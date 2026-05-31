@@ -179,4 +179,51 @@ describe('conversations CRUD', () => {
     await deleteConversation(id, TEST_USER)
     expect(await loadConversation(id, TEST_USER)).toBeNull()
   })
+
+  // Backs the bulk delete server action (#71), which fans `deleteSession`
+  // (→ deleteConversation) across an array of ids. Verifies that deleting a
+  // set of ids removes exactly those rows and is user-scoped per id.
+  it('bulk delete removes the selected rows, scoped to the user', async () => {
+    if (!dbAvailable) return
+    const ids: string[] = []
+    for (const n of [1, 2, 3]) {
+      const id = `conv-bulk-${n}-${Math.random().toString(36).slice(2, 8)}`
+      await saveConversation({
+        id,
+        userId: TEST_USER,
+        agentId: 'default',
+        title: `bulk-${n}`,
+        serializedContext: '{}',
+      })
+      ids.push(id)
+    }
+    // A row belonging to another user must survive when we delete by the
+    // wrong user — the DELETE is scoped by user_id per id.
+    const otherUser = `other-${Math.random().toString(36).slice(2, 8)}`
+    const otherId = `conv-bulk-other-${Math.random().toString(36).slice(2, 8)}`
+    await saveConversation({
+      id: otherId,
+      userId: otherUser,
+      agentId: 'default',
+      title: 'theirs',
+      serializedContext: '{}',
+    })
+
+    // Bulk delete ids[0] and ids[1] for TEST_USER, plus attempt otherId under
+    // the wrong user — that one no-ops. Leave ids[2].
+    await Promise.all([
+      deleteConversation(ids[0], TEST_USER),
+      deleteConversation(ids[1], TEST_USER),
+      deleteConversation(otherId, TEST_USER),
+    ])
+
+    expect(await loadConversation(ids[0], TEST_USER)).toBeNull()
+    expect(await loadConversation(ids[1], TEST_USER)).toBeNull()
+    expect(await loadConversation(ids[2], TEST_USER)).not.toBeNull()
+    // The other user's row is untouched — deleting it under TEST_USER no-oped.
+    expect(await loadConversation(otherId, otherUser)).not.toBeNull()
+
+    // Cleanup the other-user row (afterAll only sweeps TEST_USER).
+    await deleteConversation(otherId, otherUser)
+  })
 })

@@ -6,7 +6,7 @@ import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPane
 import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns'
 import { executeCypherWrite } from '~/lib/neo4j/write-action'
 import { mergeGraphElements } from '~/lib/graph-merge'
-import { listConversations } from '~/lib/harness-client'
+import { listConversations, deleteConversations } from '~/lib/harness-client'
 import { newSessionId } from '~/lib/session-id'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 import { createChainProgress, type ChainProgressController } from '~/components/ark-ui/useChainProgress'
@@ -151,6 +151,27 @@ export default function Home() {
     setPlaceholderSessionId(null)
   }
 
+  // Delete one or more conversations (#71). Optimistically prunes the threads
+  // cache, fires the server action, then — if the active thread was among the
+  // deleted — drops the user into a fresh "+ New Chat" so the main pane never
+  // shows a conversation that no longer exists.
+  const handleDeleteThreads = async (ids: string[]) => {
+    if (ids.length === 0) return
+    const toDelete = new Set(ids)
+    mutateThreads(list => (list ?? []).filter(t => !toDelete.has(t.id)))
+    try {
+      await deleteConversations(ids)
+    } catch (err) {
+      console.error('[index] delete conversations failed:', err)
+      // Re-sync from the server so a failed delete doesn't leave the sidebar
+      // out of step with persisted state.
+      refetchThreads()
+    }
+    if (toDelete.has(selectedSessionId())) {
+      handleNewChat()
+    }
+  }
+
   // Once the persisted row for the placeholder lands in the threadsResource,
   // drop the optimistic row so the real one (with its sticky title) takes over.
   createEffect(() => {
@@ -255,6 +276,7 @@ export default function Home() {
               onSelectThread={handleSelectThread}
               onNewChat={handleNewChat}
               onTitleRegenerated={handleTitleUpdated}
+              onDeleteThreads={handleDeleteThreads}
             />
             <div flex="1" overflow="hidden">
               <ChatInterface

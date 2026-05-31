@@ -12,6 +12,7 @@ export {
   approveAction,
   rejectAction,
   clearSession,
+  deleteConversations,
   getAgentList,
   listConversations,
   loadConversation,

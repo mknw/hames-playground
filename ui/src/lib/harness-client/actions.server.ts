@@ -179,6 +179,23 @@ export async function clearSession(sessionId: string): Promise<void> {
 }
 
 /**
+ * Delete one or more conversations for the current user (sidebar delete /
+ * bulk select-mode — #71). Each id is deleted scoped to the requesting user,
+ * so a wrong/foreign id silently no-ops rather than touching another user's
+ * data. Pattern caches are evicted alongside the Postgres rows via
+ * `deleteSession`. Returns the ids that were requested for deletion so the
+ * client can patch its threads cache without a refetch.
+ */
+export async function deleteConversations(
+  sessionIds: string[],
+): Promise<string[]> {
+  const user = await requireUser();
+  const unique = Array.from(new Set(sessionIds)).filter(Boolean);
+  await Promise.all(unique.map((id) => deleteSession(id, user.id)));
+  return unique;
+}
+
+/**
  * Get list of available agents (metadata only).
  */
 export async function getAgentList(): Promise<

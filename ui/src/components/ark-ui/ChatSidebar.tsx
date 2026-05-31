@@ -77,6 +77,11 @@ interface ChatSidebarProps {
    *  LLM title. The sidebar handles the server action itself, then forwards
    *  the new title so the parent can patch its threads cache in-place. */
   onTitleRegenerated?: (sessionId: string, title: string) => void
+  /** Delete one or more conversations (#71). The sidebar drives both the
+   *  single per-row trash button and the bulk select-mode delete; the parent
+   *  performs the server action and patches its threads cache + handles the
+   *  case where the active thread was deleted. */
+  onDeleteThreads?: (ids: string[]) => void | Promise<void>
 }
 
 export const ChatSidebar = (props: ChatSidebarProps) => {
@@ -100,6 +105,66 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
   })
   const badgeFor = (agentId: string | undefined): AgentBadge | undefined =>
     agentId ? agentBadges().get(agentId) : undefined
+
+  // ---- Bulk select / delete state (#71) ----
+  const [selectMode, setSelectMode] = createSignal(false)
+  const [selectedForDelete, setSelectedForDelete] = createSignal<ReadonlySet<string>>(new Set())
+  const [deleting, setDeleting] = createSignal(false)
+
+  // Persisted (non-placeholder) rows are the only deletable ones.
+  const deletableThreads = createMemo(() => props.threads.filter(t => !t.isPlaceholder))
+  const selectedCount = () => selectedForDelete().size
+  const allSelected = () =>
+    deletableThreads().length > 0 && selectedCount() === deletableThreads().length
+
+  const exitSelectMode = () => {
+    setSelectMode(false)
+    setSelectedForDelete(new Set<string>())
+  }
+
+  const toggleSelected = (threadId: string) => {
+    setSelectedForDelete(prev => {
+      const next = new Set(prev)
+      if (next.has(threadId)) next.delete(threadId)
+      else next.add(threadId)
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    if (allSelected()) setSelectedForDelete(new Set<string>())
+    else setSelectedForDelete(new Set<string>(deletableThreads().map(t => t.id)))
+  }
+
+  const runDelete = async (ids: string[]) => {
+    if (ids.length === 0 || deleting()) return
+    const plural = ids.length > 1 ? `${ids.length} conversations` : 'this conversation'
+    if (!confirm(`Delete ${plural}? This cannot be undone.`)) return
+    setDeleting(true)
+    try {
+      await props.onDeleteThreads?.(ids)
+      exitSelectMode()
+    } catch (err) {
+      console.error('[sidebar] delete failed:', err)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const handleDeleteSingle = async (e: MouseEvent, threadId: string) => {
+    // Stop the click from also selecting/navigating to the thread.
+    e.stopPropagation()
+    e.preventDefault()
+    await runDelete([threadId])
+  }
+
+  const handleRowClick = (threadId: string) => {
+    if (selectMode()) {
+      toggleSelected(threadId)
+      return
+    }
+    props.onSelectThread(threadId)
+  }
 
   const handleRegenerate = async (e: MouseEvent, threadId: string) => {
     // Stop the click from also selecting the thread.
@@ -131,35 +196,53 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
       style={{width: props.collapsed ? '3rem' : '16rem'}}
     >
       {/* Header with Toggle */}
-      <div p="4" border="b dark-border-primary" flex="~" items="center" justify="between">
+      <div p="4" border="b dark-border-primary" flex="~" items="center" justify="between" gap="2">
         {!props.collapsed && (
           <span text="sm dark-text-primary" font="medium">Chat History</span>
         )}
-        <button
-          onClick={() => props.onToggle()}
-          p="2"
-          rounded="md"
-          hover="bg-dark-bg-hover"
-          transition="colors"
-          text="neon-cyan"
-          flex="shrink-0"
-          title={props.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          <svg
-            width="16"
-            height="16"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
+        <div flex="~ items-center gap-1 shrink-0">
+          {/* Select / Cancel toggle for bulk delete (#71). Only shown when
+              expanded and at least one deletable conversation exists. */}
+          <Show when={!props.collapsed && deletableThreads().length > 0}>
+            <button
+              onClick={() => (selectMode() ? exitSelectMode() : setSelectMode(true))}
+              px="2"
+              py="1"
+              rounded="md"
+              hover="bg-dark-bg-hover"
+              transition="colors"
+              text={selectMode() ? 'xs neon-cyan' : 'xs dark-text-secondary'}
+              title={selectMode() ? 'Cancel selection' : 'Select conversations to delete'}
+            >
+              {selectMode() ? 'Cancel' : 'Select'}
+            </button>
+          </Show>
+          <button
+            onClick={() => props.onToggle()}
+            p="2"
+            rounded="md"
+            hover="bg-dark-bg-hover"
+            transition="colors"
+            text="neon-cyan"
+            flex="shrink-0"
+            title={props.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d={props.collapsed ? "M9 5l7 7-7 7" : "M15 19l-7-7 7-7"}
-            />
-          </svg>
-        </button>
+            <svg
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d={props.collapsed ? "M9 5l7 7-7 7" : "M15 19l-7-7 7-7"}
+              />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* Thread List */}
@@ -179,22 +262,57 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                   {(thread) => {
                     const isSelected = () => thread.id === props.selectedId
                     const isRegenerating = () => pendingRegen().has(thread.id)
+                    const isChecked = () => selectedForDelete().has(thread.id)
+                    // In select mode, placeholder rows aren't selectable.
+                    const selectable = () => selectMode() && !thread.isPlaceholder
                     return (
                       <button
-                        onClick={() => props.onSelectThread(thread.id)}
+                        onClick={() => handleRowClick(thread.id)}
                         w="full"
                         text="left"
                         p="3"
                         rounded="md"
-                        bg={isSelected() ? 'cyber-700/30' : ''}
+                        bg={
+                          selectable() && isChecked()
+                            ? 'neon-cyan/10'
+                            : isSelected() && !selectMode()
+                              ? 'cyber-700/30'
+                              : ''
+                        }
                         hover="bg-dark-bg-hover"
                         transition="all"
-                        border={isSelected() ? '1 neon-cyan/40' : '1 transparent hover:neon-cyan/30'}
+                        border={
+                          selectable() && isChecked()
+                            ? '1 neon-cyan/40'
+                            : isSelected() && !selectMode()
+                              ? '1 neon-cyan/40'
+                              : '1 transparent hover:neon-cyan/30'
+                        }
                         cursor="pointer"
                         data-placeholder={thread.isPlaceholder ? '' : undefined}
                         relative=""
                         class="group"
+                        flex="~ items-start gap-2"
                       >
+                        {/* Checkbox indicator — only in select mode. */}
+                        <Show when={selectable()}>
+                          <span
+                            flex="~ shrink-0 items-center justify-center"
+                            w="4"
+                            h="4"
+                            m="t-0.5"
+                            rounded="sm"
+                            border="~ dark-border-secondary"
+                            bg={isChecked() ? 'neon-cyan' : 'transparent'}
+                          >
+                            <Show when={isChecked()}>
+                              <svg width="12" height="12" fill="none" stroke="#0a0a0f" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+                              </svg>
+                            </Show>
+                          </span>
+                        </Show>
+                        <div flex="1" overflow="hidden">
                         <div
                           text={thread.isPlaceholder ? 'sm dark-text-tertiary' : 'sm dark-text-primary'}
                           font={thread.isPlaceholder ? 'normal italic' : 'medium'}
@@ -219,12 +337,15 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         <div text="xs dark-text-tertiary" m="t-1">
                           {formatTimestamp(thread.updatedAt)}
                         </div>
-                        {/* Hover-reveal regenerate-title button. Hidden for
-                            placeholder rows (nothing persisted yet). Spinning
-                            while the LLM call is in flight. Sits in a span
-                            outside the outer <button> hit area so nested-
-                            interactive semantics stay valid. */}
-                        <Show when={!thread.isPlaceholder}>
+                        </div>
+                        {/* Hover-reveal row actions — regenerate ↻ + delete 🗑.
+                            Hidden for placeholder rows (nothing persisted yet)
+                            and while in select mode (the checkbox + bulk bar own
+                            deletion then). Each sits in a span outside the outer
+                            <button>'s primary action via stopPropagation so
+                            nested-interactive semantics stay valid. */}
+                        <Show when={!thread.isPlaceholder && !selectMode()}>
+                          {/* Regenerate title */}
                           <span
                             aria-hidden="true"
                             onClick={(e) => handleRegenerate(e, thread.id)}
@@ -232,7 +353,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             style={{
                               position: 'absolute',
                               top: '0.5rem',
-                              right: '0.5rem',
+                              right: '2rem',
                               padding: '0.25rem',
                               'border-radius': '0.375rem',
                               cursor: 'pointer',
@@ -259,6 +380,39 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                               />
                             </svg>
                           </span>
+                          {/* Delete (single) */}
+                          <span
+                            aria-hidden="true"
+                            onClick={(e) => handleDeleteSingle(e, thread.id)}
+                            title="Delete conversation"
+                            style={{
+                              position: 'absolute',
+                              top: '0.5rem',
+                              right: '0.5rem',
+                              padding: '0.25rem',
+                              'border-radius': '0.375rem',
+                              cursor: 'pointer',
+                              'pointer-events': deleting() ? 'none' : 'auto',
+                            }}
+                            text="xs dark-text-tertiary hover:red-400"
+                            transition="opacity"
+                            class="opacity-0 group-hover:opacity-100"
+                          >
+                            <svg
+                              width="14"
+                              height="14"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                              />
+                            </svg>
+                          </span>
                         </Show>
                       </button>
                     )
@@ -268,23 +422,61 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
             </Show>
           </div>
 
-          {/* Footer: Settings + New Chat */}
-          <div p="4" border="t dark-border-primary" flex="~" gap="2" items="center">
-            <SettingsPanel />
-            <button
-              onClick={() => props.onNewChat()}
-              flex="1"
-              p="2"
-              bg="cyber-700 hover:cyber-600"
-              text="white sm"
-              font="medium"
-              rounded="md"
-              transition="all"
-              shadow="hover:[0_0_15px_rgba(79,70,229,0.5)]"
-            >
-              + New Chat
-            </button>
-          </div>
+          {/* Footer — in select mode it becomes the bulk-delete bar (#71),
+              otherwise the usual Settings + New Chat row. */}
+          <Show
+            when={selectMode()}
+            fallback={
+              <div p="4" border="t dark-border-primary" flex="~" gap="2" items="center">
+                <SettingsPanel />
+                <button
+                  onClick={() => props.onNewChat()}
+                  flex="1"
+                  p="2"
+                  bg="cyber-700 hover:cyber-600"
+                  text="white sm"
+                  font="medium"
+                  rounded="md"
+                  transition="all"
+                  shadow="hover:[0_0_15px_rgba(79,70,229,0.5)]"
+                >
+                  + New Chat
+                </button>
+              </div>
+            }
+          >
+            <div p="3" border="t dark-border-primary" flex="~ col" gap="2">
+              <div flex="~ items-center justify-between" text="xs dark-text-secondary">
+                <span>{selectedCount()} selected</span>
+                <button
+                  onClick={toggleSelectAll}
+                  text="xs neon-cyan hover:neon-cyan/80"
+                  transition="colors"
+                >
+                  {allSelected() ? 'Clear all' : 'Select all'}
+                </button>
+              </div>
+              <button
+                onClick={() => runDelete(Array.from(selectedForDelete()))}
+                disabled={selectedCount() === 0 || deleting()}
+                w="full"
+                p="2"
+                bg={selectedCount() === 0 ? 'dark-bg-tertiary' : 'red-600/80 hover:red-600'}
+                text={selectedCount() === 0 ? 'sm dark-text-tertiary' : 'sm white'}
+                font="medium"
+                rounded="md"
+                transition="all"
+                cursor={selectedCount() === 0 || deleting() ? 'not-allowed' : 'pointer'}
+                opacity={deleting() ? '60' : '100'}
+              >
+                {deleting()
+                  ? 'Deleting…'
+                  : selectedCount() > 0
+                    ? `Delete ${selectedCount()}`
+                    : 'Delete'}
+              </button>
+            </div>
+          </Show>
         </>
       )}
     </div>

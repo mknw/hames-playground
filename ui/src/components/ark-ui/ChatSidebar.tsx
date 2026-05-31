@@ -1,16 +1,26 @@
-import { For, Show, createSignal } from 'solid-js'
+import { For, Show, createSignal, createResource, createMemo } from 'solid-js'
 import { SettingsPanel } from './SettingsPanel'
-import { regenerateConversationTitle } from '../../lib/harness-client'
+import { regenerateConversationTitle, getAgentList } from '../../lib/harness-client'
 
 export interface ChatThreadSummary {
   id: string
   title: string | null
+  /** Agent that owns this conversation. Drives the agent icon + name shown
+   *  below the title (#60/#61). Undefined for the optimistic placeholder
+   *  (no agent committed until the first turn persists). */
+  agentId?: string
   /** ISO 8601 timestamp from the server. */
   updatedAt: string
   /** Optimistic client-side row for a brand-new chat that hasn't been
    *  persisted yet. Replaced in place once the real row appears in the
    *  threadsResource refetch. */
   isPlaceholder?: boolean
+}
+
+/** Minimal shape of an agent's display metadata (subset of getAgentList()). */
+interface AgentBadge {
+  icon: string
+  name: string
 }
 
 const PLACEHOLDER_TITLE = 'new chat'
@@ -72,6 +82,24 @@ interface ChatSidebarProps {
 export const ChatSidebar = (props: ChatSidebarProps) => {
   // Per-thread pending state for the ↻ button — keyed by sessionId.
   const [pendingRegen, setPendingRegen] = createSignal<ReadonlySet<string>>(new Set())
+
+  // Agent display metadata (icon + name), keyed by agent id. Fetched once;
+  // used to render the agent badge below each conversation title (#60/#61).
+  const [agentList] = createResource(async () => {
+    try {
+      return await getAgentList()
+    } catch (err) {
+      console.error('[sidebar] failed to load agent metadata:', err)
+      return []
+    }
+  })
+  const agentBadges = createMemo(() => {
+    const map = new Map<string, AgentBadge>()
+    for (const a of agentList() ?? []) map.set(a.id, { icon: a.icon, name: a.name })
+    return map
+  })
+  const badgeFor = (agentId: string | undefined): AgentBadge | undefined =>
+    agentId ? agentBadges().get(agentId) : undefined
 
   const handleRegenerate = async (e: MouseEvent, threadId: string) => {
     // Stop the click from also selecting the thread.
@@ -177,6 +205,17 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             ? PLACEHOLDER_TITLE
                             : thread.title ?? '(untitled)'}
                         </div>
+                        {/* Agent badge below the title — icon + agent name
+                            (#60/#61). Hidden for placeholders (no agent yet)
+                            and when the agent id isn't in the metadata list. */}
+                        <Show when={!thread.isPlaceholder && badgeFor(thread.agentId)}>
+                          {(badge) => (
+                            <div flex="~ items-center gap-1" m="t-1" text="xs dark-text-tertiary">
+                              <span text="sm" leading="none">{badge().icon}</span>
+                              <span truncate>{badge().name}</span>
+                            </div>
+                          )}
+                        </Show>
                         <div text="xs dark-text-tertiary" m="t-1">
                           {formatTimestamp(thread.updatedAt)}
                         </div>

@@ -32,7 +32,7 @@ export const UserMenu = () => {
           <Menu.Trigger flex items-center gap-2 cursor-pointer opacity="hover:80" transition-opacity>
             <Avatar.Root w-8 h-8 rounded-full overflow-hidden border="2 white/20">
               <Avatar.Fallback bg-sky-700 text="white sm" font-medium flex items-center justify-center w-full h-full>
-                {getInitials(currentUser().displayName, currentUser().primaryEmail)}
+                {getInitials(currentUser().displayName, currentUser().email)}
               </Avatar.Fallback>
               <Show when={currentUser().profileImageUrl}>
                 <Avatar.Image
@@ -43,7 +43,7 @@ export const UserMenu = () => {
               </Show>
             </Avatar.Root>
             <span text="gray-200 sm" font-medium hidden sm:block>
-              {currentUser().displayName || currentUser().primaryEmail}
+              {currentUser().displayName || currentUser().email}
             </span>
           </Menu.Trigger>
 

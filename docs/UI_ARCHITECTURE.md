@@ -18,7 +18,7 @@ Quick reference for the SolidJS frontend structure, configuration, and patterns.
   "framework": "@solidjs/start ^1.2.0",
   "router": "@solidjs/router ^0.15.3",
   "ui-library": "@ark-ui/solid ^5.26.2",
-  "auth": "@stackframe/js ^2.8.48",
+  "auth": "@azure/msal-node ^5.4.2 (Entra OIDC)",
   "styling": "unocss ^66.5.4",
   "bundler": "vinxi ^0.5.8"
 }
@@ -112,29 +112,35 @@ declare module 'solid-js' {
 ## 3. Authentication
 
 ### Architecture Overview
-**Client-side:** `StackClientApp` (browser only)
-**Server-side:** `getCurrentUser()` via Stack Auth cookies
-**Email allowlist:** Controls access (`ui/src/lib/auth/allowList.ts`)
+**Identity source:** Microsoft Entra ID via a direct MSAL (`@azure/msal-node`)
+OpenID Connect **auth-code flow** — the code→token exchange runs server-side
+(replaced Stack Auth in #119; chosen over federating into Stack because
+#110/OBO needs the raw Entra token server-side).
+**Client-side:** no auth SDK — `AuthProvider` reads the session via the
+`getSessionUser()` server action.
+**Server-side:** `getCurrentUser()` reads the `kg_session` cookie → a Postgres
+`auth_sessions` row.
+**Email allowlist:** still gates access (`ui/src/lib/auth/allowList.ts`).
 
-### Client Setup
-**File:** `ui/src/lib/auth/client.ts`
+### Sign-in flow (server-side OIDC)
+| Route | Does |
+|-------|------|
+| `GET /api/auth/login` | generate PKCE + state + nonce (stashed in a short-lived **signed** handshake cookie) → 302 to Entra authorize |
+| `GET /api/auth/callback` | validate `state` vs the handshake cookie, redeem the code, enforce the allowlist, upsert `users`, create an `auth_sessions` row, set the `kg_session` cookie → `/` |
+| `GET /api/auth/logout` | delete the session row (server-side revocation), clear the cookie, 302 to Entra sign-out |
 
-```typescript
-// Singleton pattern - lazy initialization
-getStackClientApp() → StackClientApp
+Config lives in `ui/src/lib/auth/entra-config.server.ts` (env: `AZURE_TENANT_ID`,
+`AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AUTH_SESSION_SECRET`; see
+[`docs/deploy/entra-setup.md`](deploy/entra-setup.md)). `isEntraConfigured()`
+lets `/api/auth/login` fail soft (503) when the tenant config is absent, so
+dev-bypass stays a zero-config path.
 
-// Environment variables required:
-VITE_STACK_PROJECT_ID
-VITE_STACK_PUBLISHABLE_CLIENT_KEY
-
-// URL configuration:
-{
-  signIn: '/auth/signin',
-  signUp: '/auth/signup',
-  oauthCallback: window.location.origin + '/auth/callback',
-  afterSignOut: '/auth/signin'
-}
-```
+### Session store
+**File:** `ui/src/lib/auth/session-store.server.ts` — Postgres `auth_sessions`
+(opaque cookie id → row: `user_id` = Entra `oid`, email, display name,
+`home_account_id`, serialized MSAL token cache for #110, 8h expiry). Every
+sign-in also upserts `users` (`ui/src/lib/auth/users.server.ts`: oid, email,
+display name, tenant, first/last login) — the app's own activity record.
 
 ### Server Validation
 **File:** `ui/src/lib/auth/server.ts`
@@ -142,8 +148,11 @@ VITE_STACK_PUBLISHABLE_CLIENT_KEY
 ```typescript
 // Use in server functions:
 const user = await getAuthenticatedUser();
-// → Returns: { id, email, displayName }
+// → Returns: { id (Entra oid), email, displayName }
 // → Throws if: not authenticated or email not in allowlist
+
+// Non-throwing variant for the client AuthProvider resource:
+const maybeUser = await getSessionUser();   // → AuthUser | null
 ```
 
 ### AuthProvider Component
@@ -153,33 +162,23 @@ Provides app-wide auth context:
 
 ```typescript
 const { user, loading, refetch, signOut } = useAuth();
-
-// Features:
-// - Client-only resource fetching (no SSR issues)
-// - Automatic redirect logic (auth ↔ protected routes)
-// - Email allowlist enforcement
-// - Loading states with branded spinner
+// user() → AuthUser | null  ({ id, email, displayName })
 ```
 
 **Redirect Logic:**
 1. Authenticated user on `/auth/*` → redirect to `/`
 2. Unauthenticated user on protected route → redirect to `/auth/signin`
-3. User email not in allowlist → sign out + redirect to `/auth/access-denied`
+3. `signOut()` → full navigation to `/api/auth/logout`
 
-### Sign-in providers
+Allowlist rejection is enforced **server-side** (the callback sends unlisted
+emails to `/auth/access-denied` and mints no session).
 
-**File:** `ui/src/routes/auth/signin.tsx` — hand-rolled UI (not Stack Auth's
-built-in components). Renders:
+### Sign-in page
 
-- Email + password form (`signInWithCredential`)
-- "Sign in with Google" button (`signInWithOAuth('google')`)
-- "Sign in with Microsoft" button (`signInWithOAuth('microsoft')`) — backed by
-  Microsoft Entra ID; the provider must be enabled in the Stack Auth dashboard.
-
-Stack Auth's SDK supports a wider set of providers (`github`, `apple`,
-`linkedin`, etc. — see `allProviders` in `@stackframe/stack-shared`); to
-expose a new one, enable it in the Stack dashboard and add a button calling
-`signInWithOAuth(<provider>)` in `signin.tsx`.
+**File:** `ui/src/routes/auth/signin.tsx` — a single **"Sign in with Microsoft"**
+link to `/api/auth/login`, which starts the OIDC flow. The link carries
+`rel="external"` so `@solidjs/router` doesn't intercept it as a client route
+(without that, the click is swallowed and the server route never runs).
 
 ### Dev Bypass (#42)
 
@@ -203,9 +202,11 @@ misconfiguration is visible — but the bypass still does not activate.
 `dev-user` while the backend used `dev-bypass-user`, so `useAuth().user().id`
 did not match the `user_id` Postgres rows were written under.
 
-**To enable real auth locally** (e.g. to test the Stack Auth flow), set
-`VITE_DEV_BYPASS_AUTH='false'` in `ui/.env` and sign in with an email in
-`VITE_ALLOWED_EMAILS`. See `ui/.env.example` for the canonical layout.
+**To enable real auth locally** (e.g. to test the Entra sign-in), set
+`VITE_DEV_BYPASS_AUTH='false'` in `ui/.env`, fill in the `AZURE_*` +
+`AUTH_SESSION_SECRET` values, and sign in with an email in
+`VITE_ALLOWED_EMAILS`. See `ui/.env.example` and
+[`docs/deploy/entra-setup.md`](deploy/entra-setup.md).
 
 **Known footgun (out of scope for #42):** because `BYPASS_USER.id` is a
 single literal, all devs running against shared Postgres share one
@@ -219,20 +220,20 @@ remains tracked on #42.
 ### UserMenu Component
 **File:** `ui/src/components/ark-ui/UserMenu.tsx`
 
-Integration with Stack Auth via `useAuth()`:
+Integration via `useAuth()`:
 
 ```tsx
 import { useAuth } from '~/components/AuthProvider'
 
 const { user, signOut } = useAuth()
 
-// Available user data:
-user().profileImageUrl  // Avatar URL (nullable)
+// Available user data (AuthUser):
+user().profileImageUrl  // Avatar URL (nullable; unused by the Entra flow today)
 user().displayName      // Display name (nullable)
-user().primaryEmail     // Email address (nullable)
+user().email            // Email address
 
 // Sign out action:
-await signOut()  // → Clears session, redirects to signin
+await signOut()  // → full navigation to /api/auth/logout (revokes session)
 ```
 
 **Component Structure:**
@@ -570,7 +571,7 @@ Once the first turn completes, a minimal one-pattern harness agent in `lib/harne
 
 ### Auth
 
-Every public action and the `/api/events` / `/api/stash` routes authenticate via Stack Auth and scope session ops by `user.id`. In dev with the bypass enabled (`isBypassEnabled()` from `lib/auth/dev-bypass.ts`), the user id falls back to `BYPASS_USER.id` (`'dev-bypass-user'`) — the same literal the client-side `AuthProvider` mock user uses, so `useAuth().user().id` matches the `conversations.user_id` rows. See §3 *Dev Bypass* for the gate and the production guard.
+Every public action and the `/api/events` / `/api/stash` routes authenticate via the Entra session (`getAuthenticatedUser()` → `getCurrentUser()`, §3) and scope session ops by `user.id` (the Entra `oid`). In dev with the bypass enabled (`isBypassEnabled()` from `lib/auth/dev-bypass.ts`), the user id falls back to `BYPASS_USER.id` (`'dev-bypass-user'`) — the same literal the client-side `AuthProvider` mock user uses, so `useAuth().user().id` matches the `conversations.user_id` rows. See §3 *Dev Bypass* for the gate and the production guard.
 
 ---
 

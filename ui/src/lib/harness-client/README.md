@@ -55,7 +55,7 @@ Returns metadata for all registered agents (id, name, description, icon).
 
 ### `listConversations()` / `loadConversation(sessionId)`
 
-Server actions used by the sidebar. Both authenticate via Stack Auth (or fall back to `dev-bypass-user` when `VITE_DEV_BYPASS_AUTH=true`) and scope by `user.id`:
+Server actions used by the sidebar. Both authenticate via the Entra session (`getAuthenticatedUser()`, or fall back to `dev-bypass-user` when `VITE_DEV_BYPASS_AUTH=true`) and scope by `user.id`:
 
 - `listConversations()` → `{ id, agentId, title, updatedAt }[]`, newest first, capped at 200
 - `loadConversation(sessionId)` → returns the deserialized `UnifiedContext` so `ChatInterface` can replay events into the graph + observability panel

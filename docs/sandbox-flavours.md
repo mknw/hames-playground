@@ -4,7 +4,7 @@
 > ship in this PR; the hardening/ergonomics items are tracked in
 > [#116](https://github.com/mknw/harness-playground/issues/116). Tracks
 > [#78](https://github.com/mknw/harness-playground/issues/78). Companion to
-> [`sandbox-plan.md`](sandbox-plan.md) and [`data-flow.md`](data-flow.md)
+> [`plan/sandbox.md`](plan/sandbox.md) and [`data-flow.md`](data-flow.md)
 > (attachment lifecycle + `/work` ⇄ Data Stash).
 
 ## Problem

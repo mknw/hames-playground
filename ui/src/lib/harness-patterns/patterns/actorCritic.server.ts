@@ -80,7 +80,9 @@ export function actorCritic<T extends ActorCriticData>(
     // 1 = every turn, the original behavior). Clamped to >= 1 so a stray 0 /
     // negative value can't disable the critic — the loop's only exit authority.
     // See `ActorCriticConfig.criticCadence` and the cadence gate below.
-    const criticCadence = Math.max(1, Math.floor(config?.criticCadence ?? 1))
+    const criticCadence = Number.isFinite(config?.criticCadence)
+      ? Math.max(1, Math.floor(config!.criticCadence!))
+      : 1
     let successfulTurns = 0
     const previousAttempts: ScriptExecutionEvent[] = []
     let errorMessage: string | undefined
@@ -150,7 +152,7 @@ export function actorCritic<T extends ActorCriticData>(
           : []
         // A third augmentation: an active `withSandbox` scope's tool surface.
         // Sandbox-owned (`sandbox_*`) names pass without being listed in
-        // `tools` or `dynamicToolAllowlist` (see docs/sandbox-plan.md → "How
+        // `tools` or `dynamicToolAllowlist` (see docs/plan/sandbox.md → "How
         // tools reach the controller"). Outside any sandbox scope this is
         // a no-op.
         const sandbox = getActiveSandbox()

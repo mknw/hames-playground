@@ -2,7 +2,7 @@
  * Sandbox ALS scope unit tests.
  *
  * Covers `runWithSandbox` / `getActiveSandbox` propagation invariants — the
- * load-bearing primitive for build-order step 3 (see docs/sandbox-plan.md →
+ * load-bearing primitive for build-order step 3 (see docs/plan/sandbox.md →
  * "How tools reach the controller").
  */
 import { describe, it, expect, vi } from 'vitest'

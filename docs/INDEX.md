@@ -7,7 +7,19 @@
 | Document | Description |
 |----------|-------------|
 | [README.md](../README.md) | Project overview and quick start |
-| [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Planning board / roadmap (replaced `docs/ROADMAP.md`; planning now in GitHub Projects) |
+| [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Live planning board (Status / Priority / MSCW per issue) |
+| [plan/ROADMAP.md](plan/ROADMAP.md) | The roadmap *shape*: target multi-user architecture, phases 0–4 with MoSCoW ratings + dependency spine (Entra SSO #119 as the gate) |
+
+---
+
+## Planning (`docs/plan/`)
+
+Forward-looking design docs. Live item-tracking stays on the GitHub project board; these hold the converged shapes.
+
+| Document | Description |
+|----------|-------------|
+| [plan/ROADMAP.md](plan/ROADMAP.md) | Multi-user target architecture + phased MoSCoW roadmap (#107 identity patterns, #119–#122) |
+| [plan/sandbox.md](plan/sandbox.md) | Sandbox compute design — core shipped (#79/#89/#97/#78 flavours); still plan-only: Swarm, Firecracker, ephemeral one-shot, #82 |
 
 ---
 
@@ -20,7 +32,7 @@
 | [harness-patterns/README.md](harness-patterns/README.md) | Overview, core concepts, quick start |
 | [harness-patterns/api.md](harness-patterns/api.md) | Complete API reference |
 | [harness-patterns/frontend.md](harness-patterns/frontend.md) | SolidStart integration, server actions, sessions |
-| [harness-patterns/examples.md](harness-patterns/examples.md) | Example agent catalog (6 agents) |
+| [harness-patterns/examples.md](harness-patterns/examples.md) | Example agent catalog (7 agents) |
 | [harness-patterns/parallel.md](harness-patterns/parallel.md) | Parallel pattern design notes |
 | [harness-patterns/with-references.md](harness-patterns/with-references.md) | `withReferences` meta-pattern + `expandPreviousResult` synthetic tool design (#30, #19) |
 | [harness-patterns/withReferences-tutorial.md](harness-patterns/withReferences-tutorial.md) | Hands-on walkthrough — search the web, attach refs at ingress, write to Neo4j |
@@ -58,9 +70,9 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 |----------|-------------|
 | [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md) | Neo4j, MCP Gateway, Redis service configuration |
 | [MCP_GATEWAY.md](MCP_GATEWAY.md) | MCP Gateway reference, CLI, troubleshooting |
-| [sandbox-plan.md](sandbox-plan.md) | Sandbox compute plan — `withSandbox` wrapper, attachment model, MCP-in-VM architecture, durable workspaces (`syncWorkspace`, #89), backend interface (Docker + Firecracker), substrate options, failure modes |
-| [sandbox-flavours.md](sandbox-flavours.md) | Sandbox rootfs flavours (#78) — the `image-processing` + `data` images, the router-over-flavoured-sandboxes recipe, ephemeral vs persistent, and deferred hardening (#116) |
+| [sandbox-flavours.md](sandbox-flavours.md) | Sandbox rootfs flavours (#78) — the `image-processing` + `data` + `office` images, the router-over-flavoured-sandboxes recipe, ephemeral vs persistent, and deferred hardening (#116) |
 | [sandbox/README.md](sandbox/README.md) | Sandbox debugging — identify/inspect/reap containers, `/work` durable-workspace layout, `.harness-logs` jq recipes |
+| [deploy/azure-vm.md](deploy/azure-vm.md) | Single-VM deployment runbook (Azure VM or any VPS): compose hardening (loopback binds), UI as systemd host service, Caddy TLS, env reference, ops |
 
 **Key config files:**
 - `docker-compose.yaml` — service orchestration
@@ -90,7 +102,7 @@ Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/rese
 | `EMBEDDINGS_PROVIDER` | Data Stash embedding provider: `local` (default) or `openrouter` (see [DATA_STASH.md](DATA_STASH.md)) |
 | `EMBEDDINGS_LOCAL_URL` / `EMBEDDINGS_LOCAL_MODEL` | Override the local embedder URL (`http://localhost:8090/v1`) / model (`Qwen3-Embedding-0.6B`) |
 | `OPENAI_API_KEY` | OpenAI models (GPT-5, GPT-5 Mini, GPT-5 Nano) |
-| `ANTHROPIC_API_KEY` | Anthropic models (Opus 4, Sonnet 4, Haiku) |
+| `ANTHROPIC_API_KEY` | Anthropic models (Sonnet 5, Sonnet 4.6, Haiku 4.5) — the default chains; **required** |
 | `VITE_STACK_PROJECT_ID` | Stack Auth project |
 | `VITE_STACK_PUBLISHABLE_CLIENT_KEY` | Stack Auth client key |
 | `STACK_SECRET_SERVER_KEY` | Stack Auth server key (used by `lib/auth/session.ts` to resolve users on the server) |
@@ -111,10 +123,18 @@ kg-agent/
 │   ├── AGENT_TRIGGER.md         # POST /api/agents/:id async trigger → actions
 │   ├── DOCKER_COMPOSE.md        # Docker setup
 │   ├── MCP_GATEWAY.md           # MCP Gateway reference
+│   ├── sandbox-flavours.md      # Rootfs flavours (#78): image-processing/data/office
+│   ├── plan/                    # Forward-looking design docs
+│   │   ├── ROADMAP.md           # Multi-user architecture + phased MoSCoW roadmap
+│   │   └── sandbox.md           # Sandbox design (core shipped; Swarm/Firecracker = plan)
+│   ├── deploy/
+│   │   └── azure-vm.md          # Single-VM deployment runbook
+│   ├── sandbox/
+│   │   └── README.md            # Sandbox operational debugging
 │   └── harness-patterns/        # Harness patterns documentation
 │       ├── README.md            # Overview
 │       ├── api.md               # API reference
-│       ├── examples.md          # Example agents
+│       ├── examples.md          # Example agents (7)
 │       ├── frontend.md          # Frontend integration
 │       ├── parallel.md          # Parallel pattern design
 │       └── with-references.md   # withReferences meta-pattern design (#30)

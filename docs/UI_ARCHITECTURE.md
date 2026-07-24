@@ -830,7 +830,6 @@ ui/
 │       │   └── patterns/
 │       │       ├── simpleLoop.server.ts   # ReAct loop + callId on tool events
 │       │       ├── actorCritic.server.ts  # Generate-evaluate + callId
-│       │       ├── withApproval.server.ts # Approval gate + pattern_enter/exit
 │       │       ├── parallel.server.ts     # Concurrent branches + pattern_enter/exit
 │       │       ├── guardrail.server.ts    # Rail validation + pattern_enter/exit
 │       │       ├── hook.server.ts         # Lifecycle hook + pattern_enter/exit

@@ -43,7 +43,7 @@ src/
 │   ├── embeddings.server.ts     # Data Stash: provider-pluggable embeddings (#8)
 │   ├── document-ingest.server.ts # Data Stash: chunk→embed→HNSW index + KNN search
 │   ├── stash/                   # Data Stash upload HTTP helpers (parse + auth). See docs/DATA_STASH.md
-│   ├── sandbox/                 # Compute sandbox: withSandbox, Docker backend, warm pool, durable /work⇄DataStash sync (#89). See docs/sandbox-plan.md
+│   ├── sandbox/                 # Compute sandbox: withSandbox, Docker backend, warm pool, durable /work⇄DataStash sync (#89). See docs/plan/sandbox.md
 │   ├── settings.ts            # HarnessSettings type, defaults, MODEL_CONTEXT_WINDOWS
 │   ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
 │   ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage

@@ -1,6 +1,6 @@
 /**
  * `withSandbox` — outer wrapper that attaches a sandbox VM to a controller
- * pattern for its lifetime. See docs/sandbox-plan.md → "What withSandbox is".
+ * pattern for its lifetime. See docs/plan/sandbox.md → "What withSandbox is".
  *
  * Four acquire paths, picked by `id` and `fresh`:
  *
@@ -83,7 +83,7 @@ const SANDBOX_SWEEP_INTERVAL_MS = 60_000
 // Process-shared singletons, lazily constructed from DEFAULT_SETTINGS. Cap
 // values are read once at first use; the settings panel can't reshape an
 // already-built scheduler/pool/table at runtime (those caps are process-
-// scoped, not per-request — see docs/sandbox-plan.md → "Settings").
+// scoped, not per-request — see docs/plan/sandbox.md → "Settings").
 let defaultBackend: ComputeBackend | null = null
 let defaultPool: WarmPool | null = null
 let defaultScheduler: SandboxScheduler | null = null

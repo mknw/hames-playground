@@ -1036,7 +1036,7 @@ describe('extractFailureLLMCallData', () => {
 // Build-order step 3: when a `withSandbox` wrapper is active, the adapters
 // prepend the sandbox's in-VM tool descriptions to the `tools` arg passed to
 // the BAML function, so the actor sees them in its first-turn prompt without
-// the caller threading them through `toolNames`. See docs/sandbox-plan.md →
+// the caller threading them through `toolNames`. See docs/plan/sandbox.md →
 // "How tools reach the controller".
 describe('sandbox tool descriptions in prompt', () => {
   function fakeTransport() {

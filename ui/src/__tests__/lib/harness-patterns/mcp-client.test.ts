@@ -378,7 +378,7 @@ describe('mcp-client', () => {
 
   // Build-order step 3: callTool dispatches sandbox-owned tool names to the
   // active `withSandbox` scope's in-VM transport, not the host gateway. See
-  // docs/sandbox-plan.md → "How tools reach the controller".
+  // docs/plan/sandbox.md → "How tools reach the controller".
   describe('callTool sandbox dispatch', () => {
     it('routes sandbox-owned tool names to the in-VM transport, not the gateway', async () => {
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')

@@ -35,7 +35,6 @@ MCP Tools ───────┘
 | `router` | Intent-based dispatch | Multi-capability agents |
 | `synthesizer` | Response generation | Human-readable output |
 | `compactIntent` | Rewrite latest message → self-contained `data.intent` | Router-less multi-turn agents ([#83](https://github.com/mknw/harness-playground/issues/83)) |
-| `withApproval` | User approval gate | Write operations |
 | `withReferences` | LLM-curated prior-result attachment at pattern ingress | Cross-pattern data flow ([#30](with-references.md)) |
 | `parallel` | Concurrent execution | Multi-source search |
 | `judge` | Quality ranking | Best-of-N selection |

@@ -345,7 +345,7 @@ async function filterToolDescriptions(
 
 /** When a `withSandbox` wrapper is active, return its in-VM tool descriptions
  *  in the adapter's `ToolDescription` shape. Outside any sandbox scope, returns
- *  `[]`. See docs/sandbox-plan.md → "How tools reach the controller". The
+ *  `[]`. See docs/plan/sandbox.md → "How tools reach the controller". The
  *  transport caches its tool list internally, so this is cheap per call. */
 async function getActiveSandboxToolDescriptions(): Promise<ToolDescription[]> {
   const sandbox = getActiveSandbox()

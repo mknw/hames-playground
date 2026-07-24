@@ -4,7 +4,7 @@
  * Acquisition is O(ms) on a hit (return a parked VM); cold-boot via the
  * backend otherwise. Release calls `backend.reset(vm)` and parks the VM if
  * the pool has capacity; otherwise (cap reached or reset failed) destroys
- * it. See docs/sandbox-plan.md → "Warm pool".
+ * it. See docs/plan/sandbox.md → "Warm pool".
  *
  * Pool is keyed by rootfs flavor only — v0 sandboxes use settings-driven
  * defaults, so all parked VMs share a runtime fingerprint. If a future

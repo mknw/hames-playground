@@ -1,12 +1,12 @@
 # Sandbox Compute Infrastructure (Plan)
 
-> **Status: plan, not yet implemented.** This documents the intended shape. Several primitives it composes with (`parallel`, `parallelMap`, `withApproval`, `judge`) are untested or unbuilt — see caveats inline. Once `withSandbox` ships, the durable API description moves to [`ui/src/lib/harness-patterns/README.md`](../ui/src/lib/harness-patterns/README.md); this file stays the project-scoped plan.
+> **Status: core shipped; forward-looking sections remain the plan.** `withSandbox` + DockerBackend shipped in PR #81 (#79); durable `/work` ⇄ DataStash workspaces in PR #95 (#89); lifecycle hardening (startup reaper, health-check on reuse, Shell-hydrate) in PRs #103/#104 (#97); rootfs flavours (`image-processing`/`data`/`office`) + the router-over-flavours recipe in PR #117 (#78). The durable API lives in [`ui/src/lib/harness-patterns/README.md`](../../ui/src/lib/harness-patterns/README.md); operational debugging in [`../sandbox/README.md`](../sandbox/README.md); flavours in [`../sandbox-flavours.md`](../sandbox-flavours.md). Still plan-only: **Swarm** (parallel strategies), **Firecracker substrate** (#78), **ephemeral one-shot mode**, timer-driven sweep + LRU cap (#82), and the "Deferred / v1+" section.
 
 Reference design for `withSandbox` — a harness wrapper that attaches a stateful, isolated microVM to a controller pattern, exposing filesystem / shell / Python tools to the actor via MCP servers running *inside* the VM. See [#79](https://github.com/mknw/harness-playground/issues/79) for the implementation story and [#78](https://github.com/mknw/harness-playground/issues/78) for the capability vision (Polars over user-uploaded files, document extraction, NER pipelines, …).
 
 This document is the infrastructure design — wrapper API, attachment model, MCP-in-VM architecture, backend interface, substrate options, lifecycle, failure modes. It does **not** cover:
 - Why we want this (see #78)
-- Rootfs flavor catalog beyond the v0 minimum (see #78 → "Rootfs flavors"; the first `image-processing` + `data` flavours are specced in [`sandbox-flavours.md`](sandbox-flavours.md))
+- Rootfs flavor catalog beyond the v0 minimum (see #78 → "Rootfs flavors"; the first `image-processing` + `data` flavours are specced in [`sandbox-flavours.md`](../sandbox-flavours.md))
 - `backgroundSession` (a v2 primitive, orthogonal to `withSandbox`; outlined under "Deferred / v1+")
 
 > **Design-conversation note.** An earlier draft of this doc was scaffolded too early, before the load-bearing architectural choices were probed. The current shape was reached by sampling the option space first and converging with the user before writing. Keep that ordering. See CLAUDE.md → "Design Decisions" → "Probe before scaffolding."
@@ -15,7 +15,7 @@ This document is the infrastructure design — wrapper API, attachment model, MC
 
 ## What `withSandbox` is
 
-A wrapper, not a leaf pattern. It composes like `withReferences` and `withApproval`:
+A wrapper, not a leaf pattern. It composes like `withReferences`:
 
 ```typescript
 withSandbox({
@@ -33,14 +33,14 @@ The wrapped pattern's controller (e.g., `actorCritic`, `simpleLoop`) gains the s
 
 **Canonical use case:** in-chat data analysis. Agent is asked to operate on a spreadsheet or document, runs Python inside the sandbox, answers in chat. Same shape for format conversion, extraction, profiling — the conversation changes, the wrapper doesn't.
 
-The wrapper composes orthogonally with everything already in the harness — `chain(withSandbox(actorCritic), synthesizer)`, `withSandbox(chain(simpleLoop, synthesizer, actorCritic))`, `router → routes({…: withSandbox(coder)})`, `withReferences(withSandbox(actorCritic))`. Wrapper patterns (`chain`, `router`, `routes`, `withReferences`, `withApproval`) and individual agents need **no** changes — the sandbox handle propagates to nested tool-calling controllers automatically (see [How tools reach the controller](#how-tools-reach-the-controller)). The only code that becomes sandbox-aware is the two controllers that actually dispatch tools.
+The wrapper composes orthogonally with everything already in the harness — `chain(withSandbox(actorCritic), synthesizer)`, `withSandbox(chain(simpleLoop, synthesizer, actorCritic))`, `router → routes({…: withSandbox(coder)})`, `withReferences(withSandbox(actorCritic))`. Wrapper patterns (`chain`, `router`, `routes`, `withReferences`) and individual agents need **no** changes — the sandbox handle propagates to nested tool-calling controllers automatically (see [How tools reach the controller](#how-tools-reach-the-controller)). The only code that becomes sandbox-aware is the two controllers that actually dispatch tools.
 
 It composes with `parallel` / `parallelMap` too, with semantics that depend on **which side** of the parallel the wrapper sits:
 
 - **Wrapper inside the branches** — `parallel(withSandbox(chainA), chainB)` or `parallelMap(items, i => withSandbox(chain(...)))`. Each wrapped branch gets its own sandbox via auto-attachment; unwrapped branches (e.g. `chainB`) run normally with no sandbox — not every branch needs one. No state collision. This is the useful direction — see "Swarm" below.
 - **Wrapper outside the parallel** — `withSandbox(parallel(branchA, branchB))`. All branches share one sandbox and state can collide. No compelling use case identified, so not a focus.
 
-**Caveat — these rest on untested or unbuilt primitives.** `parallel` has never been exercised, `parallelMap` does not exist yet, and `withApproval` / `judge` are likewise untested. The compositions here are structurally sound but depend on primitives that need building and hardening first. Treat them as design intent, not shipping capability.
+**Caveat — these rest on untested or unbuilt primitives.** `parallel` has never been exercised, `parallelMap` does not exist yet, and `judge` is untested; `withApproval` was removed outright (#125 — it never actually paused) with the supervision redesign tracked in #123. The compositions here are structurally sound but depend on primitives that need building and hardening first. Treat them as design intent, not shipping capability.
 
 ---
 
@@ -93,7 +93,7 @@ HOST  (Linux + KVM in production; macOS via Docker fallback)
 
 - **No session-routing in the gateway.** Each VM is a self-contained MCP endpoint. "Which sandbox?" is implicit in the connection. The host gateway stays a static, host-level service for shared infra (Neo4j, web, GitHub).
 - **No second deployable.** The "code at the project root" is `rootfs/` — image definition + init scripts, same shape as `docker-compose.yml`. There is no separate `vmPoolManager` daemon to build or supervise.
-- **Reuse existing MCP server images.** [`rust-mcp-filesystem`](../configs/custom-catalog.yaml) gives us read/write/edit/list/search out of the box; a JS shell-exec MCP gives us `bash`. We don't author MCP servers for v0.
+- **Reuse existing MCP server images.** [`rust-mcp-filesystem`](../../configs/custom-catalog.yaml) gives us read/write/edit/list/search out of the box; a JS shell-exec MCP gives us `bash`. We don't author MCP servers for v0.
 
 **Alternatives explicitly considered and rejected:**
 
@@ -129,7 +129,7 @@ The two controllers, the `callTool` dispatch layer, and the BAML adapters are ch
 
 **What this buys composition:**
 
-- `chain`, `router`, `routes`, `withReferences`, `withApproval` are **unchanged** — they don't dispatch tools, and ALS propagates through their `await`s.
+- `chain`, `router`, `routes`, `withReferences` are **unchanged** — they don't dispatch tools, and ALS propagates through their `await`s.
 - `withSandbox(chain(simpleLoop, synthesizer, actorCritic))` shares **one** sandbox across all of the chain's children for free: `simpleLoop` and `actorCritic` both read the same handle from ALS (a file one writes to `/work` is visible to the other); `synthesizer` simply never touches the scope. No `sandbox` parameter is threaded through `chain`.
 - **Placement is the design lever.** Wrapping the whole chain → shared workspace across children. Wrapping a single child (`chain(withSandbox(actorCritic), synthesizer)`) → only that child sees the sandbox, and it's torn down before the synthesizer runs.
 
@@ -282,7 +282,7 @@ A container is disposable; the workspace shouldn't be. The 5-minute-class idle w
 
 - **Hydrate** — on first boot only (tracked by `Attachment.isFirstBoot`), `listDocuments(sessionId)` → write each into `/work/in`. Reused live attachments skip this, so a multi-turn session doesn't re-hydrate every turn.
 - **Promote** — snapshot `/work/out` (in-VM `sha256sum`) at turn entry, diff at exit, and `storeDocument` each new/changed file. Runs in a `finally`, so deliverables are saved even if the turn throws. Deletions are ignored (promotion never removes stored docs).
-- **Binary-faithful** — text files store verbatim; everything else (xlsx, pdf, images) moves as base64 staged through a `.b64` text file (the in-VM filesystem MCP is text-only) and is stored with `encoding: 'base64'`. See [DATA_STASH.md → Storage model](DATA_STASH.md#storage-model-redis).
+- **Binary-faithful** — text files store verbatim; everything else (xlsx, pdf, images) moves as base64 staged through a `.b64` text file (the in-VM filesystem MCP is text-only) and is stored with `encoding: 'base64'`. See [DATA_STASH.md → Storage model](../DATA_STASH.md#storage-model-redis).
 
 **Boundaries.** Only the `{ id }` path syncs; anonymous (`withSandbox({})`) and one-shot (`{ fresh: true }`) sandboxes have no session identity and are untouched. Sync requires the MCP gateway (the DataStash lives in Redis). The window in which a *live* container is reused before falling back to hydrate-from-store is the warm-cache horizon — see `idleEvictMs` in [Settings](#settings).
 
@@ -290,10 +290,10 @@ A container is disposable; the workspace shouldn't be. The 5-minute-class idle w
 
 ## Swarm: parallel strategies, pick a winner (forward-looking)
 
-A composition the wrapper enables, but which depends on primitives that don't exist or aren't tested yet (`parallelMap`, `withApproval`, `judge`):
+A composition the wrapper enables, but which depends on primitives that don't exist yet (`parallelMap`, `judge`, and the #123 supervision gate — the removed `withApproval` predecessor):
 
 ```typescript
-withApproval(                              // user picks the winner — UNTESTED
+superviseGate(                             // user picks the winner — #123, NOT BUILT
   parallelMap(strategies, (strategy) =>    // N branches, one sandbox each — DOESN'T EXIST YET
     withSandbox(
       chain(actorCritic, synthesizer)      // a full agentic loop per strategy
@@ -483,4 +483,4 @@ Open problems `backgroundSession` surfaces (all genuinely v2):
 - [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) — where this fits in the broader plan
 - [#79](https://github.com/mknw/harness-playground/issues/79) — implementation story
 - [#78](https://github.com/mknw/harness-playground/issues/78) — capability vision + rootfs flavor catalog
-- [`ui/src/lib/harness-patterns/README.md`](../ui/src/lib/harness-patterns/README.md) — pattern framework overview (`withReferences`, `withApproval` are the analogous wrappers)
+- [`ui/src/lib/harness-patterns/README.md`](../../ui/src/lib/harness-patterns/README.md) — pattern framework overview (`withReferences` is the analogous wrapper)

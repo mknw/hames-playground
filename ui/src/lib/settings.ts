@@ -5,7 +5,7 @@
  */
 
 /**
- * Sandbox compute settings. See docs/sandbox-plan.md → "Settings".
+ * Sandbox compute settings. See docs/plan/sandbox.md → "Settings".
  *
  * Process-scoped values (`globalCap`, `perSessionCap`, `warmPool`, `idleEvictMs`)
  * are read once when the harness lazily constructs its singleton scheduler

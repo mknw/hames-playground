@@ -369,7 +369,7 @@ the workspace is **durable across sessions**, not just turns: stored documents
 are restored into `/work/in` on first boot and `/work/out` deliverables are
 promoted to the DataStash each turn — so an uploaded spreadsheet survives idle
 eviction, restart, and next-day reconnects. The layout contract + mechanism
-live in [`docs/sandbox-plan.md → Durable workspaces`](../../../../docs/sandbox-plan.md#durable-workspaces-89).
+live in [`docs/plan/sandbox.md → Durable workspaces`](../../../../docs/plan/sandbox.md#durable-workspaces-89).
 
 Composes any actor-style pattern with id-addressable attachment. Because this
 agent is **router-less**, `compactIntent` runs first ([#83](https://github.com/mknw/harness-playground/issues/83)

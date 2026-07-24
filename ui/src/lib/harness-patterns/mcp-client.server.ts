@@ -101,7 +101,7 @@ export async function callTool(
   name: string,
   args: Record<string, unknown>
 ): Promise<ToolCallResult> {
-  // Sandbox dispatch (see docs/sandbox-plan.md → "How tools reach the
+  // Sandbox dispatch (see docs/plan/sandbox.md → "How tools reach the
   // controller"). When a `withSandbox` wrapper is active and the tool name
   // is owned by its in-VM transport, route there instead of the host
   // gateway. Tools not owned by the sandbox fall through to the gateway path

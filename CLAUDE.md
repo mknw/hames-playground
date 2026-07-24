@@ -74,7 +74,7 @@ docker compose ps
 
 **Graph tabs:** `SupportPanel` uses `lazyMount` + `unmountOnExit` on `Tabs.Root` — Cytoscape instances only exist for the active tab. The Neo4j/Memory tabs consume accumulated `graphElements` from `index.tsx`. The All tab derives elements on-demand from `contextEvents` via `turn-utils.ts` based on user-selected turns, with per-turn color coding via `GraphVisualization`'s `extraStyles` prop.
 
-**Probe before scaffolding:** For architectural questions (new patterns, infrastructure, deployment shapes, anything with multiple non-obvious options), sample the option space first and converge with the user on the shape before writing implementation docs or code. Going straight to a fully-detailed design tends to lock in defaults the user would have redirected. See [`docs/sandbox-plan.md`](docs/sandbox-plan.md) for the kind of doc that should *follow* such a conversation, not start it.
+**Probe before scaffolding:** For architectural questions (new patterns, infrastructure, deployment shapes, anything with multiple non-obvious options), sample the option space first and converge with the user on the shape before writing implementation docs or code. Going straight to a fully-detailed design tends to lock in defaults the user would have redirected. See [`docs/plan/sandbox.md`](docs/plan/sandbox.md) for the kind of doc that should *follow* such a conversation, not start it.
 
 ---
 
@@ -188,7 +188,8 @@ Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secon
 | Doc | Contents |
 |-----|----------|
 | [`docs/INDEX.md`](docs/INDEX.md) | Full documentation index |
-| [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Planning board / roadmap — replaced `docs/ROADMAP.md`; planning lives in GitHub Projects now |
+| [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Live planning board (Status / Priority / MSCW per issue) — item tracking lives here |
+| [`docs/plan/ROADMAP.md`](docs/plan/ROADMAP.md) | Roadmap *shape*: multi-user target architecture + phased MoSCoW plan (Entra SSO #119 gates; keep in sync with the board's MSCW field) |
 | [`docs/UI_ARCHITECTURE.md`](docs/UI_ARCHITECTURE.md) | Component structure, data flow, Chat-Graph linking |
 | [`docs/DATA_STASH.md`](docs/DATA_STASH.md) | Data Stash pipeline: upload → chunk → embed → search (#6/#9/#8), API routes, Redis storage, redis-stack + local-embedder requirements |
 | [`docs/AGENT_TRIGGER.md`](docs/AGENT_TRIGGER.md) | `POST /api/agents/:id` async agent trigger → action rows: contract, fire-and-forget model, `kind`/`source`/`status` columns, token auth (`configs/action-tokens.yaml`), recording playback via Data Stash, promotion gate |

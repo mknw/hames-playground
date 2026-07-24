@@ -177,6 +177,10 @@ export class AttachmentTable {
    * entry to make room. If every entry is still in use, the cap overflows
    * rather than kill a live session — the scheduler's `globalCap` remains the
    * in-flight backstop. No-op when `maxAttachments` is unset.
+   *
+   * Soft by design under concurrency too: two boots of *different* ids can both
+   * pass this check before either inserts, transiently reaching cap+1. Not a
+   * bug — the cap bounds steady-state accumulation, not a momentary race.
    */
   private async enforceCap(): Promise<void> {
     const max = this.config.maxAttachments

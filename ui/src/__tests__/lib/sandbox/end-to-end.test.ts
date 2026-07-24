@@ -1,7 +1,7 @@
 /**
  * End-to-end integration test — `withSandbox(actorCritic(...))`.
  *
- * Build-order step 4 (see docs/sandbox-plan.md → "v0 build order"). Proves the
+ * Build-order step 4 (see docs/plan/sandbox.md → "v0 build order"). Proves the
  * full chain composes: a real `actorCritic` driven by the real BAML adapters,
  * wrapped in `withSandbox`, dispatching through real `callTool` and the real
  * ALS scope, to a real `DockerBackend` whose Docker engine and MCP SDK have

@@ -314,13 +314,10 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
   const neo4jController = createNeo4jController(tools.neo4j ?? [])
   const webController = createWebSearchController(tools.web ?? [])
 
-  const neo4jPattern = withApproval(
-    simpleLoop(neo4jController, tools.neo4j ?? [], {
-      patternId: 'neo4j-query',
-      schema
-    }),
-    approvalPredicates.writes
-  )
+  const neo4jPattern = simpleLoop(neo4jController, tools.neo4j ?? [], {
+    patternId: 'neo4j-query',
+    schema
+  })
 
   const webPattern = simpleLoop(webController, tools.web ?? [], {
     patternId: 'web-search'

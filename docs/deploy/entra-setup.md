@@ -85,11 +85,15 @@ local iteration.
 ## Identity model & migration
 
 - The stable per-user id (`userId`) is the Entra **`oid`** claim (the user's
-  *Object ID*). Sessions, `conversations.user_id`, and per-user data all key on
-  it.
-- `conversations.user_id` is a plain `TEXT` column, so migrating existing rows
-  from Stack ids to Entra `oid`s is a **data-only** remap (no schema change).
-  ~30 users → a one-off script mapping each Stack id to the person's `oid`.
+  *Object ID*). Sessions, `conversations.user_id`, the `users` table, and
+  per-user data all key on it.
+- Every successful sign-in upserts a row in **`users`** (oid, email, display
+  name, tid, first/last login) — the app's own activity record, and the future
+  home for #108 role/tier data (e.g. gating sandbox agents by tier).
+- No Stack→Entra id migration was needed: pre-cutover conversations were
+  purged at cutover (2026-07-24) rather than remapped. If a deployment ever
+  needs to preserve old rows, `conversations.user_id` is plain `TEXT`, so a
+  data-only remap works.
 - Agent-trigger tokens (`configs/action-tokens.yaml`) now map a Bearer secret
   to an Entra `oid` — see `configs/template.action-tokens.yaml`. The endpoint
   contract (`POST /api/agents/:id`) is unchanged.

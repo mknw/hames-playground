@@ -18,7 +18,7 @@ import {
 } from "@azure/msal-node";
 import { assertServerOnImport } from "../harness-patterns/assert.server";
 import { buildEntraConfig, msalConfiguration, type EntraConfig } from "./entra-config.server";
-import { extractIdentity, type EntraIdTokenClaims } from "./entra-claims";
+import { extractIdentity, type EntraIdTokenClaims, type EntraIdentity } from "./entra-claims";
 
 assertServerOnImport();
 

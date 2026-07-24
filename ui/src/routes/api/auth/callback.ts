@@ -21,6 +21,7 @@ import {
   createSession,
   DEFAULT_SESSION_TTL_SECONDS,
 } from "~/lib/auth/session-store.server";
+import { upsertUser } from "~/lib/auth/users.server";
 import { isEmailAllowed } from "~/lib/auth/allowList";
 
 interface Handshake {
@@ -75,6 +76,16 @@ export async function GET(event: APIEvent): Promise<Response> {
       console.warn("[auth/callback] email not in allow-list:", identity.email);
       return redirect("/auth/access-denied", clearCookie(HANDSHAKE_COOKIE));
     }
+
+    // Record the sign-in (first/last_login + profile snapshot). Same DB as the
+    // session insert below, so no separate failure handling: if Postgres is
+    // down, sign-in fails either way and the catch sends us back to signin.
+    await upsertUser({
+      id: identity.userId,
+      email: identity.email,
+      displayName: identity.displayName,
+      tenantId: identity.tenantId,
+    });
 
     const sessionId = await createSession(
       {

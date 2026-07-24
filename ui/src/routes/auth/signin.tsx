@@ -30,9 +30,15 @@ export default function SignIn() {
           </div>
         </Show>
 
-        {/* Full navigation to the server login route (starts the OIDC flow). */}
+        {/*
+          `rel="external"` is REQUIRED: without it @solidjs/router intercepts
+          the click and treats /api/auth/login as a client page route (→ 404),
+          so the server handler never runs. rel="external" forces a real
+          browser navigation that hits the API route and 302s to Entra.
+        */}
         <a
           href="/api/auth/login"
+          rel="external"
           class="text-white font-medium px-4 py-3 rounded-md bg-blue-600 w-full shadow-sm flex items-center justify-center gap-2 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
         >
           <span class="i-mdi-microsoft" style={{ width: "20px", height: "20px" }} />

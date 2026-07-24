@@ -62,6 +62,12 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 |----------|-------------|
 | [AGENT_TRIGGER.md](AGENT_TRIGGER.md) | `POST /api/agents/:id` async agent trigger → **action** rows: endpoint contract, in-process fire-and-forget model, `kind`/`source`/`status` data model, per-user token auth (`configs/action-tokens.yaml`), recording storage + playback via the Data Stash, sidebar filter + promotion gate, status-lifecycle quirk |
 
+### Auth & Deployment
+
+| Document | Description |
+|----------|-------------|
+| [deploy/entra-setup.md](deploy/entra-setup.md) | **Microsoft Entra ID SSO** (#119): tenant-owner provisioning checklist (app registration, redirect URIs, delegated Graph scopes, client secret), app env vars, the `oid`-based identity model, and the server-side OIDC sign-in flow. The auth architecture itself is in [UI_ARCHITECTURE.md §3](UI_ARCHITECTURE.md) |
+
 ---
 
 ## Infrastructure Documentation
@@ -103,9 +109,11 @@ Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/rese
 | `EMBEDDINGS_LOCAL_URL` / `EMBEDDINGS_LOCAL_MODEL` | Override the local embedder URL (`http://localhost:8090/v1`) / model (`Qwen3-Embedding-0.6B`) |
 | `OPENAI_API_KEY` | OpenAI models (GPT-5, GPT-5 Mini, GPT-5 Nano) |
 | `ANTHROPIC_API_KEY` | Anthropic models (Sonnet 5, Sonnet 4.6, Haiku 4.5) — the default chains; **required** |
-| `VITE_STACK_PROJECT_ID` | Stack Auth project |
-| `VITE_STACK_PUBLISHABLE_CLIENT_KEY` | Stack Auth client key |
-| `STACK_SECRET_SERVER_KEY` | Stack Auth server key (used by `lib/auth/session.ts` to resolve users on the server) |
+| `AZURE_TENANT_ID` | Entra tenant (directory) GUID — the OIDC authority (#119) |
+| `AZURE_CLIENT_ID` | Entra app registration (client) id |
+| `AZURE_CLIENT_SECRET` | Entra client secret (server-side; resolves sign-in server-side, see `lib/auth/entra.server.ts`) |
+| `AUTH_SESSION_SECRET` | HMAC key signing the auth cookies (`openssl rand -base64 32`) |
+| `AUTH_REDIRECT_URI` / `AUTH_POST_LOGOUT_REDIRECT_URI` | Optional OIDC redirect / post-logout overrides (default dev port 3444) |
 | `VITE_ALLOWED_EMAILS` | Comma-separated allow-list; supports `*@domain.com` wildcards |
 | `VITE_DEV_BYPASS_AUTH` | `'true'` to skip auth in dev (gated on `import.meta.env.DEV`; ignored in prod builds). See `ui/.env.example` and `lib/auth/dev-bypass.ts` |
 

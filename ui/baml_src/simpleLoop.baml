@@ -5,21 +5,19 @@
 //   turns               — tool calls/results from the CURRENT task (this invocation)
 //   turns_previous_runs — compact references to results from PREVIOUS tasks/sessions
 //                         (separate so the LLM can distinguish past context from current work)
-//   stable_hash         — digest of every run-stable input, computed by the adapter.
-//                         Rendered in tier-2 as a mutation canary: it MUST stay
-//                         constant across all iterations of one task run; a change
-//                         mid-run means the cacheable prefix was invalidated.
 //
-// Prompt-caching layout (#122) — two stable tiers, then a chronological
+// Prompt-caching layout (#122) — SCHEME B (4 markers). The A/B counterpart is
+// ActorController in actorCritic.baml (SCHEME A, 2 markers); see the
+// scheme-comparison note there. Two stable tiers, then a chronological
 // conversation:
 //
 //   system                      agent role text (static)
 //   user  [CACHE tier-1]        CONTEXT · AVAILABLE TOOLS · EXAMPLES
 //                               agent-static: survives ACROSS runs/user-turns,
 //                               so consecutive tasks of the same agent reuse it
-//   user  [CACHE tier-2]        input-hash · INTENT · INSTRUCTIONS ·
-//                               PREVIOUS RESULTS (expansion affordance + frozen
-//                               summaries — run-static: fixed for one task run)
+//   user  [CACHE tier-2]        INTENT · INSTRUCTIONS · PREVIOUS RESULTS
+//                               (expansion affordance + frozen summaries —
+//                               run-static: fixed for one task run)
 //   (assistant → user)*         one pair per turn, chronological: the action the
 //                               model took (assistant) and what came back (user;
 //                               tool result and/or expanded refs). Append-only.
@@ -28,7 +26,11 @@
 //                               by the previous one and WRITES the extension.
 //   user                        "Turn N. Decide." + output format (never cached)
 //
-// Breakpoint budget: 2 tiers + 2 rolling = 4 = Anthropic's maximum.
+// Breakpoint budget: 2 tiers + 2 rolling = 4 = Anthropic's maximum. Every
+// marker is BOTH a read point and a write point (there is no store-vs-retrieve
+// distinction), so the tier markers stay unconditional: their prefixes must be
+// re-declared on every call to be re-readable, and to be rewritten after the
+// 5-minute TTL lapses mid-run.
 // cache_control only reaches providers that allowlist it via
 // allowed_role_metadata (the Anthropic clients in clients.baml) — all other
 // providers silently drop it, so the mixed chains see an unchanged prompt.
@@ -50,8 +52,7 @@ function LoopController(
   turns: LoopTurn[],
   context: string?,
   turns_previous_runs: PriorResult[]?,
-  few_shots: FewShot[]?,
-  stable_hash: string?
+  few_shots: FewShot[]?
 ) -> ControllerAction {
   client ControllerAnthropic
   prompt #"
@@ -87,11 +88,6 @@ function LoopController(
     {% endif %}
 
     {{ _.role("user", cache_control={"type": "ephemeral"}) }}
-    {% if stable_hash %}
-    [input-hash {{ stable_hash }} — constant for this whole task run]
-
-    ---
-    {% endif %}
     INTENT: {{ intent }}
 
     ---
@@ -122,7 +118,7 @@ function LoopController(
     Call: {{ turn.tool_call.tool }}
     Args: {{ turn.tool_call.args }}
     {% endif %}
-    {% if loop.index > turns|length - 2 %}
+    {% if loop.index0 >= turns|length - 2 %}
     {{ _.role("user", cache_control={"type": "ephemeral"}) }}
     {% else %}
     {{ _.role("user") }}

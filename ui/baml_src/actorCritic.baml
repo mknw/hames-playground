@@ -6,17 +6,37 @@
 // Actor - Generates tool calls, improving from critic feedback
 // ============================================================================
 //
-// Prompt-caching layout (#122) — same two-tier + chronological-pairs scheme as
-// LoopController; full rationale in simpleLoop.baml. Differences here:
-//  - CONTEXT sits in tier-2, not tier-1: the actor's context may come from a
-//    per-invocation contextProvider (e.g. code-mode's ENABLED SERVERS catalog)
-//    and can legitimately change mid-run — tier-2 placement limits such a
-//    change to busting tier-2, keeping the tools/examples cache alive.
-//  - The per-attempt BUDGET block renders in the volatile tail (it changes
-//    every attempt, so it must never sit in a cached region).
-//  - stable_hash is the adapter-computed mutation canary rendered in tier-2;
-//    constant across the attempts of one run unless an input actually changed
-//    (e.g. a mid-run tool registration — a deliberate, visible cache bust).
+// Prompt-caching layout (#122) — SCHEME A (2 markers). Deliberately the A/B
+// counterpart to LoopController in simpleLoop.baml (SCHEME B, 4 markers); both
+// are exercised by prompt-caching.test.ts, and the live cost/latency
+// comparison decides which one both controllers converge on.
+//
+//   system [CACHE static]   role text · AVAILABLE TOOLS · EXAMPLES. On the wire
+//                           this becomes the top-level `system` param.
+//   user                    USER INTENT · CONTEXT · USER REQUEST — run-static
+//                           but NOT separately checkpointed under this scheme;
+//                           it is covered by the rolling marker's prefix from
+//                           attempt 2 onward (uncached on attempt 1).
+//   (assistant → user)*     chronological attempt pairs: action (assistant) and
+//                           result + critic feedback (environment). Append-only.
+//                           ONE rolling marker on the LAST result block; the
+//                           previous call's marker position sits ~2 blocks
+//                           behind it, inside Anthropic's ~20-block read
+//                           lookback, so the earlier prefix is still a hit.
+//   user                    must-address · BUDGET · attempt counter · output
+//                           format — after the last marker, never cached.
+//
+// Every marker is BOTH a read point and a write point (there is no
+// store-vs-retrieve distinction), which is why the static marker is
+// unconditional: its prefix has to be re-declared on every call to stay
+// re-readable, and to be rewritten once the 5-minute TTL lapses mid-run.
+//
+// NOTE ON ROLES: the Anthropic Messages API has no `system` role inside
+// messages[] — only the top-level param. BAML hoists the FIRST system block
+// there and coerces any later `_.role("system")` to `user` on the wire
+// (verified by render). Mid-conversation system markers below are therefore
+// template-level semantics ("this is the environment speaking"), not a
+// distinct wire role.
 
 function ActorController(
   user_message: string,
@@ -27,20 +47,18 @@ function ActorController(
   few_shots: FewShot[]?,
   attempt_n: int?,
   max_attempts: int?,
-  stable_hash: string?
 ) -> ControllerAction {
   client ControllerAnthropic
   prompt #"
-    {{ _.role("system") }}
+    {{ _.role("system", cache_control={"type": "ephemeral"}) }}
     You are an AI agent that accomplishes tasks by calling tools.
     A critic evaluates your output. Learn from previous feedback.
 
-    {{ _.role("user", cache_control={"type": "ephemeral"}) }}
     AVAILABLE TOOLS:
     {% for tool in tools %}
 
     - {{ tool.name }}: {{ tool.description }}
-      {% if tool.args_schema %}  Args: {{ tool.args_schema }}{% endif %}
+      {% if tool.args_schema %}  Args: {{ tool.args_schema }} {% endif %}
     {% endfor %}
 
     The critic evaluates whether the data you've gathered is sufficient and
@@ -52,52 +70,52 @@ function ActorController(
     ---
     EXAMPLES (illustrative — adapt to the actual request, do not copy verbatim):
     {% for ex in few_shots %}
+
     - User: {{ ex.user }}
       Reasoning: {{ ex.reasoning }}
       Tool: {{ ex.tool }}
       Args: {{ ex.args }}
     {% endfor %}
-    {% endif %}
-
-    {{ _.role("user", cache_control={"type": "ephemeral"}) }}
-    {% if stable_hash %}
-    [input-hash {{ stable_hash }} — constant for this whole task run]
 
     ---
     {% endif %}
+    {{ _.role("user") }}
     USER INTENT: {{ intent }}
     {% if context %}
 
     ---
+    {{ _.role("system") }}
     CONTEXT:
     {{ context }}
     {% endif %}
 
     ---
+    {{ _.role("user") }}
     USER REQUEST: {{ user_message }}
 
+    ---
     {% for attempt in attempts %}
     {{ _.role("assistant") }}
     Attempt {{ attempt.n }} action:
-    {% if attempt.action.reasoning %}
-    Reasoning: {{ attempt.action.reasoning }}
-    {% endif %}
-    Call: {{ attempt.action.tool_name }}
+        {% if attempt.action.reasoning %}
+        Reasoning: {{ attempt.action.reasoning }}
+        {% endif %}
+    Tool: {{ attempt.action.tool_name }}
     Args: {{ attempt.action.tool_args }}
-    {% if loop.index > attempts|length - 2 %}
-    {{ _.role("user", cache_control={"type": "ephemeral"}) }}
-    {% else %}
-    {{ _.role("user") }}
-    {% endif %}
+        {% if loop.last %}
+        {{ _.role("system", cache_control={"type": "ephemeral"}) }}
+        {% else %}
+        {{ _.role("system") }}
+        {% endif %}
     Attempt {{ attempt.n }} result:
-    {% if attempt.error %}
-    ERROR: {{ attempt.error }}
-    {% else %}
-    Result: {{ attempt.result }}
-    {% endif %}
-    {% if attempt.feedback %}
-    CRITIC FEEDBACK: {{ attempt.feedback }}
-    {% endif %}
+        {% if attempt.error %}
+        ERROR: {{ attempt.error }}
+        {% else %}
+        Result: {{ attempt.result }}
+        {% endif %}
+        {% if attempt.feedback %}
+        CRITIC FEEDBACK: {{ attempt.feedback }}
+        {% endif %}
     {% endfor %}
 
     {{ _.role("user") }}

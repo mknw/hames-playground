@@ -5,21 +5,33 @@
  * HTTP body and asserts the cache-stability invariants the controller
  * templates (simpleLoop.baml / actorCritic.baml) must uphold.
  *
+ * TWO SCHEMES UNDER TEST (#122 A/B — the live run decides the winner):
+ *  - SCHEME A, ActorController: 1 static marker on the system block + 1
+ *    rolling marker on the last result. Minimal markers; relies on
+ *    Anthropic's ~20-block read lookback to hit the previous call's write.
+ *  - SCHEME B, LoopController: 2 static tier markers (agent-static +
+ *    run-static) + 2 rolling markers on the last two results. Caches the
+ *    run-static tier from call 1 and re-declares the previous write position
+ *    explicitly instead of relying on lookback.
+ *
  * NOTE ON SHAPE: BAML merges consecutive same-role prompt messages into ONE
  * API message with multiple `text` content blocks, and `cache_control` rides
  * the individual BLOCK (Anthropic's native breakpoint granularity). So the
- * two stable tiers + the volatile tail can share one `user` message; the
- * invariants below are therefore asserted per-block:
+ * stable tiers + the volatile tail can share one `user` message; the
+ * invariants below are therefore asserted per-block. Two further wire facts,
+ * both verified by render: markers ARE forwarded on the top-level `system`
+ * param, and mid-conversation `_.role("system")` is coerced to `user`
+ * (messages[] has no system role).
  *
- *  1. Breakpoint budget: ≤4 cache_control blocks per request (Anthropic max).
- *  2. Placement: tier-1 (agent-static) + tier-2 (run-static) blocks are
- *     checkpointed; rolling checkpoints sit on the last two turn-result
- *     blocks only; the final tail block is NEVER checkpointed.
- *  3. Byte-stability: tier blocks and already-rendered history blocks are
- *     identical across loop iterations — anything else silently voids the
- *     cache prefix.
+ * Invariants asserted for both schemes:
+ *  1. Breakpoint budget: ≤4 cache_control markers per request (Anthropic max).
+ *  2. Placement: static markers unconditional (a marker is BOTH a read and a
+ *     write point, so it must be re-declared every call); rolling markers on
+ *     the last result block(s); the final tail block is NEVER marked.
+ *  3. Byte-stability: marked prefix blocks are identical across iterations —
+ *     anything else silently voids the cache.
  *  4. History renders as a real conversation: past actions are ASSISTANT
- *     messages, results are user messages, chronologically interleaved.
+ *     messages, results are environment messages, chronologically interleaved.
  *  5. The refs list stays frozen (no "(expanded in turn N)" mutation);
  *     expanded content arrives in the result block of the expanding turn.
  *
@@ -68,12 +80,11 @@ const TURN_3 = {
   tool_call: { tool: 'read_neo4j_cypher', args: '{"query":"MATCH (n) RETURN n"}' },
   tool_result: { tool: 'read_neo4j_cypher', success: false, result: '', error: 'timeout' },
 }
-const HASH = 'abc123def456'
 
 async function renderLoop(turns: unknown[]): Promise<Body> {
   const req = await b.request.LoopController(
     'find nodes about X', 'find nodes about X',
-    TOOLS, turns as never, 'GRAPH SCHEMA:\n(Person)-[:KNOWS]->(Person)', REFS, undefined, HASH,
+    TOOLS, turns as never, 'GRAPH SCHEMA:\n(Person)-[:KNOWS]->(Person)', REFS, undefined,
   )
   return req.body.json() as Body
 }
@@ -102,9 +113,9 @@ describe('LoopController prompt-caching layout', () => {
     expect(tier1.text).toContain('CONTEXT')
     expect(tier1.text).not.toContain('INSTRUCTIONS')
     expect(tier1.text).not.toContain('ref:ev_1')
-    // tier-2: run-static (hash, intent, instructions, refs + expansion affordance)
-    expect(tier2.cache_control?.type).toBe('ephemeral')
-    expect(tier2.text).toContain(`[input-hash ${HASH}`)
+    // tier-2: run-static (intent, instructions, refs + expansion affordance)
+    expect(tier2.cache_control?.type).toBe("ephemeral")
+    expect(tier2.text).toContain("INTENT:")
     expect(tier2.text).toContain('INSTRUCTIONS')
     expect(tier2.text).toContain('expandPreviousResult')
     expect(tier2.text).toContain('[ref:ev_1] search: Found 3 nodes about X')
@@ -139,7 +150,7 @@ describe('LoopController prompt-caching layout', () => {
     const bps = breakpoints(body)
     expect(bps).toHaveLength(4)
     expect(bps[0].text).toContain('AVAILABLE TOOLS')          // tier-1
-    expect(bps[1].text).toContain(`[input-hash ${HASH}`)      // tier-2
+    expect(bps[1].text).toContain("INTENT:")               // tier-2
     expect(bps[2].text).toContain('Turn 2 result:')           // rolling (second-to-last)
     expect(bps[3].text).toContain('Turn 3 result:')           // rolling (last)
     // turn 1's result is no longer checkpointed; the tail block never is
@@ -175,7 +186,7 @@ describe('LoopController prompt-caching layout', () => {
       { ref_id: 'ev_2', tool: 'fetch', summary: 'Page content about Y', expanded_in_turn: null },
     ]
     const req = await b.request.LoopController(
-      'q', 'q', TOOLS, [TURN_1, TURN_2] as never, undefined, annotated, undefined, HASH)
+      'q', 'q', TOOLS, [TURN_1, TURN_2] as never, undefined, annotated, undefined)
     const body = req.body.json() as Body
     const full = JSON.stringify(body.messages)
     expect(full).not.toContain('expanded in turn 2')
@@ -201,26 +212,57 @@ describe('ActorController prompt-caching layout', () => {
   async function renderActor(attempts: unknown[]): Promise<Body> {
     const req = await b.request.ActorController(
       'do the thing', 'do the thing', TOOLS, attempts as never,
-      'ENABLED SERVERS: neo4j', undefined, attempts.length + 1, 3, HASH)
+      'ENABLED SERVERS: neo4j', undefined, attempts.length + 1, 3)
     return req.body.json() as Body
   }
 
-  it('two tiers + assistant/user attempt pairs, ≤4 breakpoints', async () => {
-    const body = await renderActor(ATTEMPTS)
-    expect(breakpoints(body).length).toBeLessThanOrEqual(4)
-    const roles = body.messages.map((m) => m.role)
-    // [user(tiers), A1, U(r1), A2, U(r2 + tail)]
-    expect(roles).toEqual(['user', 'assistant', 'user', 'assistant', 'user'])
+  /** Scheme A's static marker rides the top-level `system` param, not messages[]. */
+  function systemBlocks(body: Body): Block[] {
+    return (body.system ?? []) as Block[]
+  }
 
-    const [tier1, tier2] = blocks(body)
-    // context is per-invocation (contextProvider) → tier-2, NOT tier-1
-    expect(tier1.text).toContain('AVAILABLE TOOLS')
-    expect(tier1.text).not.toContain('ENABLED SERVERS')
-    expect(tier2.text).toContain('ENABLED SERVERS')
-    expect(tier2.text).toContain(`[input-hash ${HASH}`)
-    // critic feedback rides the result (user) block of its attempt
-    const r1 = blocks(body).find((blk) => blk.text?.includes('Attempt 1 result:'))
+  it('static requirements live in the system param and carry the only static marker', async () => {
+    const body = await renderActor(ATTEMPTS)
+    const sys = systemBlocks(body)
+    expect(sys).toHaveLength(1)
+    expect(sys[0].text).toContain('AVAILABLE TOOLS')
+    expect(sys[0].cache_control?.type).toBe('ephemeral')
+    // run-static content stays in messages[] and is NOT separately marked
+    const [intentBlk] = blocks(body)
+    expect(intentBlk.text).toContain('USER INTENT:')
+    expect(intentBlk.cache_control).toBeUndefined()
+    // CONTEXT is template-level `system` but coerced to user on the wire
+    const ctx = blocks(body).find((blk) => blk.text?.includes('ENABLED SERVERS'))
+    expect(ctx?.role).toBe('user')
+    expect(sys[0].text).not.toContain('ENABLED SERVERS')
+  })
+
+  it('scheme A marker count: 1 on attempt 1, 2 from attempt 2 on', async () => {
+    const counts = await Promise.all(
+      [0, 1, 2].map(async (n) => {
+        const body = await renderActor(ATTEMPTS.slice(0, n))
+        const inSystem = systemBlocks(body).filter((blk) => blk.cache_control).length
+        return inSystem + breakpoints(body).length
+      }))
+    expect(counts).toEqual([1, 2, 2])
+  })
+
+  it('assistant/user attempt pairs; rolling marker on the LAST result only', async () => {
+    const body = await renderActor(ATTEMPTS)
+    const roles = body.messages.map((m) => m.role)
+    // [u(intent), u(context), u(request), A1, u(r1), A2, u(r2), u(tail)]
+    // Each explicit `_.role()` marker starts its own message — the system→user
+    // coercion happens after, so CONTEXT does not merge into the intent block.
+    expect(roles).toEqual([
+      'user', 'user', 'user', 'assistant', 'user', 'assistant', 'user', 'user'])
+
+    const all = blocks(body)
+    const r1 = all.find((blk) => blk.text?.includes('Attempt 1 result:'))
+    const r2 = all.find((blk) => blk.text?.includes('Attempt 2 result:'))
     expect(r1?.role).toBe('user')
+    expect(r1?.cache_control).toBeUndefined()   // older result: covered by lookback
+    expect(r2?.cache_control?.type).toBe('ephemeral')  // rolling marker
+    // critic feedback rides the result block of its attempt
     expect(r1?.text).toContain('CRITIC FEEDBACK: not sufficient')
   })
 
@@ -234,12 +276,19 @@ describe('ActorController prompt-caching layout', () => {
     expect(all[all.length - 1]).toBe(budgeted[0]) // it IS the tail block
   })
 
-  it('tier blocks are byte-identical across attempts', async () => {
+  it('marked prefix is byte-identical across attempts', async () => {
     const b0 = await renderActor([])
+    const b1 = await renderActor(ATTEMPTS.slice(0, 1))
     const b2 = await renderActor(ATTEMPTS)
-    const [t1of0, t2of0] = blocks(b0)
-    const [t1of2, t2of2] = blocks(b2)
-    expect(t1of2.text).toBe(t1of0.text)
-    expect(t2of2.text).toBe(t2of0.text)
+    // system block (the static marker's prefix) never changes
+    expect(systemBlocks(b1)[0].text).toBe(systemBlocks(b0)[0].text)
+    expect(systemBlocks(b2)[0].text).toBe(systemBlocks(b0)[0].text)
+    // run-static intent/context/request block never changes
+    expect(blocks(b1)[0].text).toBe(blocks(b0)[0].text)
+    expect(blocks(b2)[0].text).toBe(blocks(b0)[0].text)
+    // attempt-1 pair identical once attempt 2 is appended (append-only history)
+    const pick = (body: Body, needle: string) => blocks(body).find((blk) => blk.text?.includes(needle))?.text
+    expect(pick(b2, 'Attempt 1 action:')).toBe(pick(b1, 'Attempt 1 action:'))
+    expect(pick(b2, 'Attempt 1 result:')).toBe(pick(b1, 'Attempt 1 result:'))
   })
 })

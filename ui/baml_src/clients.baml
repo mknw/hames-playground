@@ -143,6 +143,11 @@ client<llm> AnthropicSonnet5 {
     model "claude-sonnet-5"
     api_key env.ANTHROPIC_API_KEY
     max_tokens 32768
+    // #122: forward the cache_control breakpoints rendered by the controller
+    // templates (simpleLoop.baml / actorCritic.baml). Providers without this
+    // allowlist silently drop the metadata, so the same templates stay safe
+    // on the Groq/OpenRouter/OpenAI chains.
+    allowed_role_metadata ["cache_control"]
   }
 }
 
@@ -152,6 +157,8 @@ client<llm> AnthropicSonnet46 {
     model "claude-sonnet-4-6"
     api_key env.ANTHROPIC_API_KEY
     max_tokens 16384
+    // #122: see AnthropicSonnet5 — this is the ControllerAnthropic backstop.
+    allowed_role_metadata ["cache_control"]
   }
 }
 

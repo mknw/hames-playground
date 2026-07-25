@@ -17,6 +17,7 @@
  * - CodeModeControllerFn(user_message, intent, available_tools, previous_attempts)
  */
 
+import { createHash } from 'node:crypto'
 import { assertServerOnImport } from './assert.server'
 import type { ControllerFn, CriticFn, CodeModeControllerFn, ControllerAction, CriticResult, ScriptExecutionEvent, LLMCallData } from './types'
 import type { ToolDescription, LoopTurn, Attempt, PriorResult, FewShot } from '../../../baml_client/types'
@@ -209,6 +210,22 @@ export const TRUNCATION_RETRY_GUIDANCE =
   'response. Keep tool_args compact; when a file or script is large, write the first ' +
   "part now and CONTINUE BY APPENDING in later calls (e.g. bash `cat >> file <<'EOF'`) " +
   'instead of inlining everything in a single call.'
+
+// ============================================================================
+// Run-stable input hash (#122 prompt caching)
+// ============================================================================
+
+/** 12-hex-char digest of the controller inputs that must stay byte-stable
+ *  across all iterations of one task run. Rendered into the prompt's tier-2
+ *  (run-static) block as a mutation canary: if it changes between iterations
+ *  of the same loop, something invalidated the cacheable prefix (e.g. a
+ *  mid-run tool registration or a context-provider change) — visible in the
+ *  observability panel via `variables.stable_hash` without diffing prompts.
+ *  Deliberately EXCLUDES loop state (turns/attempts, attempt counters) and
+ *  the refs' `expanded_in_turn` annotation, which mutate by design. */
+export function stableInputHash(parts: Record<string, unknown>): string {
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 12)
+}
 
 /** Error thrown by BAML adapters when an LLM call fails after all in-adapter
  *  fallbacks have been exhausted. Carries the captured prompt/variables/HTTP
@@ -405,7 +422,17 @@ export function createLoopControllerAdapter(
       context = parts.join('\n\n')
     }
 
-    const variables = { user_message, intent, tools, turns, context, turns_previous_runs: priorResults, few_shots: fewShots }
+    // Run-stable hash over everything rendered in the prompt's cacheable
+    // tiers. Refs are hashed WITHOUT `expanded_in_turn` (mutates by design;
+    // not rendered in the stable prefix). The truncation retry re-hashes with
+    // its mutated context so the in-prompt canary stays truthful.
+    const hashOf = (ctx: string | undefined): string => stableInputHash({
+      user_message, intent, ctx, tools, few_shots: fewShots,
+      refs: (priorResults ?? []).map(r => ({ ref_id: r.ref_id, tool: r.tool, summary: r.summary }))
+    })
+    const stableHash = hashOf(context)
+
+    const variables = { user_message, intent, tools, turns, context, turns_previous_runs: priorResults, few_shots: fewShots, stable_hash: stableHash }
 
     // Call with or without collector.
     //
@@ -426,8 +453,8 @@ export function createLoopControllerAdapter(
     let action: ControllerAction
     try {
       action = hasBaseOpts
-        ? await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, baseOpts)
-        : await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots)
+        ? await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, stableHash, baseOpts)
+        : await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, stableHash)
     } catch (e) {
       // Output-cap truncation (any chain, incl. Anthropic-only): the parse
       // failed because the response was cut off, not because the model can't
@@ -435,10 +462,11 @@ export function createLoopControllerAdapter(
       // appended to `context` (per-call, transient); a second failure throws.
       if (e instanceof BamlValidationError && collectorHitOutputCap(collector)) {
         const retryContext = [context, TRUNCATION_RETRY_GUIDANCE].filter(Boolean).join('\n\n')
+        const retryHash = hashOf(retryContext)
         try {
           action = hasBaseOpts
-            ? await b.LoopController(user_message, intent, tools, turns, retryContext, priorResults, fewShots, baseOpts)
-            : await b.LoopController(user_message, intent, tools, turns, retryContext, priorResults, fewShots)
+            ? await b.LoopController(user_message, intent, tools, turns, retryContext, priorResults, fewShots, retryHash, baseOpts)
+            : await b.LoopController(user_message, intent, tools, turns, retryContext, priorResults, fewShots, retryHash)
           const llmCall = collector
             ? extractLLMCallData(collector, 'LoopController', variables, startTime, action)
             : undefined
@@ -451,13 +479,13 @@ export function createLoopControllerAdapter(
         throw wrapAsLLMCallError(e, 'LoopController', variables, startTime, collector)
       }
       try {
-        action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' })
+        action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, stableHash, collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' })
       } catch (e2) {
         if (!(e2 instanceof BamlValidationError)) {
           throw wrapAsLLMCallError(e2, 'LoopController', variables, startTime, collector)
         }
         try {
-          action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' })
+          action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, stableHash, collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' })
         } catch (e3) {
           throw wrapAsLLMCallError(e3, 'LoopController', variables, startTime, collector)
         }
@@ -652,6 +680,16 @@ export function createActorControllerAdapter(
       ? await options.contextProvider()
       : options.contextPrefix
     const fewShots = options.fewShots
+
+    // Run-stable hash (see stableInputHash). `context` is included even though
+    // contextProvider resolves per invocation — a mid-run provider change is a
+    // deliberate cache bust that the canary should make visible, not hide.
+    // Attempt counters and attempts are excluded (loop state).
+    const hashOf = (ctx: string | undefined): string => stableInputHash({
+      user_message, intent, ctx, tools, few_shots: fewShots
+    })
+    const stableHash = hashOf(context)
+
     const variables = {
       user_message,
       intent,
@@ -661,6 +699,7 @@ export function createActorControllerAdapter(
       few_shots: fewShots,
       attempt_n: attemptNumber,
       max_attempts: maxAttempts,
+      stable_hash: stableHash,
     }
 
     // Call with or without collector.
@@ -684,17 +723,18 @@ export function createActorControllerAdapter(
     let action: ControllerAction
     try {
       action = hasBaseOpts
-        ? await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, baseOpts)
-        : await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts)
+        ? await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, stableHash, baseOpts)
+        : await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, stableHash)
     } catch (e) {
       // Output-cap truncation: one corrective retry with the truncation notice
       // appended to `context` — see createLoopControllerAdapter for rationale.
       if (e instanceof BamlValidationError && collectorHitOutputCap(collector)) {
         const retryContext = [context, TRUNCATION_RETRY_GUIDANCE].filter(Boolean).join('\n\n')
+        const retryHash = hashOf(retryContext)
         try {
           action = hasBaseOpts
-            ? await b.ActorController(user_message, intent, tools, attempts, retryContext, fewShots, attemptNumber, maxAttempts, baseOpts)
-            : await b.ActorController(user_message, intent, tools, attempts, retryContext, fewShots, attemptNumber, maxAttempts)
+            ? await b.ActorController(user_message, intent, tools, attempts, retryContext, fewShots, attemptNumber, maxAttempts, retryHash, baseOpts)
+            : await b.ActorController(user_message, intent, tools, attempts, retryContext, fewShots, attemptNumber, maxAttempts, retryHash)
           const llmCall = collector
             ? extractLLMCallData(collector, 'ActorController', variables, startTime, action)
             : undefined
@@ -707,13 +747,13 @@ export function createActorControllerAdapter(
         throw wrapAsLLMCallError(e, 'ActorController', variables, startTime, collector)
       }
       try {
-        action = await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' })
+        action = await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, stableHash, collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' })
       } catch (e2) {
         if (!(e2 instanceof BamlValidationError)) {
           throw wrapAsLLMCallError(e2, 'ActorController', variables, startTime, collector)
         }
         try {
-          action = await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' })
+          action = await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, stableHash, collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' })
         } catch (e3) {
           throw wrapAsLLMCallError(e3, 'ActorController', variables, startTime, collector)
         }

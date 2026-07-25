@@ -610,8 +610,9 @@ describe('LoopController BamlValidationError fallback', () => {
     expect(result.action).toBeDefined()
     expect(result.action.is_final).toBe(true)
     expect(mockLoopController).toHaveBeenCalledTimes(2)
-    // Second call should use GroqGPT120B client override
-    const secondCallOptions = mockLoopController.mock.calls[1][7] ?? mockLoopController.mock.calls[1][6]
+    // Second call should use GroqGPT120B client override.
+    // Positional layout: ..., few_shots[6], stable_hash[7], options[8].
+    const secondCallOptions = mockLoopController.mock.calls[1][8] ?? mockLoopController.mock.calls[1][7]
     expect(secondCallOptions).toEqual(expect.objectContaining({ client: 'GroqGPT120B' }))
   })
 
@@ -631,8 +632,9 @@ describe('LoopController BamlValidationError fallback', () => {
     expect(result.action).toBeDefined()
     expect(result.action.is_final).toBe(true)
     expect(mockLoopController).toHaveBeenCalledTimes(3)
-    // Third call should use GroqFast client override
-    const thirdCallOptions = mockLoopController.mock.calls[2][7] ?? mockLoopController.mock.calls[2][6]
+    // Third call should use GroqFast client override.
+    // Positional layout: ..., few_shots[6], stable_hash[7], options[8].
+    const thirdCallOptions = mockLoopController.mock.calls[2][8] ?? mockLoopController.mock.calls[2][7]
     expect(thirdCallOptions).toEqual(expect.objectContaining({ client: 'GroqFast' }))
   })
 

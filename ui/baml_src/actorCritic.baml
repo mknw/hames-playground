@@ -5,6 +5,18 @@
 // ============================================================================
 // Actor - Generates tool calls, improving from critic feedback
 // ============================================================================
+//
+// Prompt-caching layout (#122) — same two-tier + chronological-pairs scheme as
+// LoopController; full rationale in simpleLoop.baml. Differences here:
+//  - CONTEXT sits in tier-2, not tier-1: the actor's context may come from a
+//    per-invocation contextProvider (e.g. code-mode's ENABLED SERVERS catalog)
+//    and can legitimately change mid-run — tier-2 placement limits such a
+//    change to busting tier-2, keeping the tools/examples cache alive.
+//  - The per-attempt BUDGET block renders in the volatile tail (it changes
+//    every attempt, so it must never sit in a cached region).
+//  - stable_hash is the adapter-computed mutation canary rendered in tier-2;
+//    constant across the attempts of one run unless an input actually changed
+//    (e.g. a mid-run tool registration — a deliberate, visible cache bust).
 
 function ActorController(
   user_message: string,
@@ -14,7 +26,8 @@ function ActorController(
   context: string?,
   few_shots: FewShot[]?,
   attempt_n: int?,
-  max_attempts: int?
+  max_attempts: int?,
+  stable_hash: string?
 ) -> ControllerAction {
   client ControllerAnthropic
   prompt #"
@@ -22,14 +35,21 @@ function ActorController(
     You are an AI agent that accomplishes tasks by calling tools.
     A critic evaluates your output. Learn from previous feedback.
 
-    USER INTENT: {{ intent }}
+    {{ _.role("user", cache_control={"type": "ephemeral"}) }}
+    AVAILABLE TOOLS:
+    {% for tool in tools %}
 
-    {% if context %}
-    CONTEXT:
-    {{ context }}
-    {% endif %}
+    - {{ tool.name }}: {{ tool.description }}
+      {% if tool.args_schema %}  Args: {{ tool.args_schema }}{% endif %}
+    {% endfor %}
 
+    The critic evaluates whether the data you've gathered is sufficient and
+    decides when the task is complete — you don't need a "Return" tool. Focus
+    on calling the right tool to make progress; the loop exits when the critic
+    says so.
     {% if few_shots and few_shots|length > 0 %}
+
+    ---
     EXAMPLES (illustrative — adapt to the actual request, do not copy verbatim):
     {% for ex in few_shots %}
     - User: {{ ex.user }}
@@ -39,29 +59,49 @@ function ActorController(
     {% endfor %}
     {% endif %}
 
-    AVAILABLE TOOLS:
-    {% for tool in tools %}
-    - {{ tool.name }}: {{ tool.description }}
-      {% if tool.args_schema %}  Args: {{ tool.args_schema }}{% endif %}
-    {% endfor %}
+    {{ _.role("user", cache_control={"type": "ephemeral"}) }}
+    {% if stable_hash %}
+    [input-hash {{ stable_hash }} — constant for this whole task run]
 
-    The critic evaluates whether the data you've gathered is sufficient and
-    decides when the task is complete — you don't need a "Return" tool. Focus
-    on calling the right tool to make progress; the loop exits when the critic
-    says so.
-
-    {% if attempts|length > 0 %}
-    PREVIOUS ATTEMPTS:
-    {% for attempt in attempts %}
-    --- Attempt {{ attempt.n }} ---
-    Action: {{ attempt.action.tool_name }}({{ attempt.action.tool_args }})
-    Reasoning: {{ attempt.action.reasoning }}
-    {% if attempt.error %}ERROR: {{ attempt.error }}
-    {% else %}Result: {{ attempt.result }}
+    ---
     {% endif %}
-    {% if attempt.feedback %}CRITIC FEEDBACK: {{ attempt.feedback }}{% endif %}
+    USER INTENT: {{ intent }}
+    {% if context %}
+
+    ---
+    CONTEXT:
+    {{ context }}
+    {% endif %}
+
+    ---
+    USER REQUEST: {{ user_message }}
+
+    {% for attempt in attempts %}
+    {{ _.role("assistant") }}
+    Attempt {{ attempt.n }} action:
+    {% if attempt.action.reasoning %}
+    Reasoning: {{ attempt.action.reasoning }}
+    {% endif %}
+    Call: {{ attempt.action.tool_name }}
+    Args: {{ attempt.action.tool_args }}
+    {% if loop.index > attempts|length - 2 %}
+    {{ _.role("user", cache_control={"type": "ephemeral"}) }}
+    {% else %}
+    {{ _.role("user") }}
+    {% endif %}
+    Attempt {{ attempt.n }} result:
+    {% if attempt.error %}
+    ERROR: {{ attempt.error }}
+    {% else %}
+    Result: {{ attempt.result }}
+    {% endif %}
+    {% if attempt.feedback %}
+    CRITIC FEEDBACK: {{ attempt.feedback }}
+    {% endif %}
     {% endfor %}
 
+    {{ _.role("user") }}
+    {% if attempts|length > 0 %}
     You MUST address the critic's feedback. Do not repeat failed approaches.
     {% endif %}
 
@@ -73,9 +113,6 @@ function ActorController(
     Do NOT start a fresh tool chain that won't complete in time.
     {% endif %}
     {% endif %}
-
-    {{ _.role("user") }}
-    {{ user_message }}
 
     You are on attempt {{ attempts|length + 1 }}. Respond with the next action.
 

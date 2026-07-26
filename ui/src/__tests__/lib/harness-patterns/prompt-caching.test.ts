@@ -5,14 +5,14 @@
  * HTTP body and asserts the cache-stability invariants the controller
  * templates (simpleLoop.baml / actorCritic.baml) must uphold.
  *
- * TWO SCHEMES UNDER TEST (#122 A/B — the live run decides the winner):
- *  - SCHEME A, ActorController: 1 static marker on the system block + 1
- *    rolling marker on the last result. Minimal markers; relies on
- *    Anthropic's ~20-block read lookback to hit the previous call's write.
- *  - SCHEME B, LoopController: 2 static tier markers (agent-static +
- *    run-static) + 2 rolling markers on the last two results. Caches the
- *    run-static tier from call 1 and re-declares the previous write position
- *    explicitly instead of relying on lookback.
+ * VARIANTS UNDER TEST (#122 A/B — the live bench decides the winner):
+ *  - ActorControllerV2 (actorCritic_v2.baml): cookbook Example-3 shape — one
+ *    breakpoint on the system block + one rolling breakpoint on the last
+ *    PERSISTENT block (USER REQUEST on call 1, newest attempt result after).
+ *    Asserted here. Production still calls ActorController (V1) — the
+ *    user-authored experimental arm, measured by the live bench only and
+ *    deliberately NOT shape-asserted by tests.
+ *  - LoopController (scheme B): 2 static tier markers + 2 rolling markers.
  *
  * NOTE ON SHAPE: BAML merges consecutive same-role prompt messages into ONE
  * API message with multiple `text` content blocks, and `cache_control` rides
@@ -195,7 +195,10 @@ describe('LoopController prompt-caching layout', () => {
   })
 })
 
-describe('ActorController prompt-caching layout', () => {
+// V2 is the bench arm this suite asserts. Production's ActorController (V1,
+// actorCritic.baml) is the user-authored experimental arm: measured by the
+// live bench (src/__tests__/bench/), deliberately not shape-asserted here.
+describe('ActorControllerV2 prompt-caching layout', () => {
   const ATTEMPTS = [
     {
       n: 1,
@@ -210,18 +213,18 @@ describe('ActorController prompt-caching layout', () => {
   ]
 
   async function renderActor(attempts: unknown[]): Promise<Body> {
-    const req = await b.request.ActorController(
+    const req = await b.request.ActorControllerV2(
       'do the thing', 'do the thing', TOOLS, attempts as never,
       'ENABLED SERVERS: neo4j', undefined, attempts.length + 1, 3)
     return req.body.json() as Body
   }
 
-  /** Scheme A's static marker rides the top-level `system` param, not messages[]. */
+  /** V2's static marker rides the top-level `system` param, not messages[]. */
   function systemBlocks(body: Body): Block[] {
     return (body.system ?? []) as Block[]
   }
 
-  it('static requirements live in the system param and carry the only static marker', async () => {
+  it('static requirements live in the system param and carry the static marker', async () => {
     const body = await renderActor(ATTEMPTS)
     const sys = systemBlocks(body)
     expect(sys).toHaveLength(1)
@@ -230,38 +233,43 @@ describe('ActorController prompt-caching layout', () => {
     // run-static content stays in messages[] and is NOT separately marked
     const [intentBlk] = blocks(body)
     expect(intentBlk.text).toContain('USER INTENT:')
+    expect(intentBlk.text).toContain('ENABLED SERVERS') // context rides the intent block
     expect(intentBlk.cache_control).toBeUndefined()
-    // CONTEXT is template-level `system` but coerced to user on the wire
-    const ctx = blocks(body).find((blk) => blk.text?.includes('ENABLED SERVERS'))
-    expect(ctx?.role).toBe('user')
     expect(sys[0].text).not.toContain('ENABLED SERVERS')
   })
 
-  it('scheme A marker count: 1 on attempt 1, 2 from attempt 2 on', async () => {
+  it('two markers on every call: system + last persistent block', async () => {
     const counts = await Promise.all(
       [0, 1, 2].map(async (n) => {
         const body = await renderActor(ATTEMPTS.slice(0, n))
         const inSystem = systemBlocks(body).filter((blk) => blk.cache_control).length
         return inSystem + breakpoints(body).length
       }))
-    expect(counts).toEqual([1, 2, 2])
+    expect(counts).toEqual([2, 2, 2])
   })
 
-  it('assistant/user attempt pairs; rolling marker on the LAST result only', async () => {
-    const body = await renderActor(ATTEMPTS)
-    const roles = body.messages.map((m) => m.role)
-    // [u(intent), u(context), u(request), A1, u(r1), A2, u(r2), u(tail)]
-    // Each explicit `_.role()` marker starts its own message — the system→user
-    // coercion happens after, so CONTEXT does not merge into the intent block.
-    expect(roles).toEqual([
-      'user', 'user', 'user', 'assistant', 'user', 'assistant', 'user', 'user'])
+  it('the rolling marker sits on USER REQUEST at call 1, then moves to the newest result', async () => {
+    // call 1: no attempts yet — the request block is the last persistent block
+    const first = await renderActor([])
+    expect(breakpoints(first)).toHaveLength(1)
+    expect(breakpoints(first)[0].text).toContain('USER REQUEST')
+    // call 3: marker moved onto the newest result; request no longer marked
+    const third = await renderActor(ATTEMPTS)
+    expect(breakpoints(third)).toHaveLength(1)
+    expect(breakpoints(third)[0].text).toContain('Attempt 2 result:')
+    expect(blocks(third).find((blk) => blk.text?.includes('USER REQUEST'))?.cache_control).toBeUndefined()
+  })
 
+  it('assistant/user attempt pairs; older results unmarked (covered by prefix matching)', async () => {
+    const body = await renderActor(ATTEMPTS)
     const all = blocks(body)
+    const a1 = all.find((blk) => blk.role === 'assistant')
+    expect(a1?.text).toContain('Attempt 1 action:')
     const r1 = all.find((blk) => blk.text?.includes('Attempt 1 result:'))
     const r2 = all.find((blk) => blk.text?.includes('Attempt 2 result:'))
     expect(r1?.role).toBe('user')
-    expect(r1?.cache_control).toBeUndefined()   // older result: covered by lookback
-    expect(r2?.cache_control?.type).toBe('ephemeral')  // rolling marker
+    expect(r1?.cache_control).toBeUndefined()
+    expect(r2?.cache_control?.type).toBe('ephemeral')
     // critic feedback rides the result block of its attempt
     expect(r1?.text).toContain('CRITIC FEEDBACK: not sufficient')
   })

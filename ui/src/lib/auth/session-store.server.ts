@@ -53,10 +53,10 @@ const SCHEMA_SQL = `
     email            TEXT NOT NULL,
     display_name     TEXT,
     home_account_id  TEXT,
-    -- Serialized MSAL token cache for this session's account. Holds the
-    -- refresh/access tokens for the OBO exchange (#110). Nullable: a session
-    -- can exist before a cache is captured, and dev/test paths omit it.
-    token_cache      TEXT,
+    -- NOTE: the MSAL token cache is NOT stored here. It lives encrypted and
+    -- per-user in user_tokens (see user-tokens.server.ts, #110) so that runs
+    -- without a live session (agent-trigger) can still act for the user. That
+    -- module also drops this table's legacy plaintext token_cache column.
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at       TIMESTAMPTZ NOT NULL
   );
@@ -93,27 +93,26 @@ function toRecord(row: DbRow): SessionRecord {
 
 /**
  * Create a session row and return its opaque id (to be set as the cookie).
- * `tokenCache` is MSAL's serialized cache blob — stored for OBO (#110), never
- * sent to the client.
+ * The MSAL token cache is persisted separately, per-user and encrypted, by
+ * `user-tokens.server.ts` (#110) — not on the session row.
  */
 export async function createSession(
   claims: SessionClaims,
-  opts: { tokenCache?: string | null; ttlSeconds?: number } = {},
+  opts: { ttlSeconds?: number } = {},
 ): Promise<string> {
   await ensureSchema();
   const id = newOpaqueId();
   const ttl = opts.ttlSeconds ?? DEFAULT_SESSION_TTL_SECONDS;
   await query(
     `INSERT INTO auth_sessions
-       (id, user_id, email, display_name, home_account_id, token_cache, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW() + ($7 || ' seconds')::interval)`,
+       (id, user_id, email, display_name, home_account_id, expires_at)
+     VALUES ($1, $2, $3, $4, $5, NOW() + ($6 || ' seconds')::interval)`,
     [
       id,
       claims.userId,
       claims.email,
       claims.displayName,
       claims.homeAccountId,
-      opts.tokenCache ?? null,
       String(ttl),
     ],
   );
@@ -139,16 +138,6 @@ export async function getSession(id: string | null | undefined): Promise<Session
     return null;
   }
   return toRecord(row);
-}
-
-/** Retrieve the persisted MSAL token cache for a session (for #110/OBO). */
-export async function getSessionTokenCache(id: string): Promise<string | null> {
-  await ensureSchema();
-  const { rows } = await query<{ token_cache: string | null }>(
-    `SELECT token_cache FROM auth_sessions WHERE id = $1`,
-    [id],
-  );
-  return rows[0]?.token_cache ?? null;
 }
 
 /** Delete a session (logout / revocation). Idempotent. */

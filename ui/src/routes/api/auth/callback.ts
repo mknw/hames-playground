@@ -22,6 +22,7 @@ import {
   DEFAULT_SESSION_TTL_SECONDS,
 } from "~/lib/auth/session-store.server";
 import { upsertUser } from "~/lib/auth/users.server";
+import { saveUserTokenCache } from "~/lib/auth/user-tokens.server";
 import { isEmailAllowed } from "~/lib/auth/allowList";
 
 interface Handshake {
@@ -87,15 +88,16 @@ export async function GET(event: APIEvent): Promise<Response> {
       tenantId: identity.tenantId,
     });
 
-    const sessionId = await createSession(
-      {
-        userId: identity.userId,
-        email: identity.email,
-        displayName: identity.displayName,
-        homeAccountId,
-      },
-      { tokenCache },
-    );
+    // Persist the MSAL cache per-user (encrypted) so Graph can be called as
+    // this user later — including from runs with no live session (#110).
+    await saveUserTokenCache(identity.userId, tokenCache, homeAccountId);
+
+    const sessionId = await createSession({
+      userId: identity.userId,
+      email: identity.email,
+      displayName: identity.displayName,
+      homeAccountId,
+    });
 
     return redirect(
       "/",

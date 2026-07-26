@@ -17,7 +17,6 @@ import {
   createSession,
   getSession,
   deleteSession,
-  getSessionTokenCache,
 } from "../../../lib/auth/session-store.server";
 import { closePool, query } from "../../../lib/db/client.server";
 
@@ -40,17 +39,14 @@ afterAll(async () => {
 });
 
 describe("auth session store", () => {
-  it("round-trips a session with its token cache", async () => {
+  it("round-trips a session (token cache now lives per-user, see #110)", async () => {
     if (!dbAvailable) return;
-    const id = await createSession(
-      {
-        userId: TEST_USER,
-        email: "u@corp.com",
-        displayName: "U",
-        homeAccountId: "hai-1",
-      },
-      { tokenCache: '{"cache":1}' },
-    );
+    const id = await createSession({
+      userId: TEST_USER,
+      email: "u@corp.com",
+      displayName: "U",
+      homeAccountId: "hai-1",
+    });
 
     const s = await getSession(id);
     expect(s).not.toBeNull();
@@ -58,7 +54,6 @@ describe("auth session store", () => {
     expect(s!.email).toBe("u@corp.com");
     expect(s!.displayName).toBe("U");
     expect(s!.homeAccountId).toBe("hai-1");
-    expect(await getSessionTokenCache(id)).toBe('{"cache":1}');
 
     await deleteSession(id);
     expect(await getSession(id)).toBeNull();

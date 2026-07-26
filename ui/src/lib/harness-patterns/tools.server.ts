@@ -6,6 +6,7 @@
 
 import { assertServerOnImport } from './assert.server'
 import { listTools as mcpListTools } from './mcp-client.server'
+import { appToolNamespace } from '../app-tools/index.server'
 import type { ToolSet, MCPToolDescription } from './types'
 
 assertServerOnImport()
@@ -131,8 +132,9 @@ for (const t of [
  * Infer server name from tool name.
  *
  * 1. Strip MCP gateway prefix (mcp__gateway__toolName → toolName)
- * 2. Check KNOWN_TOOL_SERVERS lookup
- * 3. Fall back to heuristic (verb prefix stripping, underscore/hyphen split)
+ * 2. App-side tools declare their own namespace (#110)
+ * 3. Check KNOWN_TOOL_SERVERS lookup
+ * 4. Fall back to heuristic (verb prefix stripping, underscore/hyphen split)
  */
 export function inferServer(toolName: string): string {
   // Handle MCP gateway format: mcp__server-name__tool_name → infer from tool_name part
@@ -140,6 +142,13 @@ export function inferServer(toolName: string): string {
     const parts = toolName.split('__')
     const actualToolName = parts[parts.length - 1]
     return inferServer(actualToolName)
+  }
+
+  // App-side tools carry an explicit namespace, so grouping never depends on
+  // the name heuristic (which would mis-bucket e.g. `list_graph_messages`).
+  const appNs = appToolNamespace(toolName)
+  if (appNs) {
+    return appNs
   }
 
   // Check known mapping first

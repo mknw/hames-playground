@@ -303,24 +303,35 @@ describe('mcp-client', () => {
       expect(typeof listTools).toBe('function')
     })
 
-    it('should return list of tool descriptions', async () => {
+    it('should return gateway tool descriptions', async () => {
       const { listTools } = await import('../../../lib/harness-patterns/mcp-client.server')
 
       const tools = await listTools()
 
-      expect(tools).toHaveLength(1)
-      expect(tools[0].name).toBe('test_tool')
-      expect(tools[0].description).toBe('A test tool')
+      const gateway = tools.find((t) => t.name === 'test_tool')
+      expect(gateway).toBeDefined()
+      expect(gateway!.description).toBe('A test tool')
     })
 
-    it('should return empty array on error', async () => {
+    it('should append in-process app tools to the gateway list (#110)', async () => {
+      const { listTools } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const tools = await listTools()
+
+      // App-side tools (per-user Graph) are advertised alongside gateway tools.
+      expect(tools.map((t) => t.name)).toContain('graph_me')
+    })
+
+    it('should still offer app tools when the gateway fails', async () => {
       mockListTools.mockRejectedValue(new Error('Failed'))
 
       const { listTools } = await import('../../../lib/harness-patterns/mcp-client.server')
 
       const tools = await listTools()
 
-      expect(tools).toEqual([])
+      // No gateway tools, but app tools run in-process so they survive.
+      expect(tools.every((t) => t.name !== 'test_tool')).toBe(true)
+      expect(tools.map((t) => t.name)).toContain('graph_me')
     })
   })
 

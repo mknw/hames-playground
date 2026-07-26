@@ -18,13 +18,19 @@ const { FakeInteractionRequiredAuthError } = vi.hoisted(() => ({
   FakeInteractionRequiredAuthError: class extends Error {},
 }));
 
+type FakeAccount = { homeAccountId: string };
+
 const acquireTokenSilent = vi.fn();
 const cacheState = {
   deserialize: vi.fn(),
   serialize: vi.fn(() => '{"cache":"rotated"}'),
   hasChanged: vi.fn(() => true),
-  getAccountByHomeId: vi.fn(async () => ({ homeAccountId: "hai-1" })),
-  getAllAccounts: vi.fn(async () => [{ homeAccountId: "hai-1" }]),
+  getAccountByHomeId: vi.fn<(id: string) => Promise<FakeAccount | null>>(async () => ({
+    homeAccountId: "hai-1",
+  })),
+  getAllAccounts: vi.fn<() => Promise<FakeAccount[]>>(async () => [
+    { homeAccountId: "hai-1" },
+  ]),
 };
 
 vi.mock("@azure/msal-node", () => ({
@@ -50,11 +56,14 @@ vi.mock("../../../lib/auth/entra-config.server", () => ({
   msalConfiguration: () => ({ auth: { clientId: "c" } }),
 }));
 
-const loadUserTokenCache = vi.fn();
-const saveUserTokenCache = vi.fn(async () => {});
+const loadUserTokenCache = vi.fn<(userId: string) => Promise<unknown>>();
+const saveUserTokenCache = vi.fn<
+  (userId: string, cache: string, homeAccountId: string | null) => Promise<void>
+>(async () => {});
 vi.mock("../../../lib/auth/user-tokens.server", () => ({
-  loadUserTokenCache: (...a: unknown[]) => loadUserTokenCache(...a),
-  saveUserTokenCache: (...a: unknown[]) => saveUserTokenCache(...a),
+  loadUserTokenCache: (userId: string) => loadUserTokenCache(userId),
+  saveUserTokenCache: (userId: string, cache: string, hai: string | null) =>
+    saveUserTokenCache(userId, cache, hai),
 }));
 
 import {

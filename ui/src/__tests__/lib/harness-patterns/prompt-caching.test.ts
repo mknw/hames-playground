@@ -300,3 +300,39 @@ describe('ActorControllerV2 prompt-caching layout', () => {
     expect(pick(b2, 'Attempt 1 result:')).toBe(pick(b1, 'Attempt 1 result:'))
   })
 })
+
+// ---------------------------------------------------------------------------
+// V3 ≡ V2 (#122 DX refactor): ActorControllerV3 is ActorControllerV2 decomposed
+// into template_strings. The refactor is ONLY legitimate while the rendered
+// request stays byte-identical — same blocks, same text, same cache_control.
+// This is the proof; if a section edit in actorCritic_v3.baml breaks it, the
+// cache behavior changed and the two no longer share cache entries.
+// ---------------------------------------------------------------------------
+describe('ActorControllerV3 renders byte-identical requests to V2', () => {
+  const FEW_SHOTS = [
+    { user: 'count the nodes', reasoning: 'plain count', tool: 'read_neo4j_cypher', args: '{"query":"MATCH (n) RETURN count(n)"}' },
+  ]
+  // Branch coverage: reasoning present/empty, feedback present/absent,
+  // success/error results, tools with/without args_schema.
+  const RICH_ATTEMPTS = [
+    { n: 1, action: { reasoning: 'try a script', tool_name: 'code-mode', tool_args: '{"script":"return 1"}', status: 'success', is_final: false }, result: 'got 1', error: null, feedback: 'not sufficient' },
+    { n: 2, action: { reasoning: '', tool_name: 'code-mode', tool_args: '{"script":"return 2"}', status: 'error', is_final: false }, result: '', error: 'boom', feedback: null },
+    { n: 3, action: { reasoning: 'retry smaller', tool_name: 'code-mode', tool_args: '{"script":"return 3"}', status: 'success', is_final: false }, result: 'got 3', error: null, feedback: null },
+  ]
+
+  const CASES: Array<[string, unknown[], string | undefined, unknown[] | undefined]> = [
+    ['no attempts, context, no few-shots', [], 'ENABLED SERVERS: neo4j', undefined],
+    ['no attempts, no context, few-shots', [], undefined, FEW_SHOTS],
+    ['1 attempt', RICH_ATTEMPTS.slice(0, 1), 'ENABLED SERVERS: neo4j', FEW_SHOTS],
+    ['2 attempts (error branch)', RICH_ATTEMPTS.slice(0, 2), 'ENABLED SERVERS: neo4j', FEW_SHOTS],
+    ['3 attempts', RICH_ATTEMPTS, 'ENABLED SERVERS: neo4j', FEW_SHOTS],
+  ]
+
+  it.each(CASES)('%s', async (_label, attempts, context, fewShots) => {
+    const args = ['do the thing', 'do the thing', TOOLS, attempts, context, fewShots, attempts.length + 1, 3]
+    type Render = (...a: unknown[]) => Promise<{ body: { json(): unknown } }>
+    const v2 = (await (b.request.ActorControllerV2 as never as Render)(...args)).body.json()
+    const v3 = (await (b.request.ActorControllerV3 as never as Render)(...args)).body.json()
+    expect(JSON.stringify(v3)).toBe(JSON.stringify(v2))
+  })
+})

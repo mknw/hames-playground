@@ -1,7 +1,17 @@
 /**
  * LIVE prompt-cache benchmark (#122) — V1 (ActorController, user-authored)
- * vs V2 (ActorControllerV2, cookbook Example-3 shape). Calls the real
- * Anthropic API and reports actual cache behavior per call.
+ * vs V2 (ActorControllerV2, cookbook Example-3 shape) vs V3
+ * (ActorControllerV3, template_string refactor of V2 — proven byte-identical
+ * offline by prompt-caching.test.ts, so live parity with V2 is expected).
+ * Calls the real Anthropic API and reports actual cache behavior per call.
+ *
+ * VARIANT ISOLATION: each variant gets a per-variant salt woven into the
+ * FIRST TOOL's description. Tools render inside the system block, i.e. at the
+ * very top of the hashed prefix — so no variant can read entries another
+ * variant wrote (observed in an earlier run: V1's turn-1 "read" was actually
+ * the through-system entry V2 had written minutes before). Without this,
+ * byte-identical variants (V2/V3) would share nearly ALL entries and the
+ * later one would show ~100% cache for free.
  *
  * OFF by default (skipped) so `pnpm test:run` stays offline. Run with:
  *
@@ -69,9 +79,12 @@ const LOREM =
   'supports pagination, cursor resumption, schema-aware validation of every ' +
   'parameter, structured error surfaces, and per-call rate accounting. '
 
-const TOOLS = Array.from({ length: 8 }, (_, i) => ({
+/** Tool catalog with a per-variant isolation salt in tool 0's description —
+ *  tools render at the top of the system block, so this de-shares the entire
+ *  prefix between variants. */
+const toolsFor = (isoSalt: string) => Array.from({ length: 8 }, (_, i) => ({
   name: `bench_tool_${i}`,
-  description: `Benchmark tool #${i}. ${LOREM.repeat(6)}`,
+  description: `${i === 0 ? `[iso:${isoSalt}] ` : ''}Benchmark tool #${i}. ${LOREM.repeat(6)}`,
   args_schema: JSON.stringify({
     type: 'object',
     properties: {
@@ -193,8 +206,9 @@ describe('prompt-cache live bench: V1 vs V2', () => {
     const userMessage = `[${salt}] Compute the per-label node counts for the Bench subgraph and report the three largest labels with their counts.`
 
     const variants = [
-      { name: 'V1 ActorController (user arm)', fn: b.request.ActorController.bind(b.request) },
-      { name: 'V2 ActorControllerV2 (cookbook arm)', fn: b.request.ActorControllerV2.bind(b.request) },
+      { tag: 'v1', name: 'V1 ActorController (user arm)', fn: b.request.ActorController.bind(b.request) },
+      { tag: 'v2', name: 'V2 ActorControllerV2 (cookbook arm)', fn: b.request.ActorControllerV2.bind(b.request) },
+      { tag: 'v3', name: 'V3 ActorControllerV3 (template_string refactor of V2)', fn: b.request.ActorControllerV3.bind(b.request) },
     ] as const
 
     const sections: string[] = [
@@ -204,9 +218,10 @@ describe('prompt-cache live bench: V1 vs V2', () => {
 
     for (const variant of variants) {
       const rows: CallRow[] = []
+      const tools = toolsFor(`${variant.tag}-${salt}`)
       for (let len = 0; len <= 3; len++) {
         const req = await variant.fn(
-          userMessage, userMessage, TOOLS, ATTEMPTS.slice(0, len) as never,
+          userMessage, userMessage, tools, ATTEMPTS.slice(0, len) as never,
           CONTEXT, undefined, len + 1, 4)
         const prefixes = markedPrefixSizes(req.body.json() as Body)
         const { usage, ms } = await callApi(req as never, key)

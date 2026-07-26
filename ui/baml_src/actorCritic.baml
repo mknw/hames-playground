@@ -86,7 +86,7 @@ function ActorController(
         {% endif %}
     Tool: {{ attempt.action.tool_name }}
     Args: {{ attempt.action.tool_args }}
-        {% if loop.index0 > (attempt_n - 2) %}
+        {% if loop.index0 >= (attempt_n - 2) %}
         {{ _.role("system", cache_control={"type": "ephemeral"}) }}
         {% else %}
         {{ _.role("system") }}

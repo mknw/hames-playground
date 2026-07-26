@@ -50,6 +50,7 @@ set a rotation reminder. (Rotate out any secret previously shared with Stack.)
 |------------|---------------|
 | `openid`, `profile`, `email`, `offline_access` | not required (user consent) |
 | `User.Read` | grant tenant-wide admin consent |
+| `Mail.Read`, `Mail.Send`, `Calendars.ReadWrite`, `Files.Read.All`, `Sites.Read.All` | add + grant admin consent before enabling the connectors — see "Scopes are requested up front" below |
 
 `offline_access` is what yields the refresh token the app persists for the
 future OBO exchange (#110). Additional Graph scopes for #110 (e.g. `Mail.Read`,
@@ -127,19 +128,42 @@ It is **per-user, not per-session**, because background runs
 (`POST /api/agents/:id` → `runAgentInBackground`) have no live session — only a
 `userId`. A session-scoped cache would leave those runs with no credential.
 
-### Adding a connector (mail, files, calendar)
+### Scopes are requested up front — all of them
 
-1. Add the delegated scope in **API permissions** and grant admin consent.
-2. Add it to the sign-in request (`scopes` in `lib/auth/entra-config.server.ts`)
-   so one consent covers it and the refresh token can mint it silently. Requesting
-   scopes at sign-in — rather than incrementally — is what makes background runs
-   possible at all: there is no user present to consent mid-run.
-3. Register a tool in `lib/app-tools/graph.server.ts` using `graphFetch(userId,
-   path, { scopes })`. It appears in `tools.graph` automatically, so the
-   `microsoft-365` agent picks it up with no change.
+`DEFAULT_GRAPH_SCOPES` in `lib/auth/entra-config.server.ts` requests the whole
+connector set at sign-in:
 
-Existing users must sign in again after new scopes are added, so their stored
-refresh token covers them.
+| Scope | For | Kind |
+|---|---|---|
+| `User.Read`, `email` | own profile | read |
+| `Mail.Read` | mailbox search / summarise | read |
+| `Mail.Send` | send as the user | **write** |
+| `Calendars.ReadWrite` | availability + scheduling | **write** |
+| `Files.Read.All` | OneDrive + SharePoint files the user can access | read |
+| `Sites.Read.All` | SharePoint sites the user can access | read |
+
+Why up front rather than incrementally: **adding a scope later forces every user
+to sign in again** (their stored refresh token must cover it), and background runs
+have no user present to consent mid-run. One consent, done.
+
+A granted scope is not a capability. The model can only do what a *registered
+tool* exposes, and today that is the read-only `graph_me`. Any future write tool
+should carry its own confirmation gate.
+
+> ⚠️ **Order matters.** Every scope in the request must exist under **API
+> permissions** with consent granted *before* anyone signs in. A scope that is
+> requested but not consented fails **the whole sign-in** — not just that
+> connector ("Need admin approval"). If that happens, trim the list via the
+> `AZURE_GRAPH_SCOPES` env var (space- or comma-separated) and restart — no code
+> change or redeploy needed. Reserved scopes (`openid`/`profile`/
+> `offline_access`) are stripped automatically; MSAL supplies them.
+
+### Adding a connector tool
+
+Register it in `lib/app-tools/graph.server.ts` using `graphFetch(userId, path,
+{ scopes })`. It appears in `tools.graph` automatically, so the `microsoft-365`
+agent picks it up with no change. No re-consent is needed as long as the scope is
+already in the set above.
 
 ### Security invariants (#107 principle 1)
 

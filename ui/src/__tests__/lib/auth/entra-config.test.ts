@@ -16,6 +16,7 @@ import {
   isEntraConfigured,
   msalConfiguration,
   AAD_HOST,
+  DEFAULT_GRAPH_SCOPES,
 } from "../../../lib/auth/entra-config.server";
 
 const full = {
@@ -39,7 +40,43 @@ describe("buildEntraConfig", () => {
     expect(cfg.authority).toBe(`${AAD_HOST}/tid`);
     expect(cfg.redirectUri).toBe("http://localhost:3444/api/auth/callback");
     expect(cfg.postLogoutRedirectUri).toBe("http://localhost:3444/auth/signin");
-    expect(cfg.scopes).toEqual(["User.Read", "email"]);
+    expect(cfg.scopes).toEqual([...DEFAULT_GRAPH_SCOPES]);
+  });
+
+  it("requests the full connector scope set at sign-in (#110)", () => {
+    const cfg = buildEntraConfig(full);
+    // One consent must cover every connector: background runs have no user
+    // present to consent later.
+    for (const s of ["User.Read", "Mail.Read", "Files.Read.All", "Calendars.ReadWrite"]) {
+      expect(cfg.scopes).toContain(s);
+    }
+  });
+
+  it("AZURE_GRAPH_SCOPES trims the set without a code change", () => {
+    const cfg = buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: "User.Read, Mail.Read" });
+    expect(cfg.scopes).toEqual(["User.Read", "Mail.Read"]);
+  });
+
+  it("accepts whitespace-separated overrides and ignores blanks", () => {
+    const cfg = buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: "  User.Read   Mail.Read  " });
+    expect(cfg.scopes).toEqual(["User.Read", "Mail.Read"]);
+  });
+
+  it("falls back to the default set for a blank/empty override", () => {
+    expect(buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: "   " }).scopes).toEqual([
+      ...DEFAULT_GRAPH_SCOPES,
+    ]);
+    expect(buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: " , , " }).scopes).toEqual([
+      ...DEFAULT_GRAPH_SCOPES,
+    ]);
+  });
+
+  it("strips reserved OIDC scopes from an override (MSAL would throw)", () => {
+    const cfg = buildEntraConfig({
+      ...full,
+      AZURE_GRAPH_SCOPES: "openid profile offline_access User.Read",
+    });
+    expect(cfg.scopes).toEqual(["User.Read"]);
   });
 
   it("does NOT list reserved OIDC scopes (MSAL adds them)", () => {

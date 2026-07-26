@@ -67,10 +67,19 @@ AZURE_TENANT_ID=<tenant (directory) GUID>
 AZURE_CLIENT_ID=<app registration client id>
 AZURE_CLIENT_SECRET=<from Certificates & secrets>
 AUTH_SESSION_SECRET=<openssl rand -base64 32>   # signs auth cookies
+# Encrypts the stored per-user token cache (#110). Strongly recommended in
+# production so it can rotate independently of the cookie-signing key; when
+# unset, the key is HKDF-derived from AUTH_SESSION_SECRET.
+TOKEN_ENCRYPTION_KEY=<openssl rand -base64 32>
 # Optional overrides (defaults target dev):
 # AUTH_REDIRECT_URI=http://localhost:3444/api/auth/callback
 # AUTH_POST_LOGOUT_REDIRECT_URI=http://localhost:3444/auth/signin
 ```
+
+⚠️ Rotating `TOKEN_ENCRYPTION_KEY` (or `AUTH_SESSION_SECRET` when no dedicated
+key is set) makes existing stored token caches undecryptable. That is handled
+gracefully — affected users are simply asked to sign in again — but it does mean
+background runs for those users fail until they do.
 
 Access is still gated by the email allow-list (`VITE_ALLOWED_EMAILS`); a
 signed-in account whose email isn't listed lands on `/auth/access-denied` and
@@ -79,6 +88,67 @@ gets no session.
 **Dev without a tenant:** `VITE_DEV_BYPASS_AUTH=true` (dev builds only) signs in
 as the mock `dev-bypass-user` — no Entra round-trip. This is the default for
 local iteration.
+
+---
+
+## Calling Microsoft Graph as the user (Pattern C, #110)
+
+Once signed in, the app can call Graph **as that user** — Entra enforces the
+delegated scope, so there is no over-privileged org token and no app-side
+scoping guard to get wrong.
+
+### Why `acquireTokenSilent`, not the OBO grant
+
+The On-Behalf-Of grant is for a **middle-tier API**: a separate client (SPA or
+mobile) signs in, receives a token scoped to *our* API, calls us, and we exchange
+that user assertion for a downstream token. This app is itself the confidential
+OIDC client — the browser holds an opaque session cookie, not a token — so there
+is no assertion to exchange, and we already hold the user's refresh token from
+sign-in. `acquireTokenSilent` yields the same delegated per-user token with less
+machinery: **no `api://…/access_as_user` scope and nothing to configure under
+"Expose an API"**.
+
+OBO proper (`acquireTokenOnBehalfOf`) becomes necessary only if a distinct client
+authenticates to Entra itself and then calls our API — e.g. giving the iOS
+Shortcut its own client id instead of a shared bearer secret. The token-cache
+plumbing is the seam for that.
+
+### Where the tokens live
+
+| | |
+|---|---|
+| Store | `user_tokens` table, keyed by the Entra `oid` |
+| Contents | MSAL's serialized cache (**includes the refresh token**) |
+| At rest | AES-256-GCM encrypted (`TOKEN_ENCRYPTION_KEY`) |
+| Lifetime | Survives logout and session expiry — deliberately |
+| Rotation | Re-written after every silent acquisition (Entra rotates refresh tokens) |
+
+It is **per-user, not per-session**, because background runs
+(`POST /api/agents/:id` → `runAgentInBackground`) have no live session — only a
+`userId`. A session-scoped cache would leave those runs with no credential.
+
+### Adding a connector (mail, files, calendar)
+
+1. Add the delegated scope in **API permissions** and grant admin consent.
+2. Add it to the sign-in request (`scopes` in `lib/auth/entra-config.server.ts`)
+   so one consent covers it and the refresh token can mint it silently. Requesting
+   scopes at sign-in — rather than incrementally — is what makes background runs
+   possible at all: there is no user present to consent mid-run.
+3. Register a tool in `lib/app-tools/graph.server.ts` using `graphFetch(userId,
+   path, { scopes })`. It appears in `tools.graph` automatically, so the
+   `microsoft-365` agent picks it up with no change.
+
+Existing users must sign in again after new scopes are added, so their stored
+refresh token covers them.
+
+### Security invariants (#107 principle 1)
+
+- Tool schemas shown to the model contain **no** token or user field; the user id
+  comes from `getRequestUserId()`, so the model cannot choose whose data to read.
+- Tokens are attached inside `graphFetch` and never returned to callers, logged,
+  or placed in the prompt/event stream.
+- These tools run **in-process**, not through the MCP gateway — the gateway is a
+  single shared-identity boundary and cannot express per-user identity.
 
 ---
 

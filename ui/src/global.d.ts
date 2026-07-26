@@ -12,6 +12,9 @@ declare namespace NodeJS {
     AZURE_CLIENT_SECRET: string;
     /** HMAC key for signed auth cookies (`openssl rand -base64 32`). */
     AUTH_SESSION_SECRET: string;
+    /** Encrypts the per-user MSAL token cache at rest (#110). Falls back to
+     *  an HKDF derivation from AUTH_SESSION_SECRET when unset. */
+    TOKEN_ENCRYPTION_KEY: string;
     /** OIDC redirect URI; must match a registered Redirect URI. */
     AUTH_REDIRECT_URI: string;
     /** Post-sign-out landing URI. */

@@ -42,10 +42,12 @@ const SCHEMA_SQL = `
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
-  -- #110: the session-scoped cache column from #119 is superseded by this
-  -- table. Dropping it removes plaintext refresh tokens from any existing
-  -- database; idempotent, so it is safe on every boot.
-  ALTER TABLE IF EXISTS auth_sessions DROP COLUMN IF EXISTS token_cache;
+  -- NOTE: auth_sessions.token_cache (the plaintext, session-scoped cache from
+  -- #119) is superseded by this table and is no longer written. It is
+  -- deliberately NOT dropped here: this app shares one database with whatever
+  -- code is deployed from main, and main's createSession still INSERTs that
+  -- column — dropping it from a feature branch breaks sign-in for main.
+  -- Dropping the column is post-merge cleanup, tracked in the PR description.
 `;
 
 let _schemaReady: Promise<void> | null = null;

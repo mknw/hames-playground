@@ -55,8 +55,10 @@ const SCHEMA_SQL = `
     home_account_id  TEXT,
     -- NOTE: the MSAL token cache is NOT stored here. It lives encrypted and
     -- per-user in user_tokens (see user-tokens.server.ts, #110) so that runs
-    -- without a live session (agent-trigger) can still act for the user. That
-    -- module also drops this table's legacy plaintext token_cache column.
+    -- without a live session (agent-trigger) can still act for the user. The
+    -- legacy plaintext token_cache column may still exist on databases created
+    -- by #119; it is no longer written, and dropping it is post-merge cleanup
+    -- (doing it here would break main's code, which still writes it).
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at       TIMESTAMPTZ NOT NULL
   );

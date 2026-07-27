@@ -66,7 +66,8 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 
 | Document | Description |
 |----------|-------------|
-| [deploy/entra-setup.md](deploy/entra-setup.md) | **Microsoft Entra ID SSO** (#119): tenant-owner provisioning checklist (app registration, redirect URIs, delegated Graph scopes, client secret), app env vars, the `oid`-based identity model, and the server-side OIDC sign-in flow. The auth architecture itself is in [UI_ARCHITECTURE.md §3](UI_ARCHITECTURE.md) |
+| [deploy/entra-setup.md](deploy/entra-setup.md) | **Entra tenant setup** (#119): provisioning checklist (app registration, redirect URIs, client secret), the delegated Graph scope set + consent ordering trap, app env vars and key rotation, the `oid`-based identity model. Operator-facing — in-app architecture is below and in [UI_ARCHITECTURE.md §3](UI_ARCHITECTURE.md) |
+| [MICROSOFT_GRAPH.md](MICROSOFT_GRAPH.md) | **Per-user Graph access** (Pattern C, #110): what the Microsoft 365 agent can do, the app-side tool transport + dispatch order, cross-user isolation guarantees, the encrypted per-user token lifecycle, and how to add a connector |
 
 ---
 

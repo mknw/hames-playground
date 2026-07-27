@@ -200,6 +200,7 @@ import { conversationalMemoryAgent } from "./examples/conversational-memory.serv
 import { sandboxSessionAgent } from "./examples/sandbox-session.server";
 import { flavouredSandboxAgent } from "./examples/flavoured-sandbox.server";
 import { retrieverAgent } from "./examples/retriever-agent.server";
+import { microsoft365Agent } from "./examples/microsoft-365.server";
 
 // Register all agents
 registerAgent(defaultAgent);
@@ -209,3 +210,4 @@ registerAgent(conversationalMemoryAgent);
 registerAgent(sandboxSessionAgent);
 registerAgent(flavouredSandboxAgent);
 registerAgent(retrieverAgent);
+registerAgent(microsoft365Agent);

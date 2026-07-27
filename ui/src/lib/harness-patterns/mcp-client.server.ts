@@ -7,6 +7,7 @@
 
 import { assertServerOnImport } from './assert.server';
 import { getActiveSandbox } from '../sandbox/scope.server';
+import { hasAppTool, runAppTool, appToolDescriptions } from '../app-tools/index.server';
 import type { ToolCallResult, MCPToolDescription } from './types';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -111,6 +112,14 @@ export async function callTool(
     return sandbox.callTool(name, args);
   }
 
+  // App-side dispatch (#110). Tools that must run in THIS process because they
+  // carry a per-user credential resolved server-side — the shared-identity
+  // gateway cannot express per-user identity (#107). Checked after the sandbox
+  // (so an in-VM tool of the same name still wins) and before the gateway.
+  if (hasAppTool(name)) {
+    return runAppTool(name, args);
+  }
+
   try {
     const result = await withReconnect((c) => c.callTool({ name, arguments: args }));
 
@@ -194,13 +203,20 @@ function demoteErrorString(
 }
 
 export async function listTools(): Promise<MCPToolDescription[]> {
+  // App-side tools (#110) are advertised alongside the gateway's. They run
+  // in-process, so they stay available even when the gateway is unreachable —
+  // hence they are appended on both the success and the failure path.
+  const appTools = appToolDescriptions();
   try {
     const { tools } = await withReconnect((c) => c.listTools());
-    return tools.map((t) => ({
-      name: t.name,
-      description: t.description ?? '',
-      inputSchema: (t.inputSchema as Record<string, unknown>) ?? {}
-    }));
+    return [
+      ...tools.map((t) => ({
+        name: t.name,
+        description: t.description ?? '',
+        inputSchema: (t.inputSchema as Record<string, unknown>) ?? {}
+      })),
+      ...appTools
+    ];
   } catch (err) {
     // Reconnect already tried once. If we still failed here, this is a real
     // problem (gateway down, URL misconfigured, etc.) — log it loudly so the
@@ -209,7 +225,8 @@ export async function listTools(): Promise<MCPToolDescription[]> {
     // longer hidden the way it was before this change.
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[mcp-client] listTools failed after reconnect:', msg);
-    return [];
+    // App-side tools don't depend on the gateway — keep offering them.
+    return appTools;
   }
 }
 

@@ -257,8 +257,19 @@ Fetch MCP tools and group by server namespace.
 const tools = await Tools()
 tools.neo4j  // ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema']
 tools.web    // ['search', 'fetch', 'fetch_content']
+tools.graph  // app-side, per-user (see below)
 tools.all    // all tool names
 ```
+
+**Three transports.** `callTool()` routes a tool name to whichever transport
+owns it: the **sandbox** (in-VM, when a `withSandbox` scope is active), an
+**app-side** in-process tool, or the **MCP gateway** (the default). App-side
+tools exist for calls that carry a per-user credential resolved server-side —
+the gateway executes every user's calls as one shared principal, so it cannot
+express per-user identity. They are registered via `registerAppTool()` in
+`lib/app-tools/` and advertised by `listTools()` alongside gateway tools, so
+patterns and agents treat them identically. See
+[`docs/MICROSOFT_GRAPH.md`](../../../../docs/MICROSOFT_GRAPH.md).
 
 ### `simpleLoop(controller, tools, config?)`
 
@@ -1104,7 +1115,7 @@ harness-patterns/
 ├── tools.server.ts         # Tools() — groups MCP tools by namespace
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? callback
 ├── routing.server.ts       # BAML router integration (routeMessageOp)
-├── mcp-client.server.ts    # callTool(), listTools(); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
+├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE tool transports — sandbox (in-VM) → app-side in-process → MCP gateway; demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, describeToolResultOp, etc.
 ├── summarize.server.ts     # scheduleSummarization() — background tool result summarization via DescribeFallback
 ├── token-budget.server.ts  # trimToFit(), getContextWindow(), estimateTokens() — rolling context window

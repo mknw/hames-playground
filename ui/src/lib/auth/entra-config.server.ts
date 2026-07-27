@@ -40,6 +40,55 @@ const DEFAULT_REDIRECT_URI = "http://localhost:3444/api/auth/callback";
 const DEFAULT_POST_LOGOUT_REDIRECT_URI = "http://localhost:3444/auth/signin";
 
 /**
+ * Reserved OIDC scopes MSAL adds itself; passing them explicitly makes MSAL
+ * throw. Filtered defensively so an operator-supplied `AZURE_GRAPH_SCOPES`
+ * can't break sign-in by including them.
+ */
+const RESERVED_SCOPES = new Set(["openid", "profile", "offline_access"]);
+
+/**
+ * Delegated Graph scopes requested **at sign-in**, so one consent covers every
+ * connector and the stored refresh token can mint any of them silently. This
+ * matters beyond convenience: background runs (`POST /api/agents/:id`) have no
+ * user present to consent, so a scope missing here can never be obtained later
+ * without dragging the user back through an interactive sign-in.
+ *
+ * Consequence to keep in mind: **adding a scope to this list forces every user
+ * to sign in again**, because their stored refresh token must cover it. Hence
+ * the full set up front.
+ *
+ * Each scope must also exist under the app registration's API permissions with
+ * consent granted — see `docs/deploy/entra-setup.md`. A scope requested here but
+ * not consented fails the whole sign-in (not just that connector), so
+ * `AZURE_GRAPH_SCOPES` exists as an escape hatch: set it to a trimmed,
+ * space- or comma-separated list to drop a problem scope without a code change.
+ *
+ * WRITE scopes are included deliberately (one-and-done consent). Note that a
+ * granted scope is not a capability: the model can only do what a *registered
+ * tool* exposes, and today only the read-only `graph_me` exists. Any future
+ * write tool should carry its own confirmation gate.
+ */
+export const DEFAULT_GRAPH_SCOPES: readonly string[] = [
+  "User.Read", // own profile
+  "email",
+  "Mail.Read", // read mailbox
+  "Mail.Send", // WRITE: send as the user
+  "Calendars.ReadWrite", // WRITE: create/modify events
+  "Files.Read.All", // OneDrive + SharePoint files the user can access
+  "Sites.Read.All", // SharePoint sites the user can access
+];
+
+/** Parse an operator-supplied scope override (comma or whitespace separated). */
+function parseScopes(raw: string | undefined): string[] | null {
+  if (!raw?.trim()) return null;
+  const list = raw
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && !RESERVED_SCOPES.has(s.toLowerCase()));
+  return list.length > 0 ? list : null;
+}
+
+/**
  * True when all three `AZURE_*` secrets are present. `/api/auth/login` checks
  * this and returns a helpful error instead of a raw MSAL crash when the tenant
  * config hasn't been filled in yet (dev-bypass remains the zero-config path).
@@ -74,7 +123,7 @@ export function buildEntraConfig(
     postLogoutRedirectUri:
       env.AUTH_POST_LOGOUT_REDIRECT_URI?.trim() ||
       DEFAULT_POST_LOGOUT_REDIRECT_URI,
-    scopes: ["User.Read", "email"],
+    scopes: parseScopes(env.AZURE_GRAPH_SCOPES) ?? [...DEFAULT_GRAPH_SCOPES],
   };
 }
 

@@ -138,9 +138,13 @@ dev-bypass stays a zero-config path.
 ### Session store
 **File:** `ui/src/lib/auth/session-store.server.ts` — Postgres `auth_sessions`
 (opaque cookie id → row: `user_id` = Entra `oid`, email, display name,
-`home_account_id`, serialized MSAL token cache for #110, 8h expiry). Every
-sign-in also upserts `users` (`ui/src/lib/auth/users.server.ts`: oid, email,
-display name, tenant, first/last login) — the app's own activity record.
+`home_account_id`, 8h expiry). Every sign-in also upserts `users`
+(`ui/src/lib/auth/users.server.ts`: oid, email, display name, tenant, first/last
+login) — the app's own activity record.
+
+The user's **MSAL token cache is not stored on the session**: it lives encrypted
+and per-user in `user_tokens` so runs without a live session can still act for
+the user. See [MICROSOFT_GRAPH.md](MICROSOFT_GRAPH.md).
 
 ### Server Validation
 **File:** `ui/src/lib/auth/server.ts`

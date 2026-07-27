@@ -144,6 +144,54 @@ function getEventLane(type: EventType): 'interface' | 'tools' {
 // Summary Bar Component
 // ============================================================================
 
+/** Compact token count: 1234 → "1.2k", 25_320 → "25.3k". */
+const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
+
+/** Cost with enough precision to be meaningful at per-call scale. */
+const fmtUsd = (v: number): string => (v >= 0.1 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`)
+
+/** Fold `event.metrics` (first-class accounting, #122) into session totals.
+ *  Events predating the metrics attribute fall back to `llmCall.usage` — no
+ *  cache-write bucket there, and no cost (partial pricing would mislead). */
+const foldTokenTotals = (events: ContextEvent[]) => {
+  const t = {
+    llmCalls: 0, attempts: 0,
+    inputUncached: 0, cacheRead: 0, cacheWrite: 0, output: 0,
+    costUsd: 0, noCacheUsd: 0, costKnownCalls: 0,
+  }
+  for (const e of events) {
+    const m = e.metrics
+    if (m) {
+      t.llmCalls++
+      t.attempts += m.attempts
+      t.inputUncached += m.inputUncachedTokens
+      t.cacheRead += m.inputCacheReadTokens
+      t.cacheWrite += m.inputCacheWriteTokens
+      t.output += m.outputTokens
+      if (m.costUsd !== undefined) {
+        t.costUsd += m.costUsd
+        t.noCacheUsd += m.noCacheUsd ?? m.costUsd
+        t.costKnownCalls++
+      }
+    } else if (e.llmCall?.usage) {
+      const u = e.llmCall.usage
+      t.llmCalls++
+      t.attempts++
+      t.inputUncached += u.inputTokens
+      t.cacheRead += u.cachedInputTokens
+      t.cacheWrite += u.cacheCreationInputTokens ?? 0
+      t.output += u.outputTokens
+    }
+  }
+  const inputTotal = t.inputUncached + t.cacheRead + t.cacheWrite
+  return {
+    ...t,
+    inputTotal,
+    cachedPct: inputTotal > 0 ? t.cacheRead / inputTotal : 0,
+    savedPct: t.noCacheUsd > 0 ? (t.noCacheUsd - t.costUsd) / t.noCacheUsd : 0,
+  }
+}
+
 const SummaryBar = (props: { events: ContextEvent[], onClear?: () => void }) => {
   const metrics = createMemo(() => {
     const events = props.events
@@ -157,6 +205,8 @@ const SummaryBar = (props: { events: ContextEvent[], onClear?: () => void }) => 
       errorCount
     }
   })
+
+  const tokenTotals = createMemo(() => foldTokenTotals(props.events))
 
   return (
     <div
@@ -186,6 +236,46 @@ const SummaryBar = (props: { events: ContextEvent[], onClear?: () => void }) => 
           <span text="xs dark-text-tertiary">Errors:</span>
           <span text="sm red-400" font="mono">{metrics().errorCount}</span>
         </div>
+      </Show>
+
+      {/* Session-level token/cost accounting (#122) — fold over event.metrics */}
+      <Show when={tokenTotals().llmCalls > 0}>
+        <div flex="~" items="center" gap="2" title="Input tokens: fresh / cache-read / cache-write">
+          <span text="xs dark-text-tertiary">In:</span>
+          <span text="sm neon-green" font="mono">{fmtTok(tokenTotals().inputUncached)}</span>
+          <Show when={tokenTotals().cacheRead > 0 || tokenTotals().cacheWrite > 0}>
+            <span text="sm violet-400" font="mono">+{fmtTok(tokenTotals().cacheRead)}⚡</span>
+            <span text="sm amber-400" font="mono">+{fmtTok(tokenTotals().cacheWrite)}✎</span>
+          </Show>
+        </div>
+        <div flex="~" items="center" gap="2">
+          <span text="xs dark-text-tertiary">Out:</span>
+          <span text="sm neon-cyan" font="mono">{fmtTok(tokenTotals().output)}</span>
+        </div>
+        <Show when={tokenTotals().cachedPct > 0}>
+          <div flex="~" items="center" gap="2" title="Share of input tokens served from cache (0.1× rate)">
+            <span text="xs dark-text-tertiary">Cached:</span>
+            <span text="sm violet-400" font="mono">{Math.round(tokenTotals().cachedPct * 100)}%</span>
+          </div>
+        </Show>
+        <Show when={tokenTotals().costKnownCalls > 0}>
+          <div
+            flex="~" items="center" gap="2"
+            title={`Estimated from per-call rates at call time; ${tokenTotals().costKnownCalls}/${tokenTotals().llmCalls} calls priced. Without caching: ${fmtUsd(tokenTotals().noCacheUsd)}`}
+          >
+            <span text="xs dark-text-tertiary">Cost:</span>
+            <span text="sm dark-text-primary" font="mono">{fmtUsd(tokenTotals().costUsd)}</span>
+            <Show when={tokenTotals().savedPct > 0.005}>
+              <span text="xs neon-green" font="mono">−{Math.round(tokenTotals().savedPct * 100)}%</span>
+            </Show>
+          </div>
+        </Show>
+        <Show when={tokenTotals().attempts > tokenTotals().llmCalls}>
+          <div flex="~" items="center" gap="2" title="Physical API calls exceeded LLM steps — retries/fallbacks burned extra spend (already included in the totals)">
+            <span text="xs dark-text-tertiary">Retries:</span>
+            <span text="sm amber-400" font="mono">+{tokenTotals().attempts - tokenTotals().llmCalls}</span>
+          </div>
+        </Show>
       </Show>
 
       <Show when={props.events.length > 0}>
@@ -1079,26 +1169,51 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
       {/* Separator */}
       <div w="px" h="8" bg="dark-border-secondary" />
 
-      {/* Token stats */}
+      {/* Token stats — selected exchange (full breakdown, #122) */}
       <Show when={props.llmCall.usage}>
-        <div flex="~ col" gap="0.5">
-          <span text="xs dark-text-tertiary">Input</span>
+        <div flex="~ col" gap="0.5" title="Input tokens billed at the full base rate">
+          <span text="xs dark-text-tertiary">Input (fresh)</span>
           <span text="sm neon-green" font="mono">{props.llmCall.usage!.inputTokens.toLocaleString()}</span>
         </div>
+        <Show when={props.llmCall.usage!.cachedInputTokens > 0}>
+          <div flex="~ col" gap="0.5" title="Input tokens read from cache — billed at 0.1× the base rate">
+            <span text="xs dark-text-tertiary">Cache read</span>
+            <span text="sm violet-400" font="mono">{props.llmCall.usage!.cachedInputTokens.toLocaleString()}</span>
+          </div>
+        </Show>
+        <Show when={(props.llmCall.usage!.cacheCreationInputTokens ?? 0) > 0}>
+          <div flex="~ col" gap="0.5" title="Input tokens written to cache — billed at 1.25× the base rate">
+            <span text="xs dark-text-tertiary">Cache write</span>
+            <span text="sm amber-400" font="mono">{props.llmCall.usage!.cacheCreationInputTokens!.toLocaleString()}</span>
+          </div>
+        </Show>
         <div flex="~ col" gap="0.5">
           <span text="xs dark-text-tertiary">Output</span>
           <span text="sm neon-cyan" font="mono">{props.llmCall.usage!.outputTokens.toLocaleString()}</span>
         </div>
-        <Show when={props.llmCall.usage!.cachedInputTokens > 0}>
-          <div flex="~ col" gap="0.5">
-            <span text="xs dark-text-tertiary">Cached</span>
-            <span text="sm violet-400" font="mono">{props.llmCall.usage!.cachedInputTokens.toLocaleString()}</span>
-          </div>
-        </Show>
-        <div flex="~ col" gap="0.5">
+        <div flex="~ col" gap="0.5" title="All tokens processed: fresh + cache read + cache write + output">
           <span text="xs dark-text-tertiary">Total</span>
           <span text="sm amber-400" font="mono">{props.llmCall.usage!.totalTokens.toLocaleString()}</span>
         </div>
+      </Show>
+
+      {/* Step accounting — summed across ALL attempts (retries/fallbacks) */}
+      <Show when={props.llmCall.metrics}>
+        <Show when={props.llmCall.metrics!.attempts > 1}>
+          <div flex="~ col" gap="0.5" title="This step needed multiple API calls (truncation retry / fallback chain); tokens and cost below include all of them">
+            <span text="xs dark-text-tertiary">Attempts</span>
+            <span text="sm red-400" font="mono">{props.llmCall.metrics!.attempts}</span>
+          </div>
+        </Show>
+        <Show when={props.llmCall.metrics!.costUsd !== undefined}>
+          <div
+            flex="~ col" gap="0.5"
+            title={`At $${props.llmCall.metrics!.rates?.inPerMTok}/$${props.llmCall.metrics!.rates?.outPerMTok} per MTok; uncached this call would be ${fmtUsd(props.llmCall.metrics!.noCacheUsd ?? props.llmCall.metrics!.costUsd!)}`}
+          >
+            <span text="xs dark-text-tertiary">Cost (step)</span>
+            <span text="sm dark-text-primary" font="mono">{fmtUsd(props.llmCall.metrics!.costUsd!)}</span>
+          </div>
+        </Show>
       </Show>
 
       {/* Duration */}

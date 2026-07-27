@@ -131,4 +131,53 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   AnthropicOpus4: 4_096,
 }
 
+// ============================================================================
+// LLM pricing (#122 / #132 — token & cost metrics)
+// ============================================================================
+
+/**
+ * $ per MTok per BAML client — the Anthropic-only chains (the dev/prod
+ * default). Mixed-chain clients (Groq/OpenRouter/OpenAI) are deliberately
+ * absent: cost then reads as "unknown" rather than silently wrong.
+ *
+ * AnthropicSonnet5 uses the INTRO pricing in force through 2026-08-31
+ * (standard: 3.00 / 15.00) — update after.
+ */
+export const CLIENT_PRICING: Record<string, { inPerMTok: number; outPerMTok: number }> = {
+  AnthropicSonnet5: { inPerMTok: 2.0, outPerMTok: 10.0 },
+  AnthropicSonnet46: { inPerMTok: 3.0, outPerMTok: 15.0 },
+  AnthropicHaiku45: { inPerMTok: 1.0, outPerMTok: 5.0 },
+  AnthropicOpus4: { inPerMTok: 15.0, outPerMTok: 75.0 },
+}
+
+/** Anthropic cache pricing multipliers on the base input rate. */
+export const CACHE_WRITE_MULT = 1.25
+export const CACHE_READ_MULT = 0.1
+
+/** Cost of one call given its token buckets, at `clientName`'s rates.
+ *  Returns undefined for clients without a pricing entry. `noCacheUsd` is the
+ *  same tokens priced as if nothing were cached — the savings baseline. */
+export function estimateLlmCostUsd(
+  tokens: {
+    inputUncachedTokens: number
+    inputCacheReadTokens: number
+    inputCacheWriteTokens: number
+    outputTokens: number
+  },
+  clientName?: string,
+): { costUsd: number; noCacheUsd: number; rates: { inPerMTok: number; outPerMTok: number } } | undefined {
+  const rates = clientName ? CLIENT_PRICING[clientName] : undefined
+  if (!rates) return undefined
+  const inUsd =
+    (tokens.inputUncachedTokens +
+      tokens.inputCacheWriteTokens * CACHE_WRITE_MULT +
+      tokens.inputCacheReadTokens * CACHE_READ_MULT) * rates.inPerMTok
+  const allIn = tokens.inputUncachedTokens + tokens.inputCacheWriteTokens + tokens.inputCacheReadTokens
+  return {
+    costUsd: (inUsd + tokens.outputTokens * rates.outPerMTok) / 1_000_000,
+    noCacheUsd: (allIn * rates.inPerMTok + tokens.outputTokens * rates.outPerMTok) / 1_000_000,
+    rates,
+  }
+}
+
 export const SETTINGS_STORAGE_KEY = 'kg_agent_settings'

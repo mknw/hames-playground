@@ -359,11 +359,13 @@ describe('extractLLMCallData', () => {
     expect(result!.rawOutput).toBe('{"tool_name":"Return","is_final":true}')
     expect(result!.rawInput).toBe('{"messages":[{"role":"user","content":"test"}]}')
     expect(result!.parsedOutput).toEqual({ is_final: true })
+    // totalTokens = ALL tokens processed (fresh + cache read + write + out) —
+    // semantics changed with #122 cache accounting (was fresh + out only).
     expect(result!.usage).toEqual({
       inputTokens: 150,
       outputTokens: 30,
       cachedInputTokens: 50,
-      totalTokens: 180
+      totalTokens: 230
     })
     expect(result!.provider).toBe('groq')
     expect(result!.clientName).toBe('GroqFast')

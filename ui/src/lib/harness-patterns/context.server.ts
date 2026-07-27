@@ -94,7 +94,10 @@ export function createScope<T>(
 // Event Helpers
 // ============================================================================
 
-/** Create a context event */
+/** Create a context event. Step-level token/cost accounting (`metrics`,
+ *  computed by the adapters across ALL attempts of the call) is lifted from
+ *  the llmCall carrier onto the event itself, making events self-contained
+ *  accounting records for any consumer (panel, exports, recordings). */
 export function createEvent(
   type: EventType,
   patternId: string,
@@ -107,7 +110,8 @@ export function createEvent(
     ts: Date.now(),
     patternId,
     data,
-    ...(llmCall && { llmCall })
+    ...(llmCall && { llmCall }),
+    ...(llmCall?.metrics && { metrics: llmCall.metrics })
   }
 }
 

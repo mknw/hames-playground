@@ -18,6 +18,9 @@ declare namespace NodeJS {
     /** Override the delegated Graph scopes requested at sign-in (space- or
      *  comma-separated). Escape hatch when a scope isn't consented (#110). */
     AZURE_GRAPH_SCOPES: string;
+    /** IANA timezone Graph renders calendar times in (#110). Defaults to the
+     *  server's own zone. */
+    GRAPH_TIMEZONE: string;
     /** OIDC redirect URI; must match a registered Redirect URI. */
     AUTH_REDIRECT_URI: string;
     /** Post-sign-out landing URI. */

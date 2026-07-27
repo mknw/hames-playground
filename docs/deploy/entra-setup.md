@@ -92,41 +92,18 @@ local iteration.
 
 ---
 
-## Calling Microsoft Graph as the user (Pattern C, #110)
+## Graph scopes and consent (Pattern C, #110)
 
 Once signed in, the app can call Graph **as that user** — Entra enforces the
 delegated scope, so there is no over-privileged org token and no app-side
-scoping guard to get wrong.
+scoping guard to get wrong. How that works internally, and how to add a
+connector, is [MICROSOFT_GRAPH.md](../MICROSOFT_GRAPH.md); this section covers
+only what the tenant needs.
 
-### Why `acquireTokenSilent`, not the OBO grant
-
-The On-Behalf-Of grant is for a **middle-tier API**: a separate client (SPA or
-mobile) signs in, receives a token scoped to *our* API, calls us, and we exchange
-that user assertion for a downstream token. This app is itself the confidential
-OIDC client — the browser holds an opaque session cookie, not a token — so there
-is no assertion to exchange, and we already hold the user's refresh token from
-sign-in. `acquireTokenSilent` yields the same delegated per-user token with less
-machinery: **no `api://…/access_as_user` scope and nothing to configure under
-"Expose an API"**.
-
-OBO proper (`acquireTokenOnBehalfOf`) becomes necessary only if a distinct client
-authenticates to Entra itself and then calls our API — e.g. giving the iOS
-Shortcut its own client id instead of a shared bearer secret. The token-cache
-plumbing is the seam for that.
-
-### Where the tokens live
-
-| | |
-|---|---|
-| Store | `user_tokens` table, keyed by the Entra `oid` |
-| Contents | MSAL's serialized cache (**includes the refresh token**) |
-| At rest | AES-256-GCM encrypted (`TOKEN_ENCRYPTION_KEY`) |
-| Lifetime | Survives logout and session expiry — deliberately |
-| Rotation | Re-written after every silent acquisition (Entra rotates refresh tokens) |
-
-It is **per-user, not per-session**, because background runs
-(`POST /api/agents/:id` → `runAgentInBackground`) have no live session — only a
-`userId`. A session-scoped cache would leave those runs with no credential.
+One consequence is worth noting here because it saves portal work: the app is
+itself the OIDC client, so it uses `acquireTokenSilent` rather than the
+On-Behalf-Of grant — which means **nothing needs configuring under "Expose an
+API"** and there is no `api://…/access_as_user` scope. Leave that blade empty.
 
 ### Scopes are requested up front — all of them
 
@@ -158,21 +135,13 @@ should carry its own confirmation gate.
 > change or redeploy needed. Reserved scopes (`openid`/`profile`/
 > `offline_access`) are stripped automatically; MSAL supplies them.
 
-### Adding a connector tool
+### Adding a scope later
 
-Register it in `lib/app-tools/graph.server.ts` using `graphFetch(userId, path,
-{ scopes })`. It appears in `tools.graph` automatically, so the `microsoft-365`
-agent picks it up with no change. No re-consent is needed as long as the scope is
-already in the set above.
-
-### Security invariants (#107 principle 1)
-
-- Tool schemas shown to the model contain **no** token or user field; the user id
-  comes from `getRequestUserId()`, so the model cannot choose whose data to read.
-- Tokens are attached inside `graphFetch` and never returned to callers, logged,
-  or placed in the prompt/event stream.
-- These tools run **in-process**, not through the MCP gateway — the gateway is a
-  single shared-identity boundary and cannot express per-user identity.
+Adding a scope to the sign-in request **forces every user to sign in again**
+(their stored refresh token must cover it), which is the reason the full set is
+taken up front. Grant it in the portal first, then extend
+`DEFAULT_GRAPH_SCOPES`. Writing the tool that uses it is
+[MICROSOFT_GRAPH.md](../MICROSOFT_GRAPH.md).
 
 ---
 

@@ -193,5 +193,6 @@ Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secon
 | [`docs/UI_ARCHITECTURE.md`](docs/UI_ARCHITECTURE.md) | Component structure, data flow, Chat-Graph linking |
 | [`docs/DATA_STASH.md`](docs/DATA_STASH.md) | Data Stash pipeline: upload → chunk → embed → search (#6/#9/#8), API routes, Redis storage, redis-stack + local-embedder requirements |
 | [`docs/AGENT_TRIGGER.md`](docs/AGENT_TRIGGER.md) | `POST /api/agents/:id` async agent trigger → action rows: contract, fire-and-forget model, `kind`/`source`/`status` columns, token auth (`configs/action-tokens.yaml`), recording playback via Data Stash, promotion gate |
+| [`docs/MICROSOFT_GRAPH.md`](docs/MICROSOFT_GRAPH.md) | Per-user Microsoft Graph (Pattern C, #110): the Microsoft 365 agent's tools, the app-side tool transport (third transport beside gateway + sandbox), cross-user isolation, encrypted per-user token lifecycle, adding a connector. Tenant setup: [`docs/deploy/entra-setup.md`](docs/deploy/entra-setup.md) |
 | [`ui/README.md`](ui/README.md) | UI quick start and file index |
 | [`ui/src/lib/harness-patterns/README.md`](ui/src/lib/harness-patterns/README.md) | Harness patterns full API |

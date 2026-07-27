@@ -71,7 +71,9 @@ function LoopController(
     {% for tool in tools %}
 
     - {{ tool.name }}: {{ tool.description }}
-      {% if tool.args_schema %}  Args: {{ tool.args_schema }}{% endif %}
+    {% if tool.args_schema %}
+      Args: {{ tool.args_schema }}
+    {% endif %}
     {% endfor %}
 
     - Return: Signal task completion (tool_args = final answer or summary)

@@ -336,3 +336,89 @@ describe('ActorControllerV3 renders byte-identical requests to V2', () => {
     expect(JSON.stringify(v3)).toBe(JSON.stringify(v2))
   })
 })
+
+// ---------------------------------------------------------------------------
+// Template-string twins (#122 DX pass): LoopControllerV2 ≡ LoopController and
+// ActorControllerV4 ≡ ActorController (the production V1 scheme). Same rule
+// as V3 ≡ V2: the refactor is only legitimate while the rendered request is
+// byte-identical — blocks, text, and cache_control alike. Passing also proves
+// the {# … #} section comments in the twins contribute zero bytes.
+// ---------------------------------------------------------------------------
+type Render = (...a: unknown[]) => Promise<{ body: { json(): unknown } }>
+
+describe('LoopControllerV2 renders byte-identical requests to LoopController', () => {
+  const FEW_SHOTS = [
+    { user: 'count the nodes', reasoning: 'plain count', tool: 'read_neo4j_cypher', args: '{"query":"MATCH (n) RETURN count(n)"}' },
+  ]
+  const CASES: Array<[string, unknown[], string | undefined, unknown[] | undefined, unknown[] | undefined]> = [
+    ['no turns, context + refs + few-shots', [], 'GRAPH SCHEMA: (Person)', REFS, FEW_SHOTS],
+    ['no turns, bare (no context/refs/few-shots)', [], undefined, undefined, undefined],
+    ['1 turn', [TURN_1], 'GRAPH SCHEMA: (Person)', REFS, undefined],
+    ['3 turns (expansion + error branches)', [TURN_1, TURN_2, TURN_3], 'GRAPH SCHEMA: (Person)', REFS, FEW_SHOTS],
+  ]
+  it.each(CASES)('%s', async (_label, turns, context, refs, fewShots) => {
+    const args = ['find nodes', 'find nodes', TOOLS, turns, context, refs, fewShots]
+    const prod = (await (b.request.LoopController as never as Render)(...args)).body.json()
+    const twin = (await (b.request.LoopControllerV2 as never as Render)(...args)).body.json()
+    expect(JSON.stringify(twin)).toBe(JSON.stringify(prod))
+  })
+})
+
+describe('ActorControllerV4 renders byte-identical requests to ActorController', () => {
+  const FEW_SHOTS = [
+    { user: 'do it', reasoning: 'directly', tool: 'code-mode', args: '{"script":"return 1"}' },
+  ]
+  const RICH = [
+    { n: 1, action: { reasoning: 'try a script', tool_name: 'code-mode', tool_args: '{"s":1}', status: 'success', is_final: false }, result: 'got 1', error: null, feedback: 'not sufficient' },
+    { n: 2, action: { reasoning: '', tool_name: 'code-mode', tool_args: '{"s":2}', status: 'error', is_final: false }, result: '', error: 'boom', feedback: null },
+    { n: 3, action: { reasoning: 'smaller', tool_name: 'code-mode', tool_args: '{"s":3}', status: 'success', is_final: false }, result: 'got 3', error: null, feedback: null },
+  ]
+  const CASES: Array<[string, unknown[], string | undefined, unknown[] | undefined]> = [
+    ['call 1 (request marker fires), context + few-shots', [], 'ENABLED SERVERS: neo4j', FEW_SHOTS],
+    ['call 1, bare', [], undefined, undefined],
+    ['call 2 (rolling marker on newest result)', RICH.slice(0, 1), 'ENABLED SERVERS: neo4j', FEW_SHOTS],
+    ['call 3 (error + feedback branches)', RICH.slice(0, 2), 'ENABLED SERVERS: neo4j', undefined],
+    ['call 4 (full history)', RICH, 'ENABLED SERVERS: neo4j', FEW_SHOTS],
+  ]
+  it.each(CASES)('%s', async (_label, attempts, context, fewShots) => {
+    const args = ['do the thing', 'do the thing', TOOLS, attempts, context, fewShots, attempts.length + 1, 4]
+    const prod = (await (b.request.ActorController as never as Render)(...args)).body.json()
+    const twin = (await (b.request.ActorControllerV4 as never as Render)(...args)).body.json()
+    expect(JSON.stringify(twin)).toBe(JSON.stringify(prod))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Tool-catalog separation (#122 whitespace pass). Regression for the
+// inlining bug where a template line ending in a statement tag lost its
+// newline and tool entries ran together ("…Args: {…}- next_tool"). Verified
+// against the PROCESSED string, per review: every entry is blank-line
+// separated, and the catalog is cleanly separated from the next section.
+// ---------------------------------------------------------------------------
+describe('tool catalog renders blank-line-separated entries (processed string)', () => {
+  // Adjacent tools WITH and WITHOUT args_schema — the bug's trigger shape.
+  const MIXED_TOOLS = [
+    { name: 'tool_1', description: 'first tool', args_schema: '{"q":"string"}' },
+    { name: 'tool_2', description: 'second tool' },
+    { name: 'tool_3', description: 'third tool', args_schema: '{"x":"int"}' },
+  ]
+
+  it('LoopController: entries separated; Return entry not glued to the last tool', async () => {
+    const req = await (b.request.LoopController as never as Render)('q', 'q', MIXED_TOOLS, [], 'CTX', undefined, undefined)
+    const text = (blocks(req.body.json() as Body)[0].text ?? '')
+    expect(text).toContain('- tool_1: first tool\n  Args: {"q":"string"}\n\n- tool_2: second tool')
+    expect(text).toContain('- tool_2: second tool\n\n- tool_3: third tool')
+    expect(text).toContain('Args: {"x":"int"}\n\n- Return:')
+    expect(text).not.toMatch(/\S- tool_\d/) // nothing glued to an entry dash
+  })
+
+  it('ActorController: entries separated; critic paragraph not glued to the last tool', async () => {
+    const req = await (b.request.ActorController as never as Render)('q', 'q', MIXED_TOOLS, [], 'CTX', undefined, 1, 3)
+    const body = req.body.json() as Body
+    const text = ((body.system as Block[] | undefined)?.[0]?.text ?? '')
+    expect(text).toContain('- tool_1: first tool\n  Args: {"q":"string"}\n\n- tool_2: second tool')
+    expect(text).toContain('Args: {"x":"int"}\n\nThe critic evaluates')
+    expect(text).not.toMatch(/\S- tool_\d/)
+    expect(text).not.toContain('} \n') // the old trailing space after schemas
+  })
+})

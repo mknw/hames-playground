@@ -38,7 +38,9 @@ function ActorController(
     {% for tool in tools %}
 
     - {{ tool.name }}: {{ tool.description }}
-      {% if tool.args_schema %}  Args: {{ tool.args_schema }} {% endif %}
+    {% if tool.args_schema %}
+      Args: {{ tool.args_schema }}
+    {% endif %}
     {% endfor %}
 
     The critic evaluates whether the data you've gathered is sufficient and

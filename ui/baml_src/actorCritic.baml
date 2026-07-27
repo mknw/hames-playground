@@ -1,22 +1,131 @@
 // actorCritic.baml - Default prompts for the actorCritic pattern
 // Two functions: Actor generates actions, Critic evaluates results.
 // Task-agnostic: tools, attempts, and feedback are injected at runtime.
+// The actor prompt is decomposed into named template_strings (one per
+// section) — edit the section, not the monolith. ToolCatalog is shared
+// across controllers (prompt-sections.baml).
+//
+// Prompt-caching layout (#122), settled by live A/B bench (~89% of input
+// served from cache, ~64% input-cost reduction on a 4-call run):
+//
+//   system                 role text · AVAILABLE TOOLS · EXAMPLES (static;
+//                          NO cache marker here — cross-run static-head
+//                          reuse is a still-open decision, see STATE)
+//   user                   USER INTENT · CONTEXT · USER REQUEST — the
+//                          request block carries the CALL-1 cache marker
+//   (assistant → result)*  one pair per attempt, append-only, ROLLING cache
+//                          marker on the newest result
+//   user                   feedback nudge · BUDGET · attempt counter ·
+//                          output format — after the last marker, never cached
+//
+// Every marker is BOTH a read point and a write point; reads walk backward
+// (automatic prefix checking) to the previous call's write. cache_control
+// only reaches providers that allowlist it via allowed_role_metadata (the
+// Anthropic clients) — all others silently drop it.
 
 // ============================================================================
 // Actor - Generates tool calls, improving from critic feedback
 // ============================================================================
-//
-// Prompt-caching layout (#122) — same two-tier + chronological-pairs scheme as
-// LoopController; full rationale in simpleLoop.baml. Differences here:
-//  - CONTEXT sits in tier-2, not tier-1: the actor's context may come from a
-//    per-invocation contextProvider (e.g. code-mode's ENABLED SERVERS catalog)
-//    and can legitimately change mid-run — tier-2 placement limits such a
-//    change to busting tier-2, keeping the tools/examples cache alive.
-//  - The per-attempt BUDGET block renders in the volatile tail (it changes
-//    every attempt, so it must never sit in a cached region).
-//  - stable_hash is the adapter-computed mutation canary rendered in tier-2;
-//    constant across the attempts of one run unless an input actually changed
-//    (e.g. a mid-run tool registration — a deliberate, visible cache bust).
+
+// --- Section: few-shot examples (blank-line entries, ----fenced) ------------
+template_string ActorFewShots(few_shots: FewShot[]?) #"
+  {% if few_shots and few_shots|length > 0 %}
+
+  ---
+  EXAMPLES (illustrative — adapt to the actual request, do not copy verbatim):
+  {% for ex in few_shots %}
+
+  - User: {{ ex.user }}
+    Reasoning: {{ ex.reasoning }}
+    Tool: {{ ex.tool }}
+    Args: {{ ex.args }}
+  {% endfor %}
+
+  ---
+  {% endif %}
+"#
+
+// --- Section: task frame — intent · context · request ------------------------
+// Carries the FIRST-CALL cache marker on the USER REQUEST block: attempt_n is
+// 1-based (the loop passes attempt + 1), so `== 1` fires exactly on call 1,
+// when the request is the last block that recurs in the next call's prefix.
+// (`== 0` is defensive: it can never fire under the current convention.)
+// CONTEXT is authored as a system role for template-level semantics — the
+// Anthropic provider coerces mid-conversation system to `user` on the wire.
+template_string ActorTaskFrame(intent: string, context: string?, user_message: string, attempt_n: int?) #"
+  {{ _.role("user") }}
+  USER INTENT: {{ intent }}
+  {% if context %}
+
+  ---
+  {{ _.role("system") }}
+  CONTEXT:
+  {{ context }}
+  {% endif %}
+
+  ---
+  {% if attempt_n == 0 or attempt_n == 1 %}
+  {{ _.role("user", cache_control={"type": "ephemeral"}) }}
+  {% else %}
+  {{ _.role("user") }}
+  {% endif %}
+  USER REQUEST: {{ user_message }}
+
+  ---
+"#
+
+// --- Section: attempt log — chronological assistant/system(→user) pairs ------
+// ROLLING cache marker on the newest result: loop.index0 maxes at
+// attempts|length - 1 == attempt_n - 2, so `>=` fires on the last entry only
+// (strict `>` never fires — measured as 0% cache reads before the fix).
+// Result blocks use the system role; the wire coerces them to `user`.
+template_string ActorAttemptLog(attempts: Attempt[], attempt_n: int?) #"
+  {% for attempt in attempts %}
+  {{ _.role("assistant") }}
+  Attempt {{ attempt.n }} action:
+      {% if attempt.action.reasoning %}
+      Reasoning: {{ attempt.action.reasoning }}
+      {% endif %}
+  Tool: {{ attempt.action.tool_name }}
+  Args: {{ attempt.action.tool_args }}
+      {% if loop.index0 >= (attempt_n - 2) %}
+      {{ _.role("system", cache_control={"type": "ephemeral"}) }}
+      {% else %}
+      {{ _.role("system") }}
+      {% endif %}
+  Attempt {{ attempt.n }} result:
+      {% if attempt.error %}
+      ERROR: {{ attempt.error }}
+      {% else %}
+      Result: {{ attempt.result }}
+      {% endif %}
+      {% if attempt.feedback %}
+      CRITIC FEEDBACK: {{ attempt.feedback }}
+      {% endif %}
+  {% endfor %}
+"#
+
+// --- Section: closing — feedback nudge · budget · attempt counter ------------
+// Volatile tail: changes every call, renders AFTER the last cache marker and
+// is never cached. ctx.output_format stays in the function prompt (kept out
+// of template_strings deliberately).
+template_string ActorClosing(attempts: Attempt[], attempt_n: int?, max_attempts: int?) #"
+  {{ _.role("user") }}
+  {% if attempts|length > 0 %}
+  You MUST address the critic's feedback. Do not repeat failed approaches.
+  {% endif %}
+
+  {% if attempt_n is not none and max_attempts is not none %}
+  BUDGET: Attempt {{ attempt_n }} of {{ max_attempts }}.
+  {% if attempt_n >= max_attempts - 1 %}
+  This is your final or near-final attempt. Call the tool most likely to
+  produce a useful partial answer — the critic will decide whether to accept.
+  Do NOT start a fresh tool chain that won't complete in time.
+  {% endif %}
+  {% endif %}
+
+  You are on attempt {{ attempts|length + 1 }}. Respond with the next action.
+"#
 
 function ActorController(
   user_message: string,
@@ -26,99 +135,31 @@ function ActorController(
   context: string?,
   few_shots: FewShot[]?,
   attempt_n: int?,
-  max_attempts: int?,
+  max_attempts: int?
 ) -> ControllerAction {
   client ControllerAnthropic
   prompt #"
+    {# ────────── SYSTEM · static requirements: role · tools · examples ────────── #}
     {{ _.role("system") }}
     You are an AI agent that accomplishes tasks by calling tools.
     A critic evaluates your output. Learn from previous feedback.
 
     AVAILABLE TOOLS:
-    {% for tool in tools %}
-
-    - {{ tool.name }}: {{ tool.description }}
-    {% if tool.args_schema %}
-      Args: {{ tool.args_schema }}
-    {% endif %}
-    {% endfor %}
-
+    {{ ToolCatalog(tools) }}
     The critic evaluates whether the data you've gathered is sufficient and
     decides when the task is complete — you don't need a "Return" tool. Focus
     on calling the right tool to make progress; the loop exits when the critic
     says so.
-    {% if few_shots and few_shots|length > 0 %}
+    {{ ActorFewShots(few_shots) }}
 
-    ---
-    EXAMPLES (illustrative — adapt to the actual request, do not copy verbatim):
-    {% for ex in few_shots %}
+    {# ────────── TASK FRAME · intent · context · request (call-1 cache marker) ────────── #}
+    {{ ActorTaskFrame(intent, context, user_message, attempt_n) }}
 
-    - User: {{ ex.user }}
-      Reasoning: {{ ex.reasoning }}
-      Tool: {{ ex.tool }}
-      Args: {{ ex.args }}
-    {% endfor %}
+    {# ────────── ATTEMPT LOG · append-only, rolling marker on newest result ────────── #}
+    {{ ActorAttemptLog(attempts, attempt_n) }}
 
-    ---
-    {% endif %}
-    {{ _.role("user") }}
-    USER INTENT: {{ intent }}
-    {% if context %}
-
-    ---
-    {{ _.role("system") }}
-    CONTEXT:
-    {{ context }}
-    {% endif %}
-
-    ---
-    {% if attempt_n == 0 or attempt_n == 1 %}
-    {{ _.role("user", cache_control={"type": "ephemeral"}) }}
-    {% else %}
-    {{ _.role("user") }}
-    {% endif %}
-    USER REQUEST: {{ user_message }}
-
-    ---
-    {% for attempt in attempts %}
-    {{ _.role("assistant") }}
-    Attempt {{ attempt.n }} action:
-        {% if attempt.action.reasoning %}
-        Reasoning: {{ attempt.action.reasoning }}
-        {% endif %}
-    Tool: {{ attempt.action.tool_name }}
-    Args: {{ attempt.action.tool_args }}
-        {% if loop.index0 >= (attempt_n - 2) %}
-        {{ _.role("system", cache_control={"type": "ephemeral"}) }}
-        {% else %}
-        {{ _.role("system") }}
-        {% endif %}
-    Attempt {{ attempt.n }} result:
-        {% if attempt.error %}
-        ERROR: {{ attempt.error }}
-        {% else %}
-        Result: {{ attempt.result }}
-        {% endif %}
-        {% if attempt.feedback %}
-        CRITIC FEEDBACK: {{ attempt.feedback }}
-        {% endif %}
-    {% endfor %}
-
-    {{ _.role("user") }}
-    {% if attempts|length > 0 %}
-    You MUST address the critic's feedback. Do not repeat failed approaches.
-    {% endif %}
-
-    {% if attempt_n is not none and max_attempts is not none %}
-    BUDGET: Attempt {{ attempt_n }} of {{ max_attempts }}.
-    {% if attempt_n >= max_attempts - 1 %}
-    This is your final or near-final attempt. Call the tool most likely to
-    produce a useful partial answer — the critic will decide whether to accept.
-    Do NOT start a fresh tool chain that won't complete in time.
-    {% endif %}
-    {% endif %}
-
-    You are on attempt {{ attempts|length + 1 }}. Respond with the next action.
+    {# ────────── VOLATILE TAIL · feedback nudge · budget · counter — never cached ────────── #}
+    {{ ActorClosing(attempts, attempt_n, max_attempts) }}
 
     {{ ctx.output_format }}
   "#

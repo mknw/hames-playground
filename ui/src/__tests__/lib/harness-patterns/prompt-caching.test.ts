@@ -5,13 +5,10 @@
  * HTTP body and asserts the cache-stability invariants the controller
  * templates (simpleLoop.baml / actorCritic.baml) must uphold.
  *
- * VARIANTS UNDER TEST (#122 A/B — the live bench decides the winner):
- *  - ActorControllerV2 (actorCritic_v2.baml): cookbook Example-3 shape — one
- *    breakpoint on the system block + one rolling breakpoint on the last
- *    PERSISTENT block (USER REQUEST on call 1, newest attempt result after).
- *    Asserted here. Production still calls ActorController (V1) — the
- *    user-authored experimental arm, measured by the live bench only and
- *    deliberately NOT shape-asserted by tests.
+ * FUNCTIONS UNDER TEST (post-A/B; both are template_string compositions):
+ *  - ActorController: request marker on call 1 (attempt_n gate) + one rolling
+ *    marker on the newest attempt result; no system-block marker. Scheme
+ *    settled by the live bench (~89% cached input, ~64% cost reduction).
  *  - LoopController (scheme B): 2 static tier markers + 2 rolling markers.
  *
  * NOTE ON SHAPE: BAML merges consecutive same-role prompt messages into ONE
@@ -195,10 +192,11 @@ describe('LoopController prompt-caching layout', () => {
   })
 })
 
-// V2 is the bench arm this suite asserts. Production's ActorController (V1,
-// actorCritic.baml) is the user-authored experimental arm: measured by the
-// live bench (src/__tests__/bench/), deliberately not shape-asserted here.
-describe('ActorControllerV2 prompt-caching layout', () => {
+// V1 scheme (settled by the live A/B bench) is now THE production scheme, so
+// it is shape-asserted here: request marker on call 1 only, one rolling
+// marker on the newest attempt result, NO system-block marker (cross-run
+// static-head reuse is a still-open decision).
+describe('ActorController prompt-caching layout (production scheme)', () => {
   const ATTEMPTS = [
     {
       n: 1,
@@ -213,64 +211,37 @@ describe('ActorControllerV2 prompt-caching layout', () => {
   ]
 
   async function renderActor(attempts: unknown[]): Promise<Body> {
-    const req = await b.request.ActorControllerV2(
+    const req = await b.request.ActorController(
       'do the thing', 'do the thing', TOOLS, attempts as never,
       'ENABLED SERVERS: neo4j', undefined, attempts.length + 1, 3)
     return req.body.json() as Body
   }
 
-  /** V2's static marker rides the top-level `system` param, not messages[]. */
   function systemBlocks(body: Body): Block[] {
     return (body.system ?? []) as Block[]
   }
 
-  it('static requirements live in the system param and carry the static marker', async () => {
-    const body = await renderActor(ATTEMPTS)
-    const sys = systemBlocks(body)
-    expect(sys).toHaveLength(1)
-    expect(sys[0].text).toContain('AVAILABLE TOOLS')
-    expect(sys[0].cache_control?.type).toBe('ephemeral')
-    // run-static content stays in messages[] and is NOT separately marked
-    const [intentBlk] = blocks(body)
-    expect(intentBlk.text).toContain('USER INTENT:')
-    expect(intentBlk.text).toContain('ENABLED SERVERS') // context rides the intent block
-    expect(intentBlk.cache_control).toBeUndefined()
-    expect(sys[0].text).not.toContain('ENABLED SERVERS')
-  })
-
-  it('two markers on every call: system + last persistent block', async () => {
-    const counts = await Promise.all(
-      [0, 1, 2].map(async (n) => {
-        const body = await renderActor(ATTEMPTS.slice(0, n))
-        const inSystem = systemBlocks(body).filter((blk) => blk.cache_control).length
-        return inSystem + breakpoints(body).length
-      }))
-    expect(counts).toEqual([2, 2, 2])
-  })
-
-  it('the rolling marker sits on USER REQUEST at call 1, then moves to the newest result', async () => {
-    // call 1: no attempts yet — the request block is the last persistent block
+  it('exactly one marker per call: USER REQUEST on call 1, newest result after', async () => {
     const first = await renderActor([])
+    expect(systemBlocks(first).some((blk) => blk.cache_control)).toBe(false) // no system marker in this scheme
     expect(breakpoints(first)).toHaveLength(1)
     expect(breakpoints(first)[0].text).toContain('USER REQUEST')
-    // call 3: marker moved onto the newest result; request no longer marked
+
     const third = await renderActor(ATTEMPTS)
+    expect(systemBlocks(third).some((blk) => blk.cache_control)).toBe(false)
     expect(breakpoints(third)).toHaveLength(1)
     expect(breakpoints(third)[0].text).toContain('Attempt 2 result:')
     expect(blocks(third).find((blk) => blk.text?.includes('USER REQUEST'))?.cache_control).toBeUndefined()
   })
 
-  it('assistant/user attempt pairs; older results unmarked (covered by prefix matching)', async () => {
+  it('assistant/user attempt pairs; feedback rides its attempt result', async () => {
     const body = await renderActor(ATTEMPTS)
     const all = blocks(body)
     const a1 = all.find((blk) => blk.role === 'assistant')
     expect(a1?.text).toContain('Attempt 1 action:')
     const r1 = all.find((blk) => blk.text?.includes('Attempt 1 result:'))
-    const r2 = all.find((blk) => blk.text?.includes('Attempt 2 result:'))
-    expect(r1?.role).toBe('user')
+    expect(r1?.role).toBe('user') // authored as system, coerced on the wire
     expect(r1?.cache_control).toBeUndefined()
-    expect(r2?.cache_control?.type).toBe('ephemeral')
-    // critic feedback rides the result block of its attempt
     expect(r1?.text).toContain('CRITIC FEEDBACK: not sufficient')
   })
 
@@ -281,112 +252,27 @@ describe('ActorControllerV2 prompt-caching layout', () => {
     expect(budgeted).toHaveLength(1)
     expect(budgeted[0].text).toContain('BUDGET: Attempt 3 of 3')
     expect(budgeted[0].cache_control).toBeUndefined()
-    expect(all[all.length - 1]).toBe(budgeted[0]) // it IS the tail block
+    expect(all[all.length - 1]).toBe(budgeted[0])
   })
 
   it('marked prefix is byte-identical across attempts', async () => {
     const b0 = await renderActor([])
     const b1 = await renderActor(ATTEMPTS.slice(0, 1))
     const b2 = await renderActor(ATTEMPTS)
-    // system block (the static marker's prefix) never changes
     expect(systemBlocks(b1)[0].text).toBe(systemBlocks(b0)[0].text)
     expect(systemBlocks(b2)[0].text).toBe(systemBlocks(b0)[0].text)
-    // run-static intent/context/request block never changes
+    // intent/context block and request block never change (compare text only —
+    // the request block's marker legitimately differs between call 1 and 2+)
     expect(blocks(b1)[0].text).toBe(blocks(b0)[0].text)
     expect(blocks(b2)[0].text).toBe(blocks(b0)[0].text)
-    // attempt-1 pair identical once attempt 2 is appended (append-only history)
     const pick = (body: Body, needle: string) => blocks(body).find((blk) => blk.text?.includes(needle))?.text
+    expect(pick(b2, 'USER REQUEST')).toBe(pick(b0, 'USER REQUEST'))
     expect(pick(b2, 'Attempt 1 action:')).toBe(pick(b1, 'Attempt 1 action:'))
     expect(pick(b2, 'Attempt 1 result:')).toBe(pick(b1, 'Attempt 1 result:'))
   })
 })
 
-// ---------------------------------------------------------------------------
-// V3 ≡ V2 (#122 DX refactor): ActorControllerV3 is ActorControllerV2 decomposed
-// into template_strings. The refactor is ONLY legitimate while the rendered
-// request stays byte-identical — same blocks, same text, same cache_control.
-// This is the proof; if a section edit in actorCritic_v3.baml breaks it, the
-// cache behavior changed and the two no longer share cache entries.
-// ---------------------------------------------------------------------------
-describe('ActorControllerV3 renders byte-identical requests to V2', () => {
-  const FEW_SHOTS = [
-    { user: 'count the nodes', reasoning: 'plain count', tool: 'read_neo4j_cypher', args: '{"query":"MATCH (n) RETURN count(n)"}' },
-  ]
-  // Branch coverage: reasoning present/empty, feedback present/absent,
-  // success/error results, tools with/without args_schema.
-  const RICH_ATTEMPTS = [
-    { n: 1, action: { reasoning: 'try a script', tool_name: 'code-mode', tool_args: '{"script":"return 1"}', status: 'success', is_final: false }, result: 'got 1', error: null, feedback: 'not sufficient' },
-    { n: 2, action: { reasoning: '', tool_name: 'code-mode', tool_args: '{"script":"return 2"}', status: 'error', is_final: false }, result: '', error: 'boom', feedback: null },
-    { n: 3, action: { reasoning: 'retry smaller', tool_name: 'code-mode', tool_args: '{"script":"return 3"}', status: 'success', is_final: false }, result: 'got 3', error: null, feedback: null },
-  ]
-
-  const CASES: Array<[string, unknown[], string | undefined, unknown[] | undefined]> = [
-    ['no attempts, context, no few-shots', [], 'ENABLED SERVERS: neo4j', undefined],
-    ['no attempts, no context, few-shots', [], undefined, FEW_SHOTS],
-    ['1 attempt', RICH_ATTEMPTS.slice(0, 1), 'ENABLED SERVERS: neo4j', FEW_SHOTS],
-    ['2 attempts (error branch)', RICH_ATTEMPTS.slice(0, 2), 'ENABLED SERVERS: neo4j', FEW_SHOTS],
-    ['3 attempts', RICH_ATTEMPTS, 'ENABLED SERVERS: neo4j', FEW_SHOTS],
-  ]
-
-  it.each(CASES)('%s', async (_label, attempts, context, fewShots) => {
-    const args = ['do the thing', 'do the thing', TOOLS, attempts, context, fewShots, attempts.length + 1, 3]
-    type Render = (...a: unknown[]) => Promise<{ body: { json(): unknown } }>
-    const v2 = (await (b.request.ActorControllerV2 as never as Render)(...args)).body.json()
-    const v3 = (await (b.request.ActorControllerV3 as never as Render)(...args)).body.json()
-    expect(JSON.stringify(v3)).toBe(JSON.stringify(v2))
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Template-string twins (#122 DX pass): LoopControllerV2 ≡ LoopController and
-// ActorControllerV4 ≡ ActorController (the production V1 scheme). Same rule
-// as V3 ≡ V2: the refactor is only legitimate while the rendered request is
-// byte-identical — blocks, text, and cache_control alike. Passing also proves
-// the {# … #} section comments in the twins contribute zero bytes.
-// ---------------------------------------------------------------------------
 type Render = (...a: unknown[]) => Promise<{ body: { json(): unknown } }>
-
-describe('LoopControllerV2 renders byte-identical requests to LoopController', () => {
-  const FEW_SHOTS = [
-    { user: 'count the nodes', reasoning: 'plain count', tool: 'read_neo4j_cypher', args: '{"query":"MATCH (n) RETURN count(n)"}' },
-  ]
-  const CASES: Array<[string, unknown[], string | undefined, unknown[] | undefined, unknown[] | undefined]> = [
-    ['no turns, context + refs + few-shots', [], 'GRAPH SCHEMA: (Person)', REFS, FEW_SHOTS],
-    ['no turns, bare (no context/refs/few-shots)', [], undefined, undefined, undefined],
-    ['1 turn', [TURN_1], 'GRAPH SCHEMA: (Person)', REFS, undefined],
-    ['3 turns (expansion + error branches)', [TURN_1, TURN_2, TURN_3], 'GRAPH SCHEMA: (Person)', REFS, FEW_SHOTS],
-  ]
-  it.each(CASES)('%s', async (_label, turns, context, refs, fewShots) => {
-    const args = ['find nodes', 'find nodes', TOOLS, turns, context, refs, fewShots]
-    const prod = (await (b.request.LoopController as never as Render)(...args)).body.json()
-    const twin = (await (b.request.LoopControllerV2 as never as Render)(...args)).body.json()
-    expect(JSON.stringify(twin)).toBe(JSON.stringify(prod))
-  })
-})
-
-describe('ActorControllerV4 renders byte-identical requests to ActorController', () => {
-  const FEW_SHOTS = [
-    { user: 'do it', reasoning: 'directly', tool: 'code-mode', args: '{"script":"return 1"}' },
-  ]
-  const RICH = [
-    { n: 1, action: { reasoning: 'try a script', tool_name: 'code-mode', tool_args: '{"s":1}', status: 'success', is_final: false }, result: 'got 1', error: null, feedback: 'not sufficient' },
-    { n: 2, action: { reasoning: '', tool_name: 'code-mode', tool_args: '{"s":2}', status: 'error', is_final: false }, result: '', error: 'boom', feedback: null },
-    { n: 3, action: { reasoning: 'smaller', tool_name: 'code-mode', tool_args: '{"s":3}', status: 'success', is_final: false }, result: 'got 3', error: null, feedback: null },
-  ]
-  const CASES: Array<[string, unknown[], string | undefined, unknown[] | undefined]> = [
-    ['call 1 (request marker fires), context + few-shots', [], 'ENABLED SERVERS: neo4j', FEW_SHOTS],
-    ['call 1, bare', [], undefined, undefined],
-    ['call 2 (rolling marker on newest result)', RICH.slice(0, 1), 'ENABLED SERVERS: neo4j', FEW_SHOTS],
-    ['call 3 (error + feedback branches)', RICH.slice(0, 2), 'ENABLED SERVERS: neo4j', undefined],
-    ['call 4 (full history)', RICH, 'ENABLED SERVERS: neo4j', FEW_SHOTS],
-  ]
-  it.each(CASES)('%s', async (_label, attempts, context, fewShots) => {
-    const args = ['do the thing', 'do the thing', TOOLS, attempts, context, fewShots, attempts.length + 1, 4]
-    const prod = (await (b.request.ActorController as never as Render)(...args)).body.json()
-    const twin = (await (b.request.ActorControllerV4 as never as Render)(...args)).body.json()
-    expect(JSON.stringify(twin)).toBe(JSON.stringify(prod))
-  })
-})
 
 // ---------------------------------------------------------------------------
 // Tool-catalog separation (#122 whitespace pass). Regression for the

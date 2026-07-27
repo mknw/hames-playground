@@ -21,7 +21,7 @@
  * if any byte differs, the read silently misses and we pay 1.25× instead.
  *
  * Also records the per-call marker counts for the two schemes under A/B
- * (V2 = ActorControllerV2, 2 markers; scheme B = LoopController, up to 4) so a
+ * (ActorController: 1 marker; LoopController scheme B: up to 4) so a
  * regression in either shows up as a diff here rather than on the bill.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -124,12 +124,8 @@ async function loadHarness() {
         captured.push(req.body.json() as Body)
         return loopScript[Math.min(loopCall++, loopScript.length - 1)]
       },
-      // Production wiring calls ActorController (V1 — the user-authored
-      // experimental arm, intentionally not shape-asserted; the live bench
-      // measures it). Here we route the SAME loop-produced args through the
-      // V2 template so the byte-stability of the real data path is covered.
       ActorController: async (...args: unknown[]) => {
-        const req = await (actual.b.request.ActorControllerV2 as (...a: unknown[]) => Promise<{ body: { json(): unknown } }>)(...args)
+        const req = await (actual.b.request.ActorController as (...a: unknown[]) => Promise<{ body: { json(): unknown } }>)(...args)
         captured.push(req.body.json() as Body)
         return actorScript[Math.min(actorCall++, actorScript.length - 1)]
       },
@@ -216,7 +212,7 @@ describe('simpleLoop (scheme B) — real loop, rendered per turn', () => {
   })
 })
 
-describe('actorCritic → ActorControllerV2 — real loop, rendered per attempt', () => {
+describe('actorCritic → ActorController — real loop, rendered per attempt', () => {
   async function runActor() {
     const h = await loadHarness()
     const actor = h.createActorControllerAdapter({
@@ -248,10 +244,10 @@ describe('actorCritic → ActorControllerV2 — real loop, rendered per attempt'
     }
   })
 
-  it('marker budget holds every attempt (V2: system + last persistent block)', async () => {
+  it('marker budget holds every attempt (production: 1 marker per call)', async () => {
     const bodies = await runActor()
     const counts = bodies.map(markerCount)
-    counts.forEach((c) => expect(c).toBe(2))
+    counts.forEach((c) => expect(c).toBe(1))
   })
 
   it('the rolling marker sits on USER REQUEST at call 1, then moves to the newest result', async () => {

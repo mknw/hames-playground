@@ -1,9 +1,9 @@
 /**
- * LIVE prompt-cache benchmark (#122) — V1 (ActorController, user-authored)
- * vs V2 (ActorControllerV2, cookbook Example-3 shape) vs V3
- * (ActorControllerV3, template_string refactor of V2 — proven byte-identical
- * offline by prompt-caching.test.ts, so live parity with V2 is expected).
- * Calls the real Anthropic API and reports actual cache behavior per call.
+ * LIVE prompt-cache benchmark (#122). The V1/V2/V3 A/B is settled (schemes
+ * converged at ~89% cached input / ~64% cost reduction; bench arms removed) —
+ * this now measures the PRODUCTION controllers so cache behavior can be
+ * re-verified after any template change. Calls the real Anthropic API and
+ * reports actual cache read/write behavior per call.
  *
  * VARIANT ISOLATION: each variant gets a per-variant salt woven into the
  * FIRST TOOL's description. Tools render inside the system block, i.e. at the
@@ -206,9 +206,7 @@ describe('prompt-cache live bench: V1 vs V2', () => {
     const userMessage = `[${salt}] Compute the per-label node counts for the Bench subgraph and report the three largest labels with their counts.`
 
     const variants = [
-      { tag: 'v1', name: 'V1 ActorController (user arm)', fn: b.request.ActorController.bind(b.request) },
-      { tag: 'v2', name: 'V2 ActorControllerV2 (cookbook arm)', fn: b.request.ActorControllerV2.bind(b.request) },
-      { tag: 'v3', name: 'V3 ActorControllerV3 (template_string refactor of V2)', fn: b.request.ActorControllerV3.bind(b.request) },
+      { tag: 'actor', name: 'ActorController (production)', fn: b.request.ActorController.bind(b.request) },
     ] as const
 
     const sections: string[] = [

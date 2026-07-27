@@ -55,6 +55,33 @@ export type EventType =
   | 'reference_attached'
   | 'intent_compacted'
 
+/** Accounting record for one harness step (#122): token and cost totals
+ *  summed across EVERY physical API call the step made — including truncation
+ *  retries and fallback-chain attempts that never surface in `llmCall` (which
+ *  describes only the selected exchange). Stamped at event-creation time so
+ *  costs reflect the rates in force when the call happened; `rates` makes the
+ *  figure auditable/recomputable. Never rendered into LLM-facing
+ *  serializations (formatEvent reads only `data`). */
+export interface EventMetrics {
+  /** Input tokens billed at the full base rate (not served from cache) */
+  inputUncachedTokens: number
+  /** Input tokens read from cache (0.1× base input rate) */
+  inputCacheReadTokens: number
+  /** Input tokens written to cache (1.25× base input rate) */
+  inputCacheWriteTokens: number
+  /** Output tokens (no cached variant exists — caching covers the request prefix) */
+  outputTokens: number
+  /** Physical API calls this step made (>1 ⇒ retries/fallbacks burned spend) */
+  attempts: number
+  /** Estimated cost in USD at the rates below; absent when any attempt's
+   *  client has no pricing entry (unknown beats silently wrong) */
+  costUsd?: number
+  /** Same tokens priced with zero caching — the savings baseline */
+  noCacheUsd?: number
+  /** $/MTok rates used for the final attempt's client (audit trail) */
+  rates?: { inPerMTok: number; outPerMTok: number }
+}
+
 /** A single event in the context stream */
 export interface ContextEvent {
   /** Unique event identifier for cross-referencing */
@@ -65,6 +92,10 @@ export interface ContextEvent {
   data: unknown
   /** LLM call data - present when event involved an LLM call */
   llmCall?: LLMCallData
+  /** Step-level token/cost accounting — lifted from `llmCall.metrics` at
+   *  trackEvent time. First-class so any consumer (panel, exports,
+   *  recordings, dashboards) folds events without knowing llmCall internals. */
+  metrics?: EventMetrics
 }
 
 /** UnifiedContext - single source of truth for session state */
@@ -643,13 +674,24 @@ export interface LLMCallData {
   rawOutput?: string
   /** Structured output after BAML parsing */
   parsedOutput?: unknown
-  /** Token usage statistics */
+  /** Token usage of the SELECTED exchange (the prompt/response pair shown in
+   *  the drill-down). For the step's total spend across all attempts, use
+   *  `metrics` / `event.metrics`. */
   usage?: {
+    /** Input tokens NOT served from cache (Anthropic: `input_tokens`) */
     inputTokens: number
     outputTokens: number
+    /** Cache-READ input tokens (0.1× rate; Anthropic: `cache_read_input_tokens`) */
     cachedInputTokens: number
+    /** Cache-WRITE input tokens (1.25× rate; Anthropic: `cache_creation_input_tokens`) */
+    cacheCreationInputTokens?: number
+    /** All tokens processed: uncached + cache read + cache write + output */
     totalTokens: number
   }
+  /** Step-level accounting summed across ALL attempts this call made
+   *  (truncation retry, fallback chains). Lifted onto `event.metrics` by
+   *  trackEvent — this field is the carrier from adapter to event. */
+  metrics?: EventMetrics
   /** Call duration in milliseconds */
   durationMs?: number
   /** LLM provider name (e.g., 'openai', 'anthropic') */

@@ -18,14 +18,14 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import type { ControllerFn, CriticFn, CodeModeControllerFn, ControllerAction, CriticResult, ScriptExecutionEvent, LLMCallData } from './types'
+import type { ControllerFn, CriticFn, CodeModeControllerFn, ControllerAction, CriticResult, ScriptExecutionEvent, LLMCallData, EventMetrics } from './types'
 import type { ToolDescription, LoopTurn, Attempt, PriorResult, FewShot } from '../../../baml_client/types'
 import { listTools as mcpListTools } from './mcp-client.server'
 import { getActiveSandbox } from '../sandbox/scope.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
 import { clientOverrideFor } from './clients.server'
-import { CLIENT_MAX_OUTPUT_TOKENS } from '../settings'
+import { CLIENT_MAX_OUTPUT_TOKENS, estimateLlmCostUsd } from '../settings'
 
 assertServerOnImport()
 
@@ -74,13 +74,116 @@ export function extractLLMCallData(
 ): LLMCallData | undefined {
   const last = collector.last
   if (!last) return undefined
-  return buildLLMCallDataFromLog(last, functionName, variables, startTime, parsedOutput)
+  const llmCall = buildLLMCallDataFromLog(last, functionName, variables, startTime, parsedOutput)
+  llmCall.metrics = computeEventMetrics(collector)
+  return llmCall
 }
 
 /** Build LLMCallData from a collector log entry. Used for both success and
  *  failure paths — on failure `parsedOutput` is omitted, `rawOutput` may be
  *  empty, and `usage` may be absent, but `promptTemplate`/`variables` are
  *  always populated so the failed-call drill-down has something to render. */
+/** Shape of a collector call as this module reads it (native class, so all
+ *  property access is via getters — hence the loose cast). */
+type CollectorCall = {
+  selected?: boolean
+  provider?: string
+  clientName?: string
+  httpRequest?: { body?: unknown }
+  httpResponse?: { body?: { json?: () => unknown } } | null
+  usage?: { inputTokens?: number | null; outputTokens?: number | null; cachedInputTokens?: number | null } | null
+}
+
+/** Provider-side usage from a call's raw HTTP response. Needed because the
+ *  Collector's Usage has no cache-WRITE bucket (only read); Anthropic reports
+ *  `cache_creation_input_tokens` only in the response body. Best-effort. */
+function usageFromResponse(call: CollectorCall | undefined): {
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+} | undefined {
+  try {
+    const json = call?.httpResponse?.body?.json?.() as
+      | { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } }
+      | undefined
+    return json?.usage
+  } catch {
+    return undefined // absent/malformed body (e.g. stream call, network failure)
+  }
+}
+
+/** One call's token buckets: raw response usage first (has the cache-write
+ *  bucket), Collector usage as fallback (write reads as 0). Undefined when
+ *  the call never produced usage (pre-flight failures). */
+function callTokenBuckets(call: CollectorCall | undefined): {
+  inputUncachedTokens: number
+  inputCacheReadTokens: number
+  inputCacheWriteTokens: number
+  outputTokens: number
+} | undefined {
+  const raw = usageFromResponse(call)
+  if (raw && (raw.input_tokens != null || raw.output_tokens != null)) {
+    return {
+      inputUncachedTokens: raw.input_tokens ?? 0,
+      inputCacheReadTokens: raw.cache_read_input_tokens ?? 0,
+      inputCacheWriteTokens: raw.cache_creation_input_tokens ?? 0,
+      outputTokens: raw.output_tokens ?? 0,
+    }
+  }
+  const u = call?.usage
+  if (!u || (u.inputTokens == null && u.outputTokens == null)) return undefined
+  return {
+    inputUncachedTokens: u.inputTokens ?? 0,
+    inputCacheReadTokens: u.cachedInputTokens ?? 0,
+    inputCacheWriteTokens: 0,
+    outputTokens: u.outputTokens ?? 0,
+  }
+}
+
+/** Step-level accounting (#122): sum token buckets and cost across EVERY
+ *  call in the collector — all BAML invocations (truncation retry, manual
+ *  Groq escalation re-invoke) and all attempts within each (client fallback,
+ *  retry policies). One collector == one harness step by construction (the
+ *  loops create a fresh Collector per turn/attempt), so this is the step's
+ *  true bill; `llmCall.usage` remains the selected exchange only.
+ *  Cost is omitted (not zeroed) when any token-bearing attempt has no
+ *  pricing entry — unknown beats silently wrong. */
+export function computeEventMetrics(collector: Collector | undefined): EventMetrics | undefined {
+  if (!collector) return undefined
+  const totals = { inputUncachedTokens: 0, inputCacheReadTokens: 0, inputCacheWriteTokens: 0, outputTokens: 0 }
+  let attempts = 0
+  let costUsd = 0
+  let noCacheUsd = 0
+  let costKnown = true
+  let rates: { inPerMTok: number; outPerMTok: number } | undefined
+  for (const log of collector.logs ?? []) {
+    for (const call of (log.calls ?? []) as CollectorCall[]) {
+      const buckets = callTokenBuckets(call)
+      if (!buckets) continue
+      attempts++
+      totals.inputUncachedTokens += buckets.inputUncachedTokens
+      totals.inputCacheReadTokens += buckets.inputCacheReadTokens
+      totals.inputCacheWriteTokens += buckets.inputCacheWriteTokens
+      totals.outputTokens += buckets.outputTokens
+      const est = estimateLlmCostUsd(buckets, call.clientName)
+      if (est) {
+        costUsd += est.costUsd
+        noCacheUsd += est.noCacheUsd
+        rates = est.rates
+      } else {
+        costKnown = false
+      }
+    }
+  }
+  if (attempts === 0) return undefined
+  return {
+    ...totals,
+    attempts,
+    ...(costKnown ? { costUsd, noCacheUsd, rates } : {}),
+  }
+}
+
 function buildLLMCallDataFromLog(
   last: NonNullable<Collector['last']>,
   functionName: string,
@@ -90,12 +193,7 @@ function buildLLMCallDataFromLog(
 ): LLMCallData {
   // Prefer the call BAML actually selected (handles fallbacks); fall back to the last attempted call.
   // For failures, `selected` is rarely set — we want the last attempt that actually went out.
-  const calls = (last.calls ?? []) as Array<{
-    selected?: boolean
-    provider?: string
-    clientName?: string
-    httpRequest?: { body?: unknown }
-  }>
+  const calls = (last.calls ?? []) as CollectorCall[]
   const selectedCall = calls.find((c) => c.selected) ?? calls[calls.length - 1]
 
   // BAML's httpRequest.body is an HttpBody class instance with .text()/.json()/.raw() methods.
@@ -121,6 +219,27 @@ function buildLLMCallDataFromLog(
   const provider = selectedCall?.provider
   const clientName = selectedCall?.clientName
 
+  // Selected-exchange usage: prefer the raw response (carries the cache-write
+  // bucket); fall back to the Collector's aggregate for this log.
+  // totalTokens = ALL tokens processed (uncached + cache read + write + out).
+  const buckets = callTokenBuckets(selectedCall)
+  const usage = buckets
+    ? {
+        inputTokens: buckets.inputUncachedTokens,
+        outputTokens: buckets.outputTokens,
+        cachedInputTokens: buckets.inputCacheReadTokens,
+        cacheCreationInputTokens: buckets.inputCacheWriteTokens,
+        totalTokens: buckets.inputUncachedTokens + buckets.inputCacheReadTokens
+          + buckets.inputCacheWriteTokens + buckets.outputTokens
+      }
+    : last.usage ? {
+        inputTokens: last.usage.inputTokens ?? 0,
+        outputTokens: last.usage.outputTokens ?? 0,
+        cachedInputTokens: last.usage.cachedInputTokens ?? 0,
+        totalTokens: (last.usage.inputTokens ?? 0) + (last.usage.cachedInputTokens ?? 0)
+          + (last.usage.outputTokens ?? 0)
+      } : undefined
+
   return {
     functionName,
     variables,
@@ -128,12 +247,7 @@ function buildLLMCallDataFromLog(
     rawInput,
     rawOutput: last.rawLlmResponse ?? undefined,
     parsedOutput,
-    usage: last.usage ? {
-      inputTokens: last.usage.inputTokens ?? 0,
-      outputTokens: last.usage.outputTokens ?? 0,
-      cachedInputTokens: last.usage.cachedInputTokens ?? 0,
-      totalTokens: (last.usage.inputTokens ?? 0) + (last.usage.outputTokens ?? 0)
-    } : undefined,
+    usage,
     durationMs: Date.now() - startTime,
     provider,
     clientName
@@ -153,7 +267,11 @@ export function extractFailureLLMCallData(
 ): LLMCallData {
   const last = collector?.last
   if (last) {
-    return buildLLMCallDataFromLog(last, functionName, variables, startTime)
+    const llmCall = buildLLMCallDataFromLog(last, functionName, variables, startTime)
+    // Failed steps still spent tokens (e.g. a truncated 32k-output response
+    // before the retry also failed) — account for them.
+    llmCall.metrics = computeEventMetrics(collector)
+    return llmCall
   }
   return {
     functionName,
@@ -652,6 +770,7 @@ export function createActorControllerAdapter(
       ? await options.contextProvider()
       : options.contextPrefix
     const fewShots = options.fewShots
+
     const variables = {
       user_message,
       intent,

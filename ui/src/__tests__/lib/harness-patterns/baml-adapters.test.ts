@@ -359,11 +359,13 @@ describe('extractLLMCallData', () => {
     expect(result!.rawOutput).toBe('{"tool_name":"Return","is_final":true}')
     expect(result!.rawInput).toBe('{"messages":[{"role":"user","content":"test"}]}')
     expect(result!.parsedOutput).toEqual({ is_final: true })
+    // totalTokens = ALL tokens processed (fresh + cache read + write + out) —
+    // semantics changed with #122 cache accounting (was fresh + out only).
     expect(result!.usage).toEqual({
       inputTokens: 150,
       outputTokens: 30,
       cachedInputTokens: 50,
-      totalTokens: 180
+      totalTokens: 230
     })
     expect(result!.provider).toBe('groq')
     expect(result!.clientName).toBe('GroqFast')
@@ -610,8 +612,8 @@ describe('LoopController BamlValidationError fallback', () => {
     expect(result.action).toBeDefined()
     expect(result.action.is_final).toBe(true)
     expect(mockLoopController).toHaveBeenCalledTimes(2)
-    // Second call should use GroqGPT120B client override
-    const secondCallOptions = mockLoopController.mock.calls[1][7] ?? mockLoopController.mock.calls[1][6]
+    // Second call should use GroqGPT120B client override.
+        const secondCallOptions = mockLoopController.mock.calls[1][7] ?? mockLoopController.mock.calls[1][6]
     expect(secondCallOptions).toEqual(expect.objectContaining({ client: 'GroqGPT120B' }))
   })
 
@@ -631,8 +633,8 @@ describe('LoopController BamlValidationError fallback', () => {
     expect(result.action).toBeDefined()
     expect(result.action.is_final).toBe(true)
     expect(mockLoopController).toHaveBeenCalledTimes(3)
-    // Third call should use GroqFast client override
-    const thirdCallOptions = mockLoopController.mock.calls[2][7] ?? mockLoopController.mock.calls[2][6]
+    // Third call should use GroqFast client override.
+        const thirdCallOptions = mockLoopController.mock.calls[2][7] ?? mockLoopController.mock.calls[2][6]
     expect(thirdCallOptions).toEqual(expect.objectContaining({ client: 'GroqFast' }))
   })
 

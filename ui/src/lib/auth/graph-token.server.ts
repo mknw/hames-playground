@@ -159,7 +159,14 @@ async function resolveAccount(
 export async function graphFetch(
   userId: string,
   path: string,
-  init: { method?: string; scopes?: readonly string[]; body?: unknown } = {},
+  init: {
+    method?: string;
+    scopes?: readonly string[];
+    body?: unknown;
+    /** Extra request headers, e.g. `Prefer: outlook.timezone="Europe/Brussels"`.
+     *  Cannot override Authorization — the credential is set here, not by callers. */
+    headers?: Record<string, string>;
+  } = {},
 ): Promise<unknown> {
   const token = await getUserGraphToken(userId, init.scopes ?? DEFAULT_GRAPH_SCOPES);
   const url = path.startsWith("http") ? path : `${GRAPH_BASE}${path}`;
@@ -167,6 +174,8 @@ export async function graphFetch(
   const res = await fetch(url, {
     method: init.method ?? "GET",
     headers: {
+      ...init.headers,
+      // Set last so a caller can never replace the credential or content type.
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
       ...(init.body ? { "Content-Type": "application/json" } : {}),

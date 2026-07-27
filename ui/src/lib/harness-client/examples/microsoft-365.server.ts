@@ -6,9 +6,11 @@
  * delegated per-user token server-side (see `lib/app-tools/graph.server.ts`),
  * so Entra enforces the scope and no credential ever reaches the model.
  *
- * First slice is profile-only (`graph_me`, scope `User.Read` — already
- * admin-consented). Mail/Files/Calendar tools appear in `tools.graph`
- * automatically once registered, so this agent needs no change to pick them up.
+ * Tools available: `graph_me` (profile), `graph_calendar_today` (today's
+ * events), `graph_mail_recent` (inbox, optionally unread-only) — enough for a
+ * "what does my day look like?" briefing. Further graph tools appear in
+ * `tools.graph` automatically once registered, so this agent needs no change to
+ * pick them up.
  */
 "use server";
 
@@ -32,9 +34,11 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
     {
       patternId: "microsoft-365",
       liveEvents: true,
-      // Profile lookups are single-shot; no need to replay prior turns.
       rememberPriorTurns: false,
-      maxTurns: 3,
+      // A "what's on today?" briefing needs several calls in one turn
+      // (calendar + mail, sometimes profile), plus room to recover from a
+      // failed call, so this is deliberately higher than a single-shot loop.
+      maxTurns: 8,
     },
   );
 

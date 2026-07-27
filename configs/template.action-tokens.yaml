@@ -12,7 +12,13 @@
 #
 # `label` is for your own bookkeeping (which device a secret belongs to); it is
 # never used at runtime. Rotate by replacing the `secret` value.
+#
+# `userId` is the caller's Entra object id (`oid`) — the same stable id the app
+# now keys sessions and conversations on (#119). It is the GUID shown as
+# "Object ID" on the user in Entra admin center (Users → the person), and the
+# `oid` claim in that user's ID token. The endpoint contract is unchanged; only
+# the meaning of this value moved from a Stack Auth id to the Entra oid.
 tokens:
   - label: "example iOS Shortcut"
     secret: "<REPLACE_WITH_A_LONG_RANDOM_SECRET>"
-    userId: "<STACK_AUTH_USER_ID>"
+    userId: "<ENTRA_OBJECT_ID_OID>"

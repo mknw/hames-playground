@@ -3,7 +3,7 @@
  *
  * `withSandbox` acquires a sandbox (boot + connectMcp) and runs the wrapped
  * pattern inside an ALS scope carrying the resulting `McpTransport`. Three
- * downstream readers consult it (see docs/sandbox-plan.md → "How tools reach
+ * downstream readers consult it (see docs/plan/sandbox.md → "How tools reach
  * the controller"):
  *
  *   1. `mcp-client.callTool` — routes sandbox-owned tool names to the in-VM

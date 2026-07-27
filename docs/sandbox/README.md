@@ -3,7 +3,7 @@
 Quick reference for observing what's happening inside the compute sandbox
 ([#79](https://github.com/mknw/harness-playground/issues/79)) at runtime:
 what containers exist, what's running inside them, how to peek, and how to
-clean up. Pairs with the design spec at [`docs/sandbox-plan.md`](../sandbox-plan.md).
+clean up. Pairs with the design spec at [`docs/plan/sandbox.md`](../plan/sandbox.md).
 
 For the runtime data flow — attachment lifecycle, `/work` ⇄ Data Stash sync, and
 tool dispatch / topology — see the Mermaid diagrams in
@@ -183,7 +183,7 @@ jq -r '.events[] | select(.type=="error") | .data.error' "$LOG"
 
 ## Related docs
 
-- [`docs/sandbox-plan.md`](../sandbox-plan.md) — full design spec (process
+- [`docs/plan/sandbox.md`](../plan/sandbox.md) — full design spec (process
   topology, attachment model, MCP-in-VM architecture, ALS dispatch, backend
   interface, build order).
 - [`rootfs/README.md`](../../rootfs/README.md) — how the `kg-sandbox:base`

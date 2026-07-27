@@ -1,55 +1,38 @@
 "use server";
 
-import { StackServerApp, type User } from '@stackframe/js';
-import { getRequestEvent } from 'solid-js/web';
+import { getRequestEvent } from "solid-js/web";
+import { getSession } from "./session-store.server";
+import { readCookie, SESSION_COOKIE } from "./cookies.server";
+import type { AuthUser } from "./types";
 
 /**
- * Retrieves the current Stack Auth user from the server context.
- * This creates a new StackServerApp instance for each request to properly
- * handle authentication in server functions.
+ * Read the current authenticated user from the server-side Entra session:
+ * the opaque `kg_session` cookie → a Postgres `auth_sessions` row. Returns
+ * `null` when there is no valid, unexpired session.
  *
- * @returns {Promise<User | null>} The authenticated user or null
+ * Replaces the former Stack Auth lookup (#119). The identity *source* changed
+ * (Stack → Entra); the `{ id, email, displayName }` shape did not, so every
+ * downstream consumer (via `getAuthenticatedUser`) is unaffected. `id` is the
+ * Entra `oid`.
  */
-export async function getCurrentUser(): Promise<User | null> {
+export async function getCurrentUser(): Promise<AuthUser | null> {
   "use server";
 
   const event = getRequestEvent();
-
   if (!event) {
-    console.error("[getCurrentUser] No request event found. This function must be called within a server context.");
+    console.error(
+      "[getCurrentUser] No request event found. This must be called within a server context.",
+    );
     return null;
   }
 
-  try {
-    // Create a new StackServerApp instance for this specific request context
-    const stackServerApp = new StackServerApp({
-      tokenStore: event.request,
-      secretServerKey: process.env.STACK_SECRET_SERVER_KEY,
-      projectId: import.meta.env.VITE_STACK_PROJECT_ID,
-      publishableClientKey: import.meta.env.VITE_STACK_PUBLISHABLE_CLIENT_KEY,
-    });
-    console.log("[getCurrentUser] Credentials are: ", {
-      secretServerKey: process.env.STACK_SECRET_SERVER_KEY,
-      projectId: import.meta.env.VITE_STACK_PROJECT_ID,
-      publishableClientKey: import.meta.env.VITE_STACK_PUBLISHABLE_CLIENT_KEY,
-    });
+  const sessionId = readCookie(event.request, SESSION_COOKIE);
+  const session = await getSession(sessionId);
+  if (!session) return null;
 
-    const user = await stackServerApp.getUser();
-
-    console.log("[getCurrentUser] Retrieved user from Stack Auth:", {
-      hasUser: !!user,
-      userId: user?.id,
-      primaryEmail: user?.primaryEmail,
-      displayName: user?.displayName,
-    });
-
-    return user;
-  } catch (error) {
-    console.error("[getCurrentUser] Error while retrieving user:", error);
-    console.error("[getCurrentUser] Error details:", {
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined
-    });
-    return null;
-  }
+  return {
+    id: session.userId,
+    email: session.email,
+    displayName: session.displayName,
+  };
 }

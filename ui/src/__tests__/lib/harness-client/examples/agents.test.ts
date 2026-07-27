@@ -347,29 +347,6 @@ describe('Agent Harnesses', () => {
     })
   })
 
-  describe('kgBuilderAgent', () => {
-    it('should have valid config', async () => {
-      const { kgBuilderAgent } = await import('../../../../lib/harness-client/examples/kg-builder.server')
-      validateAgentConfig(kgBuilderAgent)
-      expect(kgBuilderAgent.id).toBe('kg-builder')
-    })
-
-    it('should create valid patterns', async () => {
-      const { kgBuilderAgent } = await import('../../../../lib/harness-client/examples/kg-builder.server')
-      const patterns = await validatePatterns(kgBuilderAgent)
-
-      // Should have web research, memory extract, neo4j persist, synthesizer
-      expect(patterns.length).toBe(4)
-    })
-
-    it('should include approval pattern for neo4j persist', async () => {
-      const { kgBuilderAgent } = await import('../../../../lib/harness-client/examples/kg-builder.server')
-      const patterns = await kgBuilderAgent.createPatterns('test-session') as Pattern[]
-      const hasApproval = patterns.some(p => p.name === 'withApproval')
-      expect(hasApproval).toBe(true)
-    })
-  })
-
   describe('multiSourceResearchAgent', () => {
     it('should have valid config', async () => {
       const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
@@ -430,14 +407,12 @@ describe('Agent Consistency', () => {
     const { defaultAgent } = await import('../../../../lib/harness-client/examples/default.server')
     const { codeModeAgent } = await import('../../../../lib/harness-client/examples/code-mode.server')
     const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-    const { kgBuilderAgent } = await import('../../../../lib/harness-client/examples/kg-builder.server')
     const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
 
     const ids = [
       defaultAgent.id,
       codeModeAgent.id,
       conversationalMemoryAgent.id,
-      kgBuilderAgent.id,
       multiSourceResearchAgent.id
     ]
 
@@ -448,13 +423,11 @@ describe('Agent Consistency', () => {
   it('all agents should contain synthesizer pattern', async () => {
     const { defaultAgent } = await import('../../../../lib/harness-client/examples/default.server')
     const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-    const { kgBuilderAgent } = await import('../../../../lib/harness-client/examples/kg-builder.server')
     const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
 
     const agents = [
       defaultAgent,
       conversationalMemoryAgent,
-      kgBuilderAgent,
       multiSourceResearchAgent
     ]
 

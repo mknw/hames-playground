@@ -4,8 +4,8 @@
  * Top-level "use server" module for SolidStart server actions.
  * Wraps harness-patterns for use in Solid components.
  *
- * Persistence: every public action authenticates the caller via Stack Auth
- * (or VITE_DEV_BYPASS_AUTH) and scopes session reads/writes to that user.
+ * Persistence: every public action authenticates the caller via the Entra
+ * session (or VITE_DEV_BYPASS_AUTH) and scopes session reads/writes to that user.
  * The full UnifiedContext is stored as a single JSONB blob in Postgres —
  * see `lib/db/conversations.server.ts`.
  */
@@ -45,7 +45,7 @@ import { runWithUserId } from "./request-user.server";
 
 /**
  * Resolve the current user. In dev with the bypass enabled, returns the
- * shared `BYPASS_USER` so persistence works without a real Stack Auth session.
+ * shared `BYPASS_USER` so persistence works without a real Entra session.
  * See `lib/auth/dev-bypass.ts` for the gate.
  */
 async function requireUser(): Promise<{ id: string; email: string }> {

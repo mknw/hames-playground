@@ -81,15 +81,6 @@ describe('estimateTurns', () => {
     expect(par.estimateTurns?.(settings)).toBe(6)
   })
 
-  it('withApproval: delegates to inner pattern', async () => {
-    const { withApproval } = await import('../../../lib/harness-patterns/patterns/withApproval.server')
-    const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
-
-    const inner = asAny(simpleLoop(vi.fn(), [], { patternId: 'inner', maxTurns: 4 }))
-    const guarded = withApproval(inner, () => true)
-    expect(guarded.estimateTurns?.(settings)).toBe(4)
-  })
-
   it('hook: 0 when background, delegates otherwise', async () => {
     const { hook } = await import('../../../lib/harness-patterns/patterns/hook.server')
     const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')

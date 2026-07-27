@@ -303,7 +303,7 @@ describe('tool catalog renders blank-line-separated entries (processed string)',
     const body = req.body.json() as Body
     const text = ((body.system as Block[] | undefined)?.[0]?.text ?? '')
     expect(text).toContain('- tool_1: first tool\n  Args: {"q":"string"}\n\n- tool_2: second tool')
-    expect(text).toContain('Args: {"x":"int"}\n\nThe critic evaluates')
+    expect(text).toContain('Args: {"x":"int"}\n\nA critic decides')
     expect(text).not.toMatch(/\S- tool_\d/)
     expect(text).not.toContain('} \n') // the old trailing space after schemas
   })

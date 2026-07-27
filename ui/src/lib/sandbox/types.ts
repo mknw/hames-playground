@@ -4,7 +4,7 @@
  * The `ComputeBackend` trait abstracts the substrate (Docker today,
  * Firecracker later) behind a single interface so substrate choice is
  * operational config, not application code. See
- * docs/sandbox-plan.md → "Backend interface".
+ * docs/plan/sandbox.md → "Backend interface".
  *
  * Pure types only — safe to import from anywhere. The actual backend
  * implementations live in `*.server.ts` files (server-only).
@@ -157,7 +157,7 @@ export interface InVmMcpServer {
 
 /**
  * v0 in-VM server registry — the six tools from
- * docs/sandbox-plan.md → "Tools available in v0".
+ * docs/plan/sandbox.md → "Tools available in v0".
  *
  * `launch` argv targets `/opt/mcp/init.sh serve <name>`, the stable launch
  * path baked into the rootfs (see rootfs/init.sh).

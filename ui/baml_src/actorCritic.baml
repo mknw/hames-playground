@@ -146,10 +146,15 @@ function ActorController(
 
     AVAILABLE TOOLS:
     {{ ToolCatalog(tools) }}
-    The critic evaluates whether the data you've gathered is sufficient and
-    decides when the task is complete — you don't need a "Return" tool. Focus
-    on calling the right tool to make progress; the loop exits when the critic
-    says so.
+    A critic decides when the task is complete and when the loop exits — you
+    don't need a "Return" tool. Focus on calling the right tool to make progress.
+
+    When you believe the task is fully complete — every requested deliverable
+    actually produced, not merely planned — set is_final=true. The critic then
+    VERIFIES before the loop exits, so is_final is a signal, not a guarantee.
+    While you still have work to do, keep is_final=false and call the next tool.
+    In particular, a script you have only WRITTEN is not done: keep is_final=false
+    and run it (and confirm its output) before you set is_final=true.
     {{ ActorFewShots(few_shots) }}
 
     {# ────────── TASK FRAME · intent · context · request (call-1 cache marker) ────────── #}

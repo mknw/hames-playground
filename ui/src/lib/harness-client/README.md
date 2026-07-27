@@ -55,7 +55,7 @@ Returns metadata for all registered agents (id, name, description, icon).
 
 ### `listConversations()` / `loadConversation(sessionId)`
 
-Server actions used by the sidebar. Both authenticate via Stack Auth (or fall back to `dev-bypass-user` when `VITE_DEV_BYPASS_AUTH=true`) and scope by `user.id`:
+Server actions used by the sidebar. Both authenticate via the Entra session (`getAuthenticatedUser()`, or fall back to `dev-bypass-user` when `VITE_DEV_BYPASS_AUTH=true`) and scope by `user.id`:
 
 - `listConversations()` → `{ id, agentId, title, updatedAt }[]`, newest first, capped at 200
 - `loadConversation(sessionId)` → returns the deserialized `UnifiedContext` so `ChatInterface` can replay events into the graph + observability panel
@@ -114,5 +114,5 @@ Sessions are split into two layers:
 1. First message: auth → `processMessageStreaming(sessionId, message, agentId)` builds patterns, runs the agent, and `saveSession(sessionId, userId, agentId, serializeContext(ctx))` upserts the row. Title is derived from the first user message and stuck via `COALESCE` on update.
 2. Subsequent messages: `loadSession(sessionId, userId)` reads the row, `deserializeContext()` rehydrates state, `continueSession()` runs the next turn.
 3. Sidebar selection: `loadConversation(sessionId)` returns the rehydrated context; `ChatInterface` replays events into graph + observability via the existing pipeline.
-4. Approval flow: `withApproval()` pauses → `approveAction()` / `rejectAction()` resumes via `resumeHarness()`; the resumed context is re-saved.
+4. Approval flow (plumbing): a paused context (`status: 'paused'`) resumes via `approveAction()` / `rejectAction()` → `resumeHarness()`; the resumed context is re-saved. The gating pattern that pauses a run is being redesigned — see "Execute under Supervision" (#123).
 5. Agent change / new chat: `deleteSession()` evicts the pattern cache and removes the row (or simply selects a different `sessionId`).

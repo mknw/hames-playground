@@ -208,7 +208,7 @@ describe('cross-turn persistence after conversation switch', () => {
 
   it('agent mismatch on resume falls through to a fresh start (no cross-agent leak)', async () => {
     if (!dbAvailable) return
-    // Stored as default; if a request comes in claiming agentId="kg-builder",
+    // Stored as default; if a request comes in claiming agentId="code-mode",
     // runTurn ignores the loaded context. We assert the persistence layer
     // surfaces the stored agentId so the dispatch decision is unambiguous.
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`

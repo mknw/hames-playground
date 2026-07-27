@@ -141,7 +141,7 @@ export function guardrail<T extends Record<string, unknown>>(
         // The wrapped pattern needs its own scope so its events are tagged
         // with its own patternId (not the guardrail's). Without this,
         // `view.fromLastPattern()` filters the wrapped pattern's events out.
-        // Mirrors `withApproval.server.ts:93-104`.
+        // Mirrors `with-references.server.ts`'s child-scope wrapping.
         const innerPatternId = pattern.config.patternId ?? pattern.name
         const childScope = createScope(innerPatternId, scope.data) as typeof scope
         const result = await pattern.fn(childScope, view)

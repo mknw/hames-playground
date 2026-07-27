@@ -1,6 +1,6 @@
 # Sandbox rootfs (`base` flavor, v0)
 
-The image definition for sandbox VMs. See [`docs/sandbox-plan.md`](../docs/sandbox-plan.md)
+The image definition for sandbox VMs. See [`docs/plan/sandbox.md`](../docs/plan/sandbox.md)
 → "Rootfs composition (v0)" for the design. This is the only "code at the
 project root" the sandbox needs — there is no separate pool-manager daemon.
 

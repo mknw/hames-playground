@@ -297,6 +297,19 @@ export interface ActorCriticConfig extends PatternConfig {
    *  and the loop's strict allowlist stay in sync when the user mutates the
    *  selection mid-conversation. */
   dynamicToolAllowlist?: () => Promise<string[]>
+  /** How often the critic runs, in successful actor turns (default: 1 = every
+   *  turn, the original behavior). With `criticCadence: N` the actor free-runs a
+   *  sequence of tool calls and the critic — still the loop's SOLE exit
+   *  authority — evaluates only (a) every Nth successful turn, (b) whenever the
+   *  actor sets `is_final: true` ("I think I'm done"), and (c) on the final
+   *  attempt. This lets a multi-step deliverable (e.g. write a script, THEN run
+   *  it) finish before the critic judges, so it can't wrongly accept an
+   *  intermediate state as complete — the failure in
+   *  `.harness-logs/context-3817275e-*.json`, where a critic ran right after the
+   *  report script was WRITTEN (before it ran) and exited with no .docx. Values
+   *  < 1 are clamped to 1 so the critic can never be disabled. Note: with N > 1,
+   *  `maxRetries` bounds actor turns (tool steps), not critic evaluations. */
+  criticCadence?: number
 }
 
 /** Synthetic tool injected into LoopController's tools list when prior results
@@ -393,7 +406,7 @@ export interface ConfiguredPattern<T> {
    *  equivalent to a contribution of 1. */
   estimateTurns?: (settings: TurnEstimateSettings) => number
   /** Wrapped sub-patterns, for combinators that compose others
-   *  (`chain`, `routes`, `parallel`, `guardrail`, `hook`, `withApproval`,
+   *  (`chain`, `routes`, `parallel`, `guardrail`, `hook`,
    *  `withReferences`). Leaf patterns omit it. Purely for static
    *  introspection of the pattern graph — execution runs through `fn`, never
    *  this — so it's safe and additive. See `pattern-capabilities.ts`
@@ -728,7 +741,6 @@ export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
   router: true,
   routes: false,
   chain: false,
-  withApproval: true,
   compactIntent: 'intent_compacted',
   // The retriever's matches are surfaced as a tool_result (the channel the
   // synthesizer reads via view.fromLastPattern()) — same as a simpleLoop tool.
@@ -743,7 +755,6 @@ export const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy> = {
   router: 'always',
   routes: 'always',
   chain: 'always',
-  withApproval: 'on-success',
   compactIntent: 'always',
   retriever: 'always'
 }
@@ -758,7 +769,6 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   router: 'irrecoverable',
   routes: 'irrecoverable',
   chain: 'irrecoverable',
-  withApproval: 'recoverable',
   // compactIntent is best-effort: on failure it leaves intent unset and the
   // downstream actor falls back to the raw user message — never fatal.
   compactIntent: 'recoverable',

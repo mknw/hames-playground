@@ -137,8 +137,6 @@ export {
 export {
   simpleLoop,
   actorCritic,
-  withApproval,
-  approvalPredicates,
   withReferences,
   chain,
   runChain,
@@ -163,8 +161,6 @@ export {
   type RetrievalHit,
   type RetrievalReference,
   type RetrieverResult,
-  type ApprovalPredicate,
-  type WithApprovalData,
   type JudgeConfig,
   type JudgeData,
   type EvaluatorFn,

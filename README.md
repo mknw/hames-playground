@@ -105,7 +105,7 @@ Full API: [`ui/src/lib/harness-patterns/README.md`](ui/src/lib/harness-patterns/
 
 Conversations are persisted to Postgres in a single `conversations(id, user_id, agent_id, title, context jsonb, created_at, updated_at)` table — the `context` column is the full `serializeContext()` blob, no normalization. Schema is bootstrapped idempotently on first DB hit, so the bring-up is just `docker compose up -d`.
 
-- Per-user scoping: every load/save is gated by `user_id` (Stack Auth, or `dev-bypass-user` when `VITE_DEV_BYPASS_AUTH=true`)
+- Per-user scoping: every load/save is gated by `user_id` (the Entra `oid`, or `dev-bypass-user` when `VITE_DEV_BYPASS_AUTH=true`)
 - Sticky titles: first 60 chars of the first user message becomes the title, locked in via `COALESCE` on update
 - Sidebar lists threads via `listConversations()`; selecting one calls `loadConversation()` and replays events into the graph + observability panel
 
@@ -195,7 +195,7 @@ kg-agent/
 │   │       ├── harness-client/    # Server actions, registry, session, examples/
 │   │       ├── db/                # Postgres pool + conversations repo
 │   │       ├── neo4j/             # neo4j-driver singleton + write actions
-│   │       └── auth/              # Stack Auth client + server helpers
+│   │       └── auth/              # Entra OIDC (MSAL) + session store + helpers
 │   └── package.json
 ├── docs/                     # Documentation (see docs/INDEX.md)
 └── graphiti-mcp/             # Graphiti MCP utilities (optional)

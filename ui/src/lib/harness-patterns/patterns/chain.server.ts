@@ -172,7 +172,8 @@ export function chain<T extends Record<string, unknown>>(
       // ancestry (no view of its sibling's emit) or — worse — selects its
       // OWN patternId as "last" (because the outer view was constructed
       // for the wrapping pattern, not for the synth). Mirrors `runChain`
-      // above (chain.server.ts:60-122) and `withApproval.server.ts:93-104`.
+      // above (chain.server.ts:60-122) and the single-child wrappers
+      // (`guardrail`/`hook`/`with-references`).
       const outerCtx = (view as unknown as { ctx: UnifiedContext }).ctx
       let currentData = scope.data
       for (const pattern of patterns) {

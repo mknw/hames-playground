@@ -13,7 +13,7 @@
  * Orthogonal to `WarmPool`: the scheduler decides *whether* a sandbox may
  * exist right now, not where it comes from. `withSandbox` does
  * `scheduler.allocate(...)` first (blocks on cap), then `pool.acquire(...)`
- * (cold-boot vs. pool hit). See docs/sandbox-plan.md → "Scheduler".
+ * (cold-boot vs. pool hit). See docs/plan/sandbox.md → "Scheduler".
  *
  * Queue fairness: FIFO with skip-on-session-cap. A waiter whose session is
  * still over its per-session cap is passed over so later waiters in *other*

@@ -13,7 +13,11 @@
  *   tokens:
  *     - label: "iphone"            # optional, bookkeeping only
  *       secret: "<long-random>"
- *       userId: "<stack-auth-id>"
+ *       userId: "<entra-oid>"      # caller's Entra object id (#119)
+ *
+ * The `userId` is the Entra `oid` — the same stable id the app keys sessions
+ * and conversations on since #119. The endpoint contract is unchanged; only
+ * what this value denotes moved from a Stack Auth id to the Entra oid.
  */
 
 import { readFileSync, existsSync } from "node:fs";

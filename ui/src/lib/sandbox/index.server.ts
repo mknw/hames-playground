@@ -3,7 +3,7 @@
  *
  * `withSandbox` and the (future) sandbox manager import `getComputeBackend()`
  * here rather than constructing a backend directly, so substrate choice stays
- * a single operational decision (see docs/sandbox-plan.md → "macOS
+ * a single operational decision (see docs/plan/sandbox.md → "macOS
  * development" / "Substrate options").
  */
 

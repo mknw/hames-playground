@@ -379,7 +379,7 @@ export function simpleLoop<T extends SimpleLoopData>(
 
         // Validate tool. The static allowlist is augmented by an active
         // `withSandbox` scope's tool surface — `sandbox_*` names pass without
-        // being listed in `tools` (see docs/sandbox-plan.md → "How tools reach
+        // being listed in `tools` (see docs/plan/sandbox.md → "How tools reach
         // the controller"). Outside any sandbox scope, `getActiveSandbox()`
         // returns undefined and this collapses to the original check.
         const sandbox = getActiveSandbox()

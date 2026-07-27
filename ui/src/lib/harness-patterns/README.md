@@ -33,7 +33,6 @@ Functional, composable framework for agentic tool execution.
   - [Tools()](#tools)
   - [simpleLoop()](#simpleloopcontroller-tools-config)
   - [actorCritic()](#actorcriticactor-critic-tools-config)
-  - [withApproval()](#withapprovalpattern-predicate)
   - [withReferences()](#withreferencespattern-config)
   - [synthesizer()](#synthesizerconfig)
   - [compactIntent()](#compactintentconfig)
@@ -162,7 +161,7 @@ interface ControllerAction {
   tool_name: string      // Tool to call. simpleLoop: `'Return'` exits the loop. actorCritic: actor's `'Return'` is ignored — the critic alone owns termination.
   tool_args: string      // JSON payload
   status: string         // User-facing message
-  is_final: boolean      // simpleLoop only — actorCritic ignores it on the actor side
+  is_final: boolean      // simpleLoop: exits the loop. actorCritic: cannot exit (critic owns that), but is an advisory *critic trigger* — see criticCadence.
 }
 
 // Critic result for actor-critic pattern
@@ -352,6 +351,7 @@ actorCritic(b.CodeModeController.bind(b), b.CodeModeCritic.bind(b), tools.all, {
 interface ActorCriticConfig extends PatternConfig {
   maxRetries?: number             // Default: 3
   onToolResult?: OnToolResult     // Same shape + semantics as in SimpleLoopConfig
+  criticCadence?: number          // Default: 1 (critic every turn). See below.
 }
 ```
 
@@ -361,6 +361,20 @@ interface ActorCriticConfig extends PatternConfig {
 3. Critic evaluates result
 4. Retry with feedback if insufficient
 5. Exit when sufficient or max retries
+
+**`criticCadence` — let the actor free-run a multi-step sequence.** By default
+(`1`) the critic runs after every successful turn. This interrupts multi-step
+deliverables mid-plan: the actor writes a script, and the critic — the loop's
+*sole* exit authority — can wrongly accept the written-but-unrun script as "done"
+(observed live: a report loop exited with no `.docx` because the critic judged the
+generator script before it ran). With `criticCadence: N` the actor free-runs and
+the critic evaluates only (a) every Nth successful turn, (b) when the actor sets
+`is_final: true` ("I think I'm done" — it still can't exit by itself; the critic
+verifies), and (c) on the final attempt. This is the composable "actor free-runs,
+judge gates exit" shape without a second pattern. `is_final` is thus an advisory
+critic *trigger* here, never an exit. With `N > 1`, `maxRetries` bounds actor
+turns (tool steps), not critic calls; values `< 1` are clamped to `1` so the
+critic can never be disabled.
 
 ### `parallel(...patterns)`
 
@@ -416,22 +430,6 @@ const distillHook = hook(distillChain, {
 **How it works:**
 - `background: true` — schedules the inner pattern via `queueMicrotask` and returns immediately
 - `background: false` (default) — runs synchronously; inner events are wrapped with `pattern_enter` / `pattern_exit`
-
-### `withApproval(pattern, predicate)`
-
-Wrap pattern to pause for user approval on matching actions.
-
-```typescript
-withApproval(
-  simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema }),
-  approvalPredicates.writes
-)
-
-// Built-in predicates
-approvalPredicates.writes     // tool_name includes 'write'
-approvalPredicates.deletes    // tool_name includes 'delete'
-approvalPredicates.mutations  // write, delete, create, update, insert, remove
-```
 
 ### `withReferences(pattern, config?)`
 
@@ -845,10 +843,10 @@ transformed into prompt-friendly types. The table below shows which harness
 | `critic_result` | `CriticResultEventData` | _(embedded in `Attempt.feedback`)_ | actorCritic |
 | `user_message` | `UserMessageEventData` | `Message { role, content }` | router (history) |
 | `assistant_message` | `AssistantMessageEventData` | `Message { role, content }` | router (history) |
-| `pattern_enter` | `PatternEnterEventData` | _(not sent to BAML)_ | `chain` + wrapper patterns: `parallel`, `hook`, `withApproval`, `guardrail` |
-| `pattern_exit` | `PatternExitEventData` | _(not sent to BAML)_ | `chain` + wrapper patterns: `parallel`, `hook`, `withApproval`, `guardrail` |
-| `approval_request` | `ApprovalRequestEventData` | _(not sent to BAML)_ | withApproval only |
-| `approval_response` | `ApprovalResponseEventData` | _(not sent to BAML)_ | withApproval only |
+| `pattern_enter` | `PatternEnterEventData` | _(not sent to BAML)_ | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail` |
+| `pattern_exit` | `PatternExitEventData` | _(not sent to BAML)_ | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail` |
+| `approval_request` | `ApprovalRequestEventData` | _(not sent to BAML)_ | (reserved — no active emitter) |
+| `approval_response` | `ApprovalResponseEventData` | _(not sent to BAML)_ | (reserved — no active emitter) |
 | `error` | `ErrorEventData` | _(read via `view.hasErrors()`)_ | synthesizer (error context), harness error handling |
 | `reference_attached` | `ReferenceAttachedEventData` | _(not sent to BAML)_ | withReferences only (observability) |
 | `intent_compacted` | `IntentCompactedEventData` | _(not sent to BAML)_ | compactIntent only (observability) |
@@ -893,7 +891,7 @@ BAML Inputs (ActorController):
   tools        : ToolDescription[]← MCP listTools()
   attempts     : Attempt[]        ← assembled from scope events per attempt
 
-BAML Return → ControllerAction (same shape as simpleLoop; actor's `is_final` / `tool_name: 'Return'` are *not* honored — exit is the critic's call)
+BAML Return → ControllerAction (same shape as simpleLoop; the actor cannot exit — `tool_name: 'Return'` is rejected and `is_final` only *triggers* a critic check under `criticCadence`. Exit is the critic's call.)
 
 BAML Inputs (Critic):
   intent   : string      ← same intent
@@ -1011,8 +1009,6 @@ import {
   simpleLoop,
   actorCritic,
   synthesizer,
-  withApproval,
-  approvalPredicates,
   Tools,
   callTool,
   createNeo4jController,
@@ -1036,13 +1032,10 @@ async function createPatterns() {
   const actor = createActorControllerAdapter(tools.all)
   const critic = createCriticAdapter()
 
-  const neo4jPattern = withApproval(
-    simpleLoop(neo4jController, tools.neo4j ?? [], {
-      patternId: 'neo4j-query',
-      schema
-    }),
-    approvalPredicates.writes
-  )
+  const neo4jPattern = simpleLoop(neo4jController, tools.neo4j ?? [], {
+    patternId: 'neo4j-query',
+    schema
+  })
 
   const webPattern = simpleLoop(webController, tools.web ?? [], {
     patternId: 'web-search'
@@ -1096,7 +1089,6 @@ Span names:
 - `router` - Intent classification
 - `pattern.simpleLoop` - Decide-execute loop
 - `pattern.actorCritic` - Generate-evaluate loop
-- `pattern.withApproval` - Approval flow
 - `pattern.chain` - Sequential composition
 - `pattern.synthesizer` - Response synthesis
 - `controller` / `actor` / `critic` - BAML function calls
@@ -1124,7 +1116,6 @@ harness-patterns/
     ├── simpleLoop.server.ts    # ReAct loop; emits callId on tool_call/tool_result; resolveRefs(); config-driven cross-turn memory
     ├── actorCritic.server.ts   # Generate-evaluate loop; emits callId on tool pairs
     ├── judge.server.ts         # Evaluation pattern for quality gates
-    ├── withApproval.server.ts  # Approval gate; wraps inner events with pattern_enter/exit
     ├── parallel.server.ts      # Concurrent branches; wraps each branch with pattern_enter/exit
     ├── guardrail.server.ts     # Rail validation; wraps inner events with pattern_enter/exit
     ├── hook.server.ts          # Lifecycle hook; wraps inner events with pattern_enter/exit

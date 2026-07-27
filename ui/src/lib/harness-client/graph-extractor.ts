@@ -16,7 +16,6 @@ const PATTERN_SOURCE_MAP: Record<string, GraphElement['source']> = {
   // Neo4j patterns
   'neo4j-query': 'neo4j',
   'neo4j': 'neo4j',
-  'kg-builder': 'neo4j',
   'ontology': 'neo4j',
 
   // Memory patterns

@@ -138,7 +138,7 @@ export function createChainProgress(): ChainProgressController {
           const contribution =
             typeof data.maxTurns === 'number' && data.maxTurns > 0 ? data.maxTurns : 1
           // Fallback path: replace any pending enter — wrappers
-          // (routes, withApproval) emit an enter immediately followed by
+          // (routes, guardrail) emit an enter immediately followed by
           // their child's, and the child's contribution should win.
           pendingEnter = { contribution, patternId: event.patternId }
           advancedForPattern = null

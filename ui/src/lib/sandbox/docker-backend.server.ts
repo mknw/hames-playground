@@ -1,7 +1,7 @@
 /**
  * DockerBackend — `ComputeBackend` over the local Docker engine.
  *
- * v0 substrate (see docs/sandbox-plan.md → "Backend interface" / "macOS
+ * v0 substrate (see docs/plan/sandbox.md → "Backend interface" / "macOS
  * development"). Works on macOS dev hosts; same MCP-in-VM architecture and
  * tool surface as the future FirecrackerBackend — only boot latency and reset
  * semantics differ.

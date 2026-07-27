@@ -43,3 +43,4 @@ n8n_data/
 
 # Working memory — Claude session notes
 SCRATCHPAD.md
+docker-compose.override.yml

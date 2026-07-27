@@ -1,7 +1,7 @@
 # Data Flow — Data Stash & Sandbox
 
 Visual companion to [`DATA_STASH.md`](DATA_STASH.md) (the store → chunk → embed →
-search pipeline) and the sandbox docs [`sandbox-plan.md`](sandbox-plan.md) /
+search pipeline) and the sandbox docs [`plan/sandbox.md`](plan/sandbox.md) /
 [`sandbox/README.md`](sandbox/README.md). Those cover the *what* and *why* in
 prose; this doc is the *how data moves* at a glance — four Mermaid diagrams
 covering the two subsystems and the bridge between them.

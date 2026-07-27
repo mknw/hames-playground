@@ -136,5 +136,5 @@ llama-server --embedding -m models/Qwen3-Embedding-0.6B-Q8_0.gguf --port 8090 --
 
 ## Relationships
 
-- **#89** (sandbox `/work` ⇄ DataStash artifact sync) builds on the store/retrieve path (`storeDocument` / `getDocument` / `listDocuments`) and added the base64 `encoding` field + the `?download` route for byte-faithful binaries. It does not require vector search. Mechanism: [`docs/sandbox-plan.md → Durable workspaces`](sandbox-plan.md#durable-workspaces-89).
+- **#89** (sandbox `/work` ⇄ DataStash artifact sync) builds on the store/retrieve path (`storeDocument` / `getDocument` / `listDocuments`) and added the base64 `encoding` field + the `?download` route for byte-faithful binaries. It does not require vector search. Mechanism: [`docs/plan/sandbox.md → Durable workspaces`](plan/sandbox.md#durable-workspaces-89).
 - Distinct from **#17** (RDF/OWL → Neo4j): this is documents → Redis + vectors.

@@ -193,7 +193,8 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
   })
 
   try {
-    // Re-run patterns - withApproval will handle the resume
+    // Re-run patterns from the restored (now-running) context. The `approved`
+    // flag rides on ctx.data for a resume-aware gating pattern to consume.
     await runWithLiveListener(onEvent, () => runChain(ctx, patterns, onEvent))
 
     const response = ctx.data.response ?? ''

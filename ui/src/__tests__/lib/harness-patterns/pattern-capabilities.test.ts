@@ -86,10 +86,10 @@ describe('usesCodeMode', () => {
     expect(usesCodeMode(tree)).toBe(true)
   })
 
-  it('detects through single-child wrappers (guardrail → withApproval → chain → loop)', () => {
+  it('detects through single-child wrappers (guardrail → hook → chain → loop)', () => {
     const tree = [
       pat('guardrail', {}, [
-        pat('withApproval', {}, [
+        pat('hook', {}, [
           pat('chain', {}, [pat('actorCritic', { dynamicToolPattern: /^code-mode-/ })]),
         ]),
       ]),

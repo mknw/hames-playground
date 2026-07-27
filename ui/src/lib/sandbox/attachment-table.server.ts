@@ -7,12 +7,15 @@
  * reference counting; release decrements; refCount=0 leaves the entry
  * parked under the id (a sweeper destroys it after `idleMs`).
  *
- * Sweep model: lazy, not timer-driven. Each `acquire` fires a best-effort
+ * Sweep model: lazy + optional timer. Each `acquire` fires a best-effort
  * background sweep that destroys idle attachments AND cascades to
- * `pool.evictIdle()`. Skipping the timer keeps test lifecycle simple — no
- * unref/clear, no leak warnings — at the cost that a fully idle harness
- * never sweeps. That's fine: idle means no resources are being held by
- * the agent layer beyond the parked VMs themselves.
+ * `pool.evictIdle()`. Because that only fires on activity, `startSweepTimer`
+ * adds a periodic (unref'd) sweep so a *fully idle* harness still reaps its
+ * parked VMs (#82); production arms it in `with-sandbox`, tests opt in.
+ *
+ * At-rest cap: `maxAttachments` (optional) bounds parked VMs regardless of
+ * idleness — a new boot evicts the least-recently-used refCount=0 entry
+ * (#82). `globalCap` only bounds in-flight allocations, not the at-rest table.
  *
  * Race-safe: parallel callers requesting the same id share the same boot
  * promise via an `inFlight` map; only the first call does the work.
@@ -50,11 +53,19 @@ export interface Attachment {
 export interface AttachmentTableConfig {
   /** Idle time before a refCount=0 attachment is destroyed (ms). */
   idleMs: number
+  /**
+   * Hard ceiling on entries in the table (#82). When a new boot would exceed
+   * it, the least-recently-used refCount=0 (parked) attachment is evicted to
+   * make room. `undefined` = no cap (the historical behavior). Bounds at-rest
+   * VMs regardless of idleness; `globalCap` only bounds in-flight allocations.
+   */
+  maxAttachments?: number
 }
 
 export class AttachmentTable {
   private readonly table = new Map<string, Attachment>()
   private readonly inFlight = new Map<string, Promise<Attachment>>()
+  private sweepTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(
     private readonly backend: ComputeBackend,
@@ -98,6 +109,9 @@ export class AttachmentTable {
       return att
     }
     const p = (async (): Promise<Attachment> => {
+      // Make room under the at-rest cap BEFORE booting, so peak VM count stays
+      // at the cap rather than cap+1 (#82).
+      await this.enforceCap()
       const vm = await this.pool.acquire(rootfs, runtime)
       let transport: McpTransport
       try {
@@ -158,9 +172,63 @@ export class AttachmentTable {
   }
 
   /**
+   * LRU cap enforcement (#82). Before booting a new attachment, if the table
+   * is at `maxAttachments`, evict the least-recently-used PARKED (refCount=0)
+   * entry to make room. If every entry is still in use, the cap overflows
+   * rather than kill a live session — the scheduler's `globalCap` remains the
+   * in-flight backstop. No-op when `maxAttachments` is unset.
+   *
+   * Soft by design under concurrency too: two boots of *different* ids can both
+   * pass this check before either inserts, transiently reaching cap+1. Not a
+   * bug — the cap bounds steady-state accumulation, not a momentary race.
+   */
+  private async enforceCap(): Promise<void> {
+    const max = this.config.maxAttachments
+    if (max === undefined) return
+    while (this.table.size >= max) {
+      let lru: Attachment | undefined
+      for (const att of this.table.values()) {
+        if (att.refCount === 0 && (lru === undefined || att.lastUsedAt < lru.lastUsedAt)) {
+          lru = att
+        }
+      }
+      if (lru === undefined) break // all in use — allow overflow
+      this.table.delete(lru.id)
+      await lru.transport.close().catch(() => {})
+      await this.pool.release(lru.vm).catch(() => {})
+    }
+  }
+
+  /**
+   * Start a periodic idle sweep (#82). The per-`acquire` lazy sweep only fires
+   * on activity; this covers a *fully idle* harness whose parked VMs would
+   * otherwise sit until the next sandbox action. Idempotent. `unref()`'d so it
+   * never keeps the process alive on its own. Clear via `stopSweepTimer` /
+   * `shutdown`.
+   */
+  startSweepTimer(intervalMs: number): void {
+    if (this.sweepTimer) return
+    const timer = setInterval(() => {
+      void this.sweepIdle().catch(() => {})
+    }, intervalMs)
+    // Node's Timeout has unref(); guard in case the runtime's return type differs.
+    timer.unref?.()
+    this.sweepTimer = timer
+  }
+
+  /** Stop the periodic sweep started by `startSweepTimer` (idempotent). */
+  stopSweepTimer(): void {
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer)
+      this.sweepTimer = null
+    }
+  }
+
+  /**
    * Destroy refCount=0 attachments idle past the threshold, and cascade to
    * `pool.evictIdle` so warm-pool entries don't accumulate either. Public
-   * for tests; production calls it via the lazy hook in `acquire`.
+   * for tests; production calls it via the lazy hook in `acquire` and the
+   * periodic `startSweepTimer`.
    */
   async sweepIdle(now: number = Date.now()): Promise<void> {
     const toEvict: Attachment[] = []
@@ -183,6 +251,7 @@ export class AttachmentTable {
 
   /** Destroy every attachment. Called on harness shutdown / between tests. */
   async shutdown(): Promise<void> {
+    this.stopSweepTimer()
     const all = [...this.table.values()]
     this.table.clear()
     await Promise.all(

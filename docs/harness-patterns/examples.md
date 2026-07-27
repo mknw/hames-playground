@@ -1,6 +1,6 @@
 # Harness Pattern Examples
 
-Catalog of 6 pre-built agents demonstrating pattern compositions.
+Catalog of 7 pre-built agents demonstrating pattern compositions.
 
 > **Full Code:** See [`ui/src/lib/harness-client/examples/`](../../ui/src/lib/harness-client/examples/) for complete implementations.
 
@@ -16,8 +16,9 @@ All agents are registered in `registry.server.ts` and available via `getAgentLis
 | `code-mode` | Code Mode Agent | router → actorCritic → synthesizer | all (via code-mode factory) |
 | `multi-source-research` | Multi-Source Research | parallel → judge → synthesizer | web_search, github, context7 |
 | `conversational-memory` | Conversational Memory | sessionTracker → router → memoryWriter → synthesizer | memory, neo4j, web_search, redis |
-| `kg-builder` | Knowledge Graph Builder | simpleLoop → simpleLoop → withApproval(simpleLoop) → synthesizer | web_search, memory, neo4j |
 | `sandbox-session` | Sandbox · Session | compactIntent → withSandbox(actorCritic) → synthesizer | none (in-VM sandbox tools) |
+| `retriever` | Retriever Agent | router → { retriever \| neo4j \| web_search } → synthesizer | neo4j, web_search, fetch (+ Data Stash via Redis retriever) |
+| `flavoured-sandbox` | Sandbox · Flavoured (router) | router → withSandbox(actorCritic) per flavour (base / image-processing / data) → synthesizer | none (in-VM sandbox tools per flavour) |
 
 ---
 
@@ -40,7 +41,7 @@ router({ neo4j: '...', web_search: '...' })
 - Web search via DuckDuckGo (`search`, `fetch`, `fetch_content`)
 - Cross-turn data flow: `withReferences` selector attaches relevant prior refs at each route's ingress; the controller can use `expandPreviousResult` or pass `ref:<id>` in tool args to inline-expand the full data
 
-For JS-orchestration workflows that span multiple servers, see [Agent 5 — Code Mode](#5-code-mode-agent).
+For JS-orchestration workflows that span multiple servers, see [Agent 4 — Code Mode](#4-code-mode-agent).
 
 ---
 
@@ -76,22 +77,7 @@ synthesizer
 
 ---
 
-## 4. Knowledge Graph Builder
-
-**File:** `kg-builder.server.ts`
-
-Research → Extract → Persist pipeline.
-
-```
-simpleLoop(WebSearchController)  → research topic
-simpleLoop(MemoryController)     → extract entities/relations
-withApproval(simpleLoop(Neo4jController)) → persist to graph
-synthesizer
-```
-
----
-
-## 5. Code Mode Agent
+## 4. Code Mode Agent
 
 **File:** `code-mode.server.ts`
 
@@ -165,4 +151,4 @@ registerAgent(myAgent)
 
 ---
 
-**Last Updated:** 2026-02-12
+**Last Updated:** 2026-07-23

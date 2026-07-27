@@ -43,7 +43,7 @@ src/
 │   ├── embeddings.server.ts     # Data Stash: provider-pluggable embeddings (#8)
 │   ├── document-ingest.server.ts # Data Stash: chunk→embed→HNSW index + KNN search
 │   ├── stash/                   # Data Stash upload HTTP helpers (parse + auth). See docs/DATA_STASH.md
-│   ├── sandbox/                 # Compute sandbox: withSandbox, Docker backend, warm pool, durable /work⇄DataStash sync (#89). See docs/sandbox-plan.md
+│   ├── sandbox/                 # Compute sandbox: withSandbox, Docker backend, warm pool, durable /work⇄DataStash sync (#89). See docs/plan/sandbox.md
 │   ├── settings.ts            # HarnessSettings type, defaults, MODEL_CONTEXT_WINDOWS
 │   ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
 │   ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
@@ -65,7 +65,7 @@ src/
 Agent events stream to the client in real-time via `POST /api/events`. The UI updates the graph visualization and observability panel incrementally as events arrive.
 
 ### Conversation Persistence
-Conversations are persisted to Postgres in a single `conversations` table; the `context` column holds the full `serializeContext()` blob. The sidebar lists per-user threads via `listConversations()`, and selecting a thread calls `loadConversation()` which rehydrates events into the graph + observability panel. Titles are sticky (first 60 chars of the first user message). Auth is gated by Stack Auth; in dev, `isBypassEnabled()` (in `src/lib/auth/dev-bypass.ts`, gated on `import.meta.env.DEV && VITE_DEV_BYPASS_AUTH === 'true'`) falls back to the shared `dev-bypass-user` literal. See [`src/lib/harness-client/README.md`](src/lib/harness-client/README.md#session-lifecycle) for the session lifecycle.
+Conversations are persisted to Postgres in a single `conversations` table; the `context` column holds the full `serializeContext()` blob. The sidebar lists per-user threads via `listConversations()`, and selecting a thread calls `loadConversation()` which rehydrates events into the graph + observability panel. Titles are sticky (first 60 chars of the first user message). Auth is Microsoft Entra ID via server-side MSAL OIDC (`src/lib/auth/`, #119); in dev, `isBypassEnabled()` (in `src/lib/auth/dev-bypass.ts`, gated on `import.meta.env.DEV && VITE_DEV_BYPASS_AUTH === 'true'`) falls back to the shared `dev-bypass-user` literal. See [`src/lib/harness-client/README.md`](src/lib/harness-client/README.md#session-lifecycle) for the session lifecycle.
 
 ### Interactive Graph Visualization
 - Cytoscape.js rendering with dark theme and multiple layouts

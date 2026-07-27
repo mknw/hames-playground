@@ -80,7 +80,7 @@ export function hook<T extends Record<string, unknown>>(
         // events carry its own patternId. Without this, the wrapped
         // pattern's events are tagged with the hook's id and become
         // invisible to `view.fromLastPattern()`. Mirrors
-        // `withApproval.server.ts:93-104`.
+        // `with-references.server.ts`'s child-scope wrapping.
         const childScope = createScope(innerPatternId, scope.data) as typeof scope
         const result = await pattern.fn(childScope, view)
 

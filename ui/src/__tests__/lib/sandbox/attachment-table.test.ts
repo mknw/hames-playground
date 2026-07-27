@@ -334,3 +334,131 @@ describe('AttachmentTable.shutdown', () => {
     expect(table.size()).toBe(0)
   })
 })
+
+describe('AttachmentTable maxAttachments — LRU cap (#82)', () => {
+  it('evicts the least-recently-used parked entry when a new boot exceeds the cap', async () => {
+    vi.useFakeTimers()
+    try {
+      const backend = makeBackend()
+      const pool = new WarmPool(backend, { caps: { base: 3 }, idleEvictMs: 60_000 })
+      const table = new AttachmentTable(backend, pool, { idleMs: 60_000, maxAttachments: 2 })
+
+      vi.setSystemTime(1_000)
+      const a = await table.acquire('alpha', 'base', {})
+      table.release(a) // parked, lastUsedAt = 1_000 (oldest)
+
+      vi.setSystemTime(2_000)
+      const b = await table.acquire('beta', 'base', {})
+      table.release(b) // parked, lastUsedAt = 2_000 (more recent)
+      expect(table.size()).toBe(2)
+
+      // Third distinct id at cap → evict the LRU parked entry (alpha).
+      vi.setSystemTime(3_000)
+      await table.acquire('gamma', 'base', {})
+
+      expect(table.has('alpha')).toBe(false) // LRU evicted
+      expect(table.has('beta')).toBe(true)
+      expect(table.has('gamma')).toBe(true)
+      expect(table.size()).toBe(2) // cap held
+      expect((a.transport as FakeTransport).closes).toBe(1) // stale transport torn down
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('overflows rather than evicting in-use (refCount>0) entries', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 4 }, idleEvictMs: 60_000 })
+    const table = new AttachmentTable(backend, pool, { idleMs: 60_000, maxAttachments: 2 })
+
+    await table.acquire('alpha', 'base', {}) // refCount 1 (not released)
+    await table.acquire('beta', 'base', {}) // refCount 1 (not released)
+    expect(table.size()).toBe(2)
+
+    // Both in use → cap cannot evict; overflow rather than kill a live session.
+    await table.acquire('gamma', 'base', {})
+    expect(table.size()).toBe(3)
+    expect(table.has('alpha')).toBe(true)
+    expect(table.has('beta')).toBe(true)
+  })
+})
+
+describe('AttachmentTable.startSweepTimer (#82)', () => {
+  it('fires sweepIdle on the interval WITHOUT an acquire, reaping idle parked VMs', async () => {
+    vi.useFakeTimers()
+    try {
+      const backend = makeBackend()
+      const pool = new WarmPool(backend, { caps: { base: 1 }, idleEvictMs: 10_000 })
+      const table = new AttachmentTable(backend, pool, { idleMs: 10_000 })
+
+      vi.setSystemTime(1_000_000)
+      const att = await table.acquire('alpha', 'base', {})
+      table.release(att) // parked at t0
+
+      table.startSweepTimer(30_000)
+      // No further acquire — only the timer drives the sweep. Advancing the fake
+      // clock 30s both fires the interval and ages the entry past idleMs.
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      expect(table.has('alpha')).toBe(false)
+      table.stopSweepTimer()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stopSweepTimer halts the periodic sweep', async () => {
+    vi.useFakeTimers()
+    try {
+      const backend = makeBackend()
+      const pool = new WarmPool(backend, { caps: { base: 1 }, idleEvictMs: 10_000 })
+      const table = new AttachmentTable(backend, pool, { idleMs: 10_000 })
+      const sweepSpy = vi.spyOn(table, 'sweepIdle')
+
+      table.startSweepTimer(30_000)
+      table.stopSweepTimer()
+      await vi.advanceTimersByTimeAsync(90_000)
+
+      expect(sweepSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('startSweepTimer is idempotent (no duplicate timers)', async () => {
+    vi.useFakeTimers()
+    try {
+      const backend = makeBackend()
+      const pool = new WarmPool(backend, { caps: { base: 1 }, idleEvictMs: 10_000 })
+      const table = new AttachmentTable(backend, pool, { idleMs: 10_000 })
+      const sweepSpy = vi.spyOn(table, 'sweepIdle')
+
+      table.startSweepTimer(30_000)
+      table.startSweepTimer(30_000) // second call is a no-op
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      expect(sweepSpy).toHaveBeenCalledTimes(1) // one tick, not two
+      table.stopSweepTimer()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shutdown stops the sweep timer', async () => {
+    vi.useFakeTimers()
+    try {
+      const backend = makeBackend()
+      const pool = new WarmPool(backend, { caps: { base: 1 }, idleEvictMs: 10_000 })
+      const table = new AttachmentTable(backend, pool, { idleMs: 10_000 })
+
+      table.startSweepTimer(30_000)
+      await table.shutdown()
+      const sweepSpy = vi.spyOn(table, 'sweepIdle')
+      await vi.advanceTimersByTimeAsync(90_000)
+
+      expect(sweepSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

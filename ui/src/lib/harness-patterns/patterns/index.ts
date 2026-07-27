@@ -6,7 +6,6 @@
 export { router, routes, type Routes, type RoutePatterns, type RouterData } from './router.server'
 export { simpleLoop, type SimpleLoopData } from './simpleLoop.server'
 export { actorCritic, type ActorCriticData } from './actorCritic.server'
-export { withApproval, approvalPredicates, type ApprovalPredicate, type WithApprovalData } from './withApproval.server'
 export { chain, runChain, configurePattern } from './chain.server'
 export { synthesizer } from './synthesizer.server'
 export { compactIntent, type CompactIntentConfig, type CompactIntentData } from './compactIntent.server'

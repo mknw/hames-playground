@@ -25,7 +25,6 @@ compositions across all available MCP servers.
 |---------|-----------|---------|
 | `simpleLoop` | `(controller, tools, config?)` | ReAct decide-execute loop |
 | `actorCritic` | `(actor, critic, tools, config?)` | Generate-evaluate with retry |
-| `withApproval` | `(pattern, predicate)` | Pause for user approval on matching actions |
 | `withReferences` | `(pattern, config?)` | LLM-curated prior-result attachment at pattern ingress (cross-pattern data flow, [#30](../../../../docs/harness-patterns/with-references.md)) |
 | `synthesizer` | `(config)` | Transform tool results into natural language |
 | `compactIntent` | `(config?)` | Rewrite the latest message into a self-contained `data.intent` for a router-less actor ([#83](https://github.com/mknw/harness-playground/issues/83)) |
@@ -173,58 +172,7 @@ return [researchPattern, evaluator, synthesizer({ mode: "response", patternId: "
 
 ---
 
-
-### 2. Knowledge Graph Builder (chain)
-
-**Servers**: web_search, neo4j, memory
-**Patterns**: `simpleLoop` → `simpleLoop` → `withApproval(simpleLoop)` → `synthesizer`
-**Use case**: Research a topic, extract entities, persist to both neo4j and memory.
-
-```
-User: "Build a knowledge graph about WebAssembly runtimes"
-
-chain:
-  1. simpleLoop(webController)
-     → search("WebAssembly runtimes comparison")
-     → fetch_content(top results)
-
-  2. simpleLoop(memoryController)
-     → create_entities([wasmtime, wasmer, wasm3, ...])
-     → create_relations([{from: "wasmtime", to: "Bytecode Alliance", type: "maintained_by"}])
-
-  3. withApproval(simpleLoop(neo4jController))
-     → CREATE (n:Runtime {name: "wasmtime", ...})
-     → CREATE (n)-[:MAINTAINED_BY]->(org)
-
-  4. synthesizer({ mode: 'thread' })
-```
-
-```typescript
-const webResearch = simpleLoop(b.WebSearchController.bind(b), tools.web ?? [], {
-  patternId: "web-research",
-  maxTurns: 8,
-});
-
-const memoryExtract = simpleLoop(b.MemoryExtractController.bind(b), tools.memory ?? [], {
-  patternId: "memory-extract",
-});
-
-const neo4jPersist = withApproval(
-  simpleLoop(b.Neo4jController.bind(b), tools.neo4j ?? [], {
-    patternId: "neo4j-persist",
-    schema,
-  }),
-  approvalPredicates.mutations,
-);
-
-const responseSynth = synthesizer({ mode: "thread", patternId: "kg-build-synth" });
-
-return [webResearch, memoryExtract, neo4jPersist, responseSynth];
-```
-
----
-
-### 3. Conversational Memory with KB Distillation (memory + neo4j + redis)
+### 2. Conversational Memory with KB Distillation (memory + neo4j + redis)
 
 **Servers**: memory (short-term), neo4j (long-term KB), redis (session state + vector)
 **Patterns**: Main loop + `hook` pattern on session close
@@ -407,7 +355,7 @@ export async function closeSession(sessionId: string): Promise<void> {
 
 ---
 
-### 4. Sandbox · Session (`withSandbox({ id })` persistent + xterm)
+### 3. Sandbox · Session (`withSandbox({ id })` persistent + xterm)
 
 **Servers**: none (in-VM `sandbox_*` tools via the ALS scope, not the gateway)
 **Patterns**: `[compactIntent, withSandbox({ id: sessionId, syncWorkspace: true })(actorCritic), synth]`
@@ -421,7 +369,7 @@ the workspace is **durable across sessions**, not just turns: stored documents
 are restored into `/work/in` on first boot and `/work/out` deliverables are
 promoted to the DataStash each turn — so an uploaded spreadsheet survives idle
 eviction, restart, and next-day reconnects. The layout contract + mechanism
-live in [`docs/sandbox-plan.md → Durable workspaces`](../../../../docs/sandbox-plan.md#durable-workspaces-89).
+live in [`docs/plan/sandbox.md → Durable workspaces`](../../../../docs/plan/sandbox.md#durable-workspaces-89).
 
 Composes any actor-style pattern with id-addressable attachment. Because this
 agent is **router-less**, `compactIntent` runs first ([#83](https://github.com/mknw/harness-playground/issues/83)
@@ -442,7 +390,6 @@ See `sandbox-session.server.ts`. Debugging modalities for live sandboxes:
 |---|---|---|---|---|---|---|---|---|---|
 | **simpleLoop** | Query/write | Fetch URLs | Search | Resolve docs | Read/search | Issues/PRs | Entity CRUD | Get/set/hash | SQL query |
 | **actorCritic** | Complex queries | - | - | - | File refactoring | PR review | - | - | Schema migration |
-| **withApproval** | Write queries | - | - | - | Write/move | Create issue | Delete entities | Delete keys | DROP/ALTER |
 | **parallel** | Multi-query | Multi-fetch | Multi-search | Multi-lib | Multi-file | Multi-repo | - | - | Multi-DB |
 | **guardrail** | Cypher injection | URL allowlist | Topic scope | - | Path safety | Org/repo scope | - | Rate limit | SQL injection |
 | **judge** | - | - | Rank results | Rank docs | - | Rank code | - | Score cache | - |

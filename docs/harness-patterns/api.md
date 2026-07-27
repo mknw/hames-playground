@@ -171,25 +171,6 @@ interface ActorCriticConfig extends PatternConfig {
 }
 ```
 
-### withApproval
-
-Wrap pattern to pause for user approval.
-
-```typescript
-function withApproval<T>(
-  pattern: ConfiguredPattern<T>,
-  predicate: ApprovalPredicate,
-  config?: PatternConfig
-): ConfiguredPattern<T>
-
-type ApprovalPredicate = (action: ControllerAction) => boolean
-
-// Built-in predicates
-approvalPredicates.writes     // tool_name includes 'write'
-approvalPredicates.deletes    // tool_name includes 'delete'
-approvalPredicates.mutations  // write, delete, create, update, insert, remove
-```
-
 ### withReferences
 
 Wrap a pattern so that on entry, an LLM-driven selector picks relevant prior `tool_result` events and attaches them to the inner pattern's `priorResults` channel via `scope.data.attachedRefs`. See [`with-references.md`](with-references.md) for full design + selection cases.
@@ -604,7 +585,6 @@ interface ViewConfig {
 | compactIntent | `'intent_compacted'` | `'always'` |
 | router | `false` | `'always'` |
 | chain | `false` | `'always'` |
-| withApproval | `false` | `'on-success'` |
 
 ---
 

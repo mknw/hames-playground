@@ -76,6 +76,14 @@ export function actorCritic<T extends ActorCriticData>(
     view: EventView
   ): Promise<PatternScope<T>> => {
     const maxRetries = config?.maxRetries ?? getRequestSettings().maxRetries
+    // Critic cadence: run the critic every Nth *successful* actor turn (default
+    // 1 = every turn, the original behavior). Clamped to >= 1 so a stray 0 /
+    // negative value can't disable the critic — the loop's only exit authority.
+    // See `ActorCriticConfig.criticCadence` and the cadence gate below.
+    const criticCadence = Number.isFinite(config?.criticCadence)
+      ? Math.max(1, Math.floor(config!.criticCadence!))
+      : 1
+    let successfulTurns = 0
     const previousAttempts: ScriptExecutionEvent[] = []
     let errorMessage: string | undefined
 
@@ -119,17 +127,18 @@ export function actorCritic<T extends ActorCriticData>(
           actorLlmCall
         )
 
-        // P0 (Return-from-critic redesign): the actor used to be able to exit
-        // the loop by calling `tool_name === 'Return'` or setting `is_final`.
-        // We removed that — sufficiency-to-exit is the critic's job by
-        // definition, and the dual responsibility let the actor self-terminate
-        // with fabricated data (see `.harness-logs/one-turn-codemode.json`).
-        // If the actor still proposes `Return` (or anything else not on the
-        // allowlist), it falls through to the allowlist check below, which
-        // rejects it as "Tool not allowed: Return" and continues the loop —
-        // letting the critic actually evaluate the next real tool call.
-        // `is_final` is preserved on `ControllerAction` for backwards compat
-        // but is now advisory; nothing in the loop honours it.
+        // P0 (Return-from-critic redesign): the actor cannot EXIT the loop on
+        // its own — sufficiency-to-exit is the critic's job by definition, and
+        // the dual responsibility once let the actor self-terminate with
+        // fabricated data (see `.harness-logs/one-turn-codemode.json`). That
+        // invariant still holds: the critic is the SOLE exit authority below.
+        //
+        // `is_final` is now an advisory *critic trigger*, not an exit: when the
+        // actor sets it, the cadence gate (after the tool call) runs the critic
+        // this turn even under `criticCadence` > 1 — but the critic still
+        // decides whether the loop exits. If the actor proposes a `Return` tool
+        // (or anything not on the allowlist) it falls through to the allowlist
+        // check below, is rejected as "Tool not allowed", and the loop continues.
 
         // Validate tool. The strict allowlist is augmented by an optional
         // `dynamicToolPattern` regex so agents whose backends create tools at
@@ -143,7 +152,7 @@ export function actorCritic<T extends ActorCriticData>(
           : []
         // A third augmentation: an active `withSandbox` scope's tool surface.
         // Sandbox-owned (`sandbox_*`) names pass without being listed in
-        // `tools` or `dynamicToolAllowlist` (see docs/sandbox-plan.md → "How
+        // `tools` or `dynamicToolAllowlist` (see docs/plan/sandbox.md → "How
         // tools reach the controller"). Outside any sandbox scope this is
         // a no-op.
         const sandbox = getActiveSandbox()
@@ -311,6 +320,39 @@ export function actorCritic<T extends ActorCriticData>(
         )
 
         if (!result.success) {
+          continue
+        }
+
+        // Cadence gate. The actor free-runs successful tool calls; the critic
+        // (the loop's sole exit authority) only weighs in periodically, so a
+        // multi-step deliverable isn't interrupted mid-plan and wrongly judged
+        // "done" on an intermediate state. Run the critic when ANY of:
+        //   - the actor set `is_final: true` — it believes the task is done and
+        //     is asking to be judged (it still can't exit by itself);
+        //   - this is the final attempt — so work that completes on the last
+        //     turn is still evaluated (and can be accepted) instead of falling
+        //     through to "Max retries exceeded";
+        //   - it's the Nth successful turn — a backstop for an actor that never
+        //     sets `is_final`.
+        // At criticCadence === 1 the modulo is always true → critic every turn
+        // (unchanged default behavior).
+        successfulTurns++
+        const isLastAttempt = attempt === maxRetries - 1
+        const shouldCritique =
+          action.is_final === true ||
+          isLastAttempt ||
+          successfulTurns % criticCadence === 0
+
+        if (!shouldCritique) {
+          // Skip the critic this turn and let the actor take the next step. The
+          // tool result is already in `previousAttempts` (the actor's
+          // self-correction channel), so the next actor call sees what happened.
+          scope.data = {
+            ...scope.data,
+            attempt,
+            lastAction: action,
+            lastResult: result.data,
+          }
           continue
         }
 

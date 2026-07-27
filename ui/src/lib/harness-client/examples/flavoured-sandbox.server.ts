@@ -120,6 +120,12 @@ function sandboxLoop(patternId: string, guidance: string) {
     availableTools: [],
     liveEvents: true,
     maxRetries: 6,
+    // Deliverable-producing routes: the actor typically inspects inputs, WRITES
+    // a script, RUNS it, then confirms the output — a multi-step chain. Let it
+    // free-run and have the critic judge only when the actor signals is_final
+    // (or every 3rd turn as a backstop), so the critic can't accept a written-
+    // but-unrun script as "done" (see .harness-logs/context-3817275e-*.json).
+    criticCadence: 3,
   });
 }
 

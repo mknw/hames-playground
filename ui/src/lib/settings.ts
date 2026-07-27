@@ -5,7 +5,7 @@
  */
 
 /**
- * Sandbox compute settings. See docs/sandbox-plan.md → "Settings".
+ * Sandbox compute settings. See docs/plan/sandbox.md → "Settings".
  *
  * Process-scoped values (`globalCap`, `perSessionCap`, `warmPool`, `idleEvictMs`)
  * are read once when the harness lazily constructs its singleton scheduler
@@ -19,6 +19,11 @@ export interface SandboxSettings {
   globalCap: number
   /** Max concurrent sandbox attachments per session. */
   perSessionCap: number
+  /** Hard ceiling on parked (at-rest) attachments in the AttachmentTable. When
+   *  a new boot would exceed it, the least-recently-used idle attachment is
+   *  evicted. Bounds at-rest VMs regardless of idleness; `globalCap` only
+   *  bounds in-flight allocations. */
+  maxAttachments: number
   /** Per-rootfs warm-pool depth. e.g. `{ base: 1 }`. */
   warmPool: Partial<Record<string, number>>
   /** Idle time before a pooled VM is destroyed (ms). */
@@ -51,6 +56,10 @@ export const DEFAULT_SETTINGS: HarnessSettings = {
   sandbox: {
     globalCap: 16,
     perSessionCap: 4,
+    // At-rest ceiling on the attachment table (#82). 8 = 2× perSessionCap, so a
+    // handful of persistent-flavour sessions can coexist while a runaway
+    // accumulation of parked VMs is capped even if the idle sweep hasn't fired.
+    maxAttachments: 8,
     warmPool: { base: 1, 'image-processing': 1, data: 1, office: 1 },
     // Hot-cache window only: a parked VM is reused instantly within this window.
     // Durable workspace state lives in the document store (hydrated into /work on

@@ -111,7 +111,7 @@ Per-user secret map (git-ignored, mirrors `configs/mcp-config.yaml`). Copy
 tokens:
   - label: "iphone"                 # bookkeeping only, never used at runtime
     secret: "<long-random-secret>"
-    userId: "<stack-auth-user-id>"
+    userId: "<entra-oid>"           # caller's Entra object id (#119)
 ```
 
 Parsed once and cached (`resolveActionUser`). A missing file rejects every

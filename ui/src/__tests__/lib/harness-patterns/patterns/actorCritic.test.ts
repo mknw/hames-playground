@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockAction, mockFinalAction, mockCriticResult, mockBAMLClient } from '../../../mocks/baml'
 import { mockCallTool, mockListTools, fixtures } from '../../../mocks/mcp'
+import type { CodeModeControllerFnWithLLMData, CriticFnWithLLMData } from '../../../../lib/harness-patterns/baml-adapters.server'
 
 // Mock server-only imports
 vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
@@ -462,5 +463,137 @@ describe('actorCritic execution', () => {
     await pattern.fn(scope, view)
 
     expect(receivedAvailableTools).toEqual(['custom-tool-1', 'custom-tool-2'])
+  })
+})
+
+describe('actorCritic criticCadence', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    callToolMock.mockResolvedValue({ success: true, data: { result: 'ok' } })
+  })
+
+  // Minimal scope/view/context builder shared by the cadence tests.
+  async function run(
+    mockActor: CodeModeControllerFnWithLLMData,
+    mockCritic: CriticFnWithLLMData,
+    config: Record<string, unknown>,
+  ) {
+    const { actorCritic } = await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], {
+      patternId: 'cadence',
+      ...config,
+    })
+    const scope = createScope('test', {})
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'do it' } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'do it',
+    }
+    return pattern.fn(scope, createEventView(mockContext))
+  }
+
+  it('skips the critic until the Nth successful turn (cadence backstop)', async () => {
+    // Actor never signals is_final; critic accepts when it finally runs.
+    const mockActor = vi.fn().mockResolvedValue({
+      action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"step"}' }),
+      llmCall: undefined,
+    })
+    const mockCritic = vi.fn().mockResolvedValue({
+      result: mockCriticResult({ is_sufficient: true }),
+      llmCall: undefined,
+    })
+
+    const result = await run(mockActor, mockCritic, { maxRetries: 6, criticCadence: 3 })
+
+    // Turns 0,1 skip the critic; turn 2 (3rd successful turn) runs it → exits.
+    expect(mockActor).toHaveBeenCalledTimes(3)
+    expect(mockCritic).toHaveBeenCalledTimes(1)
+    expect(result.data.result).toBeDefined()
+  })
+
+  it('runs the critic immediately when the actor sets is_final (early trigger)', async () => {
+    // First action is already is_final → critic runs on turn 0 despite cadence 3.
+    // Use an allowlisted tool (not mockFinalAction's 'Return', which the loop
+    // rejects before the critic) so is_final is what triggers the critic.
+    const mockActor = vi.fn().mockResolvedValue({
+      action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"done"}', is_final: true }),
+      llmCall: undefined,
+    })
+    const mockCritic = vi.fn().mockResolvedValue({
+      result: mockCriticResult({ is_sufficient: true }),
+      llmCall: undefined,
+    })
+
+    const result = await run(mockActor, mockCritic, { maxRetries: 6, criticCadence: 3 })
+
+    expect(mockActor).toHaveBeenCalledTimes(1)
+    expect(mockCritic).toHaveBeenCalledTimes(1)
+    expect(result.data.result).toBeDefined()
+  })
+
+  it('encodes the write-then-run fix: never critiques the written-but-unrun step', async () => {
+    // Turn 0: WRITE the script (is_final=false) → must be skipped by the critic.
+    // Turn 1: RUN it (is_final=true) → critic runs and accepts. The regression
+    // (.harness-logs/context-3817275e-*.json) was the critic accepting turn 0.
+    const mockActor = vi.fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"write report"}', is_final: false }),
+        llmCall: undefined,
+      })
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"run report"}', is_final: true }),
+        llmCall: undefined,
+      })
+    const mockCritic = vi.fn().mockResolvedValue({
+      result: mockCriticResult({ is_sufficient: true }),
+      llmCall: undefined,
+    })
+
+    await run(mockActor, mockCritic, { maxRetries: 6, criticCadence: 3 })
+
+    // The critic must NOT have been consulted after the write-only turn.
+    expect(mockActor).toHaveBeenCalledTimes(2)
+    expect(mockCritic).toHaveBeenCalledTimes(1)
+  })
+
+  it('always critiques on the final attempt even if cadence never hits', async () => {
+    const mockActor = vi.fn().mockResolvedValue({
+      action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"step"}' }),
+      llmCall: undefined,
+    })
+    const mockCritic = vi.fn().mockResolvedValue({
+      result: mockCriticResult({ is_sufficient: true }),
+      llmCall: undefined,
+    })
+
+    // cadence 5 never divides turns 1..2, but the last attempt forces a critic run.
+    const result = await run(mockActor, mockCritic, { maxRetries: 2, criticCadence: 5 })
+
+    expect(mockActor).toHaveBeenCalledTimes(2)
+    expect(mockCritic).toHaveBeenCalledTimes(1)
+    expect(result.data.result).toBeDefined()
+  })
+
+  it('clamps criticCadence < 1 to every-turn (critic can never be disabled)', async () => {
+    const mockActor = vi.fn().mockResolvedValue({
+      action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"step"}' }),
+      llmCall: undefined,
+    })
+    // Not sufficient on turn 0, sufficient on turn 1 — proves the critic ran both.
+    const mockCritic = vi.fn()
+      .mockResolvedValueOnce({ result: mockCriticResult({ is_sufficient: false, explanation: 'more' }), llmCall: undefined })
+      .mockResolvedValueOnce({ result: mockCriticResult({ is_sufficient: true }), llmCall: undefined })
+
+    await run(mockActor, mockCritic, { maxRetries: 2, criticCadence: 0 })
+
+    expect(mockCritic).toHaveBeenCalledTimes(2)
   })
 })

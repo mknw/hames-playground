@@ -197,6 +197,10 @@ export async function graphFetch(
       // Set last so a caller can never replace the credential or content type.
       Authorization: `Bearer ${token}`,
       Accept: wantsBytes ? "*/*" : "application/json",
+      // Decorated traffic is prioritized under Graph throttling; undecorated
+      // traffic is first to be shed. NONISV|<company>|<app>/<version> is the
+      // documented shape for internal (non-ISV) apps.
+      "User-Agent": "NONISV|DTSC|kg-agent/1.0",
       ...(init.body ? { "Content-Type": "application/json" } : {}),
     },
     ...(init.body ? { body: JSON.stringify(init.body) } : {}),

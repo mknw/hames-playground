@@ -197,7 +197,7 @@ describe("happy path", () => {
 
   it("ingests a convertible binary (docx) when the converter is enabled", async () => {
     vi.stubEnv("STASH_CONVERT_DOCS", "1");
-    const docx = Buffer.from("PK").toString("base64");
+    const docx = Buffer.from([0x50, 0x4b, 0x03, 0x04]) /* "PK" + zip magic */.toString("base64");
     graphAnswers(
       {
         name: "spec.docx",

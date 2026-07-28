@@ -13,21 +13,23 @@ machinery see [UI_ARCHITECTURE.md §3](UI_ARCHITECTURE.md).
 ## What it can do today
 
 The **Microsoft 365** agent (`lib/harness-client/examples/microsoft-365.server.ts`)
-exposes three **read-only** tools:
+exposes four tools. All of them only ever **read** from Microsoft 365:
 
 | Tool | Reads | Scope used |
 |------|-------|-----------|
 | `graph_me` | own profile (name, UPN, job title, office) | `User.Read` |
 | `graph_calendar_today` | own calendar for a given day (`day_offset`) | `Calendars.ReadWrite` |
 | `graph_mail_recent` | own inbox, newest first, optional `unread_only` | `Mail.Read` |
+| `graph_file_ingest` | one own OneDrive/SharePoint file → the Data Stash | `Files.Read.All` |
 
 Enough for "what does my day look like?" — the agent's loop calls several tools
-in one turn and the synthesizer writes the briefing.
+in one turn and the synthesizer writes the briefing — plus "pull that
+spreadsheet in and chart it", which is [the file bridge](#files--the-data-stash).
 
 **Consented scopes exceed implemented tools.** The sign-in request also carries
-`Mail.Send`, `Files.Read.All` and `Sites.Read.All` (see the setup doc for why
-consent is taken up front). No tool exposes them, so the model cannot use them:
-a granted scope is not a capability — capability comes from a registered tool.
+`Mail.Send` and `Sites.Read.All` (see the setup doc for why consent is taken up
+front). No tool exposes them, so the model cannot use them: a granted scope is
+not a capability — capability comes from a registered tool.
 
 **Writes.** None yet. Adding one is the same shape as a read tool, but it should
 carry a confirmation gate: creating an event emails real invitations, and
@@ -52,8 +54,9 @@ callTool(name, args)                    ← harness-patterns/mcp-client.server.t
    └─ else              → MCP gateway
         │
 runAppTool                              ← app-tools/registry.server.ts
-   ├─ userId = getRequestUserId()        ← AsyncLocalStorage, not args
-   └─ def.execute(args, {userId}) → {success, data} | {success:false, error}
+   ├─ userId    = getRequestUserId()     ← AsyncLocalStorage, not args
+   ├─ sessionId = getRequestSessionId()  ← idem; null off the request path
+   └─ def.execute(args, ctx) → {success, data} | {success:false, error}
         │
 tool definition                          ← app-tools/graph.server.ts
    └─ graphFetch(userId, '/me/calendarView?…', {scopes, headers})
@@ -69,6 +72,7 @@ graphFetch                               ← auth/graph-token.server.ts
 | Module | Sole responsibility |
 |--------|--------------------|
 | `harness-patterns/mcp-client.server.ts` | dispatch: which transport owns this tool name |
+| `lib/harness-client/request-user.server.ts` | the ambient `{userId, sessionId}` of a run |
 | `lib/app-tools/registry.server.ts` | resolve identity, execute, never throw |
 | `lib/app-tools/graph.server.ts` | Graph paths, `$select`, response shaping |
 | `lib/auth/graph-token.server.ts` | token acquisition, rotation, attach credential |
@@ -114,7 +118,7 @@ seam for that.
 
 ## Identity and isolation
 
-Two invariants shape the design:
+Three invariants shape the design:
 
 1. **Tokens resolve from the request, never from arguments.** No advertised
    schema has a user or token field, so the model cannot ask for another
@@ -122,12 +126,18 @@ Two invariants shape the design:
    `getRequestUserId()`.
 2. **The credential is attached inside `graphFetch`** and never returned, so no
    tool body, log line, tool result or event can carry it.
+3. **The destination resolves the same way as the identity.** A tool that
+   *writes* somewhere per-conversation (only `graph_file_ingest` today) takes its
+   `sessionId` from `getRequestSessionId()`, not from args — otherwise the model
+   could name another conversation's stash. Same reasoning as (1): anything the
+   model can name, it can point elsewhere.
 
-Four mechanisms keep concurrent users apart:
+Five mechanisms keep concurrent users apart:
 
 | Layer | Mechanism |
 |-------|-----------|
 | Identity | `getRequestUserId()` reads AsyncLocalStorage — per-request context |
+| Destination | `getRequestSessionId()` from the same store — stash writes can't cross conversations |
 | MSAL client | constructed per call; only that user's cache is deserialized into it |
 | Token store | `user_tokens.user_id` is the primary key; every query is `WHERE user_id = $1` |
 | Provenance | no server action accepts a `userId`; all derive it from `requireUser()` → session cookie |
@@ -136,9 +146,14 @@ Four mechanisms keep concurrent users apart:
 deliberately interleaved concurrent calls, and were mutation-checked: hoisting
 the MSAL client to a module-level singleton fails them.
 
-**Fail-closed:** a tool called outside any `runWithUserId` scope is refused
-rather than guessing an identity. Both entry points establish the scope —
-`runTurn` (interactive) and `runAgentInBackground` (async).
+**Fail-closed:** a tool called outside any request scope is refused rather than
+guessing an identity, and a stash-writing tool with no `sessionId` in scope is
+refused rather than guessing a conversation. All three entry points establish the
+scope via `runWithRequestContext({userId, sessionId}, …)` — `runTurn` and
+`resolveApproval` (interactive) and `runAgentInBackground` (async, where the
+run id *is* the session id). The older `runWithUserId(userId, …)` survives as a
+thin wrapper that sets `sessionId: null`, which is exactly right for callers with
+no conversation: session-dependent tools then refuse instead of picking one.
 
 **Accepted limit:** one encryption key protects every stored cache. Users cannot
 reach each other's tokens, but a leaked key plus database access would expose
@@ -170,6 +185,66 @@ than failing the run.
 > `auth_sessions.token_cache` column. It is no longer written; dropping it is
 > post-merge cleanup, deliberately not done from a feature branch because code
 > deployed from `main` still writes it.
+
+---
+
+## Files → the Data Stash
+
+`graph_file_ingest` is the one tool that doesn't hand its result to the model. It
+copies a file the person already owns into **this conversation's** Data Stash, so
+the machinery that already exists for uploads — retriever search, the sandbox
+`/work` sync, the file viewer, chat citations — works on Microsoft 365 content
+with no second pipeline. See [DATA_STASH.md](DATA_STASH.md) for that side.
+
+```
+graph_file_ingest {item_id, drive_id?, filename?}
+  │  sessionId = getRequestSessionId()      ← refuse if null (never guess a stash)
+  ├─ GET  {base}?$select=name,file,size,webUrl     ← metadata FIRST
+  │     ├─ no `file` facet        → refuse (it's a folder)
+  │     └─ size > MAX_CONTENT_BYTES → refuse *before* downloading
+  ├─ GET  {base}/content   (responseType: 'base64')
+  ├─ storeDocument({sessionId, filename, mimeType, content, encoding?})
+  └─ void ingestStashDocument(sessionId, doc.id)   ← fire-and-forget
+        → {documentId, filename, mimeType, size, ingesting, webUrl}
+```
+
+`{base}` is `/me/drive/items/{id}` or `/drives/{drive}/items/{id}`; both id
+segments are URL-encoded so a crafted id cannot escape into another path.
+
+**Why metadata is a separate call.** It is the only way to know the size before
+the bytes are in this process's heap — a 4 GB video would otherwise be downloaded
+and base64'd purely to be rejected. It also supplies the true filename and MIME
+type. A missing `size` (Graph reports one for every file in practice) is not
+treated as oversized; `storeDocument` re-checks the limit on the decoded bytes.
+
+**Text vs. binary** mirrors the upload route's intake decision, and matters more
+than it looks: a base64 document that isn't convertible is marked
+`ingestStatus: 'failed'` by the ingest layer. So `isTextMime` types are decoded
+to UTF-8 and stored as text (the chunker reads `content` directly); everything
+else keeps its exact bytes as base64. The background ingest is fired only when
+the result can become text — text, or a convertible binary with
+`STASH_CONVERT_DOCS=1`.
+
+Unlike `POST /api/stash/upload`, it does **not** additionally require the
+session's agent to compose a redis retriever: calling this tool is an explicit
+request to make the file usable, and a retriever added later reads an
+already-indexed corpus.
+
+### The `/content` redirect and the bearer token
+
+`/content` answers **302** to a pre-authenticated CDN URL
+(`*.sharepoint.com`, `*.files.1drv.com`) carrying its own short-lived token in
+the query string. Sending our delegated bearer token to that host would be a
+credential leak to a third party, so this was checked rather than assumed:
+
+> Verified on this runtime (Node 22.21 / undici 6.22): `fetch` follows the
+> redirect and **strips `Authorization` cross-origin**, per the Fetch standard.
+> Same-origin (Graph → Graph) redirects keep it. `Accept` *is* forwarded — hence
+> `Accept: */*` in binary mode rather than asking a blob endpoint for JSON.
+
+So the default `redirect: 'follow'` is safe and `redirect: 'manual'` plus a bare
+second fetch would add moving parts for no gain. If a future runtime changes that
+behaviour, the fix belongs in `graphFetch` (one place), not in tool bodies.
 
 ---
 

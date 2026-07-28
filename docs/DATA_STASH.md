@@ -46,6 +46,12 @@ query ─────────────────────── embe
 
 Auth follows the existing posture (dev-bypass aware; see `lib/auth/dev-bypass.ts`). Ingest runs two ways: **explicitly** via `POST /api/stash/ingest`, or **automatically on upload** when the session's agent composes a `retriever` wired to the redis backend (see [Harness-aware ingest](#harness-aware-ingest-the-retriever-pattern) below). Either way it needs an embedding backend and binds the corpus to one model.
 
+Documents don't only arrive over HTTP: the `graph_file_ingest` app tool calls
+`storeDocument` + `ingestStashDocument` in-process to copy one of the signed-in
+person's Microsoft 365 files into the session's stash, under the same store/ingest
+contract as the upload route — see
+[MICROSOFT_GRAPH.md](MICROSOFT_GRAPH.md#files--the-data-stash).
+
 ## Harness-aware ingest (the `retriever` pattern)
 
 The Data Stash adapts to the agent's harness composition:

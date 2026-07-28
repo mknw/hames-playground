@@ -5,14 +5,20 @@
  * resolves that user's delegated token server-side. Entra enforces the scope,
  * so we don't write a scoping guard and the model never sees a credential.
  *
- * First slice is deliberately `User.Read`-only — the scope already has tenant
- * admin consent, so the whole per-user token path is provable end-to-end with
- * no new tenant configuration. Mail/Files/Calendar tools slot in here once
- * their scopes are consented and added to the sign-in request
- * (`entra-config.server.ts`).
+ * First slice was deliberately `User.Read`-only — the scope already has tenant
+ * admin consent, so the whole per-user token path was provable end-to-end with
+ * no new tenant configuration. Further tools slot in here once their scopes are
+ * consented and added to the sign-in request (`entra-config.server.ts`).
+ *
+ * `graph_file_ingest` is the one tool that does more than read-and-shape: it
+ * bridges Microsoft 365 into the **Data Stash**, so a file the person already
+ * owns becomes something later turns (retriever, sandbox, file viewer) can use
+ * without the bytes ever passing through the model's context.
  */
 import { assertServerOnImport } from "../harness-patterns/assert.server";
 import { graphFetch } from "../auth/graph-token.server";
+import { conversionEnabled, isConvertible } from "../doc-convert.server";
+import { guessMimeType, isTextMime } from "../stash/upload-service.server";
 import { registerAppTool } from "./registry.server";
 
 assertServerOnImport();
@@ -244,5 +250,205 @@ registerAppTool({
       { scopes: ["User.Read"] },
     );
     return shapeMe(raw);
+  },
+});
+
+// ============================================================================
+// Files → Data Stash
+// ============================================================================
+
+/** Narrowest scope that can read a driveItem and its content. */
+const FILE_SCOPES = ["Files.Read.All"] as const;
+
+/** driveItem fields we need: enough to name, classify and size-check the file.
+ *  Explicit because a full driveItem carries a lot we'd never use. */
+const DRIVE_ITEM_SELECT = "name,file,size,webUrl";
+
+/** What the model gets back. Notably **not** the content: the bytes go to the
+ *  Data Stash, and `documentId` is how later turns reach them. */
+export interface GraphFileIngestResult {
+  documentId: string;
+  filename: string;
+  mimeType: string;
+  /** Stored size in bytes (original bytes, not the base64 expansion). */
+  size: number;
+  /** A background chunk→embed→index was started for this document. */
+  ingesting: boolean;
+  /** Provenance — the file's Microsoft 365 link, for citing back to the person. */
+  webUrl: string | null;
+}
+
+interface DriveItemMeta {
+  name: string | null;
+  mimeType: string | null;
+  /** Byte size, or null when Graph didn't report one. */
+  size: number | null;
+  webUrl: string | null;
+  isFile: boolean;
+}
+
+/**
+ * `/drives/{drive}/items/{item}` when a drive is named, else the caller's own
+ * OneDrive. Ids are URL-encoded so a crafted id cannot escape its path segment
+ * (`../`) and address an unrelated Graph resource.
+ */
+export function driveItemPath(itemId: string, driveId?: string | null): string {
+  const item = encodeURIComponent(itemId);
+  return driveId
+    ? `/drives/${encodeURIComponent(driveId)}/items/${item}`
+    : `/me/drive/items/${item}`;
+}
+
+/** Pick the four things we need off a driveItem, tolerating a partial payload. */
+export function shapeDriveItem(raw: unknown): DriveItemMeta {
+  const it = (raw ?? {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+  const file = it.file as Record<string, unknown> | undefined;
+  return {
+    name: str(it.name),
+    mimeType: str(file?.mimeType),
+    size: typeof it.size === "number" && Number.isFinite(it.size) ? it.size : null,
+    webUrl: str(it.webUrl),
+    // The `file` facet is what distinguishes a file from a folder or package —
+    // `$select=file` returns it for files only.
+    isFile: file != null && typeof file === "object",
+  };
+}
+
+registerAppTool({
+  name: "graph_file_ingest",
+  namespace: "graph",
+  description:
+    "Copy one of the signed-in person's own Microsoft 365 files (OneDrive or " +
+    "SharePoint) into this conversation's Data Stash, so later turns can search " +
+    "it, read it or hand it to the sandbox. Identify the file by item_id, " +
+    "optionally with drive_id for a shared/SharePoint drive. Text files become " +
+    "searchable automatically; other formats are stored as-is. Returns the stash " +
+    "document id and metadata — never the file contents. Acts as the current " +
+    "signed-in person.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      item_id: {
+        type: "string",
+        description: "Microsoft Graph driveItem id of the file to copy.",
+      },
+      drive_id: {
+        type: "string",
+        description:
+          "Drive holding the item. Omit for the signed-in person's own OneDrive.",
+      },
+      filename: {
+        type: "string",
+        description:
+          "Override the stored filename. Defaults to the name in Microsoft 365.",
+      },
+    },
+    required: ["item_id"],
+    additionalProperties: false,
+  },
+  execute: async (args, { userId, sessionId }): Promise<GraphFileIngestResult> => {
+    // Fail closed: the Data Stash is keyed by conversation, so without one in
+    // scope there is no correct place to put the file — and guessing would mean
+    // writing one person's file into another conversation's stash.
+    if (!sessionId) {
+      throw new Error(
+        "graph_file_ingest stores the file in the current conversation's Data Stash, " +
+          "and no conversation is in scope for this call. Run it from a chat turn or " +
+          "a triggered action run.",
+      );
+    }
+    const itemId = typeof args.item_id === "string" ? args.item_id.trim() : "";
+    if (!itemId) {
+      throw new Error("item_id is required — the Microsoft Graph driveItem id of the file.");
+    }
+    const driveId =
+      typeof args.drive_id === "string" ? args.drive_id.trim() || null : null;
+    const base = driveItemPath(itemId, driveId);
+
+    // Metadata first — and separately from the download — because it carries the
+    // size, which is how an oversized file is refused BEFORE its bytes are in
+    // this process's heap. It also gives the real filename and MIME type.
+    const meta = shapeDriveItem(
+      await graphFetch(userId, `${base}?$select=${DRIVE_ITEM_SELECT}`, {
+        scopes: FILE_SCOPES,
+      }),
+    );
+    if (!meta.isFile) {
+      throw new Error(
+        `Microsoft 365 item ${itemId} has no file content — it is probably a folder. ` +
+          "Pass the id of a file.",
+      );
+    }
+
+    // The Data Stash layer is imported lazily: it pulls in ioredis and the whole
+    // chunk/embed/vector stack, and `mcp-client.server.ts` imports this registry
+    // eagerly for *every* harness run — including deployments with no stash.
+    const { storeDocument, MAX_CONTENT_BYTES } = await import("../document-store.server");
+    // A missing size (Graph reports one for every file in practice) is not
+    // treated as oversized; `storeDocument` re-checks the limit on the decoded
+    // bytes, so an unreported giant still can't be stored.
+    if (meta.size != null && meta.size > MAX_CONTENT_BYTES) {
+      throw new Error(
+        `"${meta.name ?? itemId}" is ${meta.size} bytes, above the Data Stash limit of ` +
+          `${MAX_CONTENT_BYTES} bytes, so it was not downloaded. Use a smaller file or ` +
+          "an extract of this one.",
+      );
+    }
+
+    const override = typeof args.filename === "string" ? args.filename.trim() : "";
+    const filename = override || meta.name || `driveitem-${itemId}`;
+    const mimeType = meta.mimeType ?? guessMimeType(filename);
+
+    // Always download bytes, then decide how to STORE them — mirroring the
+    // upload route's intake: text formats go in as UTF-8 (the chunker reads
+    // `content` directly), anything else keeps its exact bytes as base64 so the
+    // `/work` round-trip and `?download` still serve the real file.
+    const encoded = await graphFetch(userId, `${base}/content`, {
+      scopes: FILE_SCOPES,
+      responseType: "base64",
+    });
+    if (typeof encoded !== "string") {
+      throw new Error(`Microsoft 365 returned no content for "${filename}".`);
+    }
+    const isText = isTextMime(mimeType);
+    const content = isText ? Buffer.from(encoded, "base64").toString("utf8") : encoded;
+
+    // Same gate as the upload route: a binary is only worth ingesting when we can
+    // turn it into text; otherwise `ingestStashDocument` would only mark it
+    // failed. Unlike that route we do NOT also require the agent to compose a
+    // redis retriever — calling this tool is an explicit request to make the file
+    // usable, and a retriever added later reads an already-indexed corpus.
+    const ingesting = isText || (conversionEnabled() && isConvertible(mimeType));
+
+    const doc = await storeDocument({
+      sessionId,
+      filename,
+      mimeType,
+      content,
+      ...(isText ? {} : { encoding: "base64" as const }),
+      // Persist 'pending' in the FIRST write (as the upload route does) so a
+      // status poll can never read a doc with no ingest status and flicker.
+      ...(ingesting ? { ingestStatus: "pending" as const } : {}),
+    });
+
+    if (ingesting) {
+      // Fire-and-forget, mirroring `POST /api/stash/upload`: embedding is slow
+      // and the tool result must come back inside the turn. Failures are
+      // recorded in the document's `ingestStatus`, which is why the rejection is
+      // swallowed here rather than surfaced.
+      void import("../document-ingest.server")
+        .then(({ ingestStashDocument }) => ingestStashDocument(sessionId, doc.id))
+        .catch(() => {});
+    }
+
+    return {
+      documentId: doc.id,
+      filename,
+      mimeType,
+      size: doc.size,
+      ingesting,
+      webUrl: meta.webUrl,
+    };
   },
 });

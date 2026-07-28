@@ -8,9 +8,11 @@
  *
  * Tools available: `graph_me` (profile), `graph_calendar_today` (today's
  * events), `graph_mail_recent` (inbox, optionally unread-only) — enough for a
- * "what does my day look like?" briefing. Further graph tools appear in
- * `tools.graph` automatically once registered, so this agent needs no change to
- * pick them up.
+ * "what does my day look like?" briefing — plus `graph_file_ingest`, which pulls
+ * one of the person's own OneDrive/SharePoint files into this conversation's Data
+ * Stash so later turns (retriever, sandbox) can work on it. Further graph tools
+ * appear in `tools.graph` automatically once registered, so this agent needs no
+ * change to pick them up.
  */
 "use server";
 

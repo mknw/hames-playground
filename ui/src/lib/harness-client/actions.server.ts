@@ -37,7 +37,7 @@ import type { HarnessSettings } from "../settings";
 import { runWithSettings } from "../settings-context.server";
 import { getAuthenticatedUser } from "../auth/server";
 import { BYPASS_USER, isBypassEnabled } from "../auth/dev-bypass";
-import { runWithUserId } from "./request-user.server";
+import { runWithRequestContext } from "./request-user.server";
 
 // ============================================================================
 // Auth helper
@@ -106,10 +106,11 @@ async function runTurn(
   agentId: string,
   onEvent?: (event: ContextEvent) => void,
 ): Promise<HarnessResultScoped<SessionData>> {
-  // Establish the user-id scope so pattern closures that need to load
-  // per-conversation context at runtime (e.g. code-mode's tool allowlist
-  // reader) can resolve the right user without an explicit parameter.
-  return runWithUserId(userId, async () => {
+  // Establish the request scope so pattern closures and app-side tools that
+  // need per-conversation context at runtime (code-mode's tool-allowlist
+  // reader, `graph_file_ingest`'s Data Stash target) resolve the right user and
+  // conversation without an explicit parameter.
+  return runWithRequestContext({ userId, sessionId }, async () => {
     // If the user switched agent within an existing conversation, treat it as
     // a fresh conversation by ignoring the prior serialized context. The UI is
     // expected to mint a new sessionId on agent change, but we double-guard
@@ -173,7 +174,7 @@ async function resolveApproval(
   if (!loaded) {
     throw new Error("No active session");
   }
-  return runWithUserId(user.id, async () => {
+  return runWithRequestContext({ userId: user.id, sessionId }, async () => {
     const patterns = await getOrBuildPatterns(sessionId, loaded.agentId);
     const result = await resumeHarness(
       loaded.serializedContext,

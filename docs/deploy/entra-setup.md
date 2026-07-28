@@ -124,8 +124,10 @@ to sign in again** (their stored refresh token must cover it), and background ru
 have no user present to consent mid-run. One consent, done.
 
 A granted scope is not a capability. The model can only do what a *registered
-tool* exposes, and today that is the read-only `graph_me`. Any future write tool
-should carry its own confirmation gate.
+tool* exposes — see
+[MICROSOFT_GRAPH.md](../MICROSOFT_GRAPH.md#what-it-can-do-today) for the current
+set, none of which writes to Microsoft 365. Any future write tool should carry
+its own confirmation gate.
 
 > ⚠️ **Order matters.** Every scope in the request must exist under **API
 > permissions** with consent granted *before* anyone signs in. A scope that is

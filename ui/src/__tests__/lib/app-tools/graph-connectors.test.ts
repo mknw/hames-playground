@@ -10,9 +10,12 @@ vi.mock("../../../lib/harness-patterns/assert.server", () => ({
 }));
 
 const getRequestUserId = vi.fn<() => string | null>(() => "oid-1");
+const getRequestSessionId = vi.fn<() => string | null>(() => "sess-1");
 vi.mock("../../../lib/harness-client/request-user.server", () => ({
   getRequestUserId: () => getRequestUserId(),
+  getRequestSessionId: () => getRequestSessionId(),
   runWithUserId: (_u: string, fn: () => Promise<unknown>) => fn(),
+  runWithRequestContext: (_c: unknown, fn: () => Promise<unknown>) => fn(),
 }));
 
 const graphFetch = vi.fn();
@@ -41,6 +44,7 @@ function lastCall() {
 beforeEach(() => {
   vi.clearAllMocks();
   getRequestUserId.mockReturnValue("oid-1");
+  getRequestSessionId.mockReturnValue("sess-1");
   graphFetch.mockResolvedValue({ value: [] });
 });
 

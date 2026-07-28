@@ -155,6 +155,18 @@ async function resolveAccount(
  *
  * @param path Graph path beginning with `/` (e.g. `/me`), or an absolute URL
  *             (used for `@odata.nextLink` pagination).
+ *
+ * ## `responseType: 'base64'` and the `/content` redirect
+ * File downloads (`/drive/items/{id}/content`) answer **302** to a
+ * pre-authenticated CDN URL (`*.sharepoint.com`, `*.files.1drv.com`) that
+ * carries its own short-lived token in the query string. We deliberately let
+ * `fetch` follow it: per the Fetch standard — and verified on this runtime
+ * (Node 22 / undici 6) — `Authorization` is **stripped on a cross-origin
+ * redirect**, so our delegated bearer token never reaches the CDN, while the
+ * same-origin Graph→Graph case keeps it. `redirect: 'manual'` plus a bare
+ * follow-up fetch would achieve the same thing with more moving parts, so it
+ * isn't used. `Accept` *is* forwarded, hence `*​/*` in binary mode rather than
+ * asking a blob endpoint for JSON.
  */
 export async function graphFetch(
   userId: string,
@@ -166,10 +178,17 @@ export async function graphFetch(
     /** Extra request headers, e.g. `Prefer: outlook.timezone="Europe/Brussels"`.
      *  Cannot override Authorization — the credential is set here, not by callers. */
     headers?: Record<string, string>;
+    /**
+     * How to decode the response body. `'json'` (default) parses JSON;
+     * `'base64'` returns the raw bytes base64-encoded — the only faithful way to
+     * carry a binary file (xlsx/pdf/png) through the string-typed Data Stash.
+     */
+    responseType?: "json" | "base64";
   } = {},
 ): Promise<unknown> {
   const token = await getUserGraphToken(userId, init.scopes ?? DEFAULT_GRAPH_SCOPES);
   const url = path.startsWith("http") ? path : `${GRAPH_BASE}${path}`;
+  const wantsBytes = init.responseType === "base64";
 
   const res = await fetch(url, {
     method: init.method ?? "GET",
@@ -177,7 +196,11 @@ export async function graphFetch(
       ...init.headers,
       // Set last so a caller can never replace the credential or content type.
       Authorization: `Bearer ${token}`,
-      Accept: "application/json",
+      Accept: wantsBytes ? "*/*" : "application/json",
+      // Decorated traffic is prioritized under Graph throttling; undecorated
+      // traffic is first to be shed. NONISV|<company>|<app>/<version> is the
+      // documented shape for internal (non-ISV) apps.
+      "User-Agent": "NONISV|DTSC|kg-agent/1.0",
       ...(init.body ? { "Content-Type": "application/json" } : {}),
     },
     ...(init.body ? { body: JSON.stringify(init.body) } : {}),
@@ -197,5 +220,6 @@ export async function graphFetch(
     );
   }
   if (res.status === 204) return null;
+  if (wantsBytes) return Buffer.from(await res.arrayBuffer()).toString("base64");
   return res.json();
 }

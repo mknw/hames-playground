@@ -192,4 +192,69 @@ describe("graphFetch", () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 204 })));
     await expect(graphFetch(USER, "/me")).resolves.toBeNull();
   });
+
+  it("asks for JSON by default and never sends a body-less Content-Type", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+    vi.stubGlobal("fetch", fetchMock);
+    await graphFetch(USER, "/me");
+    const headers = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]
+      .headers as Record<string, string>;
+    expect(headers.Accept).toBe("application/json");
+    expect(headers["Content-Type"]).toBeUndefined();
+  });
+
+  describe("responseType: 'base64'", () => {
+    const BYTES = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d]);
+
+    function stubBinaryFetch() {
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => BYTES.buffer,
+        json: async () => {
+          throw new Error("json() must not be called in binary mode");
+        },
+      }));
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    it("returns the raw bytes base64-encoded", async () => {
+      stubBinaryFetch();
+      await expect(
+        graphFetch(USER, "/me/drive/items/01ABC/content", { responseType: "base64" }),
+      ).resolves.toBe(Buffer.from(BYTES).toString("base64"));
+    });
+
+    it("asks for any content type — a blob endpoint has no JSON to give", async () => {
+      const fetchMock = stubBinaryFetch();
+      await graphFetch(USER, "/me/drive/items/01ABC/content", {
+        responseType: "base64",
+        scopes: ["Files.Read.All"],
+      });
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      const headers = init.headers as Record<string, string>;
+      expect(url).toBe(`${GRAPH_BASE}/me/drive/items/01ABC/content`);
+      expect(headers.Accept).toBe("*/*");
+      // Still delegated, and the 302 to the CDN is followed by fetch itself —
+      // which drops Authorization cross-origin (see graphFetch's doc comment).
+      expect(headers.Authorization).toBe("Bearer tok-abc");
+      expect(init.redirect).toBeUndefined();
+      expect(acquireTokenSilent).toHaveBeenCalledWith(
+        expect.objectContaining({ scopes: ["Files.Read.All"] }),
+      );
+    });
+
+    it("still maps 401/403 and 204 the same way", async () => {
+      vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 403, statusText: "no" })));
+      await expect(
+        graphFetch(USER, "/x/content", { responseType: "base64" }),
+      ).rejects.toBeInstanceOf(GraphAuthRequiredError);
+
+      vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 204 })));
+      await expect(
+        graphFetch(USER, "/x/content", { responseType: "base64" }),
+      ).resolves.toBeNull();
+    });
+  });
 });

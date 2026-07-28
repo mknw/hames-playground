@@ -26,8 +26,13 @@ vi.mock("../../../lib/auth/graph-token.server", () => ({
   },
 }));
 
-import { runWithUserId } from "../../../lib/harness-client/request-user.server";
-import { runAppTool } from "../../../lib/app-tools/index.server";
+import {
+  runWithUserId,
+  runWithRequestContext,
+  getRequestUserId,
+  getRequestSessionId,
+} from "../../../lib/harness-client/request-user.server";
+import { runAppTool, registerAppTool } from "../../../lib/app-tools/index.server";
 
 describe("request-scoped identity under concurrency", () => {
   it("keeps each user's identity separate across interleaved calls", async () => {
@@ -73,6 +78,52 @@ describe("request-scoped identity under concurrency", () => {
     expect(scoped.success).toBe(true);
     expect(unscoped.success).toBe(false);
     expect(unscoped.error).toMatch(/authenticated user/i);
+  });
+});
+
+describe("request-scoped conversation", () => {
+  // Echoes whatever context runAppTool resolved, after a yield — so a bleed
+  // between concurrent conversations shows up as a mismatched sessionId.
+  registerAppTool({
+    name: "test_echo_ctx",
+    namespace: "test",
+    description: "echo the resolved app-tool context",
+    inputSchema: { type: "object", properties: {} },
+    execute: async (_args, ctx) => {
+      await sleep(ctx.sessionId === "sess-A" ? 20 : 2);
+      return { ...ctx };
+    },
+  });
+
+  it("keeps each conversation's sessionId separate across interleaved calls", async () => {
+    const call = (userId: string, sessionId: string) =>
+      runWithRequestContext({ userId, sessionId }, async () => {
+        await sleep(1);
+        return runAppTool("test_echo_ctx", {});
+      });
+
+    const [a, b] = await Promise.all([
+      call("user-A", "sess-A"), // slow — B overtakes it
+      call("user-B", "sess-B"),
+    ]);
+
+    expect(a.data).toEqual({ userId: "user-A", sessionId: "sess-A" });
+    expect(b.data).toEqual({ userId: "user-B", sessionId: "sess-B" });
+  });
+
+  it("runWithUserId still establishes the user, with no session", async () => {
+    const res = await runWithUserId("user-legacy", async () => {
+      // The old accessor keeps its exact behaviour for existing callers.
+      expect(getRequestUserId()).toBe("user-legacy");
+      expect(getRequestSessionId()).toBeNull();
+      return runAppTool("test_echo_ctx", {});
+    });
+    expect(res.data).toEqual({ userId: "user-legacy", sessionId: null });
+  });
+
+  it("reads null for both outside any scope", () => {
+    expect(getRequestUserId()).toBeNull();
+    expect(getRequestSessionId()).toBeNull();
   });
 });
 

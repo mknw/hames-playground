@@ -5,14 +5,26 @@
  * resolves that user's delegated token server-side. Entra enforces the scope,
  * so we don't write a scoping guard and the model never sees a credential.
  *
- * First slice is deliberately `User.Read`-only — the scope already has tenant
- * admin consent, so the whole per-user token path is provable end-to-end with
- * no new tenant configuration. Mail/Files/Calendar tools slot in here once
- * their scopes are consented and added to the sign-in request
- * (`entra-config.server.ts`).
+ * First slice was deliberately `User.Read`-only — the scope already has tenant
+ * admin consent, so the whole per-user token path was provable end-to-end with
+ * no new tenant configuration. Further tools slot in here once their scopes are
+ * consented and added to the sign-in request (`entra-config.server.ts`).
+ *
+ * `graph_file_ingest` is the one tool that does more than read-and-shape: it
+ * bridges Microsoft 365 into the **Data Stash**, so a file the person already
+ * owns becomes something later turns (retriever, sandbox, file viewer) can use
+ * without the bytes ever passing through the model's context.
+ *
+ * `graph_files_search` and `graph_files_list` are how a file is *found* in the
+ * first place, and both hand back the `drive_id` + `item_id` pair that names a
+ * file to any tool acting on one. Search keeps the **query language on the
+ * server**: the model passes structured arguments and this module composes the
+ * KQL, so no model-authored operator can reshape the query it didn't write.
  */
 import { assertServerOnImport } from "../harness-patterns/assert.server";
 import { graphFetch } from "../auth/graph-token.server";
+import { conversionEnabled, isConvertible } from "../doc-convert.server";
+import { guessMimeType, isTextMime } from "../stash/upload-service.server";
 import { registerAppTool } from "./registry.server";
 
 assertServerOnImport();
@@ -244,5 +256,699 @@ registerAppTool({
       { scopes: ["User.Read"] },
     );
     return shapeMe(raw);
+  },
+});
+
+// ============================================================================
+// Files → Data Stash
+// ============================================================================
+
+/** Narrowest scope that can read a driveItem and its content. */
+const FILE_SCOPES = ["Files.Read.All"] as const;
+
+/** driveItem fields we need: enough to name, classify and size-check the file.
+ *  Explicit because a full driveItem carries a lot we'd never use. */
+const DRIVE_ITEM_SELECT = "name,file,size,webUrl";
+
+/** What the model gets back. Notably **not** the content: the bytes go to the
+ *  Data Stash, and `documentId` is how later turns reach them. */
+export interface GraphFileIngestResult {
+  documentId: string;
+  filename: string;
+  mimeType: string;
+  /** Stored size in bytes (original bytes, not the base64 expansion). */
+  size: number;
+  /** A background chunk→embed→index was started for this document. */
+  ingesting: boolean;
+  /** Provenance — the file's Microsoft 365 link, for citing back to the person. */
+  webUrl: string | null;
+}
+
+interface DriveItemMeta {
+  name: string | null;
+  mimeType: string | null;
+  /** Byte size, or null when Graph didn't report one. */
+  size: number | null;
+  webUrl: string | null;
+  isFile: boolean;
+}
+
+/**
+ * `/drives/{drive}/items/{item}` when a drive is named, else the caller's own
+ * OneDrive. Ids are URL-encoded so a crafted id cannot escape its path segment
+ * (`../`) and address an unrelated Graph resource.
+ */
+export function driveItemPath(itemId: string, driveId?: string | null): string {
+  const item = encodeURIComponent(itemId);
+  return driveId
+    ? `/drives/${encodeURIComponent(driveId)}/items/${item}`
+    : `/me/drive/items/${item}`;
+}
+
+/** Pick the four things we need off a driveItem, tolerating a partial payload. */
+export function shapeDriveItem(raw: unknown): DriveItemMeta {
+  const it = (raw ?? {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+  const file = it.file as Record<string, unknown> | undefined;
+  return {
+    name: str(it.name),
+    mimeType: str(file?.mimeType),
+    size: typeof it.size === "number" && Number.isFinite(it.size) ? it.size : null,
+    webUrl: str(it.webUrl),
+    // The `file` facet is what distinguishes a file from a folder or package —
+    // `$select=file` returns it for files only.
+    isFile: file != null && typeof file === "object",
+  };
+}
+
+registerAppTool({
+  name: "graph_file_ingest",
+  namespace: "graph",
+  description:
+    "Copy one of the signed-in person's own Microsoft 365 files (OneDrive or " +
+    "SharePoint) into this conversation's Data Stash, so later turns can search " +
+    "it, read it or hand it to the sandbox. Identify the file by item_id, " +
+    "optionally with drive_id for a shared/SharePoint drive. Text files become " +
+    "searchable automatically; other formats are stored as-is. Returns the stash " +
+    "document id and metadata — never the file contents. Acts as the current " +
+    "signed-in person.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      item_id: {
+        type: "string",
+        description: "Microsoft Graph driveItem id of the file to copy.",
+      },
+      drive_id: {
+        type: "string",
+        description:
+          "Drive holding the item. Omit for the signed-in person's own OneDrive.",
+      },
+      filename: {
+        type: "string",
+        description:
+          "Override the stored filename. Defaults to the name in Microsoft 365.",
+      },
+    },
+    required: ["item_id"],
+    additionalProperties: false,
+  },
+  execute: async (args, { userId, sessionId }): Promise<GraphFileIngestResult> => {
+    // Fail closed: the Data Stash is keyed by conversation, so without one in
+    // scope there is no correct place to put the file — and guessing would mean
+    // writing one person's file into another conversation's stash.
+    if (!sessionId) {
+      throw new Error(
+        "graph_file_ingest stores the file in the current conversation's Data Stash, " +
+          "and no conversation is in scope for this call. Run it from a chat turn or " +
+          "a triggered action run.",
+      );
+    }
+    const itemId = typeof args.item_id === "string" ? args.item_id.trim() : "";
+    if (!itemId) {
+      throw new Error("item_id is required — the Microsoft Graph driveItem id of the file.");
+    }
+    const driveId =
+      typeof args.drive_id === "string" ? args.drive_id.trim() || null : null;
+    const base = driveItemPath(itemId, driveId);
+
+    // Metadata first — and separately from the download — because it carries the
+    // size, which is how an oversized file is refused BEFORE its bytes are in
+    // this process's heap. It also gives the real filename and MIME type.
+    const meta = shapeDriveItem(
+      await graphFetch(userId, `${base}?$select=${DRIVE_ITEM_SELECT}`, {
+        scopes: FILE_SCOPES,
+      }),
+    );
+    if (!meta.isFile) {
+      throw new Error(
+        `Microsoft 365 item ${itemId} has no file content — it is probably a folder. ` +
+          "Pass the id of a file.",
+      );
+    }
+
+    // The Data Stash layer is imported lazily: it pulls in ioredis and the whole
+    // chunk/embed/vector stack, and `mcp-client.server.ts` imports this registry
+    // eagerly for *every* harness run — including deployments with no stash.
+    const { storeDocument, MAX_CONTENT_BYTES } = await import("../document-store.server");
+    // A missing size (Graph reports one for every file in practice) is not
+    // treated as oversized; `storeDocument` re-checks the limit on the decoded
+    // bytes, so an unreported giant still can't be stored.
+    if (meta.size != null && meta.size > MAX_CONTENT_BYTES) {
+      throw new Error(
+        `"${meta.name ?? itemId}" is ${meta.size} bytes, above the Data Stash limit of ` +
+          `${MAX_CONTENT_BYTES} bytes, so it was not downloaded. Use a smaller file or ` +
+          "an extract of this one.",
+      );
+    }
+
+    const override = typeof args.filename === "string" ? args.filename.trim() : "";
+    const filename = override || meta.name || `driveitem-${itemId}`;
+    const mimeType = meta.mimeType ?? guessMimeType(filename);
+
+    // Always download bytes, then decide how to STORE them — mirroring the
+    // upload route's intake: text formats go in as UTF-8 (the chunker reads
+    // `content` directly), anything else keeps its exact bytes as base64 so the
+    // `/work` round-trip and `?download` still serve the real file.
+    const encoded = await graphFetch(userId, `${base}/content`, {
+      scopes: FILE_SCOPES,
+      responseType: "base64",
+    });
+    if (typeof encoded !== "string") {
+      throw new Error(`Microsoft 365 returned no content for "${filename}".`);
+    }
+    const isText = isTextMime(mimeType);
+    const content = isText ? Buffer.from(encoded, "base64").toString("utf8") : encoded;
+
+    // Same gate as the upload route: a binary is only worth ingesting when we can
+    // turn it into text; otherwise `ingestStashDocument` would only mark it
+    // failed. Unlike that route we do NOT also require the agent to compose a
+    // redis retriever — calling this tool is an explicit request to make the file
+    // usable, and a retriever added later reads an already-indexed corpus.
+    const ingesting = isText || (conversionEnabled() && isConvertible(mimeType));
+
+    const doc = await storeDocument({
+      sessionId,
+      filename,
+      mimeType,
+      content,
+      ...(isText ? {} : { encoding: "base64" as const }),
+      // Persist 'pending' in the FIRST write (as the upload route does) so a
+      // status poll can never read a doc with no ingest status and flicker.
+      ...(ingesting ? { ingestStatus: "pending" as const } : {}),
+    });
+
+    if (ingesting) {
+      // Fire-and-forget, mirroring `POST /api/stash/upload`: embedding is slow
+      // and the tool result must come back inside the turn. Failures are
+      // recorded in the document's `ingestStatus`, which is why the rejection is
+      // swallowed here rather than surfaced.
+      void import("../document-ingest.server")
+        .then(({ ingestStashDocument }) => ingestStashDocument(sessionId, doc.id))
+        .catch(() => {});
+    }
+
+    return {
+      documentId: doc.id,
+      filename,
+      mimeType,
+      size: doc.size,
+      ingesting,
+      webUrl: meta.webUrl,
+    };
+  },
+});
+
+// ============================================================================
+// Files — search and browse
+//
+// Both tools return the same flattened item shape and both reuse the drive
+// helpers above (`driveItemPath`, `shapeDriveItem`), so a file found here is
+// addressable by `graph_file_ingest` without the model reformatting anything.
+// ============================================================================
+
+/** Search reaches SharePoint as well as OneDrive, so it needs the sites scope on
+ *  top of the file scope. Kept separate from `FILE_SCOPES` so browsing and
+ *  ingesting stay on the narrower one. */
+const FILE_SEARCH_SCOPES = [...FILE_SCOPES, "Sites.Read.All"] as const;
+
+/** driveItem fields the browse tool reads. Explicit for the same reason as
+ *  `DRIVE_ITEM_SELECT`, plus `parentReference` (the drive id + folder path) and
+ *  `remoteItem` (a OneDrive root holds shortcuts to other drives as stubs). */
+const DRIVE_ITEM_LIST_SELECT =
+  "id,name,file,folder,size,webUrl,lastModifiedDateTime,parentReference,remoteItem";
+
+// ----------------------------------------------------------------------------
+// KQL composition — the app owns the query language
+//
+// Microsoft Search speaks KQL, which has clause grammar (`AND`, parentheses)
+// and property restrictions (`filetype:exe`, `path:"…"`, `size>1000`). A model
+// writing that string directly would be writing the query's *structure* from
+// untrusted-shaped text: one stray quote in a filename it echoes back and the
+// restriction we added is closed and a different one opened. So the model never
+// writes KQL. It passes plain terms plus structured filters, the functions below
+// compose every clause, and each user-supplied value is reduced to something
+// that can only ever be a value.
+// ----------------------------------------------------------------------------
+
+/** What can end a quoted value or break the request line: the quote itself,
+ *  plus C0 control characters and DEL. */
+const PHRASE_UNSAFE = /["\u0000-\u001f\u007f]+/g;
+
+/** For unquoted terms, also the operators: `(` `)` group clauses, and `:` `<`
+ *  `>` `=` are what bind a value to a managed property (`filetype:exe`). */
+const TERM_UNSAFE = /["():<>=\u0000-\u001f\u007f]+/g;
+
+/** KQL's boolean and ranking keywords, which it honours in upper case only. */
+const KQL_KEYWORDS = /\b(AND|OR|NOT|NEAR|ONEAR|XRANK)\b/g;
+
+/**
+ * Quote a URL as a KQL value — today the `path:` site restriction.
+ *
+ * The double quote is **stripped, not escaped**. KQL publishes no escape
+ * sequence for a quote inside a value, so an escaping implementation would be
+ * inventing a contract Microsoft doesn't define and hoping the parser agrees;
+ * removal is the only handling whose behaviour is knowable. Control characters
+ * go with it — they would split the request line.
+ *
+ * Then *all* whitespace goes: a URL contains none, and a single space inside a
+ * restriction makes Search stop reading it as a restriction and treat the rest as
+ * free text — a silently wider search rather than an error. Whitespace is handled
+ * last because removing an unsafe character can itself leave a gap behind.
+ */
+export function kqlUrlPhrase(value: string): string {
+  return `"${value.replace(PHRASE_UNSAFE, "").replace(/\s+/g, "")}"`;
+}
+
+/**
+ * Strip KQL grammar out of free-text terms while keeping them searchable.
+ *
+ * Quoting the whole thing would turn every multi-word request into an exact
+ * phrase match and defeat stemming, so the terms stay bare and the *operators*
+ * are removed instead: quotes and parentheses (clause structure), and `:` `<`
+ * `>` `=` (what makes `filetype:exe` or `size>1000` a property restriction).
+ * KQL's boolean keywords are uppercase-only, so lowercasing them leaves the
+ * caller's words intact while reducing them to ordinary search terms.
+ *
+ * What survives cannot open a clause, close one, or restrict a property — the
+ * only structure in the composed query is the structure we added.
+ */
+export function kqlTerms(value: string): string {
+  const cleaned = value.replace(TERM_UNSAFE, " ").replace(/\s+/g, " ").trim();
+  return cleaned.replace(KQL_KEYWORDS, (op) => op.toLowerCase());
+}
+
+/**
+ * `filetype:` clause from a supplied extension, or null when there isn't one.
+ *
+ * An extension is alphanumeric, so the leading alphanumeric run is taken and
+ * everything after it is discarded — `docx" OR filetype:exe` yields
+ * `filetype:docx`. That leaves no quoting question to get wrong. A leading dot
+ * (`.pdf`) is tolerated because models write it.
+ */
+export function kqlFileType(value: string): string | null {
+  const match = /[a-z0-9]+/i.exec(value.trim().replace(/^\.+/, ""));
+  return match ? `filetype:${match[0].toLowerCase()}` : null;
+}
+
+export interface FileSearchArgs {
+  /** Free-text terms from the caller. */
+  query: string;
+  /** SharePoint site URL to restrict to, composed as `path:"…"`. */
+  site?: string | null;
+  /** File extension to restrict to, composed as `filetype:…`. */
+  fileType?: string | null;
+}
+
+/**
+ * Compose the KQL sent to `/search/query`.
+ *
+ * Terms first, then the restrictions, joined by whitespace — KQL's default
+ * operator is AND, so this reads as "these words, in this site, of this type".
+ * Returns `""` when nothing survives sanitization, which the tool treats as a
+ * missing query rather than sending Graph an empty search.
+ *
+ * A restriction is fragile in one direction worth naming: a stray space inside
+ * the clause makes Search stop reading it as a restriction and treat the rest as
+ * free text — silently widening the search instead of failing. So no clause here
+ * contains caller-controlled whitespace: `filetype:` takes an alphanumeric run,
+ * and the `path:` URL has its whitespace removed rather than preserved.
+ */
+export function composeFileQuery({ query, site, fileType }: FileSearchArgs): string {
+  const parts: string[] = [];
+
+  const terms = kqlTerms(query ?? "");
+  if (terms) parts.push(terms);
+
+  const type = fileType?.trim() ? kqlFileType(fileType) : null;
+  if (type) parts.push(type);
+
+  // `path:` is the documented way to scope Microsoft Search to one site (KQL has
+  // no `site:` operator — that's Purview eDiscovery). The value is a URL, so it
+  // needs quoting: it contains `:` and `/`.
+  if (site?.trim()) parts.push(`path:${kqlUrlPhrase(site)}`);
+
+  return parts.join(" ");
+}
+
+// ----------------------------------------------------------------------------
+// Response flattening
+// ----------------------------------------------------------------------------
+
+/**
+ * Strip Microsoft Search's summary markup and truncate.
+ *
+ * Search wraps each matched term in the summary as `<c0>term</c0>` (one `<cN>`
+ * per term) and marks elided text as `<ddd/>`. To a model that is broken markup
+ * it may well try to reproduce, so the highlight markers go and the elision
+ * becomes an ellipsis. Capped at 300 chars, the same budget as
+ * `graph_mail_recent`'s preview, because a page of matched text per hit is how a
+ * 25-result search blows a turn.
+ */
+export function cleanSummary(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const text = raw
+    .replace(/<\/?c\d+>/gi, "")
+    .replace(/<ddd\s*\/?>/gi, "…")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text ? text.slice(0, 300) : null;
+}
+
+/**
+ * `parentReference.path` → a path a person could read.
+ *
+ * Graph reports it as `/drive/root:/Reports/Q3%20Plans` (or
+ * `/drives/{id}/root:/…`): an addressing prefix, a `root:` marker, then
+ * URL-encoded segments. The prefix is noise and the encoding reads as mojibake,
+ * so both go, leaving `Reports/Q3 Plans`. An item at the drive root has nothing
+ * after `root:` and is reported as `/`.
+ */
+export function drivePath(raw: unknown): string | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const marker = raw.indexOf("root:");
+  const rel = (marker >= 0 ? raw.slice(marker + "root:".length) : raw).replace(/^\/+/, "");
+  if (!rel) return "/";
+  try {
+    return decodeURIComponent(rel);
+  } catch {
+    // A malformed escape (`%zz`) must not fail the whole search — a slightly
+    // ugly path is a better result than no results.
+    return rel;
+  }
+}
+
+/**
+ * Readable site from `parentReference.siteId`, which Graph reports as
+ * `contoso.sharepoint.com,{siteGuid},{webGuid}`. Only the hostname means
+ * anything to a person or to a model citing a source, so the guids are dropped.
+ * An id with no hostname is passed through rather than invented over.
+ */
+export function siteHost(raw: unknown): string | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  return raw.split(",")[0].trim() || null;
+}
+
+/** What a found file looks like, whether it came from search or from browsing. */
+export interface GraphFileRef {
+  name: string | null;
+  /** Containing folder relative to the drive root; `/` at the root itself. */
+  path: string | null;
+  /** SharePoint host the item lives on, or null for a plain OneDrive item. */
+  site: string | null;
+  modified: string | null;
+  size: number | null;
+  /** Half of the handoff to the tools that act on a file — always surfaced. */
+  drive_id: string | null;
+  /** The other half: the item's *own* id, not its parent's. */
+  item_id: string | null;
+  webUrl: string | null;
+}
+
+export interface GraphFileHit extends GraphFileRef {
+  /** Matched text, markup stripped. Null when Search returned no summary. */
+  snippet: string | null;
+}
+
+export interface GraphFileEntry extends GraphFileRef {
+  isFolder: boolean;
+  /** Items inside a folder; null for a file, so the model can tell "empty
+   *  folder" from "not a folder". */
+  child_count: number | null;
+}
+
+/**
+ * A OneDrive root listing contains shortcuts as well as files: "Add shortcut to
+ * My files" puts a stub driveItem in the root whose real identity sits under
+ * `remoteItem`. Unwrapping it keeps `drive_id` / `item_id` pointing at the file
+ * itself, because the stub's own ids address the shortcut — handing those to a
+ * tool that reads content would 404.
+ */
+function unwrapRemote(raw: unknown): Record<string, unknown> {
+  const it = (raw ?? {}) as Record<string, unknown>;
+  const remote = it.remoteItem;
+  return remote && typeof remote === "object"
+    ? { ...it, ...(remote as Record<string, unknown>) }
+    : it;
+}
+
+/**
+ * Flatten one driveItem — from a search hit or from a folder listing.
+ * Name/size/webUrl extraction is `shapeDriveItem`'s, so the two file paths can't
+ * drift apart on what a "file" looks like; the rest is the location the model
+ * needs to navigate or to hand the file on.
+ */
+export function shapeFileRef(raw: unknown): GraphFileRef {
+  const it = unwrapRemote(raw);
+  const base = shapeDriveItem(it);
+  const parent = (it.parentReference ?? {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+  return {
+    name: base.name,
+    path: drivePath(parent.path),
+    site: siteHost(parent.siteId),
+    modified: str(it.lastModifiedDateTime),
+    size: base.size,
+    drive_id: str(parent.driveId),
+    // `parentReference.id` is the *folder* the item sits in; using it here would
+    // point every downstream call at the wrong resource.
+    item_id: str(it.id),
+    webUrl: base.webUrl,
+  };
+}
+
+/**
+ * Flatten `/search/query`'s three levels of nesting
+ * (`value[].hitsContainers[].hits[].resource`) into one list.
+ *
+ * Hits arrive in rank order, so `rank` itself is dropped — a position in a list
+ * says the same thing in fewer tokens. `total` is summed over the containers
+ * that reported one and left null when none did, because Search omits it for
+ * some result sets and a fabricated 0 would read as "nothing found".
+ */
+export function shapeSearchHits(raw: unknown): {
+  total: number | null;
+  results: GraphFileHit[];
+} {
+  const responses = (raw as { value?: unknown[] })?.value;
+  if (!Array.isArray(responses)) return { total: null, results: [] };
+
+  const results: GraphFileHit[] = [];
+  let total: number | null = null;
+
+  for (const response of responses) {
+    const containers = (response as { hitsContainers?: unknown[] })?.hitsContainers;
+    if (!Array.isArray(containers)) continue;
+    for (const container of containers) {
+      const c = (container ?? {}) as { hits?: unknown[]; total?: unknown };
+      if (typeof c.total === "number" && Number.isFinite(c.total)) {
+        total = (total ?? 0) + c.total;
+      }
+      if (!Array.isArray(c.hits)) continue;
+      for (const hit of c.hits) {
+        const h = (hit ?? {}) as Record<string, unknown>;
+        const ref = shapeFileRef(h.resource);
+        results.push({
+          ...ref,
+          // For a driveItem hit `hitId` *is* the item id, which makes it the
+          // fallback when a hit came back without its resource expanded.
+          item_id: ref.item_id ?? (typeof h.hitId === "string" ? h.hitId : null),
+          snippet: cleanSummary(h.summary),
+        });
+      }
+    }
+  }
+  return { total, results };
+}
+
+/** Flatten a driveItem collection (a `children` listing) for browsing. */
+export function shapeFileEntries(raw: unknown): GraphFileEntry[] {
+  const items = (raw as { value?: unknown[] })?.value;
+  if (!Array.isArray(items)) return [];
+  return items.map((item) => {
+    const it = unwrapRemote(item);
+    const folder = it.folder as Record<string, unknown> | undefined;
+    // The `folder` facet is the counterpart of `file`: present on folders only.
+    const isFolder = folder != null && typeof folder === "object";
+    const count = folder?.childCount;
+    return {
+      ...shapeFileRef(it),
+      isFolder,
+      child_count:
+        isFolder && typeof count === "number" && Number.isFinite(count) ? count : null,
+    };
+  });
+}
+
+export interface GraphFileSearchResult {
+  /** The KQL the app composed, so the model can see how its arguments were
+   *  read — and correct them — instead of guessing why a filter didn't bite. */
+  query: string;
+  /** Graph's reported match count; null when Search didn't report one. */
+  total: number | null;
+  results: GraphFileHit[];
+}
+
+registerAppTool({
+  name: "graph_files_search",
+  namespace: "graph",
+  description:
+    "Search the files the signed-in person can open — their own OneDrive and " +
+    "every SharePoint site they have access to. Pass plain words in `query`: the " +
+    "app builds the search expression, so search syntax is neither needed nor " +
+    "honoured. Narrow with `site` (a SharePoint site URL) or `file_type` (an " +
+    "extension like docx or pdf). Returns each file's name, folder, site, " +
+    "modified date, size and a snippet of the matched text, plus the drive_id + " +
+    "item_id pair that identifies a file to the tools that act on one. Acts as " +
+    "the current signed-in person.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description:
+          'Words to look for, e.g. "q3 budget forecast". Plain terms only — ' +
+          "operators and field:value syntax are stripped, not interpreted.",
+      },
+      site: {
+        type: "string",
+        description:
+          "Restrict to one SharePoint site, given as its URL " +
+          "(https://contoso.sharepoint.com/sites/Finance).",
+      },
+      file_type: {
+        type: "string",
+        description: "Restrict to one file extension, e.g. docx, xlsx, pdf.",
+      },
+      limit: {
+        type: "integer",
+        description: "How many files to return, 1-25 (default 10).",
+      },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
+  execute: async (args, { userId }): Promise<GraphFileSearchResult> => {
+    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25);
+    const query = composeFileQuery({
+      query: typeof args.query === "string" ? args.query : "",
+      site: typeof args.site === "string" ? args.site : null,
+      fileType: typeof args.file_type === "string" ? args.file_type : null,
+    });
+    if (!query) {
+      throw new Error(
+        "query is required — the words to look for, e.g. \"q3 budget\". " +
+          "Nothing searchable was left after the arguments were parsed.",
+      );
+    }
+
+    const raw = await graphFetch(userId, "/search/query", {
+      method: "POST",
+      scopes: FILE_SEARCH_SCOPES,
+      body: {
+        requests: [
+          {
+            // driveItem covers OneDrive *and* SharePoint document libraries in
+            // one request. `listItem` and `site` are combinable with it here,
+            // but they'd fold list rows and site pages into a *file* search.
+            entityTypes: ["driveItem"],
+            query: { queryString: query },
+            from: 0,
+            size: limit,
+            // Deliberately no `fields`: unlike `$select` it *replaces* the
+            // returned resource properties, and a hit stripped of
+            // `parentReference` loses `drive_id` — the handoff this tool exists
+            // to produce. `shapeSearchHits` is the allowlist instead, so no raw
+            // Graph payload reaches the model either way.
+          },
+        ],
+      },
+    });
+
+    const { total, results } = shapeSearchHits(raw);
+    return { query, total, results };
+  },
+});
+
+export interface GraphFileListResult {
+  /** Which place was listed, echoed back because the arguments select it
+   *  implicitly. */
+  location: "onedrive-root" | "folder";
+  items: GraphFileEntry[];
+}
+
+/**
+ * Browse a known location. Two modes — the person's OneDrive root, or one named
+ * folder in any drive they can reach.
+ *
+ * ## Why there is no `recent` mode
+ * The obvious third mode would be `/me/drive/recent` (and its sibling
+ * `/me/drive/sharedWithMe`), but both are **deprecated and already degrading**:
+ * `sharedWithMe` is currently clamped to roughly one result by a live Microsoft
+ * mitigation, and both stop returning data in **November 2026**, with no
+ * replacement endpoint. Shipping a tool mode on top of that would build a
+ * capability with a known expiry date and no migration path — a model would learn
+ * to reach for it and then quietly get nothing back. If "files I touched lately"
+ * is wanted later, `GET /me/drive/search(q=…)` (note: no `/root`) is the surface
+ * that still reaches shared items; it is a search, so it belongs in
+ * `graph_files_search`, not here.
+ */
+registerAppTool({
+  name: "graph_files_list",
+  namespace: "graph",
+  description:
+    "Browse the signed-in person's files instead of searching them. With no " +
+    "arguments, lists the top level of their own OneDrive; pass folder_item_id " +
+    "(plus drive_id for a SharePoint or shared drive) to list that folder's " +
+    "contents. Entries carry the same drive_id + item_id pair as a search result, " +
+    "and folders report isFolder + child_count so you can walk down into them. " +
+    "Use graph_files_search to find a file by its words instead. Acts as the " +
+    "current signed-in person.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      folder_item_id: {
+        type: "string",
+        description:
+          "driveItem id of the folder to list. Omit for the top level of the " +
+          "person's own OneDrive.",
+      },
+      drive_id: {
+        type: "string",
+        description:
+          "Drive holding that folder. Omit for the person's own OneDrive.",
+      },
+      limit: {
+        type: "integer",
+        description: "How many entries to return, 1-50 (default 20).",
+      },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args, { userId }): Promise<GraphFileListResult> => {
+    const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 50);
+    const folderId =
+      typeof args.folder_item_id === "string" ? args.folder_item_id.trim() : "";
+    const driveId =
+      typeof args.drive_id === "string" ? args.drive_id.trim() || null : null;
+
+    const location: GraphFileListResult["location"] = folderId
+      ? "folder"
+      : "onedrive-root";
+
+    const base = folderId
+      ? // Same encoded path builder as the ingest tool, so a crafted id can't
+        // escape its segment and address an unrelated resource.
+        `${driveItemPath(folderId, driveId)}/children`
+      : "/me/drive/root/children";
+
+    // No `$orderby`: children come back name-ordered already, and it is not
+    // supported on every drive type — a 400 here would break browsing outright.
+    const raw = await graphFetch(
+      userId,
+      `${base}?$select=${DRIVE_ITEM_LIST_SELECT}&$top=${limit}`,
+      { scopes: FILE_SCOPES },
+    );
+    return { location, items: shapeFileEntries(raw) };
   },
 });

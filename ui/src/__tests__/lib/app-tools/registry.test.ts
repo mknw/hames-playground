@@ -14,9 +14,12 @@ vi.mock("../../../lib/harness-patterns/assert.server", () => ({
 }));
 
 const getRequestUserId = vi.fn<() => string | null>(() => "oid-1");
+const getRequestSessionId = vi.fn<() => string | null>(() => "sess-1");
 vi.mock("../../../lib/harness-client/request-user.server", () => ({
   getRequestUserId: () => getRequestUserId(),
+  getRequestSessionId: () => getRequestSessionId(),
   runWithUserId: (_u: string, fn: () => Promise<unknown>) => fn(),
+  runWithRequestContext: (_c: unknown, fn: () => Promise<unknown>) => fn(),
 }));
 
 const graphFetch = vi.fn();
@@ -39,6 +42,7 @@ import { shapeMe } from "../../../lib/app-tools/graph.server";
 beforeEach(() => {
   vi.clearAllMocks();
   getRequestUserId.mockReturnValue("oid-1");
+  getRequestSessionId.mockReturnValue("sess-1");
 });
 
 describe("registry wiring", () => {
@@ -102,6 +106,34 @@ describe("runAppTool", () => {
     const res = await runAppTool("test_echo", { a: 1 });
     expect(res.success).toBe(true);
     expect(res.data).toEqual({ args: { a: 1 }, user: "oid-1" });
+  });
+
+  it("passes the request-scoped sessionId to the executor (not from args)", async () => {
+    registerAppTool({
+      name: "test_ctx",
+      namespace: "test",
+      description: "ctx",
+      inputSchema: { type: "object", properties: {} },
+      execute: async (_args, ctx) => ({ ...ctx }),
+    });
+    getRequestSessionId.mockReturnValue("sess-real");
+    const res = await runAppTool("test_ctx", { sessionId: "attacker-session" });
+    expect(res.data).toEqual({ userId: "oid-1", sessionId: "sess-real" });
+  });
+
+  it("hands the executor sessionId: null when a user scope carries no session", async () => {
+    registerAppTool({
+      name: "test_ctx_null",
+      namespace: "test",
+      description: "ctx",
+      inputSchema: { type: "object", properties: {} },
+      execute: async (_args, ctx) => ({ ...ctx }),
+    });
+    // `runWithUserId` (background summarization, legacy call sites) — a user but
+    // no conversation. Session-dependent tools must see null, not a guess.
+    getRequestSessionId.mockReturnValue(null);
+    const res = await runAppTool("test_ctx_null", {});
+    expect(res.data).toEqual({ userId: "oid-1", sessionId: null });
   });
 });
 

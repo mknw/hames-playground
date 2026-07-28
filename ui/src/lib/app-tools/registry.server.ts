@@ -15,20 +15,31 @@
  * - The schema advertised to the model has **no credential field** (#107
  *   principle 1). The user id comes from `getRequestUserId()` at call time, so
  *   the model cannot choose whose data to read.
- * - Executors receive `{ userId }` and resolve tokens themselves; a token must
- *   never appear in args, results, logs or the event stream.
+ * - Executors receive `{ userId, sessionId }` and resolve tokens themselves; a
+ *   token must never appear in args, results, logs or the event stream.
  * - Errors become `{ success: false, error }` rather than throwing, so one
  *   failing tool degrades a turn instead of killing a run.
  */
 import { assertServerOnImport } from "../harness-patterns/assert.server";
 import type { ToolCallResult, MCPToolDescription } from "../harness-patterns/types";
-import { getRequestUserId } from "../harness-client/request-user.server";
+import {
+  getRequestUserId,
+  getRequestSessionId,
+} from "../harness-client/request-user.server";
 
 assertServerOnImport();
 
 export interface AppToolContext {
   /** Authenticated user id (Entra `oid`), resolved server-side. */
   userId: string;
+  /**
+   * Conversation this call belongs to, resolved server-side like `userId` — so a
+   * tool that writes into per-conversation storage (the Data Stash) cannot be
+   * pointed at someone else's conversation by the model. `null` off the request
+   * path (e.g. a background summarization); tools that need it must refuse
+   * rather than guess a session.
+   */
+  sessionId: string | null;
 }
 
 export interface AppToolDefinition {
@@ -76,9 +87,9 @@ export function __resetAppTools(): void {
 }
 
 /**
- * Execute a registered app tool. Resolves the caller's user id from the
- * request scope — established by `runWithUserId()` in both the interactive
- * path (`runTurn`) and background runs (`runAgentInBackground`).
+ * Execute a registered app tool. Resolves the caller's user id and conversation
+ * from the request scope — established by `runWithRequestContext()` in both the
+ * interactive path (`runTurn`) and background runs (`runAgentInBackground`).
  */
 export async function runAppTool(
   name: string,
@@ -92,7 +103,7 @@ export async function runAppTool(
   const userId = getRequestUserId();
   if (!userId) {
     // No user scope — e.g. a background summarization path outside
-    // runWithUserId. Refuse rather than guess an identity.
+    // runWithRequestContext. Refuse rather than guess an identity.
     return {
       success: false,
       data: null,
@@ -101,7 +112,10 @@ export async function runAppTool(
   }
 
   try {
-    return { success: true, data: await def.execute(args, { userId }) };
+    // sessionId may legitimately be null (a user scope without a conversation);
+    // it is the tool's job to refuse if it needs one.
+    const sessionId = getRequestSessionId();
+    return { success: true, data: await def.execute(args, { userId, sessionId }) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // Deliberately no stack/credential detail in the tool result — it flows

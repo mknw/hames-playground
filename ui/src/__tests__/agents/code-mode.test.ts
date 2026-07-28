@@ -87,6 +87,8 @@ const getRequestUserIdMock = vi.fn(() => null as string | null)
 vi.mock('../../lib/harness-client/request-user.server', () => ({
   getRequestUserId: getRequestUserIdMock,
   runWithUserId: (_uid: string, fn: () => Promise<unknown>) => fn(),
+  getRequestSessionId: vi.fn(() => null),
+  runWithRequestContext: (_c: unknown, fn: () => Promise<unknown>) => fn(),
 }))
 
 describe('code-mode agent — router → routes(chain(actorCritic, synth))', () => {

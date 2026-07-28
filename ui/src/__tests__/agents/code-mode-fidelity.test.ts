@@ -111,6 +111,8 @@ vi.mock('../../lib/harness-client/session.server', () => ({
 vi.mock('../../lib/harness-client/request-user.server', () => ({
   getRequestUserId: vi.fn(() => null),
   runWithUserId: (_uid: string, fn: () => Promise<unknown>) => fn(),
+  getRequestSessionId: vi.fn(() => null),
+  runWithRequestContext: (_c: unknown, fn: () => Promise<unknown>) => fn(),
 }))
 
 describe('code-mode agent — synth fidelity + script-hygiene guidance', () => {

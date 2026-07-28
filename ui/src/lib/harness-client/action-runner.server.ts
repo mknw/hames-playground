@@ -19,7 +19,7 @@
 import { assertServerOnImport } from "../harness-patterns/assert.server";
 import { harness, createContext, serializeContext } from "../harness-patterns";
 import { getOrBuildPatterns, saveSession, type SessionData } from "./session.server";
-import { runWithUserId } from "./request-user.server";
+import { runWithRequestContext } from "./request-user.server";
 import {
   saveConversation as dbSaveConversation,
   setConversationStatus as dbSetConversationStatus,
@@ -88,8 +88,10 @@ export async function seedActionRow(
  *
  * Always a fresh first run — it never `continueSession`s the seeded
  * placeholder (which would duplicate the user_message). Wrapped in
- * `runWithUserId` so pattern closures resolve the owner; settings fall back to
- * `DEFAULT_SETTINGS` (no request-scoped settings off the request path). The
+ * `runWithRequestContext` so pattern closures resolve the owner and the
+ * conversation (the `runId` *is* this run's sessionId — the route uses it as
+ * both the conversation id and the Data Stash session key); settings fall back
+ * to `DEFAULT_SETTINGS` (no request-scoped settings off the request path). The
  * harness itself never throws (it catches internally and returns an `error`
  * status), so the catch here only guards pattern-construction failures.
  */
@@ -101,7 +103,7 @@ export async function runAgentInBackground(
   trigger: ActionTrigger,
 ): Promise<void> {
   try {
-    await runWithUserId(userId, async () => {
+    await runWithRequestContext({ userId, sessionId: runId }, async () => {
       const patterns = await getOrBuildPatterns(runId, agentId);
       const agent = harness(...patterns);
       const result = await agent(message, runId, {

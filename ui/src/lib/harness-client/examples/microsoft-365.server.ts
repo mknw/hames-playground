@@ -6,11 +6,12 @@
  * delegated per-user token server-side (see `lib/app-tools/graph.server.ts`),
  * so Entra enforces the scope and no credential ever reaches the model.
  *
- * Tools available: `graph_me` (profile), `graph_calendar_today` (today's
- * events), `graph_mail_recent` (inbox, optionally unread-only) — enough for a
- * "what does my day look like?" briefing. Further graph tools appear in
- * `tools.graph` automatically once registered, so this agent needs no change to
- * pick them up.
+ * Profile, today's calendar and recent inbox mail — enough for a "what does my
+ * day look like?" briefing, which the loop assembles from several calls in one
+ * turn — plus finding and browsing the person's OneDrive/SharePoint files.
+ *
+ * It composes an explicit subset of `tools.graph` rather than the whole
+ * namespace: see {@link MICROSOFT_365_TOOLS} for which tools, and why.
  */
 "use server";
 
@@ -24,9 +25,39 @@ import {
 import type { SessionData } from "../session.server";
 import type { AgentConfig } from "../registry.server";
 
+/**
+ * The graph tools this agent composes, in the order it should reach for them.
+ *
+ * **To give this agent another tool, add its name here.** An explicit list, not
+ * all of `tools.graph`, because "a tool exists" and "this agent can do something
+ * useful with it" are different questions — and for one tool the answer is no:
+ *
+ * `graph_file_ingest` is absent deliberately. It copies a file's bytes into the
+ * conversation's Data Stash, where they are reachable only through a retriever
+ * pattern — and this agent has none. Exposing it would advertise a capability
+ * whose payoff the agent can't deliver: the model would ingest a file, get back a
+ * document id, and have no way to read a word of it. The file tools it *does*
+ * have (search + browse) are the half that works without a retriever.
+ *
+ * Nothing here gates the *registry*: a newly registered graph tool still appears
+ * in `tools.graph` for every other consumer. This list only decides what this one
+ * agent's loop is handed.
+ */
+export const MICROSOFT_365_TOOLS = [
+  "graph_me",
+  "graph_calendar_today",
+  "graph_mail_recent",
+  "graph_files_search",
+  "graph_files_list",
+] as const;
+
 async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools();
-  const graphTools = tools.graph ?? [];
+  const available = new Set(tools.graph ?? []);
+  // Filtering the allowlist (rather than the namespace) keeps a tool that isn't
+  // registered — a typo, a module not imported — out of the loop's tool list
+  // instead of into it. Same shape as code-mode's meta-tool subset.
+  const graphTools = MICROSOFT_365_TOOLS.filter((t) => available.has(t));
 
   const graphPattern = simpleLoop<SessionData>(
     createLoopControllerAdapter(graphTools),

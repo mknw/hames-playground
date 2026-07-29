@@ -11,7 +11,7 @@ import { listConversations, type OpenReferenceTarget } from '~/lib/harness-clien
 import { newSessionId } from '~/lib/session-id'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 import { createChainProgress, type ChainProgressController } from '~/components/ark-ui/useChainProgress'
-import { DEFAULT_RUN_STATE, type SessionRunState } from '~/lib/run-registry'
+import { DEFAULT_RUN_STATE, countRunning, type SessionRunState } from '~/lib/run-registry'
 
 export default function Home() {
   // Conversation a user is currently viewing. Initial value is a fresh id so
@@ -139,6 +139,11 @@ export default function Home() {
       [sid]: { ...DEFAULT_RUN_STATE, ...prev[sid], ...patch },
     }))
   }
+
+  // How many conversations are streaming right now. Drives the sidebar's
+  // header badge and the composer's cap guard (#105 slice 2) — the count is
+  // only knowable here, since each ChatInterface sees just its own session.
+  const runningCount = createMemo(() => countRunning(runStates()))
 
   // ---------------------------------------------------------------------------
   // Per-session chat message buffers (#105 slice 1)
@@ -362,6 +367,7 @@ export default function Home() {
               onNewChat={handleNewChat}
               onTitleRegenerated={handleTitleUpdated}
               getRunState={getRunState}
+              runningCount={runningCount()}
             />
             <div flex="1" overflow="hidden">
               <ChatInterface
@@ -381,6 +387,7 @@ export default function Home() {
                 updateRunState={updateRunState}
                 getMessages={getMessages}
                 setMessages={setMessages}
+                runningCount={runningCount()}
                 registerAbortController={registerAbortController}
                 unregisterAbortController={unregisterAbortController}
                 onTitleUpdated={handleTitleUpdated}

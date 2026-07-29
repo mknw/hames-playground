@@ -23,3 +23,40 @@ export const DEFAULT_RUN_STATE: SessionRunState = {
   isProcessing: false,
   runningTool: null,
 }
+
+// ============================================================================
+// Concurrency policy (#105 slice 2)
+// ============================================================================
+
+/** Number of sessions with a stream currently open. */
+export function countRunning(states: Record<string, SessionRunState>): number {
+  let n = 0
+  for (const s of Object.values(states)) if (s.isProcessing) n++
+  return n
+}
+
+/**
+ * Whether starting a *new* run would exceed the concurrency cap.
+ *
+ * A session that is already running is never "at cap" on its own account —
+ * its composer is blocked by `isProcessing` instead, and counting it here
+ * would refuse a turn that costs no additional concurrency.
+ *
+ * A non-positive or non-finite cap means "no cap" rather than "block
+ * everything", so a corrupted localStorage value can't lock the user out.
+ */
+export function isAtConcurrencyCap(args: {
+  runningCount: number
+  cap: number
+  /** True when the session attempting to send is itself already running. */
+  thisSessionRunning: boolean
+}): boolean {
+  if (!Number.isFinite(args.cap) || args.cap <= 0) return false
+  if (args.thisSessionRunning) return false
+  return args.runningCount >= args.cap
+}
+
+/** Composer banner shown when a send is refused for hitting the cap. */
+export function capReachedMessage(cap: number): string {
+  return `max ${cap} reached — wait for a session to stop`
+}

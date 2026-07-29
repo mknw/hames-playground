@@ -37,7 +37,11 @@ import { getSettings } from '~/lib/settings-store'
 import { parseChatStream, type DoneEventData } from '~/lib/sse-client'
 import type { GraphElement } from './SupportPanel'
 import type { ContextEvent, UnifiedContext, ControllerActionEventData } from '~/lib/harness-patterns'
-import type { SessionRunState } from '~/lib/run-registry'
+import {
+  capReachedMessage,
+  isAtConcurrencyCap,
+  type SessionRunState,
+} from '~/lib/run-registry'
 
 // ============================================================================
 // Types
@@ -85,6 +89,9 @@ export interface ChatInterfaceProps {
     sessionId: string,
     next: Message[] | ((prev: Message[]) => Message[]),
   ) => void
+  /** How many sessions are streaming right now, across the whole route.
+   *  Only the route can know this — used for the concurrency cap (#105). */
+  runningCount: number
   /** Push-driven sidebar title update — fired when the server emits a
    *  `title_updated` SSE event after the first-turn LLM title resolves.
    *  Route patches its threads cache in-place; no refetch required. */
@@ -140,6 +147,17 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const currentRunState = () => props.getRunState(props.sessionId)
   const isProcessing = () => currentRunState().isProcessing
   const runningTool = () => currentRunState().runningTool
+
+  // Concurrency cap (#105 slice 2). Multiple sessions may stream at once; at
+  // the cap a send into an *idle* conversation is refused outright rather
+  // than queued, and nothing already running is ever interrupted.
+  const concurrencyCap = () => getSettings().maxConcurrentRuns
+  const atCap = () =>
+    isAtConcurrencyCap({
+      runningCount: props.runningCount,
+      cap: concurrencyCap(),
+      thisSessionRunning: isProcessing(),
+    })
 
   // When the parent swaps in a different sessionId (sidebar selection or
   // "+ New Chat"), reset local state and try to rehydrate from persisted
@@ -239,6 +257,10 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   // draft is dropped — the user chose not to interact). Once promoted, the
   // thread is a normal conversation and never gates again.
   const handleSendMessage = (content: string) => {
+    // Hard stop at the cap. The composer is already disabled in this state,
+    // so this only catches a send that raced the count going up (e.g. another
+    // thread started streaming between keystroke and submit).
+    if (atCap()) return
     if (currentKind() === 'action') {
       setPromotionDraft(content)
       return
@@ -602,11 +624,13 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       <div border="t dark-border-primary" p="4" bg="dark-bg-secondary/80" backdrop-blur="sm">
         <ChatInput
           onSend={handleSendMessage}
-          disabled={isProcessing() || !!props.embeddingSources}
+          disabled={isProcessing() || atCap() || !!props.embeddingSources}
           blockedMessage={
             props.embeddingSources
               ? 'Embedding sources… you can ask once indexing finishes.'
-              : blockedMessage()
+              : atCap()
+                ? capReachedMessage(concurrencyCap())
+                : blockedMessage()
           }
           focusToken={props.focusInputToken}
         />

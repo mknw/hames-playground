@@ -97,6 +97,9 @@ interface ChatSidebarProps {
    *  spin while *its* run is in flight, regardless of which thread is
    *  selected. Optional so the sidebar still renders without it. */
   getRunState?: (sessionId: string) => SessionRunState
+  /** How many conversations are streaming right now — surfaced as a header
+   *  badge so the count is visible without hunting for spinners (#105). */
+  runningCount?: number
 }
 
 /**
@@ -221,7 +224,31 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
       {/* Header with Toggle */}
       <div p="4" border="b dark-border-primary" flex="~" items="center" justify="between">
         {!props.collapsed && (
-          <span text="sm dark-text-primary" font="medium">Chat History</span>
+          <div flex="~" items="center" gap="2">
+            <span text="sm dark-text-primary" font="medium">Chat History</span>
+            {/* Running-count badge — only present while something streams. */}
+            <Show when={(props.runningCount ?? 0) > 0}>
+              <span
+                title={`${props.runningCount} conversation${props.runningCount === 1 ? '' : 's'} running`}
+                flex="~"
+                items="center"
+                gap="1"
+                p="x-1.5"
+                rounded="full"
+                bg="cyber-700/40"
+                border="1 neon-cyan/30"
+                text="2xs neon-cyan"
+                font="medium"
+              >
+                <span
+                  aria-hidden="true"
+                  class="i-mdi-loading animate-spin"
+                  style={{ width: '10px', height: '10px' }}
+                />
+                {props.runningCount}
+              </span>
+            </Show>
+          </div>
         )}
         <button
           onClick={() => props.onToggle()}

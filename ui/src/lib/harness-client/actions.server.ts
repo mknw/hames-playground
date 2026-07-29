@@ -15,6 +15,8 @@ import {
   harness,
   resumeHarness,
   continueSession,
+  createContext,
+  serializeContext,
   type HarnessResultScoped,
   type ContextEvent,
 } from "../harness-patterns";
@@ -29,6 +31,8 @@ import { getAgent, getAgentMetadata } from "./registry.server";
 import {
   listConversations as dbListConversations,
   promoteConversation as dbPromoteConversation,
+  saveConversation as dbSaveConversation,
+  deriveTitle,
   type ConversationKind,
   type ConversationSource,
   type ConversationStatus,
@@ -115,6 +119,30 @@ async function runTurn(
     // expected to mint a new sessionId on agent change, but we double-guard
     // here so a stale id can't continue with a different agent's patterns.
     const loaded = await loadSession(sessionId, userId);
+
+    // Brand-new conversation: persist the row BEFORE the run so it exists in
+    // the sidebar for its whole first turn (#105) — previously the row only
+    // appeared at run end, so an in-flight new chat was invisible (and lost
+    // outright if the user clicked "+ New Chat" again, dropping its
+    // placeholder). Mirrors `seedActionRow`: a minimal valid context carrying
+    // the user message (so a mid-run reload still replays it) and a title
+    // derived from the message; the run's own `saveSession` below overwrites
+    // the blob, and the first-turn LLM title replaces the derived one via the
+    // existing `title_updated` path. Guarded on `!loaded`, so pre-seeded
+    // action rows (which always exist before their run) are never touched.
+    if (!loaded) {
+      await dbSaveConversation({
+        id: sessionId,
+        userId,
+        agentId,
+        title: deriveTitle(message),
+        serializedContext: serializeContext(
+          createContext(message, undefined, sessionId),
+        ),
+        status: "running",
+      });
+    }
+
     const patterns = await getOrBuildPatterns(sessionId, agentId);
 
     let result: HarnessResultScoped<SessionData>;

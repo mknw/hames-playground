@@ -93,6 +93,11 @@ export interface ChatInterfaceProps {
   /** How many sessions are streaming right now, across the whole route.
    *  Only the route can know this — used for the concurrency cap (#105). */
   runningCount: number
+  /** Fired once per run, on the first SSE event. By then the server has
+   *  persisted the conversation row (the early save in `runTurn` strictly
+   *  precedes event emission), so the route can refetch the sidebar and the
+   *  new thread appears with its derived title while still streaming (#105). */
+  onRunStarted?: (sessionId: string) => void
   /** Fired when a run finishes, with how it ended. The route marks the
    *  thread so a run that lands while the user is elsewhere is visible
    *  (#105). Not fired for an abort — that's page teardown. */
@@ -347,10 +352,17 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       }
 
       let finalResult: DoneEventData | null = null
+      let runAnnounced = false
 
       // Typed SSE iteration — the parser handles frame buffering, malformed
       // JSON, partial reads, and yields discriminated `ChatStreamEvent`s.
       for await (const sseEvt of parseChatStream(response)) {
+        // First event of the stream: the server-side early persist has
+        // committed, so the sidebar can pick up the new row.
+        if (!runAnnounced) {
+          runAnnounced = true
+          props.onRunStarted?.(runSessionId)
+        }
         if (sseEvt.event === 'done') {
           finalResult = sseEvt.data as DoneEventData
           continue

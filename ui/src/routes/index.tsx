@@ -176,7 +176,18 @@ export default function Home() {
     })
   }
 
+  // First SSE event of a run — the early-persisted row is now in Postgres, so
+  // a refetch surfaces the new conversation (derived title + live indicator)
+  // while it is still streaming. Replaces the placeholder in the same pass.
+  const handleRunStarted = (_sid: string) => {
+    refetchThreads()
+  }
+
   const handleRunSettled = (sid: string, outcome: RunOutcome) => {
+    // Refetch regardless of which thread is in view: the run's final save
+    // bumped title/status server-side, and for a backgrounded new chat this
+    // is what makes it appear at all if the start-refetch was missed.
+    refetchThreads()
     // The user watched this one land — nothing to announce, and a mark here
     // would just need dismissing.
     if (sid === selectedSessionId()) return
@@ -446,6 +457,7 @@ export default function Home() {
                 getMessages={getMessages}
                 setMessages={setMessages}
                 runningCount={runningCount()}
+                onRunStarted={handleRunStarted}
                 onRunSettled={handleRunSettled}
                 registerAbortController={registerAbortController}
                 unregisterAbortController={unregisterAbortController}

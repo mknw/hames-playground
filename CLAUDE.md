@@ -122,10 +122,20 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 | Client | Role | Chain |
 |--------|------|-------|
 | `RouterAnthropic` | Intent classification | AnthropicHaiku45 → AnthropicSonnet5 |
-| `ControllerAnthropic` | Tool loop controllers (simpleLoop + actor) | AnthropicSonnet5 → AnthropicSonnet46 (backstop stays Sonnet-tier — no Haiku fallback on structured output) |
+| `ControllerAnthropic` | simpleLoop tool-loop controller | AnthropicSonnet5**NoThink** → AnthropicSonnet46**NoThink** (backstop stays Sonnet-tier — no Haiku fallback on structured output) |
+| `ActorAnthropic` | actorCritic actor | AnthropicSonnet5 → AnthropicSonnet46 (same models, thinking left ON) |
 | `CriticAnthropic` | Evaluation/critique | AnthropicHaiku45 → AnthropicSonnet5 |
 | `SynthesizerAnthropic` | Response synthesis | AnthropicSonnet5 → AnthropicHaiku45 |
 | `DescribeAnthropic` | Lightweight tool result summarization, titles, intent compaction (`compactIntent`) | AnthropicHaiku45 |
+
+**Extended thinking (#139):** these models think by default — no request asks for
+it — and the trace is never exposed (empty string + signature), so it cannot feed
+`reasoning`. Measured on 12 captured controller prompts × 6 samples: the simpleLoop
+controller is better WITHOUT it (72/72 valid actions vs 70/72; median output 438 →
+249 tokens; it stops re-querying when it already holds the answer), so
+`ControllerAnthropic` uses the `*NoThink` clients. The actor, router, critic and
+synthesizer keep thinking — unmeasured, and the corpus had no actor prompts. A
+thinking-only response with no text is retried once by the adapters.
 
 **Output caps + truncation recovery:** Anthropic client `max_tokens` are 32768 (Sonnet 5) / 16384 (Sonnet 4.6, Haiku 4.5) — mirrored in `CLIENT_MAX_OUTPUT_TOKENS` (`ui/src/lib/settings.ts`); keep the two in sync. A controller response that hits its cap truncates mid-JSON (historically: `BamlValidationError: missing status/is_final` when a sandbox actor inlined a huge script into `tool_args`). The adapters detect cap-hits and do ONE corrective retry with truncation guidance appended to the per-call `context`; the loops emit truncation-specific feedback instead of generic "invalid JSON" when `tool_args` were cut off (`llmCallHitOutputCap`).
 

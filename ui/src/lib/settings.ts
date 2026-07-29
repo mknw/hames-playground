@@ -92,6 +92,7 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   CustomOpus4: 200_000,
   CustomSonnet4: 200_000,
   AnthropicSonnet5: 1_000_000,
+  AnthropicSonnet5NoThink: 1_000_000,   // #139
   // Cerebras — separate-quota safety nets at end of each fallback chain
   CerebrasGPT120B: 131_072,        // gpt-oss-120b
   CerebrasZaiGLM4_7: 131_072,      // zai-glm-4.7
@@ -105,6 +106,7 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic-only chains (dev default) → Sonnet 4.6 / Haiku 4.5, 200K each.
   RouterAnthropic: 200_000,
   ControllerAnthropic: 200_000,
+  ActorAnthropic: 200_000,        // #139 — actor chain, split from ControllerAnthropic
   CriticAnthropic: 200_000,
   SynthesizerAnthropic: 200_000,
   DescribeAnthropic: 200_000,
@@ -136,6 +138,11 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   AnthropicSonnet5: 32_768,
   AnthropicSonnet46: 16_384,
+  // #139 thinking-disabled twins — same models, so same caps. Missing entries
+  // here would make llmCallHitOutputCap() blind and silently disable the
+  // truncation retry for the controller.
+  AnthropicSonnet5NoThink: 32_768,
+  AnthropicSonnet46NoThink: 16_384,
   AnthropicHaiku45: 16_384,
   AnthropicOpus4: 4_096,
 }
@@ -155,6 +162,9 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
 export const CLIENT_PRICING: Record<string, { inPerMTok: number; outPerMTok: number }> = {
   AnthropicSonnet5: { inPerMTok: 2.0, outPerMTok: 10.0 },
   AnthropicSonnet46: { inPerMTok: 3.0, outPerMTok: 15.0 },
+  // #139 thinking-disabled twins — identical models, identical rates.
+  AnthropicSonnet5NoThink: { inPerMTok: 2.0, outPerMTok: 10.0 },
+  AnthropicSonnet46NoThink: { inPerMTok: 3.0, outPerMTok: 15.0 },
   AnthropicHaiku45: { inPerMTok: 1.0, outPerMTok: 5.0 },
   AnthropicOpus4: { inPerMTok: 15.0, outPerMTok: 75.0 },
 }

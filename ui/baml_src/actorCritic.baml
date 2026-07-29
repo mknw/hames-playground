@@ -139,7 +139,10 @@ function ActorController(
   attempt_n: int?,
   max_attempts: int?
 ) -> ControllerAction {
-  client ControllerAnthropic
+  // ActorAnthropic, not ControllerAnthropic: same models, but thinking stays ON
+  // here. #139 disabled it for the simpleLoop controller on measured evidence
+  // that did not cover this pattern at all.
+  client ActorAnthropic
   prompt #"
     {# ────────── SYSTEM · static requirements: role · tools · examples ────────── #}
     {{ _.role("system") }}

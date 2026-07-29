@@ -1,6 +1,7 @@
 import { Splitter } from '@ark-ui/solid/splitter'
 import { createSignal, createMemo, createResource, createEffect, onCleanup, onMount } from 'solid-js'
-import { ChatInterface, type SessionRunState } from '~/components/ark-ui/ChatInterface'
+import { ChatInterface } from '~/components/ark-ui/ChatInterface'
+import type { Message } from '~/components/ark-ui/ChatMessages'
 import { ChatSidebar, mergeThreadsWithPlaceholder } from '~/components/ark-ui/ChatSidebar'
 import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
 import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns'
@@ -10,8 +11,7 @@ import { listConversations, type OpenReferenceTarget } from '~/lib/harness-clien
 import { newSessionId } from '~/lib/session-id'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 import { createChainProgress, type ChainProgressController } from '~/components/ark-ui/useChainProgress'
-
-const DEFAULT_RUN_STATE: SessionRunState = { isProcessing: false, runningTool: null }
+import { DEFAULT_RUN_STATE, type SessionRunState } from '~/lib/run-registry'
 
 export default function Home() {
   // Conversation a user is currently viewing. Initial value is a fresh id so
@@ -140,6 +140,47 @@ export default function Home() {
     }))
   }
 
+  // ---------------------------------------------------------------------------
+  // Per-session chat message buffers (#105 slice 1)
+  // ---------------------------------------------------------------------------
+  // The in-flight turn is NOT persisted until the run ends, so a buffer that
+  // lives in ChatInterface's closure is destroyed the moment the user switches
+  // threads — the run finishes server-side but the live view never reattaches.
+  // Hoisting the buffer here (next to `progressBySession`) means the streaming
+  // turn keeps accumulating into its own session's array while the user reads
+  // another chat, and switching back just renders it.
+  //
+  // Buffers for idle sessions are disposable: the hydration effect reloads
+  // those from Postgres, which is authoritative once a run has ended. Only a
+  // *running* session's buffer is irreplaceable, so `pruneIdleBuffers` keeps
+  // the map from growing without bound as the user browses.
+  const messagesBySession = new Map<string, ReturnType<typeof createSignal<Message[]>>>()
+  const messagesSignal = (sid: string) => {
+    let sig = messagesBySession.get(sid)
+    if (!sig) {
+      sig = createSignal<Message[]>([])
+      messagesBySession.set(sid, sig)
+    }
+    return sig
+  }
+  const getMessages = (sid: string): Message[] => messagesSignal(sid)[0]()
+  const setMessages = (
+    sid: string,
+    next: Message[] | ((prev: Message[]) => Message[]),
+  ) => {
+    const set = messagesSignal(sid)[1]
+    // Solid reads a bare function argument as an updater — wrap plain arrays.
+    if (typeof next === 'function') set(next)
+    else set(() => next)
+  }
+  const pruneIdleBuffers = (keep: string) => {
+    const states = runStates()
+    for (const sid of [...messagesBySession.keys()]) {
+      if (sid === keep || states[sid]?.isProcessing) continue
+      messagesBySession.delete(sid)
+    }
+  }
+
   // AbortControllers for in-flight SSE streams. Switching sessions does NOT
   // abort — only an explicit cancel or page unload does (acceptance: "Streams
   // survive chat switches").
@@ -201,6 +242,7 @@ export default function Home() {
   const handleNewChat = () => {
     resetForNewSession()
     const id = newSessionId()
+    pruneIdleBuffers(id)
     setSelectedSessionId(id)
     setPlaceholderSessionId(id)
     setFocusInputToken(t => t + 1)
@@ -209,6 +251,7 @@ export default function Home() {
   const handleSelectThread = (threadId: string) => {
     if (threadId === selectedSessionId()) return
     resetForNewSession()
+    pruneIdleBuffers(threadId)
     setSelectedSessionId(threadId)
     // User picked an existing thread — drop the optimistic row.
     setPlaceholderSessionId(null)
@@ -318,6 +361,7 @@ export default function Home() {
               onSelectThread={handleSelectThread}
               onNewChat={handleNewChat}
               onTitleRegenerated={handleTitleUpdated}
+              getRunState={getRunState}
             />
             <div flex="1" overflow="hidden">
               <ChatInterface
@@ -335,6 +379,8 @@ export default function Home() {
                 getProgress={getProgress}
                 getRunState={getRunState}
                 updateRunState={updateRunState}
+                getMessages={getMessages}
+                setMessages={setMessages}
                 registerAbortController={registerAbortController}
                 unregisterAbortController={unregisterAbortController}
                 onTitleUpdated={handleTitleUpdated}

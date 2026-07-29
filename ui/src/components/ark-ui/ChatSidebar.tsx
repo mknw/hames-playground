@@ -1,6 +1,7 @@
 import { For, Show, createSignal } from 'solid-js'
 import { SettingsPanel } from './SettingsPanel'
 import { regenerateConversationTitle } from '../../lib/harness-client'
+import type { SessionRunState } from '../../lib/run-registry'
 
 /** Mirror of the server's ConversationKind/Status (kept local so the sidebar
  *  has no server-module import). */
@@ -92,24 +93,58 @@ interface ChatSidebarProps {
    *  LLM title. The sidebar handles the server action itself, then forwards
    *  the new title so the parent can patch its threads cache in-place. */
   onTitleRegenerated?: (sessionId: string, title: string) => void
+  /** Live per-session run state from the route registry (#105). Lets a row
+   *  spin while *its* run is in flight, regardless of which thread is
+   *  selected. Optional so the sidebar still renders without it. */
+  getRunState?: (sessionId: string) => SessionRunState
 }
 
-/** A small status indicator for action rows: spinner while running, red dot on
- *  error, amber dot when paused (awaiting approval). Done actions / all
- *  conversations render nothing. */
-const StatusBadge = (props: { kind: ThreadKind; status: ThreadStatus }) => {
-  if (props.kind !== 'action') return null
-  if (props.status === 'running') {
+/**
+ * Which leading indicator a thread row shows.
+ *
+ * A *live* run (this browser has an SSE stream open for the thread) outranks
+ * everything: it applies to chats as well as actions, and it is fresher than
+ * the row's persisted `status`, which only refreshes when the list refetches.
+ * Everything below it is the pre-existing action-row badge set — plain
+ * conversations at rest show nothing.
+ *
+ * Pure so the precedence rules can be unit-tested without rendering.
+ */
+export type RowIndicator =
+  | 'running'
+  | 'action-error'
+  | 'action-paused'
+  | 'action-done'
+  | 'none'
+
+export function rowIndicator(args: {
+  kind: ThreadKind
+  status: ThreadStatus
+  /** A run for this thread is in flight in this tab right now. */
+  live: boolean
+}): RowIndicator {
+  if (args.live) return 'running'
+  if (args.kind !== 'action') return 'none'
+  if (args.status === 'running') return 'running'
+  if (args.status === 'error') return 'action-error'
+  if (args.status === 'paused') return 'action-paused'
+  return 'action-done'
+}
+
+/** Renders the indicator chosen by {@link rowIndicator}. */
+const StatusBadge = (props: { indicator: RowIndicator; runningTool?: string | null }) => {
+  if (props.indicator === 'none') return null
+  if (props.indicator === 'running') {
     return (
       <span
-        title="Running"
+        title={props.runningTool ? `Running \`${props.runningTool}\`…` : 'Running'}
         aria-label="running"
         class="i-mdi-loading animate-spin"
         style={{ width: '14px', height: '14px', color: '#22d3ee', 'flex-shrink': 0 }}
       />
     )
   }
-  if (props.status === 'error') {
+  if (props.indicator === 'action-error') {
     return (
       <span
         title="Failed"
@@ -119,7 +154,7 @@ const StatusBadge = (props: { kind: ThreadKind; status: ThreadStatus }) => {
       />
     )
   }
-  if (props.status === 'paused') {
+  if (props.indicator === 'action-paused') {
     return (
       <span
         title="Awaiting approval"
@@ -258,6 +293,15 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                   {(thread) => {
                     const isSelected = () => thread.id === props.selectedId
                     const isRegenerating = () => pendingRegen().has(thread.id)
+                    // Live run state for THIS row — a backgrounded run keeps
+                    // its spinner while the user reads another thread (#105).
+                    const runState = () => props.getRunState?.(thread.id)
+                    const indicator = () =>
+                      rowIndicator({
+                        kind: thread.kind,
+                        status: thread.status,
+                        live: !!runState()?.isProcessing,
+                      })
                     return (
                       <button
                         onClick={() => props.onSelectThread(thread.id)}
@@ -275,7 +319,10 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         class="group"
                       >
                         <div flex="~" items="center" gap="1.5" pr="6">
-                          <StatusBadge kind={thread.kind} status={thread.status} />
+                          <StatusBadge
+                            indicator={indicator()}
+                            runningTool={runState()?.runningTool}
+                          />
                           <div
                             text={thread.isPlaceholder ? 'sm dark-text-tertiary' : 'sm dark-text-primary'}
                             font={thread.isPlaceholder ? 'normal italic' : 'medium'}

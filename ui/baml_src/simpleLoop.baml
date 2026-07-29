@@ -41,6 +41,13 @@
 //    expansions). See LoopPriorResults / LoopTurnLog for the details.
 
 // --- Section: few-shot examples (cached tier-1; empty when unset) -----------
+// Field labels deliberately match ControllerAction's field NAMES (reasoning /
+// tool_name / tool_args) rather than inventing a third vocabulary (the earlier
+// `Tool:` / `Args:` against the turn log's `Call:` / `Args:` against the schema's
+// `tool_name` / `tool_args`). Kept as a labelled list rather than a JSON object:
+// these live inside a user message and carry no status/is_final, so rendering
+// them as objects would demonstrate an ACTION MISSING REQUIRED FIELDS — the very
+// shape the turn log is careful not to model.
 template_string LoopFewShots(few_shots: FewShot[]?) #"
   {% if few_shots and few_shots|length > 0 %}
 
@@ -48,9 +55,9 @@ template_string LoopFewShots(few_shots: FewShot[]?) #"
   EXAMPLES (illustrative — adapt to the actual request, do not copy verbatim):
   {% for ex in few_shots %}
   - User: {{ ex.user }}
-    Reasoning: {{ ex.reasoning }}
-    Tool: {{ ex.tool }}
-    Args: {{ ex.args }}
+    reasoning: {{ ex.reasoning }}
+    tool_name: {{ ex.tool }}
+    tool_args: {{ ex.args }}
   {% endfor %}
   {% endif %}
 "#
@@ -84,17 +91,27 @@ template_string LoopPriorResults(turns_previous_runs: PriorResult[]?) #"
 // WRITES the extension. Expanded ref content renders inside the turn that
 // expanded it — as late as possible, so everything before stays a valid
 // cache prefix.
+// Each assistant entry is rendered as a COMPLETE ControllerAction object — the
+// same shape `ctx.output_format` asks for. This is load-bearing, not cosmetic:
+// an assistant turn is one of the model's OWN prior messages, and continuing the
+// form of its previous messages is a stronger prior than a trailing instruction.
+// Rendering history as prose (`Reasoning:` / `Call:` / `Args:`) put N
+// demonstrations of one vocabulary against one request for another, and the
+// demonstrations win — observed live as a complete, correct action emitted in
+// prose, failing BAML parsing with all five required fields "missing" (output
+// 412 tokens against a 32768 cap, so not truncation). The demonstration count
+// grows with turn depth, so deep loops were the most exposed. Rendered this way
+// the same copying instinct produces a valid action.
+//
+// `is_final` is a literal `false`: the loop breaks on a final action BEFORE
+// pushing a turn (`simpleLoop.server.ts` — `if (action.is_final || tool_name ===
+// 'Return') break`), so every turn that reaches this log is non-final by
+// construction. `tojson` does the quoting, so tool_args (itself JSON, full of
+// quotes) can't break out of its string.
 template_string LoopTurnLog(turns: LoopTurn[]) #"
   {% for turn in turns %}
   {{ _.role("assistant") }}
-  Turn {{ turn.n }} action:
-  {% if turn.reasoning %}
-  Reasoning: {{ turn.reasoning }}
-  {% endif %}
-  {% if turn.tool_call %}
-  Call: {{ turn.tool_call.tool }}
-  Args: {{ turn.tool_call.args }}
-  {% endif %}
+  {"reasoning": {{ turn.reasoning | default("") | tojson }}, "tool_name": {{ (turn.tool_call.tool if turn.tool_call else "") | tojson }}, "tool_args": {{ (turn.tool_call.args if turn.tool_call else "") | tojson }}, "status": {{ turn.status | default("") | tojson }}, "is_final": false}
   {% if loop.index0 >= turns|length - 2 %}
   {{ _.role("user", cache_control={"type": "ephemeral"}) }}
   {% else %}
@@ -162,7 +179,11 @@ function LoopController(
 
     {# ────────── VOLATILE TAIL · changes every turn, never cached ────────── #}
     {{ _.role("user") }}
-    Turn {{ turns|length + 1 }}. Decide the next action.
+    {# 0-indexed to match the turn log and the `n` the next turn is recorded
+       under: with one completed turn the log ends at "Turn 0 result" and this
+       asks for turn 1. The previous `+ 1` skipped a number, inviting the model
+       to infer a turn it had never seen. #}
+    Turn {{ turns|length }}. Decide the next action.
 
     {{ ctx.output_format }}
   "#

@@ -362,6 +362,7 @@ export function simpleLoop<T extends SimpleLoopData>(
           turns.push({
             n: turn,
             reasoning: action.reasoning,
+            status: action.status,
             tool_call: { tool: EXPAND_TOOL_NAME, args: action.tool_args },
             tool_result: {
               tool: EXPAND_TOOL_NAME,
@@ -476,6 +477,9 @@ export function simpleLoop<T extends SimpleLoopData>(
         turns.push({
           n: turn,
           reasoning: action.reasoning,
+          // Carried so the assistant turn log can replay a complete
+          // ControllerAction rather than one missing required fields.
+          status: action.status,
           tool_call: { tool: action.tool_name, args: action.tool_args },
           tool_result: {
             tool: action.tool_name,

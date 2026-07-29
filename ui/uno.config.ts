@@ -213,6 +213,31 @@ export default defineConfig({
           opacity: 0.6;
         }
 
+        /* Sidebar completion flash (#105) — a backgrounded run finishing
+           pulses its thread row once, then decays to the static accent
+           border applied by ChatSidebar. Duration is mirrored by
+           COMPLETION_FLASH_MS in lib/run-registry.ts. */
+        @keyframes thread-flash-done {
+          0%   { background-color: rgba(74,222,128,0); }
+          12%  { background-color: rgba(74,222,128,0.22); }
+          100% { background-color: rgba(74,222,128,0); }
+        }
+        @keyframes thread-flash-error {
+          0%   { background-color: rgba(248,113,113,0); }
+          12%  { background-color: rgba(248,113,113,0.22); }
+          100% { background-color: rgba(248,113,113,0); }
+        }
+        .thread-flash-done {
+          animation: thread-flash-done 2.4s ease-out 1;
+        }
+        .thread-flash-error {
+          animation: thread-flash-error 2.4s ease-out 1;
+        }
+        /* The border still marks completion — only the motion is dropped. */
+        @media (prefers-reduced-motion: reduce) {
+          .thread-flash-done, .thread-flash-error { animation: none; }
+        }
+
         /* Graph entity interactive spans in chat messages */
         .graph-entity {
           cursor: pointer;

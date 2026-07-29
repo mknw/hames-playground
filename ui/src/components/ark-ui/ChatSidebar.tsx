@@ -1,7 +1,7 @@
 import { For, Show, createSignal } from 'solid-js'
 import { SettingsPanel } from './SettingsPanel'
 import { regenerateConversationTitle } from '../../lib/harness-client'
-import type { SessionRunState } from '../../lib/run-registry'
+import type { CompletionMark, SessionRunState } from '../../lib/run-registry'
 
 /** Mirror of the server's ConversationKind/Status (kept local so the sidebar
  *  has no server-module import). */
@@ -100,6 +100,40 @@ interface ChatSidebarProps {
   /** How many conversations are streaming right now — surfaced as a header
    *  badge so the count is visible without hunting for spinners (#105). */
   runningCount?: number
+  /** Completion mark for a run that finished while the user was reading
+   *  another thread: the row flashes once, then keeps an accent border
+   *  until opened (#105). */
+  getCompletion?: (sessionId: string) => CompletionMark | undefined
+}
+
+/**
+ * Accent border colour for a row carrying a completion mark, as an inline
+ * `border-color` value (or undefined to leave the attributify border alone).
+ *
+ * Deliberately NOT attributify: presetAttributify builds its `[border~="…"]`
+ * selectors by scanning literal `border="…"` text in source, so a colour that
+ * only ever appears inside a dynamic expression is never emitted. Inline
+ * `border-color` sidesteps the extractor entirely and also outranks the
+ * hover rule, so the mark stays visible under the cursor.
+ *
+ * Matches the `thread-flash-*` keyframe colours in `uno.config.ts`.
+ *
+ * Selection is handled by the existing attributify border and wins by virtue
+ * of the mark being cleared on select — the two only collide for a frame.
+ */
+export function completionBorderColor(
+  completion?: CompletionMark,
+): string | undefined {
+  if (!completion) return undefined
+  return completion.outcome === 'error'
+    ? 'rgba(248, 113, 113, 0.55)'
+    : 'rgba(74, 222, 128, 0.55)'
+}
+
+/** One-shot flash class while a completion is still animating. */
+export function rowFlashClass(completion?: CompletionMark): string {
+  if (!completion?.flashing) return ''
+  return completion.outcome === 'error' ? 'thread-flash-error' : 'thread-flash-done'
 }
 
 /**
@@ -329,6 +363,14 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         status: thread.status,
                         live: !!runState()?.isProcessing,
                       })
+                    const completion = () => props.getCompletion?.(thread.id)
+                    const completionTitle = () => {
+                      const c = completion()
+                      if (!c) return undefined
+                      return c.outcome === 'error'
+                        ? 'Finished with an error while you were away'
+                        : 'Finished while you were away'
+                    }
                     return (
                       <button
                         onClick={() => props.onSelectThread(thread.id)}
@@ -342,8 +384,11 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         border={isSelected() ? '1 neon-cyan/40' : '1 transparent hover:neon-cyan/30'}
                         cursor="pointer"
                         data-placeholder={thread.isPlaceholder ? '' : undefined}
+                        data-completed={completion()?.outcome}
+                        title={completionTitle()}
                         relative=""
-                        class="group"
+                        class={`group ${rowFlashClass(completion())}`}
+                        style={{ 'border-color': completionBorderColor(completion()) }}
                       >
                         <div flex="~" items="center" gap="1.5" pr="6">
                           <StatusBadge

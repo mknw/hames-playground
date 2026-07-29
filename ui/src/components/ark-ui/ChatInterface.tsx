@@ -40,6 +40,7 @@ import type { ContextEvent, UnifiedContext, ControllerActionEventData } from '~/
 import {
   capReachedMessage,
   isAtConcurrencyCap,
+  type RunOutcome,
   type SessionRunState,
 } from '~/lib/run-registry'
 
@@ -92,6 +93,10 @@ export interface ChatInterfaceProps {
   /** How many sessions are streaming right now, across the whole route.
    *  Only the route can know this — used for the concurrency cap (#105). */
   runningCount: number
+  /** Fired when a run finishes, with how it ended. The route marks the
+   *  thread so a run that lands while the user is elsewhere is visible
+   *  (#105). Not fired for an abort — that's page teardown. */
+  onRunSettled?: (sessionId: string, outcome: RunOutcome) => void
   /** Push-driven sidebar title update — fired when the server emits a
    *  `title_updated` SSE event after the first-turn LLM title resolves.
    *  Route patches its threads cache in-place; no refetch required. */
@@ -317,6 +322,12 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     const abortController = new AbortController()
     props.registerAbortController(runSessionId, abortController)
 
+    // How this run ended, reported once in `finally` so the route can mark
+    // the thread if the user has moved on. `aborted` stays unreported — that
+    // path is page teardown, not a result worth announcing.
+    let outcome: RunOutcome = 'done'
+    let aborted = false
+
     try {
       // Stream events via SSE endpoint for real-time updates
       const response = await fetch('/api/events', {
@@ -433,6 +444,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       // the run's own buffer, so a turn that lands while the user is reading
       // another chat is waiting for them when they switch back (#105).
       const finalResponse = finalResult?.response ?? ''
+      if (finalResult?.status === 'error') outcome = 'error'
       if (finalResponse && finalResult?.status !== 'error') {
         const assistantMessage: Message = {
           id: Date.now().toString(),
@@ -453,8 +465,9 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       }
     } catch (error) {
       // Suppress the noisy AbortError that fires on page-unload teardown.
-      const aborted = error instanceof DOMException && error.name === 'AbortError'
+      aborted = error instanceof DOMException && error.name === 'AbortError'
       if (!aborted) {
+        outcome = 'error'
         console.error('Error processing message:', error)
         const errorMessage: Message = {
           id: Date.now().toString(),
@@ -468,6 +481,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     } finally {
       props.updateRunState(runSessionId, { isProcessing: false, runningTool: null })
       props.unregisterAbortController(runSessionId)
+      if (!aborted) props.onRunSettled?.(runSessionId, outcome)
     }
   }
 

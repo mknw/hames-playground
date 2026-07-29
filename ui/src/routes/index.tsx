@@ -11,7 +11,14 @@ import { listConversations, type OpenReferenceTarget } from '~/lib/harness-clien
 import { newSessionId } from '~/lib/session-id'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 import { createChainProgress, type ChainProgressController } from '~/components/ark-ui/useChainProgress'
-import { DEFAULT_RUN_STATE, countRunning, type SessionRunState } from '~/lib/run-registry'
+import {
+  DEFAULT_RUN_STATE,
+  COMPLETION_FLASH_MS,
+  countRunning,
+  type CompletionMark,
+  type RunOutcome,
+  type SessionRunState,
+} from '~/lib/run-registry'
 
 export default function Home() {
   // Conversation a user is currently viewing. Initial value is a fresh id so
@@ -146,6 +153,54 @@ export default function Home() {
   const runningCount = createMemo(() => countRunning(runStates()))
 
   // ---------------------------------------------------------------------------
+  // Completion marks (#105)
+  // ---------------------------------------------------------------------------
+  // With several conversations running at once, a run landing in a thread the
+  // user isn't looking at is otherwise silent. Mark the row: it flashes once,
+  // then holds a quiet accent border until the thread is opened.
+  const [completions, setCompletions] = createSignal<Record<string, CompletionMark>>({})
+  const getCompletion = (sid: string): CompletionMark | undefined => completions()[sid]
+  const flashTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  const clearCompletion = (sid: string) => {
+    const timer = flashTimers.get(sid)
+    if (timer) {
+      clearTimeout(timer)
+      flashTimers.delete(sid)
+    }
+    setCompletions(prev => {
+      if (!(sid in prev)) return prev
+      const next = { ...prev }
+      delete next[sid]
+      return next
+    })
+  }
+
+  const handleRunSettled = (sid: string, outcome: RunOutcome) => {
+    // The user watched this one land — nothing to announce, and a mark here
+    // would just need dismissing.
+    if (sid === selectedSessionId()) return
+    const existing = flashTimers.get(sid)
+    if (existing) clearTimeout(existing)
+    setCompletions(prev => ({ ...prev, [sid]: { outcome, flashing: true } }))
+    flashTimers.set(
+      sid,
+      setTimeout(() => {
+        flashTimers.delete(sid)
+        // Decay to the static border; the mark itself survives until visited.
+        setCompletions(prev =>
+          sid in prev ? { ...prev, [sid]: { ...prev[sid], flashing: false } } : prev,
+        )
+      }, COMPLETION_FLASH_MS),
+    )
+  }
+
+  onCleanup(() => {
+    for (const timer of flashTimers.values()) clearTimeout(timer)
+    flashTimers.clear()
+  })
+
+  // ---------------------------------------------------------------------------
   // Per-session chat message buffers (#105 slice 1)
   // ---------------------------------------------------------------------------
   // The in-flight turn is NOT persisted until the run ends, so a buffer that
@@ -256,6 +311,8 @@ export default function Home() {
   const handleSelectThread = (threadId: string) => {
     if (threadId === selectedSessionId()) return
     resetForNewSession()
+    // Opening the thread is the acknowledgement — drop its completion mark.
+    clearCompletion(threadId)
     pruneIdleBuffers(threadId)
     setSelectedSessionId(threadId)
     // User picked an existing thread — drop the optimistic row.
@@ -368,6 +425,7 @@ export default function Home() {
               onTitleRegenerated={handleTitleUpdated}
               getRunState={getRunState}
               runningCount={runningCount()}
+              getCompletion={getCompletion}
             />
             <div flex="1" overflow="hidden">
               <ChatInterface
@@ -388,6 +446,7 @@ export default function Home() {
                 getMessages={getMessages}
                 setMessages={setMessages}
                 runningCount={runningCount()}
+                onRunSettled={handleRunSettled}
                 registerAbortController={registerAbortController}
                 unregisterAbortController={unregisterAbortController}
                 onTitleUpdated={handleTitleUpdated}

@@ -23,7 +23,8 @@ vi.mock('../../../lib/harness-client', () => ({
   regenerateConversationTitle: vi.fn(async () => null),
 }))
 
-const { mergeThreadsWithPlaceholder, rowIndicator } = await import('../../../components/ark-ui/ChatSidebar')
+const { mergeThreadsWithPlaceholder, rowIndicator, completionBorderColor, rowFlashClass } =
+  await import('../../../components/ark-ui/ChatSidebar')
 type ChatThreadSummary = import('../../../components/ark-ui/ChatSidebar').ChatThreadSummary
 
 const persisted: ChatThreadSummary[] = [
@@ -135,5 +136,52 @@ describe('rowIndicator', () => {
       const got = rowIndicator({ kind: 'conversation', status, live: false })
       expect(got).toBe('none')
     }
+  })
+})
+
+describe('completionBorderColor', () => {
+  // undefined leaves the attributify border untouched — an empty string would
+  // set `border-color: ''` and clobber it.
+  it('is undefined for a row with no completion mark', () => {
+    expect(completionBorderColor(undefined)).toBeUndefined()
+  })
+
+  it('accents a completed row per outcome, and keeps doing so after the flash', () => {
+    expect(completionBorderColor({ outcome: 'done', flashing: true })).toBe(
+      'rgba(74, 222, 128, 0.55)',
+    )
+    expect(completionBorderColor({ outcome: 'done', flashing: false })).toBe(
+      'rgba(74, 222, 128, 0.55)',
+    )
+    expect(completionBorderColor({ outcome: 'error', flashing: false })).toBe(
+      'rgba(248, 113, 113, 0.55)',
+    )
+  })
+
+  // Must be a real CSS colour, not a UnoCSS token: presetAttributify only
+  // emits selectors for colours it finds as literal `border="…"` text, which
+  // a value living in a dynamic expression never is.
+  it('returns a literal CSS colour rather than a UnoCSS token', () => {
+    const value = completionBorderColor({ outcome: 'done', flashing: false })!
+    expect(value).toMatch(/^rgba?\(/)
+    expect(value).not.toContain('green-400')
+  })
+})
+
+describe('rowFlashClass', () => {
+  it('is empty with no completion', () => {
+    expect(rowFlashClass(undefined)).toBe('')
+  })
+
+  it('flashes per outcome while animating', () => {
+    expect(rowFlashClass({ outcome: 'done', flashing: true })).toBe('thread-flash-done')
+    expect(rowFlashClass({ outcome: 'error', flashing: true })).toBe('thread-flash-error')
+  })
+
+  // Once the flash decays the row keeps only its border — re-adding the class
+  // on a later render would restart the animation.
+  it('stops flashing once the mark has settled', () => {
+    expect(rowFlashClass({ outcome: 'done', flashing: false })).toBe('')
+    expect(rowFlashClass({ outcome: 'error', flashing: false })).toBe('')
   })
 })

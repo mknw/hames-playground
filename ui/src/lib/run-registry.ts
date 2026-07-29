@@ -25,6 +25,30 @@ export const DEFAULT_RUN_STATE: SessionRunState = {
 }
 
 // ============================================================================
+// Completion marks
+// ============================================================================
+
+/** How a finished run ended. */
+export type RunOutcome = 'done' | 'error'
+
+/**
+ * A run that finished while the user was reading a *different* thread.
+ * The row flashes once to catch the eye, then keeps a quiet accent border
+ * until the thread is opened — with several runs in flight, a purely
+ * transient signal is easy to miss.
+ */
+export interface CompletionMark {
+  outcome: RunOutcome
+  /** True during the one-shot flash animation, false once it has settled
+   *  into the static border. */
+  flashing: boolean
+}
+
+/** How long the completion flash runs. Kept in sync with the
+ *  `thread-flash-*` keyframes in `uno.config.ts`. */
+export const COMPLETION_FLASH_MS = 2400
+
+// ============================================================================
 // Concurrency policy (#105 slice 2)
 // ============================================================================
 

@@ -147,9 +147,9 @@ export default function Home() {
     }))
   }
 
-  // How many conversations are streaming right now. Drives the sidebar's
-  // header badge and the composer's cap guard (#105 slice 2) — the count is
-  // only knowable here, since each ChatInterface sees just its own session.
+  // How many conversations are streaming right now. Drives the composer's
+  // cap guard (#105 slice 2) — the count is only knowable here, since each
+  // ChatInterface sees just its own session.
   const runningCount = createMemo(() => countRunning(runStates()))
 
   // ---------------------------------------------------------------------------
@@ -435,7 +435,7 @@ export default function Home() {
               onNewChat={handleNewChat}
               onTitleRegenerated={handleTitleUpdated}
               getRunState={getRunState}
-              runningCount={runningCount()}
+              getProgress={getProgress}
               getCompletion={getCompletion}
             />
             <div flex="1" overflow="hidden">

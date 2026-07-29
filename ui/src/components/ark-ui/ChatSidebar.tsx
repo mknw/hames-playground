@@ -2,6 +2,7 @@ import { For, Show, createSignal } from 'solid-js'
 import { SettingsPanel } from './SettingsPanel'
 import { regenerateConversationTitle } from '../../lib/harness-client'
 import type { CompletionMark, SessionRunState } from '../../lib/run-registry'
+import type { ChainProgressController, ChainProgressSnapshot } from './useChainProgress'
 
 /** Mirror of the server's ConversationKind/Status (kept local so the sidebar
  *  has no server-module import). */
@@ -93,13 +94,14 @@ interface ChatSidebarProps {
    *  LLM title. The sidebar handles the server action itself, then forwards
    *  the new title so the parent can patch its threads cache in-place. */
   onTitleRegenerated?: (sessionId: string, title: string) => void
-  /** Live per-session run state from the route registry (#105). Lets a row
-   *  spin while *its* run is in flight, regardless of which thread is
-   *  selected. Optional so the sidebar still renders without it. */
+  /** Live per-session run state from the route registry (#105). Drives the
+   *  per-row progress readout while *its* run is in flight, regardless of
+   *  which thread is selected. Optional so the sidebar renders without it. */
   getRunState?: (sessionId: string) => SessionRunState
-  /** How many conversations are streaming right now — surfaced as a header
-   *  badge so the count is visible without hunting for spinners (#105). */
-  runningCount?: number
+  /** Per-session progress controller from the route registry — the same one
+   *  feeding the in-chat LiveProgressBar. Only consulted for rows whose run
+   *  state says a stream is open (a run's controller always exists by then). */
+  getProgress?: (sessionId: string) => ChainProgressController
   /** Completion mark for a run that finished while the user was reading
    *  another thread: the row flashes once, then keeps an accent border
    *  until opened (#105). */
@@ -137,13 +139,13 @@ export function rowFlashClass(completion?: CompletionMark): string {
 }
 
 /**
- * Which leading indicator a thread row shows.
+ * Which leading badge a thread row shows.
  *
- * A *live* run (this browser has an SSE stream open for the thread) outranks
- * everything: it applies to chats as well as actions, and it is fresher than
- * the row's persisted `status`, which only refreshes when the list refetches.
- * Everything below it is the pre-existing action-row badge set — plain
- * conversations at rest show nothing.
+ * Badges are the *persisted* action-row set only (POST-triggered runs have no
+ * client-side stream, so their persisted `status` is the freshest signal we
+ * have). A live run in THIS browser is indicated by the per-row progress
+ * strip instead — see {@link progressPercent} — so conversations never take
+ * a badge.
  *
  * Pure so the precedence rules can be unit-tested without rendering.
  */
@@ -157,10 +159,7 @@ export type RowIndicator =
 export function rowIndicator(args: {
   kind: ThreadKind
   status: ThreadStatus
-  /** A run for this thread is in flight in this tab right now. */
-  live: boolean
 }): RowIndicator {
-  if (args.live) return 'running'
   if (args.kind !== 'action') return 'none'
   if (args.status === 'running') return 'running'
   if (args.status === 'error') return 'action-error'
@@ -168,13 +167,87 @@ export function rowIndicator(args: {
   return 'action-done'
 }
 
+/**
+ * Fill fraction (0–100) for the row's mini progress strip, or null while the
+ * chain projection hasn't been seeded yet (→ render as indeterminate).
+ *
+ * Same math as the in-chat LiveProgressBar: currentTurn over the refined
+ * path projection, with the stable max as fallback denominator.
+ */
+export function progressPercent(snap: {
+  currentTurn: number
+  pathProjection: number
+  maxProjection: number
+}): number | null {
+  const denom = snap.pathProjection || snap.maxProjection
+  if (denom <= 0) return null
+  return Math.max(0, Math.min(100, (snap.currentTurn / denom) * 100))
+}
+
+/** Shared with the in-chat LiveProgressBar so the two read as one system. */
+const STRIP_GRADIENT = 'linear-gradient(90deg, rgba(0,255,255,0.85), rgba(157,0,255,0.85))'
+
+/**
+ * Row-sized live-run readout: current status line + a 3px progress strip.
+ * Replaces the "{x} ago" timestamp while the run streams. Reuses the chat
+ * bar's *mechanics* (ChainProgressSnapshot from the route's per-session
+ * controller) but not the component — this is a strip, not a labelled bar.
+ */
+const RowProgress = (props: { snapshot: ChainProgressSnapshot }) => {
+  const pct = () => progressPercent(props.snapshot)
+  return (
+    // m="t-1" and gap="1", not t-1.5: verified against the built sheet —
+    // the extractor drops [m~=t-1.5] while these both emit.
+    <div m="t-1" flex="~ col" gap="1">
+      <div text="xs dark-text-tertiary" truncate>
+        {props.snapshot.status ?? 'Starting…'}
+      </div>
+      <div
+        style={{
+          height: '3px',
+          'border-radius': '9999px',
+          overflow: 'hidden',
+          'background-color': 'rgb(58, 58, 74)',
+        }}
+      >
+        <Show
+          when={pct() !== null}
+          fallback={
+            // Projection not seeded yet — indeterminate shimmer so the row
+            // reacts the instant the run starts, before the first estimate.
+            <div
+              class="thread-progress-indeterminate"
+              style={{
+                height: '100%',
+                width: '40%',
+                'border-radius': '9999px',
+                'background-image': STRIP_GRADIENT,
+              }}
+            />
+          }
+        >
+          <div
+            style={{
+              height: '100%',
+              width: `${pct()}%`,
+              'background-image': STRIP_GRADIENT,
+              'box-shadow': '0 0 8px rgba(0,255,255,0.45)',
+              transition: 'width 420ms cubic-bezier(0.22, 1, 0.36, 1)',
+            }}
+          />
+        </Show>
+      </div>
+    </div>
+  )
+}
+
 /** Renders the indicator chosen by {@link rowIndicator}. */
-const StatusBadge = (props: { indicator: RowIndicator; runningTool?: string | null }) => {
+const StatusBadge = (props: { indicator: RowIndicator }) => {
   if (props.indicator === 'none') return null
   if (props.indicator === 'running') {
     return (
       <span
-        title={props.runningTool ? `Running \`${props.runningTool}\`…` : 'Running'}
+        title="Running"
         aria-label="running"
         class="i-mdi-loading animate-spin"
         style={{ width: '14px', height: '14px', color: '#22d3ee', 'flex-shrink': 0 }}
@@ -258,31 +331,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
       {/* Header with Toggle */}
       <div p="4" border="b dark-border-primary" flex="~" items="center" justify="between">
         {!props.collapsed && (
-          <div flex="~" items="center" gap="2">
-            <span text="sm dark-text-primary" font="medium">Chat History</span>
-            {/* Running-count badge — only present while something streams. */}
-            <Show when={(props.runningCount ?? 0) > 0}>
-              <span
-                title={`${props.runningCount} conversation${props.runningCount === 1 ? '' : 's'} running`}
-                flex="~"
-                items="center"
-                gap="1"
-                p="x-1.5"
-                rounded="full"
-                bg="cyber-700/40"
-                border="1 neon-cyan/30"
-                text="2xs neon-cyan"
-                font="medium"
-              >
-                <span
-                  aria-hidden="true"
-                  class="i-mdi-loading animate-spin"
-                  style={{ width: '10px', height: '10px' }}
-                />
-                {props.runningCount}
-              </span>
-            </Show>
-          </div>
+          <span text="sm dark-text-primary" font="medium">Chat History</span>
         )}
         <button
           onClick={() => props.onToggle()}
@@ -355,14 +404,11 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                     const isSelected = () => thread.id === props.selectedId
                     const isRegenerating = () => pendingRegen().has(thread.id)
                     // Live run state for THIS row — a backgrounded run keeps
-                    // its spinner while the user reads another thread (#105).
-                    const runState = () => props.getRunState?.(thread.id)
+                    // its progress readout while the user reads another
+                    // thread (#105).
+                    const live = () => !!props.getRunState?.(thread.id).isProcessing
                     const indicator = () =>
-                      rowIndicator({
-                        kind: thread.kind,
-                        status: thread.status,
-                        live: !!runState()?.isProcessing,
-                      })
+                      rowIndicator({ kind: thread.kind, status: thread.status })
                     const completion = () => props.getCompletion?.(thread.id)
                     const completionTitle = () => {
                       const c = completion()
@@ -391,10 +437,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         style={{ 'border-color': completionBorderColor(completion()) }}
                       >
                         <div flex="~" items="center" gap="1.5" pr="6">
-                          <StatusBadge
-                            indicator={indicator()}
-                            runningTool={runState()?.runningTool}
-                          />
+                          <StatusBadge indicator={indicator()} />
                           <div
                             text={thread.isPlaceholder ? 'sm dark-text-tertiary' : 'sm dark-text-primary'}
                             font={thread.isPlaceholder ? 'normal italic' : 'medium'}
@@ -406,9 +449,20 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                               : thread.title ?? '(untitled)'}
                           </div>
                         </div>
-                        <div text="xs dark-text-tertiary" m="t-1">
-                          {formatTimestamp(thread.updatedAt)}
-                        </div>
+                        {/* While a run streams, the timestamp row gives way
+                            to the live status + mini progress strip — the
+                            same per-session controller that feeds the
+                            in-chat bar (#105). Reappears when the run ends. */}
+                        <Show
+                          when={live() && props.getProgress}
+                          fallback={
+                            <div text="xs dark-text-tertiary" m="t-1">
+                              {formatTimestamp(thread.updatedAt)}
+                            </div>
+                          }
+                        >
+                          <RowProgress snapshot={props.getProgress!(thread.id).snapshot()} />
+                        </Show>
                         {/* Hover-reveal regenerate-title button. Hidden for
                             placeholder rows (nothing persisted yet). Spinning
                             while the LLM call is in flight. Sits in a span

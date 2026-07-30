@@ -196,7 +196,6 @@ export async function agentUsesSyncWorkspace(
 import { defaultAgent } from "./examples/default.server";
 import { codeModeAgent } from "./examples/code-mode.server";
 import { multiSourceResearchAgent } from "./examples/multi-source-research.server";
-import { conversationalMemoryAgent } from "./examples/conversational-memory.server";
 import { sandboxSessionAgent } from "./examples/sandbox-session.server";
 import { flavouredSandboxAgent } from "./examples/flavoured-sandbox.server";
 import { retrieverAgent } from "./examples/retriever-agent.server";
@@ -206,7 +205,6 @@ import { microsoft365Agent } from "./examples/microsoft-365.server";
 registerAgent(defaultAgent);
 registerAgent(codeModeAgent);
 registerAgent(multiSourceResearchAgent);
-registerAgent(conversationalMemoryAgent);
 registerAgent(sandboxSessionAgent);
 registerAgent(flavouredSandboxAgent);
 registerAgent(retrieverAgent);

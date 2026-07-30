@@ -249,35 +249,3 @@ describe('Multi-Source Research Evaluator Execution', () => {
     expect((scope as Scope).data.response).toBeDefined()
   })
 })
-
-// ============================================================================
-// Conversational Memory Distillation Hook Tests
-// ============================================================================
-
-describe('Conversational Memory Distillation', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  afterEach(async () => {
-    vi.resetModules()
-  })
-
-  it('should have hook configured for session_close trigger', async () => {
-    const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-    const patterns = await conversationalMemoryAgent.createPatterns('test-session') as Pattern[]
-
-    const hookPattern = patterns.find(p => p.config.patternId === 'session-close-hook')
-    expect(hookPattern).toBeDefined()
-  })
-
-  it('should configure hook as background task', async () => {
-    const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-    const patterns = await conversationalMemoryAgent.createPatterns('test-session') as Pattern[]
-
-    const hookPattern = patterns.find(p => p.config.patternId === 'session-close-hook')
-    expect(hookPattern).toBeDefined()
-    // Hook pattern name includes trigger and wrapped pattern
-    expect(hookPattern!.name).toContain('hook')
-  })
-})

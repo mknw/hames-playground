@@ -995,37 +995,40 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
         </>
       )}
 
-      {/* Delete confirm (#71) — Ark Dialog for free Escape + focus trap
-          (EnvVarManager idiom, incl. the attributify-props cast). */}
+      {/* Delete confirm (#71) — Ark Dialog for free Escape + focus trap.
+          `lazyMount unmountOnExit` is LOAD-BEARING: without it Ark keeps the
+          closed dialog mounted with the `hidden` attribute, and an
+          attributify display utility (flex="~") overrides the UA's
+          [hidden]{display:none} — the "hidden" positioner rendered as an
+          in-flow full-height div inside this flex column, starving the
+          thread list to zero height. Positioning is inline because
+          `position` is not an attributify rule at all (silently a no-op).
+          See Rendering gotchas #4 in docs/UI_ARCHITECTURE.md. */}
       <Dialog.Root
         open={confirmTarget() != null}
         onOpenChange={(d) => {
           if (!d.open && !deleting()) setConfirmTarget(null)
         }}
+        lazyMount
+        unmountOnExit
       >
         <Dialog.Backdrop
-          {...({
-            bg: 'black/50',
+          style={{
             position: 'fixed',
-            top: '0',
-            left: '0',
-            w: 'full',
-            h: 'full',
-            z: '40',
-          } as Record<string, string>)}
+            inset: '0',
+            'z-index': '40',
+            background: 'rgba(0, 0, 0, 0.5)',
+          }}
         />
         <Dialog.Positioner
-          {...({
+          style={{
             position: 'fixed',
-            top: '0',
-            left: '0',
-            w: 'full',
-            h: 'full',
-            z: '50',
-            flex: '~',
-            items: 'center',
-            justify: 'center',
-          } as Record<string, string>)}
+            inset: '0',
+            'z-index': '50',
+            display: 'flex',
+            'align-items': 'center',
+            'justify-content': 'center',
+          }}
         >
           <Dialog.Content
             bg="dark-bg-secondary"

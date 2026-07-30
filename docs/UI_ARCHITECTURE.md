@@ -711,6 +711,20 @@ mid-run cancellation is #105 PR 3, unbuilt.
    that marker appears in the code. Adding an agent: use an
    `i-material-symbols-*` class and keep the marker comment. Render with
    `class=` + inline sizing, never attributify (gotcha 1).
+4. **Attributify props on Ark `Dialog` overlay parts:** without
+   `lazyMount unmountOnExit`, Ark keeps the closed dialog MOUNTED with the
+   `hidden` attribute — and any attributify display utility on it
+   (`flex="~"` → `[flex~="~"]{display:flex}`) is an author rule that
+   overrides the UA's `[hidden]{display:none}`, resurrecting the element.
+   Compounding it, `position` is not an attributify rule at all
+   (`position: "fixed"` in a props cast silently does nothing), so the
+   resurrected overlay is *static and in-flow*: a phantom full-height flex
+   item that starved the sidebar's `flex:1` thread list to zero height
+   (found via computed styles in a live browser; the built CSS was fine).
+   Rule: give `Dialog.Root` `lazyMount unmountOnExit`, and position
+   Backdrop/Positioner with inline `style`. `EnvVarManager.tsx` still
+   carries the original idiom and mounts a hidden-but-rendered ghost into
+   ToolsPanel while closed — latent, flagged for follow-up.
 
 ---
 

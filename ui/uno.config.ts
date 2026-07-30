@@ -11,6 +11,22 @@ import presetWind4 from "@unocss/preset-wind4";
 // import presetIcons from "@unocss/preset-icons";
 
 export default defineConfig({
+  // UnoCSS only extracts utilities from files its pipeline scans, and plain
+  // `.ts` is NOT in the default include (only [jt]sx & friends). Agent icon
+  // classes live as literals in the server-side agent registry, so those
+  // files are added to extraction explicitly — without this, `i-*` classes
+  // referenced from AgentConfig.icon silently emit no CSS.
+  //
+  // BOTH halves below are required (verified against @unocss/vite source):
+  //  1. this `content.filesystem` glob makes the client build READ the files
+  //     (they're never in the client module graph, being .server.ts), and
+  //  2. each listed file carries a literal `@unocss-include` comment —
+  //     filesystem-globbed files still pass through the pipeline filter,
+  //     which rejects `.ts` paths unless that marker appears in the code.
+  // Globs are relative to ui/; entries are watched in dev.
+  content: {
+    filesystem: ["src/lib/harness-client/examples/*.server.ts"],
+  },
   presets: [
     presetIcons({
       collections: {

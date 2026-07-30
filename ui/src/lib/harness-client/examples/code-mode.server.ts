@@ -29,6 +29,7 @@
  */
 "use server";
 
+// @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
 import {
   router,
   routes,
@@ -386,7 +387,7 @@ export const codeModeAgent: AgentConfig = {
   name: "Code Mode Agent",
   description:
     "Orchestrate multiple MCP tools via JavaScript scripts run by the kg-agent gateway",
-  icon: "📜",
+  icon: "i-material-symbols-code-blocks-outline",
   servers: ["kg-agent-mcp-gateway"],
   createPatterns,
 };

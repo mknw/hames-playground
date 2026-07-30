@@ -21,7 +21,11 @@ export interface AgentConfig {
   id: string;
   name: string;
   description: string;
-  /** Emoji icon for UI display */
+  /** Iconify class for UI display (e.g. `i-material-symbols-robot-2-outline`).
+   *  Must appear as a literal in a file matched by uno.config.ts
+   *  `content.filesystem`, or UnoCSS emits no CSS for it and the icon
+   *  renders as an empty span. Render with `class=` + inline style sizing —
+   *  never attributify. */
   icon: string;
   /** Server namespaces this agent uses */
   servers: string[];

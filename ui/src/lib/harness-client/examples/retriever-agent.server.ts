@@ -32,6 +32,7 @@
  */
 "use server";
 
+// @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
 import {
   router,
   routes,
@@ -128,7 +129,7 @@ export const retrieverAgent: AgentConfig = {
   name: "Retriever Agent",
   description:
     "Fast semantic retrieval over uploaded documents (Data Stash), with Neo4j and Web Search routes",
-  icon: "🔎",
+  icon: "i-material-symbols-document-search-outline",
   servers: ["neo4j-cypher", "web_search", "fetch"],
   createPatterns,
 };

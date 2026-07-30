@@ -1679,4 +1679,113 @@ describe('simpleLoop execution', () => {
     expect(sharedRef.summary).toBe('shared (from selector)')
   })
 
+  describe('resultOmit — compact controller view, full-fidelity events', () => {
+    const BIG_URL = 'https://loop.cloud.microsoft/p/'.padEnd(519, 'x')
+    const searchResult = {
+      query: 'q', total: 14,
+      results: [{ name: 'a.docx', webUrl: BIG_URL, item_id: 'i1' }],
+    }
+    const baseContext = () => ({
+      sessionId: 'omit', createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'q' } },
+      ],
+      status: 'running' as const, data: {}, input: 'q',
+    })
+
+    it('projects the turn log the controller reads, but the tool_result EVENT keeps the full result', async () => {
+      const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+      const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+      callToolMock.mockResolvedValueOnce({ success: true, data: searchResult })
+      const mockController = vi.fn()
+        .mockResolvedValueOnce({
+          action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"x"}' }),
+          llmCall: undefined,
+        })
+        .mockResolvedValueOnce({ action: mockFinalAction('done'), llmCall: undefined })
+
+      const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+        patternId: 'omit-loop',
+        resultOmit: { read_neo4j_cypher: ['webUrl'] },
+      })
+      const scope = createScope('omit-loop', { intent: 'q' })
+      const result = await pattern.fn(scope, createEventView(baseContext()))
+
+      // Turn 2's previous_results (3rd positional arg) is what the LLM reads.
+      const previousResults = mockController.mock.calls[1][2] as string
+      expect(previousResults).not.toContain(BIG_URL)
+      expect(previousResults).toContain('a.docx')
+      expect(previousResults).toContain('i1')
+      // The turn's result is a JSON string nested in the outer JSON — keys
+      // arrive escaped.
+      expect(previousResults).toContain('total\\":14')
+
+      // The event — what the synthesizer and citation extractors read — is complete.
+      const event = result.events.find(e => e.type === 'tool_result')!
+      expect((event.data as { result: typeof searchResult }).result.results[0].webUrl).toBe(BIG_URL)
+    })
+
+    it('a tool without an omit entry passes through untouched', async () => {
+      const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+      const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+      callToolMock.mockResolvedValueOnce({ success: true, data: searchResult })
+      const mockController = vi.fn()
+        .mockResolvedValueOnce({
+          action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"x"}' }),
+          llmCall: undefined,
+        })
+        .mockResolvedValueOnce({ action: mockFinalAction('done'), llmCall: undefined })
+
+      const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+        patternId: 'no-omit-loop',
+        resultOmit: { some_other_tool: ['webUrl'] },
+      })
+      const scope = createScope('no-omit-loop', { intent: 'q' })
+      await pattern.fn(scope, createEventView(baseContext()))
+
+      expect(mockController.mock.calls[1][2] as string).toContain(BIG_URL)
+    })
+
+    it('expandPreviousResult projects per ORIGIN tool; the expand event stays raw', async () => {
+      const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+      const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+      const mockController = vi.fn()
+        .mockResolvedValueOnce({
+          action: mockAction({ tool_name: 'expandPreviousResult', tool_args: 'ref:ev-big' }),
+          llmCall: undefined,
+        })
+        .mockResolvedValueOnce({ action: mockFinalAction('done'), llmCall: undefined })
+
+      const ctx = baseContext()
+      ctx.events.push({
+        type: 'tool_result' as const, ts: 2, patternId: 'microsoft-365', id: 'ev-big',
+        data: { tool: 'graph_files_search', result: searchResult, success: true, summary: 'search hits' },
+      } as never)
+
+      const pattern = simpleLoop(mockController, ['Return'], {
+        patternId: 'omit-expand',
+        // Keyed by the REFERENCED result's origin tool, not by expandPreviousResult.
+        resultOmit: { graph_files_search: ['webUrl'] },
+      })
+      const scope = createScope('omit-expand', { intent: 'q' })
+      const result = await pattern.fn(scope, createEventView(ctx))
+
+      const previousResults = mockController.mock.calls[1][2] as string
+      expect(previousResults).not.toContain(BIG_URL)
+      expect(previousResults).toContain('a.docx')
+
+      // The tracked expand event keeps the raw referenced result.
+      const expandEvent = result.events.find(
+        e => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'expandPreviousResult',
+      )!
+      expect(JSON.stringify((expandEvent.data as { result: unknown }).result)).toContain(BIG_URL)
+    })
+  })
+
 })

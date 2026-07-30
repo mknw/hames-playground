@@ -39,7 +39,7 @@ export interface SandboxSettings {
 export interface HarnessSettings {
   maxToolTurns: number        // simpleLoop max iterations (default: 5)
   maxRetries: number          // actorCritic max attempts (default: 3)
-  maxResultChars: number      // tool result truncation chars (default: 2000)
+  maxResultChars: number      // tool result truncation chars (default: 8000)
   maxResultForSummary: number // summarizer input limit chars (default: 3000)
   priorTurnCount: number      // prior turns for tool result memory (default: 3)
   routerTurnWindow: number    // router history window in turns (default: 5)
@@ -49,7 +49,12 @@ export interface HarnessSettings {
 export const DEFAULT_SETTINGS: HarnessSettings = {
   maxToolTurns: 5,
   maxRetries: 3,
-  maxResultChars: 2000,
+  // Raised 2000 → 8000 (2026-07-30): at 2000 a 14-hit Graph search showed ~3
+  // hits and the controller re-queried for data it already had (its own
+  // reasoning: "only 3 were shown before truncation"). 8000 ≈ 2k tokens —
+  // trivial against 200k windows and cache-absorbed on the Anthropic chains;
+  // trimToFit still bounds the aggregate turn log on small-window chains.
+  maxResultChars: 8000,
   maxResultForSummary: 3000,
   priorTurnCount: 3,
   routerTurnWindow: 5,

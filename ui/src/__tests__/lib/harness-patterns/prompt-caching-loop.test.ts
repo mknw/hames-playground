@@ -206,8 +206,9 @@ describe('simpleLoop (scheme B) — real loop, rendered per turn', () => {
     const bodies = await runLoop()
     // the tail is the turn counter + output format, and it DOES change
     const tails = bodies.map((b) => tailAfterLastMarker(b).map((blk) => blk.text).join('\n'))
-    expect(tails[0]).toContain('Turn 1. Decide the next action.')
-    expect(tails[1]).toContain('Turn 2. Decide the next action.')
+    // 0-indexed: iteration 1 has no completed turns and asks for turn 0.
+    expect(tails[0]).toContain('Turn 0. Decide the next action.')
+    expect(tails[1]).toContain('Turn 1. Decide the next action.')
     expect(tails[0]).not.toBe(tails[1])
   })
 })

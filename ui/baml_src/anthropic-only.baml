@@ -22,6 +22,25 @@ client<llm> ControllerAnthropic {
     // cost. Backstop is Sonnet 4.6, NOT Haiku: a rate-limit fallback on the
     // controller must stay Sonnet-tier (Haiku's weaker structured output was
     // implicated in tool-loop parse failures).
+    //
+    // Thinking DISABLED (#139): measured on captured controller prompts, the
+    // tool loop decides better without it — 72/72 valid actions vs 70/72, 43%
+    // fewer output tokens, and it stops re-querying when it already holds the
+    // answer. The trace is never exposed to us, so nothing is lost from
+    // `reasoning`. See AnthropicSonnet5NoThink in clients.baml.
+    strategy [AnthropicSonnet5NoThink, AnthropicSonnet46NoThink]
+  }
+}
+
+client<llm> ActorAnthropic {
+  provider fallback
+  options {
+    // The actor keeps thinking ON. Same models as ControllerAnthropic, and it
+    // used to share that client — split so the measured simpleLoop change does
+    // not silently apply here. The #139 corpus contained ZERO ActorController
+    // prompts and nothing deeper than 2 turns; the sandbox actor is the deepest,
+    // most multi-step loop we run and the place thinking is most likely to earn
+    // its cost. Do not flip this without its own measurement.
     strategy [AnthropicSonnet5, AnthropicSonnet46]
   }
 }

@@ -328,6 +328,49 @@ export const TRUNCATION_RETRY_GUIDANCE =
   "part now and CONTINUE BY APPENDING in later calls (e.g. bash `cat >> file <<'EOF'`) " +
   'instead of inlining everything in a single call.'
 
+/**
+ * The model produced NO text at all — the completion is empty.
+ *
+ * Distinct from truncation despite the identical error text: nothing was
+ * generated, so there is nothing to parse and the model did not misunderstand
+ * the contract. Observed with these models returning a `thinking` block (whose
+ * content is not exposed — empty string plus a signature) and then ending the
+ * turn with `stop_reason: end_turn` and no text block. Measured by replaying one
+ * captured controller request: 7 of 43 calls, ~16%; the same request with
+ * thinking disabled produced 0 of 37. Whether to keep thinking on is a separate
+ * question — it is where the controller's reasoning happens — so this is
+ * handled as a retry rather than by changing the model configuration.
+ */
+function collectorReturnedNoText(collector: Collector | undefined): boolean {
+  const last = collector?.last
+  if (!last) return false
+  return !(last.rawLlmResponse ?? '').trim()
+}
+
+/**
+ * Whether a parse failure is worth ONE retry, and what to tell the model.
+ *
+ * Shared by both controller adapters so the retry mechanism stays a single
+ * branch with two triggers rather than a per-cause code path:
+ *  - truncation → retry WITH corrective guidance (the model must respond
+ *    differently, so it needs to know why).
+ *  - empty completion → retry with the prompt UNCHANGED. There is nothing to
+ *    correct: asking again is the whole remedy, and guidance would imply the
+ *    model erred when it simply produced nothing.
+ *
+ * Returns null when the failure is a genuine structured-output failure, which
+ * keeps the existing behaviour (propagate, or escalate on the mixed chains).
+ */
+function planParseRetry(
+  error: unknown,
+  collector: Collector | undefined,
+): { guidance: string | null } | null {
+  if (!(error instanceof BamlValidationError)) return null
+  if (collectorHitOutputCap(collector)) return { guidance: TRUNCATION_RETRY_GUIDANCE }
+  if (collectorReturnedNoText(collector)) return { guidance: null }
+  return null
+}
+
 /** Error thrown by BAML adapters when an LLM call fails after all in-adapter
  *  fallbacks have been exhausted. Carries the captured prompt/variables/HTTP
  *  bodies so the catching pattern can attach them to the emitted `error`
@@ -547,12 +590,16 @@ export function createLoopControllerAdapter(
         ? await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, baseOpts)
         : await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots)
     } catch (e) {
-      // Output-cap truncation (any chain, incl. Anthropic-only): the parse
-      // failed because the response was cut off, not because the model can't
-      // do structured output. ONE corrective retry with the truncation notice
-      // appended to `context` (per-call, transient); a second failure throws.
-      if (e instanceof BamlValidationError && collectorHitOutputCap(collector)) {
-        const retryContext = [context, TRUNCATION_RETRY_GUIDANCE].filter(Boolean).join('\n\n')
+      // Recoverable parse failures (any chain, incl. Anthropic-only): the parse
+      // failed because the response was cut off, or because there was no
+      // response at all — not because the model can't do structured output.
+      // ONE retry, guidance appended to `context` only when there is something
+      // to correct (per-call, transient); a second failure throws.
+      const plan = planParseRetry(e, collector)
+      if (plan) {
+        const retryContext = plan.guidance
+          ? [context, plan.guidance].filter(Boolean).join('\n\n')
+          : context
         try {
           action = hasBaseOpts
             ? await b.LoopController(user_message, intent, tools, turns, retryContext, priorResults, fewShots, baseOpts)
@@ -806,10 +853,13 @@ export function createActorControllerAdapter(
         ? await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, baseOpts)
         : await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts)
     } catch (e) {
-      // Output-cap truncation: one corrective retry with the truncation notice
-      // appended to `context` — see createLoopControllerAdapter for rationale.
-      if (e instanceof BamlValidationError && collectorHitOutputCap(collector)) {
-        const retryContext = [context, TRUNCATION_RETRY_GUIDANCE].filter(Boolean).join('\n\n')
+      // Truncated or empty response: one retry, guidance only when there is
+      // something to correct — see createLoopControllerAdapter for rationale.
+      const plan = planParseRetry(e, collector)
+      if (plan) {
+        const retryContext = plan.guidance
+          ? [context, plan.guidance].filter(Boolean).join('\n\n')
+          : context
         try {
           action = hasBaseOpts
             ? await b.ActorController(user_message, intent, tools, attempts, retryContext, fewShots, attemptNumber, maxAttempts, baseOpts)

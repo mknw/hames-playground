@@ -1,5 +1,8 @@
 /**
- * Output-cap truncation handling in the BAML adapters.
+ * Recoverable parse failures in the BAML adapters: truncation and empty
+ * completions. Both surface as the SAME BamlValidationError text ("missing
+ * required fields"), so they are handled by one retry branch with two triggers
+ * and asserted apart here.
  *
  * A controller response that hits its client's `max_tokens` truncates mid-JSON
  * (observed live: a sandbox actor inlined a full report-generation script into
@@ -42,6 +45,22 @@ function fakeCollector(outputTokens: number, clientName: string): Collector {
       usage: { inputTokens: 1000, outputTokens, cachedInputTokens: 0 },
       calls: [{ selected: true, provider: 'anthropic', clientName }],
       rawLlmResponse: '{"reasoning": "truncated mid-way',
+    },
+  } as unknown as Collector
+}
+
+/**
+ * Collector for a completion with no text: tokens were spent (the model
+ * produced a thinking block whose content is not exposed) but nothing was
+ * returned to parse. Well below the cap, so it must not be mistaken for
+ * truncation.
+ */
+function emptyCollector(outputTokens = 689, rawLlmResponse = ''): Collector {
+  return {
+    last: {
+      usage: { inputTokens: 1000, outputTokens, cachedInputTokens: 0 },
+      calls: [{ selected: true, provider: 'anthropic', clientName: 'AnthropicSonnet5' }],
+      rawLlmResponse,
     },
   } as unknown as Collector
 }
@@ -210,5 +229,119 @@ describe('mixed-chains interaction', () => {
     } finally {
       delete process.env.USE_MIXED_CHAINS
     }
+  })
+})
+
+/**
+ * Empty completions: the model spends output tokens and returns no text (a
+ * thinking block, whose content is not exposed, then `end_turn`). Measured at
+ * ~16% on one replayed controller request — 7 of 43 calls, against 0 of 37 with
+ * thinking disabled. The parse "failure" is a misnomer: there is nothing to
+ * parse, so asking again IS the remedy and there is nothing to correct.
+ */
+describe('empty-completion retry', () => {
+  it('LoopController retries ONCE with the context UNCHANGED', async () => {
+    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { BamlValidationError } = await import('@boundaryml/baml')
+
+    mockLoopController
+      .mockRejectedValueOnce(new BamlValidationError('prompt', '', 'missing=5', 'missing=5'))
+      .mockResolvedValueOnce(mockFinalAction('Recovered'))
+
+    const controller = createLoopControllerAdapter(['Return'], 'Graph context.')
+    const result = await controller('user message', 'intent', '[]', 2, undefined, emptyCollector())
+
+    expect(result.action).toBeDefined()
+    expect(mockLoopController).toHaveBeenCalledTimes(2)
+    // Same context both times: no guidance, because the model did not err —
+    // it produced nothing. Telling it "your response was cut off" would be false.
+    const first = mockLoopController.mock.calls[0][4]
+    const retry = mockLoopController.mock.calls[1][4]
+    expect(retry).toEqual(first)
+    expect(String(retry)).not.toContain('CUT OFF')
+  })
+
+  it('ActorController retries ONCE with the context UNCHANGED', async () => {
+    const { createActorControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { BamlValidationError } = await import('@boundaryml/baml')
+
+    mockActorController
+      .mockRejectedValueOnce(new BamlValidationError('prompt', '', 'missing=5', 'missing=5'))
+      .mockResolvedValueOnce(mockFinalAction('Recovered'))
+
+    const actor = createActorControllerAdapter({ toolNames: ['sandbox_bash'], contextPrefix: 'You have a sandbox.' })
+    const result = await actor('do the thing', 'intent', [], [], emptyCollector(), 1, 6)
+
+    expect(result.action).toBeDefined()
+    expect(mockActorController).toHaveBeenCalledTimes(2)
+    expect(mockActorController.mock.calls[1][4]).toEqual(mockActorController.mock.calls[0][4])
+    expect(String(mockActorController.mock.calls[1][4])).not.toContain('CUT OFF')
+  })
+
+  it('whitespace-only output counts as empty', async () => {
+    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { BamlValidationError } = await import('@boundaryml/baml')
+
+    mockLoopController
+      .mockRejectedValueOnce(new BamlValidationError('prompt', '\n  \n', 'missing=5', 'missing=5'))
+      .mockResolvedValueOnce(mockFinalAction('Recovered'))
+
+    const controller = createLoopControllerAdapter(['Return'])
+    await controller('user message', 'intent', '[]', 1, undefined, emptyCollector(400, '\n  \n'))
+    expect(mockLoopController).toHaveBeenCalledTimes(2)
+  })
+
+  it('a cap-hit still wins: truncation guidance, not a bare retry', async () => {
+    const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } = await import(
+      '../../../lib/harness-patterns/baml-adapters.server'
+    )
+    const { BamlValidationError } = await import('@boundaryml/baml')
+
+    mockLoopController
+      .mockRejectedValueOnce(new BamlValidationError('prompt', '', 'missing=5', 'missing=5'))
+      .mockResolvedValueOnce(mockFinalAction('Recovered'))
+
+    const controller = createLoopControllerAdapter(['Return'])
+    // Empty raw response AND at the cap — a response cut off before any text
+    // reached us is still truncation, and the model needs to know why.
+    await controller(
+      'user message', 'intent', '[]', 1, undefined,
+      emptyCollector(32_768, ''),
+    )
+    expect(String(mockLoopController.mock.calls[1][4])).toContain(TRUNCATION_RETRY_GUIDANCE)
+  })
+
+  it('exactly one retry: a second empty response throws LLMCallError', async () => {
+    const { createLoopControllerAdapter, LLMCallError } = await import(
+      '../../../lib/harness-patterns/baml-adapters.server'
+    )
+    const { BamlValidationError } = await import('@boundaryml/baml')
+
+    mockLoopController
+      .mockRejectedValueOnce(new BamlValidationError('prompt', '', 'missing=5', 'missing=5'))
+      .mockRejectedValueOnce(new BamlValidationError('prompt', '', 'missing=5', 'missing=5'))
+
+    const controller = createLoopControllerAdapter(['Return'])
+    await expect(
+      controller('user message', 'intent', '[]', 1, undefined, emptyCollector()),
+    ).rejects.toBeInstanceOf(LLMCallError)
+    expect(mockLoopController).toHaveBeenCalledTimes(2)
+  })
+
+  it('a non-empty response that simply failed to parse is NOT retried', async () => {
+    const { createLoopControllerAdapter, LLMCallError } = await import(
+      '../../../lib/harness-patterns/baml-adapters.server'
+    )
+    const { BamlValidationError } = await import('@boundaryml/baml')
+
+    mockLoopController.mockRejectedValueOnce(
+      new BamlValidationError('prompt', 'Turn 2 action: …', 'missing=5', 'missing=5'),
+    )
+
+    const controller = createLoopControllerAdapter(['Return'])
+    await expect(
+      controller('user message', 'intent', '[]', 1, undefined, emptyCollector(500, 'Turn 2 action: …')),
+    ).rejects.toBeInstanceOf(LLMCallError)
+    expect(mockLoopController).toHaveBeenCalledTimes(1)
   })
 })

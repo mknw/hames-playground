@@ -36,9 +36,9 @@ template_string ActorFewShots(few_shots: FewShot[]?) #"
   {% for ex in few_shots %}
 
   - User: {{ ex.user }}
-    Reasoning: {{ ex.reasoning }}
-    Tool: {{ ex.tool }}
-    Args: {{ ex.args }}
+    reasoning: {{ ex.reasoning }}
+    tool_name: {{ ex.tool }}
+    tool_args: {{ ex.args }}
   {% endfor %}
 
   ---
@@ -79,15 +79,17 @@ template_string ActorTaskFrame(intent: string, context: string?, user_message: s
 // attempts|length - 1 == attempt_n - 2, so `>=` fires on the last entry only
 // (strict `>` never fires — measured as 0% cache reads before the fix).
 // Result blocks use the system role; the wire coerces them to `user`.
+// Assistant entries render the recorded ControllerAction as JSON — the shape
+// `ctx.output_format` asks for. Same reasoning as simpleLoop's LoopTurnLog (see
+// the comment there): prior assistant messages are the model's own output, so a
+// prose history demonstrates a vocabulary that contradicts the response contract
+// and the demonstrations outnumber the instruction. Unlike simpleLoop, `is_final`
+// comes from the DATA here: the critic verifies and can reject, so an attempt
+// with is_final=true legitimately appears in history followed by another attempt.
 template_string ActorAttemptLog(attempts: Attempt[], attempt_n: int?) #"
   {% for attempt in attempts %}
   {{ _.role("assistant") }}
-  Attempt {{ attempt.n }} action:
-      {% if attempt.action.reasoning %}
-      Reasoning: {{ attempt.action.reasoning }}
-      {% endif %}
-  Tool: {{ attempt.action.tool_name }}
-  Args: {{ attempt.action.tool_args }}
+  {"reasoning": {{ attempt.action.reasoning | default("") | tojson }}, "tool_name": {{ attempt.action.tool_name | tojson }}, "tool_args": {{ attempt.action.tool_args | tojson }}, "status": {{ attempt.action.status | default("") | tojson }}, "is_final": {{ attempt.action.is_final | tojson }}}
       {% if loop.index0 >= (attempt_n - 2) %}
       {{ _.role("system", cache_control={"type": "ephemeral"}) }}
       {% else %}
@@ -137,7 +139,10 @@ function ActorController(
   attempt_n: int?,
   max_attempts: int?
 ) -> ControllerAction {
-  client ControllerAnthropic
+  // ActorAnthropic, not ControllerAnthropic: same models, but thinking stays ON
+  // here. #139 disabled it for the simpleLoop controller on measured evidence
+  // that did not cover this pattern at all.
+  client ActorAnthropic
   prompt #"
     {# ────────── SYSTEM · static requirements: role · tools · examples ────────── #}
     {{ _.role("system") }}

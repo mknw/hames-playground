@@ -20,6 +20,11 @@ class ToolDescription {
 class LoopTurn {
   n int @description("Turn number, 0-indexed")
   reasoning string? @description("Agent reasoning for this turn")
+  /// The turn's own user-facing status. Recorded so the assistant turn log can
+  /// replay a COMPLETE ControllerAction — a history entry missing required
+  /// fields would demonstrate exactly the malformed shape we want to prevent.
+  /// Optional because sessions serialized before this field exists still parse.
+  status string? @description("Short user-facing status message from this turn's action")
   tool_call ToolCall? @description("Tool invocation if any")
   tool_result ToolResult? @description("Tool execution result if any")
   expansions ExpandedRef[]? @description("Refs resolved into tool_args this turn via ref:<id>")

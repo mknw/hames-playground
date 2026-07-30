@@ -162,6 +162,51 @@ client<llm> AnthropicSonnet46 {
   }
 }
 
+// --- Thinking-disabled variants (#139) --------------------------------------
+// These models run extended thinking BY DEFAULT — no request asks for it — and
+// they do not expose the trace (empty `thinking` string plus a signature), so a
+// caller pays for tokens it can neither read nor replay into `reasoning`.
+//
+// Measured over 12 captured controller prompts × 6 samples each (144 calls):
+// disabling thinking took valid actions from 70/72 to 72/72 (with it on, the
+// model sometimes ends its turn having produced ONLY thinking and no text — the
+// failure #138 retries), cut median output tokens 438 → 249, and stopped the
+// controller re-running a search it had just run while already holding the
+// answer. Full data and the per-prompt output comparison: #139.
+//
+// Used ONLY by ControllerAnthropic (the simpleLoop tool loop). Everything else
+// keeps thinking, deliberately: the actor, router, critic and synthesizer are
+// unmeasured, and the actor in particular is the deepest loop we run.
+//
+// Identical to their twins otherwise — keep the options in sync, including
+// `allowed_role_metadata` (#122 cache markers) and the caps / pricing entries in
+// `settings.ts` keyed by these names.
+client<llm> AnthropicSonnet5NoThink {
+  provider anthropic
+  options {
+    model "claude-sonnet-5"
+    api_key env.ANTHROPIC_API_KEY
+    max_tokens 32768
+    allowed_role_metadata ["cache_control"]
+    thinking {
+      type "disabled"
+    }
+  }
+}
+
+client<llm> AnthropicSonnet46NoThink {
+  provider anthropic
+  options {
+    model "claude-sonnet-4-6"
+    api_key env.ANTHROPIC_API_KEY
+    max_tokens 16384
+    allowed_role_metadata ["cache_control"]
+    thinking {
+      type "disabled"
+    }
+  }
+}
+
 client<llm> AnthropicHaiku45 {
   provider anthropic
   retry_policy Constant

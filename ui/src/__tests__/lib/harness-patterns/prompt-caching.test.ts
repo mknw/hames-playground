@@ -118,7 +118,8 @@ describe('LoopController prompt-caching layout', () => {
     expect(tier2.text).toContain('[ref:ev_1] search: Found 3 nodes about X')
     // volatile tail: turn counter + output format, never cached
     expect(tail.cache_control).toBeUndefined()
-    expect(tail.text).toContain('Turn 1. Decide the next action.')
+    // 0-indexed, matching the `n` the first turn is recorded under.
+    expect(tail.text).toContain('Turn 0. Decide the next action.')
   })
 
   it('history renders as chronological assistant/user pairs', async () => {
@@ -129,8 +130,9 @@ describe('LoopController prompt-caching layout', () => {
 
     const all = blocks(body)
     const a1 = all.find((blk) => blk.role === 'assistant')
-    expect(a1?.text).toContain('Turn 1 action:')
-    expect(a1?.text).toContain('Call: get_neo4j_schema')
+    // Assistant turns replay the recorded action as ControllerAction JSON — the
+    // shape the controller is asked to emit. See controller-history-format.test.ts.
+    expect(JSON.parse(a1?.text ?? '{}')).toMatchObject({ tool_name: 'get_neo4j_schema' })
     const r1 = all.find((blk) => blk.text?.includes('Turn 1 result:'))
     expect(r1?.role).toBe('user')
     expect(r1?.text).toContain('(Person)-[:KNOWS]->(Person)')
@@ -238,7 +240,8 @@ describe('ActorController prompt-caching layout (production scheme)', () => {
     const body = await renderActor(ATTEMPTS)
     const all = blocks(body)
     const a1 = all.find((blk) => blk.role === 'assistant')
-    expect(a1?.text).toContain('Attempt 1 action:')
+    // Attempts replay as ControllerAction JSON, matching the requested shape.
+    expect(JSON.parse(a1?.text ?? '{}')).toMatchObject({ tool_name: 'code-mode' })
     const r1 = all.find((blk) => blk.text?.includes('Attempt 1 result:'))
     expect(r1?.role).toBe('user') // authored as system, coerced on the wire
     expect(r1?.cache_control).toBeUndefined()

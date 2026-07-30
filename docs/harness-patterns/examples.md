@@ -15,7 +15,6 @@ All agents are registered in `registry.server.ts` and available via `getAgentLis
 | `default` | Default Agent | router → synthesizer | neo4j, web_search, fetch |
 | `code-mode` | Code Mode Agent | router → actorCritic → synthesizer | all (via code-mode factory) |
 | `multi-source-research` | Multi-Source Research | parallel → judge → synthesizer | web_search, github, context7 |
-| `conversational-memory` | Conversational Memory | sessionTracker → router → memoryWriter → synthesizer | memory, neo4j, web_search, redis |
 | `sandbox-session` | Sandbox · Session | compactIntent → withSandbox(actorCritic) → synthesizer | none (in-VM sandbox tools) |
 | `retriever` | Retriever Agent | router → { retriever \| neo4j \| web_search } → synthesizer | neo4j, web_search, fetch (+ Data Stash via Redis retriever) |
 | `flavoured-sandbox` | Sandbox · Flavoured (router) | router → withSandbox(actorCritic) per flavour (base / image-processing / data) → synthesizer | none (in-VM sandbox tools per flavour) |
@@ -59,25 +58,7 @@ synthesizer({ mode: 'response' })
 
 ---
 
-## 3. Conversational Memory
-
-**File:** `conversational-memory.server.ts`
-
-Memory scratchpad with KB distillation.
-
-```
-sessionTracker → hset/expire session metadata
-router(neo4j | web_search)
-memoryWriter   → persist key facts
-synthesizer
-
-+ hook(distillChain, { trigger: 'session_close', background: true })
-  → read memory → distill → persist to neo4j → cleanup
-```
-
----
-
-## 4. Code Mode Agent
+## 3. Code Mode Agent
 
 **File:** `code-mode.server.ts`
 

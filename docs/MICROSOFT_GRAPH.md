@@ -12,16 +12,18 @@ machinery see [UI_ARCHITECTURE.md §3](UI_ARCHITECTURE.md).
 
 ## What it can do today
 
-Seven registered `graph` tools. All of them only ever **read** from Microsoft 365:
+Nine registered `graph` tools. All of them only ever **read** from Microsoft 365:
 
 | Tool | Reads | Scope used |
 |------|-------|-----------|
 | `graph_me` | own profile (name, UPN, job title, office) | `User.Read` |
 | `graph_calendar_today` | own calendar for a given day (`day_offset`) | `Calendars.ReadWrite` |
 | `graph_mail_recent` | own inbox, newest first, optional `unread_only` | `Mail.Read` |
+| `graph_mail_attachments` | own sent/received mail carrying attachments, by person/date | `Mail.Read` |
 | `graph_files_search` | files across own OneDrive **and** every reachable SharePoint site | `Files.Read.All` + `Sites.Read.All` |
 | `graph_files_list` | own OneDrive root, or one folder's children | `Files.Read.All` |
 | `graph_files_recent` | own recently used/edited files (Office Graph insights) | `Sites.Read.All` |
+| `graph_files_shared` | what was shared *with* the user, by whom and how (insights) | `Sites.Read.All` |
 | `graph_file_ingest` | one own OneDrive/SharePoint file → the Data Stash | `Files.Read.All` |
 
 Enough for "what does my day look like?" — the agent's loop calls several tools
@@ -29,7 +31,7 @@ in one turn and the synthesizer writes the briefing — plus "find last quarter'
 budget in Finance", which is [file discovery](#finding-a-file), and "pull that
 spreadsheet in and chart it", which is [the file bridge](#files--the-data-stash).
 
-**The agent composes six of the seven.** The **Microsoft 365** agent
+**The agent composes eight of the nine.** The **Microsoft 365** agent
 (`lib/harness-client/examples/microsoft-365.server.ts`) takes an explicit
 allowlist, `MICROSOFT_365_TOOLS`, and `graph_file_ingest` is deliberately not in
 it: ingestion puts a file's bytes in the Data Stash, which is reachable only

@@ -1227,3 +1227,303 @@ registerAppTool({
     return { items: rows };
   },
 });
+
+// ----------------------------------------------------------------------------
+// Shared with me (Office Graph insights)
+// ----------------------------------------------------------------------------
+
+/** One thing shared with the signed-in user. */
+export interface GraphSharedFile {
+  name: string | null;
+  /** "file" (a driveItem — carries the handoff pair) or "attachment" (an email
+   *  attachment — lives in a mailbox, so there are no drive ids to hand on). */
+  kind: "file" | "attachment";
+  shared_by: string | null;
+  shared_when: string | null;
+  /** How it was shared: "Link", "Attachment", "Direct" (from Graph). */
+  how: string | null;
+  drive_id: string | null;
+  item_id: string | null;
+  webUrl: string | null;
+}
+
+export interface GraphSharedFilesResult {
+  items: GraphSharedFile[];
+  /** Present when insights were unavailable (tenant policy) or when a
+   *  shared_by filter matched nothing — steers instead of failing. */
+  note?: string;
+}
+
+/**
+ * Shape one /me/insights/shared row; null for rows that aren't shareable
+ * content (bare `entity` references arrive with no title and no address —
+ * noise a model would only trip on).
+ *
+ * INBOUND ONLY, by construction of the Office Graph: sharing is recorded on
+ * the RECIPIENT's insights (measured: 50 rows, 15 distinct sharers, zero
+ * shared by the signed-in user). "What did I share with X" is X's question to
+ * ask; this tool answers "what was shared with me" and "what did X share with
+ * me".
+ */
+export function shapeSharedInsight(raw: unknown): GraphSharedFile | null {
+  const it = (raw ?? {}) as Record<string, unknown>;
+  const ref = (it.resourceReference ?? {}) as Record<string, unknown>;
+  const kind =
+    ref.type === "microsoft.graph.driveItem"
+      ? ("file" as const)
+      : ref.type === "microsoft.graph.fileAttachment"
+        ? ("attachment" as const)
+        : null;
+  if (!kind) return null;
+  const vis = (it.resourceVisualization ?? {}) as Record<string, unknown>;
+  const last = (it.lastShared ?? {}) as Record<string, unknown>;
+  const by = (last.sharedBy ?? {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+  const ids = kind === "file" ? /^drives\/([^/]+)\/items\/(.+)$/.exec(str(ref.id) ?? "") : null;
+  return {
+    name: str(vis.title),
+    kind,
+    shared_by: str(by.displayName),
+    shared_when: str(last.sharedDateTime),
+    how: str(last.sharingType),
+    drive_id: ids ? ids[1] : null,
+    item_id: ids ? ids[2] : null,
+    webUrl: str(ref.webUrl),
+  };
+}
+
+registerAppTool({
+  name: "graph_files_shared",
+  namespace: "graph",
+  description:
+    "List what was recently shared WITH the signed-in person — OneDrive/" +
+    "SharePoint links and email attachments — newest first, with who shared it, " +
+    "when and how. Filter to one sharer with shared_by (a person's name). This " +
+    "answers \"what was shared with me\" and \"what did X share with me\"; it " +
+    "CANNOT list what the signed-in person shared with others (that is recorded " +
+    "on the recipient's side). Files carry the drive_id + item_id pair the other " +
+    "file tools accept; email attachments do not (they live in the mailbox). " +
+    "Acts as the current signed-in person.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      shared_by: {
+        type: "string",
+        description: 'Only items shared by this person, e.g. "Thibault" or "Thibault Draye".',
+      },
+      limit: {
+        type: "integer",
+        description: "How many items to return, 1-25 (default 10).",
+      },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args, { userId }): Promise<GraphSharedFilesResult> => {
+    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25);
+    const sharedBy = typeof args.shared_by === "string" ? args.shared_by.trim() : "";
+    // Same inflation rationale as graph_files_recent ($top precedes our row
+    // filter), amplified when a sharer filter will discard most rows.
+    const top = sharedBy ? 50 : Math.min(limit * 2, 50);
+    let raw: unknown;
+    try {
+      raw = await graphFetch(userId, `/me/insights/shared?$top=${top}`, {
+        scopes: ["Sites.Read.All"],
+      });
+    } catch (err) {
+      if (err instanceof GraphAuthRequiredError && err.status === 403) {
+        return {
+          items: [],
+          note:
+            "Item insights are disabled by tenant policy (or this account lacks " +
+            'consent for them) — use graph_files_search with sort="newest" instead.',
+        };
+      }
+      throw err;
+    }
+    const needle = sharedBy.toLowerCase();
+    const rows = ((raw as { value?: unknown[] })?.value ?? [])
+      .map(shapeSharedInsight)
+      .filter((r): r is GraphSharedFile => r !== null)
+      .filter((r) => !needle || (r.shared_by ?? "").toLowerCase().includes(needle))
+      .slice(0, limit);
+    if (rows.length === 0 && sharedBy) {
+      return {
+        items: [],
+        note:
+          `Nothing in the recent sharing activity was shared by "${sharedBy}". ` +
+          "The window covers recent items only — try graph_files_search with " +
+          "author for older files.",
+      };
+    }
+    return { items: rows };
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Mail with attachments (sent or received)
+// ----------------------------------------------------------------------------
+
+/** One attachment on a message — name/size/type only, never content bytes. */
+export interface GraphMailAttachment {
+  name: string | null;
+  size: number | null;
+  contentType: string | null;
+}
+
+export interface GraphMailAttachmentMessage {
+  subject: string | null;
+  /** The other side of the exchange: recipients for sent mail, sender for
+   *  received mail. */
+  with: string[];
+  date: string | null;
+  attachments: GraphMailAttachment[];
+  webLink: string | null;
+}
+
+export interface GraphMailAttachmentsResult {
+  direction: "sent" | "received";
+  messages: GraphMailAttachmentMessage[];
+}
+
+/** Case-insensitive person match against a display name or address. */
+function personMatches(needle: string, name: unknown, address: unknown): boolean {
+  const n = needle.toLowerCase();
+  return (
+    (typeof name === "string" && name.toLowerCase().includes(n)) ||
+    (typeof address === "string" && address.toLowerCase().includes(n))
+  );
+}
+
+/** Shape one message row from the attachments query. */
+export function shapeAttachmentMessage(
+  raw: unknown,
+  direction: "sent" | "received",
+): GraphMailAttachmentMessage {
+  const m = (raw ?? {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+  const recips = (Array.isArray(m.toRecipients) ? m.toRecipients : []) as Array<
+    Record<string, unknown>
+  >;
+  const from = ((m.from ?? {}) as Record<string, unknown>).emailAddress as
+    | Record<string, unknown>
+    | undefined;
+  const withNames =
+    direction === "sent"
+      ? recips
+          .map((r) => str((r.emailAddress as Record<string, unknown> | undefined)?.name))
+          .filter((n): n is string => n !== null)
+      : [str(from?.name)].filter((n): n is string => n !== null);
+  const atts = (Array.isArray(m.attachments) ? m.attachments : []) as Array<
+    Record<string, unknown>
+  >;
+  return {
+    subject: str(m.subject),
+    with: withNames,
+    date: str(m.sentDateTime) ?? str(m.receivedDateTime),
+    attachments: atts.map((a) => ({
+      name: str(a.name),
+      size: typeof a.size === "number" && Number.isFinite(a.size) ? a.size : null,
+      contentType: str(a.contentType),
+    })),
+    webLink: str(m.webLink),
+  };
+}
+
+registerAppTool({
+  name: "graph_mail_attachments",
+  namespace: "graph",
+  description:
+    "List the signed-in person's emails that carry file attachments — what was " +
+    "SENT (default) or RECEIVED, newest first, with the attachment names. " +
+    "Filter to one person and/or a start date. Useful for \"what files did I " +
+    "send X\" — but note it only sees files that travelled through email: " +
+    "OneDrive/SharePoint shares made from the Share dialog do not appear in " +
+    "sent mail. Returns attachment names and sizes, not their contents. Acts " +
+    "as the current signed-in person.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      person: {
+        type: "string",
+        description:
+          "Only exchanges with this person (name or email), e.g. \"Thibault\". " +
+          "Matches recipients for sent mail, the sender for received mail.",
+      },
+      direction: {
+        type: "string",
+        enum: ["sent", "received"],
+        description: "Look in sent mail (default) or received mail.",
+      },
+      since: {
+        type: "string",
+        description: "Only messages on/after this date, e.g. 2026-07-01.",
+      },
+      limit: {
+        type: "integer",
+        description: "How many messages to return, 1-25 (default 10).",
+      },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args, { userId }): Promise<GraphMailAttachmentsResult> => {
+    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25);
+    const direction = args.direction === "received" ? ("received" as const) : ("sent" as const);
+    const person = typeof args.person === "string" ? args.person.trim() : "";
+
+    // Same reject-don't-drop rule as the search date args: a silently ignored
+    // `since` is a silently wrong answer.
+    let sinceClause = "";
+    if (typeof args.since === "string" && args.since.trim()) {
+      const d = new Date(args.since.trim());
+      if (Number.isNaN(d.getTime())) {
+        throw new Error(`since must be a date like 2026-07-01 (got "${args.since}").`);
+      }
+      sinceClause = ` and receivedDateTime ge ${d.toISOString().slice(0, 10)}T00:00:00Z`;
+    }
+
+    const folder = direction === "sent" ? "sentitems" : "inbox";
+    // The person filter runs app-side (recipient matching in OData is awkward
+    // and unindexed), so the request is inflated and sliced after filtering.
+    const top = person ? 50 : Math.min(limit * 2, 50);
+    // No $orderby: combined with $filter Graph requires the sort property to
+    // lead the filter, and the default order is already newest-first.
+    // Attachments are expanded WITHOUT contentBytes — names and sizes only.
+    const raw = await graphFetch(
+      userId,
+      `/me/mailFolders/${folder}/messages` +
+        `?$filter=hasAttachments eq true${sinceClause}` +
+        `&$select=subject,toRecipients,from,sentDateTime,receivedDateTime,webLink` +
+        `&$expand=attachments($select=name,size,contentType)` +
+        `&$top=${top}`,
+      { scopes: ["Mail.Read"] },
+    );
+
+    const messages = ((raw as { value?: unknown[] })?.value ?? [])
+      .map((m) => ({ raw: m, shaped: shapeAttachmentMessage(m, direction) }))
+      .filter(({ raw: m }) => {
+        if (!person) return true;
+        const msg = (m ?? {}) as Record<string, unknown>;
+        if (direction === "received") {
+          const from = ((msg.from ?? {}) as Record<string, unknown>).emailAddress as
+            | Record<string, unknown>
+            | undefined;
+          return personMatches(person, from?.name, from?.address);
+        }
+        const recips = (Array.isArray(msg.toRecipients) ? msg.toRecipients : []) as Array<
+          Record<string, unknown>
+        >;
+        return recips.some((r) => {
+          const ea = (r.emailAddress ?? {}) as Record<string, unknown>;
+          return personMatches(person, ea.name, ea.address);
+        });
+      })
+      .map(({ shaped }) => shaped)
+      // Real attachments only: inline images and signature logos also set
+      // hasAttachments, but arrive with isInline — Graph still lists them, so
+      // an empty attachments array can slip through for filtered $selects.
+      .filter((m) => m.attachments.length > 0)
+      .slice(0, limit);
+
+    return { direction, messages };
+  },
+});

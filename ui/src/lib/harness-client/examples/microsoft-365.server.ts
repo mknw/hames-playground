@@ -47,9 +47,11 @@ export const MICROSOFT_365_TOOLS = [
   "graph_me",
   "graph_calendar_today",
   "graph_mail_recent",
+  "graph_mail_attachments",
   "graph_files_search",
   "graph_files_list",
   "graph_files_recent",
+  "graph_files_shared",
 ] as const;
 
 async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
@@ -80,6 +82,7 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
         graph_files_search: ["webUrl"],
         graph_files_list: ["webUrl"],
         graph_files_recent: ["webUrl"],
+        graph_files_shared: ["webUrl"],
       },
     },
   );

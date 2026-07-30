@@ -31,6 +31,8 @@ const {
   rowFlashClass,
   threadIcon,
   railDot,
+  canDeleteRow,
+  deleteConfirmCopy,
 } = await import('../../../components/ark-ui/ChatSidebar')
 type ChatThreadSummary = import('../../../components/ark-ui/ChatSidebar').ChatThreadSummary
 
@@ -175,6 +177,47 @@ describe('threadIcon', () => {
   // conversational-memory) must still show something — a generic robot.
   it('falls back to the generic robot for unknown agents', () => {
     expect(threadIcon({})).toBe('i-material-symbols-smart-toy-outline')
+  })
+})
+
+describe('canDeleteRow', () => {
+  it('allows an idle persisted row', () => {
+    expect(canDeleteRow({ isProcessing: false })).toBe(true)
+  })
+
+  // A mid-run delete would be resurrected by the run's end-save upsert.
+  it('blocks running rows and placeholders', () => {
+    expect(canDeleteRow({ isProcessing: true })).toBe(false)
+    expect(canDeleteRow({ isPlaceholder: true, isProcessing: false })).toBe(false)
+  })
+})
+
+describe('deleteConfirmCopy', () => {
+  it('names the single conversation, quoting its title', () => {
+    expect(deleteConfirmCopy({ kind: 'single', id: 'a', title: 'Graph audit' })).toBe(
+      'Delete "Graph audit"? This can\'t be undone.',
+    )
+  })
+
+  it('falls back to (untitled) for a titleless row', () => {
+    expect(deleteConfirmCopy({ kind: 'single', id: 'a', title: null })).toBe(
+      'Delete "(untitled)"? This can\'t be undone.',
+    )
+  })
+
+  it('counts a bulk delete, singular and plural', () => {
+    expect(
+      deleteConfirmCopy({ kind: 'bulk', ids: ['a'], skippedRunning: 0 }),
+    ).toBe("Delete 1 conversation? This can't be undone.")
+    expect(
+      deleteConfirmCopy({ kind: 'bulk', ids: ['a', 'b', 'c'], skippedRunning: 0 }),
+    ).toBe("Delete 3 conversations? This can't be undone.")
+  })
+
+  it('appends the running-skip note only when rows were skipped', () => {
+    expect(
+      deleteConfirmCopy({ kind: 'bulk', ids: ['a', 'b'], skippedRunning: 2 }),
+    ).toBe("Delete 2 conversations? This can't be undone. 2 running — skipped.")
   })
 })
 

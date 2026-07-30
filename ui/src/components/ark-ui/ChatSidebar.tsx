@@ -1,4 +1,5 @@
 import { For, Show, createSignal } from 'solid-js'
+import { Dialog } from '@ark-ui/solid/dialog'
 import { SettingsPanel } from './SettingsPanel'
 import { regenerateConversationTitle } from '../../lib/harness-client'
 import type { CompletionMark, SessionRunState } from '../../lib/run-registry'
@@ -111,6 +112,10 @@ interface ChatSidebarProps {
    *  another thread: the row flashes once, then keeps an accent border
    *  until opened (#105). */
   getCompletion?: (sessionId: string) => CompletionMark | undefined
+  /** Delete the given conversations (#71). The sidebar owns the confirm UX;
+   *  the route owns the mutation (server action + threads cache + its
+   *  per-session registries). Rejects → the dialog stays open for retry. */
+  onDeleteThreads?: (ids: string[]) => Promise<void>
 }
 
 /**
@@ -217,6 +222,35 @@ export function railDot(args: {
   const c = completionBorderColor(args.completion)
   if (c) return { color: c, pulse: false }
   return null
+}
+
+/**
+ * Whether a row may be deleted (#71). Placeholders have nothing persisted;
+ * running rows are blocked because the run's end-save upsert would silently
+ * recreate the deleted row — mid-run cancellation is out of scope (#105 PR 3).
+ */
+export function canDeleteRow(args: {
+  isPlaceholder?: boolean
+  isProcessing: boolean
+}): boolean {
+  return !args.isPlaceholder && !args.isProcessing
+}
+
+/** What the delete-confirm dialog is being asked to delete (#71). */
+export type DeleteTarget =
+  | { kind: 'single'; id: string; title: string | null }
+  | { kind: 'bulk'; ids: string[]; skippedRunning: number }
+
+/** Confirm copy — single line, no "Are you sure" hedge (house tone). */
+export function deleteConfirmCopy(target: DeleteTarget): string {
+  if (target.kind === 'single') {
+    return `Delete "${target.title ?? '(untitled)'}"? This can't be undone.`
+  }
+  const n = target.ids.length
+  const base = `Delete ${n} conversation${n === 1 ? '' : 's'}? This can't be undone.`
+  return target.skippedRunning > 0
+    ? `${base} ${target.skippedRunning} running — skipped.`
+    : base
 }
 
 /** Shared with the in-chat LiveProgressBar so the two read as one system. */
@@ -329,6 +363,33 @@ const FILTER_LABELS: ReadonlyArray<{ value: ThreadFilter; label: string }> = [
 export const ChatSidebar = (props: ChatSidebarProps) => {
   // Per-thread pending state for the ↻ button — keyed by sessionId.
   const [pendingRegen, setPendingRegen] = createSignal<ReadonlySet<string>>(new Set())
+  // Delete confirm state (#71): non-null while the dialog is up. `deleting`
+  // keeps the dialog open (buttons disabled) during the server round trip.
+  const [confirmTarget, setConfirmTarget] = createSignal<DeleteTarget | null>(null)
+  const [deleting, setDeleting] = createSignal(false)
+
+  const requestDelete = (e: MouseEvent, thread: ChatThreadSummary) => {
+    // Stop the click from also selecting the thread.
+    e.stopPropagation()
+    e.preventDefault()
+    setConfirmTarget({ kind: 'single', id: thread.id, title: thread.title })
+  }
+
+  const performDelete = async () => {
+    const target = confirmTarget()
+    if (!target || deleting() || !props.onDeleteThreads) return
+    const ids = target.kind === 'single' ? [target.id] : target.ids
+    setDeleting(true)
+    try {
+      await props.onDeleteThreads(ids)
+      setConfirmTarget(null)
+    } catch (err) {
+      // Leave the dialog open so the user can retry or cancel.
+      console.error('[sidebar] delete failed:', err)
+    } finally {
+      setDeleting(false)
+    }
+  }
   // Segmented Actions/Conversations/All filter (#agent-trigger). Local state —
   // the parent passes the full thread list; we filter for display.
   const [filter, setFilter] = createSignal<ThreadFilter>('all')
@@ -564,7 +625,10 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         class={`group ${rowFlashClass(completion())}`}
                         style={{ 'border-color': completionBorderColor(completion()) }}
                       >
-                        <div flex="~" items="center" gap="1.5" pr="6">
+                        {/* Inline padding-right: two hover actions need
+                            ~3.5rem clearance, and new attributify spacing
+                            literals are extractor roulette (see t-1.5). */}
+                        <div flex="~" items="center" gap="1.5" style={{ 'padding-right': '3.5rem' }}>
                           {/* Agent identity (#60) — muted so the title stays
                               the row's anchor. Hidden for placeholders. */}
                           <Show when={threadIcon(thread)}>
@@ -602,11 +666,41 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         >
                           <RowProgress snapshot={props.getProgress!(thread.id).snapshot()} />
                         </Show>
+                        {/* Hover-reveal delete button (#71). Hidden — not
+                            disabled — for placeholders and running rows: a
+                            mid-run delete would be resurrected by the run's
+                            end-save upsert, so the affordance simply isn't
+                            offered (mid-run cancel is #105 PR 3 scope). Same
+                            span-not-button idiom as the regenerate action. */}
+                        <Show when={canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: live() })}>
+                          <span
+                            aria-hidden="true"
+                            onClick={(e) => requestDelete(e, thread)}
+                            title="Delete conversation"
+                            style={{
+                              position: 'absolute',
+                              top: '0.5rem',
+                              right: '0.5rem',
+                              padding: '0.25rem',
+                              'border-radius': '0.375rem',
+                              cursor: 'pointer',
+                            }}
+                            text="xs dark-text-tertiary hover:red-400"
+                            transition="opacity"
+                            class="opacity-0 group-hover:opacity-100"
+                          >
+                            <span
+                              class="i-material-symbols-delete-outline"
+                              style={{ width: '14px', height: '14px', display: 'block' }}
+                            />
+                          </span>
+                        </Show>
                         {/* Hover-reveal regenerate-title button. Hidden for
                             placeholder rows (nothing persisted yet). Spinning
                             while the LLM call is in flight. Sits in a span
                             outside the outer <button> hit area so nested-
-                            interactive semantics stay valid. */}
+                            interactive semantics stay valid. Shifted left to
+                            make room for the delete action at right:0.5rem. */}
                         <Show when={!thread.isPlaceholder}>
                           <span
                             aria-hidden="true"
@@ -615,7 +709,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             style={{
                               position: 'absolute',
                               top: '0.5rem',
-                              right: '0.5rem',
+                              right: '2rem',
                               padding: '0.25rem',
                               'border-radius': '0.375rem',
                               cursor: 'pointer',
@@ -670,6 +764,94 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
           </div>
         </>
       )}
+
+      {/* Delete confirm (#71) — Ark Dialog for free Escape + focus trap
+          (EnvVarManager idiom, incl. the attributify-props cast). */}
+      <Dialog.Root
+        open={confirmTarget() != null}
+        onOpenChange={(d) => {
+          if (!d.open && !deleting()) setConfirmTarget(null)
+        }}
+      >
+        <Dialog.Backdrop
+          {...({
+            bg: 'black/50',
+            position: 'fixed',
+            top: '0',
+            left: '0',
+            w: 'full',
+            h: 'full',
+            z: '40',
+          } as Record<string, string>)}
+        />
+        <Dialog.Positioner
+          {...({
+            position: 'fixed',
+            top: '0',
+            left: '0',
+            w: 'full',
+            h: 'full',
+            z: '50',
+            flex: '~',
+            items: 'center',
+            justify: 'center',
+          } as Record<string, string>)}
+        >
+          <Dialog.Content
+            bg="dark-bg-secondary"
+            border="1 dark-border-primary"
+            rounded="lg"
+            shadow="2xl"
+            p="5"
+            m="4"
+            style={{ 'max-width': '24rem' }}
+          >
+            <Show when={confirmTarget()}>
+              {(target) => (
+                <>
+                  <Dialog.Title text="sm dark-text-primary" font="medium" flex="~" items="center" gap="2">
+                    <span
+                      class="i-material-symbols-delete-outline"
+                      aria-hidden="true"
+                      style={{ width: '18px', height: '18px', color: '#f87171', 'flex-shrink': 0 }}
+                    />
+                    {target().kind === 'single' ? 'Delete conversation' : 'Delete conversations'}
+                  </Dialog.Title>
+                  <Dialog.Description text="xs dark-text-secondary" m="t-2 b-4" style={{ 'line-height': '1.5' }}>
+                    {deleteConfirmCopy(target())}
+                  </Dialog.Description>
+                  <div flex="~" gap="2" justify="end">
+                    <button
+                      onClick={() => setConfirmTarget(null)}
+                      disabled={deleting()}
+                      p="x-3 y-1.5"
+                      rounded="md"
+                      text="xs dark-text-secondary"
+                      bg="transparent hover:dark-bg-hover"
+                      border="1 dark-border-secondary"
+                      transition="all"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => void performDelete()}
+                      disabled={deleting()}
+                      p="x-3 y-1.5"
+                      rounded="md"
+                      text="xs white"
+                      bg="red-600 hover:red-500"
+                      font="medium"
+                      transition="all"
+                    >
+                      {deleting() ? 'Deleting…' : 'Delete'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </Show>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Dialog.Root>
     </div>
   )
 }

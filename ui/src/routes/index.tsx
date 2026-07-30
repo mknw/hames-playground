@@ -7,7 +7,7 @@ import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPane
 import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns'
 import { executeCypherWrite } from '~/lib/neo4j/write-action'
 import { mergeGraphElements } from '~/lib/graph-merge'
-import { listConversations, type OpenReferenceTarget } from '~/lib/harness-client'
+import { listConversations, deleteConversationsBulk, type OpenReferenceTarget } from '~/lib/harness-client'
 import { newSessionId } from '~/lib/session-id'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 import { createChainProgress, type ChainProgressController } from '~/components/ark-ui/useChainProgress'
@@ -339,6 +339,38 @@ export default function Home() {
     setPlaceholderSessionId(null)
   }
 
+  // Delete conversations (#71). The sidebar owns the confirm UX; this owns
+  // the mutation because the per-session registries live here. The cache is
+  // patched from the server's RETURNING list (ground truth), batched once.
+  // Running rows never reach this path — the sidebar hides their delete
+  // affordance and select-mode skips them — so every cleaned-up registry
+  // entry is idle by construction.
+  const handleDeleteThreads = async (ids: string[]) => {
+    const { deleted } = await deleteConversationsBulk(ids)
+    if (deleted.length === 0) return
+    const gone = new Set(deleted)
+    mutateThreads(list => (list ?? []).filter(t => !gone.has(t.id)))
+    for (const id of deleted) {
+      messagesBySession.delete(id)
+      progressBySession.delete(id)
+      clearCompletion(id)
+      abortControllers.delete(id)
+    }
+    setRunStates(prev => {
+      if (!deleted.some(id => id in prev)) return prev
+      const next = { ...prev }
+      for (const id of deleted) delete next[id]
+      return next
+    })
+    // If the open conversation was deleted, land somewhere sensible: the
+    // most recent remaining thread, or a fresh chat when none are left.
+    if (gone.has(selectedSessionId())) {
+      const remaining = (threads.latest ?? []).filter(t => !gone.has(t.id))
+      if (remaining.length > 0) handleSelectThread(remaining[0].id)
+      else handleNewChat()
+    }
+  }
+
   // Once the persisted row for the placeholder lands in the threadsResource,
   // drop the optimistic row so the real one (with its sticky title) takes over.
   createEffect(() => {
@@ -446,6 +478,7 @@ export default function Home() {
               getRunState={getRunState}
               getProgress={getProgress}
               getCompletion={getCompletion}
+              onDeleteThreads={handleDeleteThreads}
             />
             <div flex="1" overflow="hidden">
               <ChatInterface

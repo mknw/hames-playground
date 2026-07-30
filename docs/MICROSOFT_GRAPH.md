@@ -301,9 +301,15 @@ returned resource properties, and a hit stripped of `parentReference` has no
 `drive_id` — the very handoff the tool exists to produce. The shaping function is
 the allowlist instead, so no raw Graph payload reaches the model either way.
 
-`parentReference.path` arrives as `/drives/{id}/root:/Finance/Q3%20Reports`;
-`drivePath` drops the addressing prefix and decodes the segments. A malformed
-escape keeps its raw text rather than failing the result.
+**`path` is best-effort and comes from two places.** A `/children` listing
+carries `parentReference.path` (`/drives/{id}/root:/Finance/Q3%20Reports`);
+`drivePath` drops the addressing prefix and decodes the segments. A **search
+hit never carries it** — `/search/query` resources have `parentReference` with
+only driveId/id/siteId — so `webUrlFolderPath` reads the containing folder out
+of the item's `webUrl` instead (site-relative: `sites/Finance/Q3 Reports`).
+Non-folder URLs (Loop's `loop.cloud.microsoft/p/…`, Office `/_layouts/` viewer
+links) yield `null` rather than garbage. A malformed escape keeps its raw text
+rather than failing the result.
 
 ### Why there is no `recent` mode
 

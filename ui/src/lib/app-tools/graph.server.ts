@@ -737,6 +737,40 @@ export function drivePath(raw: unknown): string | null {
 }
 
 /**
+ * Best-effort containing-folder location derived from an item's `webUrl` —
+ * the fallback when `parentReference.path` is absent, which is EVERY
+ * `/search/query` hit (search resources carry `parentReference` with driveId /
+ * id / siteId but no `path`; `/children` listings do carry it).
+ *
+ * Only attempted for real SharePoint URLs (`*.sharepoint.com`, which covers
+ * `contoso-my.sharepoint.com` personal drives): Loop pages advertise
+ * `loop.cloud.microsoft/p/<base64>` — no folder to read — and Office viewer
+ * URLs (`/_layouts/15/Doc.aspx?...`) name a handler, not a location, so both
+ * yield null. The result is site-relative (`sites/Finance/Shared Documents/Q3`)
+ * rather than drive-relative like {@link drivePath} output — good enough for a
+ * person or a model citing where a file lives.
+ */
+export function webUrlFolderPath(webUrl: unknown): string | null {
+  if (typeof webUrl !== "string" || !webUrl.trim()) return null;
+  try {
+    const url = new URL(webUrl);
+    if (!url.hostname.toLowerCase().endsWith(".sharepoint.com")) return null;
+    if (url.pathname.includes("/_layouts/")) return null;
+    const segments = url.pathname.split("/").filter(Boolean);
+    if (segments.length < 2) return null; // nothing left once the item goes
+    const folder = segments.slice(0, -1).join("/");
+    try {
+      return decodeURIComponent(folder);
+    } catch {
+      // Malformed escape — an ugly path beats no path (same rule as drivePath).
+      return folder;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Readable site from `parentReference.siteId`, which Graph reports as
  * `contoso.sharepoint.com,{siteGuid},{webGuid}`. Only the hostname means
  * anything to a person or to a model citing a source, so the guids are dropped.
@@ -803,7 +837,9 @@ export function shapeFileRef(raw: unknown): GraphFileRef {
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
   return {
     name: base.name,
-    path: drivePath(parent.path),
+    // Search hits never carry `parentReference.path` — fall back to reading
+    // the containing folder out of the webUrl (see webUrlFolderPath).
+    path: drivePath(parent.path) ?? webUrlFolderPath(base.webUrl),
     site: siteHost(parent.siteId),
     modified: str(it.lastModifiedDateTime),
     size: base.size,

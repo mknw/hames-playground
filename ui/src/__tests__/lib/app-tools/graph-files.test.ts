@@ -51,6 +51,7 @@ import {
   cleanSummary,
   drivePath,
   siteHost,
+  webUrlFolderPath,
   shapeFileRef,
   shapeSearchHits,
   shapeFileEntries,
@@ -84,7 +85,9 @@ function sentQuery(): string {
   return (searchRequest().query as { queryString: string }).queryString;
 }
 
-/** One fully-populated driveItem search hit, as Graph nests it. */
+/** One fully-populated driveItem search hit, as Graph nests it.
+ *  NOTE: no `parentReference.path` — real `/search/query` hits never carry it
+ *  (only `/children` listings do); `path` must come from the webUrl fallback. */
 const HIT = {
   hitId: "01HITID",
   rank: 1,
@@ -93,14 +96,13 @@ const HIT = {
     id: "01ITEMID",
     name: "Q3 Budget.xlsx",
     size: 20480,
-    webUrl: "https://contoso.sharepoint.com/sites/Finance/Q3%20Budget.xlsx",
+    webUrl: "https://contoso.sharepoint.com/sites/Finance/Q3%20Reports/Q3%20Budget.xlsx",
     lastModifiedDateTime: "2026-07-20T10:00:00Z",
     file: { mimeType: "application/vnd.ms-excel" },
     parentReference: {
       driveId: "b!DRIVE",
       // Deliberately different from resource.id: this is the *folder*.
       id: "01PARENTFOLDER",
-      path: "/drives/b!DRIVE/root:/Finance/Q3%20Reports",
       siteId: "contoso.sharepoint.com,11111111-1111-1111-1111-111111111111,22222222-2222-2222-2222-222222222222",
     },
   },
@@ -356,14 +358,16 @@ describe("graph_files_search", () => {
       results: [
         {
           name: "Q3 Budget.xlsx",
-          path: "Finance/Q3 Reports",
+          // Derived from the webUrl (site-relative) — search hits carry no
+          // parentReference.path to read a drive-relative one from.
+          path: "sites/Finance/Q3 Reports",
           site: "contoso.sharepoint.com",
           modified: "2026-07-20T10:00:00Z",
           size: 20480,
           snippet: "the quarterly budget was signed off…",
           drive_id: "b!DRIVE",
           item_id: "01ITEMID",
-          webUrl: "https://contoso.sharepoint.com/sites/Finance/Q3%20Budget.xlsx",
+          webUrl: "https://contoso.sharepoint.com/sites/Finance/Q3%20Reports/Q3%20Budget.xlsx",
         },
       ],
       // 42 reported, 1 returned → steering toward narrowing, not limit-raising.
@@ -747,6 +751,46 @@ describe("graph_files_list", () => {
     expect(res.success).toBe(false);
     expect(res.error).toMatch(/sign in/i);
     expect(res.data).toBeNull();
+  });
+});
+
+describe("webUrlFolderPath", () => {
+  it("reads the containing folder out of a SharePoint webUrl, percent-decoded", () => {
+    expect(
+      webUrlFolderPath("https://contoso.sharepoint.com/sites/Finance/Q3%20Reports/Q3%20Budget.xlsx"),
+    ).toBe("sites/Finance/Q3 Reports");
+  });
+
+  it("covers -my.sharepoint.com personal drives", () => {
+    expect(
+      webUrlFolderPath(
+        "https://contoso-my.sharepoint.com/personal/jane_contoso_com/Documents/STIPP/notes.docx",
+      ),
+    ).toBe("personal/jane_contoso_com/Documents/STIPP");
+  });
+
+  it("yields null for Loop URLs — an opaque payload, not a folder", () => {
+    expect(webUrlFolderPath("https://loop.cloud.microsoft/p/eyJ1IjoiaHR0cHM6...")).toBeNull();
+  });
+
+  it("yields null for Office viewer URLs (/_layouts/ names a handler, not a location)", () => {
+    expect(
+      webUrlFolderPath(
+        "https://contoso.sharepoint.com/sites/Fin/_layouts/15/Doc.aspx?sourcedoc={guid}",
+      ),
+    ).toBeNull();
+  });
+
+  it("yields null for malformed input and near-empty paths", () => {
+    expect(webUrlFolderPath("not a url")).toBeNull();
+    expect(webUrlFolderPath("https://contoso.sharepoint.com/file.docx")).toBeNull();
+    expect(webUrlFolderPath(null)).toBeNull();
+  });
+
+  it("a malformed percent-escape degrades to the raw folder, not to null", () => {
+    expect(webUrlFolderPath("https://contoso.sharepoint.com/sites/Fin%zz/doc.docx")).toBe(
+      "sites/Fin%zz",
+    );
   });
 });
 

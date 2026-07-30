@@ -88,6 +88,15 @@ export default function Home() {
   // `mutate` is exposed so the `title_updated` SSE event can patch a single
   // row's title in-place without re-querying the full list (the server already
   // gave us the new title in the event payload).
+  //
+  // IMPORTANT: read via `threads.latest`, never `threads()` (#105). The app
+  // root wraps routes in an empty-fallback <Suspense>; a plain read
+  // re-registers with that boundary on every `refetchThreads()`, detaching
+  // the ENTIRE route for the duration of the DB query — a blank flash that
+  // drops composer focus and chat scroll (typed text survives because the
+  // nodes are re-attached, not recreated). `latest` returns the stale list
+  // without touching Suspense once a first value exists; the initial page
+  // load still suspends as before.
   const [threads, { refetch: refetchThreads, mutate: mutateThreads }] = createResource(() => listConversations())
 
   // Push-driven title update from the SSE stream — the server emits a
@@ -109,7 +118,7 @@ export default function Home() {
   // The effect re-runs on every threads() change; it only arms an interval when
   // a running action exists, and clears it as soon as none remain.
   createEffect(() => {
-    const hasRunningAction = (threads() ?? []).some(
+    const hasRunningAction = (threads.latest ?? []).some(
       t => t.kind === 'action' && t.status === 'running',
     )
     if (!hasRunningAction) return
@@ -335,7 +344,7 @@ export default function Home() {
   createEffect(() => {
     const ph = placeholderSessionId()
     if (!ph) return
-    const list = threads() ?? []
+    const list = threads.latest ?? []
     if (list.some(t => t.id === ph)) {
       setPlaceholderSessionId(null)
     }
@@ -344,7 +353,7 @@ export default function Home() {
   // Display threads = optimistic placeholder (if any) on top, then persisted
   // rows, deduped by id. See `mergeThreadsWithPlaceholder` for the rule.
   const displayThreads = createMemo(() =>
-    mergeThreadsWithPlaceholder(threads() ?? [], placeholderSessionId())
+    mergeThreadsWithPlaceholder(threads.latest ?? [], placeholderSessionId())
   )
 
   // Wrap the supplied unified-context setter so each save also refreshes the

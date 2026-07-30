@@ -581,6 +581,55 @@ export function kqlFileType(value: string): string | null {
   return match ? `filetype:${match[0].toLowerCase()}` : null;
 }
 
+/**
+ * Quote a human phrase as a KQL value — today the `author:` restriction.
+ *
+ * Same strip-don't-escape rule as {@link kqlUrlPhrase} (KQL publishes no escape
+ * for a quote), but whitespace is COLLAPSED, not removed: names legitimately
+ * contain spaces, and inside a quoted phrase they are valid KQL. The
+ * whitespace-removal in `kqlUrlPhrase` is URL-specific, not a general rule.
+ * Null when nothing survives, so the clause is dropped like `site`/`file_type`.
+ */
+export function kqlPhrase(value: string): string | null {
+  const cleaned = value.replace(PHRASE_UNSAFE, "").replace(/\s+/g, " ").trim();
+  return cleaned ? `"${cleaned}"` : null;
+}
+
+/**
+ * `LastModifiedTime` restriction from one or both ISO-ish dates.
+ *
+ * Injection-proof BY CONSTRUCTION, not by sanitization: the value is parsed
+ * with `new Date()` and the emitted text derives from the Date object
+ * (`toISOString().slice(0,10)`), so no caller character can transit into the
+ * query. An unparseable date THROWS rather than being silently dropped — a
+ * silently widened search is exactly the "filter didn't bite" churn this
+ * exists to prevent, and the thrown message round-trips to the model, which
+ * fixes the date on the next turn.
+ *
+ * Both bounds emit the single range clause `LastModifiedTime:a..b` — verified
+ * live (2026-07-30): two space-joined restrictions on the SAME property are
+ * SILENTLY IGNORED by Microsoft Search (the query behaves as if neither were
+ * there), while the range operator and explicit `AND` both filter correctly.
+ */
+export function kqlModifiedRange(
+  after: string | null | undefined,
+  before: string | null | undefined,
+): string | null {
+  const day = (raw: string, argName: string): string => {
+    const d = new Date(raw.trim());
+    if (Number.isNaN(d.getTime())) {
+      throw new Error(`${argName} must be a date like 2026-07-01 (got "${raw}").`);
+    }
+    return d.toISOString().slice(0, 10);
+  };
+  const a = after?.trim() ? day(after, "modified_after") : null;
+  const b = before?.trim() ? day(before, "modified_before") : null;
+  if (a && b) return `LastModifiedTime:${a}..${b}`;
+  if (a) return `LastModifiedTime>=${a}`;
+  if (b) return `LastModifiedTime<=${b}`;
+  return null;
+}
+
 export interface FileSearchArgs {
   /** Free-text terms from the caller. */
   query: string;
@@ -588,6 +637,12 @@ export interface FileSearchArgs {
   site?: string | null;
   /** File extension to restrict to, composed as `filetype:…`. */
   fileType?: string | null;
+  /** Author display name, composed as `author:"…"`. */
+  author?: string | null;
+  /** ISO-ish dates, composed as a `LastModifiedTime` restriction. Invalid
+   *  values THROW (see kqlModifiedRange). */
+  modifiedAfter?: string | null;
+  modifiedBefore?: string | null;
 }
 
 /**
@@ -604,7 +659,14 @@ export interface FileSearchArgs {
  * contains caller-controlled whitespace: `filetype:` takes an alphanumeric run,
  * and the `path:` URL has its whitespace removed rather than preserved.
  */
-export function composeFileQuery({ query, site, fileType }: FileSearchArgs): string {
+export function composeFileQuery({
+  query,
+  site,
+  fileType,
+  author,
+  modifiedAfter,
+  modifiedBefore,
+}: FileSearchArgs): string {
   const parts: string[] = [];
 
   const terms = kqlTerms(query ?? "");
@@ -617,6 +679,12 @@ export function composeFileQuery({ query, site, fileType }: FileSearchArgs): str
   // no `site:` operator — that's Purview eDiscovery). The value is a URL, so it
   // needs quoting: it contains `:` and `/`.
   if (site?.trim()) parts.push(`path:${kqlUrlPhrase(site)}`);
+
+  const byAuthor = author?.trim() ? kqlPhrase(author) : null;
+  if (byAuthor) parts.push(`author:${byAuthor}`);
+
+  const modified = kqlModifiedRange(modifiedAfter, modifiedBefore);
+  if (modified) parts.push(modified);
 
   return parts.join(" ");
 }
@@ -817,6 +885,10 @@ export interface GraphFileSearchResult {
   /** Graph's reported match count; null when Search didn't report one. */
   total: number | null;
   results: GraphFileHit[];
+  /** Steering for the model when `total` exceeds what was returned: the raw
+   *  number alone wasn't acted on (observed: a 4,502-match search answered by
+   *  raising `limit`). Present only when triggered. */
+  hint?: string;
 }
 
 registerAppTool({
@@ -826,8 +898,10 @@ registerAppTool({
     "Search the files the signed-in person can open — their own OneDrive and " +
     "every SharePoint site they have access to. Pass plain words in `query`: the " +
     "app builds the search expression, so search syntax is neither needed nor " +
-    "honoured. Narrow with `site` (a SharePoint site URL) or `file_type` (an " +
-    "extension like docx or pdf). Returns each file's name, folder, site, " +
+    "honoured. Narrow with `site` (a SharePoint site URL), `file_type` (an " +
+    "extension like docx or pdf), `author` (a person's name), or " +
+    "`modified_after` / `modified_before` (dates). Set sort=\"newest\" for " +
+    "most-recently-modified first. Returns each file's name, folder, site, " +
     "modified date, size and a snippet of the matched text, plus the drive_id + " +
     "item_id pair that identifies a file to the tools that act on one. Acts as " +
     "the current signed-in person.",
@@ -850,6 +924,25 @@ registerAppTool({
         type: "string",
         description: "Restrict to one file extension, e.g. docx, xlsx, pdf.",
       },
+      author: {
+        type: "string",
+        description: 'Restrict to files authored by this person, e.g. "Jane Smith".',
+      },
+      modified_after: {
+        type: "string",
+        description: "Only files modified on/after this date, e.g. 2026-07-01.",
+      },
+      modified_before: {
+        type: "string",
+        description: "Only files modified on/before this date, e.g. 2026-07-31.",
+      },
+      sort: {
+        type: "string",
+        enum: ["relevance", "newest"],
+        description:
+          "Result order: best match first (relevance, default) or " +
+          "most-recently-modified first (newest).",
+      },
       limit: {
         type: "integer",
         description: "How many files to return, 1-25 (default 10).",
@@ -864,6 +957,9 @@ registerAppTool({
       query: typeof args.query === "string" ? args.query : "",
       site: typeof args.site === "string" ? args.site : null,
       fileType: typeof args.file_type === "string" ? args.file_type : null,
+      author: typeof args.author === "string" ? args.author : null,
+      modifiedAfter: typeof args.modified_after === "string" ? args.modified_after : null,
+      modifiedBefore: typeof args.modified_before === "string" ? args.modified_before : null,
     });
     if (!query) {
       throw new Error(
@@ -890,13 +986,25 @@ registerAppTool({
             // `parentReference` loses `drive_id` — the handoff this tool exists
             // to produce. `shapeSearchHits` is the allowlist instead, so no raw
             // Graph payload reaches the model either way.
+            //
+            // `isDescending` is the STRING "true" — the shape verified live
+            // against this tenant. Microsoft's docs type it Boolean; do not
+            // "correct" it untested.
+            ...(args.sort === "newest"
+              ? { sortProperties: [{ name: "lastModifiedDateTime", isDescending: "true" }] }
+              : {}),
           },
         ],
       },
     });
 
     const { total, results } = shapeSearchHits(raw);
-    return { query, total, results };
+    const hint =
+      total != null && total > results.length
+        ? `Showing ${results.length} of ${total} matches. Prefer narrowing ` +
+          `(modified_after, file_type, site, author, sort="newest") over raising limit.`
+        : undefined;
+    return { query, total, results, ...(hint ? { hint } : {}) };
   },
 });
 

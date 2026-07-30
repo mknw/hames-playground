@@ -158,6 +158,10 @@ describe("advertisement", () => {
       "query",
       "site",
       "file_type",
+      "author",
+      "modified_after",
+      "modified_before",
+      "sort",
       "limit",
     ]);
     // The model must not be invited to write query syntax.
@@ -362,6 +366,10 @@ describe("graph_files_search", () => {
           webUrl: "https://contoso.sharepoint.com/sites/Finance/Q3%20Budget.xlsx",
         },
       ],
+      // 42 reported, 1 returned → steering toward narrowing, not limit-raising.
+      hint:
+        'Showing 1 of 42 matches. Prefer narrowing (modified_after, file_type, ' +
+        'site, author, sort="newest") over raising limit.',
     });
   });
 
@@ -371,6 +379,107 @@ describe("graph_files_search", () => {
       file_type: "pdf",
     });
     expect((res.data as GraphFileSearchResult).query).toBe("budget filetype:pdf");
+  });
+
+  it("no hint when everything matched was returned", async () => {
+    graphFetch.mockResolvedValue(searchResponse([HIT], 1));
+    const res = await runAppTool("graph_files_search", { query: "budget" });
+    expect(res.data as GraphFileSearchResult).not.toHaveProperty("hint");
+  });
+
+  it('sort="newest" adds the live-verified sortProperties shape; default sends none', async () => {
+    await runAppTool("graph_files_search", { query: "budget", sort: "newest" });
+    // `isDescending` is the STRING "true" — verified against the real tenant;
+    // Microsoft's docs type it Boolean. Guard the exact wire shape.
+    expect(searchRequest()).toMatchObject({
+      sortProperties: [{ name: "lastModifiedDateTime", isDescending: "true" }],
+    });
+
+    await runAppTool("graph_files_search", { query: "budget" });
+    expect(searchRequest()).not.toHaveProperty("sortProperties");
+  });
+});
+
+describe("targeting restrictions (author / modified dates)", () => {
+  it("composes author as a quoted phrase with interior spaces kept", () => {
+    expect(composeFileQuery({ query: "notes", author: "Jane  Smith" })).toBe(
+      'notes author:"Jane Smith"',
+    );
+  });
+
+  it("a hostile author cannot open a clause — exactly two quotes, ours", () => {
+    const q = composeFileQuery({
+      query: "notes",
+      author: 'Jane" OR path:"https://evil.example',
+    });
+    // The injected quote is stripped; the `path:` lives INSIDE our phrase as
+    // literal text; the only quotes are the pair we added.
+    expect(q).toBe('notes author:"Jane OR path:https://evil.example"');
+    expect(q.match(/"/g)).toHaveLength(2);
+  });
+
+  it("an author reduced to nothing drops the clause (like site/file_type)", () => {
+    expect(composeFileQuery({ query: "notes", author: '"""' })).toBe("notes");
+  });
+
+  it("single bounds compose >= / <= from the parsed date, not the raw text", () => {
+    expect(composeFileQuery({ query: "q", modifiedAfter: "2026-07-01" })).toBe(
+      "q LastModifiedTime>=2026-07-01",
+    );
+    expect(composeFileQuery({ query: "q", modifiedBefore: "2026-07-31" })).toBe(
+      "q LastModifiedTime<=2026-07-31",
+    );
+  });
+
+  it("BOTH bounds compose the single range clause — two same-property clauses are silently ignored by Search (verified live)", () => {
+    expect(
+      composeFileQuery({ query: "q", modifiedAfter: "2026-01-01", modifiedBefore: "2026-03-01" }),
+    ).toBe("q LastModifiedTime:2026-01-01..2026-03-01");
+  });
+
+  it("dates are canonicalized through Date — caller text never enters the query", () => {
+    // Nothing hostile can transit: the emitted text derives from the Date object.
+    expect(composeFileQuery({ query: "q", modifiedAfter: "2026-07-01T15:30:00Z" })).toBe(
+      "q LastModifiedTime>=2026-07-01",
+    );
+  });
+
+  it("an unparseable date THROWS instead of silently widening the search", async () => {
+    expect(() => composeFileQuery({ query: "q", modifiedAfter: "next tuesday" })).toThrow(
+      /modified_after must be a date like 2026-07-01/,
+    );
+    // …and through the tool the throw becomes a failed result the model can fix.
+    const res = await runAppTool("graph_files_search", {
+      query: "q",
+      modified_before: "garbage",
+    });
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/modified_before must be a date/);
+    expect(graphFetch).not.toHaveBeenCalled();
+  });
+
+  it("pins the clause order: terms, filetype, path, author, modified", () => {
+    expect(
+      composeFileQuery({
+        query: "plan",
+        site: "https://contoso.sharepoint.com/sites/Fin",
+        fileType: "docx",
+        author: "Jane Smith",
+        modifiedAfter: "2026-07-01",
+      }),
+    ).toBe(
+      'plan filetype:docx path:"https://contoso.sharepoint.com/sites/Fin" ' +
+        'author:"Jane Smith" LastModifiedTime>=2026-07-01',
+    );
+  });
+
+  it("a restriction-only call (no surviving terms) is still a valid search", async () => {
+    graphFetch.mockResolvedValue(searchResponse([], 0));
+    const res = await runAppTool("graph_files_search", {
+      query: "*",
+      modified_after: "2026-07-20",
+    });
+    expect(res.success).toBe(true);
   });
 });
 

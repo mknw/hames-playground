@@ -246,6 +246,9 @@ KQL. `graph_files_search` takes structured arguments and composes every clause:
 | `query` | bare terms | quotes, `(` `)`, `:` `<` `>` `=` and control chars removed; KQL's uppercase-only `AND`/`OR`/`NOT`/`NEAR`/`ONEAR`/`XRANK` lowercased into ordinary words |
 | `file_type` | `filetype:docx` | leading alphanumeric run only, lowercased (`docx" OR filetype:exe` → `filetype:docx`) |
 | `site` | `path:"https://…"` | quotes + control chars removed, then **all** whitespace |
+| `author` | `author:"Jane Smith"` | quotes + control chars removed, whitespace **collapsed** (names keep their spaces) |
+| `modified_after` / `modified_before` | `LastModifiedTime>=2026-07-01`, or the single range clause `LastModifiedTime:a..b` when both | parsed with `Date` and re-emitted as a canonical date — the caller's text never enters the query; an unparseable date throws instead of silently widening the search |
+| `sort: "newest"` | not KQL — `sortProperties` on the request | fixed literal; `isDescending` is the *string* `"true"`, the shape verified live |
 
 **Why strip rather than escape.** KQL publishes no escape sequence for a `"`
 inside a value. An "escaped" quote would be a contract we invented and hoped the
@@ -257,7 +260,15 @@ makes Search stop reading it as a restriction and treat the rest as free text �
 *widens* the search silently instead of erroring. `filetype:` is alphanumeric by
 construction and the `path:` URL has its whitespace closed up (a URL has none),
 and the whitespace pass runs *after* the character removal, because removing a
-quote can itself leave a gap behind.
+quote can itself leave a gap behind. Whitespace *inside a quoted phrase* is a
+different matter — `author:"Jane Smith"` is valid KQL — so the author value has
+its whitespace collapsed rather than removed; the no-whitespace rule applies to
+the unquoted parts of a clause.
+
+**One live-measured trap:** two space-joined restrictions on the *same*
+property (`LastModifiedTime>=a LastModifiedTime<=b`) are **silently ignored**
+by Microsoft Search — the query behaves as if neither were there. Both bounds
+therefore compose as the single range clause `LastModifiedTime:a..b`.
 
 The composed KQL is returned to the model as the result's `query`, so a filter
 that didn't bite is visible rather than guessed at. Terms first, restrictions

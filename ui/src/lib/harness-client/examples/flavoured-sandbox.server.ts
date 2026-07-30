@@ -200,7 +200,7 @@ export const flavouredSandboxAgent: AgentConfig = {
   name: "Sandbox · Flavoured (router)",
   description:
     "Routes each turn to a purpose-built sandbox flavour — base (ephemeral), image-processing, or data.",
-  icon: "i-material-symbols-folder-special-rounded",
+  icon: "i-material-symbols-stack-star-outline",
   servers: [],
   createPatterns,
 };

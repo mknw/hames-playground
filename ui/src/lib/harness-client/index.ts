@@ -13,6 +13,7 @@ export {
   rejectAction,
   promoteAction,
   clearSession,
+  deleteConversationsBulk,
   getAgentList,
   listConversations,
   loadConversation,

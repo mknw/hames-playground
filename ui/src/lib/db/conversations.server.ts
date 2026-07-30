@@ -233,6 +233,24 @@ export async function deleteConversation(
 }
 
 /**
+ * Delete a batch of conversations in one round trip, scoped to the user.
+ * Ids that don't exist or belong to someone else are silently skipped —
+ * same contract as {@link deleteConversation}. Returns the ids actually
+ * deleted so callers can patch caches from ground truth.
+ */
+export async function deleteConversations(
+  ids: string[],
+  userId: string
+): Promise<string[]> {
+  if (ids.length === 0) return []
+  const { rows } = await query<{ id: string }>(
+    'DELETE FROM conversations WHERE id = ANY($1) AND user_id = $2 RETURNING id',
+    [ids, userId]
+  )
+  return rows.map((r) => r.id)
+}
+
+/**
  * Authoritative title override. Bypasses the COALESCE-sticky rule that
  * `saveConversation` applies on upsert — used by the LLM title generator
  * to replace the heuristic title with a model-authored one once it lands.

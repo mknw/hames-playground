@@ -25,6 +25,7 @@ import {
   loadSession,
   saveSession,
   deleteSession,
+  evictPatterns,
   type SessionData,
 } from "./session.server";
 import { getAgent, getAgentMetadata } from "./registry.server";
@@ -32,6 +33,7 @@ import {
   listConversations as dbListConversations,
   promoteConversation as dbPromoteConversation,
   saveConversation as dbSaveConversation,
+  deleteConversations as dbDeleteConversations,
   deriveTitle,
   type ConversationKind,
   type ConversationSource,
@@ -221,6 +223,25 @@ async function resolveApproval(
 export async function clearSession(sessionId: string): Promise<void> {
   const user = await requireUser();
   await deleteSession(sessionId, user.id);
+}
+
+/**
+ * Delete a batch of conversations for the current user (#71). One round
+ * trip: ids that don't exist or belong to someone else are silently skipped
+ * (`user_id` scoping in the DELETE), and the ids actually removed come back
+ * so the sidebar can patch its cache from ground truth. Serves both the
+ * per-row delete (one id) and select-mode bulk delete — one code path.
+ */
+export async function deleteConversationsBulk(
+  ids: string[],
+): Promise<{ deleted: string[] }> {
+  const user = await requireUser();
+  // Dedupe and cap at the sidebar's list size — nothing legitimate selects
+  // more rows than the list can show.
+  const unique = [...new Set(ids)].slice(0, 200);
+  const deleted = await dbDeleteConversations(unique, user.id);
+  for (const id of deleted) evictPatterns(id);
+  return { deleted };
 }
 
 /**

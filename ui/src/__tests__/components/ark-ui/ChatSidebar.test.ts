@@ -30,6 +30,7 @@ const {
   completionBorderColor,
   rowFlashClass,
   threadIcon,
+  railDot,
 } = await import('../../../components/ark-ui/ChatSidebar')
 type ChatThreadSummary = import('../../../components/ark-ui/ChatSidebar').ChatThreadSummary
 
@@ -174,6 +175,31 @@ describe('threadIcon', () => {
   // conversational-memory) must still show something — a generic robot.
   it('falls back to the generic robot for unknown agents', () => {
     expect(threadIcon({})).toBe('i-material-symbols-smart-toy-outline')
+  })
+})
+
+describe('railDot', () => {
+  it('is null for an idle thread', () => {
+    expect(railDot({ live: false })).toBeNull()
+  })
+
+  it('pulses cyan while live', () => {
+    expect(railDot({ live: true })).toEqual({ color: '#22d3ee', pulse: true })
+  })
+
+  // Live is fresher than a stale completion mark — e.g. a new run started
+  // in a thread still carrying its unseen mark.
+  it('lets live outrank a completion mark', () => {
+    const dot = railDot({ live: true, completion: { outcome: 'error', flashing: false } })
+    expect(dot).toEqual({ color: '#22d3ee', pulse: true })
+  })
+
+  it('shows the completion color, not pulsing, once settled', () => {
+    const done = railDot({ live: false, completion: { outcome: 'done', flashing: false } })
+    expect(done?.pulse).toBe(false)
+    expect(done?.color).toBe('rgba(74, 222, 128, 0.55)')
+    const err = railDot({ live: false, completion: { outcome: 'error', flashing: true } })
+    expect(err?.color).toBe('rgba(248, 113, 113, 0.55)')
   })
 })
 

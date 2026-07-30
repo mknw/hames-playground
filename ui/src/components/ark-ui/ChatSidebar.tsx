@@ -203,6 +203,22 @@ export function threadIcon(t: {
   return t.agentIcon ?? 'i-material-symbols-smart-toy-outline'
 }
 
+/**
+ * Status dot for a collapsed-rail thread button (#60). At 3rem there is no
+ * room for the progress strip or flash border, so run state compresses to a
+ * 6px dot: pulsing cyan while live (live outranks a completion mark — it is
+ * fresher), completion color until the thread is opened, nothing at rest.
+ */
+export function railDot(args: {
+  live: boolean
+  completion?: CompletionMark
+}): { color: string; pulse: boolean } | null {
+  if (args.live) return { color: '#22d3ee', pulse: true }
+  const c = completionBorderColor(args.completion)
+  if (c) return { color: c, pulse: false }
+  return null
+}
+
 /** Shared with the in-chat LiveProgressBar so the two read as one system. */
 const STRIP_GRADIENT = 'linear-gradient(90deg, rgba(0,255,255,0.85), rgba(157,0,255,0.85))'
 
@@ -378,6 +394,99 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
           </svg>
         </button>
       </div>
+
+      {/* Collapsed icon rail (#60) — one agent-icon button per thread.
+          Deliberately ignores the kind filter: that control is invisible
+          while collapsed, and a hidden control silently subsetting the list
+          would confuse. Selected/live state uses inline styles — the
+          attributify extractor drops dynamic values (see rowFlashClass
+          notes), and `border="1 neon-cyan/40"` is a known dead selector. */}
+      {props.collapsed && (
+        <>
+          <div flex="1" overflow="y-auto" p="y-2">
+            <For each={props.threads}>
+              {(thread) => {
+                const isSelected = () => thread.id === props.selectedId
+                const dot = () =>
+                  railDot({
+                    live: !!props.getRunState?.(thread.id).isProcessing,
+                    completion: props.getCompletion?.(thread.id),
+                  })
+                return (
+                  <button
+                    onClick={() => props.onSelectThread(thread.id)}
+                    title={thread.isPlaceholder ? 'new chat' : thread.title ?? '(untitled)'}
+                    aria-label={thread.isPlaceholder ? 'new chat' : thread.title ?? '(untitled)'}
+                    aria-current={isSelected() ? 'true' : undefined}
+                    style={{
+                      position: 'relative',
+                      display: 'flex',
+                      'align-items': 'center',
+                      'justify-content': 'center',
+                      width: '32px',
+                      height: '32px',
+                      margin: '0 auto 4px',
+                      'border-radius': '0.375rem',
+                      border: isSelected()
+                        ? '1px solid rgba(0, 255, 255, 0.4)'
+                        : '1px solid transparent',
+                      background: isSelected() ? 'rgba(67, 56, 202, 0.3)' : 'transparent',
+                      cursor: 'pointer',
+                    }}
+                    hover="bg-dark-bg-hover"
+                  >
+                    <span
+                      class={threadIcon(thread) ?? 'i-material-symbols-smart-toy-outline'}
+                      aria-hidden="true"
+                      style={{
+                        width: '16px',
+                        height: '16px',
+                        color: isSelected() ? '#22d3ee' : '#a1a1aa',
+                        opacity: thread.isPlaceholder ? 0.5 : 1,
+                      }}
+                    />
+                    <Show when={dot()}>
+                      {(d) => (
+                        <span
+                          aria-hidden="true"
+                          class={d().pulse ? 'animate-pulse' : ''}
+                          style={{
+                            position: 'absolute',
+                            bottom: '2px',
+                            right: '2px',
+                            width: '6px',
+                            height: '6px',
+                            'border-radius': '9999px',
+                            'background-color': d().color,
+                          }}
+                        />
+                      )}
+                    </Show>
+                  </button>
+                )
+              }}
+            </For>
+          </div>
+          {/* Compact new-chat button — Settings stays expanded-only. */}
+          <div p="y-3" border="t dark-border-primary" flex="~" justify="center">
+            <button
+              onClick={() => props.onNewChat()}
+              title="New chat"
+              aria-label="New chat"
+              bg="cyber-700 hover:cyber-600"
+              rounded="md"
+              transition="all"
+              style={{ width: '32px', height: '32px', display: 'flex', 'align-items': 'center', 'justify-content': 'center' }}
+            >
+              <span
+                class="i-material-symbols-add-2"
+                aria-hidden="true"
+                style={{ width: '16px', height: '16px', color: 'white' }}
+              />
+            </button>
+          </div>
+        </>
+      )}
 
       {/* Thread List */}
       {!props.collapsed && (

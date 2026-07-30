@@ -1,4 +1,4 @@
-import { For, Show, createSignal, createEffect, onCleanup } from 'solid-js'
+import { For, Show, Switch, Match, createSignal, createEffect, onCleanup } from 'solid-js'
 import { Dialog } from '@ark-ui/solid/dialog'
 import { SettingsPanel } from './SettingsPanel'
 import { regenerateConversationTitle } from '../../lib/harness-client'
@@ -361,49 +361,48 @@ const RowProgress = (props: { snapshot: ChainProgressSnapshot }) => {
   )
 }
 
-/** Renders the indicator chosen by {@link rowIndicator}. */
-const StatusBadge = (props: { indicator: RowIndicator }) => {
-  if (props.indicator === 'none') return null
-  if (props.indicator === 'running') {
-    return (
+/** Renders the indicator chosen by {@link rowIndicator}. Branches live in
+ *  <Switch>/<Match>, not early returns — Solid components run once, so a
+ *  body-level `if (props.…) return …` freezes the branch at mount
+ *  (solid/components-return-once). */
+const StatusBadge = (props: { indicator: RowIndicator }) => (
+  <Switch>
+    <Match when={props.indicator === 'running'}>
       <span
         title="Running"
         aria-label="running"
         class="i-mdi-loading animate-spin"
         style={{ width: '14px', height: '14px', color: '#22d3ee', 'flex-shrink': 0 }}
       />
-    )
-  }
-  if (props.indicator === 'action-error') {
-    return (
+    </Match>
+    <Match when={props.indicator === 'action-error'}>
       <span
         title="Failed"
         aria-label="error"
         class="i-mdi-alert-circle-outline"
         style={{ width: '14px', height: '14px', color: '#f87171', 'flex-shrink': 0 }}
       />
-    )
-  }
-  if (props.indicator === 'action-paused') {
-    return (
+    </Match>
+    <Match when={props.indicator === 'action-paused'}>
       <span
         title="Awaiting approval"
         aria-label="paused"
         class="i-mdi-pause-circle-outline"
         style={{ width: '14px', height: '14px', color: '#f59e0b', 'flex-shrink': 0 }}
       />
-    )
-  }
-  // Done action — a subtle bolt marks it as POST-triggered without shouting.
-  return (
-    <span
-      title="Action (completed)"
-      aria-label="action"
-      class="i-mdi-lightning-bolt-outline"
-      style={{ width: '13px', height: '13px', color: '#71717a', 'flex-shrink': 0 }}
-    />
-  )
-}
+    </Match>
+    {/* Done action — a subtle bolt marks it as POST-triggered. 'none'
+        matches nothing and renders nothing. */}
+    <Match when={props.indicator === 'action-done'}>
+      <span
+        title="Action (completed)"
+        aria-label="action"
+        class="i-mdi-lightning-bolt-outline"
+        style={{ width: '13px', height: '13px', color: '#71717a', 'flex-shrink': 0 }}
+      />
+    </Match>
+  </Switch>
+)
 
 const FILTER_LABELS: ReadonlyArray<{ value: ThreadFilter; label: string }> = [
   { value: 'all', label: 'All' },

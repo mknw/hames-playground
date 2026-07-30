@@ -1062,10 +1062,9 @@ export interface GraphFileListResult {
  * mitigation, and both stop returning data in **November 2026**, with no
  * replacement endpoint. Shipping a tool mode on top of that would build a
  * capability with a known expiry date and no migration path — a model would learn
- * to reach for it and then quietly get nothing back. If "files I touched lately"
- * is wanted later, `GET /me/drive/search(q=…)` (note: no `/root`) is the surface
- * that still reaches shared items; it is a search, so it belongs in
- * `graph_files_search`, not here.
+ * to reach for it and then quietly get nothing back. "Files I touched lately"
+ * is its own tool instead — `graph_files_recent`, on the non-deprecated Office
+ * Graph insights surface (`/me/insights/used`).
  */
 registerAppTool({
   name: "graph_files_list",
@@ -1124,5 +1123,107 @@ registerAppTool({
       { scopes: FILE_SCOPES },
     );
     return { location, items: shapeFileEntries(raw) };
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Recent files (Office Graph insights)
+// ----------------------------------------------------------------------------
+
+/** One recently-used item as the model sees it. */
+export interface GraphRecentFile {
+  name: string | null;
+  /** Human word from insights ("Word", "Excel", "Whiteboard", …) — not a MIME. */
+  type: string | null;
+  /** When the item was last changed / last opened by this user. */
+  modified: string | null;
+  accessed: string | null;
+  /** Handoff pair, parsed from the insight's resourceReference; null when the
+   *  insight didn't point at an addressable driveItem. */
+  drive_id: string | null;
+  item_id: string | null;
+  webUrl: string | null;
+}
+
+export interface GraphRecentFilesResult {
+  items: GraphRecentFile[];
+  /** Present when insights were unavailable (tenant policy) — tells the model
+   *  where to go instead rather than failing the run. */
+  note?: string;
+}
+
+/** Shape one /me/insights/used row; null when it isn't a driveItem. */
+export function shapeUsedInsight(raw: unknown): GraphRecentFile | null {
+  const it = (raw ?? {}) as Record<string, unknown>;
+  const ref = (it.resourceReference ?? {}) as Record<string, unknown>;
+  if (ref.type !== "microsoft.graph.driveItem") return null;
+  const vis = (it.resourceVisualization ?? {}) as Record<string, unknown>;
+  const used = (it.lastUsed ?? {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+  // resourceReference.id is "drives/{driveId}/items/{itemId}" — the same
+  // handoff pair search hits carry. An unparseable id keeps the row (name and
+  // dates still inform) with null ids.
+  const ids = /^drives\/([^/]+)\/items\/(.+)$/.exec(str(ref.id) ?? "");
+  return {
+    name: str(vis.title),
+    type: str(vis.type),
+    modified: str(used.lastModifiedDateTime),
+    accessed: str(used.lastAccessedDateTime),
+    drive_id: ids ? ids[1] : null,
+    item_id: ids ? ids[2] : null,
+    webUrl: str(ref.webUrl),
+  };
+}
+
+registerAppTool({
+  name: "graph_files_recent",
+  namespace: "graph",
+  description:
+    "List the files the signed-in person recently used — opened or edited — " +
+    "newest first, from Microsoft 365's insights. No query needed; this is the " +
+    "right tool for \"my recent files\" or \"what did I work on lately\". Each " +
+    "item carries the drive_id + item_id pair the other file tools accept. Use " +
+    "graph_files_search (optionally with sort=\"newest\") to find files by " +
+    "words or by other people. Acts as the current signed-in person.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      limit: {
+        type: "integer",
+        description: "How many files to return, 1-25 (default 10).",
+      },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args, { userId }): Promise<GraphRecentFilesResult> => {
+    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25);
+    let raw: unknown;
+    try {
+      // `$top` applies BEFORE our driveItem filter and insights mixes in
+      // non-file rows (sites, …), so the request is inflated and the shaped
+      // list sliced back down to `limit`.
+      raw = await graphFetch(userId, `/me/insights/used?$top=${Math.min(limit * 2, 50)}`, {
+        scopes: ["Sites.Read.All"],
+      });
+    } catch (err) {
+      // A 403 here is almost always itemInsights disabled by tenant policy —
+      // not a sign-in problem, so a re-auth prompt would be wrong AND the
+      // agent can still answer via search. Degrade to a successful, steerable
+      // result. 401/acquisition failures keep the sign-in path.
+      if (err instanceof GraphAuthRequiredError && err.status === 403) {
+        return {
+          items: [],
+          note:
+            "Item insights are disabled by tenant policy (or this account lacks " +
+            'consent for them) — use graph_files_search with sort="newest" instead.',
+        };
+      }
+      throw err;
+    }
+    const rows = ((raw as { value?: unknown[] })?.value ?? [])
+      .map(shapeUsedInsight)
+      .filter((r): r is GraphRecentFile => r !== null)
+      .slice(0, limit);
+    return { items: rows };
   },
 });

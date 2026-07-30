@@ -49,6 +49,7 @@ export const MICROSOFT_365_TOOLS = [
   "graph_mail_recent",
   "graph_files_search",
   "graph_files_list",
+  "graph_files_recent",
 ] as const;
 
 async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
@@ -70,6 +71,16 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
       // (calendar + mail, sometimes profile), plus room to recover from a
       // failed call, so this is deliberately higher than a single-shot loop.
       maxTurns: 8,
+      // The controller never needs a URL to decide the next action, and a Loop
+      // hit's webUrl is ~519 chars of base64 — half the hit. The synthesizer
+      // still gets every webUrl for citation links (it reads the full events,
+      // not this projection). `graph_mail_recent` is deliberately unprojected:
+      // its webLink is short and its results are already capped previews.
+      resultOmit: {
+        graph_files_search: ["webUrl"],
+        graph_files_list: ["webUrl"],
+        graph_files_recent: ["webUrl"],
+      },
     },
   );
 

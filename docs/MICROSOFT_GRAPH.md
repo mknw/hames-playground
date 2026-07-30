@@ -12,7 +12,7 @@ machinery see [UI_ARCHITECTURE.md §3](UI_ARCHITECTURE.md).
 
 ## What it can do today
 
-Six registered `graph` tools. All of them only ever **read** from Microsoft 365:
+Seven registered `graph` tools. All of them only ever **read** from Microsoft 365:
 
 | Tool | Reads | Scope used |
 |------|-------|-----------|
@@ -21,6 +21,7 @@ Six registered `graph` tools. All of them only ever **read** from Microsoft 365:
 | `graph_mail_recent` | own inbox, newest first, optional `unread_only` | `Mail.Read` |
 | `graph_files_search` | files across own OneDrive **and** every reachable SharePoint site | `Files.Read.All` + `Sites.Read.All` |
 | `graph_files_list` | own OneDrive root, or one folder's children | `Files.Read.All` |
+| `graph_files_recent` | own recently used/edited files (Office Graph insights) | `Sites.Read.All` |
 | `graph_file_ingest` | one own OneDrive/SharePoint file → the Data Stash | `Files.Read.All` |
 
 Enough for "what does my day look like?" — the agent's loop calls several tools
@@ -28,7 +29,7 @@ in one turn and the synthesizer writes the briefing — plus "find last quarter'
 budget in Finance", which is [file discovery](#finding-a-file), and "pull that
 spreadsheet in and chart it", which is [the file bridge](#files--the-data-stash).
 
-**The agent composes five of the six.** The **Microsoft 365** agent
+**The agent composes six of the seven.** The **Microsoft 365** agent
 (`lib/harness-client/examples/microsoft-365.server.ts`) takes an explicit
 allowlist, `MICROSOFT_365_TOOLS`, and `graph_file_ingest` is deliberately not in
 it: ingestion puts a file's bytes in the Data Stash, which is reachable only
@@ -318,9 +319,22 @@ The obvious third browse mode would be `/me/drive/recent`, with
 degrading**: `sharedWithMe` is currently clamped to roughly one result by a live
 Microsoft mitigation, and both stop returning data in **November 2026**, with no
 replacement endpoint. A tool mode on top of that would teach a model to reach for
-something that then quietly returns nothing. If "files I touched lately" is
-wanted, `GET /me/drive/search(q=…)` (note: no `/root`) is the surface that still
-reaches shared items — and being a search, it belongs in `graph_files_search`.
+something that then quietly returns nothing.
+
+"Files I touched lately" is therefore its own tool — **`graph_files_recent`**,
+on the non-deprecated Office Graph insights surface (`GET /me/insights/used`,
+`Sites.Read.All`). Details that matter:
+
+- Insights mixes non-file rows (sites, whiteboard containers) into the stream
+  and `$top` applies *before* our driveItem filter, so the request is inflated
+  (`limit × 2`, capped at 50) and the shaped list sliced back down.
+- Each row's `resourceReference.id` is `drives/{driveId}/items/{itemId}` — the
+  same handoff pair search hits carry, so recent files feed the other file
+  tools directly.
+- A tenant can disable item insights by policy; that 403 degrades to a
+  **successful** empty result with a note steering the model to
+  `graph_files_search` with `sort="newest"` — not to a sign-in prompt, which
+  couldn't help.
 
 ---
 

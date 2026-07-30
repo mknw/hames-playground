@@ -270,6 +270,14 @@ export interface SimpleLoopConfig extends PatternConfig {
   /** Hook to enrich/transform a tool result before the `tool_result` event is
    *  committed. See `OnToolResult`. */
   onToolResult?: OnToolResult
+  /** Per-tool omit-list for the CONTROLLER TURN LOG only: fields deleted
+   *  (recursively, at every object level including array elements) from the
+   *  result shown to the loop LLM. The `tool_result` EVENT keeps the full
+   *  result — the synthesizer, citation extractors and session persistence are
+   *  untouched, so e.g. dropping `webUrl` here still leaves the final answer
+   *  its links. Keyed by tool name; tools without an entry pass through
+   *  unchanged. See `omitResultFields` in content-transforms.ts. */
+  resultOmit?: Record<string, string[]>
   /** Regex matched against `action.tool_name` after the strict allowlist
    *  fails. Lets agents accept dynamically-created tools (e.g. the kg-agent
    *  gateway's `code-mode-<name>` factory output) without enumerating every

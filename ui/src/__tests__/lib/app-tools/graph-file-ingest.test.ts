@@ -24,10 +24,26 @@ vi.mock("../../../lib/harness-client/request-user.server", () => ({
 }));
 
 const graphFetch = vi.fn();
+// Hoisted so tests can CONSTRUCT the same class instance the mocked module
+// exports — graph.server's `instanceof GraphAuthRequiredError` check must see
+// one identity.
+const { GraphAuthRequiredError } = vi.hoisted(() => ({
+  GraphAuthRequiredError: class GraphAuthRequiredError extends Error {
+    constructor(
+      message: string,
+      readonly userId: string,
+      readonly status?: number,
+    ) {
+      super(message);
+      this.name = "GraphAuthRequiredError";
+    }
+  },
+}));
 vi.mock("../../../lib/auth/graph-token.server", () => ({
   graphFetch: (...a: unknown[]) => graphFetch(...a),
   GRAPH_BASE: "https://graph.microsoft.com/v1.0",
   DEFAULT_GRAPH_SCOPES: ["User.Read"],
+  GraphAuthRequiredError,
 }));
 
 /** The store is mocked so the test never needs Redis; `MAX_CONTENT_BYTES` is
@@ -292,6 +308,37 @@ describe("refusals", () => {
     expect(res.success).toBe(false);
     expect(res.error).toMatch(/sign in/i);
     expect(res.data).toBeNull();
+  });
+
+  it("a 403 says re-auth won't help (SharePoint Embedded / Loop), NOT 'sign in'", async () => {
+    // graphFetch's generic 403 message suggests a consent problem; for a
+    // driveItem it almost always means a SharePoint Embedded container (#137),
+    // where signing in again cannot help. The tool must not parrot bad advice.
+    graphFetch.mockReset();
+    graphFetch.mockRejectedValue(
+      new GraphAuthRequiredError("Microsoft Graph denied the request (403)", "oid-1", 403),
+    );
+    const res = await runAppTool("graph_file_ingest", { item_id: "01LOOP" });
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/Loop|SharePoint Embedded/);
+    expect(res.error).toMatch(/#137/);
+    expect(res.error).toMatch(/signing in again will not help/i);
+    expect(res.error).not.toMatch(/may lack consent for this scope/);
+  });
+
+  it("a 401 keeps the sign-in advice (expired token IS a re-auth case)", async () => {
+    graphFetch.mockReset();
+    graphFetch.mockRejectedValue(
+      new GraphAuthRequiredError(
+        "Microsoft Graph denied the request (401) — the account may lack consent for this scope.",
+        "oid-1",
+        401,
+      ),
+    );
+    const res = await runAppTool("graph_file_ingest", { item_id: "01ABC" });
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/may lack consent/);
+    expect(res.error).not.toMatch(/#137/);
   });
 
   it("reports a content response that isn't bytes", async () => {

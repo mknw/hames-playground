@@ -58,6 +58,12 @@ export class GraphAuthRequiredError extends Error {
   constructor(
     message: string,
     readonly userId: string,
+    /** HTTP status when Graph itself rejected the call (401 expired token,
+     *  403 missing consent OR resource-level denial such as SharePoint
+     *  Embedded); undefined when token ACQUISITION failed before any HTTP
+     *  request. Lets tools tell "sign in again" apart from "re-auth won't
+     *  help" (e.g. Loop content, #137). */
+    readonly status?: number,
   ) {
     super(message);
     this.name = "GraphAuthRequiredError";
@@ -212,6 +218,7 @@ export async function graphFetch(
     throw new GraphAuthRequiredError(
       `Microsoft Graph denied the request (${res.status}) — the account may lack consent for this scope.`,
       userId,
+      res.status,
     );
   }
   if (!res.ok) {

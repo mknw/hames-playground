@@ -24,6 +24,7 @@ import { MAX_TOOL_TURNS, EXPAND_TOOL_NAME } from '../types'
 import type { ErrorEventData } from '../types'
 import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
+import { omitResultFields } from '../content-transforms'
 import { getRequestSettings } from '../../settings-context.server'
 import { getActiveSandbox } from '../../sandbox/scope.server'
 import { trimToFit, getContextWindow } from '../token-budget.server'
@@ -84,6 +85,9 @@ function parseExpandRefs(argsStr: string): string[] {
   return []
 }
 
+// Deliberately NOT subject to `resultOmit`: `resolved[key]` is the actual input
+// handed to a real tool (projecting it would corrupt tool inputs), and the
+// expansions echo is the record of what was really inlined into the call.
 function resolveRefsAndCapture(
   args: Record<string, unknown>,
   view: EventView,
@@ -289,7 +293,9 @@ export function simpleLoop<T extends SimpleLoopData>(
           const refIds = parseExpandRefs(action.tool_args)
 
           const allEvents = view.fromAll().get()
-          type Resolution = { ref_id: string; success: boolean; result: unknown; error?: string }
+          // `tool` is the ORIGIN tool of the referenced result — carried so the
+          // per-tool `resultOmit` projection can key off it below.
+          type Resolution = { ref_id: string; success: boolean; result: unknown; error?: string; tool: string | null }
           const resolutions: Resolution[] = refIds.map(refId => {
             const refEvent = allEvents.find(e => e.id === refId)
             const refData = refEvent?.type === 'tool_result'
@@ -297,11 +303,12 @@ export function simpleLoop<T extends SimpleLoopData>(
               : null
             const usable = refData && !refData.hidden && !refData.archived
             return usable
-              ? { ref_id: refId, success: true, result: refData.result }
+              ? { ref_id: refId, success: true, result: refData.result, tool: refData.tool ?? null }
               : {
                   ref_id: refId,
                   success: false,
                   result: null,
+                  tool: null,
                   error: `ref_id "${refId}" not found in tool_result events (or excluded as hidden/archived)`
                 }
           })
@@ -345,19 +352,33 @@ export function simpleLoop<T extends SimpleLoopData>(
           // Record as a turn — same shape as a real tool, plus expansions[]
           // (one entry per *successfully* resolved ref) so the per-turn
           // rendering and `expanded_in_turn` annotation work.
+          //
+          // `resultOmit` applies here PER RESOLUTION, keyed by each ref's
+          // ORIGIN tool (projecting the ref-id-keyed combined map wholesale
+          // would use the wrong key space). The tracked event above stays raw.
           const MAX_RESULT_CHARS = settings.maxResultChars
           const truncate = (s: string) =>
             s.length > MAX_RESULT_CHARS
               ? s.slice(0, MAX_RESULT_CHARS) + '…[truncated]'
               : s
-          const resultStr = JSON.stringify(combinedResult)
-          const truncated = truncate(resultStr)
+          const project = (r: Resolution): unknown =>
+            omitResultFields(r.result, r.tool ? config?.resultOmit?.[r.tool] : undefined)
+          const turnResult: unknown = refIds.length === 1
+            ? (resolutions[0].success ? project(resolutions[0]) : resolutions[0].result)
+            : resolutions.reduce<Record<string, unknown>>((acc, r) => {
+                acc[r.ref_id] = r.success ? project(r) : { __error: r.error }
+                return acc
+              }, {})
+          const truncated = truncate(JSON.stringify(turnResult))
           const expansions = resolutions
             .filter(r => r.success)
-            .map(r => ({
-              ref_id: r.ref_id,
-              content: truncate(typeof r.result === 'string' ? r.result : JSON.stringify(r.result))
-            }))
+            .map(r => {
+              const projected = project(r)
+              return {
+                ref_id: r.ref_id,
+                content: truncate(typeof projected === 'string' ? projected : JSON.stringify(projected))
+              }
+            })
 
           turns.push({
             n: turn,
@@ -472,8 +493,13 @@ export function simpleLoop<T extends SimpleLoopData>(
         )
 
         // Record completed turn for LoopController history.
+        // `resultOmit` projects the CONTROLLER's view only — this sits after the
+        // full-fidelity trackEvent above, so the event store (and with it the
+        // synthesizer and citation extractors) keeps the complete result.
         // Truncate result to avoid overflowing reasoning models on subsequent turns.
-        const resultStr = JSON.stringify(result.data)
+        const resultStr = JSON.stringify(
+          omitResultFields(result.data, config?.resultOmit?.[action.tool_name])
+        )
         turns.push({
           n: turn,
           reasoning: action.reasoning,

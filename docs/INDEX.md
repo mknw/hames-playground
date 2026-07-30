@@ -68,6 +68,7 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 |----------|-------------|
 | [deploy/entra-setup.md](deploy/entra-setup.md) | **Entra tenant setup** (#119): provisioning checklist (app registration, redirect URIs, client secret), the delegated Graph scope set + consent ordering trap, app env vars and key rotation, the `oid`-based identity model. Operator-facing — in-app architecture is below and in [UI_ARCHITECTURE.md §3](UI_ARCHITECTURE.md) |
 | [MICROSOFT_GRAPH.md](MICROSOFT_GRAPH.md) | **Per-user Graph access** (Pattern C, #110): what the Microsoft 365 agent can do, the app-side tool transport + dispatch order, cross-user isolation guarantees, the encrypted per-user token lifecycle, and how to add a connector |
+| [user-guides/microsoft-graph.md](user-guides/microsoft-graph.md) | **User guide — Microsoft 365 agent**: example questions that work, the ones that don't (and why), reading its answers. The living record of user-askable expressions; update it when a connector lands |
 
 ---
 

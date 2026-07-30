@@ -290,6 +290,7 @@ interface SimpleLoopConfig extends PatternConfig {
   includeFailedResults?: boolean // Include failed tool results in prior context (default: false)
   fewShots?: FewShot[]         // Domain-specific examples rendered into the LoopController prompt
   onToolResult?: OnToolResult  // Enrich/transform tool results before they're committed (see "Hooks" below)
+  resultOmit?: Record<string, string[]> // Per-tool fields hidden from the controller turn log (see below)
 }
 
 interface FewShot {
@@ -339,6 +340,26 @@ recognizes that shape, dedups across the rows + neighborhood, and tags each
 node whose name is in `_touched` with `data.touched = true` so the Neo4j panel
 can highlight what the agent actually queried (vs. surrounding context).
 The same hook is also wired into `actorCritic`.
+
+**Compact controller view: `resultOmit`.** A per-tool omit-list applied to the
+CONTROLLER TURN LOG only — the named fields are deleted (recursively, at every
+object level including array elements) from the result the loop LLM reads. The
+`tool_result` event keeps the full result, so the synthesizer, citation
+extractors and session persistence are untouched. Use it for fields only the
+final answer needs — e.g. the Microsoft 365 agent drops `webUrl` (519 chars per
+Loop hit) from file-tool results while its synthesizer still renders the links:
+
+```typescript
+simpleLoop(controller, graphTools, {
+  patternId: 'microsoft-365',
+  resultOmit: { graph_files_search: ['webUrl'], graph_files_list: ['webUrl'] },
+})
+```
+
+Also applied when `expandPreviousResult` replays a prior result, keyed by that
+result's *origin* tool. NOT applied to `ref:` substitution into real tool args —
+those are actual tool inputs, and the args record must stay faithful to the call
+that was made.
 
 **How it works:**
 1. Extract params from context: `input`, `intent`, `previous_results`, `turn`

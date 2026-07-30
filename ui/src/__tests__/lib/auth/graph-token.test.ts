@@ -173,11 +173,28 @@ describe("graphFetch", () => {
     expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toContain("$skip=10");
   });
 
-  it("maps 401/403 to GraphAuthRequiredError", async () => {
+  it("maps 401/403 to GraphAuthRequiredError carrying the HTTP status", async () => {
     for (const status of [401, 403]) {
       vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status, statusText: "no" })));
-      await expect(graphFetch(USER, "/me")).rejects.toBeInstanceOf(GraphAuthRequiredError);
+      const err = await graphFetch(USER, "/me").then(
+        () => null,
+        (e) => e as GraphAuthRequiredError,
+      );
+      expect(err).toBeInstanceOf(GraphAuthRequiredError);
+      // Status lets tools tell "sign in again" (401) apart from a per-item
+      // denial where re-auth cannot help (403 on SharePoint Embedded, #137).
+      expect(err!.status).toBe(status);
     }
+  });
+
+  it("token-acquisition failures carry NO status (no HTTP request was made)", async () => {
+    loadUserTokenCache.mockResolvedValue(null);
+    const err = await getUserGraphToken(USER).then(
+      () => null,
+      (e) => e as GraphAuthRequiredError,
+    );
+    expect(err).toBeInstanceOf(GraphAuthRequiredError);
+    expect(err!.status).toBeUndefined();
   });
 
   it("throws a plain error on other failures", async () => {

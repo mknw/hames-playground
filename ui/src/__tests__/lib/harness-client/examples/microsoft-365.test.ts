@@ -19,6 +19,12 @@ vi.mock("../../../../lib/harness-patterns/assert.server", () => ({
 }));
 
 vi.mock("../../../../lib/auth/graph-token.server", () => ({
+  GraphAuthRequiredError: class GraphAuthRequiredError extends Error {
+    constructor(message: string, readonly userId: string, readonly status?: number) {
+      super(message);
+      this.name = "GraphAuthRequiredError";
+    }
+  },
   graphFetch: vi.fn(),
   GRAPH_BASE: "https://graph.microsoft.com/v1.0",
   DEFAULT_GRAPH_SCOPES: ["User.Read"],
@@ -76,9 +82,12 @@ const ALL_GRAPH_TOOLS = [
   "graph_me",
   "graph_calendar_today",
   "graph_mail_recent",
+  "graph_mail_attachments",
   "graph_file_ingest",
   "graph_files_search",
   "graph_files_list",
+  "graph_files_recent",
+  "graph_files_shared",
 ];
 
 beforeEach(() => {
@@ -87,13 +96,16 @@ beforeEach(() => {
 });
 
 describe("tool allowlist", () => {
-  it("names the five read tools the agent can actually use", () => {
+  it("names the eight read tools the agent can actually use", () => {
     expect([...MICROSOFT_365_TOOLS]).toEqual([
       "graph_me",
       "graph_calendar_today",
       "graph_mail_recent",
+      "graph_mail_attachments",
       "graph_files_search",
       "graph_files_list",
+      "graph_files_recent",
+      "graph_files_shared",
     ]);
   });
 
@@ -140,6 +152,23 @@ describe("createPatterns", () => {
     graphNamespace = [];
     await microsoft365Agent.createPatterns("test-session");
     expect(composedTools()).toEqual([]);
+  });
+
+  it("projects webUrl out of the controller's view for every file tool", async () => {
+    await microsoft365Agent.createPatterns("test-session");
+    const cfg = lastLoopCall()[2] as { resultOmit: Record<string, string[]> };
+    // Every file tool the agent composes must drop webUrl (Loop hits carry a
+    // ~519-char URL only the synthesizer needs) — and drop ONLY webUrl, so the
+    // handoff ids and the search `hint` reach the controller.
+    for (const tool of [
+      "graph_files_search",
+      "graph_files_list",
+      "graph_files_recent",
+      "graph_files_shared",
+    ]) {
+      expect(cfg.resultOmit[tool], `${tool} projection`).toEqual(["webUrl"]);
+    }
+    expect(cfg.resultOmit).not.toHaveProperty("graph_mail_recent");
   });
 
   it("keeps the loop config the agent depends on", async () => {

@@ -22,7 +22,7 @@
  * KQL, so no model-authored operator can reshape the query it didn't write.
  */
 import { assertServerOnImport } from "../harness-patterns/assert.server";
-import { graphFetch } from "../auth/graph-token.server";
+import { graphFetch, GraphAuthRequiredError } from "../auth/graph-token.server";
 import { conversionEnabled, isConvertible } from "../doc-convert.server";
 import { guessMimeType, isTextMime } from "../stash/upload-service.server";
 import { registerAppTool } from "./registry.server";
@@ -321,6 +321,32 @@ export function shapeDriveItem(raw: unknown): DriveItemMeta {
   };
 }
 
+/**
+ * Turn a Graph 403 into an error a model can act on. graphFetch's generic
+ * message ("may lack consent … sign in") is actively MISLEADING for a 403 on a
+ * driveItem: the consented delegated scopes already cover ordinary files, so a
+ * 403 here almost always means the item lives where delegated tokens cannot
+ * reach — a SharePoint Embedded container (Loop pages/workspaces, Copilot
+ * pages; measured live: 22 of this tenant's 25 .loop items). Re-signing-in
+ * cannot help; app-only guest access is the tracked fix (#137).
+ *
+ * 401 and token-acquisition failures (status undefined) pass through — for
+ * those, "sign in again" is the correct advice.
+ */
+function translateIngestDenial(err: unknown, itemId: string): unknown {
+  if (err instanceof GraphAuthRequiredError && err.status === 403) {
+    return new Error(
+      `Microsoft 365 denied access to item ${itemId} (403). This is a per-item denial, ` +
+        "not a sign-in problem — signing in again will not help. Items stored in " +
+        "SharePoint Embedded containers (Microsoft Loop pages and workspaces) are not " +
+        "readable with the app's delegated permissions (#137); only their search " +
+        "metadata (title, link, snippet) is available. Relay that metadata instead. " +
+        "If this is an ordinary file, the account may genuinely lack access to it.",
+    );
+  }
+  return err;
+}
+
 registerAppTool({
   name: "graph_file_ingest",
   namespace: "graph",
@@ -378,6 +404,8 @@ registerAppTool({
     const meta = shapeDriveItem(
       await graphFetch(userId, `${base}?$select=${DRIVE_ITEM_SELECT}`, {
         scopes: FILE_SCOPES,
+      }).catch((err) => {
+        throw translateIngestDenial(err, itemId);
       }),
     );
     if (!meta.isFile) {
@@ -413,6 +441,8 @@ registerAppTool({
     const encoded = await graphFetch(userId, `${base}/content`, {
       scopes: FILE_SCOPES,
       responseType: "base64",
+    }).catch((err) => {
+      throw translateIngestDenial(err, itemId);
     });
     if (typeof encoded !== "string") {
       throw new Error(`Microsoft 365 returned no content for "${filename}".`);

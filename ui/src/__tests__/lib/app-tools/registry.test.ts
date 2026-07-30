@@ -24,6 +24,12 @@ vi.mock("../../../lib/harness-client/request-user.server", () => ({
 
 const graphFetch = vi.fn();
 vi.mock("../../../lib/auth/graph-token.server", () => ({
+  GraphAuthRequiredError: class GraphAuthRequiredError extends Error {
+    constructor(message: string, readonly userId: string, readonly status?: number) {
+      super(message);
+      this.name = "GraphAuthRequiredError";
+    }
+  },
   graphFetch: (...a: unknown[]) => graphFetch(...a),
   GRAPH_BASE: "https://graph.microsoft.com/v1.0",
   DEFAULT_GRAPH_SCOPES: ["User.Read"],

@@ -18,6 +18,12 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Graph itself is stubbed; it echoes back whichever userId reached it, after a
 // delay, so any context bleed between concurrent calls shows up as a mismatch.
 vi.mock("../../../lib/auth/graph-token.server", () => ({
+  GraphAuthRequiredError: class GraphAuthRequiredError extends Error {
+    constructor(message: string, readonly userId: string, readonly status?: number) {
+      super(message);
+      this.name = "GraphAuthRequiredError";
+    }
+  },
   GRAPH_BASE: "https://graph.microsoft.com/v1.0",
   DEFAULT_GRAPH_SCOPES: ["User.Read"],
   graphFetch: async (userId: string) => {

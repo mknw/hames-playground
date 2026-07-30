@@ -17,7 +17,7 @@
  *   calls into the correct controller even after the user switches threads.
  */
 
-import { createSignal, createEffect, createMemo, onMount, Show } from 'solid-js'
+import { createSignal, createEffect, createMemo, untrack, Show } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { AgentSelector } from './AgentSelector'
@@ -37,22 +37,20 @@ import { getSettings } from '~/lib/settings-store'
 import { parseChatStream, type DoneEventData } from '~/lib/sse-client'
 import type { GraphElement } from './SupportPanel'
 import type { ContextEvent, UnifiedContext, ControllerActionEventData } from '~/lib/harness-patterns'
+import {
+  capReachedMessage,
+  isAtConcurrencyCap,
+  type RunOutcome,
+  type SessionRunState,
+} from '~/lib/run-registry'
 
 // ============================================================================
 // Types
 // ============================================================================
 
-/**
- * Per-session UI run state. Lives at the route so progress and the submit
- * guard survive sidebar switches — see #47.
- */
-export interface SessionRunState {
-  /** A submit for this session is in flight (SSE stream open). */
-  isProcessing: boolean
-  /** Tool name from the latest `controller_action` event of the active loop.
-   *  Drives the composer guard banner ("Waiting for `<tool>`…"). */
-  runningTool: string | null
-}
+// Run-state shape moved to `~/lib/run-registry` so the sidebar can consume it
+// without importing this component. Re-exported for existing callers.
+export type { SessionRunState }
 
 export interface ChatInterfaceProps {
   /** Session ID for server-side state (shared with SupportPanel for stash actions).
@@ -84,6 +82,26 @@ export interface ChatInterfaceProps {
   updateRunState: (sessionId: string, patch: Partial<SessionRunState>) => void
   registerAbortController: (sessionId: string, ac: AbortController) => void
   unregisterAbortController: (sessionId: string) => void
+  /** Per-session chat buffer, owned by the route (#105). Reads/writes are
+   *  always addressed by session id so a backgrounded run keeps filling its
+   *  own thread while the user reads another one. */
+  getMessages: (sessionId: string) => Message[]
+  setMessages: (
+    sessionId: string,
+    next: Message[] | ((prev: Message[]) => Message[]),
+  ) => void
+  /** How many sessions are streaming right now, across the whole route.
+   *  Only the route can know this — used for the concurrency cap (#105). */
+  runningCount: number
+  /** Fired once per run, on the first SSE event. By then the server has
+   *  persisted the conversation row (the early save in `runTurn` strictly
+   *  precedes event emission), so the route can refetch the sidebar and the
+   *  new thread appears with its derived title while still streaming (#105). */
+  onRunStarted?: (sessionId: string) => void
+  /** Fired when a run finishes, with how it ended. The route marks the
+   *  thread so a run that lands while the user is elsewhere is visible
+   *  (#105). Not fired for an abort — that's page teardown. */
+  onRunSettled?: (sessionId: string, outcome: RunOutcome) => void
   /** Push-driven sidebar title update — fired when the server emits a
    *  `title_updated` SSE event after the first-turn LLM title resolves.
    *  Route patches its threads cache in-place; no refetch required. */
@@ -109,7 +127,13 @@ const WELCOME_MESSAGE: Message = {
 // ============================================================================
 
 export const ChatInterface = (props: ChatInterfaceProps) => {
-  const [messages, setMessages] = createSignal<Message[]>([])
+  // Chat buffer for the *displayed* session. The underlying arrays are owned
+  // by the route (one per session), so an in-flight turn survives the user
+  // switching threads — see #105. Writes that belong to a specific run always
+  // address `runSessionId` explicitly rather than going through this setter.
+  const messages = () => props.getMessages(props.sessionId)
+  const setMessages = (next: Message[] | ((prev: Message[]) => Message[])) =>
+    props.setMessages(props.sessionId, next)
   const [selectedAgent, setSelectedAgent] = createSignal('default')
   // Row kind for the open thread — gates the promotion confirm on send. A
   // brand-new chat (load throws) stays 'conversation'. Set from loadConversation.
@@ -134,16 +158,33 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const isProcessing = () => currentRunState().isProcessing
   const runningTool = () => currentRunState().runningTool
 
-  onMount(() => {
-    setMessages([WELCOME_MESSAGE])
-  })
+  // Concurrency cap (#105 slice 2). Multiple sessions may stream at once; at
+  // the cap a send into an *idle* conversation is refused outright rather
+  // than queued, and nothing already running is ever interrupted.
+  const concurrencyCap = () => getSettings().maxConcurrentRuns
+  const atCap = () =>
+    isAtConcurrencyCap({
+      runningCount: props.runningCount,
+      cap: concurrencyCap(),
+      thisSessionRunning: isProcessing(),
+    })
 
   // When the parent swaps in a different sessionId (sidebar selection or
   // "+ New Chat"), reset local state and try to rehydrate from persisted
   // history. Brand-new sessions throw and we fall through to the welcome msg.
   createEffect(() => {
     const sid = props.sessionId
-    setMessages([])
+
+    // A run is in flight for this session: its buffer is the only copy of the
+    // turn (nothing is persisted until the run ends), so wiping and reloading
+    // here is precisely the #105 bug. Leave the live view alone.
+    //
+    // Read untracked — if this effect subscribed to run state it would re-run
+    // the instant a run finished, clearing the graph/observability panels that
+    // just streamed in and flashing the freshly-landed assistant message.
+    if (untrack(() => props.getRunState(sid).isProcessing)) return
+
+    props.setMessages(sid, [])
     prevEventCount = 0
     props.onResetForNewSession?.()
 
@@ -153,9 +194,16 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
 
     loadConversation(sid)
       .then((loaded) => {
-        setSelectedAgent(loaded.agentId)
-        setCurrentKind(loaded.kind)
-        setMessages(
+        // Hydration is async: the user may have moved on. The messages still
+        // belong in `sid`'s buffer, but view-level state and the parent's
+        // graph/observability callbacks must not stomp the thread now on screen.
+        const stillDisplayed = () => sid === props.sessionId
+        if (stillDisplayed()) {
+          setSelectedAgent(loaded.agentId)
+          setCurrentKind(loaded.kind)
+        }
+        props.setMessages(
+          sid,
           loaded.messages.map((m) => ({
             id: m.id,
             role: m.role,
@@ -163,6 +211,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
             timestamp: new Date(m.timestamp),
           }))
         )
+        if (!stillDisplayed()) return
 
         // Replay events to parent so graph + observability repopulate.
         try {
@@ -185,7 +234,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           // most recent turn's references are recoverable from the event stream).
           const refs = extractReferences(events)
           if (refs.length) {
-            setMessages((prev) => {
+            props.setMessages(sid, (prev) => {
               const next = [...prev]
               for (let i = next.length - 1; i >= 0; i--) {
                 if (next[i].role === 'assistant') {
@@ -202,7 +251,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       })
       .catch(() => {
         // Either a brand-new session id or no row yet — show welcome.
-        setMessages([WELCOME_MESSAGE])
+        props.setMessages(sid, [WELCOME_MESSAGE])
       })
   })
 
@@ -218,6 +267,10 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   // draft is dropped — the user chose not to interact). Once promoted, the
   // thread is a normal conversation and never gates again.
   const handleSendMessage = (content: string) => {
+    // Hard stop at the cap. The composer is already disabled in this state,
+    // so this only catches a send that raced the count going up (e.g. another
+    // thread started streaming between keystroke and submit).
+    if (atCap()) return
     if (currentKind() === 'action') {
       setPromotionDraft(content)
       return
@@ -260,21 +313,25 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     progress.reset()
     props.updateRunState(runSessionId, { isProcessing: true, runningTool: null })
 
-    // Add user message — only if we're still on this thread. (If the user
-    // submits, then immediately switches, the local view belongs to the new
-    // thread and we should not pollute it with the old message.)
-    if (runSessionId === props.sessionId) {
-      const userMessage: Message = {
-        id: Date.now().toString(),
-        role: 'user',
-        content,
-        timestamp: new Date()
-      }
-      setMessages([...messages(), userMessage])
+    // Add the user message to *this run's* buffer. No "still on this thread"
+    // guard is needed any more: the buffer is addressed by session id, so
+    // switching away can't misfile it into the thread now on screen (#105).
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content,
+      timestamp: new Date()
     }
+    props.setMessages(runSessionId, (prev) => [...prev, userMessage])
 
     const abortController = new AbortController()
     props.registerAbortController(runSessionId, abortController)
+
+    // How this run ended, reported once in `finally` so the route can mark
+    // the thread if the user has moved on. `aborted` stays unreported — that
+    // path is page teardown, not a result worth announcing.
+    let outcome: RunOutcome = 'done'
+    let aborted = false
 
     try {
       // Stream events via SSE endpoint for real-time updates
@@ -295,10 +352,17 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       }
 
       let finalResult: DoneEventData | null = null
+      let runAnnounced = false
 
       // Typed SSE iteration — the parser handles frame buffering, malformed
       // JSON, partial reads, and yields discriminated `ChatStreamEvent`s.
       for await (const sseEvt of parseChatStream(response)) {
+        // First event of the stream: the server-side early persist has
+        // committed, so the sidebar can pick up the new row.
+        if (!runAnnounced) {
+          runAnnounced = true
+          props.onRunStarted?.(runSessionId)
+        }
         if (sseEvt.event === 'done') {
           finalResult = sseEvt.data as DoneEventData
           continue
@@ -333,25 +397,10 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           }
         }
 
-        // The remaining route-level state (events, graph, messages) is
-        // only owned by the actively-displayed session — drop events
-        // from a backgrounded stream rather than corrupt the view. The
-        // server-side persistence catches everything up on rehydrate.
-        if (runSessionId !== props.sessionId) continue
-
-        if (props.onEventsUpdate) {
-          props.onEventsUpdate([evt])
-        }
-
-        // Reactive graph update on tool_result events
-        if (evt.type === 'tool_result' && props.onGraphUpdate) {
-          const graphElements = extractGraphElements([evt])
-          if (graphElements.length > 0) {
-            props.onGraphUpdate(graphElements)
-          }
-        }
-
-        // Convert error events to inline chat messages
+        // Inline error/warning bubbles belong to the run's own transcript, so
+        // they are filed by session id ahead of the view guard below — a
+        // backgrounded run that hits a recoverable error still shows it when
+        // the user switches back (#105).
         if (evt.type === 'error') {
           const errorData = evt.data as { error: string; severity?: string; hint?: string; turn?: number; iteration?: number }
           // Build context string (e.g., "(turn 3, attempt 2)")
@@ -368,7 +417,25 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
             patternId: evt.patternId,
             turnInfo,
           }
-          setMessages([...messages(), errorMsg])
+          props.setMessages(runSessionId, (prev) => [...prev, errorMsg])
+        }
+
+        // The remaining route-level state (events, graph) is single-instance
+        // and belongs to the actively-displayed session — drop events from a
+        // backgrounded stream rather than corrupt the panels. Server-side
+        // persistence catches those up on rehydrate.
+        if (runSessionId !== props.sessionId) continue
+
+        if (props.onEventsUpdate) {
+          props.onEventsUpdate([evt])
+        }
+
+        // Reactive graph update on tool_result events
+        if (evt.type === 'tool_result' && props.onGraphUpdate) {
+          const graphElements = extractGraphElements([evt])
+          if (graphElements.length > 0) {
+            props.onGraphUpdate(graphElements)
+          }
         }
       }
 
@@ -384,11 +451,13 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         }
       }
 
-      // Build assistant message from final result — only if there's a real response
-      // (not an error status with empty/stale response). Drop it silently if the
-      // user has switched away; the persisted row will surface it on reload.
+      // Build assistant message from final result — only if there's a real
+      // response (not an error status with empty/stale response). Filed into
+      // the run's own buffer, so a turn that lands while the user is reading
+      // another chat is waiting for them when they switch back (#105).
       const finalResponse = finalResult?.response ?? ''
-      if (runSessionId === props.sessionId && finalResponse && finalResult?.status !== 'error') {
+      if (finalResult?.status === 'error') outcome = 'error'
+      if (finalResponse && finalResult?.status !== 'error') {
         const assistantMessage: Message = {
           id: Date.now().toString(),
           role: 'assistant',
@@ -404,27 +473,27 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
             isReadOnly: false
           } : undefined
         }
-        setMessages([...messages(), assistantMessage])
+        props.setMessages(runSessionId, (prev) => [...prev, assistantMessage])
       }
     } catch (error) {
       // Suppress the noisy AbortError that fires on page-unload teardown.
-      const aborted = error instanceof DOMException && error.name === 'AbortError'
+      aborted = error instanceof DOMException && error.name === 'AbortError'
       if (!aborted) {
+        outcome = 'error'
         console.error('Error processing message:', error)
-        if (runSessionId === props.sessionId) {
-          const errorMessage: Message = {
-            id: Date.now().toString(),
-            role: 'error',
-            content: error instanceof Error ? error.message : 'Unknown error',
-            timestamp: new Date()
-          }
-          setMessages([...messages(), errorMessage])
+        const errorMessage: Message = {
+          id: Date.now().toString(),
+          role: 'error',
+          content: error instanceof Error ? error.message : 'Unknown error',
+          timestamp: new Date()
         }
+        props.setMessages(runSessionId, (prev) => [...prev, errorMessage])
       }
       progress.finish()
     } finally {
       props.updateRunState(runSessionId, { isProcessing: false, runningTool: null })
       props.unregisterAbortController(runSessionId)
+      if (!aborted) props.onRunSettled?.(runSessionId, outcome)
     }
   }
 
@@ -581,11 +650,13 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       <div border="t dark-border-primary" p="4" bg="dark-bg-secondary/80" backdrop-blur="sm">
         <ChatInput
           onSend={handleSendMessage}
-          disabled={isProcessing() || !!props.embeddingSources}
+          disabled={isProcessing() || atCap() || !!props.embeddingSources}
           blockedMessage={
             props.embeddingSources
               ? 'Embedding sources… you can ask once indexing finishes.'
-              : blockedMessage()
+              : atCap()
+                ? capReachedMessage(concurrencyCap())
+                : blockedMessage()
           }
           focusToken={props.focusInputToken}
         />

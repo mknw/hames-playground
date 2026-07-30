@@ -320,25 +320,33 @@ Collapsible      60% default       40% default
 **Location:** All in `ui/src/components/ark-ui/`
 
 #### 1. ChatInterface.tsx
-Main container combining sidebar and chat area:
+Chat area for the selected conversation (the sidebar is a **sibling**, owned by
+the route so thread selection can swap the `sessionId` prop):
 ```tsx
+// routes/index.tsx
 <div flex="~">
-  <ChatSidebar />           // 64 columns wide
-  <div flex="~ col 1">      // Flexible main area
-    <ChatMessages />
-    <ChatInput />
-  </div>
+  <ChatSidebar ... />       // route-level sibling
+  <ChatInterface sessionId={selectedSessionId()} ... />
 </div>
+
+// ChatInterface renders:
+<AgentSelector /> + <ChatMessages /> + <ChatInput />
 ```
+Since #105, `ChatInterface` holds **no message state of its own** — it reads and
+writes the route's per-session buffers via `getMessages`/`setMessages`, always
+addressing the *run's* session id, so a backgrounded run keeps filling its own
+thread.
 
 #### 2. ChatSidebar.tsx
-**Props:** `collapsed: boolean`, `onToggle: () => void`, `threads`, `selectedId`, `onSelectThread`, `onNewChat`
+**Props:** `collapsed: boolean`, `onToggle: () => void`, `threads`, `selectedId`, `onSelectThread`, `onNewChat`, `onTitleRegenerated`, plus the #105 registries: `getRunState`, `getProgress`, `getCompletion`
 - Width: `3rem` (collapsed) → `16rem` (expanded)
 - Smooth inline style transition
-- Thread history with relative timestamps
+- Thread history with relative timestamps, **ordered by creation (newest first)** — deliberately *not* `updated_at`, which every turn-save bumps and which made the list reshuffle under concurrent runs (#105)
 - Settings gear icon (opens `SettingsPanel` FloatingPanel) + New Chat button in footer
 - Content hidden when collapsed (toggle button only)
-- **Optimistic "+ New Chat" placeholder (#44):** Clicking *+ New Chat* immediately prepends a placeholder row keyed by the new `selectedSessionId` (`title: null`, `isPlaceholder: true`, muted italic *"description will appear here"*). Once the first user message persists and the `threadsResource` refetch returns the real row, the merger (`mergeThreadsWithPlaceholder` in `ChatSidebar.tsx`) drops the placeholder by id. No DB writes for the placeholder — purely client-side. Switching to an existing thread clears it.
+- **Optimistic "+ New Chat" placeholder (#44):** Clicking *+ New Chat* immediately prepends a placeholder row keyed by the new `selectedSessionId` (`title: null`, `isPlaceholder: true`). Once the real row lands in the `threadsResource`, the merger (`mergeThreadsWithPlaceholder`) drops the placeholder by id. Purely client-side; switching to an existing thread clears it. Since #105's early persist, the real row already appears on the *first SSE event* of the first run (derived title), so the placeholder only covers the pre-send moment.
+- **Per-row live progress (#105):** while a conversation's run streams *in this browser*, the timestamp line gives way to the run's current status text + a 3px progress strip (`RowProgress`) fed by the same route-owned `ChainProgressController` as the in-chat bar (fill math shared via `progressPercent`; indeterminate shimmer until the chain projection seeds). Badges (`StatusBadge` via `rowIndicator`) are **action-rows only** — POST actions have no client stream, so their persisted `status` is their freshest signal.
+- **Completion marks (#105):** a run that settles while another thread is in view flashes its row (green done / red error) then holds an accent border (`completionBorderColor`, inline `border-color` — see the attributify trap below) until the thread is opened. Runs that settle in the viewed thread mark nothing.
 
 #### 3. ChatMessages.tsx
 - **ScrollArea.Root** - Custom scrollable message container
@@ -360,6 +368,7 @@ Main container combining sidebar and chat area:
   - Enter → Send message
   - Shift+Enter → New line
 - **Submit guard (#47):** When `disabled` is true, the textarea **stays editable** so the user's draft survives, but Enter no-ops. If `blockedMessage` is provided, an inline banner ("Waiting for `<tool>` to complete. Try later.") renders above the input — driven by the currently-running tool from the active session's `controller_action` events.
+- **Concurrency cap (#105):** with `maxConcurrentRuns` sessions already streaming (default 3, Settings → Concurrency), sending into an *idle* conversation is refused — composer disabled, banner "max N reached — wait for a session to stop". Client-side policy (`isAtConcurrencyCap` in `lib/run-registry.ts`); nothing running is ever interrupted, and the session that is itself streaming keeps the tool banner rather than the cap message.
 - **Styling:** Neon cyan border on focus
 
 #### 5. AgentSelector.tsx
@@ -495,17 +504,27 @@ index.tsx (top-level state)
     ├─ highlightedIds: Signal<string[]>          ← newly added graph node IDs
     ├─ graphEntityNames: Memo<Map<string, string[]>>  ← name → element IDs (for chat linking)
     │
-    ├─> ChatInterface
-    │       ├─ messages: Signal<Message[]>
-    │       ├─ isProcessing: Signal<boolean>
+    ├─ per-session registries (#47/#105 — survive thread switches):
+    │   ├─ messagesBySession: Map<sid, Signal<Message[]>>   ← chat buffers (incl. the in-flight turn)
+    │   ├─ progressBySession: Map<sid, ChainProgressController>
+    │   ├─ runStates: Signal<Record<sid, SessionRunState>>  ← { isProcessing, runningTool }
+    │   ├─ completions: Signal<Record<sid, CompletionMark>> ← flash → accent border, cleared on open
+    │   ├─ abortControllers: Map<sid, AbortController>      ← aborted on unload only
+    │   └─ runningCount: Memo<number>                       ← drives the concurrency cap
+    │
+    ├─> ChatInterface (sessionId + registry accessors — messages live in the ROUTE, not here)
     │       ├─ selectedAgent: Signal<string>
-    │       │   Props: graphEntityNames, onHighlightEntities
+    │       │   Props: graphEntityNames, onHighlightEntities, getMessages/setMessages,
+    │       │          getProgress, getRunState/updateRunState, runningCount,
+    │       │          onRunStarted, onRunSettled
     │       │
     │       ├─> AgentSelector (selectedAgent, onAgentChange, disabled)
     │       ├─> ChatMessages (messages, graphEntityNames, onHighlightEntities, onApproveWrite, onRejectWrite)
     │       │       └─ annotateEntities() — wraps entity names in interactive spans post-render
-    │       ├─> ChatInput (onSend, disabled)
-    │       └─> ChatSidebar (collapsed, onToggle)
+    │       └─> ChatInput (onSend, disabled, blockedMessage)
+    │
+    ├─> ChatSidebar (threads, selectedId, getRunState, getProgress, getCompletion)
+    │       └─ RowProgress — per-row status + strip off the same progress controllers
     │
     └─> SupportPanel (lazyMount + unmountOnExit)
             │   Props: graphElements, contextEvents, highlightedIds, onCypherWrite
@@ -562,8 +581,26 @@ Conversations are persisted to Postgres so they survive process restarts and lis
 | Session | `lib/harness-client/session.server.ts` | In-process pattern cache (non-serializable BAML clients) + Postgres-backed serialized context, scoped by `userId` |
 | Actions | `lib/harness-client/actions.server.ts` | `listConversations()`, `loadConversation()` server actions for the sidebar; auth-gated |
 | Sidebar | `components/ark-ui/ChatSidebar.tsx` | Real thread list + "+ New Chat", selected-thread highlight |
-| Page | `routes/index.tsx` | `selectedSessionId` signal; threads resource refetched after each turn |
-| Hydration | `components/ark-ui/ChatInterface.tsx` | `createEffect` on `props.sessionId` replays events into graph + observability |
+| Page | `routes/index.tsx` | `selectedSessionId` signal; threads resource refetched after each turn AND on run start / settle (#105). **Always read via `threads.latest`** — see *Rendering gotchas* in §6a |
+| Hydration | `components/ark-ui/ChatInterface.tsx` | `createEffect` on `props.sessionId` replays events into graph + observability. **Skipped while that session's run is in flight** (the live buffer is the only copy of the un-persisted turn); reads run state untracked so a finishing run doesn't re-trigger it |
+
+### Row lifecycle (#105)
+
+A conversation row is persisted **at run start**, not run end: `runTurn` (in
+`actions.server.ts`) upserts a stub when no row exists — a minimal valid
+context carrying the user message (a mid-run reload replays it) and a
+`deriveTitle()` title — mirroring `seedActionRow` on the POST-trigger path.
+The run's final `saveSession` overwrites the blob; the first-turn LLM title
+replaces the derived one via `title_updated`. Guarded on "no existing row",
+so pre-seeded action rows and second turns never hit it. The client refetches
+the list on the first SSE event (which strictly follows the persist) and on
+run settle, so new chats are visible — with live progress — for their entire
+first run.
+
+`listConversations` orders by **`created_at DESC`** (stable for a row's
+lifetime), not `updated_at`, which every turn-save bumps — activity ordering
+made the sidebar reshuffle under concurrent runs. `updatedAt` is still
+returned for the "x ago" display.
 
 ### Sticky titles
 
@@ -579,45 +616,85 @@ Every public action and the `/api/events` / `/api/stash` routes authenticate via
 
 ---
 
-## 6a. Per-Session Progress & Submit Guard (#47)
+## 6a. Multi-Session Runs: Per-Session State, Cap & Live Indicators (#47, #105)
 
-The live progress bar and "Waiting for `<tool>`…" composer guard are scoped to a conversation, not to the `ChatInterface` instance. Switching threads while a chain is running leaves the streamed loop running on the server — progress keeps accumulating in the originating session's controller, and the bar restores on return.
+Everything a run produces is scoped to its conversation, not to the
+`ChatInterface` instance. Switching threads while a chain is running leaves
+the streamed loop running on the server; up to `maxConcurrentRuns` sessions
+(default 3) may stream at once, each with its own live view, sidebar
+progress readout, and completion mark.
 
 ### State location
 
-`routes/index.tsx` owns two parallel per-session registries:
+`routes/index.tsx` owns the per-session registries:
 
 | Registry | Shape | Purpose |
 |----------|-------|---------|
-| `progressBySession` | `Map<sessionId, ChainProgressController>` | One progress controller per session. Lazily created on first read. |
-| `runStates` signal | `Record<sessionId, SessionRunState>` | Reactive `{ isProcessing, runningTool }` per session — drives the composer guard banner and the bar's `visible` flag. |
+| `messagesBySession` | `Map<sessionId, Signal<Message[]>>` | Chat buffers, **including the in-flight turn** (not persisted until run end — hoisting it here is what makes switch-back non-destructive, #105). Idle buffers are pruned on thread switch; a *running* session's buffer is irreplaceable. |
+| `progressBySession` | `Map<sessionId, ChainProgressController>` | One progress controller per session. Lazily created on first read. Feeds the in-chat bar AND the sidebar's `RowProgress` strip. |
+| `runStates` signal | `Record<sessionId, SessionRunState>` | Reactive `{ isProcessing, runningTool }` per session — composer guard, sidebar live gate, `runningCount`. |
+| `completions` signal | `Record<sessionId, CompletionMark>` | Flash → accent border for runs that settle while another thread is in view. Cleared when the thread is opened. |
 | `abortControllers` | `Map<sessionId, AbortController>` | One in-flight SSE stream per session. Aborted only on page unload (not on chat switch). |
 
-`ChatInterface` receives `getProgress`, `getRunState`, `updateRunState`, `registerAbortController`, `unregisterAbortController` as props. Inside `handleSendMessage` the active `props.sessionId` is captured as `runSessionId` at submit time — all subsequent state mutations are keyed on that captured id, not the live prop, so events that arrive after a chat switch don't pollute the wrong view.
+Shared shapes + the pure cap policy (`countRunning`, `isAtConcurrencyCap`,
+`capReachedMessage`) live in `lib/run-registry.ts`.
+
+Inside `runSend` the active `props.sessionId` is captured as `runSessionId` at
+submit time — all run writes are keyed on that captured id, not the live prop.
 
 ### Event routing
 
 - **Progress is always routed** into `getProgress(runSessionId)` regardless of which chat the user is viewing.
+- **Messages** (user bubble, inline error/warning bubbles, final assistant message) are filed into `setMessages(runSessionId, …)` unconditionally — a backgrounded run fills its own thread's buffer; the view just renders the selected session's buffer.
 - **Tool name** is extracted from `controller_action.action.tool_name` and pushed via `updateRunState(runSessionId, { runningTool })`. When `is_final` is true the field clears.
-- **Graph, events, messages, context** are dropped when `runSessionId !== props.sessionId` — the active view owns those signals, and the persisted row will surface anything missed on the next hydration.
+- **Graph, events panel, context** remain single-instance route state and are dropped when `runSessionId !== props.sessionId`; the persisted row surfaces them on the next hydration.
+- **Run boundary callbacks:** `onRunStarted` (first SSE event → threads refetch; the early-persisted row appears) and `onRunSettled(sid, 'done' | 'error')` (threads refetch + completion mark; not fired on abort).
+
+### Concurrency cap
+
+`maxConcurrentRuns` (`HarnessSettings`, Settings → Concurrency slider) is a
+client-side policy — the server takes no part. At the cap, a send into an
+idle conversation is refused ("max N reached — wait for a session to stop");
+the already-running session is never "at cap" for its own account (it keeps
+the tool banner), and a non-positive/non-finite cap means *no cap* so bad
+localStorage can't lock the composer. Nothing running is ever interrupted —
+mid-run cancellation is #105 PR 3, unbuilt.
 
 ### SSE envelope
 
-`api/events.ts` now spreads `sessionId` into every emitted JSON object (the `event: done` payload too). It's not part of the typed `ContextEvent` shape — it's an envelope-only field consumed by the client.
+`api/events.ts` spreads `sessionId` into every emitted JSON object (the `event: done` payload too). It's not part of the typed `ContextEvent` shape — it's an envelope-only field consumed by the client.
 
 ### Submit guard
 
-`ChatInput` now keeps the textarea editable while `disabled` is true. The Enter handler still no-ops, but the user's draft survives. A `blockedMessage` prop renders an inline banner above the input; it's set by `ChatInterface` to `` `Waiting for \`<tool>\` to complete. Try later.` `` whenever the active session has both `isProcessing` and a `runningTool`.
+`ChatInput` keeps the textarea editable while `disabled` is true. The Enter handler no-ops, but the user's draft survives. `blockedMessage` renders an inline banner above the input: the tool banner for the running session, or the cap message when a new run is refused.
 
 ### Lifecycle
 
 | Event | Behavior |
 |-------|----------|
-| Submit on a non-running chat | `getProgress(sid).reset()`; `updateRunState(sid, { isProcessing: true })`; SSE opens; per-session `AbortController` registered. |
-| Switch chats mid-stream | Nothing aborts. `selectedSessionId` swaps; `ChatInterface`'s reactive memos pick up the new session's controller (idle → bar hides). |
-| Switch back to the running chat | The original controller's snapshot signal is still live; the bar re-renders with the current `currentTurn` and `status`. |
-| Stream completes | `progress.finish()`; `updateRunState(sid, { isProcessing: false, runningTool: null })`; `AbortController` unregistered. |
+| Submit on a non-running chat | Cap check first. Then `getProgress(sid).reset()`; `updateRunState(sid, { isProcessing: true })`; SSE opens; per-session `AbortController` registered. Server-side, `runTurn` persists the row before running (see §6 *Row lifecycle*). |
+| First SSE event | `onRunStarted` → `refetchThreads()` — the new row appears with derived title, status line, and progress strip. |
+| Switch chats mid-stream | Nothing aborts. The hydration effect loads the target thread; the running thread's buffer/controller keep accumulating; its sidebar row keeps its strip. |
+| Switch back to the running chat | The buffer + controller are still live — user bubble, inline errors, and bar all restore. Hydration is skipped (`isProcessing`, read untracked). |
+| Stream completes | `progress.finish()`; run state cleared; `AbortController` unregistered; `onRunSettled` → refetch + (if backgrounded) completion mark: flash, then accent border until opened. |
 | Tab close / `beforeunload` | Route iterates `abortControllers.values()` and aborts each → no zombie fetches in DevTools. |
+
+### Rendering gotchas (both verified against built output)
+
+1. **Attributify extractor:** UnoCSS's `presetAttributify` emits `[attr~="…"]`
+   selectors only for values found as *literal text* in source. Values that
+   exist only inside dynamic expressions (`border={fn()}`) — and some literal
+   fractions (`m="t-1.5"`) — are silently dropped from the built sheet. Rule:
+   dynamic styling uses inline `style={{…}}`. Known pre-existing casualty:
+   the sidebar's selected-row `border="1 neon-cyan/40"` never renders.
+2. **Root Suspense vs resource refetch:** `app.tsx` wraps routes in an
+   empty-fallback `<Suspense>`. Reading a `createResource` via `resource()`
+   re-registers with that boundary on every `refetch()` — the whole route
+   detaches for the query duration (blank flash, composer focus + scroll
+   lost). Rule: resources that refetch during interaction are read via
+   **`resource.latest`** (raw value once resolved, no Suspense; first load
+   still suspends). Applied to `threads`; `ToolsPanel` learned it
+   independently (local Suspense + optimistic updates).
 
 ---
 

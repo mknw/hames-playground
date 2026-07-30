@@ -1,6 +1,7 @@
 import { Splitter } from '@ark-ui/solid/splitter'
 import { createSignal, createMemo, createResource, createEffect, onCleanup, onMount } from 'solid-js'
-import { ChatInterface, type SessionRunState } from '~/components/ark-ui/ChatInterface'
+import { ChatInterface } from '~/components/ark-ui/ChatInterface'
+import type { Message } from '~/components/ark-ui/ChatMessages'
 import { ChatSidebar, mergeThreadsWithPlaceholder } from '~/components/ark-ui/ChatSidebar'
 import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
 import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns'
@@ -10,8 +11,14 @@ import { listConversations, type OpenReferenceTarget } from '~/lib/harness-clien
 import { newSessionId } from '~/lib/session-id'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 import { createChainProgress, type ChainProgressController } from '~/components/ark-ui/useChainProgress'
-
-const DEFAULT_RUN_STATE: SessionRunState = { isProcessing: false, runningTool: null }
+import {
+  DEFAULT_RUN_STATE,
+  COMPLETION_FLASH_MS,
+  countRunning,
+  type CompletionMark,
+  type RunOutcome,
+  type SessionRunState,
+} from '~/lib/run-registry'
 
 export default function Home() {
   // Conversation a user is currently viewing. Initial value is a fresh id so
@@ -81,6 +88,15 @@ export default function Home() {
   // `mutate` is exposed so the `title_updated` SSE event can patch a single
   // row's title in-place without re-querying the full list (the server already
   // gave us the new title in the event payload).
+  //
+  // IMPORTANT: read via `threads.latest`, never `threads()` (#105). The app
+  // root wraps routes in an empty-fallback <Suspense>; a plain read
+  // re-registers with that boundary on every `refetchThreads()`, detaching
+  // the ENTIRE route for the duration of the DB query — a blank flash that
+  // drops composer focus and chat scroll (typed text survives because the
+  // nodes are re-attached, not recreated). `latest` returns the stale list
+  // without touching Suspense once a first value exists; the initial page
+  // load still suspends as before.
   const [threads, { refetch: refetchThreads, mutate: mutateThreads }] = createResource(() => listConversations())
 
   // Push-driven title update from the SSE stream — the server emits a
@@ -102,7 +118,7 @@ export default function Home() {
   // The effect re-runs on every threads() change; it only arms an interval when
   // a running action exists, and clears it as soon as none remain.
   createEffect(() => {
-    const hasRunningAction = (threads() ?? []).some(
+    const hasRunningAction = (threads.latest ?? []).some(
       t => t.kind === 'action' && t.status === 'running',
     )
     if (!hasRunningAction) return
@@ -138,6 +154,111 @@ export default function Home() {
       ...prev,
       [sid]: { ...DEFAULT_RUN_STATE, ...prev[sid], ...patch },
     }))
+  }
+
+  // How many conversations are streaming right now. Drives the composer's
+  // cap guard (#105 slice 2) — the count is only knowable here, since each
+  // ChatInterface sees just its own session.
+  const runningCount = createMemo(() => countRunning(runStates()))
+
+  // ---------------------------------------------------------------------------
+  // Completion marks (#105)
+  // ---------------------------------------------------------------------------
+  // With several conversations running at once, a run landing in a thread the
+  // user isn't looking at is otherwise silent. Mark the row: it flashes once,
+  // then holds a quiet accent border until the thread is opened.
+  const [completions, setCompletions] = createSignal<Record<string, CompletionMark>>({})
+  const getCompletion = (sid: string): CompletionMark | undefined => completions()[sid]
+  const flashTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  const clearCompletion = (sid: string) => {
+    const timer = flashTimers.get(sid)
+    if (timer) {
+      clearTimeout(timer)
+      flashTimers.delete(sid)
+    }
+    setCompletions(prev => {
+      if (!(sid in prev)) return prev
+      const next = { ...prev }
+      delete next[sid]
+      return next
+    })
+  }
+
+  // First SSE event of a run — the early-persisted row is now in Postgres, so
+  // a refetch surfaces the new conversation (derived title + live indicator)
+  // while it is still streaming. Replaces the placeholder in the same pass.
+  const handleRunStarted = (_sid: string) => {
+    refetchThreads()
+  }
+
+  const handleRunSettled = (sid: string, outcome: RunOutcome) => {
+    // Refetch regardless of which thread is in view: the run's final save
+    // bumped title/status server-side, and for a backgrounded new chat this
+    // is what makes it appear at all if the start-refetch was missed.
+    refetchThreads()
+    // The user watched this one land — nothing to announce, and a mark here
+    // would just need dismissing.
+    if (sid === selectedSessionId()) return
+    const existing = flashTimers.get(sid)
+    if (existing) clearTimeout(existing)
+    setCompletions(prev => ({ ...prev, [sid]: { outcome, flashing: true } }))
+    flashTimers.set(
+      sid,
+      setTimeout(() => {
+        flashTimers.delete(sid)
+        // Decay to the static border; the mark itself survives until visited.
+        setCompletions(prev =>
+          sid in prev ? { ...prev, [sid]: { ...prev[sid], flashing: false } } : prev,
+        )
+      }, COMPLETION_FLASH_MS),
+    )
+  }
+
+  onCleanup(() => {
+    for (const timer of flashTimers.values()) clearTimeout(timer)
+    flashTimers.clear()
+  })
+
+  // ---------------------------------------------------------------------------
+  // Per-session chat message buffers (#105 slice 1)
+  // ---------------------------------------------------------------------------
+  // The in-flight turn is NOT persisted until the run ends, so a buffer that
+  // lives in ChatInterface's closure is destroyed the moment the user switches
+  // threads — the run finishes server-side but the live view never reattaches.
+  // Hoisting the buffer here (next to `progressBySession`) means the streaming
+  // turn keeps accumulating into its own session's array while the user reads
+  // another chat, and switching back just renders it.
+  //
+  // Buffers for idle sessions are disposable: the hydration effect reloads
+  // those from Postgres, which is authoritative once a run has ended. Only a
+  // *running* session's buffer is irreplaceable, so `pruneIdleBuffers` keeps
+  // the map from growing without bound as the user browses.
+  const messagesBySession = new Map<string, ReturnType<typeof createSignal<Message[]>>>()
+  const messagesSignal = (sid: string) => {
+    let sig = messagesBySession.get(sid)
+    if (!sig) {
+      sig = createSignal<Message[]>([])
+      messagesBySession.set(sid, sig)
+    }
+    return sig
+  }
+  const getMessages = (sid: string): Message[] => messagesSignal(sid)[0]()
+  const setMessages = (
+    sid: string,
+    next: Message[] | ((prev: Message[]) => Message[]),
+  ) => {
+    const set = messagesSignal(sid)[1]
+    // Solid reads a bare function argument as an updater — wrap plain arrays.
+    if (typeof next === 'function') set(next)
+    else set(() => next)
+  }
+  const pruneIdleBuffers = (keep: string) => {
+    const states = runStates()
+    for (const sid of [...messagesBySession.keys()]) {
+      if (sid === keep || states[sid]?.isProcessing) continue
+      messagesBySession.delete(sid)
+    }
   }
 
   // AbortControllers for in-flight SSE streams. Switching sessions does NOT
@@ -201,6 +322,7 @@ export default function Home() {
   const handleNewChat = () => {
     resetForNewSession()
     const id = newSessionId()
+    pruneIdleBuffers(id)
     setSelectedSessionId(id)
     setPlaceholderSessionId(id)
     setFocusInputToken(t => t + 1)
@@ -209,6 +331,9 @@ export default function Home() {
   const handleSelectThread = (threadId: string) => {
     if (threadId === selectedSessionId()) return
     resetForNewSession()
+    // Opening the thread is the acknowledgement — drop its completion mark.
+    clearCompletion(threadId)
+    pruneIdleBuffers(threadId)
     setSelectedSessionId(threadId)
     // User picked an existing thread — drop the optimistic row.
     setPlaceholderSessionId(null)
@@ -219,7 +344,7 @@ export default function Home() {
   createEffect(() => {
     const ph = placeholderSessionId()
     if (!ph) return
-    const list = threads() ?? []
+    const list = threads.latest ?? []
     if (list.some(t => t.id === ph)) {
       setPlaceholderSessionId(null)
     }
@@ -228,7 +353,7 @@ export default function Home() {
   // Display threads = optimistic placeholder (if any) on top, then persisted
   // rows, deduped by id. See `mergeThreadsWithPlaceholder` for the rule.
   const displayThreads = createMemo(() =>
-    mergeThreadsWithPlaceholder(threads() ?? [], placeholderSessionId())
+    mergeThreadsWithPlaceholder(threads.latest ?? [], placeholderSessionId())
   )
 
   // Wrap the supplied unified-context setter so each save also refreshes the
@@ -318,6 +443,9 @@ export default function Home() {
               onSelectThread={handleSelectThread}
               onNewChat={handleNewChat}
               onTitleRegenerated={handleTitleUpdated}
+              getRunState={getRunState}
+              getProgress={getProgress}
+              getCompletion={getCompletion}
             />
             <div flex="1" overflow="hidden">
               <ChatInterface
@@ -335,6 +463,11 @@ export default function Home() {
                 getProgress={getProgress}
                 getRunState={getRunState}
                 updateRunState={updateRunState}
+                getMessages={getMessages}
+                setMessages={setMessages}
+                runningCount={runningCount()}
+                onRunStarted={handleRunStarted}
+                onRunSettled={handleRunSettled}
                 registerAbortController={registerAbortController}
                 unregisterAbortController={unregisterAbortController}
                 onTitleUpdated={handleTitleUpdated}

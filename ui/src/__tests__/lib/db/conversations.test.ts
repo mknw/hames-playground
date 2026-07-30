@@ -139,11 +139,11 @@ describe('conversations CRUD', () => {
     expect(stolen).toBeNull()
   })
 
-  it('lists newest first, scoped to user', async () => {
+  it('lists newest-created first, scoped to user', async () => {
     if (!dbAvailable) return
-    // Serialize inserts so updated_at ordering is deterministic. Promise.all
-    // would race them, and Postgres NOW() can return identical values for
-    // sub-millisecond inserts.
+    // Serialize inserts so created_at ordering is deterministic (#105 sorts
+    // by creation, not update). Promise.all would race them, and Postgres
+    // NOW() can return identical values for sub-millisecond inserts.
     const ids: string[] = []
     for (const n of [1, 2, 3]) {
       const id = `conv-list-${n}-${Math.random().toString(36).slice(2, 8)}`
@@ -162,6 +162,37 @@ describe('conversations CRUD', () => {
     // Most recent insert appears first
     expect(seen[0]).toBe(ids[2])
     expect(seen[2]).toBe(ids[0])
+  })
+
+  // #105: sort by creation, not activity. A turn-save bumps updated_at; that
+  // must NOT reshuffle the sidebar (the exact churn users saw with several
+  // concurrent runs saving turns).
+  it('an updated_at bump does not reorder the list', async () => {
+    if (!dbAvailable) return
+    const older = `conv-order-a-${Math.random().toString(36).slice(2, 8)}`
+    const newer = `conv-order-b-${Math.random().toString(36).slice(2, 8)}`
+    for (const id of [older, newer]) {
+      await saveConversation({
+        id,
+        userId: TEST_USER,
+        agentId: 'default',
+        title: 't',
+        serializedContext: '{}',
+      })
+      await new Promise((r) => setTimeout(r, 15))
+    }
+    // Re-save the OLDER one — upsert path sets updated_at = NOW().
+    await saveConversation({
+      id: older,
+      userId: TEST_USER,
+      agentId: 'default',
+      title: 't',
+      serializedContext: '{"turn":2}',
+    })
+    const seen = (await listConversations(TEST_USER))
+      .map((r) => r.id)
+      .filter((id) => id === older || id === newer)
+    expect(seen).toEqual([newer, older])
   })
 
   it('deleteConversation only deletes when user matches', async () => {

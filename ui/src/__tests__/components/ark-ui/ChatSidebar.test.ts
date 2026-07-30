@@ -1,11 +1,13 @@
 /**
- * ChatSidebar — placeholder merge logic.
+ * ChatSidebar — placeholder merge logic + row indicator precedence.
  *
  * Covers the optimistic "+ New Chat" placeholder rules from #44:
  *  - placeholder is prepended when its id is not in the persisted list
  *  - placeholder is dropped once the persisted row arrives (the real row
  *    replaces the optimistic one in-place at the top of the list)
  *  - no placeholder when `placeholderId` is null
+ *
+ * ...and the #105 rule that a live run outranks the persisted status badge.
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -21,7 +23,13 @@ vi.mock('../../../lib/harness-client', () => ({
   regenerateConversationTitle: vi.fn(async () => null),
 }))
 
-const { mergeThreadsWithPlaceholder } = await import('../../../components/ark-ui/ChatSidebar')
+const {
+  mergeThreadsWithPlaceholder,
+  rowIndicator,
+  progressPercent,
+  completionBorderColor,
+  rowFlashClass,
+} = await import('../../../components/ark-ui/ChatSidebar')
 type ChatThreadSummary = import('../../../components/ark-ui/ChatSidebar').ChatThreadSummary
 
 const persisted: ChatThreadSummary[] = [
@@ -93,5 +101,103 @@ describe('mergeThreadsWithPlaceholder', () => {
     expect(merged[0].isPlaceholder).toBe(true)
     // Legacy rows still flow through unchanged, in order.
     expect(merged.slice(1).map((t) => t.id)).toEqual(legacy.map((t) => t.id))
+  })
+})
+
+describe('rowIndicator', () => {
+  // Badges are action-only: a live chat run is indicated by the per-row
+  // progress strip instead, never a badge.
+  it('maps the persisted action statuses to their badges', () => {
+    expect(rowIndicator({ kind: 'action', status: 'running' })).toBe('running')
+    expect(rowIndicator({ kind: 'action', status: 'error' })).toBe('action-error')
+    expect(rowIndicator({ kind: 'action', status: 'paused' })).toBe('action-paused')
+    expect(rowIndicator({ kind: 'action', status: 'done' })).toBe('action-done')
+  })
+
+  // A conversation must never pick up the action-only badges, which would
+  // brand an ordinary chat as POST-triggered — even when its persisted
+  // status says 'running' (which is also the at-rest value for completed
+  // chats; the harness never writes 'done').
+  it('never returns a badge for a conversation', () => {
+    for (const status of ['running', 'paused', 'done', 'error'] as const) {
+      expect(rowIndicator({ kind: 'conversation', status })).toBe('none')
+    }
+  })
+})
+
+describe('progressPercent', () => {
+  // Between run start and the chainTurnEstimate seed there is no denominator
+  // — null tells the strip to render its indeterminate shimmer.
+  it('is null before any projection is seeded', () => {
+    expect(
+      progressPercent({ currentTurn: 0, pathProjection: 0, maxProjection: 0 }),
+    ).toBeNull()
+  })
+
+  it('divides currentTurn by the path projection', () => {
+    expect(
+      progressPercent({ currentTurn: 2, pathProjection: 8, maxProjection: 8 }),
+    ).toBe(25)
+  })
+
+  // Mirrors the in-chat bar: the refined path projection is the denominator,
+  // the stable max only steps in when the path is unknown.
+  it('falls back to maxProjection when pathProjection is 0', () => {
+    expect(
+      progressPercent({ currentTurn: 1, pathProjection: 0, maxProjection: 4 }),
+    ).toBe(25)
+  })
+
+  it('clamps to 100 when the turn count overruns the projection', () => {
+    expect(
+      progressPercent({ currentTurn: 9, pathProjection: 4, maxProjection: 4 }),
+    ).toBe(100)
+  })
+})
+
+describe('completionBorderColor', () => {
+  // undefined leaves the attributify border untouched — an empty string would
+  // set `border-color: ''` and clobber it.
+  it('is undefined for a row with no completion mark', () => {
+    expect(completionBorderColor(undefined)).toBeUndefined()
+  })
+
+  it('accents a completed row per outcome, and keeps doing so after the flash', () => {
+    expect(completionBorderColor({ outcome: 'done', flashing: true })).toBe(
+      'rgba(74, 222, 128, 0.55)',
+    )
+    expect(completionBorderColor({ outcome: 'done', flashing: false })).toBe(
+      'rgba(74, 222, 128, 0.55)',
+    )
+    expect(completionBorderColor({ outcome: 'error', flashing: false })).toBe(
+      'rgba(248, 113, 113, 0.55)',
+    )
+  })
+
+  // Must be a real CSS colour, not a UnoCSS token: presetAttributify only
+  // emits selectors for colours it finds as literal `border="…"` text, which
+  // a value living in a dynamic expression never is.
+  it('returns a literal CSS colour rather than a UnoCSS token', () => {
+    const value = completionBorderColor({ outcome: 'done', flashing: false })!
+    expect(value).toMatch(/^rgba?\(/)
+    expect(value).not.toContain('green-400')
+  })
+})
+
+describe('rowFlashClass', () => {
+  it('is empty with no completion', () => {
+    expect(rowFlashClass(undefined)).toBe('')
+  })
+
+  it('flashes per outcome while animating', () => {
+    expect(rowFlashClass({ outcome: 'done', flashing: true })).toBe('thread-flash-done')
+    expect(rowFlashClass({ outcome: 'error', flashing: true })).toBe('thread-flash-error')
+  })
+
+  // Once the flash decays the row keeps only its border — re-adding the class
+  // on a later render would restart the animation.
+  it('stops flashing once the mark has settled', () => {
+    expect(rowFlashClass({ outcome: 'done', flashing: false })).toBe('')
+    expect(rowFlashClass({ outcome: 'error', flashing: false })).toBe('')
   })
 })

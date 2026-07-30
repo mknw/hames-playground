@@ -233,6 +233,16 @@ export function SettingsPanel() {
               </div>
             </div>
 
+            {/* Concurrency (#105) */}
+            <div>
+              <div text="xs dark-text-tertiary uppercase" font="semibold" m="b-2" style={{ 'letter-spacing': '0.05em' }}>
+                Concurrency
+              </div>
+              <div flex="~ col" gap="3">
+                <SliderSetting label="Max Concurrent Runs" settingKey="maxConcurrentRuns" min={1} max={10} />
+              </div>
+            </div>
+
             {/* Result Limits */}
             <div>
               <div text="xs dark-text-tertiary uppercase" font="semibold" m="b-2" style={{ 'letter-spacing': '0.05em' }}>

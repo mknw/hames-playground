@@ -193,13 +193,19 @@ export async function setConversationStatus(
 }
 
 /**
- * List a user's conversations, newest first.
+ * List a user's conversations, newest-created first.
+ *
+ * Deliberately `created_at`, not `updated_at` (#105): every turn-save bumps
+ * `updated_at`, so with concurrent runs an activity-ordered list reshuffles
+ * on each refetch — the thread under the cursor jumps to the top. Creation
+ * order is stable for a conversation's whole lifetime. `updated_at` is still
+ * returned for display ("x ago" shows activity, it just doesn't sort).
  */
 export async function listConversations(
   userId: string
 ): Promise<ConversationListItem[]> {
   const { rows } = await query<DbListRow>(
-    'SELECT id, agent_id, title, kind, source, status, updated_at FROM conversations WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 200',
+    'SELECT id, agent_id, title, kind, source, status, updated_at FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200',
     [userId]
   )
   return rows.map((r) => ({

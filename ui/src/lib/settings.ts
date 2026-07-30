@@ -43,6 +43,13 @@ export interface HarnessSettings {
   maxResultForSummary: number // summarizer input limit chars (default: 3000)
   priorTurnCount: number      // prior turns for tool result memory (default: 3)
   routerTurnWindow: number    // router history window in turns (default: 5)
+  /**
+   * How many conversations may stream at once (#105). Client-side policy —
+   * the server places no such limit, so this rides along in the settings
+   * payload without being read there. At the cap, a send into an *idle*
+   * conversation is refused rather than queued or allowed to interrupt.
+   */
+  maxConcurrentRuns: number   // concurrent streaming conversations (default: 3)
   sandbox: SandboxSettings    // compute sandbox caps + defaults
 }
 
@@ -53,6 +60,7 @@ export const DEFAULT_SETTINGS: HarnessSettings = {
   maxResultForSummary: 3000,
   priorTurnCount: 3,
   routerTurnWindow: 5,
+  maxConcurrentRuns: 3,
   sandbox: {
     globalCap: 16,
     perSessionCap: 4,

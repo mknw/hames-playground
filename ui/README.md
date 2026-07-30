@@ -20,7 +20,7 @@ src/
 │   └── api/events.ts          # SSE endpoint for streaming agent events
 ├── components/ark-ui/
 │   ├── ChatInterface.tsx      # Sends messages, streams SSE, entity highlighting (message buffers live in routes/index.tsx, #105)
-│   ├── ChatSidebar.tsx        # Thread list: per-row live progress strip, completion marks, creation-order sort (#105)
+│   ├── ChatSidebar.tsx        # Thread list: live progress strip + completion marks (#105), agent icons + collapsed rail (#60), delete + select mode (#71)
 │   ├── ChatMessages.tsx       # Markdown rendering with interactive graph entity spans
 │   ├── GraphVisualization.tsx  # Cytoscape.js graph with controls, editing, extraStyles
 │   ├── SupportPanel.tsx       # Tabbed panel (lazyMount): Neo4j, Memory, All, Context manager, Tools
@@ -67,7 +67,7 @@ src/
 Agent events stream to the client in real-time via `POST /api/events`. The UI updates the graph visualization and observability panel incrementally as events arrive.
 
 ### Conversation Persistence
-Conversations are persisted to Postgres in a single `conversations` table; the `context` column holds the full `serializeContext()` blob. Rows are created **at run start** (#105) so a new chat is visible in the sidebar — with live progress — during its whole first turn; the run's final save overwrites the stub. The sidebar lists per-user threads via `listConversations()` (ordered by creation, not activity), and selecting a thread calls `loadConversation()` which rehydrates events into the graph + observability panel. Titles are sticky (first 60 chars of the first user message). Auth is Microsoft Entra ID via server-side MSAL OIDC (`src/lib/auth/`, #119); in dev, `isBypassEnabled()` (in `src/lib/auth/dev-bypass.ts`, gated on `import.meta.env.DEV && VITE_DEV_BYPASS_AUTH === 'true'`) falls back to the shared `dev-bypass-user` literal. See [`src/lib/harness-client/README.md`](src/lib/harness-client/README.md#session-lifecycle) for the session lifecycle.
+Conversations are persisted to Postgres in a single `conversations` table; the `context` column holds the full `serializeContext()` blob. Rows are created **at run start** (#105) so a new chat is visible in the sidebar — with live progress — during its whole first turn; the run's final save overwrites the stub. The sidebar lists per-user threads via `listConversations()` (ordered by creation, not activity), and selecting a thread calls `loadConversation()` which rehydrates events into the graph + observability panel. Conversations are deletable from the sidebar (#71) — per-row or bulk via select mode — through a user-scoped atomic `DELETE … RETURNING`; running conversations are never deletable (the run's end-save would recreate the row). Titles are sticky (first 60 chars of the first user message). Auth is Microsoft Entra ID via server-side MSAL OIDC (`src/lib/auth/`, #119); in dev, `isBypassEnabled()` (in `src/lib/auth/dev-bypass.ts`, gated on `import.meta.env.DEV && VITE_DEV_BYPASS_AUTH === 'true'`) falls back to the shared `dev-bypass-user` literal. See [`src/lib/harness-client/README.md`](src/lib/harness-client/README.md#session-lifecycle) for the session lifecycle.
 
 ### Interactive Graph Visualization
 - Cytoscape.js rendering with dark theme and multiple layouts
@@ -118,7 +118,7 @@ See [examples/README.md](src/lib/harness-client/examples/README.md) for detailed
 |------|----------|
 | [GitHub Project](https://github.com/users/mknw/projects/5) | Planning board / roadmap (replaced docs/ROADMAP.md) |
 | [src/lib/harness-patterns/README.md](src/lib/harness-patterns/README.md) | Harness patterns full API reference |
-| [src/lib/harness-client/examples/README.md](src/lib/harness-client/examples/README.md) | Example agent implementations (6 agents) |
+| [src/lib/harness-client/examples/README.md](src/lib/harness-client/examples/README.md) | Example agent implementations (7 agents) |
 | [../docs/UI_ARCHITECTURE.md](../docs/UI_ARCHITECTURE.md) | Component structure, data flow, Chat-Graph linking |
 | [../docs/DATA_STASH.md](../docs/DATA_STASH.md) | Data Stash upload → chunk → embed → search pipeline (#6/#9/#8) |
 | [../docs/INDEX.md](../docs/INDEX.md) | Full project documentation index |

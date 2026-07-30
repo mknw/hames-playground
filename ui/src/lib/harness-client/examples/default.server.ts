@@ -8,6 +8,7 @@
  */
 "use server";
 
+// @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
 import {
   router,
   routes,
@@ -89,7 +90,7 @@ export const defaultAgent: AgentConfig = {
   id: "default",
   name: "Default Agent",
   description: "Router-based agent with Neo4j and Web Search",
-  icon: "🤖",
+  icon: "i-material-symbols-robot-2-outline",
   servers: ["neo4j-cypher", "web_search", "fetch"],
   createPatterns,
 };

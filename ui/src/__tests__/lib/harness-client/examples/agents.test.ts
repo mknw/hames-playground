@@ -290,63 +290,6 @@ describe('Agent Harnesses', () => {
     })
   })
 
-  describe('conversationalMemoryAgent', () => {
-    it('should have valid config', async () => {
-      const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-      validateAgentConfig(conversationalMemoryAgent)
-      expect(conversationalMemoryAgent.id).toBe('conversational-memory')
-      expect(conversationalMemoryAgent.servers).toContain('memory')
-    })
-
-    it('should create valid patterns', async () => {
-      const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-      const patterns = await validatePatterns(conversationalMemoryAgent)
-
-      // Should include session tracker, router, memory writer, synthesizer
-      expect(patterns.length).toBeGreaterThanOrEqual(4)
-    })
-
-    it('should include session tracking pattern', async () => {
-      const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-      const patterns = await conversationalMemoryAgent.createPatterns('test-session') as Pattern[]
-      const hasSessionTracker = patterns.some(p => p.config.patternId === 'session-tracker')
-      expect(hasSessionTracker).toBe(true)
-    })
-
-    it('should execute session tracker pattern', async () => {
-      const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-      const patterns = await conversationalMemoryAgent.createPatterns('test-session') as Pattern[]
-      const sessionTracker = patterns.find(p => p.config.patternId === 'session-tracker')
-
-      expect(sessionTracker).toBeDefined()
-
-      const scope = createMockScope({ sessionId: 'test-session', turnCount: 0 })
-      const view = createMockView()
-
-      // Execute the pattern
-      const result = await sessionTracker!.fn(scope, view)
-
-      // Should have incremented turn count
-      expect((result as typeof scope).data.turnCount).toBe(1)
-    })
-
-    it('should handle redis failure gracefully in session tracker', async () => {
-      const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-      const patterns = await conversationalMemoryAgent.createPatterns('test-session') as Pattern[]
-      const sessionTracker = patterns.find(p => p.config.patternId === 'session-tracker')
-
-      // Make callTool fail for this test
-      callToolMock.mockRejectedValueOnce(new Error('Redis not available'))
-
-      const scope = createMockScope({ sessionId: 'test-session' })
-      const view = createMockView()
-
-      // Should not throw
-      const result = await sessionTracker!.fn(scope, view)
-      expect(result).toBeDefined()
-    })
-  })
-
   describe('multiSourceResearchAgent', () => {
     it('should have valid config', async () => {
       const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
@@ -406,13 +349,13 @@ describe('Agent Consistency', () => {
     // Import all agents statically
     const { defaultAgent } = await import('../../../../lib/harness-client/examples/default.server')
     const { codeModeAgent } = await import('../../../../lib/harness-client/examples/code-mode.server')
-    const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
+    const { sandboxSessionAgent } = await import('../../../../lib/harness-client/examples/sandbox-session.server')
     const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
 
     const ids = [
       defaultAgent.id,
       codeModeAgent.id,
-      conversationalMemoryAgent.id,
+      sandboxSessionAgent.id,
       multiSourceResearchAgent.id
     ]
 
@@ -422,12 +365,10 @@ describe('Agent Consistency', () => {
 
   it('all agents should contain synthesizer pattern', async () => {
     const { defaultAgent } = await import('../../../../lib/harness-client/examples/default.server')
-    const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
     const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
 
     const agents = [
       defaultAgent,
-      conversationalMemoryAgent,
       multiSourceResearchAgent
     ]
 

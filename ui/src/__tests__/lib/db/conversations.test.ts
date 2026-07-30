@@ -20,6 +20,7 @@ import {
   saveConversation,
   listConversations,
   deleteConversation,
+  deleteConversations,
   deriveTitle,
   promoteConversation,
   setConversationStatus,
@@ -211,6 +212,48 @@ describe('conversations CRUD', () => {
 
     await deleteConversation(id, TEST_USER)
     expect(await loadConversation(id, TEST_USER)).toBeNull()
+  })
+
+  // #71 bulk delete: one round trip, user-scoped, returns ground truth.
+  it('deleteConversations removes only the caller\'s own rows and reports them', async () => {
+    if (!dbAvailable) return
+    const mk = () => `conv-bulk-${Math.random().toString(36).slice(2, 10)}`
+    const own1 = mk()
+    const own2 = mk()
+    const foreignId = mk()
+    const foreignUser = `other-${Math.random().toString(36).slice(2, 10)}`
+    for (const [id, userId] of [
+      [own1, TEST_USER],
+      [own2, TEST_USER],
+      [foreignId, foreignUser],
+    ] as const) {
+      await saveConversation({
+        id,
+        userId,
+        agentId: 'default',
+        title: 't',
+        serializedContext: '{}',
+      })
+    }
+    try {
+      const deleted = await deleteConversations(
+        [own1, own2, foreignId, 'missing-id'],
+        TEST_USER,
+      )
+      // Own rows deleted and reported; foreign + unknown ids silently skipped.
+      expect([...deleted].sort()).toEqual([own1, own2].sort())
+      expect(await loadConversation(own1, TEST_USER)).toBeNull()
+      expect(await loadConversation(own2, TEST_USER)).toBeNull()
+      expect(await loadConversation(foreignId, foreignUser)).not.toBeNull()
+    } finally {
+      // afterAll only sweeps TEST_USER rows — clean the foreign seed here.
+      await query('DELETE FROM conversations WHERE user_id = $1', [foreignUser])
+    }
+  })
+
+  it('deleteConversations no-ops on an empty id list', async () => {
+    if (!dbAvailable) return
+    expect(await deleteConversations([], TEST_USER)).toEqual([])
   })
 })
 

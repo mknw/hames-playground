@@ -1,4 +1,5 @@
-import { For, Show, createSignal } from 'solid-js'
+import { For, Show, Switch, Match, createSignal, createEffect, onCleanup } from 'solid-js'
+import { Dialog } from '@ark-ui/solid/dialog'
 import { SettingsPanel } from './SettingsPanel'
 import { regenerateConversationTitle } from '../../lib/harness-client'
 import type { CompletionMark, SessionRunState } from '../../lib/run-registry'
@@ -12,6 +13,11 @@ export type ThreadStatus = 'running' | 'paused' | 'done' | 'error'
 export interface ChatThreadSummary {
   id: string
   title: string | null
+  /** The agent's iconify class, pre-resolved server-side (#60). The route
+   *  passes ConversationSummary rows straight through, so this is populated
+   *  at runtime for persisted threads; absent on placeholders and for
+   *  agents that no longer exist. */
+  agentIcon?: string
   /** ISO 8601 timestamp from the server. */
   updatedAt: string
   /** 'conversation' (chat) | 'action' (POST-triggered). Drives the filter. */
@@ -106,6 +112,10 @@ interface ChatSidebarProps {
    *  another thread: the row flashes once, then keeps an accent border
    *  until opened (#105). */
   getCompletion?: (sessionId: string) => CompletionMark | undefined
+  /** Delete the given conversations (#71). The sidebar owns the confirm UX;
+   *  the route owns the mutation (server action + threads cache + its
+   *  per-session registries). Rejects → the dialog stays open for retry. */
+  onDeleteThreads?: (ids: string[]) => Promise<void>
 }
 
 /**
@@ -184,6 +194,116 @@ export function progressPercent(snap: {
   return Math.max(0, Math.min(100, (snap.currentTurn / denom) * 100))
 }
 
+/**
+ * Icon class for a thread row (#60). Placeholders show nothing — the real
+ * icon appears within ~1s once the run-start refetch lands the persisted
+ * row. Threads whose agent no longer exists fall back to a generic robot
+ * (the fallback literal lives in this scanned .tsx, so it always emits).
+ */
+export function threadIcon(t: {
+  isPlaceholder?: boolean
+  agentIcon?: string
+}): string | null {
+  if (t.isPlaceholder) return null
+  return t.agentIcon ?? 'i-material-symbols-smart-toy-outline'
+}
+
+/**
+ * Status dot for a collapsed-rail thread button (#60). At 3rem there is no
+ * room for the progress strip or flash border, so run state compresses to a
+ * 6px dot: pulsing cyan while live (live outranks a completion mark — it is
+ * fresher), completion color until the thread is opened, nothing at rest.
+ */
+export function railDot(args: {
+  live: boolean
+  completion?: CompletionMark
+}): { color: string; pulse: boolean } | null {
+  if (args.live) return { color: '#22d3ee', pulse: true }
+  const c = completionBorderColor(args.completion)
+  if (c) return { color: c, pulse: false }
+  return null
+}
+
+/**
+ * Whether a row may be deleted (#71). Placeholders have nothing persisted;
+ * running rows are blocked because the run's end-save upsert would silently
+ * recreate the deleted row — mid-run cancellation is out of scope (#105 PR 3).
+ */
+export function canDeleteRow(args: {
+  isPlaceholder?: boolean
+  isProcessing: boolean
+}): boolean {
+  return !args.isPlaceholder && !args.isProcessing
+}
+
+/** What the delete-confirm dialog is being asked to delete (#71). */
+export type DeleteTarget =
+  | { kind: 'single'; id: string; title: string | null }
+  | { kind: 'bulk'; ids: string[]; skippedRunning: number }
+
+/** Confirm copy — single line, no "Are you sure" hedge (house tone). */
+export function deleteConfirmCopy(target: DeleteTarget): string {
+  if (target.kind === 'single') {
+    return `Delete "${target.title ?? '(untitled)'}"? This can't be undone.`
+  }
+  const n = target.ids.length
+  const base = `Delete ${n} conversation${n === 1 ? '' : 's'}? This can't be undone.`
+  return target.skippedRunning > 0
+    ? `${base} ${target.skippedRunning} running — skipped.`
+    : base
+}
+
+// ---------------------------------------------------------------------------
+// Select-mode helpers (#71) — pure so the eligibility/skip rules are testable.
+// Eligible = deletable: not a placeholder, not running (see canDeleteRow).
+// ---------------------------------------------------------------------------
+
+/** Immutably toggle one id in a selection set. */
+export function toggleSelection(
+  set: ReadonlySet<string>,
+  id: string,
+): ReadonlySet<string> {
+  const next = new Set(set)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  return next
+}
+
+/** Select every eligible thread in the given (visible) list, counting the
+ *  running rows that had to be skipped for the confirm copy. */
+export function selectAllEligible(
+  threads: ReadonlyArray<Pick<ChatThreadSummary, 'id' | 'isPlaceholder'>>,
+  isProcessing: (id: string) => boolean,
+): { selected: ReadonlySet<string>; skippedRunning: number } {
+  const selected = new Set<string>()
+  let skippedRunning = 0
+  for (const t of threads) {
+    if (t.isPlaceholder) continue
+    if (isProcessing(t.id)) {
+      skippedRunning++
+      continue
+    }
+    selected.add(t.id)
+  }
+  return { selected, skippedRunning }
+}
+
+/** True when every eligible thread in the list is selected (and there is at
+ *  least one) — flips the header button label from "Select all" to "Clear". */
+export function allEligibleSelected(
+  threads: ReadonlyArray<Pick<ChatThreadSummary, 'id' | 'isPlaceholder'>>,
+  selected: ReadonlySet<string>,
+  isProcessing: (id: string) => boolean,
+): boolean {
+  let any = false
+  for (const t of threads) {
+    if (t.isPlaceholder || isProcessing(t.id)) continue
+    any = true
+    if (!selected.has(t.id)) return false
+  }
+  return any
+}
+
 /** Shared with the in-chat LiveProgressBar so the two read as one system. */
 const STRIP_GRADIENT = 'linear-gradient(90deg, rgba(0,255,255,0.85), rgba(157,0,255,0.85))'
 
@@ -241,49 +361,48 @@ const RowProgress = (props: { snapshot: ChainProgressSnapshot }) => {
   )
 }
 
-/** Renders the indicator chosen by {@link rowIndicator}. */
-const StatusBadge = (props: { indicator: RowIndicator }) => {
-  if (props.indicator === 'none') return null
-  if (props.indicator === 'running') {
-    return (
+/** Renders the indicator chosen by {@link rowIndicator}. Branches live in
+ *  <Switch>/<Match>, not early returns — Solid components run once, so a
+ *  body-level `if (props.…) return …` freezes the branch at mount
+ *  (solid/components-return-once). */
+const StatusBadge = (props: { indicator: RowIndicator }) => (
+  <Switch>
+    <Match when={props.indicator === 'running'}>
       <span
         title="Running"
         aria-label="running"
         class="i-mdi-loading animate-spin"
         style={{ width: '14px', height: '14px', color: '#22d3ee', 'flex-shrink': 0 }}
       />
-    )
-  }
-  if (props.indicator === 'action-error') {
-    return (
+    </Match>
+    <Match when={props.indicator === 'action-error'}>
       <span
         title="Failed"
         aria-label="error"
         class="i-mdi-alert-circle-outline"
         style={{ width: '14px', height: '14px', color: '#f87171', 'flex-shrink': 0 }}
       />
-    )
-  }
-  if (props.indicator === 'action-paused') {
-    return (
+    </Match>
+    <Match when={props.indicator === 'action-paused'}>
       <span
         title="Awaiting approval"
         aria-label="paused"
         class="i-mdi-pause-circle-outline"
         style={{ width: '14px', height: '14px', color: '#f59e0b', 'flex-shrink': 0 }}
       />
-    )
-  }
-  // Done action — a subtle bolt marks it as POST-triggered without shouting.
-  return (
-    <span
-      title="Action (completed)"
-      aria-label="action"
-      class="i-mdi-lightning-bolt-outline"
-      style={{ width: '13px', height: '13px', color: '#71717a', 'flex-shrink': 0 }}
-    />
-  )
-}
+    </Match>
+    {/* Done action — a subtle bolt marks it as POST-triggered. 'none'
+        matches nothing and renders nothing. */}
+    <Match when={props.indicator === 'action-done'}>
+      <span
+        title="Action (completed)"
+        aria-label="action"
+        class="i-mdi-lightning-bolt-outline"
+        style={{ width: '13px', height: '13px', color: '#71717a', 'flex-shrink': 0 }}
+      />
+    </Match>
+  </Switch>
+)
 
 const FILTER_LABELS: ReadonlyArray<{ value: ThreadFilter; label: string }> = [
   { value: 'all', label: 'All' },
@@ -294,6 +413,113 @@ const FILTER_LABELS: ReadonlyArray<{ value: ThreadFilter; label: string }> = [
 export const ChatSidebar = (props: ChatSidebarProps) => {
   // Per-thread pending state for the ↻ button — keyed by sessionId.
   const [pendingRegen, setPendingRegen] = createSignal<ReadonlySet<string>>(new Set())
+  // Delete confirm state (#71): non-null while the dialog is up. `deleting`
+  // keeps the dialog open (buttons disabled) during the server round trip.
+  const [confirmTarget, setConfirmTarget] = createSignal<DeleteTarget | null>(null)
+  const [deleting, setDeleting] = createSignal(false)
+
+  const requestDelete = (e: MouseEvent, thread: ChatThreadSummary) => {
+    // Stop the click from also selecting the thread.
+    e.stopPropagation()
+    e.preventDefault()
+    setConfirmTarget({ kind: 'single', id: thread.id, title: thread.title })
+  }
+
+  const performDelete = async () => {
+    const target = confirmTarget()
+    if (!target || deleting() || !props.onDeleteThreads) return
+    const ids = target.kind === 'single' ? [target.id] : target.ids
+    setDeleting(true)
+    try {
+      await props.onDeleteThreads(ids)
+      setConfirmTarget(null)
+      // A successful bulk delete is a natural end to select mode.
+      if (target.kind === 'bulk') exitSelectMode()
+    } catch (err) {
+      // Leave the dialog open so the user can retry or cancel.
+      console.error('[sidebar] delete failed:', err)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  // ---- Select mode (#71) ----------------------------------------------------
+  const [selectionMode, setSelectionMode] = createSignal(false)
+  const [selectedIds, setSelectedIds] = createSignal<ReadonlySet<string>>(new Set())
+  // Running rows skipped by the last select-all — reported in the confirm.
+  const [skippedRunning, setSkippedRunning] = createSignal(0)
+
+  const isRunning = (id: string) => !!props.getRunState?.(id).isProcessing
+
+  const exitSelectMode = () => {
+    setSelectionMode(false)
+    setSelectedIds(new Set<string>())
+    setSkippedRunning(0)
+  }
+
+  const toggleRow = (thread: ChatThreadSummary) => {
+    if (!canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: isRunning(thread.id) })) return
+    setSelectedIds(prev => toggleSelection(prev, thread.id))
+  }
+
+  // Select-all acts on the VISIBLE (filtered) threads; selections persist
+  // across filter switches because they're a set of ids, not row references.
+  // "Clear" drops everything, visible or not.
+  const toggleSelectAllVisible = () => {
+    if (allEligibleSelected(visibleThreads(), selectedIds(), isRunning)) {
+      setSelectedIds(new Set<string>())
+      setSkippedRunning(0)
+    } else {
+      const { selected, skippedRunning: skipped } = selectAllEligible(visibleThreads(), isRunning)
+      setSelectedIds(prev => new Set([...prev, ...selected]))
+      setSkippedRunning(skipped)
+    }
+  }
+
+  const requestBulkDelete = () => {
+    // Re-check run state at confirm time — a run may have started in a
+    // selected thread since it was ticked. Newly-running rows move into the
+    // skip count rather than being deleted out from under their run.
+    const chosen = [...selectedIds()]
+    const stillIdle = chosen.filter(id => !isRunning(id))
+    const newlyRunning = chosen.length - stillIdle.length
+    if (stillIdle.length === 0) return
+    setConfirmTarget({
+      kind: 'bulk',
+      ids: stillIdle,
+      skippedRunning: skippedRunning() + newlyRunning,
+    })
+  }
+
+  // Collapsing the sidebar hides every select-mode affordance — exit rather
+  // than leaving invisible state armed.
+  createEffect(() => {
+    if (props.collapsed && selectionMode()) exitSelectMode()
+  })
+
+  // Keyboard, scoped to select mode (first document-level keydown in the
+  // codebase): Esc exits, Cmd/Ctrl-A toggles select-all. The Ark dialog owns
+  // its own Esc while open, and typing surfaces (composer!) keep native
+  // select-all — both are bypassed explicitly.
+  createEffect(() => {
+    if (!selectionMode()) return
+    const onKey = (e: KeyboardEvent) => {
+      if (confirmTarget()) return
+      const t = e.target as HTMLElement | null
+      if (
+        t &&
+        (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable)
+      ) return
+      if (e.key === 'Escape') {
+        exitSelectMode()
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault()
+        toggleSelectAllVisible()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    onCleanup(() => document.removeEventListener('keydown', onKey))
+  })
   // Segmented Actions/Conversations/All filter (#agent-trigger). Local state —
   // the parent passes the full thread list; we filter for display.
   const [filter, setFilter] = createSignal<ThreadFilter>('all')
@@ -331,7 +557,30 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
       {/* Header with Toggle */}
       <div p="4" border="b dark-border-primary" flex="~" items="center" justify="between">
         {!props.collapsed && (
-          <span text="sm dark-text-primary" font="medium">Chat History</span>
+          <div flex="~" items="center" gap="2">
+            <span text="sm dark-text-primary" font="medium">Chat History</span>
+            {/* Select-mode toggle (#71) */}
+            <button
+              onClick={() => (selectionMode() ? exitSelectMode() : setSelectionMode(true))}
+              title={selectionMode() ? 'Exit select mode' : 'Select conversations'}
+              aria-pressed={selectionMode() ? 'true' : 'false'}
+              p="1"
+              rounded="md"
+              hover="bg-dark-bg-hover"
+              transition="colors"
+            >
+              <span
+                class="i-material-symbols-checklist"
+                aria-hidden="true"
+                style={{
+                  width: '16px',
+                  height: '16px',
+                  display: 'block',
+                  color: selectionMode() ? '#22d3ee' : '#71717a',
+                }}
+              />
+            </button>
+          </div>
         )}
         <button
           onClick={() => props.onToggle()}
@@ -360,6 +609,99 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
         </button>
       </div>
 
+      {/* Collapsed icon rail (#60) — one agent-icon button per thread.
+          Deliberately ignores the kind filter: that control is invisible
+          while collapsed, and a hidden control silently subsetting the list
+          would confuse. Selected/live state uses inline styles — the
+          attributify extractor drops dynamic values (see rowFlashClass
+          notes), and `border="1 neon-cyan/40"` is a known dead selector. */}
+      {props.collapsed && (
+        <>
+          <div flex="1" overflow="y-auto" p="y-2">
+            <For each={props.threads}>
+              {(thread) => {
+                const isSelected = () => thread.id === props.selectedId
+                const dot = () =>
+                  railDot({
+                    live: !!props.getRunState?.(thread.id).isProcessing,
+                    completion: props.getCompletion?.(thread.id),
+                  })
+                return (
+                  <button
+                    onClick={() => props.onSelectThread(thread.id)}
+                    title={thread.isPlaceholder ? 'new chat' : thread.title ?? '(untitled)'}
+                    aria-label={thread.isPlaceholder ? 'new chat' : thread.title ?? '(untitled)'}
+                    aria-current={isSelected() ? 'true' : undefined}
+                    style={{
+                      position: 'relative',
+                      display: 'flex',
+                      'align-items': 'center',
+                      'justify-content': 'center',
+                      width: '32px',
+                      height: '32px',
+                      margin: '0 auto 4px',
+                      'border-radius': '0.375rem',
+                      border: isSelected()
+                        ? '1px solid rgba(0, 255, 255, 0.4)'
+                        : '1px solid transparent',
+                      background: isSelected() ? 'rgba(67, 56, 202, 0.3)' : 'transparent',
+                      cursor: 'pointer',
+                    }}
+                    hover="bg-dark-bg-hover"
+                  >
+                    <span
+                      class={threadIcon(thread) ?? 'i-material-symbols-smart-toy-outline'}
+                      aria-hidden="true"
+                      style={{
+                        width: '16px',
+                        height: '16px',
+                        color: isSelected() ? '#22d3ee' : '#a1a1aa',
+                        opacity: thread.isPlaceholder ? 0.5 : 1,
+                      }}
+                    />
+                    <Show when={dot()}>
+                      {(d) => (
+                        <span
+                          aria-hidden="true"
+                          class={d().pulse ? 'animate-pulse' : ''}
+                          style={{
+                            position: 'absolute',
+                            bottom: '2px',
+                            right: '2px',
+                            width: '6px',
+                            height: '6px',
+                            'border-radius': '9999px',
+                            'background-color': d().color,
+                          }}
+                        />
+                      )}
+                    </Show>
+                  </button>
+                )
+              }}
+            </For>
+          </div>
+          {/* Compact new-chat button — Settings stays expanded-only. */}
+          <div p="y-3" border="t dark-border-primary" flex="~" justify="center">
+            <button
+              onClick={() => props.onNewChat()}
+              title="New chat"
+              aria-label="New chat"
+              bg="cyber-700 hover:cyber-600"
+              rounded="md"
+              transition="all"
+              style={{ width: '32px', height: '32px', display: 'flex', 'align-items': 'center', 'justify-content': 'center' }}
+            >
+              <span
+                class="i-material-symbols-add-2"
+                aria-hidden="true"
+                style={{ width: '16px', height: '16px', color: 'white' }}
+              />
+            </button>
+          </div>
+        </>
+      )}
+
       {/* Thread List */}
       {!props.collapsed && (
         <>
@@ -387,6 +729,50 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
               }}
             </For>
           </div>
+          {/* Select-mode action bar (#71). The filter stays usable above —
+              selections persist across filter switches. */}
+          <Show when={selectionMode()}>
+            <div p="x-2 t-2" flex="~" gap="1" items="center">
+              <button
+                onClick={toggleSelectAllVisible}
+                p="x-2 y-1"
+                rounded="md"
+                text="xs dark-text-secondary"
+                bg="transparent hover:dark-bg-hover"
+                border="1 dark-border-secondary"
+                transition="all"
+              >
+                {allEligibleSelected(visibleThreads(), selectedIds(), isRunning)
+                  ? 'Clear'
+                  : 'Select all'}
+              </button>
+              <button
+                onClick={requestBulkDelete}
+                disabled={selectedIds().size === 0}
+                flex="1"
+                p="x-2 y-1"
+                rounded="md"
+                text="xs white"
+                bg="red-600 hover:red-500"
+                font="medium"
+                transition="all"
+                style={{ opacity: selectedIds().size === 0 ? 0.4 : 1 }}
+              >
+                Delete selected ({selectedIds().size})
+              </button>
+              <button
+                onClick={exitSelectMode}
+                p="x-2 y-1"
+                rounded="md"
+                text="xs dark-text-secondary"
+                bg="transparent hover:dark-bg-hover"
+                border="1 dark-border-secondary"
+                transition="all"
+              >
+                Cancel
+              </button>
+            </div>
+          </Show>
           <div flex="1" overflow="auto">
             <Show
               when={visibleThreads().length > 0}
@@ -419,7 +805,9 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                     }
                     return (
                       <button
-                        onClick={() => props.onSelectThread(thread.id)}
+                        onClick={() =>
+                          selectionMode() ? toggleRow(thread) : props.onSelectThread(thread.id)
+                        }
                         w="full"
                         text="left"
                         p="3"
@@ -436,7 +824,51 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         class={`group ${rowFlashClass(completion())}`}
                         style={{ 'border-color': completionBorderColor(completion()) }}
                       >
-                        <div flex="~" items="center" gap="1.5" pr="6">
+                        {/* Inline padding-right: two hover actions need
+                            ~3.5rem clearance, and new attributify spacing
+                            literals are extractor roulette (see t-1.5). */}
+                        <div flex="~" items="center" gap="1.5" style={{ 'padding-right': '3.5rem' }}>
+                          {/* Select-mode checkbox (#71) — a styled span, not
+                              an <input>: rows are <button>s and nesting an
+                              interactive element would break semantics.
+                              Running/placeholder rows render it dimmed and
+                              toggleRow() no-ops for them. */}
+                          <Show when={selectionMode()}>
+                            <span
+                              role="checkbox"
+                              aria-checked={selectedIds().has(thread.id) ? 'true' : 'false'}
+                              aria-disabled={
+                                canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: live() })
+                                  ? undefined
+                                  : 'true'
+                              }
+                              class={
+                                selectedIds().has(thread.id)
+                                  ? 'i-material-symbols-check-box'
+                                  : 'i-material-symbols-check-box-outline-blank'
+                              }
+                              style={{
+                                width: '16px',
+                                height: '16px',
+                                'flex-shrink': 0,
+                                color: selectedIds().has(thread.id) ? '#22d3ee' : '#71717a',
+                                opacity: canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: live() })
+                                  ? 1
+                                  : 0.35,
+                              }}
+                            />
+                          </Show>
+                          {/* Agent identity (#60) — muted so the title stays
+                              the row's anchor. Hidden for placeholders. */}
+                          <Show when={threadIcon(thread)}>
+                            {(icon) => (
+                              <span
+                                class={icon()}
+                                aria-hidden="true"
+                                style={{ width: '14px', height: '14px', color: '#71717a', 'flex-shrink': 0 }}
+                              />
+                            )}
+                          </Show>
                           <StatusBadge indicator={indicator()} />
                           <div
                             text={thread.isPlaceholder ? 'sm dark-text-tertiary' : 'sm dark-text-primary'}
@@ -463,12 +895,42 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         >
                           <RowProgress snapshot={props.getProgress!(thread.id).snapshot()} />
                         </Show>
+                        {/* Hover-reveal delete button (#71). Hidden — not
+                            disabled — for placeholders and running rows: a
+                            mid-run delete would be resurrected by the run's
+                            end-save upsert, so the affordance simply isn't
+                            offered (mid-run cancel is #105 PR 3 scope). Same
+                            span-not-button idiom as the regenerate action. */}
+                        <Show when={!selectionMode() && canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: live() })}>
+                          <span
+                            aria-hidden="true"
+                            onClick={(e) => requestDelete(e, thread)}
+                            title="Delete conversation"
+                            style={{
+                              position: 'absolute',
+                              top: '0.5rem',
+                              right: '0.5rem',
+                              padding: '0.25rem',
+                              'border-radius': '0.375rem',
+                              cursor: 'pointer',
+                            }}
+                            text="xs dark-text-tertiary hover:red-400"
+                            transition="opacity"
+                            class="opacity-0 group-hover:opacity-100"
+                          >
+                            <span
+                              class="i-material-symbols-delete-outline"
+                              style={{ width: '14px', height: '14px', display: 'block' }}
+                            />
+                          </span>
+                        </Show>
                         {/* Hover-reveal regenerate-title button. Hidden for
                             placeholder rows (nothing persisted yet). Spinning
                             while the LLM call is in flight. Sits in a span
                             outside the outer <button> hit area so nested-
-                            interactive semantics stay valid. */}
-                        <Show when={!thread.isPlaceholder}>
+                            interactive semantics stay valid. Shifted left to
+                            make room for the delete action at right:0.5rem. */}
+                        <Show when={!selectionMode() && !thread.isPlaceholder}>
                           <span
                             aria-hidden="true"
                             onClick={(e) => handleRegenerate(e, thread.id)}
@@ -476,7 +938,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             style={{
                               position: 'absolute',
                               top: '0.5rem',
-                              right: '0.5rem',
+                              right: '2rem',
                               padding: '0.25rem',
                               'border-radius': '0.375rem',
                               cursor: 'pointer',
@@ -531,6 +993,97 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
           </div>
         </>
       )}
+
+      {/* Delete confirm (#71) — Ark Dialog for free Escape + focus trap.
+          `lazyMount unmountOnExit` is LOAD-BEARING: without it Ark keeps the
+          closed dialog mounted with the `hidden` attribute, and an
+          attributify display utility (flex="~") overrides the UA's
+          [hidden]{display:none} — the "hidden" positioner rendered as an
+          in-flow full-height div inside this flex column, starving the
+          thread list to zero height. Positioning is inline because
+          `position` is not an attributify rule at all (silently a no-op).
+          See Rendering gotchas #4 in docs/UI_ARCHITECTURE.md. */}
+      <Dialog.Root
+        open={confirmTarget() != null}
+        onOpenChange={(d) => {
+          if (!d.open && !deleting()) setConfirmTarget(null)
+        }}
+        lazyMount
+        unmountOnExit
+      >
+        <Dialog.Backdrop
+          style={{
+            position: 'fixed',
+            inset: '0',
+            'z-index': '40',
+            background: 'rgba(0, 0, 0, 0.5)',
+          }}
+        />
+        <Dialog.Positioner
+          style={{
+            position: 'fixed',
+            inset: '0',
+            'z-index': '50',
+            display: 'flex',
+            'align-items': 'center',
+            'justify-content': 'center',
+          }}
+        >
+          <Dialog.Content
+            bg="dark-bg-secondary"
+            border="1 dark-border-primary"
+            rounded="lg"
+            shadow="2xl"
+            p="5"
+            m="4"
+            style={{ 'max-width': '24rem' }}
+          >
+            <Show when={confirmTarget()}>
+              {(target) => (
+                <>
+                  <Dialog.Title text="sm dark-text-primary" font="medium" flex="~" items="center" gap="2">
+                    <span
+                      class="i-material-symbols-delete-outline"
+                      aria-hidden="true"
+                      style={{ width: '18px', height: '18px', color: '#f87171', 'flex-shrink': 0 }}
+                    />
+                    {target().kind === 'single' ? 'Delete conversation' : 'Delete conversations'}
+                  </Dialog.Title>
+                  <Dialog.Description text="xs dark-text-secondary" m="t-2 b-4" style={{ 'line-height': '1.5' }}>
+                    {deleteConfirmCopy(target())}
+                  </Dialog.Description>
+                  <div flex="~" gap="2" justify="end">
+                    <button
+                      onClick={() => setConfirmTarget(null)}
+                      disabled={deleting()}
+                      p="x-3 y-1.5"
+                      rounded="md"
+                      text="xs dark-text-secondary"
+                      bg="transparent hover:dark-bg-hover"
+                      border="1 dark-border-secondary"
+                      transition="all"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => void performDelete()}
+                      disabled={deleting()}
+                      p="x-3 y-1.5"
+                      rounded="md"
+                      text="xs white"
+                      bg="red-600 hover:red-500"
+                      font="medium"
+                      transition="all"
+                    >
+                      {deleting() ? 'Deleting…' : 'Delete'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </Show>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Dialog.Root>
     </div>
   )
 }

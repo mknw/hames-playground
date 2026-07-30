@@ -28,6 +28,7 @@
  */
 "use server";
 
+// @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
 import {
   router,
   routes,
@@ -199,7 +200,7 @@ export const flavouredSandboxAgent: AgentConfig = {
   name: "Sandbox · Flavoured (router)",
   description:
     "Routes each turn to a purpose-built sandbox flavour — base (ephemeral), image-processing, or data.",
-  icon: "🧪",
+  icon: "i-material-symbols-stack-star-outline",
   servers: [],
   createPatterns,
 };

@@ -66,7 +66,13 @@ export const AgentSelector = (props: AgentSelectorProps) => {
         <Show when={selectedAgentInfo()} fallback={<span text="dark-text-secondary">Loading agents...</span>}>
           {(info) => (
             <>
-              <span text="lg">{info().icon}</span>
+              {/* Iconify class from the registry — needs class= + inline
+                  sizing (attributify doesn't extract dynamic values). */}
+              <span
+                class={info().icon}
+                aria-hidden="true"
+                style={{ width: '18px', height: '18px', color: '#22d3ee', 'flex-shrink': 0 }}
+              />
               <span flex="1" text="left">{info().name}</span>
               <svg
                 viewBox="0 0 20 20"
@@ -106,7 +112,12 @@ export const AgentSelector = (props: AgentSelectorProps) => {
                   border={agent.id === props.selectedAgent ? 'l-2 neon-cyan' : 'l-2 transparent'}
                   transition="all"
                 >
-                  <span text="xl" mt="0.5">{agent.icon}</span>
+                  <span
+                    class={agent.icon}
+                    aria-hidden="true"
+                    mt="0.5"
+                    style={{ width: '20px', height: '20px', color: '#22d3ee', 'flex-shrink': 0 }}
+                  />
                   <div flex="~ col" overflow="hidden">
                     <span text="sm dark-text-primary font-medium" truncate>
                       {agent.name}

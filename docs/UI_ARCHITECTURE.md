@@ -338,12 +338,15 @@ addressing the *run's* session id, so a backgrounded run keeps filling its own
 thread.
 
 #### 2. ChatSidebar.tsx
-**Props:** `collapsed: boolean`, `onToggle: () => void`, `threads`, `selectedId`, `onSelectThread`, `onNewChat`, `onTitleRegenerated`, plus the #105 registries: `getRunState`, `getProgress`, `getCompletion`
+**Props:** `collapsed: boolean`, `onToggle: () => void`, `threads`, `selectedId`, `onSelectThread`, `onNewChat`, `onTitleRegenerated`, `onDeleteThreads` (#71), plus the #105 registries: `getRunState`, `getProgress`, `getCompletion`
 - Width: `3rem` (collapsed) → `16rem` (expanded)
 - Smooth inline style transition
 - Thread history with relative timestamps, **ordered by creation (newest first)** — deliberately *not* `updated_at`, which every turn-save bumps and which made the list reshuffle under concurrent runs (#105)
 - Settings gear icon (opens `SettingsPanel` FloatingPanel) + New Chat button in footer
-- Content hidden when collapsed (toggle button only)
+- **Agent icon per row (#60):** `listConversations()` pre-resolves each row's `agentIcon` from the registry, so the sidebar needs no registry import. Pure `threadIcon()` rule: placeholders show nothing (the real icon lands with the run-start refetch); rows whose agent was removed fall back to a generic robot.
+- **Collapsed icon rail (#60):** collapsing no longer hides everything — a 3rem rail shows one agent-icon button per thread (tooltip = title, click to switch, selected highlight) plus a compact "+" new-chat button. Run state compresses to a 6px corner dot (`railDot`: pulsing cyan while live — live outranks a completion mark — completion color until opened). The rail ignores the kind filter: that control is invisible while collapsed, and a hidden control silently subsetting the list would confuse. Delete/select/Settings stay expanded-only.
+- **Delete (#71):** hover-reveal trash per row (regenerate ↻ shifted to `right:2rem` to make room). **Hidden — not disabled — for placeholders and running rows** (`canDeleteRow`): deleting mid-run would be resurrected by the run's end-save upsert, so the affordance isn't offered; mid-run cancel is #105 PR 3. Confirm is an Ark `Dialog` (Escape + focus trap free) with single-line copy from `deleteConfirmCopy`. The sidebar owns the confirm UX; `onDeleteThreads` on the route owns the mutation — `deleteConversationsBulk` (atomic `DELETE … = ANY($1) … RETURNING id`), cache patched once from the returned ids, per-id registry cleanup (buffers, progress, completion marks + timers, abort controllers, run states), and rerouting to the newest remaining thread (or a fresh chat) when the open conversation died.
+- **Select mode (#71):** checklist toggle beside "Chat History" — row clicks toggle selection, styled `role="checkbox"` spans lead each row (rows are `<button>`s; a real `<input>` would nest interactives), hover actions collapse, and an action bar offers Select all/Clear (label via `allEligibleSelected`), destructive "Delete selected (N)", Cancel. Select-all covers the *visible* (filtered) eligible threads and counts skipped running rows for the confirm copy; selections persist across filter switches (a set of ids). Run state is re-checked at confirm time — newly-running rows move to the skip count. Exit paths: Cancel, Esc, successful bulk delete, sidebar collapse. Keyboard is the codebase's first document-level keydown (scoped to select mode, `onCleanup`ed): Esc exits, Cmd/Ctrl-A toggles select-all — bypassed while the dialog is open and when focus sits in an input/textarea/contentEditable so the composer keeps native select-all.
 - **Optimistic "+ New Chat" placeholder (#44):** Clicking *+ New Chat* immediately prepends a placeholder row keyed by the new `selectedSessionId` (`title: null`, `isPlaceholder: true`). Once the real row lands in the `threadsResource`, the merger (`mergeThreadsWithPlaceholder`) drops the placeholder by id. Purely client-side; switching to an existing thread clears it. Since #105's early persist, the real row already appears on the *first SSE event* of the first run (derived title), so the placeholder only covers the pre-send moment.
 - **Per-row live progress (#105):** while a conversation's run streams *in this browser*, the timestamp line gives way to the run's current status text + a 3px progress strip (`RowProgress`) fed by the same route-owned `ChainProgressController` as the in-chat bar (fill math shared via `progressPercent`; indeterminate shimmer until the chain projection seeds). Badges (`StatusBadge` via `rowIndicator`) are **action-rows only** — POST actions have no client stream, so their persisted `status` is their freshest signal.
 - **Completion marks (#105):** a run that settles while another thread is in view flashes its row (green done / red error) then holds an accent border (`completionBorderColor`, inline `border-color` — see the attributify trap below) until the thread is opened. Runs that settle in the viewed thread mark nothing.
@@ -373,7 +376,8 @@ thread.
 
 #### 5. AgentSelector.tsx
 **Props:** `selectedAgent: string`, `onAgentChange: (id: string) => void`, `disabled: boolean`
-- Dropdown listing registered agents (default, default-neo4j, web-search, conversational-memory, etc.)
+- Dropdown listing registered agents (default, code-mode, multi-source-research, sandbox-session, flavoured-sandbox, retriever, microsoft-365)
+- Agent icons are **iconify classes** on `AgentConfig.icon` (material-symbols set), rendered as `<span class={icon}>` with inline sizing — see the icon-scanning gotcha in §6a
 - Clearing the session on agent switch
 
 #### 6. SupportPanel.tsx
@@ -523,8 +527,10 @@ index.tsx (top-level state)
     │       │       └─ annotateEntities() — wraps entity names in interactive spans post-render
     │       └─> ChatInput (onSend, disabled, blockedMessage)
     │
-    ├─> ChatSidebar (threads, selectedId, getRunState, getProgress, getCompletion)
-    │       └─ RowProgress — per-row status + strip off the same progress controllers
+    ├─> ChatSidebar (threads, selectedId, getRunState, getProgress, getCompletion, onDeleteThreads)
+    │       ├─ RowProgress — per-row status + strip off the same progress controllers
+    │       ├─ collapsed icon rail (#60) + select mode / delete confirm (#71)
+    │       └─ Dialog (Ark) — delete confirmation
     │
     └─> SupportPanel (lazyMount + unmountOnExit)
             │   Props: graphElements, contextEvents, highlightedIds, onCypherWrite
@@ -580,7 +586,7 @@ Conversations are persisted to Postgres so they survive process restarts and lis
 | Repo | `lib/db/conversations.server.ts` | Typed CRUD: `loadConversation`, `saveConversation`, `listConversations`, `deleteConversation`, `deriveTitle` |
 | Session | `lib/harness-client/session.server.ts` | In-process pattern cache (non-serializable BAML clients) + Postgres-backed serialized context, scoped by `userId` |
 | Actions | `lib/harness-client/actions.server.ts` | `listConversations()`, `loadConversation()` server actions for the sidebar; auth-gated |
-| Sidebar | `components/ark-ui/ChatSidebar.tsx` | Real thread list + "+ New Chat", selected-thread highlight |
+| Sidebar | `components/ark-ui/ChatSidebar.tsx` | Real thread list + "+ New Chat", selected-thread highlight, per-row + bulk delete (#71) |
 | Page | `routes/index.tsx` | `selectedSessionId` signal; threads resource refetched after each turn AND on run start / settle (#105). **Always read via `threads.latest`** — see *Rendering gotchas* in §6a |
 | Hydration | `components/ark-ui/ChatInterface.tsx` | `createEffect` on `props.sessionId` replays events into graph + observability. **Skipped while that session's run is in flight** (the live buffer is the only copy of the un-persisted turn); reads run state untracked so a finishing run doesn't re-trigger it |
 
@@ -679,7 +685,7 @@ mid-run cancellation is #105 PR 3, unbuilt.
 | Stream completes | `progress.finish()`; run state cleared; `AbortController` unregistered; `onRunSettled` → refetch + (if backgrounded) completion mark: flash, then accent border until opened. |
 | Tab close / `beforeunload` | Route iterates `abortControllers.values()` and aborts each → no zombie fetches in DevTools. |
 
-### Rendering gotchas (both verified against built output)
+### Rendering gotchas (all verified against built output)
 
 1. **Attributify extractor:** UnoCSS's `presetAttributify` emits `[attr~="…"]`
    selectors only for values found as *literal text* in source. Values that
@@ -695,6 +701,30 @@ mid-run cancellation is #105 PR 3, unbuilt.
    **`resource.latest`** (raw value once resolved, no Suspense; first load
    still suspends). Applied to `threads`; `ToolsPanel` learned it
    independently (local Suspense + optimistic updates).
+3. **Icon classes in `.ts` files:** UnoCSS's default pipeline never scans
+   plain `.ts` — so `AgentConfig.icon` literals in
+   `harness-client/examples/*.server.ts` need BOTH (verified against
+   `@unocss/vite` source): the `content.filesystem` glob in `uno.config.ts`
+   (the client build reads files that are never in its module graph) AND a
+   literal `@unocss-include` comment in each file — filesystem-globbed files
+   still pass through the pipeline filter, which rejects `.ts` paths unless
+   that marker appears in the code. Adding an agent: use an
+   `i-material-symbols-*` class and keep the marker comment. Render with
+   `class=` + inline sizing, never attributify (gotcha 1).
+4. **Attributify props on Ark `Dialog` overlay parts:** without
+   `lazyMount unmountOnExit`, Ark keeps the closed dialog MOUNTED with the
+   `hidden` attribute — and any attributify display utility on it
+   (`flex="~"` → `[flex~="~"]{display:flex}`) is an author rule that
+   overrides the UA's `[hidden]{display:none}`, resurrecting the element.
+   Compounding it, `position` is not an attributify rule at all
+   (`position: "fixed"` in a props cast silently does nothing), so the
+   resurrected overlay is *static and in-flow*: a phantom full-height flex
+   item that starved the sidebar's `flex:1` thread list to zero height
+   (found via computed styles in a live browser; the built CSS was fine).
+   Rule: give `Dialog.Root` `lazyMount unmountOnExit`, and position
+   Backdrop/Positioner with inline `style`. `EnvVarManager.tsx` still
+   carries the original idiom and mounts a hidden-but-rendered ghost into
+   ToolsPanel while closed — latent, flagged for follow-up.
 
 ---
 

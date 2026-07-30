@@ -29,6 +29,13 @@ const {
   progressPercent,
   completionBorderColor,
   rowFlashClass,
+  threadIcon,
+  railDot,
+  canDeleteRow,
+  deleteConfirmCopy,
+  toggleSelection,
+  selectAllEligible,
+  allEligibleSelected,
 } = await import('../../../components/ark-ui/ChatSidebar')
 type ChatThreadSummary = import('../../../components/ark-ui/ChatSidebar').ChatThreadSummary
 
@@ -152,6 +159,134 @@ describe('progressPercent', () => {
     expect(
       progressPercent({ currentTurn: 9, pathProjection: 4, maxProjection: 4 }),
     ).toBe(100)
+  })
+})
+
+describe('threadIcon', () => {
+  // The optimistic "+ New Chat" row has no persisted agent yet; the real
+  // icon lands with the run-start refetch, so show nothing rather than a
+  // wrong guess.
+  it('is null for placeholder rows', () => {
+    expect(threadIcon({ isPlaceholder: true, agentIcon: 'i-x' })).toBeNull()
+  })
+
+  it('passes the pre-resolved agent icon through', () => {
+    expect(threadIcon({ agentIcon: 'i-material-symbols-castle-outline' })).toBe(
+      'i-material-symbols-castle-outline',
+    )
+  })
+
+  // Rows whose agent was removed from the registry (kg-builder,
+  // conversational-memory) must still show something — a generic robot.
+  it('falls back to the generic robot for unknown agents', () => {
+    expect(threadIcon({})).toBe('i-material-symbols-smart-toy-outline')
+  })
+})
+
+describe('select-mode helpers', () => {
+  const rows = [
+    { id: 'a' },
+    { id: 'b' },
+    { id: 'running-1' },
+    { id: 'ph', isPlaceholder: true },
+  ]
+  const running = (id: string) => id.startsWith('running')
+
+  it('toggleSelection adds and removes immutably', () => {
+    const s0: ReadonlySet<string> = new Set()
+    const s1 = toggleSelection(s0, 'a')
+    expect(s1.has('a')).toBe(true)
+    expect(s0.has('a')).toBe(false) // input untouched
+    const s2 = toggleSelection(s1, 'a')
+    expect(s2.has('a')).toBe(false)
+  })
+
+  it('selectAllEligible skips placeholders silently and counts running rows', () => {
+    const { selected, skippedRunning } = selectAllEligible(rows, running)
+    expect([...selected].sort()).toEqual(['a', 'b'])
+    // Placeholders aren't "skipped" in the user-facing sense — they aren't
+    // conversations yet — only running rows make the confirm-copy count.
+    expect(skippedRunning).toBe(1)
+  })
+
+  it('allEligibleSelected flips the Select all / Clear label', () => {
+    expect(allEligibleSelected(rows, new Set(['a']), running)).toBe(false)
+    expect(allEligibleSelected(rows, new Set(['a', 'b']), running)).toBe(true)
+    // Extra selected ids (e.g. from another filter view) don't break it.
+    expect(allEligibleSelected(rows, new Set(['a', 'b', 'z']), running)).toBe(true)
+  })
+
+  // A list with nothing eligible must read as "not all selected" so the
+  // button keeps offering Select all rather than lying with Clear.
+  it('allEligibleSelected is false when nothing is eligible', () => {
+    expect(allEligibleSelected([{ id: 'running-9' }], new Set(), running)).toBe(false)
+    expect(allEligibleSelected([], new Set(), running)).toBe(false)
+  })
+})
+
+describe('canDeleteRow', () => {
+  it('allows an idle persisted row', () => {
+    expect(canDeleteRow({ isProcessing: false })).toBe(true)
+  })
+
+  // A mid-run delete would be resurrected by the run's end-save upsert.
+  it('blocks running rows and placeholders', () => {
+    expect(canDeleteRow({ isProcessing: true })).toBe(false)
+    expect(canDeleteRow({ isPlaceholder: true, isProcessing: false })).toBe(false)
+  })
+})
+
+describe('deleteConfirmCopy', () => {
+  it('names the single conversation, quoting its title', () => {
+    expect(deleteConfirmCopy({ kind: 'single', id: 'a', title: 'Graph audit' })).toBe(
+      'Delete "Graph audit"? This can\'t be undone.',
+    )
+  })
+
+  it('falls back to (untitled) for a titleless row', () => {
+    expect(deleteConfirmCopy({ kind: 'single', id: 'a', title: null })).toBe(
+      'Delete "(untitled)"? This can\'t be undone.',
+    )
+  })
+
+  it('counts a bulk delete, singular and plural', () => {
+    expect(
+      deleteConfirmCopy({ kind: 'bulk', ids: ['a'], skippedRunning: 0 }),
+    ).toBe("Delete 1 conversation? This can't be undone.")
+    expect(
+      deleteConfirmCopy({ kind: 'bulk', ids: ['a', 'b', 'c'], skippedRunning: 0 }),
+    ).toBe("Delete 3 conversations? This can't be undone.")
+  })
+
+  it('appends the running-skip note only when rows were skipped', () => {
+    expect(
+      deleteConfirmCopy({ kind: 'bulk', ids: ['a', 'b'], skippedRunning: 2 }),
+    ).toBe("Delete 2 conversations? This can't be undone. 2 running — skipped.")
+  })
+})
+
+describe('railDot', () => {
+  it('is null for an idle thread', () => {
+    expect(railDot({ live: false })).toBeNull()
+  })
+
+  it('pulses cyan while live', () => {
+    expect(railDot({ live: true })).toEqual({ color: '#22d3ee', pulse: true })
+  })
+
+  // Live is fresher than a stale completion mark — e.g. a new run started
+  // in a thread still carrying its unseen mark.
+  it('lets live outrank a completion mark', () => {
+    const dot = railDot({ live: true, completion: { outcome: 'error', flashing: false } })
+    expect(dot).toEqual({ color: '#22d3ee', pulse: true })
+  })
+
+  it('shows the completion color, not pulsing, once settled', () => {
+    const done = railDot({ live: false, completion: { outcome: 'done', flashing: false } })
+    expect(done?.pulse).toBe(false)
+    expect(done?.color).toBe('rgba(74, 222, 128, 0.55)')
+    const err = railDot({ live: false, completion: { outcome: 'error', flashing: true } })
+    expect(err?.color).toBe('rgba(248, 113, 113, 0.55)')
   })
 })
 

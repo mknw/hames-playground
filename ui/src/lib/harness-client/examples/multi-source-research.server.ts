@@ -6,6 +6,7 @@
  */
 "use server";
 
+// @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
 import {
   simpleLoop,
   parallel,
@@ -115,7 +116,7 @@ export const multiSourceResearchAgent: AgentConfig = {
   id: "multi-source-research",
   name: "Multi-Source Research",
   description: "Parallel search across web, GitHub, and docs with quality ranking",
-  icon: "🔬",
+  icon: "i-material-symbols-biotech-outline",
   servers: ["web_search", "github", "context7"],
   createPatterns,
 };

@@ -15,6 +15,7 @@
  */
 "use server";
 
+// @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
 import {
   simpleLoop,
   synthesizer,
@@ -101,7 +102,7 @@ export const microsoft365Agent: AgentConfig = {
   name: "Microsoft 365",
   description:
     "Answers from your own Microsoft 365 account (delegated, per-user via Entra)",
-  icon: "🪟",
+  icon: "i-material-symbols-window-sharp",
   // Not an MCP gateway server: these tools run in-process so the per-user
   // token stays server-side (#107). Listed for UI display only.
   servers: ["graph (app-side, per-user)"],

@@ -25,6 +25,7 @@ import {
   loadSession,
   saveSession,
   deleteSession,
+  evictPatterns,
   type SessionData,
 } from "./session.server";
 import { getAgent, getAgentMetadata } from "./registry.server";
@@ -32,6 +33,7 @@ import {
   listConversations as dbListConversations,
   promoteConversation as dbPromoteConversation,
   saveConversation as dbSaveConversation,
+  deleteConversations as dbDeleteConversations,
   deriveTitle,
   type ConversationKind,
   type ConversationSource,
@@ -224,6 +226,25 @@ export async function clearSession(sessionId: string): Promise<void> {
 }
 
 /**
+ * Delete a batch of conversations for the current user (#71). One round
+ * trip: ids that don't exist or belong to someone else are silently skipped
+ * (`user_id` scoping in the DELETE), and the ids actually removed come back
+ * so the sidebar can patch its cache from ground truth. Serves both the
+ * per-row delete (one id) and select-mode bulk delete — one code path.
+ */
+export async function deleteConversationsBulk(
+  ids: string[],
+): Promise<{ deleted: string[] }> {
+  const user = await requireUser();
+  // Dedupe and cap at the sidebar's list size — nothing legitimate selects
+  // more rows than the list can show.
+  const unique = [...new Set(ids)].slice(0, 200);
+  const deleted = await dbDeleteConversations(unique, user.id);
+  for (const id of deleted) evictPatterns(id);
+  return { deleted };
+}
+
+/**
  * Get list of available agents (metadata only).
  */
 export async function getAgentList(): Promise<
@@ -245,6 +266,10 @@ export async function getAgentList(): Promise<
 export interface ConversationSummary {
   id: string;
   agentId: string;
+  /** The agent's iconify class, pre-resolved from the registry so the
+   *  sidebar needs no registry import and no second round trip (#60).
+   *  Undefined when the agent no longer exists (e.g. removed agents). */
+  agentIcon?: string;
   title: string | null;
   /** 'conversation' | 'action' — drives the sidebar's segmented filter. */
   kind: ConversationKind;
@@ -275,6 +300,7 @@ export async function listConversations(): Promise<ConversationSummary[]> {
   return rows.map((r) => ({
     id: r.id,
     agentId: r.agentId,
+    agentIcon: getAgent(r.agentId)?.icon,
     title: r.title,
     kind: r.kind,
     source: r.source,

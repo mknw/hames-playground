@@ -21,7 +21,11 @@ export interface AgentConfig {
   id: string;
   name: string;
   description: string;
-  /** Emoji icon for UI display */
+  /** Iconify class for UI display (e.g. `i-material-symbols-robot-2-outline`).
+   *  Must appear as a literal in a file matched by uno.config.ts
+   *  `content.filesystem`, or UnoCSS emits no CSS for it and the icon
+   *  renders as an empty span. Render with `class=` + inline style sizing —
+   *  never attributify. */
   icon: string;
   /** Server namespaces this agent uses */
   servers: string[];
@@ -196,7 +200,6 @@ export async function agentUsesSyncWorkspace(
 import { defaultAgent } from "./examples/default.server";
 import { codeModeAgent } from "./examples/code-mode.server";
 import { multiSourceResearchAgent } from "./examples/multi-source-research.server";
-import { conversationalMemoryAgent } from "./examples/conversational-memory.server";
 import { sandboxSessionAgent } from "./examples/sandbox-session.server";
 import { flavouredSandboxAgent } from "./examples/flavoured-sandbox.server";
 import { retrieverAgent } from "./examples/retriever-agent.server";
@@ -206,7 +209,6 @@ import { microsoft365Agent } from "./examples/microsoft-365.server";
 registerAgent(defaultAgent);
 registerAgent(codeModeAgent);
 registerAgent(multiSourceResearchAgent);
-registerAgent(conversationalMemoryAgent);
 registerAgent(sandboxSessionAgent);
 registerAgent(flavouredSandboxAgent);
 registerAgent(retrieverAgent);

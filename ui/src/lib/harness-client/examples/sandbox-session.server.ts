@@ -13,6 +13,7 @@
  */
 "use server";
 
+// @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
 import {
   actorCritic,
   synthesizer,
@@ -138,7 +139,7 @@ export const sandboxSessionAgent: AgentConfig = {
   name: "Sandbox · Session",
   description:
     "Persistent sandbox VM shared across turns and with the interactive Shell — build incrementally, inspect files live.",
-  icon: "🖥️",
+  icon: "i-material-symbols-castle-outline",
   servers: [],
   createPatterns,
 };

@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from 'solid-js'
+import { For, Show, createSignal, createEffect, onCleanup } from 'solid-js'
 import { Dialog } from '@ark-ui/solid/dialog'
 import { SettingsPanel } from './SettingsPanel'
 import { regenerateConversationTitle } from '../../lib/harness-client'
@@ -253,6 +253,57 @@ export function deleteConfirmCopy(target: DeleteTarget): string {
     : base
 }
 
+// ---------------------------------------------------------------------------
+// Select-mode helpers (#71) — pure so the eligibility/skip rules are testable.
+// Eligible = deletable: not a placeholder, not running (see canDeleteRow).
+// ---------------------------------------------------------------------------
+
+/** Immutably toggle one id in a selection set. */
+export function toggleSelection(
+  set: ReadonlySet<string>,
+  id: string,
+): ReadonlySet<string> {
+  const next = new Set(set)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  return next
+}
+
+/** Select every eligible thread in the given (visible) list, counting the
+ *  running rows that had to be skipped for the confirm copy. */
+export function selectAllEligible(
+  threads: ReadonlyArray<Pick<ChatThreadSummary, 'id' | 'isPlaceholder'>>,
+  isProcessing: (id: string) => boolean,
+): { selected: ReadonlySet<string>; skippedRunning: number } {
+  const selected = new Set<string>()
+  let skippedRunning = 0
+  for (const t of threads) {
+    if (t.isPlaceholder) continue
+    if (isProcessing(t.id)) {
+      skippedRunning++
+      continue
+    }
+    selected.add(t.id)
+  }
+  return { selected, skippedRunning }
+}
+
+/** True when every eligible thread in the list is selected (and there is at
+ *  least one) — flips the header button label from "Select all" to "Clear". */
+export function allEligibleSelected(
+  threads: ReadonlyArray<Pick<ChatThreadSummary, 'id' | 'isPlaceholder'>>,
+  selected: ReadonlySet<string>,
+  isProcessing: (id: string) => boolean,
+): boolean {
+  let any = false
+  for (const t of threads) {
+    if (t.isPlaceholder || isProcessing(t.id)) continue
+    any = true
+    if (!selected.has(t.id)) return false
+  }
+  return any
+}
+
 /** Shared with the in-chat LiveProgressBar so the two read as one system. */
 const STRIP_GRADIENT = 'linear-gradient(90deg, rgba(0,255,255,0.85), rgba(157,0,255,0.85))'
 
@@ -383,6 +434,8 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
     try {
       await props.onDeleteThreads(ids)
       setConfirmTarget(null)
+      // A successful bulk delete is a natural end to select mode.
+      if (target.kind === 'bulk') exitSelectMode()
     } catch (err) {
       // Leave the dialog open so the user can retry or cancel.
       console.error('[sidebar] delete failed:', err)
@@ -390,6 +443,84 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
       setDeleting(false)
     }
   }
+
+  // ---- Select mode (#71) ----------------------------------------------------
+  const [selectionMode, setSelectionMode] = createSignal(false)
+  const [selectedIds, setSelectedIds] = createSignal<ReadonlySet<string>>(new Set())
+  // Running rows skipped by the last select-all — reported in the confirm.
+  const [skippedRunning, setSkippedRunning] = createSignal(0)
+
+  const isRunning = (id: string) => !!props.getRunState?.(id).isProcessing
+
+  const exitSelectMode = () => {
+    setSelectionMode(false)
+    setSelectedIds(new Set<string>())
+    setSkippedRunning(0)
+  }
+
+  const toggleRow = (thread: ChatThreadSummary) => {
+    if (!canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: isRunning(thread.id) })) return
+    setSelectedIds(prev => toggleSelection(prev, thread.id))
+  }
+
+  // Select-all acts on the VISIBLE (filtered) threads; selections persist
+  // across filter switches because they're a set of ids, not row references.
+  // "Clear" drops everything, visible or not.
+  const toggleSelectAllVisible = () => {
+    if (allEligibleSelected(visibleThreads(), selectedIds(), isRunning)) {
+      setSelectedIds(new Set<string>())
+      setSkippedRunning(0)
+    } else {
+      const { selected, skippedRunning: skipped } = selectAllEligible(visibleThreads(), isRunning)
+      setSelectedIds(prev => new Set([...prev, ...selected]))
+      setSkippedRunning(skipped)
+    }
+  }
+
+  const requestBulkDelete = () => {
+    // Re-check run state at confirm time — a run may have started in a
+    // selected thread since it was ticked. Newly-running rows move into the
+    // skip count rather than being deleted out from under their run.
+    const chosen = [...selectedIds()]
+    const stillIdle = chosen.filter(id => !isRunning(id))
+    const newlyRunning = chosen.length - stillIdle.length
+    if (stillIdle.length === 0) return
+    setConfirmTarget({
+      kind: 'bulk',
+      ids: stillIdle,
+      skippedRunning: skippedRunning() + newlyRunning,
+    })
+  }
+
+  // Collapsing the sidebar hides every select-mode affordance — exit rather
+  // than leaving invisible state armed.
+  createEffect(() => {
+    if (props.collapsed && selectionMode()) exitSelectMode()
+  })
+
+  // Keyboard, scoped to select mode (first document-level keydown in the
+  // codebase): Esc exits, Cmd/Ctrl-A toggles select-all. The Ark dialog owns
+  // its own Esc while open, and typing surfaces (composer!) keep native
+  // select-all — both are bypassed explicitly.
+  createEffect(() => {
+    if (!selectionMode()) return
+    const onKey = (e: KeyboardEvent) => {
+      if (confirmTarget()) return
+      const t = e.target as HTMLElement | null
+      if (
+        t &&
+        (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable)
+      ) return
+      if (e.key === 'Escape') {
+        exitSelectMode()
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault()
+        toggleSelectAllVisible()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    onCleanup(() => document.removeEventListener('keydown', onKey))
+  })
   // Segmented Actions/Conversations/All filter (#agent-trigger). Local state —
   // the parent passes the full thread list; we filter for display.
   const [filter, setFilter] = createSignal<ThreadFilter>('all')
@@ -427,7 +558,30 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
       {/* Header with Toggle */}
       <div p="4" border="b dark-border-primary" flex="~" items="center" justify="between">
         {!props.collapsed && (
-          <span text="sm dark-text-primary" font="medium">Chat History</span>
+          <div flex="~" items="center" gap="2">
+            <span text="sm dark-text-primary" font="medium">Chat History</span>
+            {/* Select-mode toggle (#71) */}
+            <button
+              onClick={() => (selectionMode() ? exitSelectMode() : setSelectionMode(true))}
+              title={selectionMode() ? 'Exit select mode' : 'Select conversations'}
+              aria-pressed={selectionMode() ? 'true' : 'false'}
+              p="1"
+              rounded="md"
+              hover="bg-dark-bg-hover"
+              transition="colors"
+            >
+              <span
+                class="i-material-symbols-checklist"
+                aria-hidden="true"
+                style={{
+                  width: '16px',
+                  height: '16px',
+                  display: 'block',
+                  color: selectionMode() ? '#22d3ee' : '#71717a',
+                }}
+              />
+            </button>
+          </div>
         )}
         <button
           onClick={() => props.onToggle()}
@@ -576,6 +730,50 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
               }}
             </For>
           </div>
+          {/* Select-mode action bar (#71). The filter stays usable above —
+              selections persist across filter switches. */}
+          <Show when={selectionMode()}>
+            <div p="x-2 t-2" flex="~" gap="1" items="center">
+              <button
+                onClick={toggleSelectAllVisible}
+                p="x-2 y-1"
+                rounded="md"
+                text="xs dark-text-secondary"
+                bg="transparent hover:dark-bg-hover"
+                border="1 dark-border-secondary"
+                transition="all"
+              >
+                {allEligibleSelected(visibleThreads(), selectedIds(), isRunning)
+                  ? 'Clear'
+                  : 'Select all'}
+              </button>
+              <button
+                onClick={requestBulkDelete}
+                disabled={selectedIds().size === 0}
+                flex="1"
+                p="x-2 y-1"
+                rounded="md"
+                text="xs white"
+                bg="red-600 hover:red-500"
+                font="medium"
+                transition="all"
+                style={{ opacity: selectedIds().size === 0 ? 0.4 : 1 }}
+              >
+                Delete selected ({selectedIds().size})
+              </button>
+              <button
+                onClick={exitSelectMode}
+                p="x-2 y-1"
+                rounded="md"
+                text="xs dark-text-secondary"
+                bg="transparent hover:dark-bg-hover"
+                border="1 dark-border-secondary"
+                transition="all"
+              >
+                Cancel
+              </button>
+            </div>
+          </Show>
           <div flex="1" overflow="auto">
             <Show
               when={visibleThreads().length > 0}
@@ -608,7 +806,9 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                     }
                     return (
                       <button
-                        onClick={() => props.onSelectThread(thread.id)}
+                        onClick={() =>
+                          selectionMode() ? toggleRow(thread) : props.onSelectThread(thread.id)
+                        }
                         w="full"
                         text="left"
                         p="3"
@@ -629,6 +829,36 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             ~3.5rem clearance, and new attributify spacing
                             literals are extractor roulette (see t-1.5). */}
                         <div flex="~" items="center" gap="1.5" style={{ 'padding-right': '3.5rem' }}>
+                          {/* Select-mode checkbox (#71) — a styled span, not
+                              an <input>: rows are <button>s and nesting an
+                              interactive element would break semantics.
+                              Running/placeholder rows render it dimmed and
+                              toggleRow() no-ops for them. */}
+                          <Show when={selectionMode()}>
+                            <span
+                              role="checkbox"
+                              aria-checked={selectedIds().has(thread.id) ? 'true' : 'false'}
+                              aria-disabled={
+                                canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: live() })
+                                  ? undefined
+                                  : 'true'
+                              }
+                              class={
+                                selectedIds().has(thread.id)
+                                  ? 'i-material-symbols-check-box'
+                                  : 'i-material-symbols-check-box-outline-blank'
+                              }
+                              style={{
+                                width: '16px',
+                                height: '16px',
+                                'flex-shrink': 0,
+                                color: selectedIds().has(thread.id) ? '#22d3ee' : '#71717a',
+                                opacity: canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: live() })
+                                  ? 1
+                                  : 0.35,
+                              }}
+                            />
+                          </Show>
                           {/* Agent identity (#60) — muted so the title stays
                               the row's anchor. Hidden for placeholders. */}
                           <Show when={threadIcon(thread)}>
@@ -672,7 +902,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             end-save upsert, so the affordance simply isn't
                             offered (mid-run cancel is #105 PR 3 scope). Same
                             span-not-button idiom as the regenerate action. */}
-                        <Show when={canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: live() })}>
+                        <Show when={!selectionMode() && canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: live() })}>
                           <span
                             aria-hidden="true"
                             onClick={(e) => requestDelete(e, thread)}
@@ -701,7 +931,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             outside the outer <button> hit area so nested-
                             interactive semantics stay valid. Shifted left to
                             make room for the delete action at right:0.5rem. */}
-                        <Show when={!thread.isPlaceholder}>
+                        <Show when={!selectionMode() && !thread.isPlaceholder}>
                           <span
                             aria-hidden="true"
                             onClick={(e) => handleRegenerate(e, thread.id)}

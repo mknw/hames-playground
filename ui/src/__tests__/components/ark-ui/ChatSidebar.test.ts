@@ -33,6 +33,9 @@ const {
   railDot,
   canDeleteRow,
   deleteConfirmCopy,
+  toggleSelection,
+  selectAllEligible,
+  allEligibleSelected,
 } = await import('../../../components/ark-ui/ChatSidebar')
 type ChatThreadSummary = import('../../../components/ark-ui/ChatSidebar').ChatThreadSummary
 
@@ -177,6 +180,47 @@ describe('threadIcon', () => {
   // conversational-memory) must still show something — a generic robot.
   it('falls back to the generic robot for unknown agents', () => {
     expect(threadIcon({})).toBe('i-material-symbols-smart-toy-outline')
+  })
+})
+
+describe('select-mode helpers', () => {
+  const rows = [
+    { id: 'a' },
+    { id: 'b' },
+    { id: 'running-1' },
+    { id: 'ph', isPlaceholder: true },
+  ]
+  const running = (id: string) => id.startsWith('running')
+
+  it('toggleSelection adds and removes immutably', () => {
+    const s0: ReadonlySet<string> = new Set()
+    const s1 = toggleSelection(s0, 'a')
+    expect(s1.has('a')).toBe(true)
+    expect(s0.has('a')).toBe(false) // input untouched
+    const s2 = toggleSelection(s1, 'a')
+    expect(s2.has('a')).toBe(false)
+  })
+
+  it('selectAllEligible skips placeholders silently and counts running rows', () => {
+    const { selected, skippedRunning } = selectAllEligible(rows, running)
+    expect([...selected].sort()).toEqual(['a', 'b'])
+    // Placeholders aren't "skipped" in the user-facing sense — they aren't
+    // conversations yet — only running rows make the confirm-copy count.
+    expect(skippedRunning).toBe(1)
+  })
+
+  it('allEligibleSelected flips the Select all / Clear label', () => {
+    expect(allEligibleSelected(rows, new Set(['a']), running)).toBe(false)
+    expect(allEligibleSelected(rows, new Set(['a', 'b']), running)).toBe(true)
+    // Extra selected ids (e.g. from another filter view) don't break it.
+    expect(allEligibleSelected(rows, new Set(['a', 'b', 'z']), running)).toBe(true)
+  })
+
+  // A list with nothing eligible must read as "not all selected" so the
+  // button keeps offering Select all rather than lying with Clear.
+  it('allEligibleSelected is false when nothing is eligible', () => {
+    expect(allEligibleSelected([{ id: 'running-9' }], new Set(), running)).toBe(false)
+    expect(allEligibleSelected([], new Set(), running)).toBe(false)
   })
 })
 

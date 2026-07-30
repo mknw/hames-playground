@@ -245,6 +245,10 @@ export async function getAgentList(): Promise<
 export interface ConversationSummary {
   id: string;
   agentId: string;
+  /** The agent's iconify class, pre-resolved from the registry so the
+   *  sidebar needs no registry import and no second round trip (#60).
+   *  Undefined when the agent no longer exists (e.g. removed agents). */
+  agentIcon?: string;
   title: string | null;
   /** 'conversation' | 'action' — drives the sidebar's segmented filter. */
   kind: ConversationKind;
@@ -275,6 +279,7 @@ export async function listConversations(): Promise<ConversationSummary[]> {
   return rows.map((r) => ({
     id: r.id,
     agentId: r.agentId,
+    agentIcon: getAgent(r.agentId)?.icon,
     title: r.title,
     kind: r.kind,
     source: r.source,

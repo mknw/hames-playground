@@ -12,6 +12,11 @@ export type ThreadStatus = 'running' | 'paused' | 'done' | 'error'
 export interface ChatThreadSummary {
   id: string
   title: string | null
+  /** The agent's iconify class, pre-resolved server-side (#60). The route
+   *  passes ConversationSummary rows straight through, so this is populated
+   *  at runtime for persisted threads; absent on placeholders and for
+   *  agents that no longer exist. */
+  agentIcon?: string
   /** ISO 8601 timestamp from the server. */
   updatedAt: string
   /** 'conversation' (chat) | 'action' (POST-triggered). Drives the filter. */
@@ -182,6 +187,20 @@ export function progressPercent(snap: {
   const denom = snap.pathProjection || snap.maxProjection
   if (denom <= 0) return null
   return Math.max(0, Math.min(100, (snap.currentTurn / denom) * 100))
+}
+
+/**
+ * Icon class for a thread row (#60). Placeholders show nothing — the real
+ * icon appears within ~1s once the run-start refetch lands the persisted
+ * row. Threads whose agent no longer exists fall back to a generic robot
+ * (the fallback literal lives in this scanned .tsx, so it always emits).
+ */
+export function threadIcon(t: {
+  isPlaceholder?: boolean
+  agentIcon?: string
+}): string | null {
+  if (t.isPlaceholder) return null
+  return t.agentIcon ?? 'i-material-symbols-smart-toy-outline'
 }
 
 /** Shared with the in-chat LiveProgressBar so the two read as one system. */
@@ -437,6 +456,17 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         style={{ 'border-color': completionBorderColor(completion()) }}
                       >
                         <div flex="~" items="center" gap="1.5" pr="6">
+                          {/* Agent identity (#60) — muted so the title stays
+                              the row's anchor. Hidden for placeholders. */}
+                          <Show when={threadIcon(thread)}>
+                            {(icon) => (
+                              <span
+                                class={icon()}
+                                aria-hidden="true"
+                                style={{ width: '14px', height: '14px', color: '#71717a', 'flex-shrink': 0 }}
+                              />
+                            )}
+                          </Show>
                           <StatusBadge indicator={indicator()} />
                           <div
                             text={thread.isPlaceholder ? 'sm dark-text-tertiary' : 'sm dark-text-primary'}

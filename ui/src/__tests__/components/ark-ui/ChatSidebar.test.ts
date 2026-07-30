@@ -29,6 +29,7 @@ const {
   progressPercent,
   completionBorderColor,
   rowFlashClass,
+  threadIcon,
 } = await import('../../../components/ark-ui/ChatSidebar')
 type ChatThreadSummary = import('../../../components/ark-ui/ChatSidebar').ChatThreadSummary
 
@@ -152,6 +153,27 @@ describe('progressPercent', () => {
     expect(
       progressPercent({ currentTurn: 9, pathProjection: 4, maxProjection: 4 }),
     ).toBe(100)
+  })
+})
+
+describe('threadIcon', () => {
+  // The optimistic "+ New Chat" row has no persisted agent yet; the real
+  // icon lands with the run-start refetch, so show nothing rather than a
+  // wrong guess.
+  it('is null for placeholder rows', () => {
+    expect(threadIcon({ isPlaceholder: true, agentIcon: 'i-x' })).toBeNull()
+  })
+
+  it('passes the pre-resolved agent icon through', () => {
+    expect(threadIcon({ agentIcon: 'i-material-symbols-castle-outline' })).toBe(
+      'i-material-symbols-castle-outline',
+    )
+  })
+
+  // Rows whose agent was removed from the registry (kg-builder,
+  // conversational-memory) must still show something — a generic robot.
+  it('falls back to the generic robot for unknown agents', () => {
+    expect(threadIcon({})).toBe('i-material-symbols-smart-toy-outline')
   })
 })
 

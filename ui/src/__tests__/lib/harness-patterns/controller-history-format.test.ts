@@ -186,6 +186,36 @@ describe('controller history renders as ControllerAction JSON', () => {
     }
   })
 
+  it('few-shots encode tool_args the same way the history does', async () => {
+    // `tool_args` is a string whose CONTENT is JSON, so its inner quotes are
+    // escaped. Rendered bare, a few-shot demonstrated `tool_args: {"query":...}`
+    // while the assistant turn log demonstrated `"tool_args": "{\"query\":...}"`
+    // — one field, two incompatible encodings, both in the same prompt. Live
+    // failure: an action that opened escaped and closed bare
+    // (`"{\"query\": \"MATCH ... LIMIT 20"}"`), terminating the string early and
+    // failing BAML with status/is_final "missing" at 495 output tokens against a
+    // 32768 cap — neither truncation nor an empty completion, so no retry branch
+    // caught it and the loop lost two good turns of results.
+    const args = '{"query":"MATCH (c:Concept) WHERE toLower(c.name) CONTAINS toLower($n)","params":{"n":"graph"}}'
+    const fewShot = { user: 'find graph concepts', reasoning: 'substring search', tool: 'search', args }
+
+    const loop = (await b.request.LoopController(
+      'x', 'x', TOOLS, TURNS as never, null, null, [fewShot],
+    )).body.json() as Body
+    const actor = (await b.request.ActorController(
+      'x', 'x', TOOLS, ATTEMPTS as never, null, [fewShot], 3, 5,
+    )).body.json() as Body
+
+    for (const body of [loop, actor]) {
+      const text = allText(body)
+      // The example is present as a QUOTED, ESCAPED string — the exact form the
+      // model must reproduce. `allText` is itself JSON, hence the doubling.
+      expect(text).toContain(`tool_args: ${JSON.stringify(JSON.stringify(args)).slice(1, -1)}`)
+      // ...and never as a bare object, which is what taught the wrong encoding.
+      expect(text).not.toContain('tool_args: {')
+    }
+  })
+
   it('the turn counter agrees with the history it follows', async () => {
     // History is 0-indexed (`Turn 0 result`), so with N completed turns the ask
     // is for turn N. The previous `N + 1` skipped a number, inviting the model

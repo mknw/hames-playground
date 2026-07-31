@@ -28,6 +28,10 @@
 // ============================================================================
 
 // --- Section: few-shot examples (blank-line entries, ----fenced) ------------
+// Values rendered with `tojson` so the encoding of `tool_args` matches the
+// attempt log below (which also uses `tojson`): it is a string whose content is
+// JSON, so its inner quotes are escaped. See LoopFewShots in simpleLoop.baml for
+// the failure a bare rendering produced.
 template_string ActorFewShots(few_shots: FewShot[]?) #"
   {% if few_shots and few_shots|length > 0 %}
 
@@ -36,9 +40,9 @@ template_string ActorFewShots(few_shots: FewShot[]?) #"
   {% for ex in few_shots %}
 
   - User: {{ ex.user }}
-    reasoning: {{ ex.reasoning }}
-    tool_name: {{ ex.tool }}
-    tool_args: {{ ex.args }}
+    reasoning: {{ ex.reasoning | tojson }}
+    tool_name: {{ ex.tool | tojson }}
+    tool_args: {{ ex.args | tojson }}
   {% endfor %}
 
   ---

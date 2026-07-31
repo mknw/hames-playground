@@ -23,12 +23,18 @@ import type { GraphElement } from '~/lib/harness-client/types'
 // Types
 // ============================================================================
 
+/** FloatingPanel stage, mirrored from zag (no readable stage on the api). */
+type PanelStage = 'default' | 'minimized' | 'maximized'
+
 interface AllGraphTabProps {
   contextEvents: ContextEvent[]
   highlightedIds?: string[]
   onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void
   onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>
+  /** Injected by AllGraphTabWrapper (which owns FloatingPanel.Root) — drives
+   *  which window controls the Turn Explorer header shows. */
+  panelStage?: PanelStage
 }
 
 // ============================================================================
@@ -256,7 +262,10 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
                 <span class="i-mdi-drag" style={{ width: '16px', height: '16px', color: '#71717a' }} />
                 <span text="sm dark-text-primary" font="medium">Turn Explorer</span>
               </FloatingPanel.DragTrigger>
-              <FloatingPanel.Control flex="~" items="center" gap="1" m="r-5">
+              {/* Content actions — NOT window controls, so they live in a
+                  plain div: FloatingPanel.Control is the slot for the stage/
+                  close triggers below (canonical Ark anatomy). */}
+              <div flex="~" items="center" gap="1" m="r-2">
                 <Show when={turnsWithGraphData().length > 0}>
                   <button
                     onClick={selectAllTurns}
@@ -281,21 +290,66 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
                     None
                   </button>
                 </Show>
+              </div>
+              <FloatingPanel.Control flex="~" items="center" gap="0.5">
+                <Show when={props.panelStage !== 'minimized'}>
+                  <FloatingPanel.StageTrigger
+                    stage="minimized"
+                    p="1"
+                    rounded="sm"
+                    cursor="pointer"
+                    bg="hover:dark-bg-primary"
+                    text="dark-text-tertiary hover:dark-text-primary"
+                    title="Minimize"
+                  >
+                    <span class="i-material-symbols-minimize" style={{ width: '14px', height: '14px', display: 'block' }} />
+                  </FloatingPanel.StageTrigger>
+                </Show>
+                <Show when={props.panelStage !== 'maximized'}>
+                  <FloatingPanel.StageTrigger
+                    stage="maximized"
+                    p="1"
+                    rounded="sm"
+                    cursor="pointer"
+                    bg="hover:dark-bg-primary"
+                    text="dark-text-tertiary hover:dark-text-primary"
+                    title="Maximize (fills the graph area)"
+                  >
+                    <span class="i-material-symbols-fullscreen" style={{ width: '14px', height: '14px', display: 'block' }} />
+                  </FloatingPanel.StageTrigger>
+                </Show>
+                <Show when={props.panelStage !== 'default' && props.panelStage !== undefined}>
+                  <FloatingPanel.StageTrigger
+                    stage="default"
+                    p="1"
+                    rounded="sm"
+                    cursor="pointer"
+                    bg="hover:dark-bg-primary"
+                    text="dark-text-tertiary hover:dark-text-primary"
+                    title="Restore"
+                  >
+                    <span
+                      class={
+                        props.panelStage === 'maximized'
+                          ? 'i-material-symbols-fullscreen-exit'
+                          : 'i-material-symbols-expand-content'
+                      }
+                      style={{ width: '14px', height: '14px', display: 'block' }}
+                    />
+                  </FloatingPanel.StageTrigger>
+                </Show>
+                <FloatingPanel.CloseTrigger
+                  p="1"
+                  rounded="sm"
+                  cursor="pointer"
+                  bg="hover:dark-bg-primary"
+                  text="dark-text-tertiary hover:dark-text-primary"
+                  title="Close"
+                >
+                  <span class="i-material-symbols-close" style={{ width: '14px', height: '14px', display: 'block' }} />
+                </FloatingPanel.CloseTrigger>
               </FloatingPanel.Control>
             </FloatingPanel.Header>
-
-            {/* Close button — top-right corner */}
-            <FloatingPanel.CloseTrigger
-              style={{ position: 'absolute', top: '6px', right: '6px', 'z-index': '10' }}
-              p="1"
-              rounded="sm"
-              cursor="pointer"
-              bg="hover:dark-bg-primary"
-              text="dark-text-tertiary hover:dark-text-primary"
-              title="Close"
-            >
-              <span class="i-mdi-close" style={{ width: '12px', height: '12px' }} />
-            </FloatingPanel.CloseTrigger>
 
             {/* Body: horizontal flex of turn columns */}
             <FloatingPanel.Body
@@ -327,29 +381,33 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
               </Show>
             </FloatingPanel.Body>
 
-            {/* Resize handle (bottom-right) */}
-            <FloatingPanel.ResizeTrigger
-              axis="se"
-              style={{
-                position: 'absolute',
-                bottom: '0',
-                right: '0',
-                width: '14px',
-                height: '14px',
-                cursor: 'se-resize',
-              }}
-            >
-              <span
+            {/* Resize handle (bottom-right) — hidden while minimized (the
+                panel is header-height, the handle would overlap it) or
+                maximized (size is stage-managed). */}
+            <Show when={(props.panelStage ?? 'default') === 'default'}>
+              <FloatingPanel.ResizeTrigger
+                axis="se"
                 style={{
-                  display: 'block',
-                  width: '8px',
-                  height: '8px',
-                  'border-right': '2px solid #52525b',
-                  'border-bottom': '2px solid #52525b',
-                  margin: '3px 0 0 3px',
+                  position: 'absolute',
+                  bottom: '0',
+                  right: '0',
+                  width: '14px',
+                  height: '14px',
+                  cursor: 'se-resize',
                 }}
-              />
-            </FloatingPanel.ResizeTrigger>
+              >
+                <span
+                  style={{
+                    display: 'block',
+                    width: '8px',
+                    height: '8px',
+                    'border-right': '2px solid #52525b',
+                    'border-bottom': '2px solid #52525b',
+                    margin: '3px 0 0 3px',
+                  }}
+                />
+              </FloatingPanel.ResizeTrigger>
+            </Show>
           </FloatingPanel.Content>
         </FloatingPanel.Positioner>
 
@@ -542,6 +600,10 @@ const TurnColumn = (props: TurnColumnProps) => {
 // ============================================================================
 
 export const AllGraphTabWrapper = (props: AllGraphTabProps) => {
+  // Current panel stage, fed by onStageChange (the zag api exposes no
+  // readable stage). Passed down so the header can hide/show the
+  // minimize/maximize/restore triggers.
+  const [stage, setStage] = createSignal<PanelStage>('default')
   return (
     <FloatingPanel.Root
       strategy="absolute"
@@ -551,8 +613,9 @@ export const AllGraphTabWrapper = (props: AllGraphTabProps) => {
       draggable
       resizable
       closeOnEscape
+      onStageChange={(d) => setStage(d.stage)}
     >
-      <AllGraphTab {...props} />
+      <AllGraphTab {...props} panelStage={stage()} />
     </FloatingPanel.Root>
   )
 }

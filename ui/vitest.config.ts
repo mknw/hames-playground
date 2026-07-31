@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import solidPlugin from 'vite-plugin-solid';
 
@@ -11,5 +12,10 @@ export default defineConfig({
   },
   resolve: {
     conditions: ['development', 'browser'],
+    alias: {
+      // Mirror SolidStart's `~` → src/ alias so components that use it
+      // (e.g. AllGraphTab → ~/lib/turn-utils) are importable from tests.
+      '~': fileURLToPath(new URL('./src', import.meta.url)),
+    },
   },
 });

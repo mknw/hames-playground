@@ -4,7 +4,7 @@
  * Self-contained: includes FloatingPanel.Root + trigger button.
  * Parent just renders <SettingsPanel />.
  */
-import { For } from 'solid-js'
+import { For, Show, createSignal } from 'solid-js'
 import { FloatingPanel } from '@ark-ui/solid/floating-panel'
 import { Slider } from '@ark-ui/solid/slider'
 import { NumberInput } from '@ark-ui/solid/number-input'
@@ -142,15 +142,23 @@ const modelEntries = Object.entries(MODEL_CONTEXT_WINDOWS).map(([name, tokens]) 
 // Main component
 // ---------------------------------------------------------------------------
 export function SettingsPanel() {
+  // Current stage, fed by onStageChange — the zag api exposes no readable
+  // stage, so conditional window controls (hide minimize while minimized,
+  // show restore only when staged) track it locally.
+  const [stage, setStage] = createSignal<'default' | 'minimized' | 'maximized'>('default')
   return (
     <FloatingPanel.Root
       strategy="fixed"
       defaultSize={{ width: 380, height: 520 }}
       minSize={{ width: 300, height: 300 }}
+      // Anchor-computed default clipped the header above the viewport
+      // (top ≈ -13px). persistRect still wins once the user has dragged it.
+      defaultPosition={{ x: 200, y: 80 }}
       persistRect
       draggable
       resizable
       closeOnEscape
+      onStageChange={(d) => setStage(d.stage)}
     >
       {/* Trigger: gear icon button */}
       <FloatingPanel.Trigger
@@ -179,7 +187,10 @@ export function SettingsPanel() {
           flex="~ col"
           style={{ 'backdrop-filter': 'blur(8px)' }}
         >
-          {/* Header */}
+          {/* Header — drag handle + window controls (canonical Ark anatomy:
+              Control groups the StageTriggers and CloseTrigger). Maximize is
+              deliberately omitted: 380px of settings gains nothing from
+              fullscreen. */}
           <FloatingPanel.Header
             flex="~"
             items="center"
@@ -193,20 +204,45 @@ export function SettingsPanel() {
               <span class="i-mdi-drag" style={{ width: '16px', height: '16px', color: '#71717a' }} />
               <span text="sm dark-text-primary" font="medium">Settings</span>
             </FloatingPanel.DragTrigger>
+            <FloatingPanel.Control flex="~" items="center" gap="0.5">
+              <Show when={stage() !== 'minimized'}>
+                <FloatingPanel.StageTrigger
+                  stage="minimized"
+                  p="1"
+                  rounded="sm"
+                  cursor="pointer"
+                  bg="hover:dark-bg-primary"
+                  text="dark-text-tertiary hover:dark-text-primary"
+                  title="Minimize"
+                >
+                  <span class="i-material-symbols-minimize" style={{ width: '14px', height: '14px', display: 'block' }} />
+                </FloatingPanel.StageTrigger>
+              </Show>
+              <Show when={stage() !== 'default'}>
+                <FloatingPanel.StageTrigger
+                  stage="default"
+                  p="1"
+                  rounded="sm"
+                  cursor="pointer"
+                  bg="hover:dark-bg-primary"
+                  text="dark-text-tertiary hover:dark-text-primary"
+                  title="Restore"
+                >
+                  <span class="i-material-symbols-expand-content" style={{ width: '14px', height: '14px', display: 'block' }} />
+                </FloatingPanel.StageTrigger>
+              </Show>
+              <FloatingPanel.CloseTrigger
+                p="1"
+                rounded="sm"
+                cursor="pointer"
+                bg="hover:dark-bg-primary"
+                text="dark-text-tertiary hover:dark-text-primary"
+                title="Close"
+              >
+                <span class="i-material-symbols-close" style={{ width: '14px', height: '14px', display: 'block' }} />
+              </FloatingPanel.CloseTrigger>
+            </FloatingPanel.Control>
           </FloatingPanel.Header>
-
-          {/* Close button — top-right corner */}
-          <FloatingPanel.CloseTrigger
-            style={{ position: 'absolute', top: '6px', right: '6px', 'z-index': '10' }}
-            p="1"
-            rounded="sm"
-            cursor="pointer"
-            bg="hover:dark-bg-primary"
-            text="dark-text-tertiary hover:dark-text-primary"
-            title="Close"
-          >
-            <span class="i-mdi-close" style={{ width: '12px', height: '12px' }} />
-          </FloatingPanel.CloseTrigger>
 
           {/* Body */}
           <FloatingPanel.Body flex="1" overflow="y-auto" p="3" style={{ display: 'flex', 'flex-direction': 'column', gap: '16px' }}>
@@ -293,29 +329,33 @@ export function SettingsPanel() {
             </button>
           </FloatingPanel.Body>
 
-          {/* Resize handle */}
-          <FloatingPanel.ResizeTrigger
-            axis="se"
-            style={{
-              position: 'absolute',
-              bottom: '0',
-              right: '0',
-              width: '16px',
-              height: '16px',
-              cursor: 'se-resize',
-              display: 'flex',
-              'align-items': 'flex-end',
-              'justify-content': 'flex-end',
-              padding: '2px',
-            }}
-          >
-            <span style={{
-              width: '8px',
-              height: '8px',
-              'border-right': '2px solid #52525b',
-              'border-bottom': '2px solid #52525b',
-            }} />
-          </FloatingPanel.ResizeTrigger>
+          {/* Resize handle — hidden while staged: minimized collapses to the
+              header (the handle would overlap it) and maximized isn't
+              hand-resizable anyway. */}
+          <Show when={stage() === 'default'}>
+            <FloatingPanel.ResizeTrigger
+              axis="se"
+              style={{
+                position: 'absolute',
+                bottom: '0',
+                right: '0',
+                width: '16px',
+                height: '16px',
+                cursor: 'se-resize',
+                display: 'flex',
+                'align-items': 'flex-end',
+                'justify-content': 'flex-end',
+                padding: '2px',
+              }}
+            >
+              <span style={{
+                width: '8px',
+                height: '8px',
+                'border-right': '2px solid #52525b',
+                'border-bottom': '2px solid #52525b',
+              }} />
+            </FloatingPanel.ResizeTrigger>
+          </Show>
         </FloatingPanel.Content>
       </FloatingPanel.Positioner>
     </FloatingPanel.Root>

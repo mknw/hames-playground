@@ -2,6 +2,7 @@ import { For, Show, Switch, Match, createSignal, createEffect, onCleanup } from 
 import { Dialog } from '@ark-ui/solid/dialog'
 import { SettingsPanel } from './SettingsPanel'
 import { regenerateConversationTitle } from '../../lib/harness-client'
+import { accentColor } from '../../lib/agent-palette'
 import type { CompletionMark, SessionRunState } from '../../lib/run-registry'
 import type { ChainProgressController, ChainProgressSnapshot } from './useChainProgress'
 
@@ -18,6 +19,10 @@ export interface ChatThreadSummary {
    *  at runtime for persisted threads; absent on placeholders and for
    *  agents that no longer exist. */
   agentIcon?: string
+  /** The agent's accent-family token, pre-resolved server-side alongside
+   *  the icon. Arrives by the same structural passthrough; `accentColor()`
+   *  maps an absent or unknown token to neutral zinc. */
+  agentAccent?: string
   /** ISO 8601 timestamp from the server. */
   updatedAt: string
   /** 'conversation' (chat) | 'action' (POST-triggered). Drives the filter. */
@@ -649,13 +654,17 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                     }}
                     hover="bg-dark-bg-hover"
                   >
+                    {/* Always accented here, unlike the expanded rows: with
+                        no title to read, colour is the only thing telling
+                        one 32px button from the next. Selection is carried
+                        by the button's border + background instead. */}
                     <span
                       class={threadIcon(thread) ?? 'i-material-symbols-smart-toy-outline'}
                       aria-hidden="true"
                       style={{
                         width: '16px',
                         height: '16px',
-                        color: isSelected() ? '#22d3ee' : '#a1a1aa',
+                        color: accentColor(thread.agentAccent),
                         opacity: thread.isPlaceholder ? 0.5 : 1,
                       }}
                     />
@@ -859,13 +868,24 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             />
                           </Show>
                           {/* Agent identity (#60) — muted so the title stays
-                              the row's anchor. Hidden for placeholders. */}
+                              the row's anchor, taking the agent's accent
+                              family on row hover and while selected. The
+                              colour rides in as a custom property because
+                              it's per-row: `.agent-glyph` (a preflight rule)
+                              owns the rest states, since a dynamic utility
+                              class would never be extracted. */}
                           <Show when={threadIcon(thread)}>
                             {(icon) => (
                               <span
-                                class={icon()}
+                                class={`${icon()} agent-glyph`}
                                 aria-hidden="true"
-                                style={{ width: '14px', height: '14px', color: '#71717a', 'flex-shrink': 0 }}
+                                data-lit={isSelected() ? 'true' : undefined}
+                                style={{
+                                  width: '14px',
+                                  height: '14px',
+                                  'flex-shrink': 0,
+                                  '--agent-accent': accentColor(thread.agentAccent),
+                                }}
                               />
                             )}
                           </Show>

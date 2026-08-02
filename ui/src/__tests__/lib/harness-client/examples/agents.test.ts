@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mockFinalAction, mockCriticResult, mockAction } from '../../../mocks/baml'
 import { mockCallTool, mockListTools, fixtures } from '../../../mocks/mcp'
+import { AGENT_ACCENTS } from '../../../../lib/agent-palette'
 
 // ============================================================================
 // Mock Setup
@@ -112,6 +113,7 @@ interface AgentConfig {
   name: string
   description: string
   icon: string
+  accent: string
   servers: string[]
   createPatterns: (sessionId: string) => Promise<unknown[]>
 }
@@ -123,6 +125,9 @@ function validateAgentConfig(config: AgentConfig) {
   expect(config.name.length).toBeGreaterThan(0)
   expect(config.description).toBeDefined()
   expect(config.icon).toBeDefined()
+  // Every agent must claim a real accent family — a typo'd token would
+  // silently render zinc via accentColor()'s fallback.
+  expect(Object.keys(AGENT_ACCENTS)).toContain(config.accent)
   expect(config.servers).toBeInstanceOf(Array)
   expect(config.createPatterns).toBeDefined()
   expect(typeof config.createPatterns).toBe('function')

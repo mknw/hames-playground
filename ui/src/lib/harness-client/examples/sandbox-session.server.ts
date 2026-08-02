@@ -140,6 +140,7 @@ export const sandboxSessionAgent: AgentConfig = {
   description:
     "Persistent sandbox VM shared across turns and with the interactive Shell — build incrementally, inspect files live.",
   icon: "i-material-symbols-castle-outline",
+  accent: "orange",
   servers: [],
   createPatterns,
 };

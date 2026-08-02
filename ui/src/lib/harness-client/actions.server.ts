@@ -253,6 +253,8 @@ export async function getAgentList(): Promise<
     name: string;
     description: string;
     icon: string;
+    /** Accent-family token; resolve with `accentColor()` (lib/agent-palette). */
+    accent: string;
     servers: string[];
   }>
 > {
@@ -270,6 +272,11 @@ export interface ConversationSummary {
    *  sidebar needs no registry import and no second round trip (#60).
    *  Undefined when the agent no longer exists (e.g. removed agents). */
   agentIcon?: string;
+  /** The agent's accent-family token (see lib/agent-palette.ts), resolved
+   *  from the registry alongside the icon. The client maps it to a hex via
+   *  `accentColor()` — sending the token rather than the colour keeps a
+   *  future light theme free to remap. Undefined for removed agents. */
+  agentAccent?: string;
   title: string | null;
   /** 'conversation' | 'action' — drives the sidebar's segmented filter. */
   kind: ConversationKind;
@@ -301,6 +308,7 @@ export async function listConversations(): Promise<ConversationSummary[]> {
     id: r.id,
     agentId: r.agentId,
     agentIcon: getAgent(r.agentId)?.icon,
+    agentAccent: getAgent(r.agentId)?.accent,
     title: r.title,
     kind: r.kind,
     source: r.source,

@@ -12,6 +12,7 @@
 import type { ConfiguredPattern } from "../harness-patterns";
 import { usesCodeMode, harnessHasRedisRetriever, harnessUsesSyncWorkspace } from "../harness-patterns";
 import type { SessionData } from "./session.server";
+import type { AgentAccent } from "../agent-palette";
 
 // ============================================================================
 // Types
@@ -27,6 +28,11 @@ export interface AgentConfig {
    *  renders as an empty span. Render with `class=` + inline style sizing —
    *  never attributify. */
   icon: string;
+  /** Accent family for the icon glyph (see lib/agent-palette.ts). Colour
+   *  groups agents by *kind* — the glyph itself distinguishes agents inside
+   *  a family, so pick the family, not a unique hue. Sent to the client as
+   *  the token, resolved to hex there. */
+  accent: AgentAccent;
   /** Server namespaces this agent uses */
   servers: string[];
   /** Factory function that creates the pattern chain. Receives the
@@ -71,13 +77,15 @@ export function getAgentMetadata(): Array<{
   name: string;
   description: string;
   icon: string;
+  accent: AgentAccent;
   servers: string[];
 }> {
-  return getAllAgents().map(({ id, name, description, icon, servers }) => ({
+  return getAllAgents().map(({ id, name, description, icon, accent, servers }) => ({
     id,
     name,
     description,
     icon,
+    accent,
     servers,
   }));
 }

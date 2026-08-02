@@ -186,6 +186,36 @@ describe('controller history renders as ControllerAction JSON', () => {
     }
   })
 
+  it('few-shots encode tool_args the same way the history does', async () => {
+    // `tool_args` is a string whose CONTENT is JSON, so its inner quotes are
+    // escaped. Rendered bare, a few-shot demonstrated `tool_args: {"query":...}`
+    // while the assistant turn log demonstrated `"tool_args": "{\"query\":...}"`
+    // — one field, two incompatible encodings, both in the same prompt. Live
+    // failure: an action that opened escaped and closed bare
+    // (`"{\"query\": \"MATCH ... LIMIT 20"}"`), terminating the string early and
+    // failing BAML with status/is_final "missing" at 495 output tokens against a
+    // 32768 cap — neither truncation nor an empty completion, so no retry branch
+    // caught it and the loop lost two good turns of results.
+    const args = '{"query":"MATCH (c:Concept) WHERE toLower(c.name) CONTAINS toLower($n)","params":{"n":"graph"}}'
+    const fewShot = { user: 'find graph concepts', reasoning: 'substring search', tool: 'search', args }
+
+    const loop = (await b.request.LoopController(
+      'x', 'x', TOOLS, TURNS as never, null, null, [fewShot],
+    )).body.json() as Body
+    const actor = (await b.request.ActorController(
+      'x', 'x', TOOLS, ATTEMPTS as never, null, [fewShot], 3, 5,
+    )).body.json() as Body
+
+    for (const body of [loop, actor]) {
+      const text = allText(body)
+      // The example is present as a QUOTED, ESCAPED string — the exact form the
+      // model must reproduce. `allText` is itself JSON, hence the doubling.
+      expect(text).toContain(`tool_args: ${JSON.stringify(JSON.stringify(args)).slice(1, -1)}`)
+      // ...and never as a bare object, which is what taught the wrong encoding.
+      expect(text).not.toContain('tool_args: {')
+    }
+  })
+
   it('the turn counter agrees with the history it follows', async () => {
     // History is 0-indexed (`Turn 0 result`), so with N completed turns the ask
     // is for turn N. The previous `N + 1` skipped a number, inviting the model
@@ -196,5 +226,66 @@ describe('controller history renders as ControllerAction JSON', () => {
     const text = allText(req.body.json() as Body)
     expect(text).toContain(`Turn ${TURNS.length}. Decide the next action.`)
     expect(text).not.toContain(`Turn ${TURNS.length + 1}. Decide the next action.`)
+  })
+})
+
+/**
+ * The terminal action — the one shape the turn log can never demonstrate.
+ *
+ * `LoopTurnLog` renders `is_final` as a literal false because the loop breaks
+ * BEFORE pushing a final action, so every example the model sees is a non-final
+ * turn whose `status` describes a tool call it is about to make. The action that
+ * ENDS the loop — and carries the answer — is undemonstrated by construction.
+ *
+ * Live consequence: a Return action with a 900-character composed answer, valid
+ * JSON and 33 correctly-placed escapes, omitted `status` (no tool call, nothing
+ * in progress) and failed with missing=1. The answer was discarded and the user
+ * got "I hit a snag putting together the final summary."
+ */
+describe('the terminal Return action', () => {
+  // Trimmed from the live failure; the omission of `status` is verbatim.
+  const RETURNED_WITHOUT_STATUS = JSON.stringify({
+    reasoning: 'No results for TraceFrom. I should report this rather than force a match.',
+    tool_name: 'Return',
+    tool_args: 'I searched your OneDrive and all accessible SharePoint sites but found no\n\nfiles for a "TraceFrom" project. Did you mean "TraceForm" or "TReC"?',
+    is_final: true,
+  })
+
+  it('parses when the model omits status', () => {
+    // `status` is decorative — nothing reads it for control flow, and both UI
+    // consumers already guard for absence. Required, it threw away a finished
+    // answer over a field the system never needed.
+    const action = b.parse.LoopController(RETURNED_WITHOUT_STATUS)
+    expect(action.tool_name).toBe('Return')
+    expect(action.is_final).toBe(true)
+    expect(action.tool_args).toContain('TraceForm')
+    expect(action.status ?? null).toBeNull()
+  })
+
+  it('still accepts a status when the model supplies one', () => {
+    // Optional must not mean discouraged: non-final turns drive the progress UI.
+    const action = b.parse.LoopController(
+      JSON.stringify({
+        reasoning: 'r', tool_name: 'search', tool_args: '{"query":"x"}',
+        status: 'Searching files', is_final: false,
+      }),
+    )
+    expect(action.status).toBe('Searching files')
+  })
+
+  it('the prompt describes the terminal shape, since history cannot', async () => {
+    const req = await b.request.LoopController(
+      'x', 'x', TOOLS, TURNS as never, null, null, null,
+    )
+    // Read the system blocks unescaped — `allText` is JSON, where every quote
+    // in the instruction is backslashed and the phrasing is unmatchable.
+    const body = req.body.json() as Body & { system?: Array<{ text?: string }> }
+    const system = (body.system ?? []).map((s) => s.text ?? '').join('\n')
+
+    // Names the three things a final turn must get right, and licenses the
+    // omission rather than leaving the model to guess.
+    expect(system).toMatch(/tool_name to "Return"/)
+    expect(system).toMatch(/is_final to true/)
+    expect(system).toMatch(/status.{0,40}omitted/)
   })
 })

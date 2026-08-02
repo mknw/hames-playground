@@ -48,6 +48,18 @@
 // these live inside a user message and carry no status/is_final, so rendering
 // them as objects would demonstrate an ACTION MISSING REQUIRED FIELDS — the very
 // shape the turn log is careful not to model.
+//
+// `tojson` on the VALUES, not just matching labels: `tool_args` is a string whose
+// CONTENT is JSON, so every quote inside it must be escaped. Rendered bare, a
+// few-shot showed `tool_args: {"query":"MATCH ..."}` while the assistant turn log
+// (below) showed `"tool_args": "{\"query\": \"MATCH ...\"}"` — two demonstrations
+// of one field in two incompatible encodings. Observed live: an action that
+// opened in the escaped form and closed in the bare one
+// (`"{\"query\": \"MATCH ... LIMIT 20"}"` — three escapes, then a naked quote),
+// which terminated the string early and failed BAML with status/is_final
+// "missing" at 495 output tokens against a 32768 cap. The escaping is unavoidable
+// while tool_args is typed `string` (BAML has no JSON type, and the tool set is
+// only known at runtime); what IS avoidable is disagreeing about it.
 template_string LoopFewShots(few_shots: FewShot[]?) #"
   {% if few_shots and few_shots|length > 0 %}
 
@@ -55,9 +67,9 @@ template_string LoopFewShots(few_shots: FewShot[]?) #"
   EXAMPLES (illustrative — adapt to the actual request, do not copy verbatim):
   {% for ex in few_shots %}
   - User: {{ ex.user }}
-    reasoning: {{ ex.reasoning }}
-    tool_name: {{ ex.tool }}
-    tool_args: {{ ex.args }}
+    reasoning: {{ ex.reasoning | tojson }}
+    tool_name: {{ ex.tool | tojson }}
+    tool_args: {{ ex.args | tojson }}
   {% endfor %}
   {% endif %}
 "#
@@ -149,9 +161,19 @@ function LoopController(
 ) -> ControllerAction {
   client ControllerAnthropic
   prompt #"
+    {# The terminal action is described HERE because the turn log can never show
+       one: the loop breaks before pushing a final action, so `is_final` renders
+       as a literal false and every demonstration the model gets is a non-final
+       turn paired with a tool call. That left the one shape that ENDS the loop —
+       and carries the answer — undemonstrated. Static text, so it costs nothing
+       per turn and stays inside the cached prefix. #}
     {{ _.role("system") }}
     You are an AI agent that accomplishes tasks by calling tools.
     Select one tool per turn. Use "Return" when you have enough information.
+
+    To finish, set tool_name to "Return", put the complete answer in tool_args as
+    plain prose (not JSON), and set is_final to true. That turn makes no tool
+    call, so there is no progress to report and `status` may be omitted.
 
     {# ────────── CACHED TIER 1 · agent-static: context · tools · examples ────────── #}
     {{ _.role("user", cache_control={"type": "ephemeral"}) }}

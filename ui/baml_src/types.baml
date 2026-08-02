@@ -111,7 +111,21 @@ class ControllerAction {
   reasoning string @description("Step-by-step thought process")
   tool_name string @description("Tool to call, or 'Return' to exit loop")
   tool_args string @description("Valid JSON object string with the tool's arguments, e.g. {\"query\": \"search term\"}. Keys and string values MUST be double-quoted. For Return, use the final answer as a plain string.")
-  status string @description("Short user-facing status message")
+  // OPTIONAL because it is decorative: nothing reads it for control flow. The
+  // loop stores it only to render into the next prompt (simpleLoop.server.ts),
+  // and both UI consumers already guard for absence (ObservabilityPanel's
+  // `<Show when>`, useChainProgress's `?.status ? … : null`).
+  //
+  // Required, it cost a finished answer. The turn log can only ever demonstrate
+  // NON-final actions — the loop breaks before pushing a final one — so every
+  // example the model sees pairs `status` with a tool call it is about to make
+  // ("Searching for files related to TraceFrom project..."). On the terminal
+  // Return turn there is no call and no progress to report, so the field has no
+  // natural filler: observed live as a structurally perfect action (valid JSON,
+  // 33 correctly-placed escapes, a 900-char composed answer) that simply omitted
+  // `status` and failed with missing=1, discarding the answer. A required field
+  // the system treats as optional punishes the model for being right.
+  status string? @description("Short user-facing status message describing what you are doing. Omit it on the final Return turn if nothing is in progress.")
   is_final bool @description("True when the loop should terminate")
 }
 

@@ -161,9 +161,19 @@ function LoopController(
 ) -> ControllerAction {
   client ControllerAnthropic
   prompt #"
+    {# The terminal action is described HERE because the turn log can never show
+       one: the loop breaks before pushing a final action, so `is_final` renders
+       as a literal false and every demonstration the model gets is a non-final
+       turn paired with a tool call. That left the one shape that ENDS the loop —
+       and carries the answer — undemonstrated. Static text, so it costs nothing
+       per turn and stays inside the cached prefix. #}
     {{ _.role("system") }}
     You are an AI agent that accomplishes tasks by calling tools.
     Select one tool per turn. Use "Return" when you have enough information.
+
+    To finish, set tool_name to "Return", put the complete answer in tool_args as
+    plain prose (not JSON), and set is_final to true. That turn makes no tool
+    call, so there is no progress to report and `status` may be omitted.
 
     {# ────────── CACHED TIER 1 · agent-static: context · tools · examples ────────── #}
     {{ _.role("user", cache_control={"type": "ephemeral"}) }}

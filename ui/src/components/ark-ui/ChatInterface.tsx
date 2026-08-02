@@ -33,10 +33,14 @@ import {
   extractReferences,
   type OpenReferenceTarget,
 } from '~/lib/harness-client'
+// Imported from the module rather than the barrel: `replay.ts` is deliberately
+// dependency-free (no server-only imports), and the live stream handler wants
+// exactly that guarantee.
+import { errorBubble } from '~/lib/harness-client/replay'
 import { getSettings } from '~/lib/settings-store'
 import { parseChatStream, type DoneEventData } from '~/lib/sse-client'
 import type { GraphElement } from './SupportPanel'
-import type { ContextEvent, UnifiedContext, ControllerActionEventData } from '~/lib/harness-patterns'
+import type { ContextEvent, UnifiedContext, ControllerActionEventData, ErrorEventData } from '~/lib/harness-patterns'
 import {
   capReachedMessage,
   isAtConcurrencyCap,
@@ -204,12 +208,10 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         }
         props.setMessages(
           sid,
-          loaded.messages.map((m) => ({
-            id: m.id,
-            role: m.role,
-            content: m.content,
-            timestamp: new Date(m.timestamp),
-          }))
+          // Spread, don't re-list: this map used to pick four fields, which
+          // silently dropped the hint/patternId/turnInfo that error and warning
+          // bubbles carry. `timestamp` is the only field needing conversion.
+          loaded.messages.map((m) => ({ ...m, timestamp: new Date(m.timestamp) }))
         )
         if (!stillDisplayed()) return
 
@@ -402,20 +404,14 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         // backgrounded run that hits a recoverable error still shows it when
         // the user switches back (#105).
         if (evt.type === 'error') {
-          const errorData = evt.data as { error: string; severity?: string; hint?: string; turn?: number; iteration?: number }
-          // Build context string (e.g., "(turn 3, attempt 2)")
-          const parts: string[] = []
-          if (errorData.turn !== undefined) parts.push(`turn ${errorData.turn + 1}`)
-          if (errorData.iteration !== undefined) parts.push(`attempt ${errorData.iteration + 1}`)
-          const turnInfo = parts.length > 0 ? `(${parts.join(', ')})` : undefined
+          // Presentation lives in `errorBubble` so this and `replayMessages`
+          // cannot diverge — the bubble must look identical whether it was
+          // painted from the live stream or rebuilt after a reload.
           const errorMsg: Message = {
             id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            role: errorData.severity === 'recoverable' ? 'warning' : 'error',
-            content: errorData.error,
             timestamp: new Date(),
-            hint: errorData.hint,
             patternId: evt.patternId,
-            turnInfo,
+            ...errorBubble(evt.data as ErrorEventData),
           }
           props.setMessages(runSessionId, (prev) => [...prev, errorMsg])
         }

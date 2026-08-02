@@ -18,14 +18,52 @@ import type {
   ContextEvent,
   AssistantMessageEventData,
   UserMessageEventData,
+  ErrorEventData,
 } from '../harness-patterns'
 
 export interface ReplayedMessage {
   id: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'warning' | 'error'
   content: string
   /** Epoch ms — convert to Date on the client. */
   timestamp: number
+  /** Error/warning only — mirrors the `Message` fields of the same names. */
+  hint?: string
+  patternId?: string
+  turnInfo?: string
+}
+
+/**
+ * The presentation of one `error` event as a chat bubble.
+ *
+ * Shared by the LIVE stream handler (`ChatInterface`, which builds the bubble
+ * from an SSE event as it arrives) and by replay below, so the same event
+ * cannot render one way while streaming and another way after a reload. The
+ * two were written separately once and replay simply had no error branch at
+ * all: the amber bubble vanished when the user left the thread and came back,
+ * even though the event was persisted the whole time.
+ *
+ * `severity` is optional on the event; anything other than an explicit
+ * 'recoverable' is treated as terminal, which keeps an event that predates the
+ * field (or arrives malformed) loud rather than silently downgraded.
+ */
+export function errorBubble(data: ErrorEventData): {
+  role: 'warning' | 'error'
+  content: string
+  hint?: string
+  turnInfo?: string
+} {
+  // 0-indexed on the wire, 1-indexed for humans — matches the turn numbering
+  // the observability panel shows.
+  const parts: string[] = []
+  if (data.turn !== undefined) parts.push(`turn ${data.turn + 1}`)
+  if (data.iteration !== undefined) parts.push(`attempt ${data.iteration + 1}`)
+  return {
+    role: data.severity === 'recoverable' ? 'warning' : 'error',
+    content: data.error ?? '',
+    ...(data.hint !== undefined ? { hint: data.hint } : {}),
+    ...(parts.length > 0 ? { turnInfo: `(${parts.join(', ')})` } : {}),
+  }
 }
 
 export function replayMessages(serializedContext: string): ReplayedMessage[] {
@@ -58,6 +96,16 @@ export function replayMessages(serializedContext: string): ReplayedMessage[] {
         role: 'assistant',
         content: data.content ?? '',
         timestamp: ev.ts,
+      })
+    } else if (ev.type === 'error') {
+      // Errors are tracked regardless of `trackHistory`, so a persisted context
+      // always carries them — replaying every one matches the live stream, which
+      // paints a bubble per error event.
+      out.push({
+        id: ev.id ?? `replay-${out.length}`,
+        timestamp: ev.ts,
+        ...(ev.patternId !== undefined ? { patternId: ev.patternId } : {}),
+        ...errorBubble(ev.data as ErrorEventData),
       })
     }
   }

@@ -96,6 +96,11 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     availableTools: [],
     liveEvents: true,
     maxRetries: 6,
+    // Sandbox work is linear (write file → run script → read output): calls in
+    // a batch run strictly IN ORDER, so later calls see earlier calls' effects
+    // on the VM filesystem — one actor round-trip instead of N. Not 'parallel':
+    // concurrent sandbox_bash on one VM FS races.
+    multiToolCalls: "sequential",
   });
 
   // id: sessionId → the attachment table keys this VM to the conversation, so

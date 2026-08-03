@@ -300,8 +300,9 @@ flowchart LR
 - The three ALS readers: (1) `mcp-client.callTool` routes `sandbox_*` names to
   the in-VM transport instead of the gateway; (2) `simpleLoop` / `actorCritic`
   extend their allowlist guard with `sandbox.ownsTool(...)` so sandbox tools pass
-  without being threaded through `tools`; (3) the BAML adapters append the active
-  sandbox's `listTools()` to the prompt so the actor sees them on turn one.
+  without being threaded through `tools` — on a multi-call turn the guard runs
+  once per sub-call; (3) the BAML adapters append the active sandbox's
+  `listTools()` to the prompt so the actor sees them on turn one.
 - `connectMcp` opens **one MCP client per in-VM server** over `docker exec -i`
   stdio — no container networking is needed, which is why `mcp-only` egress can
   run `--network none`. Native tool names are curated to the six `sandbox_*`

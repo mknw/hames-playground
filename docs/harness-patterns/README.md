@@ -30,8 +30,8 @@ MCP Tools ───────┘
 
 | Pattern | Purpose | Example Use |
 |---------|---------|-------------|
-| `simpleLoop` | ReAct decide-execute loop | Neo4j queries, web search |
-| `actorCritic` | Generate-evaluate with retry | Code generation, file editing |
+| `simpleLoop` | ReAct decide-execute loop (turns may batch multiple tool calls — `multiToolCalls`) | Neo4j queries, web search |
+| `actorCritic` | Generate-evaluate with retry (attempts may batch calls too) | Code generation, file editing |
 | `router` | Intent-based dispatch | Multi-capability agents |
 | `synthesizer` | Response generation | Human-readable output |
 | `compactIntent` | Rewrite latest message → self-contained `data.intent` | Router-less multi-turn agents ([#83](https://github.com/mknw/harness-playground/issues/83)) |
@@ -42,7 +42,9 @@ MCP Tools ───────┘
 | `hook` | Lifecycle events | Session cleanup |
 | `chain` | Sequential composition | Multi-stage pipelines |
 
-> **Synthetic tool:** when prior results are present, simpleLoop's `LoopController` prompt also exposes `expandPreviousResult` — a virtual tool that loads the full data behind a `ref:<id>` and records it as a normal turn so subsequent iterations see it inline. See [`with-references.md`](with-references.md) for the full ingress/expansion taxonomy.
+> **Synthetic tool:** when prior results are present, simpleLoop's `LoopController` prompt also exposes `expandPreviousResult` — a virtual tool that loads the full data behind a `ref:<id>` and records it as a normal turn so subsequent iterations see it inline. See [`with-references.md`](with-references.md) for the full ingress/expansion taxonomy. (Singular-only: it cannot appear inside a multi-call turn's `additional_calls`.)
+
+> **Multi-call turns:** both loop patterns accept `multiToolCalls: 'parallel' | 'sequential' | 'off'` (default `'parallel'`) — the controller can batch several tool calls into one turn via `ControllerAction.additional_calls`, saving one controller LLM round-trip per batched call. See the API README (`ui/src/lib/harness-patterns/README.md`) for the mode semantics and failure rules.
 
 ---
 

@@ -48,7 +48,9 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
   const turns: import('../../../../baml_client/types').LoopTurn[] = []
 
   if (input.loopHistory) {
-    // Convert loop history to LoopTurn array
+    // Convert loop history to LoopTurn array. Multi-call iterations carry
+    // additional_calls through (their result is already the index-keyed map
+    // holding every sub-call's tool + result/__error).
     for (const iteration of input.loopHistory.iterations) {
       turns.push({
         n: iteration.turn,
@@ -57,6 +59,9 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
           tool: iteration.action.tool_name,
           args: iteration.action.tool_args
         },
+        ...(iteration.action.additional_calls?.length
+          ? { additional_calls: iteration.action.additional_calls }
+          : {}),
         tool_result: {
           tool: iteration.action.tool_name,
           result: JSON.stringify(iteration.result),
@@ -225,6 +230,15 @@ function buildSynthesisInputFromView(
       if (toolEvents.length > 0 || actionEvents.length > 0) {
         const iterations: LoopHistory['iterations'] = []
         let turn = 0
+        // How many tool_results the open iteration still owns. A singular
+        // action owns 1; a multi-call action owns 1 + additional_calls.length
+        // (its sub-results arrive in batch order, so the accumulation below
+        // keys them by position — the same index-keyed map the controller
+        // itself saw). Counting also fixes the old `result === null` pairing
+        // hazard where a tool legitimately returning null let the NEXT result
+        // overwrite it.
+        let openExpected = 0
+        let openReceived = 0
 
         for (const event of view.fromLastPattern().get()) {
           if (event.type === 'controller_action') {
@@ -235,12 +249,23 @@ function buildSynthesisInputFromView(
               result: null,
               timestamp: event.ts
             })
+            openExpected = 1 + (actionData.action.additional_calls?.length ?? 0)
+            openReceived = 0
           } else if (event.type === 'tool_result') {
             const resultData = event.data as ToolResultEventData
             const open = iterations.length > 0 ? iterations[iterations.length - 1] : undefined
-            if (open && open.result === null) {
-              // Pair with the controller_action that just preceded it (loop case).
-              open.result = resultData.result
+            if (open && openReceived < openExpected) {
+              // Pair with the controller_action that owns this result.
+              openReceived++
+              if (openExpected === 1) {
+                open.result = resultData.result
+              } else {
+                const acc = (open.result ?? {}) as Record<string, unknown>
+                acc[String(openReceived)] = resultData.success
+                  ? { tool: resultData.tool, result: resultData.result }
+                  : { tool: resultData.tool, __error: resultData.error }
+                open.result = acc
+              }
             } else {
               // A tool_result with no preceding action — e.g. the `retriever`
               // pattern, which does one search and emits a result without an LLM

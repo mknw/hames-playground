@@ -253,7 +253,7 @@ Each case stubs the LLM (or runs against the real fallback model with a recorded
 
 - **Default `scope`**: lean `'global'`. Consumers can tighten with `'self'` or explicit `source`.
 - **Token budget source**: ride on existing `MODEL_CONTEXT_WINDOWS` (deduct from inner pattern's budget), or take an explicit `maxTokens` config? Lean: derive from inner pattern's BAML client window minus a fixed reserve.
-- **`expand_data` budget enforcement**: when the loop expands multiple refs in one call, who enforces the cap? Lean: wrapper sets a residual budget on `scope.data.expansionBudget`; `simpleLoop` consumes per call. Out of scope for v1; track as follow-up.
+- **`expand_data` budget enforcement**: when the loop expands multiple refs in one call, who enforces the cap? Lean: wrapper sets a residual budget on `scope.data.expansionBudget`; `simpleLoop` consumes per call. Out of scope for v1; track as follow-up. (Note: multi-ref expansion is one `expandPreviousResult` call with `ref:<a>,<b>` — distinct from multi-call turns (`additional_calls`), which explicitly exclude `expandPreviousResult`.)
 - **Composition with `parallel`**: each branch enters separately. Should each branch get its own selector call, or share one? Lean: per-branch (different intents may apply).
 - **Cache invalidation**: `(intent_hash, stash_snapshot_hash)` is per-session. What about *across* sessions (e.g., long-lived agent)? Lean: session-scoped only.
 

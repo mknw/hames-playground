@@ -31,6 +31,9 @@ function Synthesize(
     {% if turn.tool_result %}
     --- Turn {{ turn.n }} ---
     Tool: {{ turn.tool_result.tool }}
+    {% if turn.additional_calls %}
+    (multi-call turn: {{ turn.additional_calls|length + 1 }} tools ran together — the result below is a map keyed by call index, each entry naming its tool)
+    {% endif %}
     {% if turn.tool_result.success %}Result: {{ turn.tool_result.result }}
     {% else %}Error: {{ turn.tool_result.error }}
     {% endif %}

@@ -127,6 +127,9 @@ function sandboxLoop(patternId: string, guidance: string) {
     // (or every 3rd turn as a backstop), so the critic can't accept a written-
     // but-unrun script as "done" (see .harness-logs/context-3817275e-*.json).
     criticCadence: 3,
+    // Same rationale as sandbox-session: linear effect-chains on one VM FS —
+    // in-order batches save actor round-trips, concurrency would race.
+    multiToolCalls: "sequential",
   });
 }
 

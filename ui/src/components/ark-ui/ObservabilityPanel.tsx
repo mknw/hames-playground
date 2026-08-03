@@ -97,7 +97,10 @@ function getEventPreview(type: EventType, data: unknown): string {
     }
     case 'controller_action': {
       const d = data as ControllerActionEventData
-      return d.action.tool_name
+      const extra = d.action.additional_calls?.length
+      return extra
+        ? `⚡×${extra + 1} ${d.action.tool_name}, ${d.action.additional_calls!.map((c) => c.tool_name).join(', ')}`
+        : d.action.tool_name
     }
     case 'user_message':
     case 'assistant_message': {
@@ -866,6 +869,32 @@ const ActionDetail = (props: { data: ControllerActionEventData }) => (
         {props.data.action.tool_args}
       </pre>
     </div>
+    <Show when={props.data.action.additional_calls?.length}>
+      <div>
+        <div text="xs dark-text-tertiary" m="b-1">
+          Additional calls (same turn)
+        </div>
+        <div flex="~ col" gap="2">
+          <For each={props.data.action.additional_calls ?? []}>
+            {(call) => (
+              <div>
+                <div text="sm neon-cyan" font="mono">{call.tool_name}</div>
+                <pre
+                  text="xs dark-text-primary"
+                  bg="dark-bg-tertiary"
+                  p="2"
+                  rounded="md"
+                  overflow="auto"
+                  max-h="120px"
+                >
+                  {call.tool_args}
+                </pre>
+              </div>
+            )}
+          </For>
+        </div>
+      </div>
+    </Show>
     <div flex="~" gap="4">
       <div>
         <div text="xs dark-text-tertiary" m="b-1">Final</div>

@@ -338,6 +338,11 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     // = 4 productive turns minimum; multi-server prompts add a second find/add
     // pair. Default 3 (settings.ts) exhausts the loop before any useful work.
     maxRetries: 8,
+    // No multi-call affordance: a code-mode script already IS the batch — the
+    // few-shots teach "ONE factory tool, ONE script — not four round-trips".
+    // An un-advertised batch would still execute (serially), it's just never
+    // invited.
+    multiToolCalls: "off",
   });
 
   // Synthesizer that reads actor-side events from the loop plus any error

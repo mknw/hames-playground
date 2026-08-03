@@ -311,3 +311,137 @@ describe('tool catalog renders blank-line-separated entries (processed string)',
     expect(text).not.toContain('} \n') // the old trailing space after schemas
   })
 })
+
+// ---------------------------------------------------------------------------
+// Multi-call turns (additional_calls). Three prompt modes gated by the
+// agent-static `multi_call_mode` param: "parallel" | "sequential" | absent.
+// Invariants: the affordance lives INSIDE the existing cached regions (tier-1
+// for the loop, system block for the actor) without adding markers; absent
+// mode renders byte-identical to the pre-feature layout; batch turns replay
+// `additional_calls` in the assistant JSON in schema field order.
+// ---------------------------------------------------------------------------
+describe('multi-call affordance + batch turn rendering', () => {
+  const BATCH_TURN = {
+    n: 1,
+    reasoning: 'two independent lookups',
+    status: 'running both queries',
+    tool_call: { tool: 'read_neo4j_cypher', args: '{"query":"MATCH (n) RETURN n"}' },
+    additional_calls: [
+      { tool_name: 'get_neo4j_schema', tool_args: '{}' },
+      { tool_name: 'read_neo4j_cypher', tool_args: '{"query":"MATCH (m) RETURN m"}' },
+    ],
+    tool_result: {
+      tool: 'read_neo4j_cypher',
+      success: true,
+      result: '{"1":{"tool":"read_neo4j_cypher","result":"rows"},"2":{"tool":"get_neo4j_schema","result":"(Person)"},"3":{"tool":"read_neo4j_cypher","__error":"timeout"}}',
+    },
+  }
+
+  async function renderLoopMode(turns: unknown[], mode?: string): Promise<Body> {
+    const req = await b.request.LoopController(
+      'find nodes about X', 'find nodes about X',
+      TOOLS, turns as never, 'GRAPH SCHEMA:\n(Person)-[:KNOWS]->(Person)', REFS, undefined, mode,
+    )
+    return req.body.json() as Body
+  }
+
+  it('parallel/sequential modes render mode-specific tier-1 guidance; absent mode renders none', async () => {
+    const parallel = blocks(await renderLoopMode([], 'parallel'))[0]
+    expect(parallel.text).toContain('MULTIPLE CALLS PER TURN')
+    expect(parallel.text).toContain('CONCURRENTLY')
+    expect(parallel.text).not.toContain('IN ORDER')
+
+    const sequential = blocks(await renderLoopMode([], 'sequential'))[0]
+    expect(sequential.text).toContain('MULTIPLE CALLS PER TURN')
+    expect(sequential.text).toContain('IN ORDER')
+    expect(sequential.text).toContain('the rest of the batch is\nskipped')
+    expect(sequential.text).not.toContain('CONCURRENTLY')
+
+    const absent = blocks(await renderLoopMode([]))[0]
+    expect(absent.text).not.toContain('MULTIPLE CALLS PER TURN')
+  })
+
+  it('affordance adds no markers and stays byte-stable across iterations', async () => {
+    const b0 = await renderLoopMode([], 'parallel')
+    const b3 = await renderLoopMode([TURN_1, TURN_2, TURN_3], 'parallel')
+    expect(blocks(b0)).toHaveLength(3)          // tier-1, tier-2, tail — unchanged
+    expect(breakpoints(b0)).toHaveLength(2)     // two tier markers on iteration 1
+    expect(breakpoints(b3)).toHaveLength(4)     // + two rolling markers later
+    expect(blocks(b3)[0].text).toBe(blocks(b0)[0].text) // tier-1 byte-stable
+  })
+
+  it('batch turns replay additional_calls in the assistant JSON, in schema field order', async () => {
+    const body = await renderLoopMode([BATCH_TURN], 'parallel')
+    const a1 = blocks(body).find((blk) => blk.role === 'assistant')
+    const parsed = JSON.parse(a1?.text ?? '{}')
+    expect(parsed.additional_calls).toEqual([
+      { tool_name: 'get_neo4j_schema', tool_args: '{}' },
+      { tool_name: 'read_neo4j_cypher', tool_args: '{"query":"MATCH (m) RETURN m"}' },
+    ])
+    // Key order mirrors ControllerAction's field order — the shape the model
+    // is asked to emit (exact-replay invariant).
+    expect(Object.keys(parsed)).toEqual(
+      ['reasoning', 'tool_name', 'tool_args', 'additional_calls', 'status', 'is_final'])
+    // the combined keyed result renders in the turn's result block as-is
+    const r1 = blocks(body).find((blk) => blk.text?.includes('Turn 1 result:'))
+    expect(r1?.text).toContain('"__error":"timeout"')
+  })
+
+  it('singular turns render byte-identically with and without a mode (no additional_calls key)', async () => {
+    const withMode = await renderLoopMode([TURN_1], 'parallel')
+    const without = await renderLoopMode([TURN_1])
+    const pick = (body: Body) => blocks(body).find((blk) => blk.role === 'assistant')?.text
+    expect(pick(withMode)).toBe(pick(without))
+    expect(pick(withMode)).not.toContain('additional_calls')
+  })
+
+  it('ActorController: affordance sits in the system block without adding a marker; batch attempts replay', async () => {
+    const BATCH_ATTEMPT = {
+      n: 1,
+      action: {
+        reasoning: 'write then run',
+        tool_name: 'sandbox_write',
+        tool_args: '{"path":"a.py","content":"print(1)"}',
+        additional_calls: [{ tool_name: 'sandbox_bash', tool_args: '{"cmd":"python a.py"}' }],
+        status: 'success',
+        is_final: false,
+      },
+      result: '{"1":{"tool":"sandbox_write","result":"ok"},"2":{"tool":"sandbox_bash","result":"1"}}',
+      error: null,
+      feedback: null,
+    }
+    const req = await (b.request.ActorController as never as Render)(
+      'q', 'q', TOOLS, [BATCH_ATTEMPT], 'CTX', undefined, 2, 3, 'sequential')
+    const body = req.body.json() as Body
+    const sys = ((body.system as Block[] | undefined) ?? [])
+    expect(sys[0]?.text).toContain('MULTIPLE CALLS PER TURN')
+    expect(sys[0]?.text).toContain('IN ORDER')
+    expect(sys.some((blk) => blk.cache_control)).toBe(false) // still no system marker
+    expect(breakpoints(body)).toHaveLength(1)                // rolling marker only
+    const a1 = blocks(body).find((blk) => blk.role === 'assistant')
+    const parsed = JSON.parse(a1?.text ?? '{}')
+    expect(parsed.additional_calls).toEqual([{ tool_name: 'sandbox_bash', tool_args: '{"cmd":"python a.py"}' }])
+    expect(Object.keys(parsed)).toEqual(
+      ['reasoning', 'tool_name', 'tool_args', 'additional_calls', 'status', 'is_final'])
+  })
+
+  it('Critic renders batch attempts with per-call lines', async () => {
+    const attempts = [{
+      n: 1,
+      action: {
+        reasoning: 'batching',
+        tool_name: 'read_neo4j_cypher',
+        tool_args: '{"query":"MATCH (n) RETURN n"}',
+        additional_calls: [{ tool_name: 'get_neo4j_schema', tool_args: '{}' }],
+        status: 'running',
+        is_final: false,
+      },
+      result: '{"1":{"result":"rows"},"2":{"result":"(Person)"}}',
+      error: null, feedback: null,
+    }]
+    const req = await (b.request.Critic as never as Render)('intent', attempts)
+    const body = req.body.json() as Body
+    const full = JSON.stringify(body)
+    expect(full).toContain('Also called (same attempt): get_neo4j_schema({})')
+  })
+})

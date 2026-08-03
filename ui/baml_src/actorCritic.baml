@@ -49,6 +49,35 @@ template_string ActorFewShots(few_shots: FewShot[]?) #"
   {% endif %}
 "#
 
+// --- Section: multi-call affordance (system block; empty when mode unset) ----
+// Actor variant of LoopMultiCalls (simpleLoop.baml — see the rationale there).
+// Differences: no Return/expandPreviousResult exclusion (neither exists for the
+// actor), and is_final may legitimately accompany a batch (the critic still
+// verifies before the loop exits). Mode is agent-static (pattern config), so
+// the section sits in the static system head inside the call-1 marker's prefix.
+template_string ActorMultiCalls(multi_call_mode: string?) #"
+  {% if multi_call_mode == "parallel" %}
+
+  MULTIPLE CALLS PER TURN:
+  You may execute several tool calls in one attempt: the first in
+  tool_name/tool_args, the rest in additional_calls. All calls in an attempt
+  run CONCURRENTLY, so they must be INDEPENDENT — no call may rely on another
+  call's result or side effects. Prefer batching independent lookups over
+  spending an attempt on each. At most 4 calls per attempt; keep each
+  tool_args small. A failed call reports its error alongside the other results.
+  {% elif multi_call_mode == "sequential" %}
+
+  MULTIPLE CALLS PER TURN:
+  You may execute several tool calls in one attempt: the first in
+  tool_name/tool_args, the rest in additional_calls. Calls in an attempt run
+  strictly IN ORDER: a later call sees the side effects (files written, state
+  changed) of earlier calls, but you will NOT see any call's output until the
+  whole attempt completes — never derive a later call's arguments from an
+  earlier call's output. If a call fails, the rest of the batch is skipped.
+  At most 4 calls per attempt; keep each tool_args small.
+  {% endif %}
+"#
+
 // --- Section: task frame — intent · context · request ------------------------
 // Carries the FIRST-CALL cache marker on the USER REQUEST block: attempt_n is
 // 1-based (the loop passes attempt + 1), so `== 1` fires exactly on call 1,
@@ -93,7 +122,7 @@ template_string ActorTaskFrame(intent: string, context: string?, user_message: s
 template_string ActorAttemptLog(attempts: Attempt[], attempt_n: int?) #"
   {% for attempt in attempts %}
   {{ _.role("assistant") }}
-  {"reasoning": {{ attempt.action.reasoning | default("") | tojson }}, "tool_name": {{ attempt.action.tool_name | tojson }}, "tool_args": {{ attempt.action.tool_args | tojson }}, "status": {{ attempt.action.status | default("") | tojson }}, "is_final": {{ attempt.action.is_final | tojson }}}
+  {"reasoning": {{ attempt.action.reasoning | default("") | tojson }}, "tool_name": {{ attempt.action.tool_name | tojson }}, "tool_args": {{ attempt.action.tool_args | tojson }}{% if attempt.action.additional_calls %}, "additional_calls": [{% for c in attempt.action.additional_calls %}{"tool_name": {{ c.tool_name | tojson }}, "tool_args": {{ c.tool_args | tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}, "status": {{ attempt.action.status | default("") | tojson }}, "is_final": {{ attempt.action.is_final | tojson }}}
       {% if loop.index0 >= (attempt_n - 2) %}
       {{ _.role("system", cache_control={"type": "ephemeral"}) }}
       {% else %}
@@ -141,7 +170,8 @@ function ActorController(
   context: string?,
   few_shots: FewShot[]?,
   attempt_n: int?,
-  max_attempts: int?
+  max_attempts: int?,
+  multi_call_mode: string?
 ) -> ControllerAction {
   // ActorAnthropic, not ControllerAnthropic: same models, but thinking stays ON
   // here. #139 disabled it for the simpleLoop controller on measured evidence
@@ -164,6 +194,7 @@ function ActorController(
     While you still have work to do, keep is_final=false and call the next tool.
     In particular, a script you have only WRITTEN is not done: keep is_final=false
     and run it (and confirm its output) before you set is_final=true.
+    {{ ActorMultiCalls(multi_call_mode) }}
     {{ ActorFewShots(few_shots) }}
 
     {# ────────── TASK FRAME · intent · context · request (call-1 cache marker) ────────── #}
@@ -199,6 +230,11 @@ function Critic(
     {% for attempt in attempts %}
     --- Attempt {{ attempt.n }} ---
     Action: {{ attempt.action.tool_name }}({{ attempt.action.tool_args }})
+    {% if attempt.action.additional_calls %}
+    {% for c in attempt.action.additional_calls %}
+    Also called (same attempt): {{ c.tool_name }}({{ c.tool_args }})
+    {% endfor %}
+    {% endif %}
     Reasoning: {{ attempt.action.reasoning }}
     {% if attempt.error %}RESULT: ERROR — {{ attempt.error }}
     {% else %}RESULT: {{ attempt.result }}

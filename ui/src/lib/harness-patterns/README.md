@@ -160,6 +160,11 @@ interface ControllerAction {
   reasoning: string      // Chain-of-thought
   tool_name: string      // Tool to call. simpleLoop: `'Return'` exits the loop. actorCritic: actor's `'Return'` is ignored — the critic alone owns termination.
   tool_args: string      // JSON payload
+  additional_calls?: ToolCallRequest[]  // Calls 2..N of a multi-call turn ({tool_name, tool_args} each).
+                         // Executed per the pattern's `multiToolCalls` mode: 'parallel' (default,
+                         // concurrent, ≤ MAX_PARALLEL_TOOL_CALLS in flight) | 'sequential' (in order,
+                         // stop-on-failure) | 'off' (no prompt affordance; tolerated batches run serially).
+                         // Singular-only actions: Return, expandPreviousResult.
   status: string         // User-facing message
   is_final: boolean      // simpleLoop: exits the loop. actorCritic: cannot exit (critic owns that), but is an advisory *critic trigger* — see criticCadence.
 }
@@ -273,7 +278,9 @@ patterns and agents treat them identically. See
 
 ### `simpleLoop(controller, tools, config?)`
 
-ReAct-style decide-execute loop. Calls BAML controller directly.
+ReAct-style decide-execute loop. Calls BAML controller directly. A turn is
+usually one tool call, but the controller may emit a **multi-call turn**
+(`additional_calls`) — see `multiToolCalls` below.
 
 ```typescript
 simpleLoop(b.Neo4jController.bind(b), tools.neo4j, {
@@ -291,6 +298,7 @@ interface SimpleLoopConfig extends PatternConfig {
   fewShots?: FewShot[]         // Domain-specific examples rendered into the LoopController prompt
   onToolResult?: OnToolResult  // Enrich/transform tool results before they're committed (see "Hooks" below)
   resultOmit?: Record<string, string[]> // Per-tool fields hidden from the controller turn log (see below)
+  multiToolCalls?: 'parallel' | 'sequential' | 'off' // Multi-call turns (default: 'parallel'; see below)
 }
 
 interface FewShot {
@@ -361,6 +369,33 @@ result's *origin* tool. NOT applied to `ref:` substitution into real tool args �
 those are actual tool inputs, and the args record must stay faithful to the call
 that was made.
 
+**Multi-call turns: `multiToolCalls`.** The controller may put calls 2..N of a
+turn in `ControllerAction.additional_calls` (call 1 stays in
+`tool_name`/`tool_args`), collapsing M independent lookups from M×(controller
+LLM call + tool call) into ONE controller call. Three modes:
+
+- `'parallel'` (default) — the prompt advertises *independent* calls; the loop
+  runs them concurrently (≤ `MAX_PARALLEL_TOOL_CALLS` = 4 in flight). A failed
+  sub-call reports per-call; the others still run.
+- `'sequential'` — advertised, but calls run strictly in order: a later call
+  sees earlier calls' *side effects* (files, state), never their *outputs*. The
+  first failure skips the rest of the batch (`__skipped`). For linear
+  effect-chains — the sandbox agents use this.
+- `'off'` — no prompt affordance. The schema field is shared by every agent, so
+  an un-advertised batch can still arrive; it is tolerated and executed
+  serially, never punished.
+
+The whole batch records as ONE `LoopTurn` (so `maxTurns` counts turns, not
+calls): the assistant history replays `additional_calls` exactly as emitted,
+and `tool_result.result` is an index-keyed map — `{"1": {tool, result}, "2":
+{tool, __error}, ...}` (the `expandPreviousResult` multi-ref shape). Per
+sub-call, one `tool_call`/`tool_result` event pair is tracked with a shared
+`batchId`, so observability, the synthesizer and graph extraction keep full
+per-tool fidelity. Partial failure → the loop continues (the controller retries
+just the failures); ALL sub-calls failed → the usual recoverable-error break
+path. `Return` and `expandPreviousResult` are singular-only — inside a batch
+they get a per-call error.
+
 **How it works:**
 1. Extract params from context: `input`, `intent`, `previous_results`, `turn`
 2. Call BAML controller with extracted params (+ optional schema)
@@ -384,6 +419,9 @@ interface ActorCriticConfig extends PatternConfig {
   maxRetries?: number             // Default: 3
   onToolResult?: OnToolResult     // Same shape + semantics as in SimpleLoopConfig
   criticCadence?: number          // Default: 1 (critic every turn). See below.
+  multiToolCalls?: 'parallel' | 'sequential' | 'off' // Same semantics as simpleLoop's (see above);
+                                  // a batch records as ONE Attempt whose result is the combined map
+                                  // the critic evaluates. Sandbox agents use 'sequential', code-mode 'off'.
 }
 ```
 
@@ -869,8 +907,8 @@ transformed into prompt-friendly types. The table below shows which harness
 
 | Harness `EventType` | Event Payload (TS) | BAML Type | Consumed By |
 |---|---|---|---|
-| `tool_call` | `ToolCallEventData` (`callId?`, `tool`, `args`) | `ToolCall` | `LoopTurn.tool_call`, `Attempt.action` |
-| `tool_result` | `ToolResultEventData` (`callId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`) | `ToolResult` | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
+| `tool_call` | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`) | `ToolCall` | `LoopTurn.tool_call`, `Attempt.action` |
+| `tool_result` | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`) | `ToolResult` | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
 | `controller_action` | `ControllerActionEventData` | _(embedded in `LoopTurn.reasoning`)_ | simpleLoop, actorCritic |
 | `critic_result` | `CriticResultEventData` | _(embedded in `Attempt.feedback`)_ | actorCritic |
 | `user_message` | `UserMessageEventData` | `Message { role, content }` | router (history) |
@@ -900,13 +938,20 @@ BAML Inputs:
   turns                 : LoopTurn[]       ← current task turns (assembled from scope events)
   context               : string?          ← optional (e.g. neo4j schema)
   turns_previous_runs   : PriorResult[]?   ← prior turns (from viewConfig, default: last 3 turns)
+  multi_call_mode       : string?          ← "parallel" | "sequential" | null, from config.multiToolCalls
+                                             ('off' → null: no affordance rendered)
 
 BAML Return → ControllerAction:
-  reasoning : string    → stored as controller_action event
-  tool_name : string    → drives tool_call event
-  tool_args : string    → passed to MCP callTool()
-  status    : string    → user-facing status
-  is_final  : bool      → terminates loop
+  reasoning        : string             → stored as controller_action event
+  tool_name        : string             → drives tool_call event
+  tool_args        : string             → passed to MCP callTool()
+  additional_calls : ToolCallRequest[]? → multi-call turn: one tool_call/tool_result event PAIR per
+                                          sub-call (shared batchId), ONE LoopTurn whose result is an
+                                          index-keyed map ({tool, result} | {tool, __error} |
+                                          {tool, __skipped}). Partial failure → loop continues;
+                                          ALL sub-calls failed → recoverable-error break path.
+  status           : string             → user-facing status
+  is_final         : bool               → terminates loop
 ```
 
 #### actorCritic → `ActorController` + `Critic`
@@ -918,12 +963,16 @@ Events read (ViewConfig default: fromLast, trackHistory: 'tool_result')
 └── critic_result      ──► Attempt.feedback
 
 BAML Inputs (ActorController):
-  user_message : string           ← ctx.input
-  intent       : string           ← extracted from routing or ctx.input
-  tools        : ToolDescription[]← MCP listTools()
-  attempts     : Attempt[]        ← assembled from scope events per attempt
+  user_message    : string           ← ctx.input
+  intent          : string           ← extracted from routing or ctx.input
+  tools           : ToolDescription[]← MCP listTools()
+  attempts        : Attempt[]        ← assembled from scope events per attempt
+  multi_call_mode : string?          ← "parallel" | "sequential" | null, from config.multiToolCalls
 
-BAML Return → ControllerAction (same shape as simpleLoop; the actor cannot exit — `tool_name: 'Return'` is rejected and `is_final` only *triggers* a critic check under `criticCadence`. Exit is the critic's call.)
+BAML Return → ControllerAction (same shape as simpleLoop, incl. `additional_calls` — a multi-call
+attempt records as ONE Attempt whose `result` is the index-keyed combined map the critic evaluates;
+the actor cannot exit — `tool_name: 'Return'` is rejected and `is_final` only *triggers* a critic
+check under `criticCadence`. Exit is the critic's call.)
 
 BAML Inputs (Critic):
   intent   : string      ← same intent
@@ -1020,6 +1069,11 @@ Here are the field mappings:
   result:  JSON.stringify((event.data as ToolResultEventData).result),
   success: (event.data as ToolResultEventData).success,
   error:   (event.data as ToolResultEventData).error ?? null }
+
+// Multi-call turns: the N events of one batch share a `batchId`; the batch's
+// LoopTurn/Attempt keeps call 1 in tool_call and calls 2..N in
+// additional_calls (ToolCallRequest[]: { tool_name, tool_args }), with the
+// combined index-keyed map as its single tool_result.result string.
 
 // MCPToolDescription → BAML ToolDescription
 { name:        mcp.name,
@@ -1139,14 +1193,15 @@ harness-patterns/
 ├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE tool transports — sandbox (in-VM) → app-side in-process → MCP gateway; demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, describeToolResultOp, etc.
 ├── summarize.server.ts     # scheduleSummarization() — background tool result summarization via DescribeFallback
+├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
 ├── token-budget.server.ts  # trimToFit(), getContextWindow(), estimateTokens() — rolling context window
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values)
 ├── assert.server.ts        # Server-only guards
 └── patterns/
     ├── index.ts
     ├── router.server.ts        # router() + routes() — intent classification + dispatch
-    ├── simpleLoop.server.ts    # ReAct loop; emits callId on tool_call/tool_result; resolveRefs(); config-driven cross-turn memory
-    ├── actorCritic.server.ts   # Generate-evaluate loop; emits callId on tool pairs
+    ├── simpleLoop.server.ts    # ReAct loop; emits callId (+ batchId on multi-call turns) on tool_call/tool_result; resolveRefs(); config-driven cross-turn memory
+    ├── actorCritic.server.ts   # Generate-evaluate loop; emits callId (+ batchId) on tool pairs
     ├── judge.server.ts         # Evaluation pattern for quality gates
     ├── parallel.server.ts      # Concurrent branches; wraps each branch with pattern_enter/exit
     ├── guardrail.server.ts     # Rail validation; wraps inner events with pattern_enter/exit

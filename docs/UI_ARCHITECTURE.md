@@ -652,7 +652,7 @@ submit time — all run writes are keyed on that captured id, not the live prop.
 
 - **Progress is always routed** into `getProgress(runSessionId)` regardless of which chat the user is viewing.
 - **Messages** (user bubble, inline error/warning bubbles, final assistant message) are filed into `setMessages(runSessionId, …)` unconditionally — a backgrounded run fills its own thread's buffer; the view just renders the selected session's buffer.
-- **Tool name** is extracted from `controller_action.action.tool_name` and pushed via `updateRunState(runSessionId, { runningTool })`. When `is_final` is true the field clears.
+- **Tool name** is extracted from `controller_action.action.tool_name` and pushed via `updateRunState(runSessionId, { runningTool })`; a multi-call turn (`action.additional_calls`) shows the batch size instead (e.g. `"3 tools"`). When `is_final` is true the field clears.
 - **Graph, events panel, context** remain single-instance route state and are dropped when `runSessionId !== props.sessionId`; the persisted row surfaces them on the next hydration.
 - **Run boundary callbacks:** `onRunStarted` (first SSE event → threads refetch; the early-persisted row appears) and `onRunSettled(sid, 'done' | 'error')` (threads refetch + completion mark; not fired on abort).
 
@@ -940,8 +940,8 @@ ui/
 │       │   ├── token-budget.server.ts # trimToFit(), getContextWindow(), estimateTokens()
 │       │   ├── summarize.server.ts    # scheduleSummarization() — background result summarization
 │       │   └── patterns/
-│       │       ├── simpleLoop.server.ts   # ReAct loop + callId on tool events
-│       │       ├── actorCritic.server.ts  # Generate-evaluate + callId
+│       │       ├── simpleLoop.server.ts   # ReAct loop + callId (+ batchId on multi-call turns) on tool events
+│       │       ├── actorCritic.server.ts  # Generate-evaluate + callId (+ batchId)
 │       │       ├── parallel.server.ts     # Concurrent branches + pattern_enter/exit
 │       │       ├── guardrail.server.ts    # Rail validation + pattern_enter/exit
 │       │       ├── hook.server.ts         # Lifecycle hook + pattern_enter/exit

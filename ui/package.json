@@ -51,7 +51,7 @@
     ]
   },
   "devDependencies": {
-    "@boundaryml/baml": "0.219.0",
+    "@boundaryml/baml": "0.224.0",
     "@eslint/js": "^9.39.4",
     "@iconify-json/material-symbols": "^1.2.67",
     "@iconify-json/material-symbols-light": "^1.2.67",

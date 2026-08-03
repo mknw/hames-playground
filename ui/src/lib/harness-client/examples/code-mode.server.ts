@@ -393,6 +393,7 @@ export const codeModeAgent: AgentConfig = {
   description:
     "Orchestrate multiple MCP tools via JavaScript scripts run by the kg-agent gateway",
   icon: "i-material-symbols-code-blocks-outline",
+  accent: "amber",
   servers: ["kg-agent-mcp-gateway"],
   createPatterns,
 };

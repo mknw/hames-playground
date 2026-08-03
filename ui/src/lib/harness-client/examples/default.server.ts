@@ -91,6 +91,7 @@ export const defaultAgent: AgentConfig = {
   name: "Default Agent",
   description: "Router-based agent with Neo4j and Web Search",
   icon: "i-material-symbols-robot-2-outline",
+  accent: "indigo",
   servers: ["neo4j-cypher", "web_search", "fetch"],
   createPatterns,
 };

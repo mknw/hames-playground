@@ -6,6 +6,7 @@
 
 import { createSignal, createResource, For, Show } from 'solid-js'
 import { getAgentList } from '~/lib/harness-client'
+import { accentColor } from '~/lib/agent-palette'
 
 // ============================================================================
 // Types
@@ -67,11 +68,17 @@ export const AgentSelector = (props: AgentSelectorProps) => {
           {(info) => (
             <>
               {/* Iconify class from the registry — needs class= + inline
-                  sizing (attributify doesn't extract dynamic values). */}
+                  sizing (attributify doesn't extract dynamic values). The
+                  accent-family colour is inline for the same reason. */}
               <span
                 class={info().icon}
                 aria-hidden="true"
-                style={{ width: '18px', height: '18px', color: '#22d3ee', 'flex-shrink': 0 }}
+                style={{
+                  width: '18px',
+                  height: '18px',
+                  color: accentColor(info().accent),
+                  'flex-shrink': 0,
+                }}
               />
               <span flex="1" text="left">{info().name}</span>
               <svg
@@ -116,7 +123,12 @@ export const AgentSelector = (props: AgentSelectorProps) => {
                     class={agent.icon}
                     aria-hidden="true"
                     mt="0.5"
-                    style={{ width: '20px', height: '20px', color: '#22d3ee', 'flex-shrink': 0 }}
+                    style={{
+                      width: '20px',
+                      height: '20px',
+                      color: accentColor(agent.accent),
+                      'flex-shrink': 0,
+                    }}
                   />
                   <div flex="~ col" overflow="hidden">
                     <span text="sm dark-text-primary font-medium" truncate>

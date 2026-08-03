@@ -117,6 +117,7 @@ export const multiSourceResearchAgent: AgentConfig = {
   name: "Multi-Source Research",
   description: "Parallel search across web, GitHub, and docs with quality ranking",
   icon: "i-material-symbols-biotech-outline",
+  accent: "violet",
   servers: ["web_search", "github", "context7"],
   createPatterns,
 };

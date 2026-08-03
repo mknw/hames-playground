@@ -103,6 +103,7 @@ export const microsoft365Agent: AgentConfig = {
   description:
     "Answers from your own Microsoft 365 account (delegated, per-user via Entra)",
   icon: "i-material-symbols-window-sharp",
+  accent: "blue",
   // Not an MCP gateway server: these tools run in-process so the per-user
   // token stays server-side (#107). Listed for UI display only.
   servers: ["graph (app-side, per-user)"],

@@ -130,6 +130,7 @@ export const retrieverAgent: AgentConfig = {
   description:
     "Fast semantic retrieval over uploaded documents (Data Stash), with Neo4j and Web Search routes",
   icon: "i-material-symbols-document-search-outline",
+  accent: "violet",
   servers: ["neo4j-cypher", "web_search", "fetch"],
   createPatterns,
 };

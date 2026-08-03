@@ -254,6 +254,23 @@ export default defineConfig({
           .thread-flash-done, .thread-flash-error { animation: none; }
         }
 
+        /* Agent accent glyph in expanded sidebar rows. Muted at rest so the
+           title stays the row's anchor; the agent's family colour appears on
+           row hover and stays lit while the row is selected. The colour is
+           per-row, so it arrives as an inline --agent-accent custom property
+           (a dynamic utility class would never be extracted) and only the
+           rest/hover *states* live here. Falls back to the muted tone when
+           the property is absent. The collapsed rail sets its colour inline
+           instead — there the accent is always on. */
+        .agent-glyph {
+          color: #71717a;
+          transition: color 0.15s ease;
+        }
+        .group:hover .agent-glyph,
+        .agent-glyph[data-lit="true"] {
+          color: var(--agent-accent, #71717a);
+        }
+
         /* Sidebar mini progress strip, indeterminate mode (#105) — shown
            between run start and the chain projection seed arriving. A 40%-
            wide segment sweeps the 3px track (RowProgress in ChatSidebar). */

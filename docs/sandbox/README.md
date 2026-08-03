@@ -155,6 +155,10 @@ LOG=.harness-logs/context-XXXX.json
 jq -r '.events[] | [.ts, .type, .patternId, (.data.action.tool_name // .data.tool // "")] | @tsv' "$LOG"
 ```
 
+(On a multi-call turn the `controller_action` row shows only call 1's tool —
+add `(.data.action.additional_calls // [] | length)` as a column if you need
+the batch size; the per-call `tool_call` rows carry every tool name anyway.)
+
 Useful follow-up filters:
 
 ```sh

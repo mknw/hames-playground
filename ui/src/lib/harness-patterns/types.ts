@@ -9,8 +9,25 @@ export type {
   ControllerAction,
   CriticResult,
   Attempt,
-  FewShot
+  FewShot,
+  ToolCallRequest
 } from '../../../baml_client/types'
+
+/** How a loop pattern handles multi-call turns (ControllerAction.additional_calls).
+ *  - 'parallel'   — affordance advertised; independent calls run concurrently
+ *                   (capped at MAX_PARALLEL_TOOL_CALLS in flight)
+ *  - 'sequential' — affordance advertised; calls run strictly in order, a
+ *                   failure skips the rest of the batch (effect-chains)
+ *  - 'off'        — no affordance in the prompt; an un-advertised batch is
+ *                   still tolerated and executed like 'sequential'
+ *  The schema field is shared by every agent, so 'off' cannot prevent a model
+ *  from emitting a batch — it only stops the prompt from inviting one. */
+export type MultiCallMode = 'parallel' | 'sequential' | 'off'
+
+/** Max concurrently in-flight sub-calls of a 'parallel' multi-call turn. Also
+ *  the batch-size guidance rendered into the controller prompts (keep in sync
+ *  with LoopMultiCalls / ActorMultiCalls in baml_src). */
+export const MAX_PARALLEL_TOOL_CALLS = 4
 
 /**
  * Script execution event for actor-critic pattern.
@@ -26,6 +43,10 @@ export interface ScriptExecutionEvent {
   script: string
   output: string
   error?: string | null
+  /** Calls 2..N of a multi-call attempt, exactly as the actor emitted them —
+   *  carried so the adapter's Attempt construction replays the real batch
+   *  action instead of fabricating a singular one. */
+  additionalCalls?: import('../../../baml_client/types').ToolCallRequest[]
 }
 
 // ============================================================================
@@ -283,6 +304,9 @@ export interface SimpleLoopConfig extends PatternConfig {
    *  gateway's `code-mode-<name>` factory output) without enumerating every
    *  possible name upfront. */
   dynamicToolPattern?: RegExp
+  /** Multi-call turns: 'parallel' (default) | 'sequential' | 'off'.
+   *  See `MultiCallMode`. */
+  multiToolCalls?: MultiCallMode
 }
 
 /** Configuration for actorCritic pattern */
@@ -318,6 +342,9 @@ export interface ActorCriticConfig extends PatternConfig {
    *  < 1 are clamped to 1 so the critic can never be disabled. Note: with N > 1,
    *  `maxRetries` bounds actor turns (tool steps), not critic evaluations. */
   criticCadence?: number
+  /** Multi-call turns: 'parallel' (default) | 'sequential' | 'off'.
+   *  See `MultiCallMode`. */
+  multiToolCalls?: MultiCallMode
 }
 
 /** Synthetic tool injected into LoopController's tools list when prior results
@@ -558,6 +585,9 @@ export interface AssistantMessageEventData {
 export interface ToolCallEventData {
   /** Correlation ID linking this call to its result */
   callId?: string
+  /** Shared ID grouping the sub-calls of one multi-call turn. Absent on
+   *  singular calls. Purely observability metadata — pairing stays callId-based. */
+  batchId?: string
   tool: string
   args: unknown
 }
@@ -566,6 +596,8 @@ export interface ToolCallEventData {
 export interface ToolResultEventData {
   /** Correlation ID linking this result to its call */
   callId?: string
+  /** Shared ID grouping the sub-calls of one multi-call turn (see ToolCallEventData). */
+  batchId?: string
   tool: string
   result: unknown
   success: boolean

@@ -8,12 +8,15 @@
 //   turns               — tool calls/results from the CURRENT task (this invocation)
 //   turns_previous_runs — compact references to results from PREVIOUS tasks/sessions
 //                         (separate so the LLM can distinguish past context from current work)
+//   multi_call_mode     — "parallel" | "sequential" | null; agent-static (from
+//                         pattern config). Gates the LoopMultiCalls tier-1
+//                         section advertising ControllerAction.additional_calls
 //
 // Prompt-caching layout (#122) — two stable tiers, then a chronological
 // conversation:
 //
 //   system                      agent role text (static)
-//   user  [CACHE tier-1]        CONTEXT · AVAILABLE TOOLS · EXAMPLES
+//   user  [CACHE tier-1]        CONTEXT · AVAILABLE TOOLS · MULTI-CALL · EXAMPLES
 //                               agent-static: survives ACROSS runs/user-turns,
 //                               so consecutive tasks of the same agent reuse it
 //   user  [CACHE tier-2]        INTENT · INSTRUCTIONS · PREVIOUS RESULTS
@@ -74,6 +77,40 @@ template_string LoopFewShots(few_shots: FewShot[]?) #"
   {% endif %}
 "#
 
+// --- Section: multi-call affordance (cached tier-1; empty when mode unset) ---
+// Advertises ControllerAction.additional_calls per execution mode. The mode is
+// agent-static (pattern config, resolved once per adapter call chain), so this
+// section is tier-1-safe: it cannot vary within a run. When the mode is null
+// ('off' — no affordance) the section renders empty and the prompt is
+// byte-identical to the pre-feature layout.
+// The Return/expandPreviousResult exclusion lives here (not only in the field
+// description) because both are loop-control actions the executor handles as
+// singular turns — a batch containing them gets per-call errors at runtime.
+template_string LoopMultiCalls(multi_call_mode: string?) #"
+  {% if multi_call_mode == "parallel" %}
+
+  MULTIPLE CALLS PER TURN:
+  You may execute several tool calls in one turn: the first in
+  tool_name/tool_args, the rest in additional_calls. All calls in a turn run
+  CONCURRENTLY, so they must be INDEPENDENT — no call may rely on another
+  call's result or side effects. Prefer batching independent lookups over
+  spending a turn on each. At most 4 calls per turn; keep each tool_args
+  small. A failed call reports its error alongside the other results.
+  Never use additional_calls on a "Return" or "expandPreviousResult" turn.
+  {% elif multi_call_mode == "sequential" %}
+
+  MULTIPLE CALLS PER TURN:
+  You may execute several tool calls in one turn: the first in
+  tool_name/tool_args, the rest in additional_calls. Calls in a turn run
+  strictly IN ORDER: a later call sees the side effects (files written,
+  state changed) of earlier calls, but you will NOT see any call's output
+  until the whole turn completes — never derive a later call's arguments
+  from an earlier call's output. If a call fails, the rest of the batch is
+  skipped. At most 4 calls per turn; keep each tool_args small.
+  Never use additional_calls on a "Return" or "expandPreviousResult" turn.
+  {% endif %}
+"#
+
 // --- Section: prior-run results (cached tier-2) ------------------------------
 // Frozen summaries + the expandPreviousResult affordance. STABILITY RULE:
 // renders plain summaries only — never per-turn annotations, which would
@@ -123,7 +160,7 @@ template_string LoopPriorResults(turns_previous_runs: PriorResult[]?) #"
 template_string LoopTurnLog(turns: LoopTurn[]) #"
   {% for turn in turns %}
   {{ _.role("assistant") }}
-  {"reasoning": {{ turn.reasoning | default("") | tojson }}, "tool_name": {{ (turn.tool_call.tool if turn.tool_call else "") | tojson }}, "tool_args": {{ (turn.tool_call.args if turn.tool_call else "") | tojson }}, "status": {{ turn.status | default("") | tojson }}, "is_final": false}
+  {"reasoning": {{ turn.reasoning | default("") | tojson }}, "tool_name": {{ (turn.tool_call.tool if turn.tool_call else "") | tojson }}, "tool_args": {{ (turn.tool_call.args if turn.tool_call else "") | tojson }}{% if turn.additional_calls %}, "additional_calls": [{% for c in turn.additional_calls %}{"tool_name": {{ c.tool_name | tojson }}, "tool_args": {{ c.tool_args | tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}, "status": {{ turn.status | default("") | tojson }}, "is_final": false}
   {% if loop.index0 >= turns|length - 2 %}
   {{ _.role("user", cache_control={"type": "ephemeral"}) }}
   {% else %}
@@ -157,7 +194,8 @@ function LoopController(
   turns: LoopTurn[],
   context: string?,
   turns_previous_runs: PriorResult[]?,
-  few_shots: FewShot[]?
+  few_shots: FewShot[]?,
+  multi_call_mode: string?
 ) -> ControllerAction {
   client ControllerAnthropic
   prompt #"
@@ -186,6 +224,7 @@ function LoopController(
     AVAILABLE TOOLS:
     {{ ToolCatalog(tools) }}
     - Return: Signal task completion (tool_args = final answer or summary)
+    {{ LoopMultiCalls(multi_call_mode) }}
     {{ LoopFewShots(few_shots) }}
 
     {# ────────── CACHED TIER 2 · run-static: intent · instructions · prior results ────────── #}

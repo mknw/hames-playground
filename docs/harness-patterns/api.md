@@ -84,6 +84,10 @@ interface ControllerAction {
   reasoning: string
   tool_name: string           // Tool to call. In simpleLoop, `'Return'` exits the loop. In actorCritic, the actor's exit signals are ignored — the critic alone decides termination via `is_sufficient`.
   tool_args: string           // JSON payload
+  additional_calls?: ToolCallRequest[]  // Calls 2..N of a multi-call turn ({ tool_name, tool_args }).
+                              // Execution per the pattern's `multiToolCalls` mode; the batch records
+                              // as ONE turn/attempt with an index-keyed combined result. Singular-only
+                              // actions: Return, expandPreviousResult.
   status: string
   is_final: boolean           // simpleLoop only — actorCritic ignores this on the actor side
 }
@@ -100,6 +104,8 @@ interface LoopTurn {
   n: number
   reasoning?: string
   tool_call?: ToolCall
+  additional_calls?: ToolCallRequest[]  // Multi-call turn: calls 2..N as the model emitted them;
+                                        // tool_result.result holds the index-keyed combined map
   tool_result?: ToolResult
   expansions?: ExpandedRef[]    // Refs resolved via ref:<id> this turn (rendered as "Expanded refs this turn")
 }
@@ -124,7 +130,9 @@ interface PriorResult {
 
 ### simpleLoop
 
-ReAct-style decide-execute loop.
+ReAct-style decide-execute loop. A turn usually carries one tool call; with
+`additional_calls` the controller can batch several into one turn (see
+`multiToolCalls`).
 
 ```typescript
 function simpleLoop<T>(
@@ -141,6 +149,11 @@ interface SimpleLoopConfig extends PatternConfig {
   includeFailedResults?: boolean  // Default: false
   fewShots?: FewShot[]            // EXAMPLES block in controller prompt
   onToolResult?: OnToolResult     // Enrich/transform tool results pre-commit (closes #7)
+  multiToolCalls?: 'parallel' | 'sequential' | 'off'
+                                  // Multi-call turns. Default 'parallel': independent sub-calls run
+                                  // concurrently, per-call errors, loop continues unless ALL fail.
+                                  // 'sequential': in order, stop-on-failure (effect-chains).
+                                  // 'off': no prompt affordance; tolerated batches run serially.
 }
 
 type OnToolResult = (
@@ -168,6 +181,9 @@ interface ActorCriticConfig extends PatternConfig {
   availableTools?: string[]
   maxRetries?: number             // Default: 3
   onToolResult?: OnToolResult     // Same shape + semantics as SimpleLoopConfig
+  multiToolCalls?: 'parallel' | 'sequential' | 'off'
+                                  // Same semantics as simpleLoop's. A batch records as ONE Attempt
+                                  // whose result is the index-keyed combined map the critic evaluates.
 }
 ```
 

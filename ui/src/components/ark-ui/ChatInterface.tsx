@@ -388,12 +388,16 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         // controller, even if the user has navigated away.
         progress.ingest(evt)
 
-        // Surface the currently-running tool for the composer guard.
+        // Surface the currently-running tool for the composer guard. A
+        // multi-call turn shows the batch size ("3 tools") instead of one name.
         if (evt.type === 'controller_action') {
           const data = evt.data as ControllerActionEventData
           const toolName = data.action?.tool_name
+          const extraCalls = data.action?.additional_calls?.length ?? 0
           if (toolName && toolName !== 'Return') {
-            props.updateRunState(runSessionId, { runningTool: toolName })
+            props.updateRunState(runSessionId, {
+              runningTool: extraCalls > 0 ? `${extraCalls + 1} tools` : toolName,
+            })
           } else if (data.action?.is_final) {
             props.updateRunState(runSessionId, { runningTool: null })
           }

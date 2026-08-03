@@ -23,8 +23,8 @@ compositions across all available MCP servers.
 
 | Pattern | Signature | Purpose |
 |---------|-----------|---------|
-| `simpleLoop` | `(controller, tools, config?)` | ReAct decide-execute loop |
-| `actorCritic` | `(actor, critic, tools, config?)` | Generate-evaluate with retry |
+| `simpleLoop` | `(controller, tools, config?)` | ReAct decide-execute loop; turns may batch calls (`multiToolCalls`, default `'parallel'`) |
+| `actorCritic` | `(actor, critic, tools, config?)` | Generate-evaluate with retry; attempts may batch calls too |
 | `withReferences` | `(pattern, config?)` | LLM-curated prior-result attachment at pattern ingress (cross-pattern data flow, [#30](../../../../docs/harness-patterns/with-references.md)) |
 | `synthesizer` | `(config)` | Transform tool results into natural language |
 | `compactIntent` | `(config?)` | Rewrite the latest message into a self-contained `data.intent` for a router-less actor ([#83](https://github.com/mknw/harness-playground/issues/83)) |
@@ -37,6 +37,8 @@ compositions across all available MCP servers.
 | `hook` | `(pattern, config)` | Side-effect pattern triggered by lifecycle events; supports background fire-and-forget |
 
 > **Synthetic tool:** simpleLoop's `LoopController` prompt also exposes `expandPreviousResult` when prior results are present — a virtual tool that loads the full data behind a `ref:<id>` and records it as a normal turn. See [`with-references.md`](../../../../docs/harness-patterns/with-references.md) for the ingress/expansion taxonomy.
+
+> **Multi-call modes across agents:** every agent inherits `multiToolCalls: 'parallel'` except the three that override it — `code-mode` → `'off'` (one script already replaces N round-trips), `sandbox-session` and `flavoured-sandbox` → `'sequential'` (linear effect-chains on one VM filesystem; in-order batches still save actor round-trips).
 
 ---
 

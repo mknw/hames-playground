@@ -26,6 +26,12 @@ class LoopTurn {
   /// Optional because sessions serialized before this field exists still parse.
   status string? @description("Short user-facing status message from this turn's action")
   tool_call ToolCall? @description("Tool invocation if any")
+  /// Calls 2..N of a multi-call turn, mirroring ControllerAction.additional_calls
+  /// so the assistant turn log can replay the model's exact output shape.
+  /// The combined per-call results land in tool_result as an index-keyed map
+  /// (the expandPreviousResult multi-ref precedent). Optional: sessions and
+  /// turns recorded before this field exists still parse.
+  additional_calls ToolCallRequest[]? @description("Extra tool calls executed in the same turn (multi-call turns only)")
   tool_result ToolResult? @description("Tool execution result if any")
   expansions ExpandedRef[]? @description("Refs resolved into tool_args this turn via ref:<id>")
 }
@@ -40,6 +46,15 @@ class ExpandedRef {
 class ToolCall {
   tool string @description("Tool name that was called")
   args string @description("JSON-encoded arguments")
+}
+
+/// One extra tool call inside a multi-call turn (ControllerAction.additional_calls).
+/// Field names deliberately match ControllerAction's singular fields — one
+/// vocabulary, demonstrated everywhere (see the few-shot encoding lesson in
+/// simpleLoop.baml: disagreeing demonstrations are defects).
+class ToolCallRequest {
+  tool_name string @description("Tool to call")
+  tool_args string @description("Valid JSON object string with this call's arguments — same contract as the top-level tool_args")
 }
 
 /// Tool execution result
@@ -111,6 +126,12 @@ class ControllerAction {
   reasoning string @description("Step-by-step thought process")
   tool_name string @description("Tool to call, or 'Return' to exit loop")
   tool_args string @description("Valid JSON object string with the tool's arguments, e.g. {\"query\": \"search term\"}. Keys and string values MUST be double-quoted. For Return, use the final answer as a plain string.")
+  // OPTIONAL and self-gating: one ControllerAction class serves every agent,
+  // so this field is visible in ctx.output_format even for agents whose
+  // instructions never mention multiple calls. The description tells the model
+  // to leave it alone unless the prompt advertises the affordance; the runtime
+  // tolerates un-advertised batches by executing them serially.
+  additional_calls ToolCallRequest[]? @description("More tool calls to execute in the SAME turn, after tool_name/tool_args. Only use this when your instructions describe multiple calls per turn — they also say whether calls run concurrently or in order. Omit it otherwise, and always omit it when tool_name is 'Return' or 'expandPreviousResult'.")
   // OPTIONAL because it is decorative: nothing reads it for control flow. The
   // loop stores it only to render into the next prompt (simpleLoop.server.ts),
   // and both UI consumers already guard for absence (ObservabilityPanel's

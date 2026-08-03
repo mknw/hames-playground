@@ -153,34 +153,49 @@ export function guardrail<T extends Record<string, unknown>>(
         scope.data = result.data
 
         // --- Output rails ---
-        for (const rail of outputRails) {
-          const check = await rail.check({
-            ...railCtx,
-            scope,
-            lastToolResult: scope.events.filter((e) => e.type === 'tool_result').pop()
-          })
+        // A multi-call turn produces N trailing tool_results (they share a
+        // batchId); every one of them must pass the rails, not just the last —
+        // otherwise N−1 results of the final batch would bypass output checks.
+        // Singular turns have no batchId and reduce to the single last result.
+        const resultEvents = scope.events.filter((e) => e.type === 'tool_result')
+        const lastResult = resultEvents[resultEvents.length - 1]
+        const lastBatchId = (lastResult?.data as { batchId?: string } | undefined)?.batchId
+        const finalTurnResults = lastBatchId
+          ? resultEvents.filter((e) => (e.data as { batchId?: string }).batchId === lastBatchId)
+          : lastResult
+            ? [lastResult]
+            : [undefined]
 
-          if (!check.ok) {
-            if (check.action === 'retry') {
-              // Track failure for circuit breaker
-              if (config.circuitBreaker) {
-                try {
-                  await callTool('zadd', {
-                    key: `circuit:${scope.id}`,
-                    score: Date.now(),
-                    member: `fail-${Date.now()}`
-                  })
-                } catch {
-                  // Redis may not be available
+        for (const rail of outputRails) {
+          for (const lastToolResult of finalTurnResults) {
+            const check = await rail.check({
+              ...railCtx,
+              scope,
+              lastToolResult
+            })
+
+            if (!check.ok) {
+              if (check.action === 'retry') {
+                // Track failure for circuit breaker
+                if (config.circuitBreaker) {
+                  try {
+                    await callTool('zadd', {
+                      key: `circuit:${scope.id}`,
+                      score: Date.now(),
+                      member: `fail-${Date.now()}`
+                    })
+                  } catch {
+                    // Redis may not be available
+                  }
                 }
+                trackEvent(scope, 'error', {
+                  error: `Output rail '${rail.name}' rejected: ${check.reason}`
+                }, true)
+              } else if (check.action === 'warn') {
+                trackEvent(scope, 'error', {
+                  error: `Output rail '${rail.name}' warning: ${check.reason}`
+                }, true)
               }
-              trackEvent(scope, 'error', {
-                error: `Output rail '${rail.name}' rejected: ${check.reason}`
-              }, true)
-            } else if (check.action === 'warn') {
-              trackEvent(scope, 'error', {
-                error: `Output rail '${rail.name}' warning: ${check.reason}`
-              }, true)
             }
           }
         }

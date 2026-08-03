@@ -387,6 +387,67 @@ describe('synthesizer execution', () => {
     expect(result.data.synthesizedResponse).toBe('iters=1')
   })
 
+  it('thread mode: a multi-call turn pairs ALL its tool_results with the one controller_action', async () => {
+    // A batch action owns 1 + additional_calls.length results. Before the
+    // counter-based pairing, results 2..N fell into the "no preceding action"
+    // branch and fabricated zero-reasoning synthetic iterations.
+    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    let captured: import('../../../../lib/harness-patterns/types').SynthesizerInput | undefined
+    const pattern = synthesizer({
+      mode: 'thread',
+      synthesize: async (input) => {
+        captured = input
+        return `iters=${input.loopHistory?.iterations.length ?? 0}`
+      },
+    })
+
+    const scope = createScope('test', {})
+    const now = Date.now()
+    const batchAction = {
+      reasoning: 'two lookups',
+      tool_name: 'web_search',
+      tool_args: '{"q":"a"}',
+      additional_calls: [{ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"MATCH (n) RETURN n"}' }],
+      status: 'running',
+      is_final: false,
+    }
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: now,
+      events: [
+        { type: 'user_message' as const, ts: now, patternId: 'harness', data: { content: 'q' } },
+        { type: 'pattern_enter' as const, ts: now + 1, patternId: 'loop', data: { pattern: 'simpleLoop' } },
+        { type: 'controller_action' as const, ts: now + 2, patternId: 'loop', data: { action: batchAction, turn: 0 } },
+        { type: 'tool_call' as const, ts: now + 3, patternId: 'loop', data: { callId: 'tc1', batchId: 'b1', tool: 'web_search', args: { q: 'a' } } },
+        { type: 'tool_call' as const, ts: now + 4, patternId: 'loop', data: { callId: 'tc2', batchId: 'b1', tool: 'read_neo4j_cypher', args: {} } },
+        { type: 'tool_result' as const, ts: now + 5, patternId: 'loop', data: { callId: 'tc1', batchId: 'b1', tool: 'web_search', result: ['hit'], success: true } },
+        { type: 'tool_result' as const, ts: now + 6, patternId: 'loop', data: { callId: 'tc2', batchId: 'b1', tool: 'read_neo4j_cypher', result: null, success: false, error: 'timeout' } },
+        { type: 'pattern_exit' as const, ts: now + 7, patternId: 'loop', data: { status: 'completed' } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'q',
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // ONE iteration, not one real + one synthetic
+    expect(captured?.loopHistory?.iterations).toHaveLength(1)
+    const iter = captured!.loopHistory!.iterations[0]
+    expect(iter.action.tool_name).toBe('web_search')
+    expect(iter.action.reasoning).toBe('two lookups')
+    // both results attached, keyed by batch position, failure marked
+    expect(iter.result).toEqual({
+      '1': { tool: 'web_search', result: ['hit'] },
+      '2': { tool: 'read_neo4j_cypher', __error: 'timeout' },
+    })
+    expect(result.data.synthesizedResponse).toBe('iters=1')
+  })
+
   it('should build input from events for thread mode', async () => {
     const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')

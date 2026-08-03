@@ -54,7 +54,8 @@ export type ControllerFnWithLLMData = (
   schema?: string,
   collector?: Collector,
   priorResults?: PriorResult[],
-  fewShots?: FewShot[]
+  fewShots?: FewShot[],
+  multiCallMode?: 'parallel' | 'sequential'
 ) => Promise<ControllerCallResult>
 
 /** Critic function that returns result + observability data */
@@ -542,7 +543,10 @@ export function createLoopControllerAdapter(
     schema?: string,
     collector?: Collector,
     priorResults?: PriorResult[],
-    fewShots?: FewShot[]
+    fewShots?: FewShot[],
+    // 'off' never reaches the adapter — the pattern maps it to undefined so the
+    // prompt renders no affordance (LoopMultiCalls stays empty).
+    multiCallMode?: 'parallel' | 'sequential'
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
@@ -566,7 +570,7 @@ export function createLoopControllerAdapter(
       context = parts.join('\n\n')
     }
 
-    const variables = { user_message, intent, tools, turns, context, turns_previous_runs: priorResults, few_shots: fewShots }
+    const variables = { user_message, intent, tools, turns, context, turns_previous_runs: priorResults, few_shots: fewShots, multi_call_mode: multiCallMode }
 
     // Call with or without collector.
     //
@@ -587,8 +591,8 @@ export function createLoopControllerAdapter(
     let action: ControllerAction
     try {
       action = hasBaseOpts
-        ? await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, baseOpts)
-        : await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots)
+        ? await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, multiCallMode, baseOpts)
+        : await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, multiCallMode)
     } catch (e) {
       // Recoverable parse failures (any chain, incl. Anthropic-only): the parse
       // failed because the response was cut off, or because there was no
@@ -602,8 +606,8 @@ export function createLoopControllerAdapter(
           : context
         try {
           action = hasBaseOpts
-            ? await b.LoopController(user_message, intent, tools, turns, retryContext, priorResults, fewShots, baseOpts)
-            : await b.LoopController(user_message, intent, tools, turns, retryContext, priorResults, fewShots)
+            ? await b.LoopController(user_message, intent, tools, turns, retryContext, priorResults, fewShots, multiCallMode, baseOpts)
+            : await b.LoopController(user_message, intent, tools, turns, retryContext, priorResults, fewShots, multiCallMode)
           const llmCall = collector
             ? extractLLMCallData(collector, 'LoopController', variables, startTime, action)
             : undefined
@@ -616,13 +620,13 @@ export function createLoopControllerAdapter(
         throw wrapAsLLMCallError(e, 'LoopController', variables, startTime, collector)
       }
       try {
-        action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' })
+        action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, multiCallMode, collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' })
       } catch (e2) {
         if (!(e2 instanceof BamlValidationError)) {
           throw wrapAsLLMCallError(e2, 'LoopController', variables, startTime, collector)
         }
         try {
-          action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' })
+          action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, multiCallMode, collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' })
         } catch (e3) {
           throw wrapAsLLMCallError(e3, 'LoopController', variables, startTime, collector)
         }
@@ -708,7 +712,8 @@ export type CodeModeControllerFnWithLLMData = (
   previous_attempts: ScriptExecutionEvent[],
   collector?: Collector,
   attemptNumber?: number,
-  maxAttempts?: number
+  maxAttempts?: number,
+  multiCallMode?: 'parallel' | 'sequential'
 ) => Promise<ControllerCallResult>
 
 /** Options for `createActorControllerAdapter` when the actor's toolset may
@@ -772,6 +777,9 @@ export function createActorControllerAdapter(
     collector?: Collector,
     attemptNumber?: number,
     maxAttempts?: number,
+    // 'off' never reaches the adapter — the pattern maps it to undefined so the
+    // prompt renders no affordance (ActorMultiCalls stays empty).
+    multiCallMode?: 'parallel' | 'sequential',
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
@@ -798,13 +806,16 @@ export function createActorControllerAdapter(
     // actor's actual tool_name per push — so a rejected `mcp-exec` attempt
     // renders as `Action: mcp-exec(<bad args>)` instead of the misleading
     // `code-mode(<empty>)` it used to show. Falls back to `'code-mode'` for
-    // legacy callers that don't set `toolName`.
+    // legacy callers that don't set `toolName`. `additionalCalls` (multi-call
+    // attempts) replays into the action so the attempt log shows the batch
+    // shape the actor actually emitted (exact-replay invariant).
     const attempts: Attempt[] = previous_attempts.map((event, i) => ({
       n: i + 1,
       action: {
         reasoning: '',
         tool_name: event.toolName ?? 'code-mode',
         tool_args: event.script,
+        ...(event.additionalCalls?.length ? { additional_calls: event.additionalCalls } : {}),
         status: event.error ? 'error' : 'success',
         is_final: false
       },
@@ -827,6 +838,7 @@ export function createActorControllerAdapter(
       few_shots: fewShots,
       attempt_n: attemptNumber,
       max_attempts: maxAttempts,
+      multi_call_mode: multiCallMode,
     }
 
     // Call with or without collector.
@@ -850,8 +862,8 @@ export function createActorControllerAdapter(
     let action: ControllerAction
     try {
       action = hasBaseOpts
-        ? await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, baseOpts)
-        : await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts)
+        ? await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, multiCallMode, baseOpts)
+        : await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, multiCallMode)
     } catch (e) {
       // Truncated or empty response: one retry, guidance only when there is
       // something to correct — see createLoopControllerAdapter for rationale.
@@ -862,8 +874,8 @@ export function createActorControllerAdapter(
           : context
         try {
           action = hasBaseOpts
-            ? await b.ActorController(user_message, intent, tools, attempts, retryContext, fewShots, attemptNumber, maxAttempts, baseOpts)
-            : await b.ActorController(user_message, intent, tools, attempts, retryContext, fewShots, attemptNumber, maxAttempts)
+            ? await b.ActorController(user_message, intent, tools, attempts, retryContext, fewShots, attemptNumber, maxAttempts, multiCallMode, baseOpts)
+            : await b.ActorController(user_message, intent, tools, attempts, retryContext, fewShots, attemptNumber, maxAttempts, multiCallMode)
           const llmCall = collector
             ? extractLLMCallData(collector, 'ActorController', variables, startTime, action)
             : undefined
@@ -876,13 +888,13 @@ export function createActorControllerAdapter(
         throw wrapAsLLMCallError(e, 'ActorController', variables, startTime, collector)
       }
       try {
-        action = await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' })
+        action = await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, multiCallMode, collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' })
       } catch (e2) {
         if (!(e2 instanceof BamlValidationError)) {
           throw wrapAsLLMCallError(e2, 'ActorController', variables, startTime, collector)
         }
         try {
-          action = await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' })
+          action = await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, multiCallMode, collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' })
         } catch (e3) {
           throw wrapAsLLMCallError(e3, 'ActorController', variables, startTime, collector)
         }
@@ -921,6 +933,7 @@ export function createCriticAdapter(): CriticFnWithLLMData {
         reasoning: '',
         tool_name: event.toolName ?? 'code-mode',
         tool_args: event.script,
+        ...(event.additionalCalls?.length ? { additional_calls: event.additionalCalls } : {}),
         status: event.error ? 'error' : 'success',
         is_final: false
       },

@@ -96,7 +96,7 @@ router({ code_mode: 'Compose JS across multiple MCP tools…' })
 
 - **Direct-response branch**: when `Router` returns `needs_tool: false`, the router sets `scope.data.response` to the conversational reply and `routes()` passes through — no synthesizer needed at the top level.
 - **Cross-turn tool reuse**: `refreshOnCall: true` on the actor adapter forces a fresh `mcpListTools()` per invocation so `code-mode-<name>` tools created in earlier turns of the same session are still visible to the actor. `invalidateToolDescriptions()` is called from `actorCritic.server.ts` right after a successful `code-mode` execution, so the new tool appears in the next attempt's prompt.
-- **actorCritic over simpleLoop**: the find → add → factory → call-generated-tool sequence has many ways to go wrong on the first try; actorCritic's retry-with-critic-feedback semantics fit better than simpleLoop's break-on-first-error.
+- **actorCritic over simpleLoop**: the find → add → factory → call-generated-tool sequence has many ways to go wrong on the first try; actorCritic's retry-with-critic-feedback semantics fit better than simpleLoop's exit-on-tool-failure (a failed singular call — or a fully-failed multi-call batch — ends a simpleLoop pass with a recoverable error; partial batch failures continue in both patterns).
 
 ---
 

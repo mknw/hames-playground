@@ -21,7 +21,9 @@ import type {
   ControllerActionEventData
 } from '../types'
 import { MAX_TOOL_TURNS, EXPAND_TOOL_NAME } from '../types'
-import type { ErrorEventData } from '../types'
+import type { ErrorEventData, MultiCallMode } from '../types'
+import { runBatch, combineOutcomes } from '../parallel-tools.server'
+import type { SubCall } from '../parallel-tools.server'
 import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { omitResultFields } from '../content-transforms'
@@ -157,6 +159,11 @@ export function simpleLoop<T extends SimpleLoopData>(
   ): Promise<PatternScope<T>> => {
     const settings = getRequestSettings()
     const maxTurns = config?.maxTurns ?? settings.maxToolTurns
+    // Multi-call turns (ControllerAction.additional_calls). 'off' still
+    // EXECUTES an un-advertised batch (serially) — it only stops the prompt
+    // from inviting one, because the shared output schema means any agent's
+    // model can emit the field.
+    const multiMode: MultiCallMode = config?.multiToolCalls ?? 'parallel'
     const data = scope.data
     const turns: LoopTurn[] = []
     let hasError = false
@@ -236,7 +243,8 @@ export function simpleLoop<T extends SimpleLoopData>(
             config?.schema,
             collector,
             priorResults,
-            config?.fewShots
+            config?.fewShots,
+            multiMode === 'off' ? undefined : multiMode
           )
           action = controllerResult.action
           controllerLlmCall = controllerResult.llmCall
@@ -288,7 +296,10 @@ export function simpleLoop<T extends SimpleLoopData>(
         //   "ref:<id_1>,<id_2>,..."      — comma-separated batch
         //   {"ref_id": "<id>"}           — JSON, single (resilience)
         //   {"ref_ids": ["<id>", ...]}   — JSON, batch
-        if (action.tool_name === EXPAND_TOOL_NAME) {
+        // Only fires SINGULAR: an expand bundled into a multi-call turn falls
+        // through to the batch path below, where it gets a per-call error
+        // (control-flow tools cannot be batched).
+        if (action.tool_name === EXPAND_TOOL_NAME && !action.additional_calls?.length) {
           const callId = generateId('tc')
           const refIds = parseExpandRefs(action.tool_args)
 
@@ -396,6 +407,176 @@ export function simpleLoop<T extends SimpleLoopData>(
 
           scope.data = { ...scope.data, turn, lastAction: action }
           // Continue to next turn — let the controller use the resolved data.
+          continue
+        }
+
+        // Multi-call turn: tool_name/tool_args is call 1, additional_calls are
+        // calls 2..N. Validation happens here per sub-call; HOW they run
+        // (concurrent / in-order / stop-on-failure) is the shared executor's
+        // job (parallel-tools.server.ts). One LoopTurn records the whole batch
+        // with an index-keyed combined result (expandPreviousResult's
+        // multi-ref precedent); per-sub-call tool_call/tool_result events keep
+        // observability and the synthesizer at full fidelity.
+        if (action.additional_calls && action.additional_calls.length > 0) {
+          const batchId = generateId('batch')
+          const allCalls = [
+            { tool_name: action.tool_name, tool_args: action.tool_args },
+            ...action.additional_calls,
+          ]
+          const sandboxScope = getActiveSandbox()
+          const MAX_RESULT_CHARS = settings.maxResultChars
+          const truncate = (s: string) =>
+            s.length > MAX_RESULT_CHARS
+              ? s.slice(0, MAX_RESULT_CHARS) + '…[truncated]'
+              : s
+          const allExpansions: ExpandedRef[] = []
+          const callIds: string[] = []
+          const trackedArgs: unknown[] = []
+          const subCalls: SubCall[] = []
+
+          for (const c of allCalls) {
+            const callId = generateId('tc')
+            callIds.push(callId)
+            // Control-flow tools are singular-only by design: Return ends the
+            // loop before any tool runs, expand resolves synchronously against
+            // the event store — neither composes with a batch.
+            if (c.tool_name === 'Return' || c.tool_name === EXPAND_TOOL_NAME) {
+              trackedArgs.push(c.tool_args)
+              subCalls.push({
+                tool: c.tool_name,
+                precheckError: `${c.tool_name} cannot be part of a multi-call turn — issue it as the only call of its own turn`,
+              })
+              continue
+            }
+            const callAllowed =
+              tools.includes(c.tool_name) ||
+              (sandboxScope?.ownsTool(c.tool_name) ?? false)
+            if (!callAllowed) {
+              trackedArgs.push(c.tool_args)
+              subCalls.push({
+                tool: c.tool_name,
+                precheckError: `Tool not allowed: ${c.tool_name}. Allowed: ${tools.join(', ')}`,
+              })
+              continue
+            }
+            let callArgs: Record<string, unknown>
+            try {
+              callArgs = repairJson(c.tool_args)
+            } catch {
+              trackedArgs.push(c.tool_args)
+              subCalls.push({
+                tool: c.tool_name,
+                precheckError: llmCallHitOutputCap(controllerLlmCall)
+                  ? `tool_args for ${c.tool_name} were CUT OFF at the output-token limit — the batch was too large; use fewer calls per turn`
+                  : `Invalid tool_args JSON: ${c.tool_args}`,
+              })
+              continue
+            }
+            const { resolved: resolvedArgs, expansions } =
+              resolveRefsAndCapture(callArgs, view, MAX_RESULT_CHARS)
+            allExpansions.push(...expansions)
+            trackedArgs.push(callArgs)
+            subCalls.push({
+              tool: c.tool_name,
+              run: async () => {
+                const result = await callTool(c.tool_name, resolvedArgs)
+                // onToolResult hook per sub-call — same non-fatal contract as
+                // the singular path.
+                if (config?.onToolResult) {
+                  try {
+                    const hookResult = await config.onToolResult(
+                      c.tool_name,
+                      result,
+                      { callId, args: resolvedArgs }
+                    )
+                    if (hookResult && 'data' in hookResult && hookResult.data !== undefined) {
+                      result.data = hookResult.data
+                    }
+                  } catch (hookErr) {
+                    const message = hookErr instanceof Error ? hookErr.message : String(hookErr)
+                    trackEvent(
+                      scope,
+                      'error',
+                      {
+                        error: `onToolResult hook failed for ${c.tool_name}: ${message}`,
+                        severity: 'recoverable',
+                        turn,
+                      } as ErrorEventData,
+                      true
+                    )
+                  }
+                }
+                return { success: result.success, result: result.data, error: result.error }
+              },
+            })
+          }
+
+          // All tool_call events land before dispatch — the panel pairs
+          // call/result by callId, so completion order doesn't matter.
+          subCalls.forEach((sc, i) =>
+            trackEvent(
+              scope,
+              'tool_call',
+              { callId: callIds[i], batchId, tool: sc.tool, args: trackedArgs[i] } as ToolCallEventData,
+              resolved.trackHistory
+            )
+          )
+
+          const outcomes = await runBatch(subCalls, multiMode)
+
+          outcomes.forEach((o, i) =>
+            trackEvent(
+              scope,
+              'tool_result',
+              {
+                callId: callIds[i],
+                batchId,
+                tool: o.tool,
+                result: o.result ?? null,
+                success: o.success,
+                error: o.error,
+              } as ToolResultEventData,
+              resolved.trackHistory
+            )
+          )
+
+          // Controller-facing combined map: per-tool resultOmit projection and
+          // per-call truncation (a batch shares ONE turn's context budget —
+          // each call gets an equal slice, floor 500 chars), then a whole-map
+          // truncate as the final guard.
+          const perCallCap = Math.max(500, Math.floor(MAX_RESULT_CHARS / outcomes.length))
+          const { combined, anySucceeded, errors } = combineOutcomes(outcomes, (o) => {
+            const projected = omitResultFields(o.result, config?.resultOmit?.[o.tool])
+            const s = typeof projected === 'string' ? projected : JSON.stringify(projected)
+            return s.length > perCallCap ? s.slice(0, perCallCap) + '…[truncated]' : s
+          })
+
+          turns.push({
+            n: turn,
+            reasoning: action.reasoning,
+            status: action.status,
+            tool_call: { tool: action.tool_name, args: action.tool_args },
+            additional_calls: action.additional_calls,
+            tool_result: {
+              tool: action.tool_name,
+              result: truncate(JSON.stringify(combined)),
+              success: anySucceeded,
+              error: anySucceeded ? null : errors.join('; '),
+            },
+            ...(allExpansions.length > 0 ? { expansions: allExpansions } : {}),
+          })
+
+          // Partial failure → continue (the controller sees per-call __error
+          // entries and can retry just those); ALL failed → the existing
+          // break path (recoverable error event, synthesizer degrades).
+          if (!anySucceeded) {
+            hasError = true
+            errorMessage = `All ${allCalls.length} calls of the multi-call turn failed: ${errors.join('; ')}`
+            errorTurn = turn
+            break
+          }
+
+          scope.data = { ...scope.data, turn, lastAction: action }
           continue
         }
 

@@ -23,7 +23,9 @@ import type {
   CriticResultEventData
 } from '../types'
 import { MAX_RETRIES } from '../types'
-import type { ErrorEventData } from '../types'
+import type { ErrorEventData, MultiCallMode } from '../types'
+import { runBatch, combineOutcomes } from '../parallel-tools.server'
+import type { SubCall } from '../parallel-tools.server'
 import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
@@ -83,9 +85,96 @@ export function actorCritic<T extends ActorCriticData>(
     const criticCadence = Number.isFinite(config?.criticCadence)
       ? Math.max(1, Math.floor(config!.criticCadence!))
       : 1
+    // Multi-call attempts (ControllerAction.additional_calls) — see
+    // simpleLoop.server.ts for the mode semantics ('off' executes serially,
+    // it only suppresses the prompt affordance).
+    const multiMode: MultiCallMode = config?.multiToolCalls ?? 'parallel'
     let successfulTurns = 0
     const previousAttempts: ScriptExecutionEvent[] = []
     let errorMessage: string | undefined
+
+    // Shared post-execution tail for singular AND multi-call attempts.
+    //
+    // Cadence gate: the actor free-runs successful tool calls; the critic
+    // (the loop's SOLE exit authority) only weighs in periodically, so a
+    // multi-step deliverable isn't interrupted mid-plan and wrongly judged
+    // "done" on an intermediate state. Run the critic when ANY of:
+    //   - the actor set `is_final: true` — it believes the task is done and
+    //     is asking to be judged (it still can't exit by itself);
+    //   - this is the final attempt — so work that completes on the last
+    //     turn is still evaluated (and can be accepted) instead of falling
+    //     through to "Max retries exceeded";
+    //   - it's the Nth successful turn — a backstop for an actor that never
+    //     sets `is_final`.
+    // At criticCadence === 1 the modulo is always true → critic every turn.
+    //
+    // Returns 'accepted' when the critic ends the loop; the caller returns
+    // scope. Mutates successfulTurns and scope.data.
+    const runCadenceAndCritic = async (
+      scope: PatternScope<T>,
+      action: ControllerAction,
+      resultData: unknown,
+      attempt: number,
+      intent: string
+    ): Promise<'accepted' | 'continue'> => {
+      successfulTurns++
+      const isLastAttempt = attempt === maxRetries - 1
+      const shouldCritique =
+        action.is_final === true ||
+        isLastAttempt ||
+        successfulTurns % criticCadence === 0
+
+      if (!shouldCritique) {
+        // Skip the critic this turn and let the actor take the next step. The
+        // tool result is already in `previousAttempts` (the actor's
+        // self-correction channel), so the next actor call sees what happened.
+        scope.data = {
+          ...scope.data,
+          attempt,
+          lastAction: action,
+          lastResult: resultData,
+        }
+        return 'continue'
+      }
+
+      const criticCollector = new Collector('critic')
+      const { result: evalResult, llmCall: criticLlmCall } = await critic(intent, previousAttempts, criticCollector)
+
+      trackEvent(
+        scope,
+        'critic_result',
+        { result: evalResult } as CriticResultEventData,
+        resolved.trackHistory,
+        criticLlmCall
+      )
+
+      const evaluation = {
+        ok: evalResult.is_sufficient,
+        feedback: evalResult.is_sufficient
+          ? undefined
+          : evalResult.suggested_approach ?? evalResult.explanation
+      }
+
+      if (evaluation.ok) {
+        scope.data = {
+          ...scope.data,
+          attempt,
+          lastAction: action,
+          result: resultData
+        }
+        return 'accepted'
+      }
+
+      // Update for next attempt
+      scope.data = {
+        ...scope.data,
+        attempt,
+        lastAction: action,
+        lastResult: resultData,
+        feedback: evaluation.feedback
+      }
+      return 'continue'
+    }
 
     try {
       for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -114,6 +203,7 @@ export function actorCritic<T extends ActorCriticData>(
           actorCollector,
           attempt + 1,
           maxRetries,
+          multiMode === 'off' ? undefined : multiMode,
         )
 
         // Track controller action with LLM call data. `turn` and `maxTurns`
@@ -139,6 +229,149 @@ export function actorCritic<T extends ActorCriticData>(
         // decides whether the loop exits. If the actor proposes a `Return` tool
         // (or anything not on the allowlist) it falls through to the allowlist
         // check below, is rejected as "Tool not allowed", and the loop continues.
+
+        // Multi-call attempt: tool_name/tool_args is call 1, additional_calls
+        // are calls 2..N. Mirrors simpleLoop's batch path with the actor's
+        // differences: the allowlist adds the dynamic sources, there are no
+        // control-flow tools to exclude (no Return/expand here — a batched
+        // 'Return' just fails the allowlist per-call), and the whole batch
+        // records as ONE attempt whose output is the index-keyed combined map
+        // (what the critic evaluates). `is_final` may accompany a batch — the
+        // cadence gate below treats it exactly like a singular attempt.
+        if (action.additional_calls && action.additional_calls.length > 0) {
+          const batchId = generateId('batch')
+          const allCalls = [
+            { tool_name: action.tool_name, tool_args: action.tool_args },
+            ...action.additional_calls,
+          ]
+          const dynamicAllowlist = config?.dynamicToolAllowlist
+            ? await config.dynamicToolAllowlist()
+            : []
+          const sandboxScope = getActiveSandbox()
+          const callIds: string[] = []
+          const trackedArgs: unknown[] = []
+          const subCalls: SubCall[] = []
+
+          for (const c of allCalls) {
+            const callId = generateId('tc')
+            callIds.push(callId)
+            const callAllowed =
+              tools.includes(c.tool_name) ||
+              dynamicAllowlist.includes(c.tool_name) ||
+              (sandboxScope?.ownsTool(c.tool_name) ?? false) ||
+              (config?.dynamicToolPattern?.test(c.tool_name) ?? false)
+            if (!callAllowed) {
+              trackedArgs.push(c.tool_args)
+              subCalls.push({ tool: c.tool_name, precheckError: `Tool not allowed: ${c.tool_name}` })
+              continue
+            }
+            let callArgs: Record<string, unknown>
+            try {
+              callArgs = repairJson(c.tool_args)
+            } catch {
+              trackedArgs.push(c.tool_args)
+              subCalls.push({
+                tool: c.tool_name,
+                precheckError: llmCallHitOutputCap(actorLlmCall)
+                  ? `tool_args for ${c.tool_name} were CUT OFF at the output-token limit — ` +
+                    `the batch was too large; use fewer calls per attempt or split large payloads`
+                  : `Invalid tool_args JSON for ${c.tool_name}`,
+              })
+              continue
+            }
+            trackedArgs.push(callArgs)
+            subCalls.push({
+              tool: c.tool_name,
+              run: async () => {
+                const result = await callTool(c.tool_name, callArgs)
+                // Factory tools register new tools on success — same cache
+                // invalidation as the singular path, per sub-call.
+                if (result.success && c.tool_name === 'code-mode') {
+                  invalidateToolDescriptions()
+                  try {
+                    await mcpListTools()
+                  } catch {
+                    // Non-fatal — the actor can still invoke the new tool by name.
+                  }
+                }
+                if (config?.onToolResult) {
+                  try {
+                    const hookResult = await config.onToolResult(
+                      c.tool_name,
+                      result,
+                      { callId, args: callArgs }
+                    )
+                    if (hookResult && 'data' in hookResult && hookResult.data !== undefined) {
+                      result.data = hookResult.data
+                    }
+                  } catch (hookErr) {
+                    const message = hookErr instanceof Error ? hookErr.message : String(hookErr)
+                    trackEvent(
+                      scope,
+                      'error',
+                      {
+                        error: `onToolResult hook failed for ${c.tool_name}: ${message}`,
+                        severity: 'recoverable',
+                      },
+                      true
+                    )
+                  }
+                }
+                return { success: result.success, result: result.data, error: result.error }
+              },
+            })
+          }
+
+          subCalls.forEach((sc, i) =>
+            trackEvent(
+              scope,
+              'tool_call',
+              { callId: callIds[i], batchId, tool: sc.tool, args: trackedArgs[i] } as ToolCallEventData,
+              resolved.trackHistory
+            )
+          )
+
+          const outcomes = await runBatch(subCalls, multiMode)
+
+          outcomes.forEach((o, i) =>
+            trackEvent(
+              scope,
+              'tool_result',
+              {
+                callId: callIds[i],
+                batchId,
+                tool: o.tool,
+                result: o.result ?? null,
+                success: o.success,
+                error: o.error,
+              } as ToolResultEventData,
+              resolved.trackHistory
+            )
+          )
+
+          const { combined, anySucceeded, errors } = combineOutcomes(outcomes)
+
+          // ONE attempt records the whole batch. `additionalCalls` carries the
+          // actor's exact emission so the adapter's Attempt construction
+          // replays the real batch action (exact-replay invariant); partial
+          // failures stay visible to the actor as __error entries in `output`.
+          previousAttempts.push({
+            toolName: action.tool_name,
+            script: action.tool_args,
+            additionalCalls: action.additional_calls,
+            output: anySucceeded ? JSON.stringify(combined) : '',
+            error: anySucceeded ? null : errors.join('; '),
+          })
+
+          if (!anySucceeded) {
+            continue
+          }
+
+          if (await runCadenceAndCritic(scope, action, combined, attempt, intent) === 'accepted') {
+            return scope
+          }
+          continue
+        }
 
         // Validate tool. The strict allowlist is augmented by an optional
         // `dynamicToolPattern` regex so agents whose backends create tools at
@@ -323,76 +556,8 @@ export function actorCritic<T extends ActorCriticData>(
           continue
         }
 
-        // Cadence gate. The actor free-runs successful tool calls; the critic
-        // (the loop's sole exit authority) only weighs in periodically, so a
-        // multi-step deliverable isn't interrupted mid-plan and wrongly judged
-        // "done" on an intermediate state. Run the critic when ANY of:
-        //   - the actor set `is_final: true` — it believes the task is done and
-        //     is asking to be judged (it still can't exit by itself);
-        //   - this is the final attempt — so work that completes on the last
-        //     turn is still evaluated (and can be accepted) instead of falling
-        //     through to "Max retries exceeded";
-        //   - it's the Nth successful turn — a backstop for an actor that never
-        //     sets `is_final`.
-        // At criticCadence === 1 the modulo is always true → critic every turn
-        // (unchanged default behavior).
-        successfulTurns++
-        const isLastAttempt = attempt === maxRetries - 1
-        const shouldCritique =
-          action.is_final === true ||
-          isLastAttempt ||
-          successfulTurns % criticCadence === 0
-
-        if (!shouldCritique) {
-          // Skip the critic this turn and let the actor take the next step. The
-          // tool result is already in `previousAttempts` (the actor's
-          // self-correction channel), so the next actor call sees what happened.
-          scope.data = {
-            ...scope.data,
-            attempt,
-            lastAction: action,
-            lastResult: result.data,
-          }
-          continue
-        }
-
-        // Call critic
-        const criticCollector = new Collector('critic')
-        const { result: evalResult, llmCall: criticLlmCall } = await critic(intent, previousAttempts, criticCollector)
-
-        // Track critic result with LLM call data
-        trackEvent(
-          scope,
-          'critic_result',
-          { result: evalResult } as CriticResultEventData,
-          resolved.trackHistory,
-          criticLlmCall
-        )
-
-        const evaluation = {
-          ok: evalResult.is_sufficient,
-          feedback: evalResult.is_sufficient
-            ? undefined
-            : evalResult.suggested_approach ?? evalResult.explanation
-        }
-
-        if (evaluation.ok) {
-          scope.data = {
-            ...scope.data,
-            attempt,
-            lastAction: action,
-            result: result.data
-          }
+        if (await runCadenceAndCritic(scope, action, result.data, attempt, intent) === 'accepted') {
           return scope
-        }
-
-        // Update for next attempt
-        scope.data = {
-          ...scope.data,
-          attempt,
-          lastAction: action,
-          lastResult: result.data,
-          feedback: evaluation.feedback
         }
       }
 

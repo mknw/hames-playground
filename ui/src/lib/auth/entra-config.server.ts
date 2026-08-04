@@ -65,8 +65,9 @@ const RESERVED_SCOPES = new Set(["openid", "profile", "offline_access"]);
  *
  * WRITE scopes are included deliberately (one-and-done consent). Note that a
  * granted scope is not a capability: the model can only do what a *registered
- * tool* exposes, and today only the read-only `graph_me` exists. Any future
- * write tool should carry its own confirmation gate.
+ * tool* exposes, and every `graph` tool registered so far only reads — the
+ * consented scope set deliberately runs ahead of the implemented tools. Any
+ * future write tool should carry its own confirmation gate.
  */
 export const DEFAULT_GRAPH_SCOPES: readonly string[] = [
   "User.Read", // own profile

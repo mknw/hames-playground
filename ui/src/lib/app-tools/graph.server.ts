@@ -1232,26 +1232,166 @@ registerAppTool({
 // Shared with me (Office Graph insights)
 // ----------------------------------------------------------------------------
 
+/** How something reached the user — the distinction `how` fails to make. */
+export type GraphSharedVia = "email" | "teams" | "link";
+
+export const GRAPH_SHARED_VIA: readonly GraphSharedVia[] = ["email", "teams", "link"];
+
 /** One thing shared with the signed-in user. */
 export interface GraphSharedFile {
+  /** For an email attachment this is the true filename recovered from the
+   *  message, which carries the extension the insights title drops (measured
+   *  2026-08-03: 14 of 15 attachment rows, e.g. "20260802-07346747"). */
   name: string | null;
   /** "file" (a driveItem — carries the handoff pair) or "attachment" (an email
    *  attachment — lives in a mailbox, so there are no drive ids to hand on). */
   kind: "file" | "attachment";
   shared_by: string | null;
   shared_when: string | null;
-  /** How it was shared: "Link", "Attachment", "Direct" (from Graph). */
+  /** Graph's own `lastShared.sharingType` — "Link", "Attachment", "Direct".
+   *  It does NOT identify the mechanism: measured 2026-08-03 (N=25), 23 rows
+   *  said "Attachment" while at least three unrelated URL shapes hid behind
+   *  that single label. Reason about `via` instead. Kept because "Link" is the
+   *  one signal separating a Share-dialog link from a drive file sent as an
+   *  attachment — a distinction `via` deliberately does not draw. */
   how: string | null;
+  /** How it actually reached the user. See `deriveVia`. */
+  via: GraphSharedVia;
   drive_id: string | null;
   item_id: string | null;
   webUrl: string | null;
+  /** Set only when this response carries several attachments from the SAME
+   *  email: every row of one message shares an ordinal, so an answer can cite
+   *  the message once instead of repeating an identical link per file. Absent
+   *  on a row that is the only one from its message. */
+  email_group?: number;
 }
 
 export interface GraphSharedFilesResult {
   items: GraphSharedFile[];
-  /** Present when insights were unavailable (tenant policy) or when a
-   *  shared_by filter matched nothing — steers instead of failing. */
+  /** Present when insights were unavailable (tenant policy) or when the
+   *  filters matched nothing — steers instead of failing. */
   note?: string;
+}
+
+/**
+ * Does this webUrl point at a file pasted into a Teams chat?
+ *
+ * Teams uploads a chat attachment to the SENDER's OneDrive, into a folder whose
+ * name is LOCALIZED ("Microsoft Teams Chat Files"; observed in this tenant as
+ * the French "Fichiers de conversation Microsoft Teams"). Enumerating those
+ * would need one entry per Microsoft UI language, so match the product name
+ * instead — Microsoft translates the words around it but never "Teams" itself.
+ *
+ * Only FOLDER segments are scanned, so a Share-dialog file named
+ * "Teams rollout plan.docx" is not misread as a chat paste.
+ *
+ * No decodeURIComponent: it throws on a lone `%`, and it buys nothing here —
+ * "Microsoft%20Teams" already lowercases to something containing "teams".
+ */
+function looksLikeTeamsChatPath(webUrl: string): boolean {
+  const folders = webUrl.split("?")[0].split("/").slice(0, -1).join("/").toLowerCase();
+  return folders.includes("/personal/") && folders.includes("teams");
+}
+
+/**
+ * Classify how a shared item reached the user. First match wins.
+ *
+ * `kind` is checked FIRST and comes from `resourceReference.type`, which Graph
+ * contracts — so a mailbox attachment can never fall through into the URL
+ * heuristic below.
+ *
+ * Degradation is deliberately one-directional. A Teams paste this misses
+ * (Microsoft renames the folder, or the file sits in a Teams *channel* under
+ * /sites/…) reads as "link", which is true and is exactly the information this
+ * tool carried before `via` existed. A false positive — a personal-OneDrive
+ * folder genuinely named "Teams Migration" — adds one row to a via="teams"
+ * query, with a visible OneDrive path in the answer. Neither ever yields
+ * "email", and the result is never null.
+ */
+export function deriveVia(kind: GraphSharedFile["kind"], webUrl: string | null): GraphSharedVia {
+  if (kind === "attachment") return "email";
+  if (webUrl && looksLikeTeamsChatPath(webUrl)) return "teams";
+  return "link";
+}
+
+/**
+ * Pull the message out of an OWA attachment-popout URL.
+ *
+ * Insights links an attachment row to the ATTACHMENT VIEWER, not to the email:
+ *
+ *   https://outlook.office.com/owa/?viewmodel=IAttachmentViewModelPopoutFactory
+ *     &AttachmentId=<message id + attachment discriminator>
+ *     &ItemId=<message id>
+ *     &AttachmentName=invoice.pdf
+ *
+ * All three parameters were present on 15 of 15 attachment rows (measured
+ * 2026-08-03). `ItemId` is the message's ordinary Graph id — verified
+ * character-for-character against `id` from /me/messages for the same message
+ * — so swapping the viewmodel reproduces the link Graph itself puts in
+ * `message.webLink`, observed the same day as:
+ *
+ *   https://outlook.office365.com/owa/?ItemID=<id>&exvsurl=1&viewmodel=ReadMessageItem
+ *
+ * Origin and pathname are carried over from the input rather than hard-coded,
+ * so a sovereign/GCC cloud — or the office365.com host Graph itself emits —
+ * keeps working.
+ */
+export function parseOwaAttachmentUrl(
+  webUrl: string | null,
+): { itemId: string; attachmentName: string | null; messageUrl: string } | null {
+  if (!webUrl) return null;
+  let url: URL;
+  try {
+    url = new URL(webUrl);
+  } catch {
+    return null;
+  }
+  // Case-INSENSITIVE lookup: insights spells it `ItemId`, Graph's own webLink
+  // spells it `ItemID`, and URLSearchParams.get() is case-sensitive — reading
+  // one spelling is the easiest way to ship a silently dead rewrite. Values
+  // come back through searchParams (lenient on a malformed escape) rather than
+  // decodeURIComponent (throws URIError).
+  const param = (want: string): string | null => {
+    for (const [k, v] of url.searchParams) {
+      if (k.toLowerCase() === want && v.trim()) return v;
+    }
+    return null;
+  };
+  const itemId = param("itemid");
+  if (!itemId) return null;
+  return {
+    itemId,
+    attachmentName: param("attachmentname"),
+    messageUrl:
+      `${url.origin}${url.pathname}` +
+      `?ItemID=${encodeURIComponent(itemId)}&exvsurl=1&viewmodel=ReadMessageItem`,
+  };
+}
+
+/** Epoch ms for sorting; an unparseable date sorts last rather than first. */
+function sharedAt(r: GraphSharedFile): number {
+  const t = Date.parse(r.shared_when ?? "");
+  return Number.isNaN(t) ? -Infinity : t;
+}
+
+/**
+ * Read the `via` argument, throwing on a value outside the set.
+ *
+ * Unlike `sort` on graph_files_search — which only reorders, so a silently
+ * ignored value is merely unhelpful — `via` NARROWS. A dropped filter returns
+ * every source and the model then narrates mail attachments as Teams pastes:
+ * the same class of silently-wrong answer the date arguments throw to prevent.
+ * Case is normalized first, so the likeliest mistake ("Teams") costs nothing.
+ */
+function parseVia(raw: unknown): GraphSharedVia | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const want = raw.trim().toLowerCase();
+  const hit = GRAPH_SHARED_VIA.find((v) => v === want);
+  if (!hit) {
+    throw new Error(`Unknown via "${raw}". Valid values: ${GRAPH_SHARED_VIA.join(", ")}.`);
+  }
+  return hit;
 }
 
 /**
@@ -1259,11 +1399,11 @@ export interface GraphSharedFilesResult {
  * content (bare `entity` references arrive with no title and no address —
  * noise a model would only trip on).
  *
- * INBOUND ONLY, by construction of the Office Graph: sharing is recorded on
- * the RECIPIENT's insights (measured: 50 rows, 15 distinct sharers, zero
- * shared by the signed-in user). "What did I share with X" is X's question to
- * ask; this tool answers "what was shared with me" and "what did X share with
- * me".
+ * INBOUND in every sample taken: sharing appears to be recorded on the
+ * RECIPIENT's insights (measured: 50 rows, 15 distinct sharers, zero shared BY
+ * the signed-in user — one mailbox, so an observation rather than a documented
+ * guarantee). "What did I share with X" is X's question to ask; this tool
+ * answers "what was shared with me" and "what did X share with me".
  */
 export function shapeSharedInsight(raw: unknown): GraphSharedFile | null {
   const it = (raw ?? {}) as Record<string, unknown>;
@@ -1280,15 +1420,22 @@ export function shapeSharedInsight(raw: unknown): GraphSharedFile | null {
   const by = (last.sharedBy ?? {}) as Record<string, unknown>;
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
   const ids = kind === "file" ? /^drives\/([^/]+)\/items\/(.+)$/.exec(str(ref.id) ?? "") : null;
+  const webUrl = str(ref.webUrl);
+  // An attachment row points at the attachment popout, and its insights title
+  // has had the extension stripped. Both are recoverable from that same URL, so
+  // rewrite to the email and take the real filename. A URL we cannot parse
+  // leaves both fields exactly as they were before this existed.
+  const owa = kind === "attachment" ? parseOwaAttachmentUrl(webUrl) : null;
   return {
-    name: str(vis.title),
+    name: owa?.attachmentName ?? str(vis.title),
     kind,
     shared_by: str(by.displayName),
     shared_when: str(last.sharedDateTime),
     how: str(last.sharingType),
+    via: deriveVia(kind, webUrl),
     drive_id: ids ? ids[1] : null,
     item_id: ids ? ids[2] : null,
-    webUrl: str(ref.webUrl),
+    webUrl: owa?.messageUrl ?? webUrl,
   };
 }
 
@@ -1297,12 +1444,16 @@ registerAppTool({
   namespace: "graph",
   description:
     "List what was recently shared WITH the signed-in person — OneDrive/" +
-    "SharePoint links and email attachments — newest first, with who shared it, " +
-    "when and how. Filter to one sharer with shared_by (a person's name). This " +
+    "SharePoint links, files pasted into a Teams chat, and email attachments — " +
+    "newest first, with who shared it, when and through which channel (via). " +
+    "Filter to one sharer with shared_by (a person's name) and/or one channel " +
+    "with via. This " +
     "answers \"what was shared with me\" and \"what did X share with me\"; it " +
     "CANNOT list what the signed-in person shared with others (that is recorded " +
     "on the recipient's side). Files carry the drive_id + item_id pair the other " +
-    "file tools accept; email attachments do not (they live in the mailbox). " +
+    "file tools accept; email attachments do not (they live in the mailbox) and " +
+    "link to the message rather than to the file. Several attachments from one " +
+    "email share an email_group number, so cite that message once. " +
     "Acts as the current signed-in person.",
   inputSchema: {
     type: "object",
@@ -1310,6 +1461,14 @@ registerAppTool({
       shared_by: {
         type: "string",
         description: 'Only items shared by this person, e.g. "Thibault" or "Thibault Draye".',
+      },
+      via: {
+        type: "string",
+        enum: ["email", "teams", "link"],
+        description:
+          'Only items that arrived this way: "email" (attached to a message), ' +
+          '"teams" (pasted into a Teams chat), "link" (a OneDrive or SharePoint ' +
+          "link). Omit to list every channel.",
       },
       limit: {
         type: "integer",
@@ -1321,9 +1480,12 @@ registerAppTool({
   execute: async (args, { userId }): Promise<GraphSharedFilesResult> => {
     const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25);
     const sharedBy = typeof args.shared_by === "string" ? args.shared_by.trim() : "";
+    const via = parseVia(args.via);
     // Same inflation rationale as graph_files_recent ($top precedes our row
-    // filter), amplified when a sharer filter will discard most rows.
-    const top = sharedBy ? 50 : Math.min(limit * 2, 50);
+    // filter), amplified when a filter will discard most rows — a via filter
+    // over a narrow window would report "no Teams files" when they were merely
+    // outside the slice.
+    const top = sharedBy || via ? 50 : Math.min(limit * 2, 50);
     let raw: unknown;
     try {
       raw = await graphFetch(userId, `/me/insights/shared?$top=${top}`, {
@@ -1341,16 +1503,58 @@ registerAppTool({
       throw err;
     }
     const needle = sharedBy.toLowerCase();
+    const seen = new Set<string>();
     const rows = ((raw as { value?: unknown[] })?.value ?? [])
       .map(shapeSharedInsight)
       .filter((r): r is GraphSharedFile => r !== null)
       .filter((r) => !needle || (r.shared_by ?? "").toLowerCase().includes(needle))
+      .filter((r) => !via || r.via === via)
+      // The insights order is empirically newest-first, but nothing contracts it
+      // — no $orderby is sent, and adding one to this surface is unverified (an
+      // unsupported-query-option 400 would take out the whole tool rather than
+      // one field). Sorting the shaped rows makes the "newest first" this tool
+      // advertises true by construction instead of by luck.
+      .sort((a, b) => sharedAt(b) - sharedAt(a))
+      // The same message AND the same filename is one attachment arriving
+      // twice; the newest copy survives because the sort already ran. Done
+      // before the slice so a duplicate never costs a slot.
+      .filter((r) => {
+        const key = `${r.webUrl ?? ""} ${r.name ?? ""}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
       .slice(0, limit);
-    if (rows.length === 0 && sharedBy) {
+
+    // Several attachments from ONE email arrive as several rows carrying the
+    // identical rewritten message URL, so that URL *is* the message key — no
+    // opaque 150-char mailbox id has to enter the shaped row or the prompt.
+    // Only a group of two or more earns an ordinal; a lone attachment needs no
+    // cross-reference. Deliberately NOT collapsed into one row: those really
+    // are different files, and their names are the useful part.
+    const byMessage = new Map<string, GraphSharedFile[]>();
+    for (const r of rows) {
+      if (r.via !== "email" || !r.webUrl) continue;
+      const group = byMessage.get(r.webUrl);
+      if (group) group.push(r);
+      else byMessage.set(r.webUrl, [r]);
+    }
+    let ordinal = 0;
+    for (const group of byMessage.values()) {
+      if (group.length < 2) continue;
+      ordinal += 1;
+      for (const r of group) r.email_group = ordinal;
+    }
+
+    if (rows.length === 0 && (sharedBy || via)) {
+      const filters = [
+        ...(sharedBy ? [`by "${sharedBy}"`] : []),
+        ...(via ? [`via ${via}`] : []),
+      ].join(" and ");
       return {
         items: [],
         note:
-          `Nothing in the recent sharing activity was shared by "${sharedBy}". ` +
+          `Nothing in the recent sharing activity was shared ${filters}. ` +
           "The window covers recent items only — try graph_files_search with " +
           "author for older files.",
       };

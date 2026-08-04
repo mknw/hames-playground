@@ -46,10 +46,22 @@ document itself would use.
 | Ask something like | Notes |
 |---|---|
 | *"What did I work on this week?"* / *"my last 10 files"* | Your own recently opened/edited files |
-| *"What was shared with me recently?"* | Files **and** email attachments, with who shared each and when |
+| *"What was shared with me recently?"* | Files, files pasted into a Teams chat, **and** email attachments, with who shared each, when and through which channel |
 | *"What did Thibault share with me?"* | Same, filtered to one person |
+| *"Show me what was shared with me via Teams"* | Filtered to one channel — also `by email`, or `as a link` |
 | *"What files did I email to Thibault since July?"* | Your sent mail with attachments — see the caveat below ⚠ |
 | *"What attachments did Marco send me?"* | Received mail with attachments |
+
+**Files pasted into a Teams chat show up here** — screenshots and documents
+dropped into a 1:1 or group chat live in the sender's OneDrive, and sharing them
+with the chat counts as sharing them with you. That is why a colleague's
+screenshot can be the most recent thing "shared with you" when nobody clicked
+Share. It is *files* only: the chat **messages** around them are not visible (see
+the ❌ table).
+
+**Email attachments link to the email, not the file.** Several attachments from
+one message are listed separately but carry the same numbered reference, so one
+link covers the set.
 
 ⚠ **"What did I email X" is not "what did I share with X".** Sent mail only
 shows files that travelled *through email*. Sharing a file from OneDrive's
@@ -62,7 +74,7 @@ invisible from your side (see the first row of the ❌ table for why).
 
 | If you ask | What happens & why | Workaround |
 |---|---|---|
-| *"What files did **I** share with Thibault?"* | **Structurally impossible from your account.** Microsoft records sharing on the *recipient's* side — your outbound shares are written to Thibault's activity, not yours. | Ask *"what did I **email** Thibault"* (partial). Or Thibault signs in and asks *"what did Michael share with me?"* — that works perfectly. |
+| *"What files did **I** share with Thibault?"* | **Not available from your account.** Microsoft appears to record sharing on the *recipient's* side: across 50 rows of your sharing activity, every one was inbound and none was shared by you. | Ask *"what did I **email** Thibault"* (partial). Or Thibault signs in and asks *"what did Michael share with me?"* — that works perfectly. |
 | *"What does the contract **say** about notice periods?"* | Search returns ~300-character snippets, not file contents. This agent can find the file, not read it. | Open the link it gives you. (A future assistant with document retrieval will close this gap.) |
 | *"Summarize the 'Meeting with Sudeesh' Loop page"* | Loop **pages and workspaces** are stored where the app's permissions can't reach (only title/link/snippet come back). Tracked as #137. | Open the Loop link it finds for you. |
 | *"What's on **Thibault's** calendar?"* / *"his unread mail"* | Deliberate boundary: the agent acts as you, and only you. | Ask Thibault — or ask *"when am I free"* and coordinate. |
@@ -72,7 +84,7 @@ invisible from your side (see the first row of the ❌ table for why).
 | *"List ALL 1,600 of Thibault's files"* | Results cap at 25 per call. The agent is told to *narrow* (dates, type, site, author) instead of paging. | Ask a narrower question. |
 | *"My most-opened file this month"* (stats/counts) | The activity feed is a recency stream, not analytics. | — |
 | *"Who has access to this file?"* | No permissions connector. | Check in OneDrive/SharePoint UI. |
-| *"What did X post in Teams?"* | No Teams connector. | — |
+| *"What did X post in Teams?"* | No Teams connector — chat and channel **messages** are not readable. Note this is narrower than it sounds: files *pasted into* a chat do appear under "what was shared with me via Teams". The words around them do not. | Open the chat in Teams. |
 
 ---
 
@@ -96,5 +108,6 @@ invisible from your side (see the first row of the ❌ table for why).
 
 | Date | Change |
 |---|---|
+| 2026-08-04 | Shared-with-me now says which channel each item arrived through (email / Teams chat / link) and can filter to one. Email attachments link to the message and keep their file extension; several attachments from one email are cross-referenced. |
 | 2026-07-30 | Added: recent files, shared-with-me, mail attachments (sent/received), author + date + newest-first search filters, folder paths on search results. This guide created. |
 | 2026-07-29 | Initial file tools: search, browse. Calendar, inbox, profile. |

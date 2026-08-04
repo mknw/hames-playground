@@ -68,6 +68,7 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 |----------|-------------|
 | [deploy/entra-setup.md](deploy/entra-setup.md) | **Entra tenant setup** (#119): provisioning checklist (app registration, redirect URIs, client secret), the delegated Graph scope set + consent ordering trap, app env vars and key rotation, the `oid`-based identity model. Operator-facing — in-app architecture is below and in [UI_ARCHITECTURE.md §3](UI_ARCHITECTURE.md) |
 | [MICROSOFT_GRAPH.md](MICROSOFT_GRAPH.md) | **Per-user Graph access** (Pattern C, #110): what the Microsoft 365 agent can do, the app-side tool transport + dispatch order, cross-user isolation guarantees, the encrypted per-user token lifecycle, and how to add a connector |
+| [graph-api-notes.md](graph-api-notes.md) | **Microsoft Graph API field notes**: what Graph actually returns — the endpoint map incl. deprecations, identifier formats, response envelopes, field-reliability table, query-language traps, what each error really means, and an explicit "not verified" list. Open this when a Graph response surprises you |
 | [user-guides/microsoft-graph.md](user-guides/microsoft-graph.md) | **User guide — Microsoft 365 agent**: example questions that work, the ones that don't (and why), reading its answers. The living record of user-askable expressions; update it when a connector lands |
 
 ---
@@ -133,21 +134,28 @@ kg-agent/
 │   ├── AGENT_TRIGGER.md         # POST /api/agents/:id async trigger → actions
 │   ├── DOCKER_COMPOSE.md        # Docker setup
 │   ├── MCP_GATEWAY.md           # MCP Gateway reference
+│   ├── MICROSOFT_GRAPH.md       # Per-user Graph access (Pattern C, #110)
+│   ├── graph-api-notes.md       # What Graph actually returns: ids, quirks, deprecations
 │   ├── sandbox-flavours.md      # Rootfs flavours (#78): image-processing/data/office
 │   ├── plan/                    # Forward-looking design docs
 │   │   ├── ROADMAP.md           # Multi-user architecture + phased MoSCoW roadmap
 │   │   └── sandbox.md           # Sandbox design (core shipped; Swarm/Firecracker = plan)
 │   ├── deploy/
-│   │   └── azure-vm.md          # Single-VM deployment runbook
+│   │   ├── azure-vm.md          # Single-VM deployment runbook
+│   │   └── entra-setup.md       # Entra tenant provisioning + consent (#119)
 │   ├── sandbox/
 │   │   └── README.md            # Sandbox operational debugging
+│   ├── user-guides/
+│   │   └── microsoft-graph.md   # Microsoft 365 agent: what you can ask
 │   └── harness-patterns/        # Harness patterns documentation
 │       ├── README.md            # Overview
 │       ├── api.md               # API reference
 │       ├── examples.md          # Example agents (7)
 │       ├── frontend.md          # Frontend integration
 │       ├── parallel.md          # Parallel pattern design
-│       └── with-references.md   # withReferences meta-pattern design (#30)
+│       ├── prompt-caching.md    # Cache-breakpoint budget and placement (#122)
+│       ├── with-references.md   # withReferences meta-pattern design (#30)
+│       └── withReferences-tutorial.md  # withReferences walkthrough
 ├── ui/
 │   ├── README.md                # UI quick start + index
 │   └── src/lib/

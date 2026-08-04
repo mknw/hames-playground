@@ -4,9 +4,12 @@ How the app calls Microsoft Graph **as the signed-in user**, so Entra enforces
 each request's scope instead of an org token guarded by app code. This is
 Pattern C of the identity model in #107; issue #110.
 
-For tenant setup (app registration, scopes, consent, env vars) see
-[`deploy/entra-setup.md`](deploy/entra-setup.md). For the sign-in/session
-machinery see [UI_ARCHITECTURE.md §3](UI_ARCHITECTURE.md).
+> **See also:** [`deploy/entra-setup.md`](deploy/entra-setup.md) for tenant setup
+> (app registration, scopes, consent, env vars) · [UI_ARCHITECTURE.md
+> §3](UI_ARCHITECTURE.md) for the sign-in/session machinery ·
+> [`graph-api-notes.md`](graph-api-notes.md) for what Graph itself actually
+> returns — id formats, field reliability, query traps, deprecation dates. The
+> decisions below cite the facts recorded there.
 
 ---
 
@@ -23,7 +26,7 @@ Nine registered `graph` tools. All of them only ever **read** from Microsoft 365
 | `graph_files_search` | files across own OneDrive **and** every reachable SharePoint site | `Files.Read.All` + `Sites.Read.All` |
 | `graph_files_list` | own OneDrive root, or one folder's children | `Files.Read.All` |
 | `graph_files_recent` | own recently used/edited files (Office Graph insights) | `Sites.Read.All` |
-| `graph_files_shared` | what was shared *with* the user, by whom and how (insights) | `Sites.Read.All` |
+| `graph_files_shared` | what was shared *with* the user, by whom and through which channel (insights) | `Sites.Read.All` |
 | `graph_file_ingest` | one own OneDrive/SharePoint file → the Data Stash | `Files.Read.All` |
 
 Enough for "what does my day look like?" — the agent's loop calls several tools
@@ -337,6 +340,57 @@ on the non-deprecated Office Graph insights surface (`GET /me/insights/used`,
   **successful** empty result with a note steering the model to
   `graph_files_search` with `sort="newest"` — not to a sign-in prompt, which
   couldn't help.
+
+---
+
+## Sharing has one direction
+
+Two tools answer "who sent me what", from opposite surfaces, and both are
+**inbound only**:
+
+| | `graph_files_shared` | `graph_mail_attachments` |
+|---|---|---|
+| Call | `GET /me/insights/shared` | `GET /me/messages?$expand=attachments(...)` |
+| Sees | OneDrive/SharePoint links, Teams chat pastes, mail attachments | only files that travelled through email |
+| Scope | `Sites.Read.All` | `Mail.Read` |
+| Direction | what reached **me** | both, via `direction` — but sent mail only shows *attachments*, never Share-dialog grants |
+
+"What did I share with X" is X's question to ask. Sharing appears to be recorded
+on the *recipient's* insights — 50 rows, 15 distinct sharers, zero shared by the
+signed-in user — so the app cannot answer the outbound direction, and the tool
+description says so rather than letting the model produce a confident undercount.
+That is a measurement over one mailbox, not a documented guarantee; see
+[`graph-api-notes.md`](graph-api-notes.md#not-verified).
+
+### Why `via` exists when Graph already reports `how`
+
+Graph's `lastShared.sharingType` does not identify the mechanism. Measured
+2026-08-03 over 25 rows, **23 said `"Attachment"`** — collapsing mail
+attachments, files pasted into a Teams chat, and drive documents sent as links
+into one uninformative label. A user asking "what was shared with me via Teams"
+could not be answered, and the synthesized answer labelled Teams screenshots
+"Attachment", which reads as wrong.
+
+`deriveVia` classifies each row into `email` / `teams` / `link`, and `via`
+filters on it. The order matters: `email` is decided from
+`resourceReference.type`, which Graph contracts, so a mailbox attachment can
+never fall through into the URL heuristic that follows. The Teams branch matches
+the untranslated product name in a **folder** segment rather than enumerating the
+localized folder names, and a miss degrades to `link` — true, and exactly what
+the tool reported before `via` existed.
+
+`how` is kept because `"Link"` is the one thing it does distinguish (a
+Share-dialog grant from a drive file sent as an attachment), and because dropping
+a field is a breaking change where hiding one from the controller is a
+`resultOmit` edit.
+
+Two things follow from the same insights row, both from the OWA URL it hands
+back: a mailbox attachment links to the **message** rather than the attachment
+popout, and its filename comes from the URL's `AttachmentName` because the
+insights title has the extension stripped. Several attachments from one email
+therefore share one rewritten URL, which is what `email_group` numbers — the
+rows stay separate, because they are separate files, but the answer can cite the
+message once.
 
 ---
 

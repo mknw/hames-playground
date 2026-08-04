@@ -11,7 +11,7 @@
 
 "use server";
 
-import { getNeo4jDriver, resetDriver, verifyConnection, type Neo4jCredentials } from './client';
+import { getNeo4jDriver, resetDriver, verifyConnection } from './client';
 import { transformNeo4jToCytoscape, parseNeo4jResults } from '../graph/transform';
 
 // ============================================================================
@@ -43,13 +43,11 @@ export interface ConnectionResult {
 /**
  * Fetch the Neo4j database schema
  * Used by agent for context about available node types and relationships
- *
- * @param credentials - Optional credentials from client-side EnvVarManager
  */
-export async function getSchema(credentials?: Neo4jCredentials): Promise<SchemaResult> {
+export async function getSchema(): Promise<SchemaResult> {
   "use server";
 
-  const session = getNeo4jDriver(credentials).session();
+  const session = getNeo4jDriver().session();
   try {
     const result = await session.run('CALL db.schema.visualization()');
     return {
@@ -73,10 +71,10 @@ export async function getSchema(credentials?: Neo4jCredentials): Promise<SchemaR
  * - Node labels with their properties
  * - Relationship patterns (start)-[TYPE]->(end)
  */
-export async function getSchemaForAgent(credentials?: Neo4jCredentials): Promise<SchemaResult> {
+export async function getSchemaForAgent(): Promise<SchemaResult> {
   "use server";
 
-  const session = getNeo4jDriver(credentials).session();
+  const session = getNeo4jDriver().session();
   try {
     // Get labels with their actual properties (sample 1 node per label)
     const labelsQuery = `
@@ -126,7 +124,7 @@ export async function getSchemaForAgent(credentials?: Neo4jCredentials): Promise
   } catch (error) {
     console.error('Failed to fetch agent schema:', error);
     // Fallback to simplified schema
-    return getSimplifiedSchema(credentials);
+    return getSimplifiedSchema();
   } finally {
     await session.close();
   }
@@ -136,10 +134,10 @@ export async function getSchemaForAgent(credentials?: Neo4jCredentials): Promise
  * Get a simplified schema representation
  * Useful for smaller context windows
  */
-export async function getSimplifiedSchema(credentials?: Neo4jCredentials): Promise<SchemaResult> {
+export async function getSimplifiedSchema(): Promise<SchemaResult> {
   "use server";
 
-  const session = getNeo4jDriver(credentials).session();
+  const session = getNeo4jDriver().session();
   try {
     // Get node labels
     const labelsResult = await session.run('CALL db.labels()');
@@ -232,11 +230,9 @@ export async function getNodeProperties(
  * Execute a read-only Cypher query (for GraphVisualization manual input)
  *
  * @param cypher - The Cypher query to execute
- * @param credentials - Optional credentials from client-side EnvVarManager
  */
 export async function runManualCypher(
-  cypher: string,
-  credentials?: Neo4jCredentials
+  cypher: string
 ): Promise<CypherResult> {
   "use server";
 
@@ -253,7 +249,7 @@ export async function runManualCypher(
     }
   }
 
-  const session = getNeo4jDriver(credentials).session();
+  const session = getNeo4jDriver().session();
   try {
     const result = await session.run(cypher);
 
@@ -285,15 +281,13 @@ export async function runManualCypher(
  * This is called by the agentic layer after user approval
  *
  * @param cypher - The Cypher query to execute
- * @param credentials - Optional credentials from client-side EnvVarManager
  */
 export async function executeWriteCypher(
-  cypher: string,
-  credentials?: Neo4jCredentials
+  cypher: string
 ): Promise<CypherResult> {
   "use server";
 
-  const session = getNeo4jDriver(credentials).session();
+  const session = getNeo4jDriver().session();
   try {
     const result = await session.run(cypher);
 
@@ -328,7 +322,7 @@ export async function executeWriteCypher(
 
 /**
  * Reset the Neo4j connection
- * Call this when credentials change in EnvVarManager
+ * Forces the driver singleton to reconnect on the next query
  */
 export async function resetNeo4jConnection(): Promise<ConnectionResult> {
   "use server";
@@ -345,15 +339,13 @@ export async function resetNeo4jConnection(): Promise<ConnectionResult> {
 }
 
 /**
- * Test the Neo4j connection with optional credentials
+ * Test the Neo4j connection
  */
-export async function testNeo4jConnection(
-  credentials?: Neo4jCredentials
-): Promise<ConnectionResult> {
+export async function testNeo4jConnection(): Promise<ConnectionResult> {
   "use server";
 
   try {
-    const connected = await verifyConnection(credentials);
+    const connected = await verifyConnection();
     return {
       success: connected,
       error: connected ? undefined : 'Connection verification failed'

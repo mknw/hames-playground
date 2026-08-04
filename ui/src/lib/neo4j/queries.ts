@@ -6,7 +6,7 @@
  * - Manual Cypher queries from GraphVisualization
  * - Connection management
  *
- * These operations bypass BAML/UTCP for performance and simplicity.
+ * These operations bypass the agent layer for performance and simplicity.
  */
 
 "use server";

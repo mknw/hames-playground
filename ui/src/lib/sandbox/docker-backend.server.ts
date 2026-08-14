@@ -252,12 +252,7 @@ export class DockerBackend implements ComputeBackend {
   async health(vm: VMHandle): Promise<HealthStatus> {
     const cid = containerId(vm)
     try {
-      const status = await docker([
-        'inspect',
-        '-f',
-        '{{.State.Status}}',
-        cid,
-      ])
+      const status = await docker(['inspect', '-f', '{{.State.Status}}', cid])
       if (status === 'running') return { state: 'healthy', detail: status }
       return { state: 'unhealthy', detail: status }
     } catch {

@@ -22,7 +22,7 @@ import type {
   ErrorEventData,
   IntentCompactedEventData,
   LLMCallData,
-  UnifiedContext
+  UnifiedContext,
 } from '~/lib/harness-patterns'
 import patternColorsJson from '../../../pattern-colors.json'
 
@@ -36,10 +36,16 @@ interface ObservabilityPanelProps {
 // Pattern Colors (loaded from pattern-colors.json)
 // ============================================================================
 
-interface PatternColorEntry { color: string; tint: string }
+interface PatternColorEntry {
+  color: string
+  tint: string
+}
 
 const patternColors = patternColorsJson as unknown as Record<string, PatternColorEntry>
-const defaultPatternColor: PatternColorEntry = patternColors._default ?? { color: '#94a3b8', tint: 'rgba(148,163,184,0.06)' }
+const defaultPatternColor: PatternColorEntry = patternColors._default ?? {
+  color: '#94a3b8',
+  tint: 'rgba(148,163,184,0.06)',
+}
 
 function getPatternColor(patternId: string): PatternColorEntry {
   return patternColors[patternId] ?? defaultPatternColor
@@ -62,23 +68,23 @@ const eventIcons: Record<EventType, string> = {
   approval_response: '✅',
   error: '❌',
   reference_attached: '🔗',
-  intent_compacted: '🎯'
+  intent_compacted: '🎯',
 }
 
 const eventColors: Record<EventType, string> = {
-  user_message: '#60a5fa',      // blue-400
+  user_message: '#60a5fa', // blue-400
   assistant_message: '#34d399', // green-400
-  tool_call: '#a78bfa',         // violet-400
-  tool_result: '#22d3ee',       // cyan-400
+  tool_call: '#a78bfa', // violet-400
+  tool_result: '#22d3ee', // cyan-400
   controller_action: '#fbbf24', // amber-400
-  critic_result: '#f472b6',     // pink-400
-  pattern_enter: '#94a3b8',     // overridden per-pattern
-  pattern_exit: '#94a3b8',      // overridden per-pattern
-  approval_request: '#f97316',  // orange-500
+  critic_result: '#f472b6', // pink-400
+  pattern_enter: '#94a3b8', // overridden per-pattern
+  pattern_exit: '#94a3b8', // overridden per-pattern
+  approval_request: '#f97316', // orange-500
   approval_response: '#10b981', // emerald-500
-  error: '#ef4444',             // red-500
+  error: '#ef4444', // red-500
   reference_attached: '#c084fc', // purple-400
-  intent_compacted: '#fbbf24'   // amber-400 (an LLM reasoning step, like controller_action)
+  intent_compacted: '#fbbf24', // amber-400 (an LLM reasoning step, like controller_action)
 }
 
 // ============================================================================
@@ -158,9 +164,15 @@ const fmtUsd = (v: number): string => (v >= 0.1 ? `$${v.toFixed(2)}` : `$${v.toF
  *  cache-write bucket there, and no cost (partial pricing would mislead). */
 const foldTokenTotals = (events: ContextEvent[]) => {
   const t = {
-    llmCalls: 0, attempts: 0,
-    inputUncached: 0, cacheRead: 0, cacheWrite: 0, output: 0,
-    costUsd: 0, noCacheUsd: 0, costKnownCalls: 0,
+    llmCalls: 0,
+    attempts: 0,
+    inputUncached: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    output: 0,
+    costUsd: 0,
+    noCacheUsd: 0,
+    costKnownCalls: 0,
   }
   for (const e of events) {
     const m = e.metrics
@@ -195,33 +207,29 @@ const foldTokenTotals = (events: ContextEvent[]) => {
   }
 }
 
-const SummaryBar = (props: { events: ContextEvent[], onClear?: () => void }) => {
+const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void }) => {
   const metrics = createMemo(() => {
     const events = props.events
-    const toolResults = events.filter(e => e.type === 'tool_result')
-    const successCount = toolResults.filter(e => (e.data as ToolResultEventData).success).length
-    const errorCount = events.filter(e => e.type === 'error').length
+    const toolResults = events.filter((e) => e.type === 'tool_result')
+    const successCount = toolResults.filter((e) => (e.data as ToolResultEventData).success).length
+    const errorCount = events.filter((e) => e.type === 'error').length
 
     return {
       totalEvents: events.length,
       successRate: toolResults.length > 0 ? successCount / toolResults.length : 1,
-      errorCount
+      errorCount,
     }
   })
 
   const tokenTotals = createMemo(() => foldTokenTotals(props.events))
 
   return (
-    <div
-      p="3"
-      bg="dark-bg-tertiary"
-      border="b dark-border-primary"
-      flex="~ wrap"
-      gap="4"
-    >
+    <div p="3" bg="dark-bg-tertiary" border="b dark-border-primary" flex="~ wrap" gap="4">
       <div flex="~" items="center" gap="2">
         <span text="xs dark-text-tertiary">Events:</span>
-        <span text="sm dark-text-primary" font="mono">{metrics().totalEvents}</span>
+        <span text="sm dark-text-primary" font="mono">
+          {metrics().totalEvents}
+        </span>
       </div>
 
       <div flex="~" items="center" gap="2">
@@ -237,7 +245,9 @@ const SummaryBar = (props: { events: ContextEvent[], onClear?: () => void }) => 
       <Show when={metrics().errorCount > 0}>
         <div flex="~" items="center" gap="2">
           <span text="xs dark-text-tertiary">Errors:</span>
-          <span text="sm red-400" font="mono">{metrics().errorCount}</span>
+          <span text="sm red-400" font="mono">
+            {metrics().errorCount}
+          </span>
         </div>
       </Show>
 
@@ -245,38 +255,66 @@ const SummaryBar = (props: { events: ContextEvent[], onClear?: () => void }) => 
       <Show when={tokenTotals().llmCalls > 0}>
         <div flex="~" items="center" gap="2" title="Input tokens: fresh / cache-read / cache-write">
           <span text="xs dark-text-tertiary">In:</span>
-          <span text="sm neon-green" font="mono">{fmtTok(tokenTotals().inputUncached)}</span>
+          <span text="sm neon-green" font="mono">
+            {fmtTok(tokenTotals().inputUncached)}
+          </span>
           <Show when={tokenTotals().cacheRead > 0 || tokenTotals().cacheWrite > 0}>
-            <span text="sm violet-400" font="mono">+{fmtTok(tokenTotals().cacheRead)}⚡</span>
-            <span text="sm amber-400" font="mono">+{fmtTok(tokenTotals().cacheWrite)}✎</span>
+            <span text="sm violet-400" font="mono">
+              +{fmtTok(tokenTotals().cacheRead)}⚡
+            </span>
+            <span text="sm amber-400" font="mono">
+              +{fmtTok(tokenTotals().cacheWrite)}✎
+            </span>
           </Show>
         </div>
         <div flex="~" items="center" gap="2">
           <span text="xs dark-text-tertiary">Out:</span>
-          <span text="sm neon-cyan" font="mono">{fmtTok(tokenTotals().output)}</span>
+          <span text="sm neon-cyan" font="mono">
+            {fmtTok(tokenTotals().output)}
+          </span>
         </div>
         <Show when={tokenTotals().cachedPct > 0}>
-          <div flex="~" items="center" gap="2" title="Share of input tokens served from cache (0.1× rate)">
+          <div
+            flex="~"
+            items="center"
+            gap="2"
+            title="Share of input tokens served from cache (0.1× rate)"
+          >
             <span text="xs dark-text-tertiary">Cached:</span>
-            <span text="sm violet-400" font="mono">{Math.round(tokenTotals().cachedPct * 100)}%</span>
+            <span text="sm violet-400" font="mono">
+              {Math.round(tokenTotals().cachedPct * 100)}%
+            </span>
           </div>
         </Show>
         <Show when={tokenTotals().costKnownCalls > 0}>
           <div
-            flex="~" items="center" gap="2"
+            flex="~"
+            items="center"
+            gap="2"
             title={`Estimated from per-call rates at call time; ${tokenTotals().costKnownCalls}/${tokenTotals().llmCalls} calls priced. Without caching: ${fmtUsd(tokenTotals().noCacheUsd)}`}
           >
             <span text="xs dark-text-tertiary">Cost:</span>
-            <span text="sm dark-text-primary" font="mono">{fmtUsd(tokenTotals().costUsd)}</span>
+            <span text="sm dark-text-primary" font="mono">
+              {fmtUsd(tokenTotals().costUsd)}
+            </span>
             <Show when={tokenTotals().savedPct > 0.005}>
-              <span text="xs neon-green" font="mono">−{Math.round(tokenTotals().savedPct * 100)}%</span>
+              <span text="xs neon-green" font="mono">
+                −{Math.round(tokenTotals().savedPct * 100)}%
+              </span>
             </Show>
           </div>
         </Show>
         <Show when={tokenTotals().attempts > tokenTotals().llmCalls}>
-          <div flex="~" items="center" gap="2" title="Physical API calls exceeded LLM steps — retries/fallbacks burned extra spend (already included in the totals)">
+          <div
+            flex="~"
+            items="center"
+            gap="2"
+            title="Physical API calls exceeded LLM steps — retries/fallbacks burned extra spend (already included in the totals)"
+          >
             <span text="xs dark-text-tertiary">Retries:</span>
-            <span text="sm amber-400" font="mono">+{tokenTotals().attempts - tokenTotals().llmCalls}</span>
+            <span text="sm amber-400" font="mono">
+              +{tokenTotals().attempts - tokenTotals().llmCalls}
+            </span>
           </div>
         </Show>
       </Show>
@@ -319,14 +357,14 @@ const PatternBoundaryRow = (props: { event: ContextEvent }) => {
         'background-color': pc.tint,
         'border-top': isEnter ? `1px solid ${pc.color}40` : 'none',
         'border-bottom': !isEnter ? `1px solid ${pc.color}40` : 'none',
-        'min-height': '24px'
+        'min-height': '24px',
       }}
     >
       <span
         style={{
           color: pc.color,
           'font-size': '9px',
-          'line-height': '1'
+          'line-height': '1',
         }}
       >
         {isEnter ? '▶' : '■'}
@@ -336,7 +374,7 @@ const PatternBoundaryRow = (props: { event: ContextEvent }) => {
           color: pc.color,
           'font-size': '10px',
           'font-family': '"Fira Code", ui-monospace, monospace',
-          'font-weight': '500'
+          'font-weight': '500',
         }}
       >
         {patternId}
@@ -345,7 +383,7 @@ const PatternBoundaryRow = (props: { event: ContextEvent }) => {
         style={{
           color: `${pc.color}99`,
           'font-size': '9px',
-          'font-family': '"Fira Code", ui-monospace, monospace'
+          'font-family': '"Fira Code", ui-monospace, monospace',
         }}
       >
         {isEnter ? 'enter' : 'exit'}
@@ -399,7 +437,7 @@ const EventRow = (props: {
           'font-size': '11px',
           'font-family': '"Fira Code", ui-monospace, monospace',
           'font-weight': '500',
-          'text-align': 'center'
+          'text-align': 'center',
         }}
       >
         {type.replace(/_/g, ' ')}
@@ -434,25 +472,14 @@ const EventRow = (props: {
       style={{ 'background-color': props.bgTint ?? 'transparent' }}
     >
       {/* Interface Lane (left) */}
-      <div
-        w="1/2"
-        flex="~"
-        justify="center"
-        items="center"
-        border="r dark-border-secondary/30"
-      >
+      <div w="1/2" flex="~" justify="center" items="center" border="r dark-border-secondary/30">
         <Show when={lane === 'interface'}>
           <NodeContent />
         </Show>
       </div>
 
       {/* Tools Lane (right) */}
-      <div
-        w="1/2"
-        flex="~"
-        justify="center"
-        items="center"
-      >
+      <div w="1/2" flex="~" justify="center" items="center">
         <Show when={lane === 'tools'}>
           <NodeContent />
         </Show>
@@ -483,20 +510,17 @@ const LaneHeaders = () => (
       border="r dark-border-secondary"
     >
       <div w="2" h="2" rounded="full" bg="cyber-500" />
-      <span text="xs dark-text-primary" font="medium">Interface</span>
+      <span text="xs dark-text-primary" font="medium">
+        Interface
+      </span>
     </div>
 
     {/* Tools Lane Header */}
-    <div
-      w="1/2"
-      p="2"
-      flex="~"
-      items="center"
-      justify="center"
-      gap="2"
-    >
+    <div w="1/2" p="2" flex="~" items="center" justify="center" gap="2">
       <div w="2" h="2" rounded="full" bg="neon-cyan" />
-      <span text="xs dark-text-primary" font="medium">Tools</span>
+      <span text="xs dark-text-primary" font="medium">
+        Tools
+      </span>
     </div>
   </div>
 )
@@ -506,14 +530,7 @@ const LaneHeaders = () => (
 // ============================================================================
 
 const EmptyState = () => (
-  <div
-    flex="~ col"
-    items="center"
-    justify="center"
-    h="full"
-    p="8"
-    text="center"
-  >
+  <div flex="~ col" items="center" justify="center" h="full" p="8" text="center">
     <svg
       width="48"
       height="48"
@@ -598,7 +615,8 @@ const ToolPairRow = (props: {
   const callData = () => props.call.data as ToolCallEventData
   const resultData = () => props.result?.data as ToolResultEventData | undefined
   const success = () => resultData()?.success ?? true
-  const preview = () => `${callData().tool}: ${resultData() ? (success() ? 'ok' : 'error') : 'pending'}`
+  const preview = () =>
+    `${callData().tool}: ${resultData() ? (success() ? 'ok' : 'error') : 'pending'}`
 
   return (
     <div
@@ -608,21 +626,10 @@ const ToolPairRow = (props: {
       style={{ 'background-color': props.bgTint ?? 'transparent' }}
     >
       {/* Interface Lane (left) - empty for tool pairs */}
-      <div
-        w="1/2"
-        flex="~"
-        justify="center"
-        items="center"
-        border="r dark-border-secondary/30"
-      />
+      <div w="1/2" flex="~" justify="center" items="center" border="r dark-border-secondary/30" />
 
       {/* Tools Lane (right) */}
-      <div
-        w="1/2"
-        flex="~"
-        justify="center"
-        items="center"
-      >
+      <div w="1/2" flex="~" justify="center" items="center">
         <div
           flex="~ col"
           items="center"
@@ -643,7 +650,7 @@ const ToolPairRow = (props: {
               'font-size': '11px',
               'font-family': '"Fira Code", ui-monospace, monospace',
               'font-weight': '500',
-              'text-align': 'center'
+              'text-align': 'center',
             }}
           >
             tool call
@@ -671,7 +678,11 @@ const ToolPairRow = (props: {
 // Tool Pair Detail Component
 // ============================================================================
 
-const ToolPairDetail = (props: { call: ContextEvent; result?: ContextEvent; onClose: () => void }) => {
+const ToolPairDetail = (props: {
+  call: ContextEvent
+  result?: ContextEvent
+  onClose: () => void
+}) => {
   const callData = () => props.call.data as ToolCallEventData
   const resultData = () => props.result?.data as ToolResultEventData | undefined
 
@@ -685,29 +696,19 @@ const ToolPairDetail = (props: { call: ContextEvent; result?: ContextEvent; onCl
         'z-index': '50',
         display: 'flex',
         'flex-direction': 'column',
-        overflow: 'hidden'
+        overflow: 'hidden',
       }}
     >
       {/* Header */}
-      <div
-        flex="~"
-        items="center"
-        justify="between"
-        p="4"
-        border="b dark-border-primary"
-      >
+      <div flex="~" items="center" justify="between" p="4" border="b dark-border-primary">
         <div flex="~ col" gap="1">
           <div flex="~" items="center" gap="2">
             <span text="lg">🔧</span>
-            <span text="sm dark-text-primary" font="medium">tool call</span>
+            <span text="sm dark-text-primary" font="medium">
+              tool call
+            </span>
             <Show when={props.call.llmCall}>
-              <span
-                text="xs neon-cyan"
-                bg="neon-cyan/10"
-                p="x-1.5 y-0.5"
-                rounded="sm"
-                font="mono"
-              >
+              <span text="xs neon-cyan" bg="neon-cyan/10" p="x-1.5 y-0.5" rounded="sm" font="mono">
                 LLM
               </span>
             </Show>
@@ -738,13 +739,19 @@ const ToolPairDetail = (props: { call: ContextEvent; result?: ContextEvent; onCl
 
         {/* Tool name */}
         <div m="b-3">
-          <div text="xs dark-text-tertiary" m="b-1">Tool</div>
-          <div text="sm neon-cyan" font="mono">{callData().tool}</div>
+          <div text="xs dark-text-tertiary" m="b-1">
+            Tool
+          </div>
+          <div text="sm neon-cyan" font="mono">
+            {callData().tool}
+          </div>
         </div>
 
         {/* Arguments */}
         <div m="b-3">
-          <div text="xs dark-text-tertiary" m="b-1">Arguments</div>
+          <div text="xs dark-text-tertiary" m="b-1">
+            Arguments
+          </div>
           <pre
             text="xs dark-text-primary"
             bg="dark-bg-tertiary"
@@ -760,16 +767,17 @@ const ToolPairDetail = (props: { call: ContextEvent; result?: ContextEvent; onCl
         {/* Result */}
         <Show when={resultData()}>
           <div m="b-3">
-            <div text="xs dark-text-tertiary" m="b-1">Status</div>
-            <div
-              text={`sm ${resultData()!.success ? 'neon-green' : 'red-400'}`}
-              font="medium"
-            >
+            <div text="xs dark-text-tertiary" m="b-1">
+              Status
+            </div>
+            <div text={`sm ${resultData()!.success ? 'neon-green' : 'red-400'}`} font="medium">
               {resultData()!.success ? 'Success' : `Error: ${resultData()!.error}`}
             </div>
           </div>
           <div>
-            <div text="xs dark-text-tertiary" m="b-1">Result</div>
+            <div text="xs dark-text-tertiary" m="b-1">
+              Result
+            </div>
             <pre
               text="xs dark-text-primary"
               bg="dark-bg-tertiary"
@@ -794,11 +802,17 @@ const ToolPairDetail = (props: { call: ContextEvent; result?: ContextEvent; onCl
 const ToolCallDetail = (props: { data: ToolCallEventData }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">Tool</div>
-      <div text="sm neon-cyan" font="mono">{props.data.tool}</div>
+      <div text="xs dark-text-tertiary" m="b-1">
+        Tool
+      </div>
+      <div text="sm neon-cyan" font="mono">
+        {props.data.tool}
+      </div>
     </div>
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">Arguments</div>
+      <div text="xs dark-text-tertiary" m="b-1">
+        Arguments
+      </div>
       <pre
         text="xs dark-text-primary"
         bg="dark-bg-tertiary"
@@ -816,20 +830,25 @@ const ToolCallDetail = (props: { data: ToolCallEventData }) => (
 const ToolResultDetail = (props: { data: ToolResultEventData }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">Tool</div>
-      <div text="sm neon-cyan" font="mono">{props.data.tool}</div>
+      <div text="xs dark-text-tertiary" m="b-1">
+        Tool
+      </div>
+      <div text="sm neon-cyan" font="mono">
+        {props.data.tool}
+      </div>
     </div>
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">Status</div>
-      <div
-        text={`sm ${props.data.success ? 'neon-green' : 'red-400'}`}
-        font="medium"
-      >
+      <div text="xs dark-text-tertiary" m="b-1">
+        Status
+      </div>
+      <div text={`sm ${props.data.success ? 'neon-green' : 'red-400'}`} font="medium">
         {props.data.success ? 'Success' : `Error: ${props.data.error}`}
       </div>
     </div>
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">Result</div>
+      <div text="xs dark-text-tertiary" m="b-1">
+        Result
+      </div>
       <pre
         text="xs dark-text-primary"
         bg="dark-bg-tertiary"
@@ -847,17 +866,25 @@ const ToolResultDetail = (props: { data: ToolResultEventData }) => (
 const ActionDetail = (props: { data: ControllerActionEventData }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">Tool</div>
-      <div text="sm neon-cyan" font="mono">{props.data.action.tool_name}</div>
+      <div text="xs dark-text-tertiary" m="b-1">
+        Tool
+      </div>
+      <div text="sm neon-cyan" font="mono">
+        {props.data.action.tool_name}
+      </div>
     </div>
     <Show when={props.data.action.reasoning}>
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">Reasoning</div>
+        <div text="xs dark-text-tertiary" m="b-1">
+          Reasoning
+        </div>
         <div text="sm dark-text-primary">{props.data.action.reasoning}</div>
       </div>
     </Show>
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">Arguments</div>
+      <div text="xs dark-text-tertiary" m="b-1">
+        Arguments
+      </div>
       <pre
         text="xs dark-text-primary"
         bg="dark-bg-tertiary"
@@ -878,7 +905,9 @@ const ActionDetail = (props: { data: ControllerActionEventData }) => (
           <For each={props.data.action.additional_calls ?? []}>
             {(call) => (
               <div>
-                <div text="sm neon-cyan" font="mono">{call.tool_name}</div>
+                <div text="sm neon-cyan" font="mono">
+                  {call.tool_name}
+                </div>
                 <pre
                   text="xs dark-text-primary"
                   bg="dark-bg-tertiary"
@@ -897,12 +926,16 @@ const ActionDetail = (props: { data: ControllerActionEventData }) => (
     </Show>
     <div flex="~" gap="4">
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">Final</div>
+        <div text="xs dark-text-tertiary" m="b-1">
+          Final
+        </div>
         <div text="sm dark-text-primary">{props.data.action.is_final ? 'Yes' : 'No'}</div>
       </div>
       <Show when={props.data.action.status}>
         <div>
-          <div text="xs dark-text-tertiary" m="b-1">Status</div>
+          <div text="xs dark-text-tertiary" m="b-1">
+            Status
+          </div>
           <div text="sm dark-text-primary">{props.data.action.status}</div>
         </div>
       </Show>
@@ -913,7 +946,9 @@ const ActionDetail = (props: { data: ControllerActionEventData }) => (
 const ErrorDetail = (props: { data: ErrorEventData }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">Error</div>
+      <div text="xs dark-text-tertiary" m="b-1">
+        Error
+      </div>
       <div
         text="sm red-400"
         bg="red-500/5"
@@ -929,42 +964,65 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
     <div flex="~ wrap" gap="4">
       <Show when={props.data.severity}>
         <div>
-          <div text="xs dark-text-tertiary" m="b-1">Severity</div>
-          <div text={`sm ${props.data.severity === 'irrecoverable' ? 'red-400' : 'amber-400'}`} font="mono">
+          <div text="xs dark-text-tertiary" m="b-1">
+            Severity
+          </div>
+          <div
+            text={`sm ${props.data.severity === 'irrecoverable' ? 'red-400' : 'amber-400'}`}
+            font="mono"
+          >
             {props.data.severity}
           </div>
         </div>
       </Show>
       <Show when={props.data.turn !== undefined}>
         <div>
-          <div text="xs dark-text-tertiary" m="b-1">Turn</div>
-          <div text="sm dark-text-primary" font="mono">{props.data.turn}</div>
+          <div text="xs dark-text-tertiary" m="b-1">
+            Turn
+          </div>
+          <div text="sm dark-text-primary" font="mono">
+            {props.data.turn}
+          </div>
         </div>
       </Show>
       <Show when={props.data.iteration !== undefined}>
         <div>
-          <div text="xs dark-text-tertiary" m="b-1">Iteration</div>
-          <div text="sm dark-text-primary" font="mono">{props.data.iteration}</div>
+          <div text="xs dark-text-tertiary" m="b-1">
+            Iteration
+          </div>
+          <div text="sm dark-text-primary" font="mono">
+            {props.data.iteration}
+          </div>
         </div>
       </Show>
     </div>
     <Show when={props.data.hint}>
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">Hint</div>
-        <div text="sm dark-text-secondary" style={{ 'white-space': 'pre-wrap' }}>{props.data.hint}</div>
+        <div text="xs dark-text-tertiary" m="b-1">
+          Hint
+        </div>
+        <div text="sm dark-text-secondary" style={{ 'white-space': 'pre-wrap' }}>
+          {props.data.hint}
+        </div>
       </div>
     </Show>
   </div>
 )
 
-const MessageDetail = (props: { data: { content: string }, role: 'user' | 'assistant' }) => (
+const MessageDetail = (props: { data: { content: string }; role: 'user' | 'assistant' }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">Role</div>
-      <div text="sm dark-text-primary" font="medium">{props.role}</div>
+      <div text="xs dark-text-tertiary" m="b-1">
+        Role
+      </div>
+      <div text="sm dark-text-primary" font="medium">
+        {props.role}
+      </div>
     </div>
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">Content</div>
+      <div text="xs dark-text-tertiary" m="b-1">
+        Content
+      </div>
       <div
         text="sm dark-text-primary"
         bg="dark-bg-tertiary"
@@ -980,7 +1038,9 @@ const MessageDetail = (props: { data: { content: string }, role: 'user' | 'assis
 
 const GenericDetail = (props: { data: unknown }) => (
   <div>
-    <div text="xs dark-text-tertiary" m="b-2">Data</div>
+    <div text="xs dark-text-tertiary" m="b-2">
+      Data
+    </div>
     <pre
       text="xs dark-text-primary"
       bg="dark-bg-tertiary"
@@ -1022,22 +1082,26 @@ interface ParsedMessage {
 }
 
 const roleColors: Record<string, string> = {
-  system: '#a78bfa',    // violet-400
-  user: '#60a5fa',      // blue-400
+  system: '#a78bfa', // violet-400
+  user: '#60a5fa', // blue-400
   assistant: '#34d399', // green-400
-  tool: '#22d3ee'       // cyan-400
+  tool: '#22d3ee', // cyan-400
 }
 
 /** Parse OpenAI-compatible HTTP body into structured messages + metadata */
-function parsePromptBody(rawInput: string): { messages: ParsedMessage[]; model?: string; params: Record<string, unknown> } | null {
+function parsePromptBody(
+  rawInput: string,
+): { messages: ParsedMessage[]; model?: string; params: Record<string, unknown> } | null {
   try {
     const body = JSON.parse(rawInput)
     if (!body || typeof body !== 'object' || !Array.isArray(body.messages)) return null
 
-    const messages: ParsedMessage[] = body.messages.map((m: { role?: string; content?: unknown }) => ({
-      role: String(m.role ?? 'unknown'),
-      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 2)
-    }))
+    const messages: ParsedMessage[] = body.messages.map(
+      (m: { role?: string; content?: unknown }) => ({
+        role: String(m.role ?? 'unknown'),
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 2),
+      }),
+    )
 
     // Extract non-message params
     const { messages: _, model, ...rest } = body
@@ -1051,11 +1115,7 @@ const PromptMessage = (props: { msg: ParsedMessage }) => {
   const color = () => roleColors[props.msg.role] ?? '#94a3b8'
 
   return (
-    <div
-      border="1 dark-border-secondary/40"
-      rounded="md"
-      overflow="hidden"
-    >
+    <div border="1 dark-border-secondary/40" rounded="md" overflow="hidden">
       {/* Role badge */}
       <div
         p="x-3 y-1.5"
@@ -1065,17 +1125,8 @@ const PromptMessage = (props: { msg: ParsedMessage }) => {
         style={{ 'border-bottom': '1px solid rgba(148,163,184,0.15)' }}
         bg="dark-bg-tertiary"
       >
-        <div
-          w="2"
-          h="2"
-          rounded="full"
-          style={{ 'background-color': color() }}
-        />
-        <span
-          text="xs"
-          font="mono medium"
-          style={{ color: color() }}
-        >
+        <div w="2" h="2" rounded="full" style={{ 'background-color': color() }} />
+        <span text="xs" font="mono medium" style={{ color: color() }}>
           {props.msg.role}
         </span>
       </div>
@@ -1118,10 +1169,16 @@ const ParsedPromptView = (props: { rawInput: string }) => {
               <Show when={p().model}>
                 <div flex="~ col" gap="0.5">
                   <span text="dark-text-tertiary">Model</span>
-                  <span text="dark-text-primary" font="mono">{p().model}</span>
+                  <span text="dark-text-primary" font="mono">
+                    {p().model}
+                  </span>
                 </div>
               </Show>
-              <For each={Object.entries(p().params).filter(([k]) => !['stream', 'stream_options'].includes(k))}>
+              <For
+                each={Object.entries(p().params).filter(
+                  ([k]) => !['stream', 'stream_options'].includes(k),
+                )}
+              >
                 {([key, val]) => (
                   <div flex="~ col" gap="0.5">
                     <span text="dark-text-tertiary">{key}</span>
@@ -1136,10 +1193,10 @@ const ParsedPromptView = (props: { rawInput: string }) => {
 
           {/* Messages */}
           <div flex="~ col" gap="2">
-            <div text="xs dark-text-tertiary">{p().messages.length} message{p().messages.length !== 1 ? 's' : ''}</div>
-            <For each={p().messages}>
-              {(msg) => <PromptMessage msg={msg} />}
-            </For>
+            <div text="xs dark-text-tertiary">
+              {p().messages.length} message{p().messages.length !== 1 ? 's' : ''}
+            </div>
+            <For each={p().messages}>{(msg) => <PromptMessage msg={msg} />}</For>
           </div>
         </div>
       )}
@@ -1170,28 +1227,29 @@ const TabButton = (props: { active: boolean; label: string; onClick: () => void 
 )
 
 const UsageStats = (props: { llmCall: LLMCallData }) => (
-  <div
-    bg="dark-bg-tertiary"
-    p="3"
-    rounded="md"
-    m="b-3"
-  >
+  <div bg="dark-bg-tertiary" p="3" rounded="md" m="b-3">
     <div flex="~ wrap" gap="4" items="center">
       {/* Function & Provider */}
       <div flex="~ col" gap="0.5">
         <span text="xs dark-text-tertiary">Function</span>
-        <span text="sm neon-cyan" font="mono">{props.llmCall.functionName}</span>
+        <span text="sm neon-cyan" font="mono">
+          {props.llmCall.functionName}
+        </span>
       </div>
       <Show when={props.llmCall.provider}>
         <div flex="~ col" gap="0.5">
           <span text="xs dark-text-tertiary">Provider</span>
-          <span text="sm dark-text-primary" font="mono">{props.llmCall.provider}</span>
+          <span text="sm dark-text-primary" font="mono">
+            {props.llmCall.provider}
+          </span>
         </div>
       </Show>
       <Show when={props.llmCall.clientName}>
         <div flex="~ col" gap="0.5">
           <span text="xs dark-text-tertiary">Client</span>
-          <span text="sm dark-text-primary" font="mono">{props.llmCall.clientName}</span>
+          <span text="sm dark-text-primary" font="mono">
+            {props.llmCall.clientName}
+          </span>
         </div>
       </Show>
 
@@ -1202,45 +1260,76 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
       <Show when={props.llmCall.usage}>
         <div flex="~ col" gap="0.5" title="Input tokens billed at the full base rate">
           <span text="xs dark-text-tertiary">Input (fresh)</span>
-          <span text="sm neon-green" font="mono">{props.llmCall.usage!.inputTokens.toLocaleString()}</span>
+          <span text="sm neon-green" font="mono">
+            {props.llmCall.usage!.inputTokens.toLocaleString()}
+          </span>
         </div>
         <Show when={props.llmCall.usage!.cachedInputTokens > 0}>
-          <div flex="~ col" gap="0.5" title="Input tokens read from cache — billed at 0.1× the base rate">
+          <div
+            flex="~ col"
+            gap="0.5"
+            title="Input tokens read from cache — billed at 0.1× the base rate"
+          >
             <span text="xs dark-text-tertiary">Cache read</span>
-            <span text="sm violet-400" font="mono">{props.llmCall.usage!.cachedInputTokens.toLocaleString()}</span>
+            <span text="sm violet-400" font="mono">
+              {props.llmCall.usage!.cachedInputTokens.toLocaleString()}
+            </span>
           </div>
         </Show>
         <Show when={(props.llmCall.usage!.cacheCreationInputTokens ?? 0) > 0}>
-          <div flex="~ col" gap="0.5" title="Input tokens written to cache — billed at 1.25× the base rate">
+          <div
+            flex="~ col"
+            gap="0.5"
+            title="Input tokens written to cache — billed at 1.25× the base rate"
+          >
             <span text="xs dark-text-tertiary">Cache write</span>
-            <span text="sm amber-400" font="mono">{props.llmCall.usage!.cacheCreationInputTokens!.toLocaleString()}</span>
+            <span text="sm amber-400" font="mono">
+              {props.llmCall.usage!.cacheCreationInputTokens!.toLocaleString()}
+            </span>
           </div>
         </Show>
         <div flex="~ col" gap="0.5">
           <span text="xs dark-text-tertiary">Output</span>
-          <span text="sm neon-cyan" font="mono">{props.llmCall.usage!.outputTokens.toLocaleString()}</span>
+          <span text="sm neon-cyan" font="mono">
+            {props.llmCall.usage!.outputTokens.toLocaleString()}
+          </span>
         </div>
-        <div flex="~ col" gap="0.5" title="All tokens processed: fresh + cache read + cache write + output">
+        <div
+          flex="~ col"
+          gap="0.5"
+          title="All tokens processed: fresh + cache read + cache write + output"
+        >
           <span text="xs dark-text-tertiary">Total</span>
-          <span text="sm amber-400" font="mono">{props.llmCall.usage!.totalTokens.toLocaleString()}</span>
+          <span text="sm amber-400" font="mono">
+            {props.llmCall.usage!.totalTokens.toLocaleString()}
+          </span>
         </div>
       </Show>
 
       {/* Step accounting — summed across ALL attempts (retries/fallbacks) */}
       <Show when={props.llmCall.metrics}>
         <Show when={props.llmCall.metrics!.attempts > 1}>
-          <div flex="~ col" gap="0.5" title="This step needed multiple API calls (truncation retry / fallback chain); tokens and cost below include all of them">
+          <div
+            flex="~ col"
+            gap="0.5"
+            title="This step needed multiple API calls (truncation retry / fallback chain); tokens and cost below include all of them"
+          >
             <span text="xs dark-text-tertiary">Attempts</span>
-            <span text="sm red-400" font="mono">{props.llmCall.metrics!.attempts}</span>
+            <span text="sm red-400" font="mono">
+              {props.llmCall.metrics!.attempts}
+            </span>
           </div>
         </Show>
         <Show when={props.llmCall.metrics!.costUsd !== undefined}>
           <div
-            flex="~ col" gap="0.5"
+            flex="~ col"
+            gap="0.5"
             title={`At $${props.llmCall.metrics!.rates?.inPerMTok}/$${props.llmCall.metrics!.rates?.outPerMTok} per MTok; uncached this call would be ${fmtUsd(props.llmCall.metrics!.noCacheUsd ?? props.llmCall.metrics!.costUsd!)}`}
           >
             <span text="xs dark-text-tertiary">Cost (step)</span>
-            <span text="sm dark-text-primary" font="mono">{fmtUsd(props.llmCall.metrics!.costUsd!)}</span>
+            <span text="sm dark-text-primary" font="mono">
+              {fmtUsd(props.llmCall.metrics!.costUsd!)}
+            </span>
           </div>
         </Show>
       </Show>
@@ -1249,7 +1338,9 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
       <Show when={props.llmCall.durationMs}>
         <div flex="~ col" gap="0.5">
           <span text="xs dark-text-tertiary">Duration</span>
-          <span text="sm dark-text-primary" font="mono">{props.llmCall.durationMs}ms</span>
+          <span text="sm dark-text-primary" font="mono">
+            {props.llmCall.durationMs}ms
+          </span>
         </div>
       </Show>
     </div>
@@ -1282,7 +1373,9 @@ const PromptAccordionItem = (props: {
       style={{ border: 'none' }}
     >
       <div flex="~" items="center" gap="2">
-        <span text="xs neon-cyan" font="mono medium">{props.label}</span>
+        <span text="xs neon-cyan" font="mono medium">
+          {props.label}
+        </span>
         <Show when={props.hint}>
           <span text="xs dark-text-tertiary">{props.hint}</span>
         </Show>
@@ -1323,8 +1416,9 @@ const PromptAccordion = (props: { llmCall: LLMCallData }) => {
           when={hasTemplate()}
           fallback={
             <div text="xs dark-text-tertiary">
-              BAML prompt template not captured. Run <code>pnpm baml-generate</code> or verify
-              the function name <code>{props.llmCall.functionName}</code> exists in <code>baml_src/</code>.
+              BAML prompt template not captured. Run <code>pnpm baml-generate</code> or verify the
+              function name <code>{props.llmCall.functionName}</code> exists in{' '}
+              <code>baml_src/</code>.
             </div>
           }
         >
@@ -1396,9 +1490,9 @@ const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
           <CodeBlock
             content={
               props.llmCall.parsedOutput != null
-                ? (typeof props.llmCall.parsedOutput === 'string'
-                    ? props.llmCall.parsedOutput
-                    : JSON.stringify(props.llmCall.parsedOutput, null, 2))
+                ? typeof props.llmCall.parsedOutput === 'string'
+                  ? props.llmCall.parsedOutput
+                  : JSON.stringify(props.llmCall.parsedOutput, null, 2)
                 : undefined
             }
             placeholder="Output not captured"
@@ -1413,7 +1507,7 @@ const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
 // Event Detail Panel Component
 // ============================================================================
 
-const EventDetailPanel = (props: { event: ContextEvent, onClose: () => void }) => {
+const EventDetailPanel = (props: { event: ContextEvent; onClose: () => void }) => {
   const { type, ts, patternId, data, llmCall } = props.event
 
   return (
@@ -1426,17 +1520,11 @@ const EventDetailPanel = (props: { event: ContextEvent, onClose: () => void }) =
         'z-index': '50',
         display: 'flex',
         'flex-direction': 'column',
-        overflow: 'hidden'
+        overflow: 'hidden',
       }}
     >
       {/* Header */}
-      <div
-        flex="~"
-        items="center"
-        justify="between"
-        p="4"
-        border="b dark-border-primary"
-      >
+      <div flex="~" items="center" justify="between" p="4" border="b dark-border-primary">
         <div flex="~ col" gap="1">
           <div flex="~" items="center" gap="2">
             <span text="lg">{eventIcons[type]}</span>
@@ -1444,13 +1532,7 @@ const EventDetailPanel = (props: { event: ContextEvent, onClose: () => void }) =
               {type.replace(/_/g, ' ')}
             </span>
             <Show when={llmCall}>
-              <span
-                text="xs neon-cyan"
-                bg="neon-cyan/10"
-                p="x-1.5 y-0.5"
-                rounded="sm"
-                font="mono"
-              >
+              <span text="xs neon-cyan" bg="neon-cyan/10" p="x-1.5 y-0.5" rounded="sm" font="mono">
                 LLM
               </span>
             </Show>
@@ -1523,11 +1605,13 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
 
     if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
       try {
-        const handle = await (window as typeof window & {
-          showSaveFilePicker: (opts: unknown) => Promise<FileSystemFileHandle>
-        }).showSaveFilePicker({
+        const handle = await (
+          window as typeof window & {
+            showSaveFilePicker: (opts: unknown) => Promise<FileSystemFileHandle>
+          }
+        ).showSaveFilePicker({
           suggestedName: filename,
-          types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }]
+          types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }],
         })
         const writable = await handle.createWritable()
         await writable.write(json)
@@ -1562,9 +1646,8 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
 
     for (const item of items) {
       if (item.kind === 'tool_pair') {
-        const activePattern = patternStack.length > 0
-          ? patternStack[patternStack.length - 1]
-          : undefined
+        const activePattern =
+          patternStack.length > 0 ? patternStack[patternStack.length - 1] : undefined
         tints.push(activePattern ? getPatternColor(activePattern).tint : undefined)
       } else {
         const event = item.event
@@ -1577,9 +1660,8 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
           if (idx >= 0) patternStack.splice(idx, 1)
           else patternStack.pop()
         } else {
-          const activePattern = patternStack.length > 0
-            ? patternStack[patternStack.length - 1]
-            : undefined
+          const activePattern =
+            patternStack.length > 0 ? patternStack[patternStack.length - 1] : undefined
           tints.push(activePattern ? getPatternColor(activePattern).tint : undefined)
         }
       }
@@ -1609,10 +1691,7 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
 
       {/* Timeline Container */}
       <div flex="1" overflow="auto">
-        <Show
-          when={hasEvents()}
-          fallback={<EmptyState />}
-        >
+        <Show when={hasEvents()} fallback={<EmptyState />}>
           <For each={timelineItems()}>
             {(item, index) => {
               if (item.kind === 'tool_pair') {
@@ -1628,12 +1707,10 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
                 )
               }
               const event = item.event
-              const isBoundary = () => event.type === 'pattern_enter' || event.type === 'pattern_exit'
+              const isBoundary = () =>
+                event.type === 'pattern_enter' || event.type === 'pattern_exit'
               return (
-                <Show
-                  when={!isBoundary()}
-                  fallback={<PatternBoundaryRow event={event} />}
-                >
+                <Show when={!isBoundary()} fallback={<PatternBoundaryRow event={event} />}>
                   <EventRow
                     event={event}
                     index={index()}
@@ -1662,8 +1739,20 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
             transition="all"
             shadow="lg"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style={{ color: '#22d3ee' }}>
-              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke-linecap="round" stroke-linejoin="round" />
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              style={{ color: '#22d3ee' }}
+            >
+              <path
+                d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
             </svg>
           </Tooltip.Trigger>
           <Tooltip.Positioner>
@@ -1694,8 +1783,12 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
             }
           >
             <ToolPairDetail
-              call={(item() as { kind: 'tool_pair'; call: ContextEvent; result?: ContextEvent }).call}
-              result={(item() as { kind: 'tool_pair'; call: ContextEvent; result?: ContextEvent }).result}
+              call={
+                (item() as { kind: 'tool_pair'; call: ContextEvent; result?: ContextEvent }).call
+              }
+              result={
+                (item() as { kind: 'tool_pair'; call: ContextEvent; result?: ContextEvent }).result
+              }
               onClose={handleClose}
             />
           </Show>

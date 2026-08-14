@@ -18,8 +18,20 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import type { ControllerAction, CriticResult, ScriptExecutionEvent, LLMCallData, EventMetrics } from './types'
-import type { ToolDescription, LoopTurn, Attempt, PriorResult, FewShot } from '../../../baml_client/types'
+import type {
+  ControllerAction,
+  CriticResult,
+  ScriptExecutionEvent,
+  LLMCallData,
+  EventMetrics,
+} from './types'
+import type {
+  ToolDescription,
+  LoopTurn,
+  Attempt,
+  PriorResult,
+  FewShot,
+} from '../../../baml_client/types'
 import { listTools as mcpListTools } from './mcp-client.server'
 import { getActiveSandbox } from '../sandbox/scope.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
@@ -55,14 +67,14 @@ export type ControllerFnWithLLMData = (
   collector?: Collector,
   priorResults?: PriorResult[],
   fewShots?: FewShot[],
-  multiCallMode?: 'parallel' | 'sequential'
+  multiCallMode?: 'parallel' | 'sequential',
 ) => Promise<ControllerCallResult>
 
 /** Critic function that returns result + observability data */
 export type CriticFnWithLLMData = (
   intent: string,
   previous_attempts: ScriptExecutionEvent[],
-  collector?: Collector
+  collector?: Collector,
 ) => Promise<CriticCallResult>
 
 /** Extract LLM call data from a collector */
@@ -71,7 +83,7 @@ export function extractLLMCallData(
   functionName: string,
   variables: Record<string, unknown>,
   startTime: number,
-  parsedOutput?: unknown
+  parsedOutput?: unknown,
 ): LLMCallData | undefined {
   const last = collector.last
   if (!last) return undefined
@@ -92,21 +104,34 @@ type CollectorCall = {
   clientName?: string
   httpRequest?: { body?: unknown }
   httpResponse?: { body?: { json?: () => unknown } } | null
-  usage?: { inputTokens?: number | null; outputTokens?: number | null; cachedInputTokens?: number | null } | null
+  usage?: {
+    inputTokens?: number | null
+    outputTokens?: number | null
+    cachedInputTokens?: number | null
+  } | null
 }
 
 /** Provider-side usage from a call's raw HTTP response. Needed because the
  *  Collector's Usage has no cache-WRITE bucket (only read); Anthropic reports
  *  `cache_creation_input_tokens` only in the response body. Best-effort. */
-function usageFromResponse(call: CollectorCall | undefined): {
-  input_tokens?: number
-  output_tokens?: number
-  cache_read_input_tokens?: number
-  cache_creation_input_tokens?: number
-} | undefined {
+function usageFromResponse(call: CollectorCall | undefined):
+  | {
+      input_tokens?: number
+      output_tokens?: number
+      cache_read_input_tokens?: number
+      cache_creation_input_tokens?: number
+    }
+  | undefined {
   try {
     const json = call?.httpResponse?.body?.json?.() as
-      | { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } }
+      | {
+          usage?: {
+            input_tokens?: number
+            output_tokens?: number
+            cache_read_input_tokens?: number
+            cache_creation_input_tokens?: number
+          }
+        }
       | undefined
     return json?.usage
   } catch {
@@ -117,12 +142,14 @@ function usageFromResponse(call: CollectorCall | undefined): {
 /** One call's token buckets: raw response usage first (has the cache-write
  *  bucket), Collector usage as fallback (write reads as 0). Undefined when
  *  the call never produced usage (pre-flight failures). */
-function callTokenBuckets(call: CollectorCall | undefined): {
-  inputUncachedTokens: number
-  inputCacheReadTokens: number
-  inputCacheWriteTokens: number
-  outputTokens: number
-} | undefined {
+function callTokenBuckets(call: CollectorCall | undefined):
+  | {
+      inputUncachedTokens: number
+      inputCacheReadTokens: number
+      inputCacheWriteTokens: number
+      outputTokens: number
+    }
+  | undefined {
   const raw = usageFromResponse(call)
   if (raw && (raw.input_tokens != null || raw.output_tokens != null)) {
     return {
@@ -152,7 +179,12 @@ function callTokenBuckets(call: CollectorCall | undefined): {
  *  pricing entry — unknown beats silently wrong. */
 export function computeEventMetrics(collector: Collector | undefined): EventMetrics | undefined {
   if (!collector) return undefined
-  const totals = { inputUncachedTokens: 0, inputCacheReadTokens: 0, inputCacheWriteTokens: 0, outputTokens: 0 }
+  const totals = {
+    inputUncachedTokens: 0,
+    inputCacheReadTokens: 0,
+    inputCacheWriteTokens: 0,
+    outputTokens: 0,
+  }
   let attempts = 0
   let costUsd = 0
   let noCacheUsd = 0
@@ -190,7 +222,7 @@ function buildLLMCallDataFromLog(
   functionName: string,
   variables: Record<string, unknown>,
   startTime: number,
-  parsedOutput?: unknown
+  parsedOutput?: unknown,
 ): LLMCallData {
   // Prefer the call BAML actually selected (handles fallbacks); fall back to the last attempted call.
   // For failures, `selected` is rarely set — we want the last attempt that actually went out.
@@ -201,10 +233,7 @@ function buildLLMCallDataFromLog(
   // JSON.stringify on the class returns "{}" because it has no enumerable own properties.
   let rawInput: string | undefined
   const body = selectedCall?.httpRequest?.body as
-    | { text?: () => string }
-    | string
-    | Record<string, unknown>
-    | undefined
+    { text?: () => string } | string | Record<string, unknown> | undefined
   if (typeof body === 'string') {
     rawInput = body
   } else if (body && typeof (body as { text?: () => string }).text === 'function') {
@@ -230,16 +259,23 @@ function buildLLMCallDataFromLog(
         outputTokens: buckets.outputTokens,
         cachedInputTokens: buckets.inputCacheReadTokens,
         cacheCreationInputTokens: buckets.inputCacheWriteTokens,
-        totalTokens: buckets.inputUncachedTokens + buckets.inputCacheReadTokens
-          + buckets.inputCacheWriteTokens + buckets.outputTokens
+        totalTokens:
+          buckets.inputUncachedTokens +
+          buckets.inputCacheReadTokens +
+          buckets.inputCacheWriteTokens +
+          buckets.outputTokens,
       }
-    : last.usage ? {
-        inputTokens: last.usage.inputTokens ?? 0,
-        outputTokens: last.usage.outputTokens ?? 0,
-        cachedInputTokens: last.usage.cachedInputTokens ?? 0,
-        totalTokens: (last.usage.inputTokens ?? 0) + (last.usage.cachedInputTokens ?? 0)
-          + (last.usage.outputTokens ?? 0)
-      } : undefined
+    : last.usage
+      ? {
+          inputTokens: last.usage.inputTokens ?? 0,
+          outputTokens: last.usage.outputTokens ?? 0,
+          cachedInputTokens: last.usage.cachedInputTokens ?? 0,
+          totalTokens:
+            (last.usage.inputTokens ?? 0) +
+            (last.usage.cachedInputTokens ?? 0) +
+            (last.usage.outputTokens ?? 0),
+        }
+      : undefined
 
   return {
     functionName,
@@ -251,7 +287,7 @@ function buildLLMCallDataFromLog(
     usage,
     durationMs: Date.now() - startTime,
     provider,
-    clientName
+    clientName,
   }
 }
 
@@ -264,7 +300,7 @@ export function extractFailureLLMCallData(
   collector: Collector | undefined,
   functionName: string,
   variables: Record<string, unknown>,
-  startTime: number
+  startTime: number,
 ): LLMCallData {
   const last = collector?.last
   if (last) {
@@ -278,7 +314,7 @@ export function extractFailureLLMCallData(
     functionName,
     variables,
     promptTemplate: getPromptTemplate(functionName),
-    durationMs: Date.now() - startTime
+    durationMs: Date.now() - startTime,
   }
 }
 
@@ -397,7 +433,7 @@ function wrapAsLLMCallError(
   functionName: string,
   variables: Record<string, unknown>,
   startTime: number,
-  collector: Collector | undefined
+  collector: Collector | undefined,
 ): LLMCallError {
   const message = err instanceof Error ? err.message : String(err)
   const llmCall = extractFailureLLMCallData(collector, functionName, variables, startTime)
@@ -477,7 +513,7 @@ async function getToolDescriptions(refresh = false): Promise<ToolDescription[]> 
     toolDescCache = tools.map((t) => ({
       name: t.name,
       description: t.description ?? '',
-      args_schema: t.inputSchema ? JSON.stringify(t.inputSchema) : undefined
+      args_schema: t.inputSchema ? JSON.stringify(t.inputSchema) : undefined,
     }))
   }
   return toolDescCache
@@ -497,7 +533,7 @@ export function invalidateToolDescriptions(): void {
  *  a `code-mode-<name>` tool on a prior turn that should now be visible). */
 async function filterToolDescriptions(
   toolNames: string[],
-  options?: { dynamicPattern?: RegExp; refresh?: boolean }
+  options?: { dynamicPattern?: RegExp; refresh?: boolean },
 ): Promise<ToolDescription[]> {
   const all = await getToolDescriptions(options?.refresh)
   const nameSet = new Set(toolNames)
@@ -533,7 +569,7 @@ async function getActiveSandboxToolDescriptions(): Promise<ToolDescription[]> {
  */
 export function createLoopControllerAdapter(
   toolNames: string[],
-  contextPrefix?: string
+  contextPrefix?: string,
 ): ControllerFnWithLLMData {
   return async (
     user_message: string,
@@ -546,7 +582,7 @@ export function createLoopControllerAdapter(
     fewShots?: FewShot[],
     // 'off' never reaches the adapter — the pattern maps it to undefined so the
     // prompt renders no affordance (LoopMultiCalls stays empty).
-    multiCallMode?: 'parallel' | 'sequential'
+    multiCallMode?: 'parallel' | 'sequential',
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
@@ -570,7 +606,16 @@ export function createLoopControllerAdapter(
       context = parts.join('\n\n')
     }
 
-    const variables = { user_message, intent, tools, turns, context, turns_previous_runs: priorResults, few_shots: fewShots, multi_call_mode: multiCallMode }
+    const variables = {
+      user_message,
+      intent,
+      tools,
+      turns,
+      context,
+      turns_previous_runs: priorResults,
+      few_shots: fewShots,
+      multi_call_mode: multiCallMode,
+    }
 
     // Call with or without collector.
     //
@@ -591,8 +636,27 @@ export function createLoopControllerAdapter(
     let action: ControllerAction
     try {
       action = hasBaseOpts
-        ? await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, multiCallMode, baseOpts)
-        : await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, multiCallMode)
+        ? await b.LoopController(
+            user_message,
+            intent,
+            tools,
+            turns,
+            context,
+            priorResults,
+            fewShots,
+            multiCallMode,
+            baseOpts,
+          )
+        : await b.LoopController(
+            user_message,
+            intent,
+            tools,
+            turns,
+            context,
+            priorResults,
+            fewShots,
+            multiCallMode,
+          )
     } catch (e) {
       // Recoverable parse failures (any chain, incl. Anthropic-only): the parse
       // failed because the response was cut off, or because there was no
@@ -606,8 +670,27 @@ export function createLoopControllerAdapter(
           : context
         try {
           action = hasBaseOpts
-            ? await b.LoopController(user_message, intent, tools, turns, retryContext, priorResults, fewShots, multiCallMode, baseOpts)
-            : await b.LoopController(user_message, intent, tools, turns, retryContext, priorResults, fewShots, multiCallMode)
+            ? await b.LoopController(
+                user_message,
+                intent,
+                tools,
+                turns,
+                retryContext,
+                priorResults,
+                fewShots,
+                multiCallMode,
+                baseOpts,
+              )
+            : await b.LoopController(
+                user_message,
+                intent,
+                tools,
+                turns,
+                retryContext,
+                priorResults,
+                fewShots,
+                multiCallMode,
+              )
           const llmCall = collector
             ? extractLLMCallData(collector, 'LoopController', variables, startTime, action)
             : undefined
@@ -620,13 +703,33 @@ export function createLoopControllerAdapter(
         throw wrapAsLLMCallError(e, 'LoopController', variables, startTime, collector)
       }
       try {
-        action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, multiCallMode, collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' })
+        action = await b.LoopController(
+          user_message,
+          intent,
+          tools,
+          turns,
+          context,
+          priorResults,
+          fewShots,
+          multiCallMode,
+          collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' },
+        )
       } catch (e2) {
         if (!(e2 instanceof BamlValidationError)) {
           throw wrapAsLLMCallError(e2, 'LoopController', variables, startTime, collector)
         }
         try {
-          action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, multiCallMode, collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' })
+          action = await b.LoopController(
+            user_message,
+            intent,
+            tools,
+            turns,
+            context,
+            priorResults,
+            fewShots,
+            multiCallMode,
+            collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' },
+          )
         } catch (e3) {
           throw wrapAsLLMCallError(e3, 'LoopController', variables, startTime, collector)
         }
@@ -692,9 +795,9 @@ export function annotateExpansions(refs: PriorResult[], turns: LoopTurn[]): Prio
       if (!firstTurn.has(e.ref_id)) firstTurn.set(e.ref_id, t.n)
     }
   }
-  return refs.map(r => ({
+  return refs.map((r) => ({
     ...r,
-    expanded_in_turn: firstTurn.get(r.ref_id) ?? null
+    expanded_in_turn: firstTurn.get(r.ref_id) ?? null,
   }))
 }
 
@@ -713,7 +816,7 @@ export type CodeModeControllerFnWithLLMData = (
   collector?: Collector,
   attemptNumber?: number,
   maxAttempts?: number,
-  multiCallMode?: 'parallel' | 'sequential'
+  multiCallMode?: 'parallel' | 'sequential',
 ) => Promise<ControllerCallResult>
 
 /** Options for `createActorControllerAdapter` when the actor's toolset may
@@ -763,7 +866,7 @@ export interface ActorAdapterOptions {
  * turns of the same session (the kg-agent gateway persists them across turns).
  */
 export function createActorControllerAdapter(
-  toolsOrOptions: string[] | ActorAdapterOptions
+  toolsOrOptions: string[] | ActorAdapterOptions,
 ): CodeModeControllerFnWithLLMData {
   const options: ActorAdapterOptions = Array.isArray(toolsOrOptions)
     ? { toolNames: toolsOrOptions }
@@ -789,7 +892,7 @@ export function createActorControllerAdapter(
     // session context surface live; otherwise fall back to the static array.
     const names = options.toolNamesProvider
       ? await options.toolNamesProvider()
-      : options.toolNames ?? []
+      : (options.toolNames ?? [])
 
     // Get tool descriptions — optionally refresh + include pattern matches.
     // When a `withSandbox` wrapper is active, prepend its in-VM tool surface
@@ -817,11 +920,11 @@ export function createActorControllerAdapter(
         tool_args: event.script,
         ...(event.additionalCalls?.length ? { additional_calls: event.additionalCalls } : {}),
         status: event.error ? 'error' : 'success',
-        is_final: false
+        is_final: false,
       },
       result: event.output,
       error: event.error ?? undefined,
-      feedback: undefined
+      feedback: undefined,
     }))
 
     const context = options.contextProvider
@@ -862,8 +965,29 @@ export function createActorControllerAdapter(
     let action: ControllerAction
     try {
       action = hasBaseOpts
-        ? await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, multiCallMode, baseOpts)
-        : await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, multiCallMode)
+        ? await b.ActorController(
+            user_message,
+            intent,
+            tools,
+            attempts,
+            context,
+            fewShots,
+            attemptNumber,
+            maxAttempts,
+            multiCallMode,
+            baseOpts,
+          )
+        : await b.ActorController(
+            user_message,
+            intent,
+            tools,
+            attempts,
+            context,
+            fewShots,
+            attemptNumber,
+            maxAttempts,
+            multiCallMode,
+          )
     } catch (e) {
       // Truncated or empty response: one retry, guidance only when there is
       // something to correct — see createLoopControllerAdapter for rationale.
@@ -874,8 +998,29 @@ export function createActorControllerAdapter(
           : context
         try {
           action = hasBaseOpts
-            ? await b.ActorController(user_message, intent, tools, attempts, retryContext, fewShots, attemptNumber, maxAttempts, multiCallMode, baseOpts)
-            : await b.ActorController(user_message, intent, tools, attempts, retryContext, fewShots, attemptNumber, maxAttempts, multiCallMode)
+            ? await b.ActorController(
+                user_message,
+                intent,
+                tools,
+                attempts,
+                retryContext,
+                fewShots,
+                attemptNumber,
+                maxAttempts,
+                multiCallMode,
+                baseOpts,
+              )
+            : await b.ActorController(
+                user_message,
+                intent,
+                tools,
+                attempts,
+                retryContext,
+                fewShots,
+                attemptNumber,
+                maxAttempts,
+                multiCallMode,
+              )
           const llmCall = collector
             ? extractLLMCallData(collector, 'ActorController', variables, startTime, action)
             : undefined
@@ -888,13 +1033,35 @@ export function createActorControllerAdapter(
         throw wrapAsLLMCallError(e, 'ActorController', variables, startTime, collector)
       }
       try {
-        action = await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, multiCallMode, collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' })
+        action = await b.ActorController(
+          user_message,
+          intent,
+          tools,
+          attempts,
+          context,
+          fewShots,
+          attemptNumber,
+          maxAttempts,
+          multiCallMode,
+          collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' },
+        )
       } catch (e2) {
         if (!(e2 instanceof BamlValidationError)) {
           throw wrapAsLLMCallError(e2, 'ActorController', variables, startTime, collector)
         }
         try {
-          action = await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, multiCallMode, collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' })
+          action = await b.ActorController(
+            user_message,
+            intent,
+            tools,
+            attempts,
+            context,
+            fewShots,
+            attemptNumber,
+            maxAttempts,
+            multiCallMode,
+            collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' },
+          )
         } catch (e3) {
           throw wrapAsLLMCallError(e3, 'ActorController', variables, startTime, collector)
         }
@@ -919,7 +1086,7 @@ export function createCriticAdapter(): CriticFnWithLLMData {
   return async (
     intent: string,
     previous_attempts: ScriptExecutionEvent[],
-    collector?: Collector
+    collector?: Collector,
   ): Promise<CriticCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
@@ -935,11 +1102,11 @@ export function createCriticAdapter(): CriticFnWithLLMData {
         tool_args: event.script,
         ...(event.additionalCalls?.length ? { additional_calls: event.additionalCalls } : {}),
         status: event.error ? 'error' : 'success',
-        is_final: false
+        is_final: false,
       },
       result: event.output,
       error: event.error ?? undefined,
-      feedback: undefined
+      feedback: undefined,
     }))
 
     const variables = { intent, attempts }
@@ -978,7 +1145,7 @@ export async function describeToolResultOp(
   tool: string,
   toolArgs: string,
   reasoning: string,
-  result: string
+  result: string,
 ): Promise<string> {
   try {
     const { b } = await import('../../../baml_client')
@@ -1043,8 +1210,8 @@ export function createCodeModeController(toolNames: string[]): ControllerFnWithL
   return createLoopControllerAdapter(
     toolNames,
     'You compose JavaScript that orchestrates multiple MCP tools in a single turn. ' +
-    'Call the `code-mode` tool with tool_args = { "script": "<your JS>" }. ' +
-    'The script runs server-side with access to the gateway\'s tools; its return ' +
-    'value comes back as the tool_result. Use Return when the result answers the user.'
+      'Call the `code-mode` tool with tool_args = { "script": "<your JS>" }. ' +
+      "The script runs server-side with access to the gateway's tools; its return " +
+      'value comes back as the tool_result. Use Return when the result answers the user.',
   )
 }

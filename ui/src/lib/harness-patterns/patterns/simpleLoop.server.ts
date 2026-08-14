@@ -18,7 +18,7 @@ import type {
   ConfiguredPattern,
   ToolCallEventData,
   ToolResultEventData,
-  ControllerActionEventData
+  ControllerActionEventData,
 } from '../types'
 import { EXPAND_TOOL_NAME } from '../types'
 
@@ -33,7 +33,12 @@ import { getActiveSandbox } from '../../sandbox/scope.server'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { resolveClientForRole } from '../clients.server'
 import type { ControllerFnWithLLMData } from '../baml-adapters.server'
-import { dedupByRefId, annotateExpansions, LLMCallError, llmCallHitOutputCap } from '../baml-adapters.server'
+import {
+  dedupByRefId,
+  annotateExpansions,
+  LLMCallError,
+  llmCallHitOutputCap,
+} from '../baml-adapters.server'
 import type { LLMCallData } from '../types'
 
 assertServerOnImport()
@@ -67,7 +72,7 @@ function parseExpandRefs(argsStr: string): string[] {
     return trimmed
       .slice(4)
       .split(',')
-      .map(s => s.trim())
+      .map((s) => s.trim())
       .filter(Boolean)
   }
   try {
@@ -84,7 +89,9 @@ function parseExpandRefs(argsStr: string): string[] {
       const id = s.startsWith('ref:') ? s.slice(4) : s
       return id ? [id] : []
     }
-  } catch { /* fall through to [] */ }
+  } catch {
+    /* fall through to [] */
+  }
   return []
 }
 
@@ -94,7 +101,7 @@ function parseExpandRefs(argsStr: string): string[] {
 function resolveRefsAndCapture(
   args: Record<string, unknown>,
   view: EventView,
-  maxResultChars: number
+  maxResultChars: number,
 ): { resolved: Record<string, unknown>; expansions: ExpandedRef[] } {
   const resolved = { ...args }
   const expansions: ExpandedRef[] = []
@@ -102,7 +109,7 @@ function resolveRefsAndCapture(
   for (const [key, value] of Object.entries(resolved)) {
     if (typeof value === 'string' && value.startsWith('ref:')) {
       const eventId = value.slice(4)
-      const event = allEvents.find(e => e.id === eventId)
+      const event = allEvents.find((e) => e.id === eventId)
       if (event && event.type === 'tool_result') {
         const d = event.data as ToolResultEventData
         // Skip hidden/archived results — refs to excluded data stay unresolved
@@ -111,9 +118,8 @@ function resolveRefsAndCapture(
           const raw = typeof d.result === 'string' ? d.result : JSON.stringify(d.result)
           expansions.push({
             ref_id: eventId,
-            content: raw.length > maxResultChars
-              ? raw.slice(0, maxResultChars) + '…[truncated]'
-              : raw
+            content:
+              raw.length > maxResultChars ? raw.slice(0, maxResultChars) + '…[truncated]' : raw,
           })
         }
       }
@@ -150,14 +156,11 @@ export interface SimpleLoopData {
 export function simpleLoop<T extends SimpleLoopData>(
   controller: ControllerFnWithLLMData,
   tools: string[],
-  config?: SimpleLoopConfig
+  config?: SimpleLoopConfig,
 ): ConfiguredPattern<T> {
   const resolved = resolveConfig('simpleLoop', config)
 
-  const fn = async (
-    scope: PatternScope<T>,
-    view: EventView
-  ): Promise<PatternScope<T>> => {
+  const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
     const settings = getRequestSettings()
     const maxTurns = config?.maxTurns ?? settings.maxToolTurns
     // Multi-call turns (ControllerAction.additional_calls). 'off' still
@@ -180,20 +183,22 @@ export function simpleLoop<T extends SimpleLoopData>(
     let turnWindowRefs: PriorResult[] = []
     if (config?.rememberPriorTurns !== false) {
       const turnCount = config?.priorTurnCount ?? settings.priorTurnCount
-      const priorEvents = view.fromLastNTurns(turnCount).ofType('tool_result').get()
-        .filter(e => {
+      const priorEvents = view
+        .fromLastNTurns(turnCount)
+        .ofType('tool_result')
+        .get()
+        .filter((e) => {
           const d = e.data as ToolResultEventData
-          return !!e.id && !d.hidden && !d.archived
-            && (d.success || config?.includeFailedResults)
+          return !!e.id && !d.hidden && !d.archived && (d.success || config?.includeFailedResults)
         })
-      turnWindowRefs = priorEvents.map(e => {
+      turnWindowRefs = priorEvents.map((e) => {
         const d = e.data as ToolResultEventData
         const rawResult = typeof d.result === 'string' ? d.result : JSON.stringify(d.result)
         const preview = d.summary ?? rawResult.slice(0, 200).replace(/\n/g, ' ')
         return {
           ref_id: e.id!,
           tool: d.tool,
-          summary: preview + (!d.summary && rawResult.length > 200 ? '...' : '')
+          summary: preview + (!d.summary && rawResult.length > 200 ? '...' : ''),
         }
       })
     }
@@ -203,7 +208,8 @@ export function simpleLoop<T extends SimpleLoopData>(
     // explicit choice wins over the implicit window.
     const attachedRefs = (scope.data as { attachedRefs?: PriorResult[] }).attachedRefs ?? []
     const mergedRefs = dedupByRefId([...attachedRefs, ...turnWindowRefs])
-    const basePriorResults: PriorResult[] | undefined = mergedRefs.length > 0 ? mergedRefs : undefined
+    const basePriorResults: PriorResult[] | undefined =
+      mergedRefs.length > 0 ? mergedRefs : undefined
 
     try {
       for (let turn = 0; turn < maxTurns; turn++) {
@@ -211,15 +217,13 @@ export function simpleLoop<T extends SimpleLoopData>(
         // (the client this call will actually use, not the hardcoded Fallback).
         const contextWindow = getContextWindow(resolveClientForRole('controller'))
         // ~500 chars base prompt overhead (template, schema, intent, etc.)
-        const trimmedTurns = trimToFit(turns, t => JSON.stringify(t), 500, contextWindow)
+        const trimmedTurns = trimToFit(turns, (t) => JSON.stringify(t), 500, contextWindow)
         const previousResults = JSON.stringify(trimmedTurns)
 
         // Extract intent from data or use input from view
         // Use ofType('user_message') to get the actual user query, not the router's assistant_message
         const userMessage = view.ofType('user_message').last(1).get()[0]
-        const userContent = userMessage
-          ? (userMessage.data as { content: string }).content
-          : ''
+        const userContent = userMessage ? (userMessage.data as { content: string }).content : ''
         const intent = data.intent ?? userContent
 
         // Annotate refs with `expanded_in_turn` from accumulated turns so the
@@ -245,7 +249,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             collector,
             priorResults,
             config?.fewShots,
-            multiMode === 'off' ? undefined : multiMode
+            multiMode === 'off' ? undefined : multiMode,
           )
           action = controllerResult.action
           controllerLlmCall = controllerResult.llmCall
@@ -259,10 +263,11 @@ export function simpleLoop<T extends SimpleLoopData>(
             'controller_action',
             { action, turn, maxTurns } as ControllerActionEventData,
             resolved.trackHistory,
-            controllerResult.llmCall
+            controllerResult.llmCall,
           )
         } catch (controllerError) {
-          const msg = controllerError instanceof Error ? controllerError.message : String(controllerError)
+          const msg =
+            controllerError instanceof Error ? controllerError.message : String(controllerError)
           // Exit loop gracefully with partial results instead of losing everything
           hasError = true
           errorMessage = msg
@@ -282,7 +287,7 @@ export function simpleLoop<T extends SimpleLoopData>(
           scope.data = {
             ...scope.data,
             lastAction: action,
-            turn
+            turn,
           }
           exitedViaReturn = true
           break
@@ -307,12 +312,17 @@ export function simpleLoop<T extends SimpleLoopData>(
           const allEvents = view.fromAll().get()
           // `tool` is the ORIGIN tool of the referenced result — carried so the
           // per-tool `resultOmit` projection can key off it below.
-          type Resolution = { ref_id: string; success: boolean; result: unknown; error?: string; tool: string | null }
-          const resolutions: Resolution[] = refIds.map(refId => {
-            const refEvent = allEvents.find(e => e.id === refId)
-            const refData = refEvent?.type === 'tool_result'
-              ? (refEvent.data as ToolResultEventData)
-              : null
+          type Resolution = {
+            ref_id: string
+            success: boolean
+            result: unknown
+            error?: string
+            tool: string | null
+          }
+          const resolutions: Resolution[] = refIds.map((refId) => {
+            const refEvent = allEvents.find((e) => e.id === refId)
+            const refData =
+              refEvent?.type === 'tool_result' ? (refEvent.data as ToolResultEventData) : null
             const usable = refData && !refData.hidden && !refData.archived
             return usable
               ? { ref_id: refId, success: true, result: refData.result, tool: refData.tool ?? null }
@@ -321,13 +331,13 @@ export function simpleLoop<T extends SimpleLoopData>(
                   success: false,
                   result: null,
                   tool: null,
-                  error: `ref_id "${refId}" not found in tool_result events (or excluded as hidden/archived)`
+                  error: `ref_id "${refId}" not found in tool_result events (or excluded as hidden/archived)`,
                 }
           })
 
           const noRefs = refIds.length === 0
-          const overallSuccess = !noRefs && resolutions.some(r => r.success)
-          const failureErrors = resolutions.filter(r => !r.success).map(r => r.error)
+          const overallSuccess = !noRefs && resolutions.some((r) => r.success)
+          const failureErrors = resolutions.filter((r) => !r.success).map((r) => r.error)
           const errorMsg = noRefs
             ? `expandPreviousResult: no ref_id parsed from tool_args (${action.tool_args})`
             : failureErrors.length > 0
@@ -337,29 +347,36 @@ export function simpleLoop<T extends SimpleLoopData>(
           // For backward compatibility, a single-ref call returns the bare
           // result; multi-ref calls return a map keyed by ref_id (failures
           // surface as { __error: "..." }).
-          const combinedResult: unknown = refIds.length === 1
-            ? resolutions[0].result
-            : resolutions.reduce<Record<string, unknown>>((acc, r) => {
-                acc[r.ref_id] = r.success ? r.result : { __error: r.error }
-                return acc
-              }, {})
+          const combinedResult: unknown =
+            refIds.length === 1
+              ? resolutions[0].result
+              : resolutions.reduce<Record<string, unknown>>((acc, r) => {
+                  acc[r.ref_id] = r.success ? r.result : { __error: r.error }
+                  return acc
+                }, {})
 
           // tool_call args mirror the input shape: scalar for one ref, list
           // for many. Keeps observability faithful to what the LLM produced.
-          const trackedArgs = refIds.length === 1
-            ? { ref_id: refIds[0] }
-            : { ref_ids: refIds }
+          const trackedArgs = refIds.length === 1 ? { ref_id: refIds[0] } : { ref_ids: refIds }
 
-          trackEvent(scope, 'tool_call',
+          trackEvent(
+            scope,
+            'tool_call',
             { callId, tool: EXPAND_TOOL_NAME, args: trackedArgs } as ToolCallEventData,
-            resolved.trackHistory)
-          trackEvent(scope, 'tool_result', {
-            callId,
-            tool: EXPAND_TOOL_NAME,
-            result: combinedResult,
-            success: overallSuccess,
-            error: errorMsg
-          } as ToolResultEventData, resolved.trackHistory)
+            resolved.trackHistory,
+          )
+          trackEvent(
+            scope,
+            'tool_result',
+            {
+              callId,
+              tool: EXPAND_TOOL_NAME,
+              result: combinedResult,
+              success: overallSuccess,
+              error: errorMsg,
+            } as ToolResultEventData,
+            resolved.trackHistory,
+          )
 
           // Record as a turn — same shape as a real tool, plus expansions[]
           // (one entry per *successfully* resolved ref) so the per-turn
@@ -370,25 +387,28 @@ export function simpleLoop<T extends SimpleLoopData>(
           // would use the wrong key space). The tracked event above stays raw.
           const MAX_RESULT_CHARS = settings.maxResultChars
           const truncate = (s: string) =>
-            s.length > MAX_RESULT_CHARS
-              ? s.slice(0, MAX_RESULT_CHARS) + '…[truncated]'
-              : s
+            s.length > MAX_RESULT_CHARS ? s.slice(0, MAX_RESULT_CHARS) + '…[truncated]' : s
           const project = (r: Resolution): unknown =>
             omitResultFields(r.result, r.tool ? config?.resultOmit?.[r.tool] : undefined)
-          const turnResult: unknown = refIds.length === 1
-            ? (resolutions[0].success ? project(resolutions[0]) : resolutions[0].result)
-            : resolutions.reduce<Record<string, unknown>>((acc, r) => {
-                acc[r.ref_id] = r.success ? project(r) : { __error: r.error }
-                return acc
-              }, {})
+          const turnResult: unknown =
+            refIds.length === 1
+              ? resolutions[0].success
+                ? project(resolutions[0])
+                : resolutions[0].result
+              : resolutions.reduce<Record<string, unknown>>((acc, r) => {
+                  acc[r.ref_id] = r.success ? project(r) : { __error: r.error }
+                  return acc
+                }, {})
           const truncated = truncate(JSON.stringify(turnResult))
           const expansions = resolutions
-            .filter(r => r.success)
-            .map(r => {
+            .filter((r) => r.success)
+            .map((r) => {
               const projected = project(r)
               return {
                 ref_id: r.ref_id,
-                content: truncate(typeof projected === 'string' ? projected : JSON.stringify(projected))
+                content: truncate(
+                  typeof projected === 'string' ? projected : JSON.stringify(projected),
+                ),
               }
             })
 
@@ -401,9 +421,9 @@ export function simpleLoop<T extends SimpleLoopData>(
               tool: EXPAND_TOOL_NAME,
               result: truncated,
               success: overallSuccess,
-              error: errorMsg ?? null
+              error: errorMsg ?? null,
             },
-            ...(expansions.length > 0 ? { expansions } : {})
+            ...(expansions.length > 0 ? { expansions } : {}),
           })
 
           scope.data = { ...scope.data, turn, lastAction: action }
@@ -427,9 +447,7 @@ export function simpleLoop<T extends SimpleLoopData>(
           const sandboxScope = getActiveSandbox()
           const MAX_RESULT_CHARS = settings.maxResultChars
           const truncate = (s: string) =>
-            s.length > MAX_RESULT_CHARS
-              ? s.slice(0, MAX_RESULT_CHARS) + '…[truncated]'
-              : s
+            s.length > MAX_RESULT_CHARS ? s.slice(0, MAX_RESULT_CHARS) + '…[truncated]' : s
           const allExpansions: ExpandedRef[] = []
           const callIds: string[] = []
           const trackedArgs: unknown[] = []
@@ -450,8 +468,7 @@ export function simpleLoop<T extends SimpleLoopData>(
               continue
             }
             const callAllowed =
-              tools.includes(c.tool_name) ||
-              (sandboxScope?.ownsTool(c.tool_name) ?? false)
+              tools.includes(c.tool_name) || (sandboxScope?.ownsTool(c.tool_name) ?? false)
             if (!callAllowed) {
               trackedArgs.push(c.tool_args)
               subCalls.push({
@@ -473,8 +490,11 @@ export function simpleLoop<T extends SimpleLoopData>(
               })
               continue
             }
-            const { resolved: resolvedArgs, expansions } =
-              resolveRefsAndCapture(callArgs, view, MAX_RESULT_CHARS)
+            const { resolved: resolvedArgs, expansions } = resolveRefsAndCapture(
+              callArgs,
+              view,
+              MAX_RESULT_CHARS,
+            )
             allExpansions.push(...expansions)
             trackedArgs.push(callArgs)
             subCalls.push({
@@ -485,11 +505,10 @@ export function simpleLoop<T extends SimpleLoopData>(
                 // the singular path.
                 if (config?.onToolResult) {
                   try {
-                    const hookResult = await config.onToolResult(
-                      c.tool_name,
-                      result,
-                      { callId, args: resolvedArgs }
-                    )
+                    const hookResult = await config.onToolResult(c.tool_name, result, {
+                      callId,
+                      args: resolvedArgs,
+                    })
                     if (hookResult && 'data' in hookResult && hookResult.data !== undefined) {
                       result.data = hookResult.data
                     }
@@ -503,7 +522,7 @@ export function simpleLoop<T extends SimpleLoopData>(
                         severity: 'recoverable',
                         turn,
                       } as ErrorEventData,
-                      true
+                      true,
                     )
                   }
                 }
@@ -518,9 +537,14 @@ export function simpleLoop<T extends SimpleLoopData>(
             trackEvent(
               scope,
               'tool_call',
-              { callId: callIds[i], batchId, tool: sc.tool, args: trackedArgs[i] } as ToolCallEventData,
-              resolved.trackHistory
-            )
+              {
+                callId: callIds[i],
+                batchId,
+                tool: sc.tool,
+                args: trackedArgs[i],
+              } as ToolCallEventData,
+              resolved.trackHistory,
+            ),
           )
 
           const outcomes = await runBatch(subCalls, multiMode)
@@ -537,8 +561,8 @@ export function simpleLoop<T extends SimpleLoopData>(
                 success: o.success,
                 error: o.error,
               } as ToolResultEventData,
-              resolved.trackHistory
-            )
+              resolved.trackHistory,
+            ),
           )
 
           // Controller-facing combined map: per-tool resultOmit projection and
@@ -588,8 +612,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         // returns undefined and this collapses to the original check.
         const sandbox = getActiveSandbox()
         const allowed =
-          tools.includes(action.tool_name) ||
-          (sandbox?.ownsTool(action.tool_name) ?? false)
+          tools.includes(action.tool_name) || (sandbox?.ownsTool(action.tool_name) ?? false)
         if (!allowed) {
           hasError = true
           errorMessage = `Tool not allowed: ${action.tool_name}. Allowed: ${tools.join(', ')}`
@@ -620,14 +643,18 @@ export function simpleLoop<T extends SimpleLoopData>(
         // Resolve ref: pointers in args (expands to full tool result data from prior events)
         // and capture the substitutions so they render in the next prompt iteration.
         const MAX_RESULT_CHARS = settings.maxResultChars
-        const { resolved: resolvedArgs, expansions } = resolveRefsAndCapture(args, view, MAX_RESULT_CHARS)
+        const { resolved: resolvedArgs, expansions } = resolveRefsAndCapture(
+          args,
+          view,
+          MAX_RESULT_CHARS,
+        )
 
         // Track tool call event (with original args for readability)
         trackEvent(
           scope,
           'tool_call',
           { callId, tool: action.tool_name, args } as ToolCallEventData,
-          resolved.trackHistory
+          resolved.trackHistory,
         )
 
         // Execute tool with resolved args
@@ -637,11 +664,10 @@ export function simpleLoop<T extends SimpleLoopData>(
         // Failures here are non-fatal — log an error event, keep the original result.
         if (config?.onToolResult) {
           try {
-            const hookResult = await config.onToolResult(
-              action.tool_name,
-              result,
-              { callId, args: resolvedArgs }
-            )
+            const hookResult = await config.onToolResult(action.tool_name, result, {
+              callId,
+              args: resolvedArgs,
+            })
             if (hookResult && 'data' in hookResult && hookResult.data !== undefined) {
               result.data = hookResult.data
             }
@@ -655,7 +681,7 @@ export function simpleLoop<T extends SimpleLoopData>(
                 severity: 'recoverable',
                 turn,
               } as ErrorEventData,
-              true
+              true,
             )
           }
         }
@@ -669,9 +695,9 @@ export function simpleLoop<T extends SimpleLoopData>(
             tool: action.tool_name,
             result: result.data,
             success: result.success,
-            error: result.error
+            error: result.error,
           } as ToolResultEventData,
-          resolved.trackHistory
+          resolved.trackHistory,
         )
 
         // Record completed turn for LoopController history.
@@ -680,7 +706,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         // synthesizer and citation extractors) keeps the complete result.
         // Truncate result to avoid overflowing reasoning models on subsequent turns.
         const resultStr = JSON.stringify(
-          omitResultFields(result.data, config?.resultOmit?.[action.tool_name])
+          omitResultFields(result.data, config?.resultOmit?.[action.tool_name]),
         )
         turns.push({
           n: turn,
@@ -691,13 +717,14 @@ export function simpleLoop<T extends SimpleLoopData>(
           tool_call: { tool: action.tool_name, args: action.tool_args },
           tool_result: {
             tool: action.tool_name,
-            result: resultStr.length > MAX_RESULT_CHARS
-              ? resultStr.slice(0, MAX_RESULT_CHARS) + '…[truncated]'
-              : resultStr,
+            result:
+              resultStr.length > MAX_RESULT_CHARS
+                ? resultStr.slice(0, MAX_RESULT_CHARS) + '…[truncated]'
+                : resultStr,
             success: result.success,
-            error: result.error ?? null
+            error: result.error ?? null,
           },
-          ...(expansions.length > 0 ? { expansions } : {})
+          ...(expansions.length > 0 ? { expansions } : {}),
         })
 
         if (!result.success) {
@@ -711,7 +738,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         scope.data = {
           ...scope.data,
           turn,
-          lastAction: action
+          lastAction: action,
         }
       }
 
@@ -720,33 +747,49 @@ export function simpleLoop<T extends SimpleLoopData>(
         // When the error originated from a failed BAML call, attach the captured
         // LLM call data so the Observability panel can render the same
         // Prompt/Output drill-down as a successful call.
-        trackEvent(scope, 'error', {
-          error: errorMessage,
-          severity: resolved.errorSeverity,
-          hint: getErrorHint(errorMessage ?? ''),
-          turn: errorTurn,
-          ...(errorLlmCall ? { kind: 'llm_call' as const } : {}),
-        } as ErrorEventData, true, errorLlmCall)
+        trackEvent(
+          scope,
+          'error',
+          {
+            error: errorMessage,
+            severity: resolved.errorSeverity,
+            hint: getErrorHint(errorMessage ?? ''),
+            turn: errorTurn,
+            ...(errorLlmCall ? { kind: 'llm_call' as const } : {}),
+          } as ErrorEventData,
+          true,
+          errorLlmCall,
+        )
       } else if (!exitedViaReturn && turns.length > 0) {
         // Loop exhausted maxTurns without controller signaling completion.
         // Surface as a recoverable error so the synthesizer can warn the user;
         // partial results from completed turns are still preserved on scope.
-        trackEvent(scope, 'error', {
-          error: `Loop exhausted: reached maxTurns (${maxTurns}) without 'Return' or is_final from the controller. Partial results from ${turns.length} completed turn(s) are preserved.`,
-          severity: 'recoverable',
-          hint: 'The controller may have needed more turns to finish. Consider increasing maxToolTurns in settings, or simplifying the task.',
-          turn: turns.length - 1,
-        } as ErrorEventData, true)
+        trackEvent(
+          scope,
+          'error',
+          {
+            error: `Loop exhausted: reached maxTurns (${maxTurns}) without 'Return' or is_final from the controller. Partial results from ${turns.length} completed turn(s) are preserved.`,
+            severity: 'recoverable',
+            hint: 'The controller may have needed more turns to finish. Consider increasing maxToolTurns in settings, or simplifying the task.',
+            turn: turns.length - 1,
+          } as ErrorEventData,
+          true,
+        )
       }
 
       return scope
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
-      trackEvent(scope, 'error', {
-        error: msg,
-        severity: resolved.errorSeverity,
-        hint: getErrorHint(msg),
-      } as ErrorEventData, true)
+      trackEvent(
+        scope,
+        'error',
+        {
+          error: msg,
+          severity: resolved.errorSeverity,
+          hint: getErrorHint(msg),
+        } as ErrorEventData,
+        true,
+      )
       return scope
     }
   }
@@ -755,6 +798,6 @@ export function simpleLoop<T extends SimpleLoopData>(
     name: 'simpleLoop',
     fn,
     config: resolved,
-    estimateTurns: (s) => config?.maxTurns ?? s.maxToolTurns
+    estimateTurns: (s) => config?.maxTurns ?? s.maxToolTurns,
   }
 }

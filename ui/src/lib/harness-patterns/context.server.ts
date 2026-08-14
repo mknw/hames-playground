@@ -16,7 +16,7 @@ import type {
   TrackHistory,
   PatternConfig,
   UserMessageEventData,
-  LLMCallData
+  LLMCallData,
 } from './types'
 
 assertServerOnImport()
@@ -39,7 +39,7 @@ export function generateId(prefix = ''): string {
 export function createContext<T = Record<string, unknown>>(
   input: string,
   initialData?: T,
-  sessionId?: string
+  sessionId?: string,
 ): UnifiedContext<T> {
   const now = Date.now()
   const ctx: UnifiedContext<T> = {
@@ -48,7 +48,7 @@ export function createContext<T = Record<string, unknown>>(
     events: [],
     status: 'running',
     data: initialData ?? ({} as T),
-    input
+    input,
   }
 
   // Add initial user message event
@@ -57,7 +57,7 @@ export function createContext<T = Record<string, unknown>>(
     type: 'user_message',
     ts: now,
     patternId: 'harness',
-    data: { content: input } as UserMessageEventData
+    data: { content: input } as UserMessageEventData,
   })
 
   return ctx
@@ -78,15 +78,12 @@ export function deserializeContext<T = Record<string, unknown>>(json: string): U
 // ============================================================================
 
 /** Create a new PatternScope for pattern execution */
-export function createScope<T>(
-  patternId: string,
-  data: T
-): PatternScope<T> {
+export function createScope<T>(patternId: string, data: T): PatternScope<T> {
   return {
     id: patternId,
     events: [],
     data,
-    startTime: Date.now()
+    startTime: Date.now(),
   }
 }
 
@@ -102,7 +99,7 @@ export function createEvent(
   type: EventType,
   patternId: string,
   data: unknown,
-  llmCall?: LLMCallData
+  llmCall?: LLMCallData,
 ): ContextEvent {
   return {
     id: generateId('ev'),
@@ -111,7 +108,7 @@ export function createEvent(
     patternId,
     data,
     ...(llmCall && { llmCall }),
-    ...(llmCall?.metrics && { metrics: llmCall.metrics })
+    ...(llmCall?.metrics && { metrics: llmCall.metrics }),
   }
 }
 
@@ -137,7 +134,7 @@ export function trackEvent(
   type: EventType,
   data: unknown,
   trackHistory: TrackHistory,
-  llmCall?: LLMCallData
+  llmCall?: LLMCallData,
 ): void {
   if (!shouldTrack(type, trackHistory)) return
   const event = createEvent(type, scope.id, data, llmCall)
@@ -161,7 +158,7 @@ const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set(['pattern_enter', 'pattern_e
 export function commitEvents<T>(
   ctx: UnifiedContext<T>,
   scope: PatternScope<unknown>,
-  strategy: CommitStrategy
+  strategy: CommitStrategy,
 ): void {
   switch (strategy) {
     case 'always':
@@ -173,12 +170,12 @@ export function commitEvents<T>(
         ctx.events.push(...scope.events)
       } else {
         // Only lifecycle events
-        ctx.events.push(...scope.events.filter(e => ALWAYS_COMMIT_TYPES.has(e.type)))
+        ctx.events.push(...scope.events.filter((e) => ALWAYS_COMMIT_TYPES.has(e.type)))
       }
       break
     case 'last': {
       // Lifecycle events + last content event, preserving order
-      const lastContentIdx = findLastIndex(scope.events, e => !ALWAYS_COMMIT_TYPES.has(e.type))
+      const lastContentIdx = findLastIndex(scope.events, (e) => !ALWAYS_COMMIT_TYPES.has(e.type))
       for (let i = 0; i < scope.events.length; i++) {
         const e = scope.events[i]
         if (ALWAYS_COMMIT_TYPES.has(e.type) || i === lastContentIdx) {
@@ -189,7 +186,7 @@ export function commitEvents<T>(
     }
     case 'never':
       // Only lifecycle events
-      ctx.events.push(...scope.events.filter(e => ALWAYS_COMMIT_TYPES.has(e.type)))
+      ctx.events.push(...scope.events.filter((e) => ALWAYS_COMMIT_TYPES.has(e.type)))
       break
   }
 }
@@ -212,30 +209,27 @@ export function enterPattern<T>(
   ctx: UnifiedContext<T>,
   patternId: string,
   patternName: string,
-  meta?: Record<string, unknown>
+  meta?: Record<string, unknown>,
 ): void {
   const event: ContextEvent = {
     id: generateId('ev'),
     type: 'pattern_enter',
     ts: Date.now(),
     patternId,
-    data: { pattern: patternName, ...(meta ?? {}) }
+    data: { pattern: patternName, ...(meta ?? {}) },
   }
   ctx.events.push(event)
   emitLive(event)
 }
 
 /** Add pattern_exit event to context */
-export function exitPattern<T>(
-  ctx: UnifiedContext<T>,
-  patternId: string
-): void {
+export function exitPattern<T>(ctx: UnifiedContext<T>, patternId: string): void {
   const event: ContextEvent = {
     id: generateId('ev'),
     type: 'pattern_exit',
     ts: Date.now(),
     patternId,
-    data: { status: ctx.status, error: ctx.error }
+    data: { status: ctx.status, error: ctx.error },
   }
   ctx.events.push(event)
   emitLive(event)
@@ -252,9 +246,9 @@ export function exitPattern<T>(
 export function enrichToolResult<T>(
   ctx: UnifiedContext<T>,
   eventId: string,
-  patch: { summary?: string; hidden?: boolean; archived?: boolean }
+  patch: { summary?: string; hidden?: boolean; archived?: boolean },
 ): boolean {
-  const event = ctx.events.find(e => e.id === eventId && e.type === 'tool_result')
+  const event = ctx.events.find((e) => e.id === eventId && e.type === 'tool_result')
   if (!event) return false
   Object.assign(event.data as object, patch)
   return true
@@ -265,11 +259,7 @@ export function enrichToolResult<T>(
 // ============================================================================
 
 /** Set context status to error */
-export function setError<T>(
-  ctx: UnifiedContext<T>,
-  error: string,
-  patternId = 'unknown'
-): void {
+export function setError<T>(ctx: UnifiedContext<T>, error: string, patternId = 'unknown'): void {
   ctx.status = 'error'
   ctx.error = error
   ctx.events.push({
@@ -277,7 +267,7 @@ export function setError<T>(
     type: 'error',
     ts: Date.now(),
     patternId,
-    data: { error }
+    data: { error },
   })
 }
 
@@ -313,14 +303,17 @@ export function getDefaultCommitStrategy(patternType: string): CommitStrategy {
  *  after defaults are applied for the well-known base fields. */
 export function resolveConfig(
   patternType: string,
-  config?: PatternConfig
-): Required<Pick<PatternConfig, 'patternId' | 'commitStrategy' | 'trackHistory' | 'errorSeverity'>> & PatternConfig {
+  config?: PatternConfig,
+): Required<
+  Pick<PatternConfig, 'patternId' | 'commitStrategy' | 'trackHistory' | 'errorSeverity'>
+> &
+  PatternConfig {
   return {
     ...config,
     patternId: config?.patternId ?? generateId(patternType),
     commitStrategy: config?.commitStrategy ?? getDefaultCommitStrategy(patternType),
     trackHistory: config?.trackHistory ?? getDefaultTrackHistory(patternType),
-    errorSeverity: config?.errorSeverity ?? (DEFAULT_ERROR_SEVERITY[patternType] ?? 'irrecoverable'),
-    viewConfig: config?.viewConfig
+    errorSeverity: config?.errorSeverity ?? DEFAULT_ERROR_SEVERITY[patternType] ?? 'irrecoverable',
+    viewConfig: config?.viewConfig,
   }
 }

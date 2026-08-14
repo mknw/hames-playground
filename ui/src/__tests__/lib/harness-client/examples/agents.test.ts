@@ -17,21 +17,49 @@ const mockToolSets = {
   neo4j: ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema', 'Return'],
   web: ['search', 'fetch', 'fetch_content', 'Return'],
   memory: [
-    'create_entities', 'create_relations', 'add_observations',
-    'delete_entities', 'delete_relations', 'delete_observations',
-    'open_nodes', 'search_nodes', 'read_graph', 'Return'
+    'create_entities',
+    'create_relations',
+    'add_observations',
+    'delete_entities',
+    'delete_relations',
+    'delete_observations',
+    'open_nodes',
+    'search_nodes',
+    'read_graph',
+    'Return',
   ],
   github: [
-    'get_issue', 'list_issues', 'create_issue', 'search_code',
-    'search_repositories', 'get_pull_request', 'Return'
+    'get_issue',
+    'list_issues',
+    'create_issue',
+    'search_code',
+    'search_repositories',
+    'get_pull_request',
+    'Return',
   ],
   context7: ['resolve-library-id', 'get-library-docs', 'Return'],
   filesystem: [
-    'read_text_file', 'write_file', 'edit_file', 'list_directory',
-    'directory_tree', 'search_files', 'search_files_content', 'Return'
+    'read_text_file',
+    'write_file',
+    'edit_file',
+    'list_directory',
+    'directory_tree',
+    'search_files',
+    'search_files_content',
+    'Return',
   ],
-  redis: ['get', 'set', 'hset', 'hget', 'expire', 'json_get', 'json_set', 'vector_search_hash', 'Return'],
-  all: [] as string[]
+  redis: [
+    'get',
+    'set',
+    'hset',
+    'hget',
+    'expire',
+    'json_get',
+    'json_set',
+    'vector_search_hash',
+    'Return',
+  ],
+  all: [] as string[],
 }
 
 mockToolSets.all = [
@@ -42,13 +70,13 @@ mockToolSets.all = [
     ...mockToolSets.github,
     ...mockToolSets.context7,
     ...mockToolSets.filesystem,
-    ...mockToolSets.redis
-  ])
+    ...mockToolSets.redis,
+  ]),
 ]
 
 // Mock assert.server for all harness files
 vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
-  assertServerOnImport: vi.fn()
+  assertServerOnImport: vi.fn(),
 }))
 
 // Create mocks that we can access and modify
@@ -59,14 +87,14 @@ const callToolMock = mockCallTool({
     json_get: { data: 'cached value' },
     hset: 'OK',
     expire: true,
-    vector_search_hash: []
-  }
+    vector_search_hash: [],
+  },
 })
 
 // Mock MCP client
 vi.mock('../../../../lib/harness-patterns/mcp-client.server', () => ({
   callTool: callToolMock,
-  listTools: mockListTools(mockToolSets.all)
+  listTools: mockListTools(mockToolSets.all),
 }))
 
 // Mock BAML client
@@ -79,10 +107,10 @@ vi.mock('../../../../../baml_client', () => ({
       intent: 'test',
       needs_tool: true,
       route: 'neo4j',
-      response: ''
+      response: '',
     })),
-    Synthesize: vi.fn(async () => 'Synthesized response')
-  }
+    Synthesize: vi.fn(async () => 'Synthesized response'),
+  },
 }))
 
 // Mock Collector — must be a real class so `new Collector()` works
@@ -91,7 +119,7 @@ vi.mock('@boundaryml/baml', () => {
     last = {
       rawLlmResponse: 'Raw response',
       usage: { inputTokens: 100, outputTokens: 50 },
-      calls: [{ httpRequest: { body: {} } }]
+      calls: [{ httpRequest: { body: {} } }],
     }
     constructor(_name?: string) {}
   }
@@ -101,7 +129,7 @@ vi.mock('@boundaryml/baml', () => {
 // Mock Tools function
 vi.mock('../../../../lib/harness-patterns/tools.server', () => ({
   Tools: vi.fn(async () => mockToolSets),
-  ToolsFrom: vi.fn(async () => mockToolSets)
+  ToolsFrom: vi.fn(async () => mockToolSets),
 }))
 
 // ============================================================================
@@ -140,7 +168,7 @@ interface Pattern {
 }
 
 async function validatePatterns(config: AgentConfig): Promise<Pattern[]> {
-  const patterns = await config.createPatterns('test-session') as Pattern[]
+  const patterns = (await config.createPatterns('test-session')) as Pattern[]
 
   expect(patterns).toBeInstanceOf(Array)
   expect(patterns.length).toBeGreaterThan(0)
@@ -161,7 +189,6 @@ async function validatePatterns(config: AgentConfig): Promise<Pattern[]> {
   return patterns
 }
 
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -177,26 +204,29 @@ describe('Agent Harnesses', () => {
 
   describe('defaultAgent', () => {
     it('should have valid config', async () => {
-      const { defaultAgent } = await import('../../../../lib/harness-client/examples/default.server')
+      const { defaultAgent } =
+        await import('../../../../lib/harness-client/examples/default.server')
       validateAgentConfig(defaultAgent)
       expect(defaultAgent.id).toBe('default')
       expect(defaultAgent.servers).toContain('neo4j-cypher')
     })
 
     it('should create valid patterns', async () => {
-      const { defaultAgent } = await import('../../../../lib/harness-client/examples/default.server')
+      const { defaultAgent } =
+        await import('../../../../lib/harness-client/examples/default.server')
       const patterns = await validatePatterns(defaultAgent)
 
       // Should have router and synthesizer
-      const patternNames = patterns.map(p => p.name)
+      const patternNames = patterns.map((p) => p.name)
       expect(patternNames).toContain('router')
       expect(patternNames).toContain('synthesizer')
     })
 
     it('should have unique pattern IDs', async () => {
-      const { defaultAgent } = await import('../../../../lib/harness-client/examples/default.server')
-      const patterns = await defaultAgent.createPatterns('test-session') as Pattern[]
-      const ids = patterns.map(p => p.config.patternId)
+      const { defaultAgent } =
+        await import('../../../../lib/harness-client/examples/default.server')
+      const patterns = (await defaultAgent.createPatterns('test-session')) as Pattern[]
+      const ids = patterns.map((p) => p.config.patternId)
       const uniqueIds = new Set(ids)
       expect(uniqueIds.size).toBe(ids.length)
     })
@@ -204,36 +234,40 @@ describe('Agent Harnesses', () => {
 
   describe('codeModeAgent', () => {
     it('should have valid config', async () => {
-      const { codeModeAgent } = await import('../../../../lib/harness-client/examples/code-mode.server')
+      const { codeModeAgent } =
+        await import('../../../../lib/harness-client/examples/code-mode.server')
       validateAgentConfig(codeModeAgent)
       expect(codeModeAgent.id).toBe('code-mode')
     })
 
     it('should create patterns: router + routes(chain(loop, synth))', async () => {
-      const { codeModeAgent } = await import('../../../../lib/harness-client/examples/code-mode.server')
+      const { codeModeAgent } =
+        await import('../../../../lib/harness-client/examples/code-mode.server')
       const patterns = await validatePatterns(codeModeAgent)
 
-      const names = patterns.map(p => p.name)
+      const names = patterns.map((p) => p.name)
       // Two top-level patterns: router + routes.
       expect(patterns.length).toBe(2)
       expect(names).toContain('router')
       // The routes name embeds the route key.
-      expect(names.some(n => n.includes('code_mode'))).toBe(true)
+      expect(names.some((n) => n.includes('code_mode'))).toBe(true)
     })
   })
 
   describe('sandboxSessionAgent', () => {
     it('should have valid config', async () => {
-      const { sandboxSessionAgent } = await import('../../../../lib/harness-client/examples/sandbox-session.server')
+      const { sandboxSessionAgent } =
+        await import('../../../../lib/harness-client/examples/sandbox-session.server')
       validateAgentConfig(sandboxSessionAgent)
       expect(sandboxSessionAgent.id).toBe('sandbox-session')
     })
 
     it('should create patterns: compactIntent → withSandbox(actorCritic) → synthesizer', async () => {
-      const { sandboxSessionAgent } = await import('../../../../lib/harness-client/examples/sandbox-session.server')
+      const { sandboxSessionAgent } =
+        await import('../../../../lib/harness-client/examples/sandbox-session.server')
       const patterns = await validatePatterns(sandboxSessionAgent)
 
-      const names = patterns.map(p => p.name)
+      const names = patterns.map((p) => p.name)
       expect(patterns.length).toBe(3)
       // #83: compactIntent runs first so the router-less actor gets a
       // self-contained brief instead of a bare back-reference.
@@ -247,47 +281,57 @@ describe('Agent Harnesses', () => {
 
   describe('flavouredSandboxAgent', () => {
     it('should have valid config', async () => {
-      const { flavouredSandboxAgent } = await import('../../../../lib/harness-client/examples/flavoured-sandbox.server')
+      const { flavouredSandboxAgent } =
+        await import('../../../../lib/harness-client/examples/flavoured-sandbox.server')
       validateAgentConfig(flavouredSandboxAgent)
       expect(flavouredSandboxAgent.id).toBe('flavoured-sandbox')
     })
 
     it('should create patterns: router + routes(flavoured sandboxes) + synthesizer', async () => {
-      const { flavouredSandboxAgent } = await import('../../../../lib/harness-client/examples/flavoured-sandbox.server')
+      const { flavouredSandboxAgent } =
+        await import('../../../../lib/harness-client/examples/flavoured-sandbox.server')
       const patterns = await validatePatterns(flavouredSandboxAgent)
 
-      const names = patterns.map(p => p.name)
+      const names = patterns.map((p) => p.name)
       expect(patterns.length).toBe(3)
       expect(names).toContain('router')
       // The routes name embeds the route keys (basic|image_processing|data|office).
-      expect(names.some(n => n.includes('routes') && n.includes('image_processing') && n.includes('office'))).toBe(true)
+      expect(
+        names.some(
+          (n) => n.includes('routes') && n.includes('image_processing') && n.includes('office'),
+        ),
+      ).toBe(true)
       expect(names[2]).toBe('synthesizer')
     })
 
     it('exposes the durable-workspace capability (persistent flavours use syncWorkspace)', async () => {
-      const { flavouredSandboxAgent } = await import('../../../../lib/harness-client/examples/flavoured-sandbox.server')
+      const { flavouredSandboxAgent } =
+        await import('../../../../lib/harness-client/examples/flavoured-sandbox.server')
       const { harnessUsesSyncWorkspace } = await import('../../../../lib/harness-patterns')
       const patterns = await flavouredSandboxAgent.createPatterns('test-session')
-      expect(harnessUsesSyncWorkspace(patterns as Parameters<typeof harnessUsesSyncWorkspace>[0])).toBe(true)
+      expect(
+        harnessUsesSyncWorkspace(patterns as Parameters<typeof harnessUsesSyncWorkspace>[0]),
+      ).toBe(true)
     })
   })
 
   describe('multiSourceResearchAgent', () => {
     it('should have valid config', async () => {
-      const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
+      const { multiSourceResearchAgent } =
+        await import('../../../../lib/harness-client/examples/multi-source-research.server')
       validateAgentConfig(multiSourceResearchAgent)
       expect(multiSourceResearchAgent.id).toBe('multi-source-research')
     })
 
     it('should create valid patterns', async () => {
-      const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
+      const { multiSourceResearchAgent } =
+        await import('../../../../lib/harness-client/examples/multi-source-research.server')
       const patterns = await validatePatterns(multiSourceResearchAgent)
 
       // Should have parallel, judge, synthesizer
       expect(patterns.length).toBe(3)
     })
   })
-
 })
 
 // ============================================================================
@@ -305,18 +349,20 @@ describe('Judge Evaluators', () => {
 
   describe('multiSourceResearchAgent judgeEvaluator', () => {
     it('should have quality judge pattern', async () => {
-      const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-      const patterns = await multiSourceResearchAgent.createPatterns('test-session') as Pattern[]
+      const { multiSourceResearchAgent } =
+        await import('../../../../lib/harness-client/examples/multi-source-research.server')
+      const patterns = (await multiSourceResearchAgent.createPatterns('test-session')) as Pattern[]
 
-      const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')
+      const judgePattern = patterns.find((p) => p.config.patternId === 'quality-judge')
       expect(judgePattern).toBeDefined()
     })
 
     it('should have parallel research pattern', async () => {
-      const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-      const patterns = await multiSourceResearchAgent.createPatterns('test-session') as Pattern[]
+      const { multiSourceResearchAgent } =
+        await import('../../../../lib/harness-client/examples/multi-source-research.server')
+      const patterns = (await multiSourceResearchAgent.createPatterns('test-session')) as Pattern[]
 
-      const parallelPattern = patterns.find(p => p.config.patternId === 'parallel-research')
+      const parallelPattern = patterns.find((p) => p.config.patternId === 'parallel-research')
       expect(parallelPattern).toBeDefined()
     })
   })
@@ -330,15 +376,18 @@ describe('Agent Consistency', () => {
   it('all agents should have unique IDs', async () => {
     // Import all agents statically
     const { defaultAgent } = await import('../../../../lib/harness-client/examples/default.server')
-    const { codeModeAgent } = await import('../../../../lib/harness-client/examples/code-mode.server')
-    const { sandboxSessionAgent } = await import('../../../../lib/harness-client/examples/sandbox-session.server')
-    const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
+    const { codeModeAgent } =
+      await import('../../../../lib/harness-client/examples/code-mode.server')
+    const { sandboxSessionAgent } =
+      await import('../../../../lib/harness-client/examples/sandbox-session.server')
+    const { multiSourceResearchAgent } =
+      await import('../../../../lib/harness-client/examples/multi-source-research.server')
 
     const ids = [
       defaultAgent.id,
       codeModeAgent.id,
       sandboxSessionAgent.id,
-      multiSourceResearchAgent.id
+      multiSourceResearchAgent.id,
     ]
 
     const uniqueIds = new Set(ids)
@@ -347,17 +396,15 @@ describe('Agent Consistency', () => {
 
   it('all agents should contain synthesizer pattern', async () => {
     const { defaultAgent } = await import('../../../../lib/harness-client/examples/default.server')
-    const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
+    const { multiSourceResearchAgent } =
+      await import('../../../../lib/harness-client/examples/multi-source-research.server')
 
-    const agents = [
-      defaultAgent,
-      multiSourceResearchAgent
-    ]
+    const agents = [defaultAgent, multiSourceResearchAgent]
 
     for (const config of agents) {
-      const patterns = await config.createPatterns('test-session') as Pattern[]
+      const patterns = (await config.createPatterns('test-session')) as Pattern[]
       // All agents should contain a synthesizer pattern somewhere in the chain
-      const hasSynthesizer = patterns.some(p => p.name === 'synthesizer')
+      const hasSynthesizer = patterns.some((p) => p.name === 'synthesizer')
       expect(hasSynthesizer).toBe(true)
     }
   })

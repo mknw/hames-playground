@@ -41,7 +41,13 @@ describe('isConvertible', () => {
   })
 
   it('rejects text and non-office binaries (stored, not converted)', () => {
-    for (const m of ['text/plain', 'text/markdown', 'application/json', 'image/png', 'application/zip']) {
+    for (const m of [
+      'text/plain',
+      'text/markdown',
+      'application/json',
+      'image/png',
+      'application/zip',
+    ]) {
       expect(isConvertible(m)).toBe(false)
     }
   })
@@ -105,17 +111,23 @@ describe('convertToMarkdown', () => {
     process.env.DOC_CONVERT_URL = 'http://doc-convert:8000'
     const fetchFn = vi.fn(async () => fakeResponse([{ content: '# x' }]))
     await convertToMarkdown(b64, 'a.pdf', 'application/pdf', fetchFn)
-    expect((fetchFn.mock.calls[0] as unknown as [string])[0]).toBe('http://doc-convert:8000/extract')
+    expect((fetchFn.mock.calls[0] as unknown as [string])[0]).toBe(
+      'http://doc-convert:8000/extract',
+    )
   })
 
   it('throws on a non-2xx response', async () => {
     const fetchFn = vi.fn(async () => fakeResponse(null, false, 500))
-    await expect(convertToMarkdown(b64, 'a.pdf', 'application/pdf', fetchFn)).rejects.toThrow(/HTTP 500/)
+    await expect(convertToMarkdown(b64, 'a.pdf', 'application/pdf', fetchFn)).rejects.toThrow(
+      /HTTP 500/,
+    )
   })
 
   it('throws when the sidecar returns no content', async () => {
     const fetchFn = vi.fn(async () => fakeResponse([{ content: '' }]))
-    await expect(convertToMarkdown(b64, 'a.pdf', 'application/pdf', fetchFn)).rejects.toThrow(/no content/)
+    await expect(convertToMarkdown(b64, 'a.pdf', 'application/pdf', fetchFn)).rejects.toThrow(
+      /no content/,
+    )
   })
 })
 

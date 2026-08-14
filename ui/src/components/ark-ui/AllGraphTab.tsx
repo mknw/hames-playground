@@ -43,9 +43,7 @@ interface AllGraphTabProps {
 
 /** Short display name for a tool */
 function toolDisplayName(tool: string): string {
-  return tool
-    .replace(/^(read_|write_|get_|create_|delete_|list_)/, '')
-    .replace(/_/g, ' ')
+  return tool.replace(/^(read_|write_|get_|create_|delete_|list_)/, '').replace(/_/g, ' ')
 }
 
 /** Truncate text with ellipsis */
@@ -72,15 +70,13 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
   const turns = createMemo(() => splitIntoTurns(props.contextEvents))
 
   // Only turns that have graph-producing tool results
-  const turnsWithGraphData = createMemo(() =>
-    turns().filter(t => t.graphToolResults.length > 0)
-  )
+  const turnsWithGraphData = createMemo(() => turns().filter((t) => t.graphToolResults.length > 0))
 
   // Derive graph elements from selected turns
   const graphElements = createMemo(() => {
     const selected = selectedTurns()
     if (selected.size === 0) return [] as GraphElement[]
-    const selectedTurnData = turns().filter(t => selected.has(t.turnNumber))
+    const selectedTurnData = turns().filter((t) => selected.has(t.turnNumber))
     return extractMultiTurnGraphElements(selectedTurnData)
   })
 
@@ -96,14 +92,14 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
           style: {
             'background-color': color,
             'border-color': color,
-          }
+          },
         } as StylesheetJsonBlock,
         {
           selector: `edge[turn = ${turnNum}]`,
           style: {
             'line-color': color,
             'target-arrow-color': color,
-          }
+          },
         } as StylesheetJsonBlock,
       )
     }
@@ -111,16 +107,12 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
   })
 
   // Counts
-  const nodeCount = createMemo(() =>
-    graphElements().filter(e => !e.data?.source).length
-  )
-  const edgeCount = createMemo(() =>
-    graphElements().filter(e => e.data?.source).length
-  )
+  const nodeCount = createMemo(() => graphElements().filter((e) => !e.data?.source).length)
+  const edgeCount = createMemo(() => graphElements().filter((e) => e.data?.source).length)
 
   // Turn selection handlers
   const toggleTurn = (turnNumber: number) => {
-    setSelectedTurns(prev => {
+    setSelectedTurns((prev) => {
       const next = new Set(prev)
       if (next.has(turnNumber)) {
         next.delete(turnNumber)
@@ -132,7 +124,7 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
   }
 
   const selectAllTurns = () => {
-    setSelectedTurns(new Set(turnsWithGraphData().map(t => t.turnNumber)))
+    setSelectedTurns(new Set(turnsWithGraphData().map((t) => t.turnNumber)))
   }
 
   const clearSelection = () => {
@@ -140,9 +132,7 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
   }
 
   // Sorted selected turn numbers for legend
-  const selectedTurnNumbers = createMemo(() =>
-    [...selectedTurns()].sort((a, b) => a - b)
-  )
+  const selectedTurnNumbers = createMemo(() => [...selectedTurns()].sort((a, b) => a - b))
 
   return (
     <div flex="~ col" h="full" style={{ position: 'relative' }}>
@@ -157,8 +147,7 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
       >
         <div text="xs dark-text-secondary">
           <Show when={graphElements().length > 0} fallback="No turns selected">
-            {nodeCount()} nodes, {edgeCount()} edges
-            {' '}
+            {nodeCount()} nodes, {edgeCount()} edges{' '}
             <span text="dark-text-tertiary">
               ({selectedTurnNumbers().length} turn{selectedTurnNumbers().length !== 1 ? 's' : ''})
             </span>
@@ -253,14 +242,14 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
               border="b dark-border-primary"
               cursor="default"
             >
-              <FloatingPanel.DragTrigger
-                flex="1 ~"
-                items="center"
-                gap="2"
-                cursor="grab"
-              >
-                <span class="i-mdi-drag" style={{ width: '16px', height: '16px', color: '#71717a' }} />
-                <span text="sm dark-text-primary" font="medium">Turn Explorer</span>
+              <FloatingPanel.DragTrigger flex="1 ~" items="center" gap="2" cursor="grab">
+                <span
+                  class="i-mdi-drag"
+                  style={{ width: '16px', height: '16px', color: '#71717a' }}
+                />
+                <span text="sm dark-text-primary" font="medium">
+                  Turn Explorer
+                </span>
               </FloatingPanel.DragTrigger>
               {/* Content actions — NOT window controls, so they live in a
                   plain div: FloatingPanel.Control is the slot for the stage/
@@ -302,7 +291,10 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
                     text="dark-text-tertiary hover:dark-text-primary"
                     title="Minimize"
                   >
-                    <span class="i-material-symbols-minimize" style={{ width: '14px', height: '14px', display: 'block' }} />
+                    <span
+                      class="i-material-symbols-minimize"
+                      style={{ width: '14px', height: '14px', display: 'block' }}
+                    />
                   </FloatingPanel.StageTrigger>
                 </Show>
                 <Show when={props.panelStage !== 'maximized'}>
@@ -315,7 +307,10 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
                     text="dark-text-tertiary hover:dark-text-primary"
                     title="Maximize (fills the graph area)"
                   >
-                    <span class="i-material-symbols-fullscreen" style={{ width: '14px', height: '14px', display: 'block' }} />
+                    <span
+                      class="i-material-symbols-fullscreen"
+                      style={{ width: '14px', height: '14px', display: 'block' }}
+                    />
                   </FloatingPanel.StageTrigger>
                 </Show>
                 <Show when={props.panelStage !== 'default' && props.panelStage !== undefined}>
@@ -346,28 +341,31 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
                   text="dark-text-tertiary hover:dark-text-primary"
                   title="Close"
                 >
-                  <span class="i-material-symbols-close" style={{ width: '14px', height: '14px', display: 'block' }} />
+                  <span
+                    class="i-material-symbols-close"
+                    style={{ width: '14px', height: '14px', display: 'block' }}
+                  />
                 </FloatingPanel.CloseTrigger>
               </FloatingPanel.Control>
             </FloatingPanel.Header>
 
             {/* Body: horizontal flex of turn columns */}
-            <FloatingPanel.Body
-              flex="1"
-              overflow="auto"
-              p="2"
-            >
+            <FloatingPanel.Body flex="1" overflow="auto" p="2">
               <Show
                 when={turnsWithGraphData().length > 0}
                 fallback={
                   <div flex="~" items="center" justify="center" h="full" p="4">
-                    <span text="xs dark-text-tertiary">
-                      No graph data in any turn yet
-                    </span>
+                    <span text="xs dark-text-tertiary">No graph data in any turn yet</span>
                   </div>
                 }
               >
-                <div flex="~" gap="2" overflow="x-auto" min-h="0" style={{ 'align-items': 'flex-start' }}>
+                <div
+                  flex="~"
+                  gap="2"
+                  overflow="x-auto"
+                  min-h="0"
+                  style={{ 'align-items': 'flex-start' }}
+                >
                   <For each={turnsWithGraphData()}>
                     {(turn) => (
                       <TurnColumn
@@ -426,7 +424,9 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
             rounded="lg"
             p="2 3"
           >
-            <div text="2xs dark-text-tertiary" m="b-1" font="medium">Turns</div>
+            <div text="2xs dark-text-tertiary" m="b-1" font="medium">
+              Turns
+            </div>
             <For each={selectedTurnNumbers()}>
               {(n) => (
                 <div flex="~" items="center" gap="2" m="y-0.5">
@@ -475,7 +475,7 @@ const TurnColumn = (props: TurnColumnProps) => {
       transition="all"
       style={{
         'border-color': props.selected ? color() + '60' : '#27272a',
-        'background': props.selected ? color() + '08' : 'transparent',
+        background: props.selected ? color() + '08' : 'transparent',
         'flex-shrink': '0',
       }}
     >
@@ -505,14 +505,13 @@ const TurnColumn = (props: TurnColumnProps) => {
         />
         {/* Turn label */}
         <div flex="~ col" min-w="0">
-          <span
-            text="xs"
-            font="medium"
-            style={{ color: props.selected ? color() : '#a1a1aa' }}
-          >
+          <span text="xs" font="medium" style={{ color: props.selected ? color() : '#a1a1aa' }}>
             Turn {props.turn.turnNumber}
           </span>
-          <span text="2xs dark-text-tertiary" style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+          <span
+            text="2xs dark-text-tertiary"
+            style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
+          >
             {getUserMessagePreview(props.turn)}
           </span>
         </div>
@@ -558,7 +557,13 @@ const TurnColumn = (props: TurnColumnProps) => {
                     'flex-shrink': '0',
                   }}
                 />
-                <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+                <span
+                  style={{
+                    overflow: 'hidden',
+                    'text-overflow': 'ellipsis',
+                    'white-space': 'nowrap',
+                  }}
+                >
                   {toolDisplayName(item.data.tool)}
                 </span>
               </Tooltip.Trigger>
@@ -576,9 +581,7 @@ const TurnColumn = (props: TurnColumnProps) => {
                     {item.data.tool}
                   </div>
                   <Show when={item.data.summary}>
-                    <div text="xs dark-text-secondary">
-                      {item.data.summary}
-                    </div>
+                    <div text="xs dark-text-secondary">{item.data.summary}</div>
                   </Show>
                   <Show when={!item.data.summary}>
                     <div text="xs dark-text-tertiary" font="italic">

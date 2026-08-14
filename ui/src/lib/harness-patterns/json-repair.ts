@@ -32,7 +32,11 @@ export function repairJson(raw: string): Record<string, unknown> {
   // Simple approach: if there are no double quotes at all, swap all single quotes
   if (!s.includes('"') && s.includes("'")) {
     s = s.replace(/'/g, '"')
-    try { return JSON.parse(s) } catch { /* continue */ }
+    try {
+      return JSON.parse(s)
+    } catch {
+      /* continue */
+    }
   }
 
   // Remove trailing commas before } or ]
@@ -54,7 +58,7 @@ export function repairJson(raw: string): Record<string, unknown> {
   // a bare string that needs quoting.
   s = s.replace(
     /:\s*(?!")(?!-?\d[\d.]*)(?!true\b)(?!false\b)(?!null\b)(?![[{])([^,}\]]+?)\s*([,}\]])/g,
-    ': "$1"$2'
+    ': "$1"$2',
   )
 
   try {

@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock server-only imports
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
-  assertServerOnImport: vi.fn()
+  assertServerOnImport: vi.fn(),
 }))
 
 describe('context', () => {
@@ -79,7 +79,7 @@ describe('context', () => {
       const llmCall = {
         functionName: 'LoopController',
         variables: { message: 'test' },
-        durationMs: 100
+        durationMs: 100,
       }
 
       const event = createEvent('controller_action', 'pattern-1', {}, llmCall)
@@ -120,7 +120,8 @@ describe('context', () => {
 
   describe('trackEvent', () => {
     it('should add event to scope when should track', async () => {
-      const { trackEvent, createScope } = await import('../../../lib/harness-patterns/context.server')
+      const { trackEvent, createScope } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const scope = createScope('test', {})
       trackEvent(scope, 'tool_call', { tool: 'test' }, true)
@@ -130,7 +131,8 @@ describe('context', () => {
     })
 
     it('should not add event when should not track', async () => {
-      const { trackEvent, createScope } = await import('../../../lib/harness-patterns/context.server')
+      const { trackEvent, createScope } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const scope = createScope('test', {})
       trackEvent(scope, 'tool_call', { tool: 'test' }, false)
@@ -139,13 +141,14 @@ describe('context', () => {
     })
 
     it('should include llmCall in tracked event', async () => {
-      const { trackEvent, createScope } = await import('../../../lib/harness-patterns/context.server')
+      const { trackEvent, createScope } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const scope = createScope('test', {})
       const llmCall = {
         functionName: 'LoopController',
         variables: {},
-        usage: { inputTokens: 100, outputTokens: 50, cachedInputTokens: 0, totalTokens: 150 }
+        usage: { inputTokens: 100, outputTokens: 50, cachedInputTokens: 0, totalTokens: 150 },
       }
 
       trackEvent(scope, 'controller_action', { action: {} }, true, llmCall)
@@ -157,7 +160,8 @@ describe('context', () => {
 
   describe('commitEvents', () => {
     it('should commit all events with "always" strategy', async () => {
-      const { commitEvents, createContext, createScope } = await import('../../../lib/harness-patterns/context.server')
+      const { commitEvents, createContext, createScope } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       const initialEventCount = ctx.events.length
@@ -165,7 +169,7 @@ describe('context', () => {
       const scope = createScope('pattern', {})
       scope.events.push(
         { type: 'tool_call', ts: Date.now(), patternId: 'pattern', data: {} },
-        { type: 'tool_result', ts: Date.now(), patternId: 'pattern', data: {} }
+        { type: 'tool_result', ts: Date.now(), patternId: 'pattern', data: {} },
       )
 
       commitEvents(ctx, scope, 'always')
@@ -174,7 +178,8 @@ describe('context', () => {
     })
 
     it('should commit events on success with "on-success" strategy', async () => {
-      const { commitEvents, createContext, createScope } = await import('../../../lib/harness-patterns/context.server')
+      const { commitEvents, createContext, createScope } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.status = 'done'
@@ -189,7 +194,8 @@ describe('context', () => {
     })
 
     it('should not commit events on error with "on-success" strategy', async () => {
-      const { commitEvents, createContext, createScope } = await import('../../../lib/harness-patterns/context.server')
+      const { commitEvents, createContext, createScope } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.status = 'error'
@@ -204,7 +210,8 @@ describe('context', () => {
     })
 
     it('should commit only last event with "last" strategy', async () => {
-      const { commitEvents, createContext, createScope } = await import('../../../lib/harness-patterns/context.server')
+      const { commitEvents, createContext, createScope } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       const initialEventCount = ctx.events.length
@@ -212,7 +219,7 @@ describe('context', () => {
       const scope = createScope('pattern', {})
       scope.events.push(
         { type: 'tool_call', ts: Date.now(), patternId: 'pattern', data: { n: 1 } },
-        { type: 'tool_result', ts: Date.now(), patternId: 'pattern', data: { n: 2 } }
+        { type: 'tool_result', ts: Date.now(), patternId: 'pattern', data: { n: 2 } },
       )
 
       commitEvents(ctx, scope, 'last')
@@ -222,16 +229,22 @@ describe('context', () => {
     })
 
     it('should not commit content events with "never" strategy but still commit lifecycle', async () => {
-      const { commitEvents, createContext, createScope } = await import('../../../lib/harness-patterns/context.server')
+      const { commitEvents, createContext, createScope } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       const initialEventCount = ctx.events.length
 
       const scope = createScope('pattern', {})
       scope.events.push(
-        { type: 'pattern_enter', ts: Date.now(), patternId: 'child', data: { pattern: 'simpleLoop' } },
+        {
+          type: 'pattern_enter',
+          ts: Date.now(),
+          patternId: 'child',
+          data: { pattern: 'simpleLoop' },
+        },
         { type: 'tool_call', ts: Date.now(), patternId: 'child', data: {} },
-        { type: 'pattern_exit', ts: Date.now(), patternId: 'child', data: { status: 'completed' } }
+        { type: 'pattern_exit', ts: Date.now(), patternId: 'child', data: { status: 'completed' } },
       )
 
       commitEvents(ctx, scope, 'never')
@@ -243,7 +256,8 @@ describe('context', () => {
     })
 
     it('should always commit lifecycle events regardless of strategy', async () => {
-      const { commitEvents, createContext, createScope } = await import('../../../lib/harness-patterns/context.server')
+      const { commitEvents, createContext, createScope } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       const initialEventCount = ctx.events.length
@@ -253,7 +267,7 @@ describe('context', () => {
         { type: 'pattern_enter', ts: Date.now(), patternId: 'sub', data: { pattern: 'loop' } },
         { type: 'tool_call', ts: Date.now(), patternId: 'sub', data: { n: 1 } },
         { type: 'tool_result', ts: Date.now(), patternId: 'sub', data: { n: 2 } },
-        { type: 'pattern_exit', ts: Date.now(), patternId: 'sub', data: { status: 'completed' } }
+        { type: 'pattern_exit', ts: Date.now(), patternId: 'sub', data: { status: 'completed' } },
       )
 
       commitEvents(ctx, scope, 'last')
@@ -261,15 +275,16 @@ describe('context', () => {
       // Lifecycle (2) + last content event (1) = 3
       expect(ctx.events.length).toBe(initialEventCount + 3)
       const newEvents = ctx.events.slice(initialEventCount)
-      expect(newEvents.filter(e => e.type === 'pattern_enter')).toHaveLength(1)
-      expect(newEvents.filter(e => e.type === 'pattern_exit')).toHaveLength(1)
-      expect(newEvents.filter(e => e.type === 'tool_result')).toHaveLength(1)
+      expect(newEvents.filter((e) => e.type === 'pattern_enter')).toHaveLength(1)
+      expect(newEvents.filter((e) => e.type === 'pattern_exit')).toHaveLength(1)
+      expect(newEvents.filter((e) => e.type === 'tool_result')).toHaveLength(1)
     })
   })
 
   describe('serialization', () => {
     it('should serialize and deserialize context', async () => {
-      const { createContext, serializeContext, deserializeContext } = await import('../../../lib/harness-patterns/context.server')
+      const { createContext, serializeContext, deserializeContext } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test message', { foo: 'bar' })
       const serialized = serializeContext(ctx)
@@ -282,7 +297,8 @@ describe('context', () => {
     })
 
     it('should preserve hidden/archived/summary fields through round-trip', async () => {
-      const { createContext, serializeContext, deserializeContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+      const { createContext, serializeContext, deserializeContext, enrichToolResult } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test message')
       ctx.events.push({
@@ -290,20 +306,20 @@ describe('context', () => {
         ts: Date.now(),
         patternId: 'p1',
         id: 'ev-roundtrip',
-        data: { tool: 'search', result: 'data', success: true }
+        data: { tool: 'search', result: 'data', success: true },
       })
 
       // Enrich with Data Stash fields
       enrichToolResult(ctx, 'ev-roundtrip', {
         summary: 'Found search results',
-        hidden: true
+        hidden: true,
       })
 
       // Serialize and deserialize
       const serialized = serializeContext(ctx)
       const deserialized = deserializeContext(serialized)
 
-      const event = deserialized.events.find(e => e.id === 'ev-roundtrip')
+      const event = deserialized.events.find((e) => e.id === 'ev-roundtrip')
       expect(event).toBeDefined()
       const data = event!.data as { summary?: string; hidden?: boolean; archived?: boolean }
       expect(data.summary).toBe('Found search results')
@@ -312,7 +328,8 @@ describe('context', () => {
     })
 
     it('should preserve archived state through round-trip', async () => {
-      const { createContext, serializeContext, deserializeContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+      const { createContext, serializeContext, deserializeContext, enrichToolResult } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.events.push({
@@ -320,13 +337,13 @@ describe('context', () => {
         ts: Date.now(),
         patternId: 'p1',
         id: 'ev-archived-rt',
-        data: { tool: 'fetch', result: 'page', success: true }
+        data: { tool: 'fetch', result: 'page', success: true },
       })
 
       enrichToolResult(ctx, 'ev-archived-rt', { archived: true, summary: 'Fetched page content' })
 
       const deserialized = deserializeContext(serializeContext(ctx))
-      const event = deserialized.events.find(e => e.id === 'ev-archived-rt')
+      const event = deserialized.events.find((e) => e.id === 'ev-archived-rt')
       const data = event!.data as { archived?: boolean; summary?: string }
       expect(data.archived).toBe(true)
       expect(data.summary).toBe('Fetched page content')
@@ -335,7 +352,8 @@ describe('context', () => {
 
   describe('enrichToolResult', () => {
     it('should add summary to a tool_result event', async () => {
-      const { createContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+      const { createContext, enrichToolResult } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.events.push({
@@ -343,7 +361,7 @@ describe('context', () => {
         ts: Date.now(),
         patternId: 'p1',
         id: 'ev-abc123',
-        data: { tool: 'read_neo4j_cypher', result: { nodes: [] }, success: true }
+        data: { tool: 'read_neo4j_cypher', result: { nodes: [] }, success: true },
       })
 
       const found = enrichToolResult(ctx, 'ev-abc123', { summary: 'Found 0 nodes in the graph.' })
@@ -354,7 +372,8 @@ describe('context', () => {
     })
 
     it('should set hidden flag on a tool_result event', async () => {
-      const { createContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+      const { createContext, enrichToolResult } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.events.push({
@@ -362,7 +381,7 @@ describe('context', () => {
         ts: Date.now(),
         patternId: 'p1',
         id: 'ev-def456',
-        data: { tool: 'search', result: 'data', success: true }
+        data: { tool: 'search', result: 'data', success: true },
       })
 
       const found = enrichToolResult(ctx, 'ev-def456', { hidden: true })
@@ -373,7 +392,8 @@ describe('context', () => {
     })
 
     it('should set archived flag on a tool_result event', async () => {
-      const { createContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+      const { createContext, enrichToolResult } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.events.push({
@@ -381,7 +401,7 @@ describe('context', () => {
         ts: Date.now(),
         patternId: 'p1',
         id: 'ev-ghi789',
-        data: { tool: 'fetch', result: 'page content', success: true }
+        data: { tool: 'fetch', result: 'page content', success: true },
       })
 
       const found = enrichToolResult(ctx, 'ev-ghi789', { archived: true })
@@ -392,7 +412,8 @@ describe('context', () => {
     })
 
     it('should apply multiple fields at once', async () => {
-      const { createContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+      const { createContext, enrichToolResult } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.events.push({
@@ -400,7 +421,7 @@ describe('context', () => {
         ts: Date.now(),
         patternId: 'p1',
         id: 'ev-multi',
-        data: { tool: 'search', result: 'data', success: true }
+        data: { tool: 'search', result: 'data', success: true },
       })
 
       enrichToolResult(ctx, 'ev-multi', { summary: 'Found data', hidden: true })
@@ -411,7 +432,8 @@ describe('context', () => {
     })
 
     it('should return false when event not found', async () => {
-      const { createContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+      const { createContext, enrichToolResult } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
 
@@ -421,7 +443,8 @@ describe('context', () => {
     })
 
     it('should not modify non-tool_result events with matching id', async () => {
-      const { createContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+      const { createContext, enrichToolResult } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       ctx.events.push({
@@ -429,7 +452,7 @@ describe('context', () => {
         ts: Date.now(),
         patternId: 'p1',
         id: 'ev-toolcall',
-        data: { tool: 'search', args: {} }
+        data: { tool: 'search', args: {} },
       })
 
       const found = enrichToolResult(ctx, 'ev-toolcall', { summary: 'should not apply' })
@@ -438,7 +461,8 @@ describe('context', () => {
     })
 
     it('should mutate event in-place (not clone)', async () => {
-      const { createContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+      const { createContext, enrichToolResult } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       const eventData = { tool: 'search', result: 'data', success: true }
@@ -447,7 +471,7 @@ describe('context', () => {
         ts: Date.now(),
         patternId: 'p1',
         id: 'ev-inplace',
-        data: eventData
+        data: eventData,
       })
 
       enrichToolResult(ctx, 'ev-inplace', { summary: 'mutated' })
@@ -459,7 +483,8 @@ describe('context', () => {
 
   describe('status helpers', () => {
     it('should set error status', async () => {
-      const { createContext, setError } = await import('../../../lib/harness-patterns/context.server')
+      const { createContext, setError } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       setError(ctx, 'Something went wrong')
@@ -469,7 +494,8 @@ describe('context', () => {
     })
 
     it('should set done status', async () => {
-      const { createContext, setDone } = await import('../../../lib/harness-patterns/context.server')
+      const { createContext, setDone } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       setDone(ctx)
@@ -478,7 +504,8 @@ describe('context', () => {
     })
 
     it('should set paused status', async () => {
-      const { createContext, setPaused } = await import('../../../lib/harness-patterns/context.server')
+      const { createContext, setPaused } =
+        await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       setPaused(ctx)

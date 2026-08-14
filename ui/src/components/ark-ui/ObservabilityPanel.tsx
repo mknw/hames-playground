@@ -1652,7 +1652,6 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
       <Show when={props.events.length > 0}>
         <Tooltip.Root openDelay={300} closeDelay={100}>
           <Tooltip.Trigger
-            as="button"
             onClick={handleSave}
             style={{ position: 'absolute', bottom: '1rem', right: '1rem', 'z-index': '20' }}
             p="2.5"

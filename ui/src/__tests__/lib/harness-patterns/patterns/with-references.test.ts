@@ -52,15 +52,6 @@ function toolResultEvent(opts: {
   }
 }
 
-function userMessageEvent(content: string, ts = Date.now()): ContextEvent {
-  return {
-    id: 'um-1',
-    type: 'user_message',
-    ts,
-    patternId: 'harness',
-    data: { content }
-  }
-}
 
 function makeInnerPattern(name = 'inner'): { pattern: ConfiguredPattern<Record<string, unknown>>; fn: ReturnType<typeof vi.fn> } {
   const fn = vi.fn(async (scope: PatternScope<Record<string, unknown>>) => scope)

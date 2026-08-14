@@ -14,7 +14,7 @@
 import { For, Show, createSignal, createMemo, createEffect, on, onCleanup } from 'solid-js'
 import { isServer } from 'solid-js/web'
 import { Tooltip } from '@ark-ui/solid/tooltip'
-import type { ContextEvent, ToolResultEventData, RetrievalReference } from '~/lib/harness-patterns'
+import type { ContextEvent, ToolResultEventData } from '~/lib/harness-patterns'
 import type { StashDocumentMeta } from '~/lib/document-store.server'
 import { referencesForDoc, type OpenReferenceTarget } from '~/lib/harness-client/reference-extractor'
 
@@ -227,7 +227,7 @@ const StashIcon = (props: {
   return (
     <div style={{ position: 'relative', display: 'inline-block' }}>
       <Tooltip.Root openDelay={200} closeDelay={100} positioning={{ placement: 'top' }}>
-        <Tooltip.Trigger as="div">
+        <Tooltip.Trigger>
           {/* Icon chip */}
           <div
             flex="~ col"
@@ -699,6 +699,9 @@ const FileViewer = (props: {
   // Reset the focused highlight when the target doc or the incoming index
   // changes (the viewer instance is reused across re-opens).
   createEffect(() => {
+    // Reading the signal is what subscribes this effect to it; deleting the
+    // bare expression stops the highlight resetting when the doc changes.
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     props.doc.id
     setCurrent(props.initialIndex ?? 0)
   })

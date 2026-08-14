@@ -69,7 +69,7 @@ export function serializeContext<T>(ctx: UnifiedContext<T>): string {
 }
 
 /** Deserialize context from JSON string */
-export function deserializeContext<T>(json: string): UnifiedContext<T> {
+export function deserializeContext<T = Record<string, unknown>>(json: string): UnifiedContext<T> {
   return JSON.parse(json) as UnifiedContext<T>
 }
 

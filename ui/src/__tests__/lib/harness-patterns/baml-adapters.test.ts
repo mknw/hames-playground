@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
-import { mockAction, mockFinalAction, mockCriticResult } from '../../mocks/baml'
+import { mockFinalAction, mockCriticResult } from '../../mocks/baml'
 import { mockListTools } from '../../mocks/mcp'
 
 // These tests target the production mixed-provider fallback chain in
@@ -603,7 +603,7 @@ describe('LoopController BamlValidationError fallback', () => {
 
     // First call throws BamlValidationError, second call (GroqGPT120B) succeeds
     mockLoopController
-      .mockRejectedValueOnce(new BamlValidationError('Invalid JSON output', 'raw output'))
+      .mockRejectedValueOnce(new BamlValidationError('Invalid JSON output', 'raw output', 'msg', 'detailed'))
       .mockResolvedValueOnce(mockFinalAction('Recovered'))
 
     const controller = createLoopControllerAdapter(['Return'])
@@ -624,8 +624,8 @@ describe('LoopController BamlValidationError fallback', () => {
 
     // All three calls fail with BamlValidationError until GroqFast succeeds
     mockLoopController
-      .mockRejectedValueOnce(new BamlValidationError('Invalid JSON', 'raw1'))
-      .mockRejectedValueOnce(new BamlValidationError('Still invalid', 'raw2'))
+      .mockRejectedValueOnce(new BamlValidationError('Invalid JSON', 'raw1', 'msg', 'detailed'))
+      .mockRejectedValueOnce(new BamlValidationError('Still invalid', 'raw2', 'msg', 'detailed'))
       .mockResolvedValueOnce(mockFinalAction('Final recovery'))
 
     const controller = createLoopControllerAdapter(['Return'])
@@ -655,7 +655,7 @@ describe('LoopController BamlValidationError fallback', () => {
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController
-      .mockRejectedValueOnce(new BamlValidationError('Invalid JSON', 'raw'))
+      .mockRejectedValueOnce(new BamlValidationError('Invalid JSON', 'raw', 'msg', 'detailed'))
       .mockRejectedValueOnce(new Error('GroqGPT120B network error'))
 
     const controller = createLoopControllerAdapter(['Return'])

@@ -20,7 +20,8 @@ import type {
   ToolResultEventData,
   ControllerActionEventData
 } from '../types'
-import { MAX_TOOL_TURNS, EXPAND_TOOL_NAME } from '../types'
+import { EXPAND_TOOL_NAME } from '../types'
+
 import type { ErrorEventData, MultiCallMode } from '../types'
 import { runBatch, combineOutcomes } from '../parallel-tools.server'
 import type { SubCall } from '../parallel-tools.server'

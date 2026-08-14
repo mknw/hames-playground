@@ -183,8 +183,6 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
   const [newRelationType, setNewRelationType] = createSignal('RELATES_TO');
   // Visibility tracking (for deferred rendering when tab is inactive)
   const [visible, setVisible] = createSignal(false);
-  // Controls panel expand state
-  const [controlsExpanded, setControlsExpanded] = createSignal(false);
   // Create node form state
   const [showCreateNode, setShowCreateNode] = createSignal(false);
   const [newNodeName, setNewNodeName] = createSignal('');

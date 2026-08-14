@@ -37,7 +37,6 @@ assertServerOnImport()
 
 const DOCKER_BIN = process.env.DOCKER_BIN || 'docker'
 const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || 'kg-sandbox:base'
-const WORK_DIR = '/work'
 
 // ============================================================================
 // Small docker CLI helper

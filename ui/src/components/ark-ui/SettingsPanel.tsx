@@ -9,7 +9,7 @@ import { FloatingPanel } from '@ark-ui/solid/floating-panel'
 import { Slider } from '@ark-ui/solid/slider'
 import { NumberInput } from '@ark-ui/solid/number-input'
 import { getSettings, updateSetting, resetSettings } from '../../lib/settings-store'
-import { MODEL_CONTEXT_WINDOWS, DEFAULT_SETTINGS, type HarnessSettings } from '../../lib/settings'
+import { MODEL_CONTEXT_WINDOWS, type HarnessSettings } from '../../lib/settings'
 
 // ---------------------------------------------------------------------------
 // Slider setting row

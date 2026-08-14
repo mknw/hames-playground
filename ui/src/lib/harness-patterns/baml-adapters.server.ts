@@ -18,7 +18,7 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import type { ControllerFn, CriticFn, CodeModeControllerFn, ControllerAction, CriticResult, ScriptExecutionEvent, LLMCallData, EventMetrics } from './types'
+import type { ControllerAction, CriticResult, ScriptExecutionEvent, LLMCallData, EventMetrics } from './types'
 import type { ToolDescription, LoopTurn, Attempt, PriorResult, FewShot } from '../../../baml_client/types'
 import { listTools as mcpListTools } from './mcp-client.server'
 import { getActiveSandbox } from '../sandbox/scope.server'

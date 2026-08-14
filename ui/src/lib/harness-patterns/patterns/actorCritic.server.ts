@@ -22,7 +22,6 @@ import type {
   ControllerActionEventData,
   CriticResultEventData
 } from '../types'
-import { MAX_RETRIES } from '../types'
 import type { ErrorEventData, MultiCallMode } from '../types'
 import { runBatch, combineOutcomes } from '../parallel-tools.server'
 import type { SubCall } from '../parallel-tools.server'

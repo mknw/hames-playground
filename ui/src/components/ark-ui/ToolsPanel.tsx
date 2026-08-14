@@ -94,7 +94,6 @@ export const ToolsPanel = (props: ToolsPanelProps) => {
 
   // --- selection helpers (selection persists as a tool-name list) ---
   const isSelected = (tool: string) => state()?.allowed.includes(tool) ?? false;
-  const isLocked = (tool: string) => state()?.defaults.includes(tool) ?? false;
 
   const allDataTools = createMemo(() =>
     (catalog() ?? []).flatMap((s) => s.tools.map((t) => t.name)),

@@ -39,7 +39,7 @@ export function repairJson(raw: string): Record<string, unknown> {
   s = s.replace(/,\s*([}\]])/g, '$1')
 
   // Quote unquoted keys:  { key: or , key:  →  {"key": or ,"key":
-  s = s.replace(/([\{,])\s*([a-zA-Z_$][\w$]*)\s*:/g, '$1"$2":')
+  s = s.replace(/([{,])\s*([a-zA-Z_$][\w$]*)\s*:/g, '$1"$2":')
 
   // Try again — keys are now quoted, values may already be valid
   try {
@@ -53,7 +53,7 @@ export function repairJson(raw: string): Record<string, unknown> {
   // null, an object, or an array — treat everything up to the next , } ] as
   // a bare string that needs quoting.
   s = s.replace(
-    /:\s*(?!")(?!-?\d[\d.]*)(?!true\b)(?!false\b)(?!null\b)(?![\[{])([^,}\]]+?)\s*([,}\]])/g,
+    /:\s*(?!")(?!-?\d[\d.]*)(?!true\b)(?!false\b)(?!null\b)(?![[{])([^,}\]]+?)\s*([,}\]])/g,
     ': "$1"$2'
   )
 

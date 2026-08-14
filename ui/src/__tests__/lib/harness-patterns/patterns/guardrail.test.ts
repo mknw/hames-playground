@@ -176,10 +176,7 @@ describe('guardrail', () => {
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
-    let receivedInput: string | undefined
-
     const innerFn = vi.fn(async (scope) => {
-      receivedInput = (scope.data as { input: string }).input
       return scope
     })
 

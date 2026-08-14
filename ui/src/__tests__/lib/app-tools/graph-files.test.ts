@@ -80,11 +80,6 @@ function searchRequest(): Record<string, unknown> {
   return init.body!.requests![0];
 }
 
-/** The KQL string the app composed for the last search call. */
-function sentQuery(): string {
-  return (searchRequest().query as { queryString: string }).queryString;
-}
-
 /** One fully-populated driveItem search hit, as Graph nests it.
  *  NOTE: no `parentReference.path` — real `/search/query` hits never carry it
  *  (only `/children` listings do); `path` must come from the webUrl fallback. */

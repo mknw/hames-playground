@@ -523,10 +523,14 @@ const DRIVE_ITEM_LIST_SELECT =
 
 /** What can end a quoted value or break the request line: the quote itself,
  *  plus C0 control characters and DEL. */
-const PHRASE_UNSAFE = /["\u0000-\u001f\u007f]+/g;
+// Matching control characters is the entire point here: they are what would let
+// user input break out of a KQL clause.
+// eslint-disable-next-line no-control-regex
+const PHRASE_UNSAFE =/["\u0000-\u001f\u007f]+/g;
 
 /** For unquoted terms, also the operators: `(` `)` group clauses, and `:` `<`
  *  `>` `=` are what bind a value to a managed property (`filetype:exe`). */
+// eslint-disable-next-line no-control-regex -- see PHRASE_UNSAFE above.
 const TERM_UNSAFE = /["():<>=\u0000-\u001f\u007f]+/g;
 
 /** KQL's boolean and ranking keywords, which it honours in upper case only. */

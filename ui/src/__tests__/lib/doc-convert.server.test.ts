@@ -92,7 +92,7 @@ describe('convertToMarkdown', () => {
 
     expect(md).toBe('# Title\n\nBody.')
     expect(fetchFn).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit]
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('http://localhost:8000/extract')
     expect(init.method).toBe('POST')
     const form = init.body as FormData
@@ -105,7 +105,7 @@ describe('convertToMarkdown', () => {
     process.env.DOC_CONVERT_URL = 'http://doc-convert:8000'
     const fetchFn = vi.fn(async () => fakeResponse([{ content: '# x' }]))
     await convertToMarkdown(b64, 'a.pdf', 'application/pdf', fetchFn)
-    expect((fetchFn.mock.calls[0] as [string])[0]).toBe('http://doc-convert:8000/extract')
+    expect((fetchFn.mock.calls[0] as unknown as [string])[0]).toBe('http://doc-convert:8000/extract')
   })
 
   it('throws on a non-2xx response', async () => {

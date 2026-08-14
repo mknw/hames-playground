@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockAction, mockFinalAction, mockCriticResult, mockBAMLClient } from '../../../mocks/baml'
-import { mockCallTool, mockListTools, fixtures } from '../../../mocks/mcp'
+import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 import type { CodeModeControllerFnWithLLMData, CriticFnWithLLMData } from '../../../../lib/harness-patterns/baml-adapters.server'
 
 // Mock server-only imports

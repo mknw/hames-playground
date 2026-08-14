@@ -5,8 +5,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mockFinalAction, mockCriticResult, mockAction } from '../../../mocks/baml'
-import { mockCallTool, mockListTools, fixtures } from '../../../mocks/mcp'
+import { mockFinalAction, mockCriticResult } from '../../../mocks/baml'
+import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 import { AGENT_ACCENTS } from '../../../../lib/agent-palette'
 
 // ============================================================================
@@ -161,29 +161,6 @@ async function validatePatterns(config: AgentConfig): Promise<Pattern[]> {
   return patterns
 }
 
-// Mock scope factory
-function createMockScope(data: Record<string, unknown> = {}) {
-  return {
-    id: 'test-scope',
-    data: { input: 'test query', ...data },
-    events: [] as unknown[],
-  }
-}
-
-// Mock view factory
-function createMockView() {
-  return {
-    fromLastPattern: () => ({
-      ofType: () => ({
-        get: () => [],
-        first: () => null,
-        last: () => null
-      })
-    }),
-    lastUserMessage: () => 'test query',
-    allEvents: () => []
-  }
-}
 
 // ============================================================================
 // Tests

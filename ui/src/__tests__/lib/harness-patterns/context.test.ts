@@ -145,7 +145,7 @@ describe('context', () => {
       const llmCall = {
         functionName: 'LoopController',
         variables: {},
-        usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 }
+        usage: { inputTokens: 100, outputTokens: 50, cachedInputTokens: 0, totalTokens: 150 }
       }
 
       trackEvent(scope, 'controller_action', { action: {} }, true, llmCall)

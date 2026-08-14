@@ -94,18 +94,6 @@ vi.mock('../../../../lib/harness-patterns/tools.server', () => ({
 // Helper Types
 // ============================================================================
 
-interface Candidate {
-  source: string
-  content: string
-}
-
-interface EvaluatorResult {
-  reasoning: string
-  rankings: Array<{ source: string; score: number; reason: string }>
-  best: Candidate | null
-}
-
-type EvaluatorFn = (query: string, candidates: Candidate[]) => Promise<EvaluatorResult>
 
 // ============================================================================
 // Multi-Source Research Evaluator Tests

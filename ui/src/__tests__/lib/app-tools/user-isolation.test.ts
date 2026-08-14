@@ -5,7 +5,7 @@
  * per-call MSAL client, with deliberately interleaved awaits, so they fail if
  * concurrent users could ever observe each other's identity or tokens.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 vi.mock("../../../lib/harness-patterns/assert.server", () => ({
   assertServerOnImport: vi.fn(),

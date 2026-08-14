@@ -195,7 +195,6 @@ describe('judge', () => {
       view
     )
 
-    const actionEvents = result.events.filter(e => e.type === 'controller_action')
     // Event may be tracked differently based on config; check data directly
     expect(result.data.judgeReasoning).toBe('Detailed reasoning')
   })

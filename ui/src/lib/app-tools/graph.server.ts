@@ -1399,11 +1399,19 @@ function parseVia(raw: unknown): GraphSharedVia | null {
  * content (bare `entity` references arrive with no title and no address —
  * noise a model would only trip on).
  *
- * INBOUND in every sample taken: sharing appears to be recorded on the
- * RECIPIENT's insights (measured: 50 rows, 15 distinct sharers, zero shared BY
- * the signed-in user — one mailbox, so an observation rather than a documented
- * guarantee). "What did I share with X" is X's question to ask; this tool
- * answers "what was shared with me" and "what did X share with me".
+ * PREDOMINANTLY, BUT NOT EXCLUSIVELY, INBOUND. `lastShared.sharedBy` is the
+ * ACTOR of the share, and that actor is sometimes the signed-in user: measured
+ * 2026-08-03 (N=25) it was them on 3 rows — a OneDrive file they had made a
+ * Link for, plus two files they had sent as attachments, all three carrying a
+ * normal drive_id + item_id pair.
+ *
+ * That contradicts an earlier reading of a 50-row sample as "zero shared by the
+ * signed-in user", recorded during #110 and repeated here until 2026-08-15. The
+ * two samples disagree and the reason is not established, so claim neither
+ * direction: the feed leans heavily inbound, some of the user's own outbound
+ * shares surface, and whether outbound coverage is anywhere near complete is
+ * unknown. Do NOT present it as a record of what the user shared with others.
+ * See docs/graph-api-notes.md ("Not verified").
  */
 export function shapeSharedInsight(raw: unknown): GraphSharedFile | null {
   const it = (raw ?? {}) as Record<string, unknown>;
@@ -1448,9 +1456,12 @@ registerAppTool({
     "newest first, with who shared it, when and through which channel (via). " +
     "Filter to one sharer with shared_by (a person's name) and/or one channel " +
     "with via. This " +
-    "answers \"what was shared with me\" and \"what did X share with me\"; it " +
-    "CANNOT list what the signed-in person shared with others (that is recorded " +
-    "on the recipient's side). Files carry the drive_id + item_id pair the other " +
+    "answers \"what was shared with me\" and \"what did X share with me\". " +
+    "shared_by names whoever performed the share, which is usually someone else " +
+    "but is sometimes the signed-in person — a few of their own outbound shares " +
+    "do surface. It is NOT a reliable record of what they shared with others, so " +
+    "do not answer that question from it alone. " +
+    "Files carry the drive_id + item_id pair the other " +
     "file tools accept; email attachments do not (they live in the mailbox) and " +
     "link to the message rather than to the file. Several attachments from one " +
     "email share an email_group number, so cite that message once. " +

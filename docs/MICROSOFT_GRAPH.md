@@ -343,10 +343,11 @@ on the non-deprecated Office Graph insights surface (`GET /me/insights/used`,
 
 ---
 
-## Sharing has one direction
+## Sharing leans one direction
 
-Two tools answer "who sent me what", from opposite surfaces, and both are
-**inbound only**:
+Two tools answer "who sent me what", from opposite surfaces, and both lean
+**inbound** — but neither is inbound-only, and this doc said otherwise until
+2026-08-15:
 
 | | `graph_files_shared` | `graph_mail_attachments` |
 |---|---|---|
@@ -355,12 +356,29 @@ Two tools answer "who sent me what", from opposite surfaces, and both are
 | Scope | `Sites.Read.All` | `Mail.Read` |
 | Direction | what reached **me** | both, via `direction` — but sent mail only shows *attachments*, never Share-dialog grants |
 
-"What did I share with X" is X's question to ask. Sharing appears to be recorded
-on the *recipient's* insights — 50 rows, 15 distinct sharers, zero shared by the
-signed-in user — so the app cannot answer the outbound direction, and the tool
-description says so rather than letting the model produce a confident undercount.
-That is a measurement over one mailbox, not a documented guarantee; see
-[`graph-api-notes.md`](graph-api-notes.md#not-verified).
+### The outbound direction is unreliable, not absent
+
+`lastShared.sharedBy` is the **actor** of the share, and that actor is sometimes
+the signed-in user. Measured 2026-08-03, N=25: 3 rows named them — a OneDrive
+file they had made a share Link for, and two files they had sent as attachments,
+all three carrying a normal `drive_id` + `item_id` pair.
+
+This contradicts an earlier reading of a 50-row sample as "zero shared by the
+signed-in user", which had been repeated in the code, the tests, this doc and the
+user guide, and asserted to the model as *"CANNOT list what the signed-in person
+shared with others"*. The two samples disagree and the reason is not established
+— so claim neither direction. What holds:
+
+- The feed leans heavily inbound; most rows are someone else sharing with you.
+- **Some** of your own outbound shares surface. Coverage is unknown and there is
+  no reason to assume it is complete.
+- `shared_by` can therefore be pointed at yourself — resolve your display name
+  with `graph_me` and filter — but a partial answer presented as a full one is
+  worse than a refusal, so the tool description tells the model not to answer
+  "what did I share with X" from this alone.
+
+Tracked in [`graph-api-notes.md`](graph-api-notes.md#not-verified) as an open
+sampling question rather than a settled fact.
 
 ### Why `via` exists when Graph already reports `how`
 

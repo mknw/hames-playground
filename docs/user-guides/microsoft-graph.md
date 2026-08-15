@@ -74,7 +74,7 @@ invisible from your side (see the first row of the ❌ table for why).
 
 | If you ask | What happens & why | Workaround |
 |---|---|---|
-| *"What files did **I** share with Thibault?"* | **Not available from your account.** Microsoft appears to record sharing on the *recipient's* side: across 50 rows of your sharing activity, every one was inbound and none was shared by you. | Ask *"what did I **email** Thibault"* (partial). Or Thibault signs in and asks *"what did Michael share with me?"* — that works perfectly. |
+| *"What files did **I** share with Thibault?"* | **Unreliable — some of your own shares appear, but not dependably.** Your sharing feed is mostly what others sent you; a few files you shared do show up (3 of 25 in one sample), so an answer here is a partial list presented as a whole one. | Ask *"what did I **email** Thibault"* (partial, but complete for email). Or Thibault signs in and asks *"what did Michael share with me?"* — that works perfectly. |
 | *"What does the contract **say** about notice periods?"* | Search returns ~300-character snippets, not file contents. This agent can find the file, not read it. | Open the link it gives you. (A future assistant with document retrieval will close this gap.) |
 | *"Summarize the 'Meeting with Sudeesh' Loop page"* | Loop **pages and workspaces** are stored where the app's permissions can't reach (only title/link/snippet come back). Tracked as #137. | Open the Loop link it finds for you. |
 | *"What's on **Thibault's** calendar?"* / *"his unread mail"* | Deliberate boundary: the agent acts as you, and only you. | Ask Thibault — or ask *"when am I free"* and coordinate. |
@@ -108,6 +108,7 @@ invisible from your side (see the first row of the ❌ table for why).
 
 | Date | Change |
 |---|---|
+| 2026-08-15 | Correction: "what was shared with me" is **not** purely inbound — a few files you shared yourself do appear. The guide previously said your own shares were invisible from your account, which was wrong. |
 | 2026-08-04 | Shared-with-me now says which channel each item arrived through (email / Teams chat / link) and can filter to one. Email attachments link to the message and keep their file extension; several attachments from one email are cross-referenced. |
 | 2026-07-30 | Added: recent files, shared-with-me, mail attachments (sent/received), author + date + newest-first search filters, folder paths on search results. This guide created. |
 | 2026-07-29 | Initial file tools: search, browse. Calendar, inbox, profile. |

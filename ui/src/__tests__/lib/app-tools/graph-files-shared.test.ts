@@ -1,12 +1,13 @@
 /**
  * graph_files_shared — "what was shared with me", from /me/insights/shared.
  *
- * Inbound in every sample taken: sharing appears to be recorded on the
- * RECIPIENT's insights (measured live: 50 rows, 15 distinct sharers, zero shared
- * by the signed-in user — one mailbox, so an observation and not a documented
- * guarantee). The tool's description says so explicitly — "what did I share with
- * X" is X's question to ask, and pretending otherwise would produce confident
- * undercounts.
+ * Predominantly but NOT exclusively inbound. `lastShared.sharedBy` is the actor
+ * of the share, and measured 2026-08-03 (N=25) that actor was the signed-in user
+ * on 3 rows. An earlier 50-row sample was read as "zero shared by the signed-in
+ * user" and the tool description asserted outright that it CANNOT list outbound
+ * shares — this suite pinned that sentence, so the test was enforcing a false
+ * claim. Both now say the accurate thing: some outbound rows surface, coverage
+ * is unknown, so the tool must not be used to answer "what did I share with X".
  *
  * The `via` classification exists because Graph's own `sharingType` does not
  * identify the mechanism: measured 2026-08-03 over 25 rows, 23 said "Attachment"
@@ -166,9 +167,14 @@ describe("advertisement", () => {
     }
   });
 
-  it("says plainly that it cannot answer the outbound direction", () => {
+  it("warns the outbound direction is unreliable, without claiming it is impossible", () => {
     const tool = appToolDescriptions().find((t) => t.name === "graph_files_shared")!;
-    expect(tool.description).toMatch(/CANNOT list what the signed-in person shared/);
+    // It used to say the tool CANNOT list the signed-in person's own shares.
+    // Measured 2026-08-03, 3 of 25 rows named them as the sharer, so that was
+    // false — and shipped to the model, which would decline a question it can
+    // partly answer and explain the refusal with a wrong reason.
+    expect(tool.description).toMatch(/NOT a reliable record of what they shared with others/);
+    expect(tool.description).not.toMatch(/CANNOT list what the signed-in person shared/);
   });
 });
 
@@ -328,6 +334,38 @@ describe("graph_files_shared", () => {
     expect(res.success).toBe(true);
     const data = res.data as GraphSharedFilesResult;
     expect(data.items.map((i) => i.name)).toEqual(["plan.docx", "invoice.pdf", "dpa.docx"]);
+  });
+
+  it("keeps rows the signed-in person shared themselves — the feed is not inbound-only", async () => {
+    // Measured 2026-08-03: 3 of 25 rows named the signed-in user as sharer, two
+    // of them files in their own OneDrive. Nothing filters those out, and
+    // nothing should — but the description must not promise they are absent.
+    graphFetch.mockResolvedValue({
+      value: [
+        shared("someone-elses.docx", "Quentin Delière"),
+        shared("my-screen-recording.mov", "Michael Accetto"),
+      ],
+    });
+    const items = (
+      (await runAppTool("graph_files_shared", {})).data as GraphSharedFilesResult
+    ).items;
+    expect(items.map((i) => i.shared_by)).toEqual(["Quentin Delière", "Michael Accetto"]);
+  });
+
+  it("shared_by is the actor, so it can be pointed at the signed-in person", async () => {
+    // The only route to those rows today: resolve the display name via graph_me,
+    // then filter on it. Partial coverage — not a substitute for an outbound feed.
+    graphFetch.mockResolvedValue({
+      value: [
+        shared("someone-elses.docx", "Quentin Delière"),
+        shared("my-screen-recording.mov", "Michael Accetto"),
+      ],
+    });
+    const items = (
+      (await runAppTool("graph_files_shared", { shared_by: "Michael Accetto" }))
+        .data as GraphSharedFilesResult
+    ).items;
+    expect(items.map((i) => i.name)).toEqual(["my-screen-recording.mov"]);
   });
 
   it("shared_by filters case-insensitively on a partial name, and inflates $top to 50", async () => {

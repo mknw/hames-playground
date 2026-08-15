@@ -130,6 +130,7 @@ for some result sets rather than returned as zero.
 | `resourceVisualization.title` | the filename | Extension-stripped on **14 of 15** mailbox-attachment rows (2026-08-03) — `20260802-07346747` for a `.pdf`. The OWA URL's `AttachmentName` parameter has the real name. |
 | `lastShared.sharedDateTime` | when it was shared | Second precision, no milliseconds. In the one case cross-checked (2026-08-04) it matched the message's `sentDateTime`, not `receivedDateTime`. Rows from one multi-attachment email therefore share an identical timestamp — which is the field's precision, **not** evidence they are the same email. Group on the message id for that. |
 | insights row order | newest first | Newest-first in every sample, but no `$orderby` is accepted-and-verified on this surface, so nothing contracts it. Sort locally if you intend to promise it. |
+| `lastShared.sharedBy` | the person who shared it *with you* | The **actor** of the share, which is sometimes **you**. 3 of 25 rows named the signed-in user (2026-08-03), two of them files in their own OneDrive. A row's presence says the item was involved in recent sharing activity, not that it came inbound. |
 | `parentReference.path` | always present | Absent on every `/search/query` hit — those carry only `driveId`/`id`/`siteId`. |
 | `/me/drive/root/children` rows | the person's files | Include "Add shortcut to My files" **stub** driveItems whose real identity sits in `remoteItem`; the stub's own ids address the shortcut, not the file. |
 | `total` (search) | a count | Sometimes missing. Microsoft's own number, and it can exceed what paging will actually yield. |
@@ -215,10 +216,16 @@ revisiting — the insights surface is a workaround, not a preference.
 
 Recorded so nothing here launders a guess into a fact.
 
-- **Whether sharing is inbound-only by design.** We have 50 rows, 15 distinct
-  sharers, zero shared *by* the signed-in user — one mailbox. That is strong
-  evidence the Office Graph records sharing on the recipient, and no basis for
-  calling it structurally impossible. Phrase it as the measurement.
+- **Which direction `/me/insights/shared` actually covers.** Two samples of the
+  same mailbox disagree: one 50-row pull recorded during #110 was read as zero
+  rows shared *by* the signed-in user, while 2026-08-03 (N=25) had **3** — a
+  file they had made a share Link for and two they had sent as attachments. So
+  `lastShared.sharedBy` is the actor, not a guarantee of direction, and the feed
+  is predominantly-but-not-exclusively inbound. Unknown: whether the earlier
+  reading was simply wrong, whether the two windows differ in kind, and above
+  all **what fraction of outbound shares appear at all** — which is what decides
+  whether "what did I share with X" is answerable or merely sometimes-lucky.
+  Settling it needs a deliberate share followed immediately by a re-pull.
 - **`AttachmentId` = message id + discriminator.** Inferred from the string
   shape in one mailbox. Untested whether it round-trips to
   `/me/messages/{id}/attachments/{id}`.

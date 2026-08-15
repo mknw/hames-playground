@@ -16,7 +16,7 @@ import type {
   ConfiguredPattern,
   AssistantMessageEventData,
   ToolResultEventData,
-  LLMCallData
+  LLMCallData,
 } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import type { ErrorEventData } from '../types'
@@ -39,7 +39,10 @@ interface SynthesisResult {
  * Default synthesis function using BAML Synthesize.
  * Tracks LLM call data when collector is provided.
  */
-async function defaultSynthesize(input: SynthesizerInput, collector?: Collector): Promise<SynthesisResult> {
+async function defaultSynthesize(
+  input: SynthesizerInput,
+  collector?: Collector,
+): Promise<SynthesisResult> {
   // Dynamic import to avoid circular dependencies
   const { b } = await import('../../../../baml_client')
   const startTime = Date.now()
@@ -57,7 +60,7 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
         reasoning: iteration.action.reasoning,
         tool_call: {
           tool: iteration.action.tool_name,
-          args: iteration.action.tool_args
+          args: iteration.action.tool_args,
         },
         ...(iteration.action.additional_calls?.length
           ? { additional_calls: iteration.action.additional_calls }
@@ -65,8 +68,8 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
         tool_result: {
           tool: iteration.action.tool_name,
           result: JSON.stringify(iteration.result),
-          success: true
-        }
+          success: true,
+        },
       })
     }
   } else if (input.response) {
@@ -77,8 +80,8 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
       tool_result: {
         tool: 'response',
         result: input.response,
-        success: true
-      }
+        success: true,
+      },
     })
   }
 
@@ -88,14 +91,14 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
   // Hardcoding 'SynthesizerFallback' here trimmed against a 16K default and
   // dropped real tool results (see .harness-logs/neo4j-no-results.json).
   const contextWindow = getContextWindow(resolveClientForRole('synth'))
-  const trimmedTurns = trimToFit(turns, t => JSON.stringify(t), 500, contextWindow)
+  const trimmedTurns = trimToFit(turns, (t) => JSON.stringify(t), 500, contextWindow)
 
   const variables = {
     userMessage: input.userMessage,
     intent: input.intent,
     turns: trimmedTurns,
     hasError: input.hasError ?? false,
-    errorMessage: input.errorMessage
+    errorMessage: input.errorMessage,
   }
 
   // Call with or without collector, including error context.
@@ -110,14 +113,14 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
         trimmedTurns,
         input.hasError ?? false,
         input.errorMessage,
-        synthOpts
+        synthOpts,
       )
     : await b.Synthesize(
         input.userMessage,
         input.intent,
         trimmedTurns,
         input.hasError ?? false,
-        input.errorMessage
+        input.errorMessage,
       )
 
   // Extract LLM call data if collector present. This site builds its own
@@ -134,16 +137,15 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
     const selectedCall = calls.find((c) => c.selected) ?? calls[calls.length - 1]
     let rawInput: string | undefined
     const body = selectedCall?.httpRequest?.body as
-      | { text?: () => string }
-      | string
-      | Record<string, unknown>
-      | undefined
+      { text?: () => string } | string | Record<string, unknown> | undefined
     if (typeof body === 'string') {
       rawInput = body
     } else if (body && typeof (body as { text?: () => string }).text === 'function') {
       try {
         rawInput = (body as { text: () => string }).text()
-      } catch { /* body.text() may throw — leave undefined */ }
+      } catch {
+        /* body.text() may throw — leave undefined */
+      }
     } else if (body && typeof body === 'object') {
       rawInput = JSON.stringify(body, null, 2)
     }
@@ -154,17 +156,28 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
       const { getBamlFiles } = await import('../../../../baml_client/inlinedbaml')
       const files = getBamlFiles() as Record<string, string>
       for (const source of Object.values(files)) {
-        const match = /function\s+Synthesize\s*\([^)]*\)\s*->\s*\S+\s*\{[^}]*?prompt\s+#"([\s\S]*?)"#/.exec(source)
+        const match =
+          /function\s+Synthesize\s*\([^)]*\)\s*->\s*\S+\s*\{[^}]*?prompt\s+#"([\s\S]*?)"#/.exec(
+            source,
+          )
         if (match) {
           promptTemplate = match[1]
           break
         }
       }
-    } catch { /* inlined BAML not available */ }
+    } catch {
+      /* inlined BAML not available */
+    }
 
     // Extract provider and client info from the selected call
-    const provider = selectedCall && 'provider' in selectedCall ? (selectedCall as { provider: string }).provider : undefined
-    const clientName = selectedCall && 'clientName' in selectedCall ? (selectedCall as { clientName: string }).clientName : undefined
+    const provider =
+      selectedCall && 'provider' in selectedCall
+        ? (selectedCall as { provider: string }).provider
+        : undefined
+    const clientName =
+      selectedCall && 'clientName' in selectedCall
+        ? (selectedCall as { clientName: string }).clientName
+        : undefined
 
     llmCall = {
       functionName: 'Synthesize',
@@ -173,15 +186,17 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
       rawInput,
       rawOutput: last.rawLlmResponse ?? undefined,
       parsedOutput: content,
-      usage: last.usage ? {
-        inputTokens: last.usage.inputTokens ?? 0,
-        outputTokens: last.usage.outputTokens ?? 0,
-        cachedInputTokens: last.usage.cachedInputTokens ?? 0,
-        totalTokens: (last.usage.inputTokens ?? 0) + (last.usage.outputTokens ?? 0)
-      } : undefined,
+      usage: last.usage
+        ? {
+            inputTokens: last.usage.inputTokens ?? 0,
+            outputTokens: last.usage.outputTokens ?? 0,
+            cachedInputTokens: last.usage.cachedInputTokens ?? 0,
+            totalTokens: (last.usage.inputTokens ?? 0) + (last.usage.outputTokens ?? 0),
+          }
+        : undefined,
       durationMs: Date.now() - startTime,
       provider,
-      clientName
+      clientName,
     }
   }
 
@@ -194,13 +209,11 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
 function buildSynthesisInputFromView(
   mode: SynthesizerConfig['mode'],
   view: EventView,
-  data: SynthesizerData
+  data: SynthesizerData,
 ): SynthesizerInput {
   // Get user message
   const userMessage = view.fromAll().ofType('user_message').last(1).get()[0]
-  const userContent = userMessage
-    ? (userMessage.data as { content: string }).content
-    : ''
+  const userContent = userMessage ? (userMessage.data as { content: string }).content : ''
 
   const input: SynthesizerInput = {
     mode,
@@ -209,7 +222,7 @@ function buildSynthesisInputFromView(
     // Read error state from view (scoped by synthesizer's ViewConfig)
     // rather than from data stash, so errors naturally expire with the view window
     hasError: view.hasErrors(),
-    errorMessage: view.lastError()
+    errorMessage: view.lastError(),
   }
 
   switch (mode) {
@@ -250,7 +263,7 @@ function buildSynthesisInputFromView(
               turn: turn++,
               action: actionData.action,
               result: null,
-              timestamp: event.ts
+              timestamp: event.ts,
             })
             openExpected = 1 + (actionData.action.additional_calls?.length ?? 0)
             openReceived = 0
@@ -294,7 +307,7 @@ function buildSynthesisInputFromView(
         input.loopHistory = {
           iterations,
           startTime: toolEvents[0]?.ts ?? Date.now(),
-          endTime: Date.now()
+          endTime: Date.now(),
         }
       }
 
@@ -331,15 +344,12 @@ function buildSynthesisInputFromView(
  * })
  */
 export function synthesizer<T extends SynthesizerData>(
-  config: SynthesizerConfig
+  config: SynthesizerConfig,
 ): ConfiguredPattern<T> {
   const { mode, synthesize, skipIfHasResponse = false } = config
   const resolved = resolveConfig('synthesizer', config)
 
-  const fn = async (
-    scope: PatternScope<T>,
-    view: EventView
-  ): Promise<PatternScope<T>> => {
+  const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
     // Collector + start time hoisted so the outer catch can recover LLM call
     // data (prompt template, variables, HTTP body) on a failed BAML call.
     let collector: Collector | undefined
@@ -379,7 +389,7 @@ export function synthesizer<T extends SynthesizerData>(
           userMessage: input.userMessage,
           intent: input.intent,
           hasError: input.hasError ?? false,
-          errorMessage: input.errorMessage
+          errorMessage: input.errorMessage,
         }
         const result = await defaultSynthesize(input, collector)
         synthesizedResponse = result.content
@@ -395,13 +405,13 @@ export function synthesizer<T extends SynthesizerData>(
         'assistant_message',
         { content: synthesizedResponse, final: true } as AssistantMessageEventData,
         resolved.trackHistory,
-        llmCall
+        llmCall,
       )
 
       scope.data = {
         ...scope.data,
         response: synthesizedResponse,
-        synthesizedResponse
+        synthesizedResponse,
       }
 
       return scope
@@ -414,12 +424,18 @@ export function synthesizer<T extends SynthesizerData>(
         collector !== undefined && synthesizeVariables !== undefined && startTime !== undefined
           ? extractFailureLLMCallData(collector, 'Synthesize', synthesizeVariables, startTime)
           : undefined
-      trackEvent(scope, 'error', {
-        error: msg,
-        severity: resolved.errorSeverity,
-        hint: getErrorHint(msg),
-        ...(failedLlmCall ? { kind: 'llm_call' as const } : {}),
-      } as ErrorEventData, true, failedLlmCall)
+      trackEvent(
+        scope,
+        'error',
+        {
+          error: msg,
+          severity: resolved.errorSeverity,
+          hint: getErrorHint(msg),
+          ...(failedLlmCall ? { kind: 'llm_call' as const } : {}),
+        } as ErrorEventData,
+        true,
+        failedLlmCall,
+      )
       return scope
     }
   }
@@ -428,6 +444,6 @@ export function synthesizer<T extends SynthesizerData>(
     name: 'synthesizer',
     fn,
     config: resolved,
-    estimateTurns: () => 1
+    estimateTurns: () => 1,
   }
 }

@@ -11,12 +11,7 @@
 
 import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '../assert.server'
-import {
-  trackEvent,
-  resolveConfig,
-  createScope,
-  createEvent
-} from '../context.server'
+import { trackEvent, resolveConfig, createScope, createEvent } from '../context.server'
 import type {
   ConfiguredPattern,
   ContextEvent,
@@ -29,7 +24,7 @@ import type {
   ToolResultEventData,
   WithReferencesConfig,
   UserMessageEventData,
-  AssistantMessageEventData
+  AssistantMessageEventData,
 } from '../types'
 import type { PriorResult } from '../../../../baml_client/types'
 
@@ -93,17 +88,16 @@ function summaryFromEvent(data: ToolResultEventData): string {
 
 function findToolArgs(events: ContextEvent[], callId?: string): string | undefined {
   if (!callId) return undefined
-  const call = events.find(e => e.type === 'tool_call' && (e.data as ToolCallEventData).callId === callId)
+  const call = events.find(
+    (e) => e.type === 'tool_call' && (e.data as ToolCallEventData).callId === callId,
+  )
   if (!call) return undefined
   const args = (call.data as ToolCallEventData).args
   const s = typeof args === 'string' ? args : JSON.stringify(args)
   return truncate(s, SUMMARY_FALLBACK_CHARS)
 }
 
-function buildCandidates(
-  events: ContextEvent[],
-  allEvents: ContextEvent[]
-): ReferenceCandidate[] {
+function buildCandidates(events: ContextEvent[], allEvents: ContextEvent[]): ReferenceCandidate[] {
   const out: ReferenceCandidate[] = []
   for (const ev of events) {
     if (ev.type !== 'tool_result' || !ev.id) continue
@@ -115,7 +109,7 @@ function buildCandidates(
       tool: d.tool,
       summary: summaryFromEvent(d),
       tool_args: findToolArgs(allEvents, d.callId),
-      ts: ev.ts
+      ts: ev.ts,
     })
   }
   return out
@@ -129,19 +123,23 @@ function extractIntent<T>(scope: PatternScope<T>, view: EventView): string {
   return ''
 }
 
-function getRecentMessages(view: EventView, n: number): Array<{ role: 'user' | 'assistant'; content: string }> {
+function getRecentMessages(
+  view: EventView,
+  n: number,
+): Array<{ role: 'user' | 'assistant'; content: string }> {
   const events = view.fromAll().ofTypes(['user_message', 'assistant_message']).last(n).get()
-  return events.map(e => ({
-    role: e.type === 'user_message' ? 'user' as const : 'assistant' as const,
-    content: e.type === 'user_message'
-      ? (e.data as UserMessageEventData).content
-      : (e.data as AssistantMessageEventData).content
+  return events.map((e) => ({
+    role: e.type === 'user_message' ? ('user' as const) : ('assistant' as const),
+    content:
+      e.type === 'user_message'
+        ? (e.data as UserMessageEventData).content
+        : (e.data as AssistantMessageEventData).content,
   }))
 }
 
 function makeCacheKey(intent: string, candidates: ReferenceCandidate[]): string {
   const stash = candidates
-    .map(c => `${c.ref_id}|${c.summary}`)
+    .map((c) => `${c.ref_id}|${c.summary}`)
     .sort()
     .join('\n')
   return `${intent}\n--\n${stash}`
@@ -149,9 +147,9 @@ function makeCacheKey(intent: string, candidates: ReferenceCandidate[]): string 
 
 function pickCandidatesByIds(
   candidates: ReferenceCandidate[],
-  ids: Array<{ ref_id: string }>
+  ids: Array<{ ref_id: string }>,
 ): ReferenceCandidate[] {
-  const map = new Map(candidates.map(c => [c.ref_id, c]))
+  const map = new Map(candidates.map((c) => [c.ref_id, c]))
   const out: ReferenceCandidate[] = []
   for (const { ref_id } of ids) {
     const c = map.get(ref_id)
@@ -161,10 +159,10 @@ function pickCandidatesByIds(
 }
 
 function toPriorResults(refs: ReferenceCandidate[]): PriorResult[] {
-  return refs.map(r => ({
+  return refs.map((r) => ({
     ref_id: r.ref_id,
     tool: r.tool,
-    summary: r.summary
+    summary: r.summary,
   }))
 }
 
@@ -180,22 +178,22 @@ const defaultSelector: SelectorFn = async (input) => {
   const collector = new Collector('reference-selector')
   const result = await b.ReferenceSelector(
     input.intent,
-    input.recentMessages.map(m => ({ role: m.role, content: m.content })),
-    input.candidates.map(c => ({
+    input.recentMessages.map((m) => ({ role: m.role, content: m.content })),
+    input.candidates.map((c) => ({
       ref_id: c.ref_id,
       tool: c.tool,
       summary: c.summary,
       tool_args: c.tool_args ?? null,
-      ts_offset_s: Math.max(0, Math.floor((now - c.ts) / 1000))
+      ts_offset_s: Math.max(0, Math.floor((now - c.ts) / 1000)),
     })),
-    { collector, ...clientOverrideFor('describe') }
+    { collector, ...clientOverrideFor('describe') },
   )
   // Nothing here reads the collector, but an empty one still means the options
   // object never reached BAML — i.e. the client override was dropped too (#154).
   warnIfCollectorEmpty(collector, 'ReferenceSelector')
   return {
-    selected: result.selected.map(s => ({ ref_id: s.ref_id, reason: s.reason })),
-    reasoning: result.reasoning
+    selected: result.selected.map((s) => ({ ref_id: s.ref_id, reason: s.reason })),
+    reasoning: result.reasoning,
   }
 }
 
@@ -216,21 +214,20 @@ const defaultSelector: SelectorFn = async (input) => {
  */
 export function withReferences<T>(
   wrappedPattern: ConfiguredPattern<T>,
-  config?: WithReferencesConfig
+  config?: WithReferencesConfig,
 ): ConfiguredPattern<T> {
   const resolved = resolveConfig('withReferences', config)
   const maxRefs = config?.maxRefs ?? DEFAULT_MAX_REFS
   const selector = config?.selector ?? defaultSelector
 
-  const fn = async (
-    scope: PatternScope<T>,
-    view: EventView
-  ): Promise<PatternScope<T>> => {
+  const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
     try {
       // 1. Build candidate list
       const allEvents = view.fromAll().get()
       const sourceList = config?.source
-        ? (Array.isArray(config.source) ? config.source : [config.source])
+        ? Array.isArray(config.source)
+          ? config.source
+          : [config.source]
         : config?.scope === 'self'
           ? [scope.id]
           : null
@@ -250,10 +247,14 @@ export function withReferences<T>(
       } else if (candidates.length === 1) {
         attached = candidates
         trackPayload = {
-          candidates: candidates.map(c => ({ ref_id: c.ref_id, tool: c.tool, summary: c.summary })),
+          candidates: candidates.map((c) => ({
+            ref_id: c.ref_id,
+            tool: c.tool,
+            summary: c.summary,
+          })),
           selected: [{ ref_id: candidates[0].ref_id, reason: 'sole candidate' }],
           reasoning: 'Only one eligible reference; attached without selector call.',
-          skipped: 'single'
+          skipped: 'single',
         }
       } else {
         const intent = extractIntent(scope, view)
@@ -263,10 +264,14 @@ export function withReferences<T>(
         if (cached) {
           attached = pickCandidatesByIds(candidates, cached.selected).slice(0, maxRefs)
           trackPayload = {
-            candidates: candidates.map(c => ({ ref_id: c.ref_id, tool: c.tool, summary: c.summary })),
+            candidates: candidates.map((c) => ({
+              ref_id: c.ref_id,
+              tool: c.tool,
+              summary: c.summary,
+            })),
             selected: cached.selected.slice(0, maxRefs),
             reasoning: cached.reasoning,
-            skipped: 'cached'
+            skipped: 'cached',
           }
         } else {
           const recentMessages = getRecentMessages(view, RECENT_MESSAGE_COUNT)
@@ -274,9 +279,13 @@ export function withReferences<T>(
           attached = pickCandidatesByIds(candidates, result.selected).slice(0, maxRefs)
           cacheSet(cacheKey, { selected: result.selected, reasoning: result.reasoning })
           trackPayload = {
-            candidates: candidates.map(c => ({ ref_id: c.ref_id, tool: c.tool, summary: c.summary })),
+            candidates: candidates.map((c) => ({
+              ref_id: c.ref_id,
+              tool: c.tool,
+              summary: c.summary,
+            })),
             selected: result.selected.slice(0, maxRefs),
-            reasoning: result.reasoning
+            reasoning: result.reasoning,
           }
         }
       }
@@ -289,11 +298,16 @@ export function withReferences<T>(
 
       // 5. Dispatch to inner pattern with a child scope so its events are
       //    surrounded by pattern_enter/exit. Mirrors guardrail/hook wrapping.
-      const childScope = createScope<T>(wrappedPattern.config.patternId ?? wrappedPattern.name, scope.data)
+      const childScope = createScope<T>(
+        wrappedPattern.config.patternId ?? wrappedPattern.name,
+        scope.data,
+      )
       const result = await wrappedPattern.fn(childScope, view)
 
       const innerPatternId = wrappedPattern.config.patternId ?? wrappedPattern.name
-      scope.events.push(createEvent('pattern_enter', innerPatternId, { pattern: wrappedPattern.name }))
+      scope.events.push(
+        createEvent('pattern_enter', innerPatternId, { pattern: wrappedPattern.name }),
+      )
       scope.events.push(...result.events)
       scope.events.push(createEvent('pattern_exit', innerPatternId, { status: 'completed' }))
       scope.data = result.data
@@ -311,6 +325,6 @@ export function withReferences<T>(
     fn,
     config: resolved,
     estimateTurns: (s) => wrappedPattern.estimateTurns?.(s) ?? 1,
-    children: [wrappedPattern]
+    children: [wrappedPattern],
   }
 }

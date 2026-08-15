@@ -8,7 +8,7 @@
  */
 
 // Client
-export { getNeo4jDriver, resetDriver, verifyConnection, type Neo4jCredentials } from './client'
+export { getNeo4jDriver, resetDriver, verifyConnection } from './client'
 
 // Server functions
 export {

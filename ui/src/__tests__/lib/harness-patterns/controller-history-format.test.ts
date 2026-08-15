@@ -17,6 +17,7 @@
  * complete ControllerAction, and the legacy prose labels must not come back.
  */
 import { describe, it, expect, beforeAll } from 'vitest'
+import { normalizeControllerAction } from '../../../lib/harness-patterns/controller-action'
 
 // b.request builds the HTTP body without sending; it still resolves the client,
 // which needs the env var to exist.
@@ -287,5 +288,99 @@ describe('the terminal Return action', () => {
     expect(system).toMatch(/tool_name to "Return"/)
     expect(system).toMatch(/is_final to true/)
     expect(system).toMatch(/status.{0,40}omitted/)
+  })
+})
+
+/**
+ * The omitted `is_final` — third instance of the same class (#159).
+ *
+ * The failing call had nothing wrong with it: `AnthropicSonnet5NoThink`, 135
+ * output tokens against a 32768 cap (so not truncation), one attempt (so no
+ * retry branch matched), valid JSON, a real tool and correct args — and no
+ * `is_final`. It was turn 0 of a fresh loop for an agent that passes no
+ * few-shots, so `turns` was empty and `ctx.output_format` was the ONLY
+ * description of the action shape in the whole prompt. BAML rejected the
+ * response with missing=1, simpleLoop broke out of the loop, and the user got
+ * an apology instead of the answer.
+ *
+ * `is_final` is `bool?` now, defaulting to false, and both patterns normalise
+ * an absent value before anything reads it. Absence cannot terminate a loop:
+ * `tool_name === 'Return'` remains the independent terminal signal.
+ */
+describe('an action that omits is_final', () => {
+  // Verbatim from the failing call (issue #159).
+  const OMITTED_IS_FINAL = JSON.stringify({
+    reasoning:
+      'I need to find what Denis Budin shared with the signed-in user. The graph_files_shared tool with shared_by filter is exactly for this.',
+    tool_name: 'graph_files_shared',
+    tool_args: '{"shared_by": "Denis Budin"}',
+    status: 'Checking what Denis Budin has shared with you...',
+  })
+
+  it('LoopController parses it instead of discarding the turn', () => {
+    const action = b.parse.LoopController(OMITTED_IS_FINAL)
+    expect(action.tool_name).toBe('graph_files_shared')
+    expect(JSON.parse(action.tool_args)).toEqual({ shared_by: 'Denis Budin' })
+    expect(action.status).toBe('Checking what Denis Budin has shared with you...')
+    // Absent in the response — the pattern, not the parser, supplies the default.
+    expect(action.is_final ?? null).toBeNull()
+  })
+
+  it('normalisation defaults it to false, leaving the rest untouched', () => {
+    const action = normalizeControllerAction(b.parse.LoopController(OMITTED_IS_FINAL))
+    expect(action.is_final).toBe(false)
+    expect(action.tool_name).toBe('graph_files_shared')
+    expect(action.status).toBe('Checking what Denis Budin has shared with you...')
+  })
+
+  it('the normalised turn executes rather than terminating the loop', () => {
+    const action = normalizeControllerAction(b.parse.LoopController(OMITTED_IS_FINAL))
+    // simpleLoop.server.ts: `if (action.is_final || action.tool_name === 'Return')`.
+    expect(action.is_final || action.tool_name === 'Return').toBe(false)
+    // actorCritic.server.ts: `action.is_final === true` triggers the critic.
+    // An omission must not read as "the actor says it's done".
+    expect(action.is_final === true).toBe(false)
+  })
+
+  it('ActorController has the same exposure and the same defaulting', () => {
+    // Both functions return the one `ControllerAction` class, so the actor can
+    // omit the field for the same reason — fixed symmetrically.
+    const action = normalizeControllerAction(b.parse.ActorController(OMITTED_IS_FINAL))
+    expect(action.tool_name).toBe('graph_files_shared')
+    expect(action.is_final).toBe(false)
+  })
+
+  it('an explicit value is never overwritten', () => {
+    for (const is_final of [true, false]) {
+      const parsed = b.parse.LoopController(
+        JSON.stringify({ reasoning: 'r', tool_name: 'Return', tool_args: 'done', is_final }),
+      )
+      expect(normalizeControllerAction(parsed).is_final).toBe(is_final)
+    }
+  })
+
+  it('the actor attempt log renders a boolean, never null', async () => {
+    // Attempts are recorded from normalised actions, so this is a second line
+    // of defence: history is the model's own prior output, and `null` there
+    // would demonstrate a third value for a boolean field.
+    const attempts = [
+      { n: 1, action: { reasoning: 'r', tool_name: 'run', tool_args: '{}' }, result: 'ok' },
+    ]
+    const req = await b.request.ActorController(
+      'x', 'x', TOOLS, attempts as never, null, null, 3, 5,
+    )
+    const texts = assistantTexts(req.body.json() as Body)
+    expect(texts).toHaveLength(1)
+    expect((JSON.parse(texts[0]) as { is_final: unknown }).is_final).toBe(false)
+  })
+
+  it('the output format tells the model what an absent value means', async () => {
+    // `ctx.output_format` was the only shape description present on the failing
+    // call, and it said only when the value is TRUE. It now states the default.
+    const req = await b.request.LoopController(
+      'x', 'x', TOOLS, [] as never, null, null, null,
+    )
+    const text = allText(req.body.json() as Body)
+    expect(text).toMatch(/an absent value is read as false/)
   })
 })

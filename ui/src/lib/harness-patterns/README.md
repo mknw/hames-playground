@@ -165,8 +165,11 @@ interface ControllerAction {
                          // concurrent, ≤ MAX_PARALLEL_TOOL_CALLS in flight) | 'sequential' (in order,
                          // stop-on-failure) | 'off' (no prompt affordance; tolerated batches run serially).
                          // Singular-only actions: Return, expandPreviousResult.
-  status: string         // User-facing message
-  is_final: boolean      // simpleLoop: exits the loop. actorCritic: cannot exit (critic owns that), but is an advisory *critic trigger* — see criticCadence.
+  status?: string        // User-facing message. Optional (#144) — omittable on the terminal turn, where nothing is in progress.
+  is_final?: boolean     // simpleLoop: exits the loop. actorCritic: cannot exit (critic owns that), but is an advisory *critic trigger* — see criticCadence.
+                         // Optional (#159), DEFAULT FALSE: the patterns normalise an absent value to `false` via
+                         // `normalizeControllerAction()` before anything reads it, so absence can never end a loop or
+                         // claim finality — `tool_name: 'Return'` stays the independent terminal signal.
 }
 
 // Critic result for actor-critic pattern
@@ -950,8 +953,8 @@ BAML Return → ControllerAction:
                                           index-keyed map ({tool, result} | {tool, __error} |
                                           {tool, __skipped}). Partial failure → loop continues;
                                           ALL sub-calls failed → recoverable-error break path.
-  status           : string             → user-facing status
-  is_final         : bool               → terminates loop
+  status           : string?            → user-facing status
+  is_final         : bool?              → terminates loop; absent is normalised to false
 ```
 
 #### actorCritic → `ActorController` + `Critic`

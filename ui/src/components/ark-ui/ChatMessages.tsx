@@ -7,8 +7,10 @@ import { ToolCallDisplay } from './ToolCallDisplay'
 import { marked } from 'marked'
 import type { RetrievalReference } from '~/lib/harness-patterns'
 import type { OpenReferenceTarget } from '~/lib/harness-client/reference-extractor'
+import { escapeHtmlAttribute, sanitizeMarkdownHtml } from '~/lib/sanitize-html'
 
-// Configure marked for safe HTML output
+// Rendering options only — marked passes raw HTML in the source through
+// untouched, so its output is sanitized downstream (see ~/lib/sanitize-html).
 marked.setOptions({
   breaks: true, // Convert \n to <br>
   gfm: true, // GitHub Flavored Markdown
@@ -95,9 +97,12 @@ function annotateEntities(html: string, entityNames: Map<string, string[]>): str
       const key = [...entityNames.keys()].find((k) => k.toLowerCase() === match.toLowerCase())
       if (!key) return match
       const ids = entityNames.get(key)!
-      const idsAttr = ids.join(',')
+      // Entity names and ids come from tool results — escape them so a quote
+      // in a name cannot terminate the attribute it is interpolated into.
+      const idsAttr = escapeHtmlAttribute(ids.join(','))
+      const nameAttr = escapeHtmlAttribute(key)
       const isToggled = toggledEntities.has(key)
-      return `<span class="graph-entity${isToggled ? ' toggled' : ''}" data-entity-name="${key}" data-entity-ids="${idsAttr}" title="Click to pin highlight">${match}</span>`
+      return `<span class="graph-entity${isToggled ? ' toggled' : ''}" data-entity-name="${nameAttr}" data-entity-ids="${idsAttr}" title="Click to pin highlight">${match}</span>`
     })
   }
 
@@ -134,8 +139,10 @@ function annotateReferences(html: string, references: RetrievalReference[]): str
     segments[i] = seg.replace(pattern, (match) => {
       const key = [...byName.keys()].find((k) => k.toLowerCase() === match.toLowerCase())
       if (!key) return match
-      const docId = byName.get(key)!
-      return `<span class="doc-ref" data-doc-id="${docId}" title="Open ${key} in viewer">${match}<sup class="doc-ref-mark">↗</sup></span>`
+      // Filenames and document ids are user/tool supplied — escape them so a
+      // quote in a filename cannot terminate the attribute it lands in.
+      const docId = escapeHtmlAttribute(byName.get(key)!)
+      return `<span class="doc-ref" data-doc-id="${docId}" title="Open ${escapeHtmlAttribute(key)} in viewer">${match}<sup class="doc-ref-mark">↗</sup></span>`
     })
   }
 
@@ -145,6 +152,25 @@ function annotateReferences(html: string, references: RetrievalReference[]): str
 /** Unique references by document (one footer chip per cited file). */
 function dedupeReferencesByDoc(references: RetrievalReference[]): RetrievalReference[] {
   return [...new Map(references.map((r) => [r.docId, r])).values()]
+}
+
+/**
+ * Render an assistant message to the HTML handed to `innerHTML`.
+ *
+ * Order matters: marked's output is sanitized FIRST, then annotated. The
+ * annotators emit their own `.graph-entity` / `.doc-ref` spans, so running
+ * them after sanitization keeps that code-generated markup intact; the values
+ * they interpolate are individually escaped instead (see the annotators
+ * above). Sanitizing last would have to allow those spans back in anyway,
+ * and would re-parse markup we just produced.
+ */
+export function renderAssistantMarkdown(
+  content: string,
+  entityNames: Map<string, string[]>,
+  references: RetrievalReference[],
+): string {
+  const html = sanitizeMarkdownHtml(marked.parse(content ?? '') as string)
+  return annotateReferences(annotateEntities(html, entityNames), references)
 }
 
 // ============================================================================
@@ -242,13 +268,8 @@ export const ChatMessages = (props: ChatMessagesProps) => {
   }
 
   /** Render assistant message with entity + reference annotation */
-  const renderAssistantContent = (content: string, references: RetrievalReference[]) => {
-    const html = marked.parse(content ?? '') as string
-    return annotateReferences(
-      annotateEntities(html, props.graphEntityNames ?? new Map()),
-      references,
-    )
-  }
+  const renderAssistantContent = (content: string, references: RetrievalReference[]) =>
+    renderAssistantMarkdown(content, props.graphEntityNames ?? new Map(), references)
 
   return (
     <ScrollArea.Root style={{ flex: 1, overflow: 'hidden', 'min-height': 0 }}>
@@ -360,10 +381,12 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                                     <span class="think-preview">{thinking!.slice(0, 140)}</span>
                                   </Collapsible.Trigger>
                                   <Collapsible.Content class="think-content">
-                                    {/* eslint-disable-next-line solid/no-innerhtml */}
                                     <div
                                       class="think-body prose-chat"
-                                      innerHTML={marked.parse(thinking!) as string}
+                                      // eslint-disable-next-line solid/no-innerhtml
+                                      innerHTML={sanitizeMarkdownHtml(
+                                        marked.parse(thinking!) as string,
+                                      )}
                                     />
                                   </Collapsible.Content>
                                 </Collapsible.Root>

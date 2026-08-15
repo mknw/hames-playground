@@ -108,7 +108,13 @@ function allText(body: Body): string {
 describe('controller history renders as ControllerAction JSON', () => {
   it('LoopController: every assistant turn parses as a complete action', async () => {
     const req = await b.request.LoopController(
-      'find the budget', 'find the budget', TOOLS, TURNS as never, null, null, null,
+      'find the budget',
+      'find the budget',
+      TOOLS,
+      TURNS as never,
+      null,
+      null,
+      null,
     )
     const body = req.body.json() as Body
     const texts = assistantTexts(body)
@@ -126,9 +132,7 @@ describe('controller history renders as ControllerAction JSON', () => {
   })
 
   it('LoopController: tool_args survives quotes, backslashes and newlines intact', async () => {
-    const req = await b.request.LoopController(
-      'x', 'x', TOOLS, TURNS as never, null, null, null,
-    )
+    const req = await b.request.LoopController('x', 'x', TOOLS, TURNS as never, null, null, null)
     const body = req.body.json() as Body
     const args = assistantTexts(body).map((t) => (JSON.parse(t) as { tool_args: string }).tool_args)
     // Round-trips byte-for-byte: the escaping is done by the JSON serializer,
@@ -139,9 +143,7 @@ describe('controller history renders as ControllerAction JSON', () => {
   it('LoopController: a completed turn is never advertised as final', async () => {
     // The loop breaks BEFORE recording a final action, so history is non-final
     // by construction; rendering `true` here would teach the model to end early.
-    const req = await b.request.LoopController(
-      'x', 'x', TOOLS, TURNS as never, null, null, null,
-    )
+    const req = await b.request.LoopController('x', 'x', TOOLS, TURNS as never, null, null, null)
     const body = req.body.json() as Body
     for (const text of assistantTexts(body)) {
       expect((JSON.parse(text) as { is_final: boolean }).is_final).toBe(false)
@@ -150,7 +152,14 @@ describe('controller history renders as ControllerAction JSON', () => {
 
   it('ActorController: every attempt parses, and is_final comes from the data', async () => {
     const req = await b.request.ActorController(
-      'build it', 'build it', TOOLS, ATTEMPTS as never, null, null, 3, 5,
+      'build it',
+      'build it',
+      TOOLS,
+      ATTEMPTS as never,
+      null,
+      null,
+      3,
+      5,
     )
     const body = req.body.json() as Body
     const parsed = assistantTexts(body).map((t) => JSON.parse(t) as Record<string, unknown>)
@@ -163,14 +172,23 @@ describe('controller history renders as ControllerAction JSON', () => {
   })
 
   it('the legacy prose vocabulary is gone from both prompts', async () => {
-    const loop = (await b.request.LoopController(
-      'x', 'x', TOOLS, TURNS as never, null, null,
-      [{ user: 'find X', reasoning: 'search', tool: 'search', args: '{"query":"X"}' }],
-    )).body.json() as Body
-    const actor = (await b.request.ActorController(
-      'x', 'x', TOOLS, ATTEMPTS as never, null,
-      [{ user: 'build X', reasoning: 'write', tool: 'write_file', args: '{}' }], 3, 5,
-    )).body.json() as Body
+    const loop = (
+      await b.request.LoopController('x', 'x', TOOLS, TURNS as never, null, null, [
+        { user: 'find X', reasoning: 'search', tool: 'search', args: '{"query":"X"}' },
+      ])
+    ).body.json() as Body
+    const actor = (
+      await b.request.ActorController(
+        'x',
+        'x',
+        TOOLS,
+        ATTEMPTS as never,
+        null,
+        [{ user: 'build X', reasoning: 'write', tool: 'write_file', args: '{}' }],
+        3,
+        5,
+      )
+    ).body.json() as Body
 
     for (const body of [loop, actor]) {
       const text = allText(body)
@@ -197,15 +215,21 @@ describe('controller history renders as ControllerAction JSON', () => {
     // failing BAML with status/is_final "missing" at 495 output tokens against a
     // 32768 cap — neither truncation nor an empty completion, so no retry branch
     // caught it and the loop lost two good turns of results.
-    const args = '{"query":"MATCH (c:Concept) WHERE toLower(c.name) CONTAINS toLower($n)","params":{"n":"graph"}}'
-    const fewShot = { user: 'find graph concepts', reasoning: 'substring search', tool: 'search', args }
+    const args =
+      '{"query":"MATCH (c:Concept) WHERE toLower(c.name) CONTAINS toLower($n)","params":{"n":"graph"}}'
+    const fewShot = {
+      user: 'find graph concepts',
+      reasoning: 'substring search',
+      tool: 'search',
+      args,
+    }
 
-    const loop = (await b.request.LoopController(
-      'x', 'x', TOOLS, TURNS as never, null, null, [fewShot],
-    )).body.json() as Body
-    const actor = (await b.request.ActorController(
-      'x', 'x', TOOLS, ATTEMPTS as never, null, [fewShot], 3, 5,
-    )).body.json() as Body
+    const loop = (
+      await b.request.LoopController('x', 'x', TOOLS, TURNS as never, null, null, [fewShot])
+    ).body.json() as Body
+    const actor = (
+      await b.request.ActorController('x', 'x', TOOLS, ATTEMPTS as never, null, [fewShot], 3, 5)
+    ).body.json() as Body
 
     for (const body of [loop, actor]) {
       const text = allText(body)
@@ -221,9 +245,7 @@ describe('controller history renders as ControllerAction JSON', () => {
     // History is 0-indexed (`Turn 0 result`), so with N completed turns the ask
     // is for turn N. The previous `N + 1` skipped a number, inviting the model
     // to infer a turn it had never seen.
-    const req = await b.request.LoopController(
-      'x', 'x', TOOLS, TURNS as never, null, null, null,
-    )
+    const req = await b.request.LoopController('x', 'x', TOOLS, TURNS as never, null, null, null)
     const text = allText(req.body.json() as Body)
     expect(text).toContain(`Turn ${TURNS.length}. Decide the next action.`)
     expect(text).not.toContain(`Turn ${TURNS.length + 1}. Decide the next action.`)
@@ -248,7 +270,8 @@ describe('the terminal Return action', () => {
   const RETURNED_WITHOUT_STATUS = JSON.stringify({
     reasoning: 'No results for TraceFrom. I should report this rather than force a match.',
     tool_name: 'Return',
-    tool_args: 'I searched your OneDrive and all accessible SharePoint sites but found no\n\nfiles for a "TraceFrom" project. Did you mean "TraceForm" or "TReC"?',
+    tool_args:
+      'I searched your OneDrive and all accessible SharePoint sites but found no\n\nfiles for a "TraceFrom" project. Did you mean "TraceForm" or "TReC"?',
     is_final: true,
   })
 
@@ -267,17 +290,18 @@ describe('the terminal Return action', () => {
     // Optional must not mean discouraged: non-final turns drive the progress UI.
     const action = b.parse.LoopController(
       JSON.stringify({
-        reasoning: 'r', tool_name: 'search', tool_args: '{"query":"x"}',
-        status: 'Searching files', is_final: false,
+        reasoning: 'r',
+        tool_name: 'search',
+        tool_args: '{"query":"x"}',
+        status: 'Searching files',
+        is_final: false,
       }),
     )
     expect(action.status).toBe('Searching files')
   })
 
   it('the prompt describes the terminal shape, since history cannot', async () => {
-    const req = await b.request.LoopController(
-      'x', 'x', TOOLS, TURNS as never, null, null, null,
-    )
+    const req = await b.request.LoopController('x', 'x', TOOLS, TURNS as never, null, null, null)
     // Read the system blocks unescaped — `allText` is JSON, where every quote
     // in the instruction is backslashed and the phrasing is unmatchable.
     const body = req.body.json() as Body & { system?: Array<{ text?: string }> }
@@ -367,7 +391,14 @@ describe('an action that omits is_final', () => {
       { n: 1, action: { reasoning: 'r', tool_name: 'run', tool_args: '{}' }, result: 'ok' },
     ]
     const req = await b.request.ActorController(
-      'x', 'x', TOOLS, attempts as never, null, null, 3, 5,
+      'x',
+      'x',
+      TOOLS,
+      attempts as never,
+      null,
+      null,
+      3,
+      5,
     )
     const texts = assistantTexts(req.body.json() as Body)
     expect(texts).toHaveLength(1)
@@ -377,9 +408,7 @@ describe('an action that omits is_final', () => {
   it('the output format tells the model what an absent value means', async () => {
     // `ctx.output_format` was the only shape description present on the failing
     // call, and it said only when the value is TRUE. It now states the default.
-    const req = await b.request.LoopController(
-      'x', 'x', TOOLS, [] as never, null, null, null,
-    )
+    const req = await b.request.LoopController('x', 'x', TOOLS, [] as never, null, null, null)
     const text = allText(req.body.json() as Body)
     expect(text).toMatch(/an absent value is read as false/)
   })

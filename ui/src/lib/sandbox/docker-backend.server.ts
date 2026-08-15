@@ -37,7 +37,6 @@ assertServerOnImport()
 
 const DOCKER_BIN = process.env.DOCKER_BIN || 'docker'
 const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || 'kg-sandbox:base'
-const WORK_DIR = '/work'
 
 // ============================================================================
 // Small docker CLI helper
@@ -253,12 +252,7 @@ export class DockerBackend implements ComputeBackend {
   async health(vm: VMHandle): Promise<HealthStatus> {
     const cid = containerId(vm)
     try {
-      const status = await docker([
-        'inspect',
-        '-f',
-        '{{.State.Status}}',
-        cid,
-      ])
+      const status = await docker(['inspect', '-f', '{{.State.Status}}', cid])
       if (status === 'running') return { state: 'healthy', detail: status }
       return { state: 'unhealthy', detail: status }
     } catch {

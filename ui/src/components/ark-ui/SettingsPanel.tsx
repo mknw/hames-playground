@@ -9,7 +9,7 @@ import { FloatingPanel } from '@ark-ui/solid/floating-panel'
 import { Slider } from '@ark-ui/solid/slider'
 import { NumberInput } from '@ark-ui/solid/number-input'
 import { getSettings, updateSetting, resetSettings } from '../../lib/settings-store'
-import { MODEL_CONTEXT_WINDOWS, DEFAULT_SETTINGS, type HarnessSettings } from '../../lib/settings'
+import { MODEL_CONTEXT_WINDOWS, type HarnessSettings } from '../../lib/settings'
 
 // ---------------------------------------------------------------------------
 // Slider setting row
@@ -135,7 +135,8 @@ function NumberSetting(props: {
 const modelEntries = Object.entries(MODEL_CONTEXT_WINDOWS).map(([name, tokens]) => ({
   name,
   tokens,
-  display: tokens >= 1_000_000 ? `${(tokens / 1_000_000).toFixed(0)}M` : `${(tokens / 1_000).toFixed(0)}K`,
+  display:
+    tokens >= 1_000_000 ? `${(tokens / 1_000_000).toFixed(0)}M` : `${(tokens / 1_000).toFixed(0)}K`,
 }))
 
 // ---------------------------------------------------------------------------
@@ -173,7 +174,10 @@ export function SettingsPanel() {
         items="center"
         justify="center"
       >
-        <span class="i-mdi-cog-outline" style={{ width: '18px', height: '18px', color: '#a1a1aa' }} />
+        <span
+          class="i-mdi-cog-outline"
+          style={{ width: '18px', height: '18px', color: '#a1a1aa' }}
+        />
       </FloatingPanel.Trigger>
 
       {/* Panel */}
@@ -201,8 +205,13 @@ export function SettingsPanel() {
             cursor="default"
           >
             <FloatingPanel.DragTrigger flex="1 ~" items="center" gap="2" cursor="grab">
-              <span class="i-mdi-drag" style={{ width: '16px', height: '16px', color: '#71717a' }} />
-              <span text="sm dark-text-primary" font="medium">Settings</span>
+              <span
+                class="i-mdi-drag"
+                style={{ width: '16px', height: '16px', color: '#71717a' }}
+              />
+              <span text="sm dark-text-primary" font="medium">
+                Settings
+              </span>
             </FloatingPanel.DragTrigger>
             <FloatingPanel.Control flex="~" items="center" gap="0.5">
               <Show when={stage() !== 'minimized'}>
@@ -215,7 +224,10 @@ export function SettingsPanel() {
                   text="dark-text-tertiary hover:dark-text-primary"
                   title="Minimize"
                 >
-                  <span class="i-material-symbols-minimize" style={{ width: '14px', height: '14px', display: 'block' }} />
+                  <span
+                    class="i-material-symbols-minimize"
+                    style={{ width: '14px', height: '14px', display: 'block' }}
+                  />
                 </FloatingPanel.StageTrigger>
               </Show>
               <Show when={stage() !== 'default'}>
@@ -228,7 +240,10 @@ export function SettingsPanel() {
                   text="dark-text-tertiary hover:dark-text-primary"
                   title="Restore"
                 >
-                  <span class="i-material-symbols-expand-content" style={{ width: '14px', height: '14px', display: 'block' }} />
+                  <span
+                    class="i-material-symbols-expand-content"
+                    style={{ width: '14px', height: '14px', display: 'block' }}
+                  />
                 </FloatingPanel.StageTrigger>
               </Show>
               <FloatingPanel.CloseTrigger
@@ -239,60 +254,119 @@ export function SettingsPanel() {
                 text="dark-text-tertiary hover:dark-text-primary"
                 title="Close"
               >
-                <span class="i-material-symbols-close" style={{ width: '14px', height: '14px', display: 'block' }} />
+                <span
+                  class="i-material-symbols-close"
+                  style={{ width: '14px', height: '14px', display: 'block' }}
+                />
               </FloatingPanel.CloseTrigger>
             </FloatingPanel.Control>
           </FloatingPanel.Header>
 
           {/* Body */}
-          <FloatingPanel.Body flex="1" overflow="y-auto" p="3" style={{ display: 'flex', 'flex-direction': 'column', gap: '16px' }}>
-
+          <FloatingPanel.Body
+            flex="1"
+            overflow="y-auto"
+            p="3"
+            style={{ display: 'flex', 'flex-direction': 'column', gap: '16px' }}
+          >
             {/* Loop Settings */}
             <div>
-              <div text="xs dark-text-tertiary uppercase" font="semibold" m="b-2" style={{ 'letter-spacing': '0.05em' }}>
+              <div
+                text="xs dark-text-tertiary uppercase"
+                font="semibold"
+                m="b-2"
+                style={{ 'letter-spacing': '0.05em' }}
+              >
                 Loop Settings
               </div>
               <div flex="~ col" gap="3">
                 <SliderSetting label="Max Tool Turns" settingKey="maxToolTurns" min={1} max={15} />
-                <SliderSetting label="Prior Turn Count" settingKey="priorTurnCount" min={1} max={10} />
+                <SliderSetting
+                  label="Prior Turn Count"
+                  settingKey="priorTurnCount"
+                  min={1}
+                  max={10}
+                />
               </div>
             </div>
 
             {/* Retry & Routing */}
             <div>
-              <div text="xs dark-text-tertiary uppercase" font="semibold" m="b-2" style={{ 'letter-spacing': '0.05em' }}>
+              <div
+                text="xs dark-text-tertiary uppercase"
+                font="semibold"
+                m="b-2"
+                style={{ 'letter-spacing': '0.05em' }}
+              >
                 Retry & Routing
               </div>
               <div flex="~ col" gap="3">
                 <SliderSetting label="Max Retries" settingKey="maxRetries" min={1} max={10} />
-                <SliderSetting label="Router Turn Window" settingKey="routerTurnWindow" min={1} max={20} />
+                <SliderSetting
+                  label="Router Turn Window"
+                  settingKey="routerTurnWindow"
+                  min={1}
+                  max={20}
+                />
               </div>
             </div>
 
             {/* Concurrency (#105) */}
             <div>
-              <div text="xs dark-text-tertiary uppercase" font="semibold" m="b-2" style={{ 'letter-spacing': '0.05em' }}>
+              <div
+                text="xs dark-text-tertiary uppercase"
+                font="semibold"
+                m="b-2"
+                style={{ 'letter-spacing': '0.05em' }}
+              >
                 Concurrency
               </div>
               <div flex="~ col" gap="3">
-                <SliderSetting label="Max Concurrent Runs" settingKey="maxConcurrentRuns" min={1} max={10} />
+                <SliderSetting
+                  label="Max Concurrent Runs"
+                  settingKey="maxConcurrentRuns"
+                  min={1}
+                  max={10}
+                />
               </div>
             </div>
 
             {/* Result Limits */}
             <div>
-              <div text="xs dark-text-tertiary uppercase" font="semibold" m="b-2" style={{ 'letter-spacing': '0.05em' }}>
+              <div
+                text="xs dark-text-tertiary uppercase"
+                font="semibold"
+                m="b-2"
+                style={{ 'letter-spacing': '0.05em' }}
+              >
                 Result Limits
               </div>
               <div flex="~ col" gap="3">
-                <NumberSetting label="Max Result Chars" settingKey="maxResultChars" min={500} max={10000} step={500} />
-                <NumberSetting label="Max Result for Summary" settingKey="maxResultForSummary" min={500} max={10000} step={500} />
+                <NumberSetting
+                  label="Max Result Chars"
+                  settingKey="maxResultChars"
+                  min={500}
+                  max={10000}
+                  step={500}
+                />
+                <NumberSetting
+                  label="Max Result for Summary"
+                  settingKey="maxResultForSummary"
+                  min={500}
+                  max={10000}
+                  step={500}
+                />
               </div>
             </div>
 
             {/* Model Context Windows (read-only) */}
             <div>
-              <div text="xs dark-text-tertiary uppercase" font="semibold" m="b-2" style={{ 'letter-spacing': '0.05em' }}>
+              <div
+                text="xs dark-text-tertiary uppercase"
+                font="semibold"
+                m="b-2"
+                style={{ 'letter-spacing': '0.05em' }}
+              >
                 Model Context Windows
               </div>
               <div
@@ -306,7 +380,9 @@ export function SettingsPanel() {
                   {(entry) => (
                     <>
                       <span text="xs dark-text-secondary">{entry.name}</span>
-                      <span text="xs cyan-400" font="mono">{entry.display}</span>
+                      <span text="xs cyan-400" font="mono">
+                        {entry.display}
+                      </span>
                     </>
                   )}
                 </For>
@@ -348,12 +424,14 @@ export function SettingsPanel() {
                 padding: '2px',
               }}
             >
-              <span style={{
-                width: '8px',
-                height: '8px',
-                'border-right': '2px solid #52525b',
-                'border-bottom': '2px solid #52525b',
-              }} />
+              <span
+                style={{
+                  width: '8px',
+                  height: '8px',
+                  'border-right': '2px solid #52525b',
+                  'border-bottom': '2px solid #52525b',
+                }}
+              />
             </FloatingPanel.ResizeTrigger>
           </Show>
         </FloatingPanel.Content>

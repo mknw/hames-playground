@@ -1,9 +1,23 @@
-import js from '@eslint/js';
-import solid from 'eslint-plugin-solid';
-import tseslint from 'typescript-eslint';
+import js from '@eslint/js'
+import solid from 'eslint-plugin-solid'
+import tseslint from 'typescript-eslint'
 import unocss from '@unocss/eslint-config/flat'
 
 export default tseslint.config(
+  // Without this, `eslint .` walks the generated BAML client and the build
+  // output and reports ~14k errors in code nobody writes by hand — which is
+  // why this config went unused. Keep it first; flat config applies globally
+  // only when `ignores` is the sole key in the object.
+  {
+    ignores: [
+      'baml_client/**',
+      '.output/**',
+      '.vinxi/**',
+      'dist/**',
+      'coverage/**',
+      'node_modules/**',
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -12,14 +26,31 @@ export default tseslint.config(
   },
   unocss,
   {
-    files: ["src/**/*.ts", "src/**/*.tsx", "eslint.config.ts"],
+    files: ['src/**/*.ts', 'src/**/*.tsx', 'eslint.config.ts'],
     rules: {
-            "prefer-const": "warn",
-            "no-constant-binary-expression": "error",
-            "@typescript-eslint/no-unused-vars": ["error", {
-              "varsIgnorePattern": "^_|^T$",
-              "argsIgnorePattern": "^_"
-            }],
+      'prefer-const': 'warn',
+      'no-constant-binary-expression': 'error',
+      // Zero-width spaces are load-bearing inside JSDoc: they keep a literal
+      // `*/` in prose from closing the comment block. Only flag them in code.
+      'no-irregular-whitespace': ['error', { skipComments: true }],
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          varsIgnorePattern: '^_|^T$',
+          argsIgnorePattern: '^_',
+        },
+      ],
+      // Warn, not error: `any` is load-bearing at the BAML/MCP boundaries where
+      // payloads are genuinely untyped until parsed. Flagging it is useful;
+      // blocking a merge on it is not.
+      '@typescript-eslint/no-explicit-any': 'warn',
     },
   },
-);
+  {
+    // Tests reach into internals and build partial fixtures on purpose.
+    files: ['src/__tests__/**/*.{ts,tsx}'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
+)

@@ -14,9 +14,12 @@
 import { For, Show, createSignal, createMemo, createEffect, on, onCleanup } from 'solid-js'
 import { isServer } from 'solid-js/web'
 import { Tooltip } from '@ark-ui/solid/tooltip'
-import type { ContextEvent, ToolResultEventData, RetrievalReference } from '~/lib/harness-patterns'
+import type { ContextEvent, ToolResultEventData } from '~/lib/harness-patterns'
 import type { StashDocumentMeta } from '~/lib/document-store.server'
-import { referencesForDoc, type OpenReferenceTarget } from '~/lib/harness-client/reference-extractor'
+import {
+  referencesForDoc,
+  type OpenReferenceTarget,
+} from '~/lib/harness-client/reference-extractor'
 
 // ============================================================================
 // Types
@@ -52,13 +55,17 @@ interface ToolResultItem {
 
 function getToolIcon(tool: string): string {
   const t = tool.toLowerCase()
-  if (t.includes('neo4j') || t.includes('cypher') || t.includes('graph')) return 'i-mdi-graph-outline'
-  if (t.includes('search') || t.includes('web') || t.includes('browse') || t.includes('fetch')) return 'i-mdi-web'
+  if (t.includes('neo4j') || t.includes('cypher') || t.includes('graph'))
+    return 'i-mdi-graph-outline'
+  if (t.includes('search') || t.includes('web') || t.includes('browse') || t.includes('fetch'))
+    return 'i-mdi-web'
   if (t.includes('redis') || t.includes('cache')) return 'i-mdi-lightning-bolt-outline'
   if (t.includes('memory') || t.includes('brain')) return 'i-mdi-brain'
   if (t.includes('github') || t.includes('git')) return 'i-mdi-github'
-  if (t.includes('file') || t.includes('filesystem') || t.includes('read') || t.includes('write')) return 'i-mdi-file-document-outline'
-  if (t.includes('context7') || t.includes('doc') || t.includes('library')) return 'i-mdi-book-open-variant'
+  if (t.includes('file') || t.includes('filesystem') || t.includes('read') || t.includes('write'))
+    return 'i-mdi-file-document-outline'
+  if (t.includes('context7') || t.includes('doc') || t.includes('library'))
+    return 'i-mdi-book-open-variant'
   if (t.includes('code') || t.includes('script') || t.includes('eval')) return 'i-mdi-code-braces'
   if (t.includes('database') || t.includes('sql')) return 'i-mdi-database-outline'
   return 'i-mdi-package-variant'
@@ -67,14 +74,14 @@ function getToolIcon(tool: string): string {
 /** Icon tint color — matches the pattern-color scheme loosely */
 function getToolColor(tool: string): string {
   const t = tool.toLowerCase()
-  if (t.includes('neo4j') || t.includes('cypher') || t.includes('graph')) return '#22d3ee'  // cyan
-  if (t.includes('search') || t.includes('web') || t.includes('browse')) return '#60a5fa'    // blue
-  if (t.includes('redis') || t.includes('cache')) return '#f59e0b'                            // amber
-  if (t.includes('memory') || t.includes('brain')) return '#a78bfa'                          // violet
-  if (t.includes('github') || t.includes('git')) return '#94a3b8'                            // slate
-  if (t.includes('file') || t.includes('filesystem')) return '#34d399'                       // emerald
-  if (t.includes('code') || t.includes('script')) return '#f472b6'                           // pink
-  return '#71717a'                                                                            // zinc default
+  if (t.includes('neo4j') || t.includes('cypher') || t.includes('graph')) return '#22d3ee' // cyan
+  if (t.includes('search') || t.includes('web') || t.includes('browse')) return '#60a5fa' // blue
+  if (t.includes('redis') || t.includes('cache')) return '#f59e0b' // amber
+  if (t.includes('memory') || t.includes('brain')) return '#a78bfa' // violet
+  if (t.includes('github') || t.includes('git')) return '#94a3b8' // slate
+  if (t.includes('file') || t.includes('filesystem')) return '#34d399' // emerald
+  if (t.includes('code') || t.includes('script')) return '#f472b6' // pink
+  return '#71717a' // zinc default
 }
 
 /**
@@ -84,10 +91,21 @@ function getToolColor(tool: string): string {
 function getRefLabel(tool: string, eventId: string): string {
   const shortId = eventId.replace('ev-', '')
   // Extract the most informative segment from the tool name
-  const parts = tool.split('_').filter(p => p.length > 2)
+  const parts = tool.split('_').filter((p) => p.length > 2)
   // Prefer domain keywords over generic verbs
-  const skip = new Set(['read', 'write', 'get', 'set', 'list', 'create', 'delete', 'fetch', 'run', 'execute'])
-  const key = parts.find(p => !skip.has(p)) ?? parts[0] ?? tool
+  const skip = new Set([
+    'read',
+    'write',
+    'get',
+    'set',
+    'list',
+    'create',
+    'delete',
+    'fetch',
+    'run',
+    'execute',
+  ])
+  const key = parts.find((p) => !skip.has(p)) ?? parts[0] ?? tool
   return `${key}:${shortId}`
 }
 
@@ -106,7 +124,8 @@ function getDocIcon(mimeType: string, filename: string): string {
   const f = filename.toLowerCase()
   if (m.startsWith('audio/') || AUDIO_EXT_RE.test(f)) return 'i-mdi-microphone'
   if (m.includes('json') || f.endsWith('.json')) return 'i-mdi-code-json'
-  if (m.includes('csv') || m.includes('tab-separated') || f.endsWith('.csv')) return 'i-mdi-table-large'
+  if (m.includes('csv') || m.includes('tab-separated') || f.endsWith('.csv'))
+    return 'i-mdi-table-large'
   if (m.includes('markdown') || f.endsWith('.md')) return 'i-mdi-language-markdown-outline'
   if (m.includes('pdf') || f.endsWith('.pdf')) return 'i-mdi-file-pdf-box'
   if (m.includes('html') || m.includes('xml')) return 'i-mdi-file-code-outline'
@@ -173,7 +192,9 @@ const CollapsibleSection = (props: {
           {open() ? '▼' : '▶'}
         </span>
         <span font="medium">{props.title}</span>
-        <span text="xs dark-text-tertiary" font="mono">({props.count})</span>
+        <span text="xs dark-text-tertiary" font="mono">
+          ({props.count})
+        </span>
       </button>
       <Show when={open()}>
         <div>{props.children}</div>
@@ -208,16 +229,20 @@ const StashIcon = (props: {
   const handleAction = async (action: StashAction) => {
     setMenuOpen(false)
     setLoading(true)
-    try { await props.onAction(props.item.event.id!, action) }
-    finally { setLoading(false) }
+    try {
+      await props.onAction(props.item.event.id!, action)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const menuActions = () => {
     if (d().archived) return [{ label: 'Unarchive', action: 'unarchive' as StashAction }]
-    if (d().hidden) return [
-      { label: 'Unhide', action: 'unhide' as StashAction },
-      { label: 'Archive', action: 'archive' as StashAction },
-    ]
+    if (d().hidden)
+      return [
+        { label: 'Unhide', action: 'unhide' as StashAction },
+        { label: 'Archive', action: 'archive' as StashAction },
+      ]
     return [
       { label: 'Hide', action: 'hide' as StashAction },
       { label: 'Archive', action: 'archive' as StashAction },
@@ -227,7 +252,7 @@ const StashIcon = (props: {
   return (
     <div style={{ position: 'relative', display: 'inline-block' }}>
       <Tooltip.Root openDelay={200} closeDelay={100} positioning={{ placement: 'top' }}>
-        <Tooltip.Trigger as="div">
+        <Tooltip.Trigger>
           {/* Icon chip */}
           <div
             flex="~ col"
@@ -238,7 +263,9 @@ const StashIcon = (props: {
             cursor="pointer"
             rounded="lg"
             bg={menuOpen() ? 'dark-bg-tertiary' : 'transparent hover:dark-bg-secondary'}
-            border={menuOpen() ? '1 dark-border-secondary' : '1 transparent hover:dark-border-primary'}
+            border={
+              menuOpen() ? '1 dark-border-secondary' : '1 transparent hover:dark-border-primary'
+            }
             transition="all"
             opacity={props.isGrayed ? '35' : loading() ? '50' : '100'}
             onClick={() => setMenuOpen(!menuOpen())}
@@ -259,7 +286,7 @@ const StashIcon = (props: {
               style={{
                 'font-family': '"Fira Code", ui-monospace, monospace',
                 'font-size': '9px',
-                'color': props.isGrayed ? '#52525b' : '#71717a',
+                color: props.isGrayed ? '#52525b' : '#71717a',
                 'text-align': 'center',
                 'word-break': 'break-all',
                 'line-height': '1.2',
@@ -298,7 +325,11 @@ const StashIcon = (props: {
             {/* Summary or raw preview */}
             <div
               text="xs dark-text-primary"
-              style={{ 'line-height': '1.5', 'white-space': 'pre-wrap', 'word-break': 'break-word' }}
+              style={{
+                'line-height': '1.5',
+                'white-space': 'pre-wrap',
+                'word-break': 'break-word',
+              }}
             >
               {tooltipText()}
             </div>
@@ -344,8 +375,8 @@ const StashIcon = (props: {
                   color: '#a1a1aa',
                   cursor: 'pointer',
                 }}
-                onMouseEnter={e => (e.currentTarget.style.background = '#22222f')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#22222f')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
               >
                 {btn.label}
               </button>
@@ -387,12 +418,11 @@ const StashIcon = (props: {
 // Icon Gallery Section
 // ============================================================================
 
-const IconGallery = (props: { items: ToolResultItem[]; onAction: (id: string, action: StashAction) => Promise<void> }) => (
-  <div
-    flex="~ wrap"
-    gap="2"
-    p="3"
-  >
+const IconGallery = (props: {
+  items: ToolResultItem[]
+  onAction: (id: string, action: StashAction) => Promise<void>
+}) => (
+  <div flex="~ wrap" gap="2" p="3">
     <For each={props.items}>
       {(item) => (
         <StashIcon
@@ -451,7 +481,11 @@ const DocChip = (props: {
             { label: 'Hide', action: 'hide' },
             { label: 'Archive', action: 'archive' },
           ]
-    return [{ label: 'Download', action: 'download' as DocAction }, ...base, { label: 'Delete', action: 'delete' }]
+    return [
+      { label: 'Download', action: 'download' as DocAction },
+      ...base,
+      { label: 'Delete', action: 'delete' },
+    ]
   }
 
   return (
@@ -498,8 +532,18 @@ const DocChip = (props: {
         w="16"
         cursor="pointer"
         rounded="lg"
-        bg={props.active ? 'dark-bg-tertiary' : menuOpen() ? 'dark-bg-tertiary' : 'transparent hover:dark-bg-secondary'}
-        border={props.active || menuOpen() ? '1 dark-border-secondary' : '1 transparent hover:dark-border-primary'}
+        bg={
+          props.active
+            ? 'dark-bg-tertiary'
+            : menuOpen()
+              ? 'dark-bg-tertiary'
+              : 'transparent hover:dark-bg-secondary'
+        }
+        border={
+          props.active || menuOpen()
+            ? '1 dark-border-secondary'
+            : '1 transparent hover:dark-border-primary'
+        }
         transition="all"
         opacity={grayed() ? '35' : loading() ? '50' : '100'}
         onClick={() => setMenuOpen(!menuOpen())}
@@ -649,7 +693,15 @@ const DocChip = (props: {
       {/* Inline audio player — toggled from the Play menu item. Sits below the
           chip; the ?download route streams the recording's bytes. */}
       <Show when={isAudio() && playing()}>
-        <div style={{ position: 'absolute', top: '100%', left: '0', 'z-index': '101', 'margin-top': '2px' }}>
+        <div
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: '0',
+            'z-index': '101',
+            'margin-top': '2px',
+          }}
+        >
           <audio
             controls
             autoplay
@@ -674,7 +726,10 @@ export interface ViewerHighlight {
 }
 
 /** 1-based inclusive line range for a char offset span in `content`. */
-function offsetsToLines(content: string, h: ViewerHighlight): { startLine: number; endLine: number } {
+function offsetsToLines(
+  content: string,
+  h: ViewerHighlight,
+): { startLine: number; endLine: number } {
   const start = Math.max(0, Math.min(h.startOffset, content.length))
   const end = Math.max(start, Math.min(h.endOffset, content.length))
   return {
@@ -699,6 +754,9 @@ const FileViewer = (props: {
   // Reset the focused highlight when the target doc or the incoming index
   // changes (the viewer instance is reused across re-opens).
   createEffect(() => {
+    // Reading the signal is what subscribes this effect to it; deleting the
+    // bare expression stops the highlight resetting when the doc changes.
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     props.doc.id
     setCurrent(props.initialIndex ?? 0)
   })
@@ -748,19 +806,36 @@ const FileViewer = (props: {
   })
 
   return (
-    <div border="t dark-border-primary" bg="dark-bg-secondary" flex="~ col" style={{ 'max-height': '340px' }}>
-      <div flex="~" items="center" gap="2" p="x-3 y-2" bg="dark-bg-tertiary" border="b dark-border-primary">
+    <div
+      border="t dark-border-primary"
+      bg="dark-bg-secondary"
+      flex="~ col"
+      style={{ 'max-height': '340px' }}
+    >
+      <div
+        flex="~"
+        items="center"
+        gap="2"
+        p="x-3 y-2"
+        bg="dark-bg-tertiary"
+        border="b dark-border-primary"
+      >
         <span
           class={getDocIcon(props.doc.mimeType, props.doc.filename)}
           style={{ width: '14px', height: '14px', color: '#34d399', 'flex-shrink': '0' }}
         />
-        <span text="xs dark-text-secondary" font="mono" style={{ flex: '1', 'word-break': 'break-all' }}>
+        <span
+          text="xs dark-text-secondary"
+          font="mono"
+          style={{ flex: '1', 'word-break': 'break-all' }}
+        >
           {props.doc.filename}
         </span>
         <Show when={activeRange()}>
           {(r) => (
             <span text="xs" style={{ color: '#f59e0b', 'font-family': 'monospace' }}>
-              L{r().startLine}{r().endLine !== r().startLine ? `–${r().endLine}` : ''}
+              L{r().startLine}
+              {r().endLine !== r().startLine ? `–${r().endLine}` : ''}
             </span>
           )}
         </Show>
@@ -771,16 +846,34 @@ const FileViewer = (props: {
               onClick={() => setCurrent((c) => Math.max(0, c - 1))}
               disabled={current() === 0}
               title="Previous reference"
-              style={{ background: 'transparent', border: 'none', cursor: current() === 0 ? 'default' : 'pointer', color: current() === 0 ? '#3f3f46' : '#a1a1aa', 'font-size': '13px', 'line-height': '1', padding: '0 2px' }}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                cursor: current() === 0 ? 'default' : 'pointer',
+                color: current() === 0 ? '#3f3f46' : '#a1a1aa',
+                'font-size': '13px',
+                'line-height': '1',
+                padding: '0 2px',
+              }}
             >
               ‹
             </button>
-            <span text="xs dark-text-tertiary" font="mono">{current() + 1}/{total()}</span>
+            <span text="xs dark-text-tertiary" font="mono">
+              {current() + 1}/{total()}
+            </span>
             <button
               onClick={() => setCurrent((c) => Math.min(total() - 1, c + 1))}
               disabled={current() === total() - 1}
               title="Next reference"
-              style={{ background: 'transparent', border: 'none', cursor: current() === total() - 1 ? 'default' : 'pointer', color: current() === total() - 1 ? '#3f3f46' : '#a1a1aa', 'font-size': '13px', 'line-height': '1', padding: '0 2px' }}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                cursor: current() === total() - 1 ? 'default' : 'pointer',
+                color: current() === total() - 1 ? '#3f3f46' : '#a1a1aa',
+                'font-size': '13px',
+                'line-height': '1',
+                padding: '0 2px',
+              }}
             >
               ›
             </button>
@@ -789,22 +882,40 @@ const FileViewer = (props: {
         <button
           onClick={() => props.onClose()}
           title="Close viewer"
-          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#71717a', 'font-size': '13px', 'line-height': '1', padding: '2px 4px' }}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            color: '#71717a',
+            'font-size': '13px',
+            'line-height': '1',
+            padding: '2px 4px',
+          }}
         >
           ✕
         </button>
       </div>
       <div
-        style={{ overflow: 'auto', 'font-family': '"Fira Code", ui-monospace, monospace', 'font-size': '11px', 'line-height': '1.55' }}
+        style={{
+          overflow: 'auto',
+          'font-family': '"Fira Code", ui-monospace, monospace',
+          'font-size': '11px',
+          'line-height': '1.55',
+        }}
       >
         <Show when={loading()}>
           <div p="3" flex="~" items="center" gap="2" text="xs dark-text-tertiary">
-            <span class="i-mdi-loading" style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />
+            <span
+              class="i-mdi-loading"
+              style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }}
+            />
             <span>Loading file…</span>
           </div>
         </Show>
         <Show when={error()}>
-          <div p="3" text="xs red-400">{error()}</div>
+          <div p="3" text="xs red-400">
+            {error()}
+          </div>
         </Show>
         <Show when={content() !== null}>
           <For each={lines()}>
@@ -817,7 +928,13 @@ const FileViewer = (props: {
                 <div
                   ref={(el) => lineEls.set(n, el)}
                   flex="~"
-                  style={{ background: active() ? 'rgba(245,158,11,0.16)' : hot() ? 'rgba(245,158,11,0.07)' : 'transparent' }}
+                  style={{
+                    background: active()
+                      ? 'rgba(245,158,11,0.16)'
+                      : hot()
+                        ? 'rgba(245,158,11,0.07)'
+                        : 'transparent',
+                  }}
                 >
                   <span
                     style={{
@@ -827,12 +944,24 @@ const FileViewer = (props: {
                       padding: '0 8px',
                       color: '#52525b',
                       'user-select': 'none',
-                      'border-right': active() ? '2px solid #f59e0b' : hot() ? '2px solid rgba(245,158,11,0.4)' : '2px solid transparent',
+                      'border-right': active()
+                        ? '2px solid #f59e0b'
+                        : hot()
+                          ? '2px solid rgba(245,158,11,0.4)'
+                          : '2px solid transparent',
                     }}
                   >
                     {n}
                   </span>
-                  <span style={{ 'white-space': 'pre-wrap', 'word-break': 'break-word', padding: '0 10px', color: '#d4d4d8', flex: '1' }}>
+                  <span
+                    style={{
+                      'white-space': 'pre-wrap',
+                      'word-break': 'break-word',
+                      padding: '0 10px',
+                      color: '#d4d4d8',
+                      flex: '1',
+                    }}
+                  >
                     {line || ' '}
                   </span>
                 </div>
@@ -968,7 +1097,11 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       startOffset: r.startOffset,
       endOffset: r.endOffset,
     }))
-    setViewer({ doc, highlights, index: Math.max(0, Math.min(index, Math.max(0, highlights.length - 1))) })
+    setViewer({
+      doc,
+      highlights,
+      index: Math.max(0, Math.min(index, Math.max(0, highlights.length - 1))),
+    })
   }
 
   const applyDocs = (sid: string, list: StashDocumentMeta[]) => {
@@ -1086,7 +1219,10 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       return
     }
     if (action === 'delete') {
-      applyDocs(sid, docs().filter((d) => d.id !== id)) // optimistic remove
+      applyDocs(
+        sid,
+        docs().filter((d) => d.id !== id),
+      ) // optimistic remove
       await fetch(
         `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(sid)}`,
         { method: 'DELETE' },
@@ -1125,8 +1261,8 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
 
   const partitioned = createMemo(() => {
     const toolResults: ToolResultItem[] = props.events
-      .filter(e => e.type === 'tool_result' && e.id)
-      .map(e => ({ event: e, data: e.data as ToolResultEventData }))
+      .filter((e) => e.type === 'tool_result' && e.id)
+      .map((e) => ({ event: e, data: e.data as ToolResultEventData }))
 
     const lastUserIdx = findLastUserMessageIndex(props.events)
 
@@ -1171,8 +1307,12 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
           class="i-mdi-package-variant-closed"
           style={{ width: '16px', height: '16px', color: '#71717a' }}
         />
-        <span text="sm dark-text-primary" font="medium">Data Stash</span>
-        <span text="xs dark-text-tertiary" font="mono">{totalCount()} items</span>
+        <span text="sm dark-text-primary" font="medium">
+          Data Stash
+        </span>
+        <span text="xs dark-text-tertiary" font="mono">
+          {totalCount()} items
+        </span>
       </div>
 
       {/* ── Your Uploads ── user-provided documents (Redis-backed, Issue #6).
@@ -1209,7 +1349,10 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
         {/* Cold-load only — never blocks the drop zone (background refresh). */}
         <Show when={loading() && docs().length === 0}>
           <div flex="~" items="center" gap="2" p="x-3 y-2" text="xs dark-text-tertiary">
-            <span class="i-mdi-loading" style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />
+            <span
+              class="i-mdi-loading"
+              style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }}
+            />
             <span>Loading uploads…</span>
           </div>
         </Show>
@@ -1231,8 +1374,12 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
         <Show when={partitioned().current.length > 0}>
           <div>
             <div p="x-3 y-2" flex="~" items="center" gap="2">
-              <span text="xs dark-text-tertiary" font="medium">Current Turn</span>
-              <span text="xs dark-text-tertiary" font="mono">({partitioned().current.length})</span>
+              <span text="xs dark-text-tertiary" font="medium">
+                Current Turn
+              </span>
+              <span text="xs dark-text-tertiary" font="mono">
+                ({partitioned().current.length})
+              </span>
             </div>
             <IconGallery items={partitioned().current} onAction={props.onStashAction} />
           </div>

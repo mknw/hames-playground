@@ -1,5 +1,5 @@
-import { Show } from "solid-js";
-import { useSearchParams } from "@solidjs/router";
+import { Show } from 'solid-js'
+import { useSearchParams } from '@solidjs/router'
 
 /**
  * Sign-in page. Direct Entra OIDC (#119): a single "Sign in with Microsoft"
@@ -10,7 +10,7 @@ import { useSearchParams } from "@solidjs/router";
  * hint here without leaking details.
  */
 export default function SignIn() {
-  const [params] = useSearchParams();
+  const [params] = useSearchParams()
 
   return (
     <div class="px-4 py-12 bg-gray-50 flex min-h-screen items-center justify-center lg:px-8 sm:px-6">
@@ -24,9 +24,7 @@ export default function SignIn() {
 
         <Show when={params.error}>
           <div class="mb-4 p-3 border border-red-200 rounded-md bg-red-50">
-            <p class="text-sm text-red-600">
-              Sign-in didn't complete. Please try again.
-            </p>
+            <p class="text-sm text-red-600">Sign-in didn't complete. Please try again.</p>
           </div>
         </Show>
 
@@ -39,17 +37,17 @@ export default function SignIn() {
         <a
           href="/api/auth/login"
           rel="external"
-          class="text-white font-medium px-4 py-3 rounded-md bg-blue-600 w-full shadow-sm flex items-center justify-center gap-2 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+          class="text-white font-medium px-4 py-3 rounded-md bg-blue-600 flex gap-2 w-full shadow-sm items-center justify-center focus:outline-none hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
         >
-          <span class="i-mdi-microsoft" style={{ width: "20px", height: "20px" }} />
+          <span class="i-mdi-microsoft" style={{ width: '20px', height: '20px' }} />
           Sign in with Microsoft
         </a>
 
         <p class="text-xs text-gray-500 mt-6 text-center">
-          Access is restricted to authorized accounts. If you need access,
-          please contact the administrator.
+          Access is restricted to authorized accounts. If you need access, please contact the
+          administrator.
         </p>
       </div>
     </div>
-  );
+  )
 }

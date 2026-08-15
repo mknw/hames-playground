@@ -1,0 +1,86 @@
+name: CI
+
+# Gates merges into main. Deployment is deliberately NOT here: a gate answers
+# "is this head SHA sound", a deploy acts on a merge commit. Fusing them makes
+# both slower and the gate less trustworthy.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to a PR makes the previous run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: ui
+
+jobs:
+  check:
+    name: typecheck · lint · test · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Needed to diff against the PR base for the formatting check.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      # Both steps are load-bearing, in this order. A node_modules that predates
+      # the lockfile makes `baml-generate` fail on a @boundaryml/baml version
+      # mismatch, which leaves a stale generated client and surfaces as ~7
+      # phantom test failures plus an inflated type-error count — failures with
+      # nothing to do with the change under test.
+      - run: pnpm install --frozen-lockfile
+
+      # baml_client/ is generated and gitignored. Without it ~270 tests fail on
+      # `Failed to resolve import "../../../baml_client/inlinedbaml"`.
+      - run: pnpm baml-generate
+
+      # configs/mcp-config.yaml is gitignored (holds local connection details)
+      # and 2 server-catalog tests read it. The committed template is enough.
+      - name: Seed local-only config
+        working-directory: .
+        run: cp -n configs/template.mcp-config.yaml configs/mcp-config.yaml || true
+
+      - run: pnpm typecheck
+
+      - run: pnpm lint
+
+      # Formatting is enforced on CHANGED files only. The repo predates Prettier,
+      # so a global --check would fail on ~320 untouched files; the codebase
+      # converges as files are edited (see the pre-commit hook). New and edited
+      # code still has to be formatted.
+      - name: Format check (changed files)
+        if: github.event_name == 'pull_request'
+        working-directory: .
+        run: |
+          files=$(git diff --name-only --diff-filter=ACMR \
+                    "${{ github.event.pull_request.base.sha }}" HEAD \
+                    -- 'ui/**/*.ts' 'ui/**/*.tsx' 'ui/**/*.js' 'ui/**/*.jsx' \
+                       'ui/**/*.json' 'ui/**/*.css' 'ui/**/*.md')
+          if [ -z "$files" ]; then
+            echo "No formattable files changed."
+            exit 0
+          fi
+          echo "$files"
+          # shellcheck disable=SC2086
+          ./ui/node_modules/.bin/prettier --check $files
+
+      - run: pnpm test:run
+
+      # Catches SSR/vinxi breakage the unit tests cannot see.
+      - run: pnpm build

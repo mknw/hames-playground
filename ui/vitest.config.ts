@@ -26,15 +26,16 @@ export default defineConfig({
       ],
       // Backstop floors, not aspirations. Measured on 2026-08-16 against
       // src/** and set 2pp below the baseline so ordinary churn does not
-      // trip the gate:
-      //   statements 46.12  branches 47.91  functions 34.21  lines 50.85
+      // trip the gate. Baseline is the CI number (Node 22, run 31914658201),
+      // which is the authoritative one — local Node 24 reads ~1pp higher:
+      //   statements 45.21  branches 47.48  functions 32.96  lines 49.85
       // The job fails if coverage drops below these. Raise them by hand as
       // coverage grows; never lower them to make a red run green.
       thresholds: {
-        statements: 44,
+        statements: 43,
         branches: 45,
-        functions: 32,
-        lines: 48,
+        functions: 30,
+        lines: 47,
       },
     },
   },

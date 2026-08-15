@@ -175,6 +175,7 @@ function toPriorResults(refs: ReferenceCandidate[]): PriorResult[] {
 const defaultSelector: SelectorFn = async (input) => {
   const { b } = await import('../../../../baml_client')
   const { clientOverrideFor } = await import('../clients.server')
+  const { warnIfCollectorEmpty } = await import('../baml-adapters.server')
   const now = Date.now()
   const collector = new Collector('reference-selector')
   const result = await b.ReferenceSelector(
@@ -189,6 +190,9 @@ const defaultSelector: SelectorFn = async (input) => {
     })),
     { collector, ...clientOverrideFor('describe') }
   )
+  // Nothing here reads the collector, but an empty one still means the options
+  // object never reached BAML — i.e. the client override was dropped too (#154).
+  warnIfCollectorEmpty(collector, 'ReferenceSelector')
   return {
     selected: result.selected.map(s => ({ ref_id: s.ref_id, reason: s.reason })),
     reasoning: result.reasoning

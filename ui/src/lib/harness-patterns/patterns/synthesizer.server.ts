@@ -24,7 +24,7 @@ import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig } from '../context.server'
 import { Collector } from '@boundaryml/baml'
 import { trimToFit, getContextWindow } from '../token-budget.server'
-import { extractFailureLLMCallData } from '../baml-adapters.server'
+import { extractFailureLLMCallData, warnIfCollectorEmpty } from '../baml-adapters.server'
 import { clientOverrideFor, resolveClientForRole } from '../clients.server'
 
 assertServerOnImport()
@@ -120,7 +120,10 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
         input.errorMessage
       )
 
-  // Extract LLM call data if collector present
+  // Extract LLM call data if collector present. This site builds its own
+  // LLMCallData rather than going through extractLLMCallData, so it calls the
+  // stale-client guard itself (#154).
+  warnIfCollectorEmpty(collector, 'Synthesize')
   let llmCall: LLMCallData | undefined
   if (collector?.last) {
     const last = collector.last

@@ -5,42 +5,42 @@
  * All tool execution routes through this module.
  */
 
-import { assertServerOnImport } from './assert.server';
-import { getActiveSandbox } from '../sandbox/scope.server';
-import { hasAppTool, runAppTool, appToolDescriptions } from '../app-tools/index.server';
-import type { ToolCallResult, MCPToolDescription } from './types';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { assertServerOnImport } from './assert.server'
+import { getActiveSandbox } from '../sandbox/scope.server'
+import { hasAppTool, runAppTool, appToolDescriptions } from '../app-tools/index.server'
+import type { ToolCallResult, MCPToolDescription } from './types'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
-assertServerOnImport();
+assertServerOnImport()
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
-const MCP_GATEWAY_URL = process.env.MCP_GATEWAY_URL || 'http://localhost:8811/mcp';
+const MCP_GATEWAY_URL = process.env.MCP_GATEWAY_URL || 'http://localhost:8811/mcp'
 
 // ============================================================================
 // Client Singleton
 // ============================================================================
 
-let client: Client | null = null;
-let transport: StreamableHTTPClientTransport | null = null;
+let client: Client | null = null
+let transport: StreamableHTTPClientTransport | null = null
 
 export async function getMcpClient(): Promise<Client> {
   if (client) {
-    return client;
+    return client
   }
 
   client = new Client({
     name: 'harness-patterns',
-    version: '1.0.0'
-  });
+    version: '1.0.0',
+  })
 
-  transport = new StreamableHTTPClientTransport(new URL(MCP_GATEWAY_URL));
-  await client.connect(transport);
+  transport = new StreamableHTTPClientTransport(new URL(MCP_GATEWAY_URL))
+  await client.connect(transport)
 
-  return client;
+  return client
 }
 
 /** Drop the singleton so the next getMcpClient() reconnects. Used by the
@@ -49,21 +49,21 @@ export async function getMcpClient(): Promise<Client> {
 async function resetMcpClient(): Promise<void> {
   if (client) {
     try {
-      await client.close();
+      await client.close()
     } catch {
       // best-effort; the connection is already broken
     }
   }
-  client = null;
-  transport = null;
+  client = null
+  transport = null
 }
 
 /** Heuristic: does this error look like a dead/closed transport rather than
  *  a tool-level failure? Covers the typical shapes that surface when the
  *  MCP gateway restarts under us. */
 function isConnectionError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const msg = err.message.toLowerCase();
+  if (!(err instanceof Error)) return false
+  const msg = err.message.toLowerCase()
   return (
     msg.includes('econnrefused') ||
     msg.includes('econnreset') ||
@@ -73,7 +73,7 @@ function isConnectionError(err: unknown): boolean {
     msg.includes('transport') ||
     msg.includes('terminated') ||
     msg.includes('aborted')
-  );
+  )
 }
 
 /** Run an MCP operation with a single reconnect attempt on connection errors.
@@ -84,13 +84,13 @@ function isConnectionError(err: unknown): boolean {
  *  not retried — only transport-level errors trigger reconnect. */
 async function withReconnect<T>(op: (c: Client) => Promise<T>): Promise<T> {
   try {
-    const c = await getMcpClient();
-    return await op(c);
+    const c = await getMcpClient()
+    return await op(c)
   } catch (err) {
-    if (!isConnectionError(err)) throw err;
-    await resetMcpClient();
-    const c = await getMcpClient();
-    return await op(c);
+    if (!isConnectionError(err)) throw err
+    await resetMcpClient()
+    const c = await getMcpClient()
+    return await op(c)
   }
 }
 
@@ -100,16 +100,16 @@ async function withReconnect<T>(op: (c: Client) => Promise<T>): Promise<T> {
 
 export async function callTool(
   name: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
 ): Promise<ToolCallResult> {
   // Sandbox dispatch (see docs/plan/sandbox.md → "How tools reach the
   // controller"). When a `withSandbox` wrapper is active and the tool name
   // is owned by its in-VM transport, route there instead of the host
   // gateway. Tools not owned by the sandbox fall through to the gateway path
   // — which is also what happens outside any sandbox scope.
-  const sandbox = getActiveSandbox();
+  const sandbox = getActiveSandbox()
   if (sandbox?.ownsTool(name)) {
-    return sandbox.callTool(name, args);
+    return sandbox.callTool(name, args)
   }
 
   // App-side dispatch (#110). Tools that must run in THIS process because they
@@ -117,11 +117,11 @@ export async function callTool(
   // gateway cannot express per-user identity (#107). Checked after the sandbox
   // (so an in-VM tool of the same name still wins) and before the gateway.
   if (hasAppTool(name)) {
-    return runAppTool(name, args);
+    return runAppTool(name, args)
   }
 
   try {
-    const result = await withReconnect((c) => c.callTool({ name, arguments: args }));
+    const result = await withReconnect((c) => c.callTool({ name, arguments: args }))
 
     // Extract text content. Some MCP servers return ONE text block PER element
     // (Redis `smembers`/`lrange`, search-style tools); the previous `.find`
@@ -132,47 +132,47 @@ export async function callTool(
     if (result.content && Array.isArray(result.content)) {
       const textItems = result.content.filter(
         (c): c is { type: 'text'; text: string } =>
-          c.type === 'text' && typeof (c as { text?: unknown }).text === 'string'
-      );
+          c.type === 'text' && typeof (c as { text?: unknown }).text === 'string',
+      )
 
       if (textItems.length === 1) {
-        const { text } = textItems[0];
-        const demoted = demoteErrorString(text);
-        if (demoted) return demoted;
+        const { text } = textItems[0]
+        const demoted = demoteErrorString(text)
+        if (demoted) return demoted
         try {
-          return { success: true, data: JSON.parse(text) };
+          return { success: true, data: JSON.parse(text) }
         } catch {
-          return { success: true, data: text };
+          return { success: true, data: text }
         }
       }
 
       if (textItems.length > 1) {
         // A failure is still reported as a single leading block in practice, so
         // check the first block before treating this as a multi-value success.
-        const demoted = demoteErrorString(textItems[0].text);
-        if (demoted) return demoted;
+        const demoted = demoteErrorString(textItems[0].text)
+        if (demoted) return demoted
         const data = textItems.map((t) => {
           try {
-            return JSON.parse(t.text);
+            return JSON.parse(t.text)
           } catch {
-            return t.text;
+            return t.text
           }
-        });
-        return { success: true, data };
+        })
+        return { success: true, data }
       }
     }
 
     // Structured content or raw result
     return {
       success: true,
-      data: result.structuredContent ?? result
-    };
+      data: result.structuredContent ?? result,
+    }
   } catch (error) {
     return {
       success: false,
       data: null,
-      error: error instanceof Error ? error.message : String(error)
-    };
+      error: error instanceof Error ? error.message : String(error),
+    }
   }
 }
 
@@ -191,42 +191,40 @@ export async function callTool(
  *      result (see .harness-logs/context-neo4j-nosecrets.json).
  *
  *  The leading `<ToolName>` token is therefore optional. */
-const ERROR_STRING_PREFIX = /^(?:[A-Z][A-Za-z0-9]*\s+)?Error:/;
+const ERROR_STRING_PREFIX = /^(?:[A-Z][A-Za-z0-9]*\s+)?Error:/
 
-function demoteErrorString(
-  text: string
-): { success: false; data: null; error: string } | null {
+function demoteErrorString(text: string): { success: false; data: null; error: string } | null {
   if (typeof text === 'string' && ERROR_STRING_PREFIX.test(text)) {
-    return { success: false, data: null, error: text };
+    return { success: false, data: null, error: text }
   }
-  return null;
+  return null
 }
 
 export async function listTools(): Promise<MCPToolDescription[]> {
   // App-side tools (#110) are advertised alongside the gateway's. They run
   // in-process, so they stay available even when the gateway is unreachable —
   // hence they are appended on both the success and the failure path.
-  const appTools = appToolDescriptions();
+  const appTools = appToolDescriptions()
   try {
-    const { tools } = await withReconnect((c) => c.listTools());
+    const { tools } = await withReconnect((c) => c.listTools())
     return [
       ...tools.map((t) => ({
         name: t.name,
         description: t.description ?? '',
-        inputSchema: (t.inputSchema as Record<string, unknown>) ?? {}
+        inputSchema: (t.inputSchema as Record<string, unknown>) ?? {},
       })),
-      ...appTools
-    ];
+      ...appTools,
+    ]
   } catch (err) {
     // Reconnect already tried once. If we still failed here, this is a real
     // problem (gateway down, URL misconfigured, etc.) — log it loudly so the
     // operator can see it. Returning [] still degrades gracefully for callers
     // that don't want to crash on a missing tool list, but the cause is no
     // longer hidden the way it was before this change.
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[mcp-client] listTools failed after reconnect:', msg);
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[mcp-client] listTools failed after reconnect:', msg)
     // App-side tools don't depend on the gateway — keep offering them.
-    return appTools;
+    return appTools
   }
 }
 
@@ -237,14 +235,14 @@ export async function listTools(): Promise<MCPToolDescription[]> {
 export async function closeMcpClient(): Promise<void> {
   if (client) {
     try {
-      await client.close();
+      await client.close()
     } finally {
-      client = null;
-      transport = null;
+      client = null
+      transport = null
     }
   }
 }
 
 export function isConnected(): boolean {
-  return client !== null;
+  return client !== null
 }

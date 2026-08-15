@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock server-only imports
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
-  assertServerOnImport: vi.fn()
+  assertServerOnImport: vi.fn(),
 }))
 
 // Mock the MCP SDK
@@ -26,13 +26,13 @@ class MockClient {
 }
 
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
-  Client: MockClient
+  Client: MockClient,
 }))
 
 class MockTransport {}
 
 vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
-  StreamableHTTPClientTransport: MockTransport
+  StreamableHTTPClientTransport: MockTransport,
 }))
 
 describe('mcp-client', () => {
@@ -41,12 +41,10 @@ describe('mcp-client', () => {
     mockConnect.mockResolvedValue(undefined)
     mockClose.mockResolvedValue(undefined)
     mockCallTool.mockResolvedValue({
-      content: [{ type: 'text', text: '{"result": "success"}' }]
+      content: [{ type: 'text', text: '{"result": "success"}' }],
     })
     mockListTools.mockResolvedValue({
-      tools: [
-        { name: 'test_tool', description: 'A test tool', inputSchema: { type: 'object' } }
-      ]
+      tools: [{ name: 'test_tool', description: 'A test tool', inputSchema: { type: 'object' } }],
     })
   })
 
@@ -101,7 +99,7 @@ describe('mcp-client', () => {
 
     it('should handle non-JSON text content', async () => {
       mockCallTool.mockResolvedValue({
-        content: [{ type: 'text', text: 'plain text result' }]
+        content: [{ type: 'text', text: 'plain text result' }],
       })
 
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
@@ -115,7 +113,7 @@ describe('mcp-client', () => {
     it('should handle structured content', async () => {
       mockCallTool.mockResolvedValue({
         content: [],
-        structuredContent: { key: 'value' }
+        structuredContent: { key: 'value' },
       })
 
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
@@ -149,7 +147,7 @@ describe('mcp-client', () => {
         '{message: Expected parameter(s): pulsarName, pulsarDesc, platformName, platformDesc} ' +
         '{gql_status: 50N42}'
       mockCallTool.mockResolvedValue({
-        content: [{ type: 'text', text: neo4jErrorText }]
+        content: [{ type: 'text', text: neo4jErrorText }],
       })
 
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
@@ -163,7 +161,7 @@ describe('mcp-client', () => {
 
     it('demotes any "<ToolName> Error:" prefixed text result', async () => {
       mockCallTool.mockResolvedValue({
-        content: [{ type: 'text', text: 'Redis Error: WRONGTYPE Operation against a key…' }]
+        content: [{ type: 'text', text: 'Redis Error: WRONGTYPE Operation against a key…' }],
       })
 
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
@@ -177,16 +175,18 @@ describe('mcp-client', () => {
     it('preserves success:true for normal Neo4j write results (regression)', async () => {
       // Real shape returned by a successful write_neo4j_cypher call.
       mockCallTool.mockResolvedValue({
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            _contains_updates: true,
-            nodes_created: 2,
-            relationships_created: 1,
-            properties_set: 4,
-            labels_added: 2
-          })
-        }]
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              _contains_updates: true,
+              nodes_created: 2,
+              relationships_created: 1,
+              properties_set: 4,
+              labels_added: 2,
+            }),
+          },
+        ],
       })
 
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
@@ -199,7 +199,7 @@ describe('mcp-client', () => {
 
     it('does not demote unrelated text starting with a capital word', async () => {
       mockCallTool.mockResolvedValue({
-        content: [{ type: 'text', text: 'Hello world — nothing wrong here.' }]
+        content: [{ type: 'text', text: 'Hello world — nothing wrong here.' }],
       })
 
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
@@ -231,7 +231,7 @@ describe('mcp-client', () => {
     it('does not demote text that merely contains "Error:" mid-string', async () => {
       // Anchored at start — a mid-string "Error:" must not trip demotion.
       mockCallTool.mockResolvedValue({
-        content: [{ type: 'text', text: 'The result has no Error: here' }]
+        content: [{ type: 'text', text: 'The result has no Error: here' }],
       })
 
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
@@ -252,7 +252,7 @@ describe('mcp-client', () => {
           { type: 'text', text: 'id-a' },
           { type: 'text', text: 'id-b' },
           { type: 'text', text: 'id-c' },
-        ]
+        ],
       })
 
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
@@ -268,7 +268,7 @@ describe('mcp-client', () => {
         content: [
           { type: 'text', text: '{"k":1}' },
           { type: 'text', text: '{"k":2}' },
-        ]
+        ],
       })
 
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
@@ -284,7 +284,7 @@ describe('mcp-client', () => {
         content: [
           { type: 'text', text: 'Error: something went wrong' },
           { type: 'text', text: 'trailing detail' },
-        ]
+        ],
       })
 
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
@@ -343,7 +343,8 @@ describe('mcp-client', () => {
     })
 
     it('should close the client', async () => {
-      const { getMcpClient, closeMcpClient } = await import('../../../lib/harness-patterns/mcp-client.server')
+      const { getMcpClient, closeMcpClient } =
+        await import('../../../lib/harness-patterns/mcp-client.server')
 
       // First create a client
       await getMcpClient()
@@ -379,7 +380,8 @@ describe('mcp-client', () => {
     })
 
     it('should return true after getMcpClient', async () => {
-      const { getMcpClient, isConnected } = await import('../../../lib/harness-patterns/mcp-client.server')
+      const { getMcpClient, isConnected } =
+        await import('../../../lib/harness-patterns/mcp-client.server')
 
       await getMcpClient()
 

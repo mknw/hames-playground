@@ -1,0 +1,87 @@
+# Orca (onorca.dev) project config — worktree lifecycle hooks, checked in so every
+# clone gets the same behaviour. Switch Settings → Worktree Hooks → Advanced →
+# Command Source to "orca.yaml only" for this file to take effect.
+#
+# Hook env: $ORCA_ROOT_PATH (primary checkout), $ORCA_WORKTREE_PATH, $ORCA_WORKSPACE_NAME.
+
+scripts:
+  # Runs after a worktree is created. A worktree inherits only COMMITTED state, so
+  # everything gitignored is missing and must be seeded or regenerated. Keep
+  # "Wait for setup to complete before starting agent" ON — agents need
+  # node_modules and baml_client to exist before their first command.
+  setup: |
+    set -euo pipefail
+
+    # 1. gitignored config a worktree cannot inherit from git
+    cp "$ORCA_ROOT_PATH/ui/.env"                 "$ORCA_WORKTREE_PATH/ui/.env"
+    cp "$ORCA_ROOT_PATH/configs/mcp-config.yaml" "$ORCA_WORKTREE_PATH/configs/mcp-config.yaml"
+    [ -f "$ORCA_ROOT_PATH/docker-compose.override.yml" ] && \
+      cp "$ORCA_ROOT_PATH/docker-compose.override.yml" "$ORCA_WORKTREE_PATH/" || true
+
+    # 2. Claude Code project settings: .mcp.json is tracked but the *enablement*
+    #    (enabledMcpjsonServers) and the permission allow-list live in gitignored
+    #    .claude/, so without this every lane re-prompts to approve the gateway.
+    mkdir -p "$ORCA_WORKTREE_PATH/.claude"
+    for f in settings.json settings.local.json; do
+      [ -f "$ORCA_ROOT_PATH/.claude/$f" ] && \
+        cp "$ORCA_ROOT_PATH/.claude/$f" "$ORCA_WORKTREE_PATH/.claude/$f" || true
+    done
+
+    # 3. toolchain: .envrc is `use flake`, and direnv trust is per-directory — it
+    #    does NOT travel with the worktree. Skip this and the agent silently runs
+    #    on the host toolchain instead of the nix devshell.
+    if command -v direnv >/dev/null 2>&1 && [ -f "$ORCA_WORKTREE_PATH/.envrc" ]; then
+      direnv allow "$ORCA_WORKTREE_PATH"
+      run() { direnv exec "$ORCA_WORKTREE_PATH" "$@"; }
+    else
+      run() { "$@"; }
+    fi
+
+    # 4. deps + the generated BAML client (both gitignored, both required).
+    #    Without baml-generate ~270 tests fail on a missing baml_client/inlinedbaml.
+    cd "$ORCA_WORKTREE_PATH/ui"
+    run pnpm install --frozen-lockfile
+    run pnpm baml-generate
+
+  # Runs before a worktree is archived/removed. Reports only — never blocks.
+  # Removing a worktree does NOT delete its branch, so committed work always
+  # survives; uncommitted changes do not.
+  archive: |
+    set -uo pipefail
+    cd "$ORCA_WORKTREE_PATH" 2>/dev/null || exit 0
+
+    if [ -n "$(git status --porcelain)" ]; then
+      echo "WARNING: $ORCA_WORKSPACE_NAME has uncommitted changes — archiving discards them:"
+      git status --short | head -20
+    fi
+
+    branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+    ahead="$(git rev-list --count main.."$branch" 2>/dev/null || echo 0)"
+    if [ "$ahead" != "0" ]; then
+      echo "NOTE: '$branch' has $ahead commit(s) not on main. The branch ref survives;"
+      echo "      reattach later with: git worktree add <path> $branch"
+    fi
+
+# Prompt used when an agent is started from a linked issue or PR. Encodes the
+# house rules so each lane does not have to be told them by hand.
+issueCommand: |
+  Work {{artifact_url}}.
+
+  Read CLAUDE.md first. If INSTRUCTIONS.md or STATE.md exist in this worktree they are
+  the lane brief — read them too and respect the file boundaries they declare. If you
+  conclude you must edit a file outside your declared scope, stop and surface the
+  decision rather than widening it.
+
+  Record a baseline before changing anything (from ui/: `pnpm test:run` and
+  `pnpm exec tsc --noEmit --project tsconfig.json`) and make sure neither is worse when
+  you finish. A non-zero tsc count is pre-existing backlog — do not chase it.
+
+  Commit coherent units on the current branch. Do not push and do not open PRs.
+  Omit Claude/Anthropic attribution trailers and footers from commit messages.
+
+# Deliberately NOT setting worktree.sharedDirectories for ui/node_modules:
+# pnpm hardlinks from its content-addressable store, so a cold `pnpm install
+# --frozen-lockfile` here is ~7s and costs little real disk. Sharing would help
+# marginally on macOS (APFS clone-copy) but falls back to symlinks elsewhere —
+# and a shared node_modules is actively wrong for this repo, where branches
+# legitimately differ in dependencies (#151 removed ten).

@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock server-only imports
 vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
-  assertServerOnImport: vi.fn()
+  assertServerOnImport: vi.fn(),
 }))
 
 describe('judge', () => {
@@ -43,7 +43,8 @@ describe('judge', () => {
   it('should track error when no candidates exist', async () => {
     const { judge } = await import('../../../../lib/harness-patterns/patterns/judge.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
     const evaluator = vi.fn()
     const ctx = createContext('test query')
@@ -52,10 +53,10 @@ describe('judge', () => {
     const pattern = judge(evaluator)
     const result = await pattern.fn(
       { id: 'judge', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
-    const errorEvents = result.events.filter(e => e.type === 'error')
+    const errorEvents = result.events.filter((e) => e.type === 'error')
     expect(errorEvents.length).toBeGreaterThan(0)
     expect(JSON.stringify(errorEvents[0].data)).toContain('No candidates to evaluate')
   })
@@ -63,14 +64,13 @@ describe('judge', () => {
   it('should call evaluator with candidates', async () => {
     const { judge } = await import('../../../../lib/harness-patterns/patterns/judge.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
     const evaluator = vi.fn().mockResolvedValue({
       reasoning: 'Test reasoning',
-      rankings: [
-        { source: 'pattern1', score: 0.9, reason: 'High quality' }
-      ],
-      best: { source: 'pattern1', content: 'Best result' }
+      rankings: [{ source: 'pattern1', score: 0.9, reason: 'High quality' }],
+      best: { source: 'pattern1', content: 'Best result' },
     })
 
     const ctx = createContext<{ input?: string }>('test query')
@@ -80,16 +80,13 @@ describe('judge', () => {
       type: 'tool_result',
       ts: Date.now(),
       patternId: 'pattern1',
-      data: { result: 'First result' }
+      data: { result: 'First result' },
     })
 
     const view = createEventView(ctx)
 
     const pattern = judge(evaluator)
-    await pattern.fn(
-      { id: 'judge', data: ctx.data, events: [], startTime: Date.now() },
-      view
-    )
+    await pattern.fn({ id: 'judge', data: ctx.data, events: [], startTime: Date.now() }, view)
 
     expect(evaluator).toHaveBeenCalled()
     const [query, candidates] = evaluator.mock.calls[0]
@@ -101,14 +98,13 @@ describe('judge', () => {
   it('should set best result as response', async () => {
     const { judge } = await import('../../../../lib/harness-patterns/patterns/judge.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
     const evaluator = vi.fn().mockResolvedValue({
       reasoning: 'Test reasoning',
-      rankings: [
-        { source: 'pattern1', score: 0.9, reason: 'High quality' }
-      ],
-      best: { source: 'pattern1', content: 'The best result' }
+      rankings: [{ source: 'pattern1', score: 0.9, reason: 'High quality' }],
+      best: { source: 'pattern1', content: 'The best result' },
     })
 
     const ctx = createContext<{ input?: string; response?: string }>('test query')
@@ -117,7 +113,7 @@ describe('judge', () => {
       type: 'tool_result',
       ts: Date.now(),
       patternId: 'pattern1',
-      data: { result: 'First result' }
+      data: { result: 'First result' },
     })
 
     const view = createEventView(ctx)
@@ -125,25 +121,26 @@ describe('judge', () => {
     const pattern = judge(evaluator)
     const result = await pattern.fn(
       { id: 'judge', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     expect(result.data.response).toBe('The best result')
     expect(result.data.judgeReasoning).toBe('Test reasoning')
     expect(result.data.rankings).toEqual([
-      { source: 'pattern1', score: 0.9, reason: 'High quality' }
+      { source: 'pattern1', score: 0.9, reason: 'High quality' },
     ])
   })
 
   it('should limit candidates when maxCandidates is set', async () => {
     const { judge } = await import('../../../../lib/harness-patterns/patterns/judge.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
     const evaluator = vi.fn().mockResolvedValue({
       reasoning: 'Test',
       rankings: [],
-      best: null
+      best: null,
     })
 
     const ctx = createContext<{ input?: string }>('test query')
@@ -152,16 +149,13 @@ describe('judge', () => {
     ctx.events.push(
       { type: 'tool_result', ts: Date.now(), patternId: 'p1', data: { result: '1' } },
       { type: 'tool_result', ts: Date.now(), patternId: 'p2', data: { result: '2' } },
-      { type: 'tool_result', ts: Date.now(), patternId: 'p3', data: { result: '3' } }
+      { type: 'tool_result', ts: Date.now(), patternId: 'p3', data: { result: '3' } },
     )
 
     const view = createEventView(ctx)
 
     const pattern = judge(evaluator, { maxCandidates: 2 })
-    await pattern.fn(
-      { id: 'judge', data: ctx.data, events: [], startTime: Date.now() },
-      view
-    )
+    await pattern.fn({ id: 'judge', data: ctx.data, events: [], startTime: Date.now() }, view)
 
     const [, candidates] = evaluator.mock.calls[0]
     expect(candidates.length).toBe(2)
@@ -170,12 +164,13 @@ describe('judge', () => {
   it('should track controller_action event with evaluation', async () => {
     const { judge } = await import('../../../../lib/harness-patterns/patterns/judge.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
     const evaluator = vi.fn().mockResolvedValue({
       reasoning: 'Detailed reasoning',
       rankings: [{ source: 'p1', score: 1, reason: 'Best' }],
-      best: { source: 'p1', content: 'Winner' }
+      best: { source: 'p1', content: 'Winner' },
     })
 
     const ctx = createContext<{ input?: string }>('test query')
@@ -184,7 +179,7 @@ describe('judge', () => {
       type: 'tool_result',
       ts: Date.now(),
       patternId: 'p1',
-      data: { result: 'Result' }
+      data: { result: 'Result' },
     })
 
     const view = createEventView(ctx)
@@ -192,10 +187,9 @@ describe('judge', () => {
     const pattern = judge(evaluator)
     const result = await pattern.fn(
       { id: 'judge', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
-    const actionEvents = result.events.filter(e => e.type === 'controller_action')
     // Event may be tracked differently based on config; check data directly
     expect(result.data.judgeReasoning).toBe('Detailed reasoning')
   })
@@ -203,7 +197,8 @@ describe('judge', () => {
   it('should handle evaluator errors', async () => {
     const { judge } = await import('../../../../lib/harness-patterns/patterns/judge.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
     const evaluator = vi.fn().mockRejectedValue(new Error('Evaluator failed'))
 
@@ -213,7 +208,7 @@ describe('judge', () => {
       type: 'tool_result',
       ts: Date.now(),
       patternId: 'p1',
-      data: { result: 'Result' }
+      data: { result: 'Result' },
     })
 
     const view = createEventView(ctx)
@@ -221,10 +216,10 @@ describe('judge', () => {
     const pattern = judge(evaluator)
     const result = await pattern.fn(
       { id: 'judge', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
-    const errorEvents = result.events.filter(e => e.type === 'error')
+    const errorEvents = result.events.filter((e) => e.type === 'error')
     expect(errorEvents.length).toBeGreaterThan(0)
     expect(JSON.stringify(errorEvents[0].data)).toContain('Evaluator failed')
   })
@@ -232,12 +227,13 @@ describe('judge', () => {
   it('should handle null best result', async () => {
     const { judge } = await import('../../../../lib/harness-patterns/patterns/judge.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
     const evaluator = vi.fn().mockResolvedValue({
       reasoning: 'No good results',
       rankings: [],
-      best: null
+      best: null,
     })
 
     const ctx = createContext<{ input?: string; response?: string }>('test query')
@@ -246,7 +242,7 @@ describe('judge', () => {
       type: 'tool_result',
       ts: Date.now(),
       patternId: 'p1',
-      data: { result: 'Result' }
+      data: { result: 'Result' },
     })
 
     const view = createEventView(ctx)
@@ -254,7 +250,7 @@ describe('judge', () => {
     const pattern = judge(evaluator)
     const result = await pattern.fn(
       { id: 'judge', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     expect(result.data.response).toBeUndefined()

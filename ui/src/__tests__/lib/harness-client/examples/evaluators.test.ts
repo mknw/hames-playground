@@ -21,7 +21,7 @@ const mockToolSets = {
   context7: ['resolve-library-id', 'get-library-docs', 'Return'],
   filesystem: ['read_text_file', 'write_file', 'edit_file', 'Return'],
   redis: ['hset', 'expire', 'Return'],
-  all: [] as string[]
+  all: [] as string[],
 }
 
 mockToolSets.all = [
@@ -32,27 +32,27 @@ mockToolSets.all = [
     ...mockToolSets.github,
     ...mockToolSets.context7,
     ...mockToolSets.filesystem,
-    ...mockToolSets.redis
-  ])
+    ...mockToolSets.redis,
+  ]),
 ]
 
 // Mock assert.server for all harness files
 vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
-  assertServerOnImport: vi.fn()
+  assertServerOnImport: vi.fn(),
 }))
 
 // Create mocks that we can access and modify
 const callToolMock = mockCallTool({
   responses: {
     get_neo4j_schema: { nodes: ['Person'], relationships: ['KNOWS'] },
-    read_graph: { entities: [], relations: [] }
-  }
+    read_graph: { entities: [], relations: [] },
+  },
 })
 
 // Mock MCP client
 vi.mock('../../../../lib/harness-patterns/mcp-client.server', () => ({
   callTool: callToolMock,
-  listTools: mockListTools(mockToolSets.all)
+  listTools: mockListTools(mockToolSets.all),
 }))
 
 // Mock BAML client
@@ -65,10 +65,10 @@ vi.mock('../../../../../baml_client', () => ({
       intent: 'test',
       needs_tool: true,
       route: 'neo4j',
-      response: ''
+      response: '',
     })),
-    Synthesize: vi.fn(async () => 'Synthesized response')
-  }
+    Synthesize: vi.fn(async () => 'Synthesized response'),
+  },
 }))
 
 // Mock Collector — must be a real class so `new Collector()` works
@@ -77,7 +77,7 @@ vi.mock('@boundaryml/baml', () => {
     last = {
       rawLlmResponse: 'Raw response',
       usage: { inputTokens: 100, outputTokens: 50 },
-      calls: [{ httpRequest: { body: {} } }]
+      calls: [{ httpRequest: { body: {} } }],
     }
     constructor(_name?: string) {}
   }
@@ -87,25 +87,12 @@ vi.mock('@boundaryml/baml', () => {
 // Mock Tools function
 vi.mock('../../../../lib/harness-patterns/tools.server', () => ({
   Tools: vi.fn(async () => mockToolSets),
-  ToolsFrom: vi.fn(async () => mockToolSets)
+  ToolsFrom: vi.fn(async () => mockToolSets),
 }))
 
 // ============================================================================
 // Helper Types
 // ============================================================================
-
-interface Candidate {
-  source: string
-  content: string
-}
-
-interface EvaluatorResult {
-  reasoning: string
-  rankings: Array<{ source: string; score: number; reason: string }>
-  best: Candidate | null
-}
-
-type EvaluatorFn = (query: string, candidates: Candidate[]) => Promise<EvaluatorResult>
 
 // ============================================================================
 // Multi-Source Research Evaluator Tests
@@ -121,34 +108,36 @@ describe('Multi-Source Research judgeEvaluator', () => {
   })
 
   it('should create parallel research with three sources', async () => {
-    const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
+    const { multiSourceResearchAgent } =
+      await import('../../../../lib/harness-client/examples/multi-source-research.server')
     const patterns = await multiSourceResearchAgent.createPatterns('test-session')
 
-    const parallelPattern = patterns.find(p =>
-      (p as { config: { patternId?: string } }).config.patternId === 'parallel-research'
+    const parallelPattern = patterns.find(
+      (p) => (p as { config: { patternId?: string } }).config.patternId === 'parallel-research',
     )
     expect(parallelPattern).toBeDefined()
   })
 
   it('should use quality judge for ranking', async () => {
-    const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
+    const { multiSourceResearchAgent } =
+      await import('../../../../lib/harness-client/examples/multi-source-research.server')
     const patterns = await multiSourceResearchAgent.createPatterns('test-session')
 
-    const judgePattern = patterns.find(p =>
-      (p as { config: { patternId?: string } }).config.patternId === 'quality-judge'
+    const judgePattern = patterns.find(
+      (p) => (p as { config: { patternId?: string } }).config.patternId === 'quality-judge',
     )
     expect(judgePattern).toBeDefined()
   })
 
   it('should have synthesizer for final response', async () => {
-    const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
+    const { multiSourceResearchAgent } =
+      await import('../../../../lib/harness-client/examples/multi-source-research.server')
     const patterns = await multiSourceResearchAgent.createPatterns('test-session')
 
-    const synthPattern = patterns.find(p =>
-      (p as { config: { patternId?: string } }).config.patternId === 'research-synth'
+    const synthPattern = patterns.find(
+      (p) => (p as { config: { patternId?: string } }).config.patternId === 'research-synth',
     )
     expect(synthPattern).toBeDefined()
     expect((synthPattern as { name: string }).name).toBe('synthesizer')
   })
 })
-

@@ -21,47 +21,47 @@
  * server**: the model passes structured arguments and this module composes the
  * KQL, so no model-authored operator can reshape the query it didn't write.
  */
-import { assertServerOnImport } from "../harness-patterns/assert.server";
-import { graphFetch, GraphAuthRequiredError } from "../auth/graph-token.server";
-import { conversionEnabled, isConvertible } from "../doc-convert.server";
-import { guessMimeType, isTextMime } from "../stash/upload-service.server";
-import { registerAppTool } from "./registry.server";
+import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { graphFetch, GraphAuthRequiredError } from '../auth/graph-token.server'
+import { conversionEnabled, isConvertible } from '../doc-convert.server'
+import { guessMimeType, isTextMime } from '../stash/upload-service.server'
+import { registerAppTool } from './registry.server'
 
-assertServerOnImport();
+assertServerOnImport()
 
 /** Fields we surface from `/me`. Explicit so we never dump the whole payload
  *  (which can include tenant metadata) into the model's context. */
 const ME_FIELDS = [
-  "displayName",
-  "givenName",
-  "surname",
-  "userPrincipalName",
-  "mail",
-  "jobTitle",
-  "officeLocation",
-  "preferredLanguage",
-] as const;
+  'displayName',
+  'givenName',
+  'surname',
+  'userPrincipalName',
+  'mail',
+  'jobTitle',
+  'officeLocation',
+  'preferredLanguage',
+] as const
 
 export interface GraphMeResult {
-  displayName: string | null;
-  givenName: string | null;
-  surname: string | null;
-  userPrincipalName: string | null;
-  mail: string | null;
-  jobTitle: string | null;
-  officeLocation: string | null;
-  preferredLanguage: string | null;
+  displayName: string | null
+  givenName: string | null
+  surname: string | null
+  userPrincipalName: string | null
+  mail: string | null
+  jobTitle: string | null
+  officeLocation: string | null
+  preferredLanguage: string | null
 }
 
 /** Pick + null-normalize the fields we advertise. */
 export function shapeMe(raw: unknown): GraphMeResult {
-  const src = (raw ?? {}) as Record<string, unknown>;
-  const out = {} as Record<string, string | null>;
+  const src = (raw ?? {}) as Record<string, unknown>
+  const out = {} as Record<string, string | null>
   for (const f of ME_FIELDS) {
-    const v = src[f];
-    out[f] = typeof v === "string" && v.trim() ? v : null;
+    const v = src[f]
+    out[f] = typeof v === 'string' && v.trim() ? v : null
   }
-  return out as unknown as GraphMeResult;
+  return out as unknown as GraphMeResult
 }
 
 // ============================================================================
@@ -73,10 +73,8 @@ export function shapeMe(raw: unknown): GraphMeResult {
  *  `GRAPH_TIMEZONE` if the app and its users don't share one. */
 function graphTimeZone(): string {
   return (
-    process.env.GRAPH_TIMEZONE?.trim() ||
-    Intl.DateTimeFormat().resolvedOptions().timeZone ||
-    "UTC"
-  );
+    process.env.GRAPH_TIMEZONE?.trim() || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  )
 }
 
 /**
@@ -85,30 +83,30 @@ function graphTimeZone(): string {
  * instants here — that would shift the day boundary.
  */
 export function localDayBounds(now: Date, dayOffset = 0): { start: string; end: string } {
-  const d = new Date(now);
-  d.setDate(d.getDate() + dayOffset);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  return { start: `${day}T00:00:00`, end: `${day}T23:59:59` };
+  const d = new Date(now)
+  d.setDate(d.getDate() + dayOffset)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  return { start: `${day}T00:00:00`, end: `${day}T23:59:59` }
 }
 
 export interface CalendarEvent {
-  subject: string | null;
-  start: string | null;
-  end: string | null;
-  isAllDay: boolean;
-  location: string | null;
-  organizer: string | null;
-  onlineMeetingUrl: string | null;
+  subject: string | null
+  start: string | null
+  end: string | null
+  isAllDay: boolean
+  location: string | null
+  organizer: string | null
+  onlineMeetingUrl: string | null
 }
 
 /** Flatten Graph's nested event shape into something compact for the model. */
 export function shapeEvents(raw: unknown): CalendarEvent[] {
-  const items = (raw as { value?: unknown[] })?.value;
-  if (!Array.isArray(items)) return [];
+  const items = (raw as { value?: unknown[] })?.value
+  if (!Array.isArray(items)) return []
   return items.map((it) => {
-    const e = (it ?? {}) as Record<string, unknown>;
-    const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+    const e = (it ?? {}) as Record<string, unknown>
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null)
     return {
       subject: str(e.subject),
       start: str((e.start as { dateTime?: unknown })?.dateTime),
@@ -116,39 +114,36 @@ export function shapeEvents(raw: unknown): CalendarEvent[] {
       isAllDay: e.isAllDay === true,
       location: str((e.location as { displayName?: unknown })?.displayName),
       organizer: str(
-        ((e.organizer as { emailAddress?: Record<string, unknown> })?.emailAddress
-          ?.name ??
+        ((e.organizer as { emailAddress?: Record<string, unknown> })?.emailAddress?.name ??
           (e.organizer as { emailAddress?: Record<string, unknown> })?.emailAddress
             ?.address) as unknown,
       ),
       onlineMeetingUrl: str(e.onlineMeetingUrl),
-    };
-  });
+    }
+  })
 }
 
 registerAppTool({
-  name: "graph_calendar_today",
-  namespace: "graph",
+  name: 'graph_calendar_today',
+  namespace: 'graph',
   description:
     "List the signed-in user's own calendar events for today (or another day via " +
-    "day_offset: 0=today, 1=tomorrow, -1=yesterday). Returns subject, start/end, " +
-    "location and organizer. Expands recurring meetings. Acts as the current user.",
+    'day_offset: 0=today, 1=tomorrow, -1=yesterday). Returns subject, start/end, ' +
+    'location and organizer. Expands recurring meetings. Acts as the current user.',
   inputSchema: {
-    type: "object",
+    type: 'object',
     properties: {
       day_offset: {
-        type: "integer",
-        description: "Days from today. 0=today (default), 1=tomorrow, -1=yesterday.",
+        type: 'integer',
+        description: 'Days from today. 0=today (default), 1=tomorrow, -1=yesterday.',
       },
     },
     additionalProperties: false,
   },
   execute: async (args, { userId }) => {
-    const offset = Number.isFinite(Number(args.day_offset))
-      ? Number(args.day_offset)
-      : 0;
-    const tz = graphTimeZone();
-    const { start, end } = localDayBounds(new Date(), offset);
+    const offset = Number.isFinite(Number(args.day_offset)) ? Number(args.day_offset) : 0
+    const tz = graphTimeZone()
+    const { start, end } = localDayBounds(new Date(), offset)
 
     // calendarView (not /events) so recurring series are expanded into
     // occurrences within the window.
@@ -158,37 +153,37 @@ registerAppTool({
         `&$select=subject,start,end,isAllDay,location,organizer,onlineMeetingUrl` +
         `&$orderby=start/dateTime&$top=50`,
       {
-        scopes: ["Calendars.ReadWrite"],
+        scopes: ['Calendars.ReadWrite'],
         headers: { Prefer: `outlook.timezone="${tz}"` },
       },
-    );
-    return { timeZone: tz, day: start.slice(0, 10), events: shapeEvents(raw) };
+    )
+    return { timeZone: tz, day: start.slice(0, 10), events: shapeEvents(raw) }
   },
-});
+})
 
 // ============================================================================
 // Mail
 // ============================================================================
 
 export interface MailMessage {
-  subject: string | null;
-  from: string | null;
-  received: string | null;
-  isRead: boolean;
-  hasAttachments: boolean;
-  preview: string | null;
-  webLink: string | null;
+  subject: string | null
+  from: string | null
+  received: string | null
+  isRead: boolean
+  hasAttachments: boolean
+  preview: string | null
+  webLink: string | null
 }
 
 /** Compact Graph's message shape; `bodyPreview` is truncated to keep turns small. */
 export function shapeMessages(raw: unknown): MailMessage[] {
-  const items = (raw as { value?: unknown[] })?.value;
-  if (!Array.isArray(items)) return [];
+  const items = (raw as { value?: unknown[] })?.value
+  if (!Array.isArray(items)) return []
   return items.map((it) => {
-    const m = (it ?? {}) as Record<string, unknown>;
-    const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
-    const sender = (m.from as { emailAddress?: Record<string, unknown> })?.emailAddress;
-    const preview = str(m.bodyPreview);
+    const m = (it ?? {}) as Record<string, unknown>
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null)
+    const sender = (m.from as { emailAddress?: Record<string, unknown> })?.emailAddress
+    const preview = str(m.bodyPreview)
     return {
       subject: str(m.subject),
       from: str((sender?.name ?? sender?.address) as unknown),
@@ -197,34 +192,34 @@ export function shapeMessages(raw: unknown): MailMessage[] {
       hasAttachments: m.hasAttachments === true,
       preview: preview ? preview.slice(0, 300) : null,
       webLink: str(m.webLink),
-    };
-  });
+    }
+  })
 }
 
 registerAppTool({
-  name: "graph_mail_recent",
-  namespace: "graph",
+  name: 'graph_mail_recent',
+  namespace: 'graph',
   description:
     "List recent messages from the signed-in user's inbox, newest first. Set " +
-    "unread_only=true for just unread mail. Returns sender, subject, received " +
-    "time and a short preview — not full bodies. Acts as the current user.",
+    'unread_only=true for just unread mail. Returns sender, subject, received ' +
+    'time and a short preview — not full bodies. Acts as the current user.',
   inputSchema: {
-    type: "object",
+    type: 'object',
     properties: {
       unread_only: {
-        type: "boolean",
-        description: "Only unread messages (default false).",
+        type: 'boolean',
+        description: 'Only unread messages (default false).',
       },
       limit: {
-        type: "integer",
-        description: "How many messages to return, 1-25 (default 10).",
+        type: 'integer',
+        description: 'How many messages to return, 1-25 (default 10).',
       },
     },
     additionalProperties: false,
   },
   execute: async (args, { userId }) => {
-    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25);
-    const unreadOnly = args.unread_only === true;
+    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
+    const unreadOnly = args.unread_only === true
 
     // Inbox specifically (not all folders), so Sent/Archive don't pollute
     // "recent mail". $filter + $orderby together is supported on messages.
@@ -233,64 +228,62 @@ registerAppTool({
       `/me/mailFolders/inbox/messages?$top=${limit}` +
         `&$select=subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview,webLink` +
         `&$orderby=receivedDateTime desc` +
-        (unreadOnly ? `&$filter=isRead eq false` : ""),
-      { scopes: ["Mail.Read"] },
-    );
-    return { unreadOnly, messages: shapeMessages(raw) };
+        (unreadOnly ? `&$filter=isRead eq false` : ''),
+      { scopes: ['Mail.Read'] },
+    )
+    return { unreadOnly, messages: shapeMessages(raw) }
   },
-});
+})
 
 registerAppTool({
-  name: "graph_me",
-  namespace: "graph",
+  name: 'graph_me',
+  namespace: 'graph',
   description:
     "Get the signed-in user's own Microsoft 365 profile (name, work email/UPN, " +
-    "job title, office, language). Acts as the current user — no user or token " +
-    "argument is accepted or needed.",
+    'job title, office, language). Acts as the current user — no user or token ' +
+    'argument is accepted or needed.',
   // No parameters at all: the identity is the request's authenticated user.
-  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   execute: async (_args, { userId }) => {
-    const raw = await graphFetch(
-      userId,
-      `/me?$select=${ME_FIELDS.join(",")}`,
-      { scopes: ["User.Read"] },
-    );
-    return shapeMe(raw);
+    const raw = await graphFetch(userId, `/me?$select=${ME_FIELDS.join(',')}`, {
+      scopes: ['User.Read'],
+    })
+    return shapeMe(raw)
   },
-});
+})
 
 // ============================================================================
 // Files → Data Stash
 // ============================================================================
 
 /** Narrowest scope that can read a driveItem and its content. */
-const FILE_SCOPES = ["Files.Read.All"] as const;
+const FILE_SCOPES = ['Files.Read.All'] as const
 
 /** driveItem fields we need: enough to name, classify and size-check the file.
  *  Explicit because a full driveItem carries a lot we'd never use. */
-const DRIVE_ITEM_SELECT = "name,file,size,webUrl";
+const DRIVE_ITEM_SELECT = 'name,file,size,webUrl'
 
 /** What the model gets back. Notably **not** the content: the bytes go to the
  *  Data Stash, and `documentId` is how later turns reach them. */
 export interface GraphFileIngestResult {
-  documentId: string;
-  filename: string;
-  mimeType: string;
+  documentId: string
+  filename: string
+  mimeType: string
   /** Stored size in bytes (original bytes, not the base64 expansion). */
-  size: number;
+  size: number
   /** A background chunk→embed→index was started for this document. */
-  ingesting: boolean;
+  ingesting: boolean
   /** Provenance — the file's Microsoft 365 link, for citing back to the person. */
-  webUrl: string | null;
+  webUrl: string | null
 }
 
 interface DriveItemMeta {
-  name: string | null;
-  mimeType: string | null;
+  name: string | null
+  mimeType: string | null
   /** Byte size, or null when Graph didn't report one. */
-  size: number | null;
-  webUrl: string | null;
-  isFile: boolean;
+  size: number | null
+  webUrl: string | null
+  isFile: boolean
 }
 
 /**
@@ -299,26 +292,26 @@ interface DriveItemMeta {
  * (`../`) and address an unrelated Graph resource.
  */
 export function driveItemPath(itemId: string, driveId?: string | null): string {
-  const item = encodeURIComponent(itemId);
+  const item = encodeURIComponent(itemId)
   return driveId
     ? `/drives/${encodeURIComponent(driveId)}/items/${item}`
-    : `/me/drive/items/${item}`;
+    : `/me/drive/items/${item}`
 }
 
 /** Pick the four things we need off a driveItem, tolerating a partial payload. */
 export function shapeDriveItem(raw: unknown): DriveItemMeta {
-  const it = (raw ?? {}) as Record<string, unknown>;
-  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
-  const file = it.file as Record<string, unknown> | undefined;
+  const it = (raw ?? {}) as Record<string, unknown>
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null)
+  const file = it.file as Record<string, unknown> | undefined
   return {
     name: str(it.name),
     mimeType: str(file?.mimeType),
-    size: typeof it.size === "number" && Number.isFinite(it.size) ? it.size : null,
+    size: typeof it.size === 'number' && Number.isFinite(it.size) ? it.size : null,
     webUrl: str(it.webUrl),
     // The `file` facet is what distinguishes a file from a folder or package —
     // `$select=file` returns it for files only.
-    isFile: file != null && typeof file === "object",
-  };
+    isFile: file != null && typeof file === 'object',
+  }
 }
 
 /**
@@ -337,46 +330,44 @@ function translateIngestDenial(err: unknown, itemId: string): unknown {
   if (err instanceof GraphAuthRequiredError && err.status === 403) {
     return new Error(
       `Microsoft 365 denied access to item ${itemId} (403). This is a per-item denial, ` +
-        "not a sign-in problem — signing in again will not help. Items stored in " +
-        "SharePoint Embedded containers (Microsoft Loop pages and workspaces) are not " +
+        'not a sign-in problem — signing in again will not help. Items stored in ' +
+        'SharePoint Embedded containers (Microsoft Loop pages and workspaces) are not ' +
         "readable with the app's delegated permissions (#137); only their search " +
-        "metadata (title, link, snippet) is available. Relay that metadata instead. " +
-        "If this is an ordinary file, the account may genuinely lack access to it.",
-    );
+        'metadata (title, link, snippet) is available. Relay that metadata instead. ' +
+        'If this is an ordinary file, the account may genuinely lack access to it.',
+    )
   }
-  return err;
+  return err
 }
 
 registerAppTool({
-  name: "graph_file_ingest",
-  namespace: "graph",
+  name: 'graph_file_ingest',
+  namespace: 'graph',
   description:
     "Copy one of the signed-in person's own Microsoft 365 files (OneDrive or " +
     "SharePoint) into this conversation's Data Stash, so later turns can search " +
-    "it, read it or hand it to the sandbox. Identify the file by item_id, " +
-    "optionally with drive_id for a shared/SharePoint drive. Text files become " +
-    "searchable automatically; other formats are stored as-is. Returns the stash " +
-    "document id and metadata — never the file contents. Acts as the current " +
-    "signed-in person.",
+    'it, read it or hand it to the sandbox. Identify the file by item_id, ' +
+    'optionally with drive_id for a shared/SharePoint drive. Text files become ' +
+    'searchable automatically; other formats are stored as-is. Returns the stash ' +
+    'document id and metadata — never the file contents. Acts as the current ' +
+    'signed-in person.',
   inputSchema: {
-    type: "object",
+    type: 'object',
     properties: {
       item_id: {
-        type: "string",
-        description: "Microsoft Graph driveItem id of the file to copy.",
+        type: 'string',
+        description: 'Microsoft Graph driveItem id of the file to copy.',
       },
       drive_id: {
-        type: "string",
-        description:
-          "Drive holding the item. Omit for the signed-in person's own OneDrive.",
+        type: 'string',
+        description: "Drive holding the item. Omit for the signed-in person's own OneDrive.",
       },
       filename: {
-        type: "string",
-        description:
-          "Override the stored filename. Defaults to the name in Microsoft 365.",
+        type: 'string',
+        description: 'Override the stored filename. Defaults to the name in Microsoft 365.',
       },
     },
-    required: ["item_id"],
+    required: ['item_id'],
     additionalProperties: false,
   },
   execute: async (args, { userId, sessionId }): Promise<GraphFileIngestResult> => {
@@ -386,17 +377,16 @@ registerAppTool({
     if (!sessionId) {
       throw new Error(
         "graph_file_ingest stores the file in the current conversation's Data Stash, " +
-          "and no conversation is in scope for this call. Run it from a chat turn or " +
-          "a triggered action run.",
-      );
+          'and no conversation is in scope for this call. Run it from a chat turn or ' +
+          'a triggered action run.',
+      )
     }
-    const itemId = typeof args.item_id === "string" ? args.item_id.trim() : "";
+    const itemId = typeof args.item_id === 'string' ? args.item_id.trim() : ''
     if (!itemId) {
-      throw new Error("item_id is required — the Microsoft Graph driveItem id of the file.");
+      throw new Error('item_id is required — the Microsoft Graph driveItem id of the file.')
     }
-    const driveId =
-      typeof args.drive_id === "string" ? args.drive_id.trim() || null : null;
-    const base = driveItemPath(itemId, driveId);
+    const driveId = typeof args.drive_id === 'string' ? args.drive_id.trim() || null : null
+    const base = driveItemPath(itemId, driveId)
 
     // Metadata first — and separately from the download — because it carries the
     // size, which is how an oversized file is refused BEFORE its bytes are in
@@ -405,20 +395,20 @@ registerAppTool({
       await graphFetch(userId, `${base}?$select=${DRIVE_ITEM_SELECT}`, {
         scopes: FILE_SCOPES,
       }).catch((err) => {
-        throw translateIngestDenial(err, itemId);
+        throw translateIngestDenial(err, itemId)
       }),
-    );
+    )
     if (!meta.isFile) {
       throw new Error(
         `Microsoft 365 item ${itemId} has no file content — it is probably a folder. ` +
-          "Pass the id of a file.",
-      );
+          'Pass the id of a file.',
+      )
     }
 
     // The Data Stash layer is imported lazily: it pulls in ioredis and the whole
     // chunk/embed/vector stack, and `mcp-client.server.ts` imports this registry
     // eagerly for *every* harness run — including deployments with no stash.
-    const { storeDocument, MAX_CONTENT_BYTES } = await import("../document-store.server");
+    const { storeDocument, MAX_CONTENT_BYTES } = await import('../document-store.server')
     // A missing size (Graph reports one for every file in practice) is not
     // treated as oversized; `storeDocument` re-checks the limit on the decoded
     // bytes, so an unreported giant still can't be stored.
@@ -426,13 +416,13 @@ registerAppTool({
       throw new Error(
         `"${meta.name ?? itemId}" is ${meta.size} bytes, above the Data Stash limit of ` +
           `${MAX_CONTENT_BYTES} bytes, so it was not downloaded. Use a smaller file or ` +
-          "an extract of this one.",
-      );
+          'an extract of this one.',
+      )
     }
 
-    const override = typeof args.filename === "string" ? args.filename.trim() : "";
-    const filename = override || meta.name || `driveitem-${itemId}`;
-    const mimeType = meta.mimeType ?? guessMimeType(filename);
+    const override = typeof args.filename === 'string' ? args.filename.trim() : ''
+    const filename = override || meta.name || `driveitem-${itemId}`
+    const mimeType = meta.mimeType ?? guessMimeType(filename)
 
     // Always download bytes, then decide how to STORE them — mirroring the
     // upload route's intake: text formats go in as UTF-8 (the chunker reads
@@ -440,42 +430,42 @@ registerAppTool({
     // `/work` round-trip and `?download` still serve the real file.
     const encoded = await graphFetch(userId, `${base}/content`, {
       scopes: FILE_SCOPES,
-      responseType: "base64",
+      responseType: 'base64',
     }).catch((err) => {
-      throw translateIngestDenial(err, itemId);
-    });
-    if (typeof encoded !== "string") {
-      throw new Error(`Microsoft 365 returned no content for "${filename}".`);
+      throw translateIngestDenial(err, itemId)
+    })
+    if (typeof encoded !== 'string') {
+      throw new Error(`Microsoft 365 returned no content for "${filename}".`)
     }
-    const isText = isTextMime(mimeType);
-    const content = isText ? Buffer.from(encoded, "base64").toString("utf8") : encoded;
+    const isText = isTextMime(mimeType)
+    const content = isText ? Buffer.from(encoded, 'base64').toString('utf8') : encoded
 
     // Same gate as the upload route: a binary is only worth ingesting when we can
     // turn it into text; otherwise `ingestStashDocument` would only mark it
     // failed. Unlike that route we do NOT also require the agent to compose a
     // redis retriever — calling this tool is an explicit request to make the file
     // usable, and a retriever added later reads an already-indexed corpus.
-    const ingesting = isText || (conversionEnabled() && isConvertible(mimeType));
+    const ingesting = isText || (conversionEnabled() && isConvertible(mimeType))
 
     const doc = await storeDocument({
       sessionId,
       filename,
       mimeType,
       content,
-      ...(isText ? {} : { encoding: "base64" as const }),
+      ...(isText ? {} : { encoding: 'base64' as const }),
       // Persist 'pending' in the FIRST write (as the upload route does) so a
       // status poll can never read a doc with no ingest status and flicker.
-      ...(ingesting ? { ingestStatus: "pending" as const } : {}),
-    });
+      ...(ingesting ? { ingestStatus: 'pending' as const } : {}),
+    })
 
     if (ingesting) {
       // Fire-and-forget, mirroring `POST /api/stash/upload`: embedding is slow
       // and the tool result must come back inside the turn. Failures are
       // recorded in the document's `ingestStatus`, which is why the rejection is
       // swallowed here rather than surfaced.
-      void import("../document-ingest.server")
+      void import('../document-ingest.server')
         .then(({ ingestStashDocument }) => ingestStashDocument(sessionId, doc.id))
-        .catch(() => {});
+        .catch(() => {})
     }
 
     return {
@@ -485,9 +475,9 @@ registerAppTool({
       size: doc.size,
       ingesting,
       webUrl: meta.webUrl,
-    };
+    }
   },
-});
+})
 
 // ============================================================================
 // Files — search and browse
@@ -500,13 +490,13 @@ registerAppTool({
 /** Search reaches SharePoint as well as OneDrive, so it needs the sites scope on
  *  top of the file scope. Kept separate from `FILE_SCOPES` so browsing and
  *  ingesting stay on the narrower one. */
-const FILE_SEARCH_SCOPES = [...FILE_SCOPES, "Sites.Read.All"] as const;
+const FILE_SEARCH_SCOPES = [...FILE_SCOPES, 'Sites.Read.All'] as const
 
 /** driveItem fields the browse tool reads. Explicit for the same reason as
  *  `DRIVE_ITEM_SELECT`, plus `parentReference` (the drive id + folder path) and
  *  `remoteItem` (a OneDrive root holds shortcuts to other drives as stubs). */
 const DRIVE_ITEM_LIST_SELECT =
-  "id,name,file,folder,size,webUrl,lastModifiedDateTime,parentReference,remoteItem";
+  'id,name,file,folder,size,webUrl,lastModifiedDateTime,parentReference,remoteItem'
 
 // ----------------------------------------------------------------------------
 // KQL composition — the app owns the query language
@@ -523,14 +513,18 @@ const DRIVE_ITEM_LIST_SELECT =
 
 /** What can end a quoted value or break the request line: the quote itself,
  *  plus C0 control characters and DEL. */
-const PHRASE_UNSAFE = /["\u0000-\u001f\u007f]+/g;
+// Matching control characters is the entire point here: they are what would let
+// user input break out of a KQL clause.
+// eslint-disable-next-line no-control-regex
+const PHRASE_UNSAFE = /["\u0000-\u001f\u007f]+/g
 
 /** For unquoted terms, also the operators: `(` `)` group clauses, and `:` `<`
  *  `>` `=` are what bind a value to a managed property (`filetype:exe`). */
-const TERM_UNSAFE = /["():<>=\u0000-\u001f\u007f]+/g;
+// eslint-disable-next-line no-control-regex -- see PHRASE_UNSAFE above.
+const TERM_UNSAFE = /["():<>=\u0000-\u001f\u007f]+/g
 
 /** KQL's boolean and ranking keywords, which it honours in upper case only. */
-const KQL_KEYWORDS = /\b(AND|OR|NOT|NEAR|ONEAR|XRANK)\b/g;
+const KQL_KEYWORDS = /\b(AND|OR|NOT|NEAR|ONEAR|XRANK)\b/g
 
 /**
  * Quote a URL as a KQL value — today the `path:` site restriction.
@@ -547,7 +541,7 @@ const KQL_KEYWORDS = /\b(AND|OR|NOT|NEAR|ONEAR|XRANK)\b/g;
  * last because removing an unsafe character can itself leave a gap behind.
  */
 export function kqlUrlPhrase(value: string): string {
-  return `"${value.replace(PHRASE_UNSAFE, "").replace(/\s+/g, "")}"`;
+  return `"${value.replace(PHRASE_UNSAFE, '').replace(/\s+/g, '')}"`
 }
 
 /**
@@ -564,8 +558,8 @@ export function kqlUrlPhrase(value: string): string {
  * only structure in the composed query is the structure we added.
  */
 export function kqlTerms(value: string): string {
-  const cleaned = value.replace(TERM_UNSAFE, " ").replace(/\s+/g, " ").trim();
-  return cleaned.replace(KQL_KEYWORDS, (op) => op.toLowerCase());
+  const cleaned = value.replace(TERM_UNSAFE, ' ').replace(/\s+/g, ' ').trim()
+  return cleaned.replace(KQL_KEYWORDS, (op) => op.toLowerCase())
 }
 
 /**
@@ -577,8 +571,8 @@ export function kqlTerms(value: string): string {
  * (`.pdf`) is tolerated because models write it.
  */
 export function kqlFileType(value: string): string | null {
-  const match = /[a-z0-9]+/i.exec(value.trim().replace(/^\.+/, ""));
-  return match ? `filetype:${match[0].toLowerCase()}` : null;
+  const match = /[a-z0-9]+/i.exec(value.trim().replace(/^\.+/, ''))
+  return match ? `filetype:${match[0].toLowerCase()}` : null
 }
 
 /**
@@ -591,8 +585,8 @@ export function kqlFileType(value: string): string | null {
  * Null when nothing survives, so the clause is dropped like `site`/`file_type`.
  */
 export function kqlPhrase(value: string): string | null {
-  const cleaned = value.replace(PHRASE_UNSAFE, "").replace(/\s+/g, " ").trim();
-  return cleaned ? `"${cleaned}"` : null;
+  const cleaned = value.replace(PHRASE_UNSAFE, '').replace(/\s+/g, ' ').trim()
+  return cleaned ? `"${cleaned}"` : null
 }
 
 /**
@@ -616,33 +610,33 @@ export function kqlModifiedRange(
   before: string | null | undefined,
 ): string | null {
   const day = (raw: string, argName: string): string => {
-    const d = new Date(raw.trim());
+    const d = new Date(raw.trim())
     if (Number.isNaN(d.getTime())) {
-      throw new Error(`${argName} must be a date like 2026-07-01 (got "${raw}").`);
+      throw new Error(`${argName} must be a date like 2026-07-01 (got "${raw}").`)
     }
-    return d.toISOString().slice(0, 10);
-  };
-  const a = after?.trim() ? day(after, "modified_after") : null;
-  const b = before?.trim() ? day(before, "modified_before") : null;
-  if (a && b) return `LastModifiedTime:${a}..${b}`;
-  if (a) return `LastModifiedTime>=${a}`;
-  if (b) return `LastModifiedTime<=${b}`;
-  return null;
+    return d.toISOString().slice(0, 10)
+  }
+  const a = after?.trim() ? day(after, 'modified_after') : null
+  const b = before?.trim() ? day(before, 'modified_before') : null
+  if (a && b) return `LastModifiedTime:${a}..${b}`
+  if (a) return `LastModifiedTime>=${a}`
+  if (b) return `LastModifiedTime<=${b}`
+  return null
 }
 
 export interface FileSearchArgs {
   /** Free-text terms from the caller. */
-  query: string;
+  query: string
   /** SharePoint site URL to restrict to, composed as `path:"…"`. */
-  site?: string | null;
+  site?: string | null
   /** File extension to restrict to, composed as `filetype:…`. */
-  fileType?: string | null;
+  fileType?: string | null
   /** Author display name, composed as `author:"…"`. */
-  author?: string | null;
+  author?: string | null
   /** ISO-ish dates, composed as a `LastModifiedTime` restriction. Invalid
    *  values THROW (see kqlModifiedRange). */
-  modifiedAfter?: string | null;
-  modifiedBefore?: string | null;
+  modifiedAfter?: string | null
+  modifiedBefore?: string | null
 }
 
 /**
@@ -667,26 +661,26 @@ export function composeFileQuery({
   modifiedAfter,
   modifiedBefore,
 }: FileSearchArgs): string {
-  const parts: string[] = [];
+  const parts: string[] = []
 
-  const terms = kqlTerms(query ?? "");
-  if (terms) parts.push(terms);
+  const terms = kqlTerms(query ?? '')
+  if (terms) parts.push(terms)
 
-  const type = fileType?.trim() ? kqlFileType(fileType) : null;
-  if (type) parts.push(type);
+  const type = fileType?.trim() ? kqlFileType(fileType) : null
+  if (type) parts.push(type)
 
   // `path:` is the documented way to scope Microsoft Search to one site (KQL has
   // no `site:` operator — that's Purview eDiscovery). The value is a URL, so it
   // needs quoting: it contains `:` and `/`.
-  if (site?.trim()) parts.push(`path:${kqlUrlPhrase(site)}`);
+  if (site?.trim()) parts.push(`path:${kqlUrlPhrase(site)}`)
 
-  const byAuthor = author?.trim() ? kqlPhrase(author) : null;
-  if (byAuthor) parts.push(`author:${byAuthor}`);
+  const byAuthor = author?.trim() ? kqlPhrase(author) : null
+  if (byAuthor) parts.push(`author:${byAuthor}`)
 
-  const modified = kqlModifiedRange(modifiedAfter, modifiedBefore);
-  if (modified) parts.push(modified);
+  const modified = kqlModifiedRange(modifiedAfter, modifiedBefore)
+  if (modified) parts.push(modified)
 
-  return parts.join(" ");
+  return parts.join(' ')
 }
 
 // ----------------------------------------------------------------------------
@@ -704,13 +698,13 @@ export function composeFileQuery({
  * 25-result search blows a turn.
  */
 export function cleanSummary(raw: unknown): string | null {
-  if (typeof raw !== "string") return null;
+  if (typeof raw !== 'string') return null
   const text = raw
-    .replace(/<\/?c\d+>/gi, "")
-    .replace(/<ddd\s*\/?>/gi, "…")
-    .replace(/\s+/g, " ")
-    .trim();
-  return text ? text.slice(0, 300) : null;
+    .replace(/<\/?c\d+>/gi, '')
+    .replace(/<ddd\s*\/?>/gi, '…')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return text ? text.slice(0, 300) : null
 }
 
 /**
@@ -723,16 +717,16 @@ export function cleanSummary(raw: unknown): string | null {
  * after `root:` and is reported as `/`.
  */
 export function drivePath(raw: unknown): string | null {
-  if (typeof raw !== "string" || !raw.trim()) return null;
-  const marker = raw.indexOf("root:");
-  const rel = (marker >= 0 ? raw.slice(marker + "root:".length) : raw).replace(/^\/+/, "");
-  if (!rel) return "/";
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  const marker = raw.indexOf('root:')
+  const rel = (marker >= 0 ? raw.slice(marker + 'root:'.length) : raw).replace(/^\/+/, '')
+  if (!rel) return '/'
   try {
-    return decodeURIComponent(rel);
+    return decodeURIComponent(rel)
   } catch {
     // A malformed escape (`%zz`) must not fail the whole search — a slightly
     // ugly path is a better result than no results.
-    return rel;
+    return rel
   }
 }
 
@@ -751,22 +745,22 @@ export function drivePath(raw: unknown): string | null {
  * person or a model citing where a file lives.
  */
 export function webUrlFolderPath(webUrl: unknown): string | null {
-  if (typeof webUrl !== "string" || !webUrl.trim()) return null;
+  if (typeof webUrl !== 'string' || !webUrl.trim()) return null
   try {
-    const url = new URL(webUrl);
-    if (!url.hostname.toLowerCase().endsWith(".sharepoint.com")) return null;
-    if (url.pathname.includes("/_layouts/")) return null;
-    const segments = url.pathname.split("/").filter(Boolean);
-    if (segments.length < 2) return null; // nothing left once the item goes
-    const folder = segments.slice(0, -1).join("/");
+    const url = new URL(webUrl)
+    if (!url.hostname.toLowerCase().endsWith('.sharepoint.com')) return null
+    if (url.pathname.includes('/_layouts/')) return null
+    const segments = url.pathname.split('/').filter(Boolean)
+    if (segments.length < 2) return null // nothing left once the item goes
+    const folder = segments.slice(0, -1).join('/')
     try {
-      return decodeURIComponent(folder);
+      return decodeURIComponent(folder)
     } catch {
       // Malformed escape — an ugly path beats no path (same rule as drivePath).
-      return folder;
+      return folder
     }
   } catch {
-    return null;
+    return null
   }
 }
 
@@ -777,36 +771,36 @@ export function webUrlFolderPath(webUrl: unknown): string | null {
  * An id with no hostname is passed through rather than invented over.
  */
 export function siteHost(raw: unknown): string | null {
-  if (typeof raw !== "string" || !raw.trim()) return null;
-  return raw.split(",")[0].trim() || null;
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  return raw.split(',')[0].trim() || null
 }
 
 /** What a found file looks like, whether it came from search or from browsing. */
 export interface GraphFileRef {
-  name: string | null;
+  name: string | null
   /** Containing folder relative to the drive root; `/` at the root itself. */
-  path: string | null;
+  path: string | null
   /** SharePoint host the item lives on, or null for a plain OneDrive item. */
-  site: string | null;
-  modified: string | null;
-  size: number | null;
+  site: string | null
+  modified: string | null
+  size: number | null
   /** Half of the handoff to the tools that act on a file — always surfaced. */
-  drive_id: string | null;
+  drive_id: string | null
   /** The other half: the item's *own* id, not its parent's. */
-  item_id: string | null;
-  webUrl: string | null;
+  item_id: string | null
+  webUrl: string | null
 }
 
 export interface GraphFileHit extends GraphFileRef {
   /** Matched text, markup stripped. Null when Search returned no summary. */
-  snippet: string | null;
+  snippet: string | null
 }
 
 export interface GraphFileEntry extends GraphFileRef {
-  isFolder: boolean;
+  isFolder: boolean
   /** Items inside a folder; null for a file, so the model can tell "empty
    *  folder" from "not a folder". */
-  child_count: number | null;
+  child_count: number | null
 }
 
 /**
@@ -817,11 +811,11 @@ export interface GraphFileEntry extends GraphFileRef {
  * tool that reads content would 404.
  */
 function unwrapRemote(raw: unknown): Record<string, unknown> {
-  const it = (raw ?? {}) as Record<string, unknown>;
-  const remote = it.remoteItem;
-  return remote && typeof remote === "object"
+  const it = (raw ?? {}) as Record<string, unknown>
+  const remote = it.remoteItem
+  return remote && typeof remote === 'object'
     ? { ...it, ...(remote as Record<string, unknown>) }
-    : it;
+    : it
 }
 
 /**
@@ -831,10 +825,10 @@ function unwrapRemote(raw: unknown): Record<string, unknown> {
  * needs to navigate or to hand the file on.
  */
 export function shapeFileRef(raw: unknown): GraphFileRef {
-  const it = unwrapRemote(raw);
-  const base = shapeDriveItem(it);
-  const parent = (it.parentReference ?? {}) as Record<string, unknown>;
-  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+  const it = unwrapRemote(raw)
+  const base = shapeDriveItem(it)
+  const parent = (it.parentReference ?? {}) as Record<string, unknown>
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null)
   return {
     name: base.name,
     // Search hits never carry `parentReference.path` — fall back to reading
@@ -848,7 +842,7 @@ export function shapeFileRef(raw: unknown): GraphFileRef {
     // point every downstream call at the wrong resource.
     item_id: str(it.id),
     webUrl: base.webUrl,
-  };
+  }
 }
 
 /**
@@ -861,151 +855,150 @@ export function shapeFileRef(raw: unknown): GraphFileRef {
  * some result sets and a fabricated 0 would read as "nothing found".
  */
 export function shapeSearchHits(raw: unknown): {
-  total: number | null;
-  results: GraphFileHit[];
+  total: number | null
+  results: GraphFileHit[]
 } {
-  const responses = (raw as { value?: unknown[] })?.value;
-  if (!Array.isArray(responses)) return { total: null, results: [] };
+  const responses = (raw as { value?: unknown[] })?.value
+  if (!Array.isArray(responses)) return { total: null, results: [] }
 
-  const results: GraphFileHit[] = [];
-  let total: number | null = null;
+  const results: GraphFileHit[] = []
+  let total: number | null = null
 
   for (const response of responses) {
-    const containers = (response as { hitsContainers?: unknown[] })?.hitsContainers;
-    if (!Array.isArray(containers)) continue;
+    const containers = (response as { hitsContainers?: unknown[] })?.hitsContainers
+    if (!Array.isArray(containers)) continue
     for (const container of containers) {
-      const c = (container ?? {}) as { hits?: unknown[]; total?: unknown };
-      if (typeof c.total === "number" && Number.isFinite(c.total)) {
-        total = (total ?? 0) + c.total;
+      const c = (container ?? {}) as { hits?: unknown[]; total?: unknown }
+      if (typeof c.total === 'number' && Number.isFinite(c.total)) {
+        total = (total ?? 0) + c.total
       }
-      if (!Array.isArray(c.hits)) continue;
+      if (!Array.isArray(c.hits)) continue
       for (const hit of c.hits) {
-        const h = (hit ?? {}) as Record<string, unknown>;
-        const ref = shapeFileRef(h.resource);
+        const h = (hit ?? {}) as Record<string, unknown>
+        const ref = shapeFileRef(h.resource)
         results.push({
           ...ref,
           // For a driveItem hit `hitId` *is* the item id, which makes it the
           // fallback when a hit came back without its resource expanded.
-          item_id: ref.item_id ?? (typeof h.hitId === "string" ? h.hitId : null),
+          item_id: ref.item_id ?? (typeof h.hitId === 'string' ? h.hitId : null),
           snippet: cleanSummary(h.summary),
-        });
+        })
       }
     }
   }
-  return { total, results };
+  return { total, results }
 }
 
 /** Flatten a driveItem collection (a `children` listing) for browsing. */
 export function shapeFileEntries(raw: unknown): GraphFileEntry[] {
-  const items = (raw as { value?: unknown[] })?.value;
-  if (!Array.isArray(items)) return [];
+  const items = (raw as { value?: unknown[] })?.value
+  if (!Array.isArray(items)) return []
   return items.map((item) => {
-    const it = unwrapRemote(item);
-    const folder = it.folder as Record<string, unknown> | undefined;
+    const it = unwrapRemote(item)
+    const folder = it.folder as Record<string, unknown> | undefined
     // The `folder` facet is the counterpart of `file`: present on folders only.
-    const isFolder = folder != null && typeof folder === "object";
-    const count = folder?.childCount;
+    const isFolder = folder != null && typeof folder === 'object'
+    const count = folder?.childCount
     return {
       ...shapeFileRef(it),
       isFolder,
-      child_count:
-        isFolder && typeof count === "number" && Number.isFinite(count) ? count : null,
-    };
-  });
+      child_count: isFolder && typeof count === 'number' && Number.isFinite(count) ? count : null,
+    }
+  })
 }
 
 export interface GraphFileSearchResult {
   /** The KQL the app composed, so the model can see how its arguments were
    *  read — and correct them — instead of guessing why a filter didn't bite. */
-  query: string;
+  query: string
   /** Graph's reported match count; null when Search didn't report one. */
-  total: number | null;
-  results: GraphFileHit[];
+  total: number | null
+  results: GraphFileHit[]
   /** Steering for the model when `total` exceeds what was returned: the raw
    *  number alone wasn't acted on (observed: a 4,502-match search answered by
    *  raising `limit`). Present only when triggered. */
-  hint?: string;
+  hint?: string
 }
 
 registerAppTool({
-  name: "graph_files_search",
-  namespace: "graph",
+  name: 'graph_files_search',
+  namespace: 'graph',
   description:
-    "Search the files the signed-in person can open — their own OneDrive and " +
-    "every SharePoint site they have access to. Pass plain words in `query`: the " +
-    "app builds the search expression, so search syntax is neither needed nor " +
-    "honoured. Narrow with `site` (a SharePoint site URL), `file_type` (an " +
+    'Search the files the signed-in person can open — their own OneDrive and ' +
+    'every SharePoint site they have access to. Pass plain words in `query`: the ' +
+    'app builds the search expression, so search syntax is neither needed nor ' +
+    'honoured. Narrow with `site` (a SharePoint site URL), `file_type` (an ' +
     "extension like docx or pdf), `author` (a person's name), or " +
-    "`modified_after` / `modified_before` (dates). Set sort=\"newest\" for " +
+    '`modified_after` / `modified_before` (dates). Set sort="newest" for ' +
     "most-recently-modified first. Returns each file's name, folder, site, " +
-    "modified date, size and a snippet of the matched text, plus the drive_id + " +
-    "item_id pair that identifies a file to the tools that act on one. Acts as " +
-    "the current signed-in person.",
+    'modified date, size and a snippet of the matched text, plus the drive_id + ' +
+    'item_id pair that identifies a file to the tools that act on one. Acts as ' +
+    'the current signed-in person.',
   inputSchema: {
-    type: "object",
+    type: 'object',
     properties: {
       query: {
-        type: "string",
+        type: 'string',
         description:
           'Words to look for, e.g. "q3 budget forecast". Plain terms only — ' +
-          "operators and field:value syntax are stripped, not interpreted.",
+          'operators and field:value syntax are stripped, not interpreted.',
       },
       site: {
-        type: "string",
+        type: 'string',
         description:
-          "Restrict to one SharePoint site, given as its URL " +
-          "(https://contoso.sharepoint.com/sites/Finance).",
+          'Restrict to one SharePoint site, given as its URL ' +
+          '(https://contoso.sharepoint.com/sites/Finance).',
       },
       file_type: {
-        type: "string",
-        description: "Restrict to one file extension, e.g. docx, xlsx, pdf.",
+        type: 'string',
+        description: 'Restrict to one file extension, e.g. docx, xlsx, pdf.',
       },
       author: {
-        type: "string",
+        type: 'string',
         description: 'Restrict to files authored by this person, e.g. "Jane Smith".',
       },
       modified_after: {
-        type: "string",
-        description: "Only files modified on/after this date, e.g. 2026-07-01.",
+        type: 'string',
+        description: 'Only files modified on/after this date, e.g. 2026-07-01.',
       },
       modified_before: {
-        type: "string",
-        description: "Only files modified on/before this date, e.g. 2026-07-31.",
+        type: 'string',
+        description: 'Only files modified on/before this date, e.g. 2026-07-31.',
       },
       sort: {
-        type: "string",
-        enum: ["relevance", "newest"],
+        type: 'string',
+        enum: ['relevance', 'newest'],
         description:
-          "Result order: best match first (relevance, default) or " +
-          "most-recently-modified first (newest).",
+          'Result order: best match first (relevance, default) or ' +
+          'most-recently-modified first (newest).',
       },
       limit: {
-        type: "integer",
-        description: "How many files to return, 1-25 (default 10).",
+        type: 'integer',
+        description: 'How many files to return, 1-25 (default 10).',
       },
     },
-    required: ["query"],
+    required: ['query'],
     additionalProperties: false,
   },
   execute: async (args, { userId }): Promise<GraphFileSearchResult> => {
-    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25);
+    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
     const query = composeFileQuery({
-      query: typeof args.query === "string" ? args.query : "",
-      site: typeof args.site === "string" ? args.site : null,
-      fileType: typeof args.file_type === "string" ? args.file_type : null,
-      author: typeof args.author === "string" ? args.author : null,
-      modifiedAfter: typeof args.modified_after === "string" ? args.modified_after : null,
-      modifiedBefore: typeof args.modified_before === "string" ? args.modified_before : null,
-    });
+      query: typeof args.query === 'string' ? args.query : '',
+      site: typeof args.site === 'string' ? args.site : null,
+      fileType: typeof args.file_type === 'string' ? args.file_type : null,
+      author: typeof args.author === 'string' ? args.author : null,
+      modifiedAfter: typeof args.modified_after === 'string' ? args.modified_after : null,
+      modifiedBefore: typeof args.modified_before === 'string' ? args.modified_before : null,
+    })
     if (!query) {
       throw new Error(
-        "query is required — the words to look for, e.g. \"q3 budget\". " +
-          "Nothing searchable was left after the arguments were parsed.",
-      );
+        'query is required — the words to look for, e.g. "q3 budget". ' +
+          'Nothing searchable was left after the arguments were parsed.',
+      )
     }
 
-    const raw = await graphFetch(userId, "/search/query", {
-      method: "POST",
+    const raw = await graphFetch(userId, '/search/query', {
+      method: 'POST',
       scopes: FILE_SEARCH_SCOPES,
       body: {
         requests: [
@@ -1013,7 +1006,7 @@ registerAppTool({
             // driveItem covers OneDrive *and* SharePoint document libraries in
             // one request. `listItem` and `site` are combinable with it here,
             // but they'd fold list rows and site pages into a *file* search.
-            entityTypes: ["driveItem"],
+            entityTypes: ['driveItem'],
             query: { queryString: query },
             from: 0,
             size: limit,
@@ -1026,29 +1019,29 @@ registerAppTool({
             // `isDescending` is the STRING "true" — the shape verified live
             // against this tenant. Microsoft's docs type it Boolean; do not
             // "correct" it untested.
-            ...(args.sort === "newest"
-              ? { sortProperties: [{ name: "lastModifiedDateTime", isDescending: "true" }] }
+            ...(args.sort === 'newest'
+              ? { sortProperties: [{ name: 'lastModifiedDateTime', isDescending: 'true' }] }
               : {}),
           },
         ],
       },
-    });
+    })
 
-    const { total, results } = shapeSearchHits(raw);
+    const { total, results } = shapeSearchHits(raw)
     const hint =
       total != null && total > results.length
         ? `Showing ${results.length} of ${total} matches. Prefer narrowing ` +
           `(modified_after, file_type, site, author, sort="newest") over raising limit.`
-        : undefined;
-    return { query, total, results, ...(hint ? { hint } : {}) };
+        : undefined
+    return { query, total, results, ...(hint ? { hint } : {}) }
   },
-});
+})
 
 export interface GraphFileListResult {
   /** Which place was listed, echoed back because the arguments select it
    *  implicitly. */
-  location: "onedrive-root" | "folder";
-  items: GraphFileEntry[];
+  location: 'onedrive-root' | 'folder'
+  items: GraphFileEntry[]
 }
 
 /**
@@ -1067,53 +1060,48 @@ export interface GraphFileListResult {
  * Graph insights surface (`/me/insights/used`).
  */
 registerAppTool({
-  name: "graph_files_list",
-  namespace: "graph",
+  name: 'graph_files_list',
+  namespace: 'graph',
   description:
     "Browse the signed-in person's files instead of searching them. With no " +
-    "arguments, lists the top level of their own OneDrive; pass folder_item_id " +
+    'arguments, lists the top level of their own OneDrive; pass folder_item_id ' +
     "(plus drive_id for a SharePoint or shared drive) to list that folder's " +
-    "contents. Entries carry the same drive_id + item_id pair as a search result, " +
-    "and folders report isFolder + child_count so you can walk down into them. " +
-    "Use graph_files_search to find a file by its words instead. Acts as the " +
-    "current signed-in person.",
+    'contents. Entries carry the same drive_id + item_id pair as a search result, ' +
+    'and folders report isFolder + child_count so you can walk down into them. ' +
+    'Use graph_files_search to find a file by its words instead. Acts as the ' +
+    'current signed-in person.',
   inputSchema: {
-    type: "object",
+    type: 'object',
     properties: {
       folder_item_id: {
-        type: "string",
+        type: 'string',
         description:
-          "driveItem id of the folder to list. Omit for the top level of the " +
+          'driveItem id of the folder to list. Omit for the top level of the ' +
           "person's own OneDrive.",
       },
       drive_id: {
-        type: "string",
-        description:
-          "Drive holding that folder. Omit for the person's own OneDrive.",
+        type: 'string',
+        description: "Drive holding that folder. Omit for the person's own OneDrive.",
       },
       limit: {
-        type: "integer",
-        description: "How many entries to return, 1-50 (default 20).",
+        type: 'integer',
+        description: 'How many entries to return, 1-50 (default 20).',
       },
     },
     additionalProperties: false,
   },
   execute: async (args, { userId }): Promise<GraphFileListResult> => {
-    const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 50);
-    const folderId =
-      typeof args.folder_item_id === "string" ? args.folder_item_id.trim() : "";
-    const driveId =
-      typeof args.drive_id === "string" ? args.drive_id.trim() || null : null;
+    const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 50)
+    const folderId = typeof args.folder_item_id === 'string' ? args.folder_item_id.trim() : ''
+    const driveId = typeof args.drive_id === 'string' ? args.drive_id.trim() || null : null
 
-    const location: GraphFileListResult["location"] = folderId
-      ? "folder"
-      : "onedrive-root";
+    const location: GraphFileListResult['location'] = folderId ? 'folder' : 'onedrive-root'
 
     const base = folderId
       ? // Same encoded path builder as the ingest tool, so a crafted id can't
         // escape its segment and address an unrelated resource.
         `${driveItemPath(folderId, driveId)}/children`
-      : "/me/drive/root/children";
+      : '/me/drive/root/children'
 
     // No `$orderby`: children come back name-ordered already, and it is not
     // supported on every drive type — a 400 here would break browsing outright.
@@ -1121,10 +1109,10 @@ registerAppTool({
       userId,
       `${base}?$select=${DRIVE_ITEM_LIST_SELECT}&$top=${limit}`,
       { scopes: FILE_SCOPES },
-    );
-    return { location, items: shapeFileEntries(raw) };
+    )
+    return { location, items: shapeFileEntries(raw) }
   },
-});
+})
 
 // ----------------------------------------------------------------------------
 // Recent files (Office Graph insights)
@@ -1132,38 +1120,38 @@ registerAppTool({
 
 /** One recently-used item as the model sees it. */
 export interface GraphRecentFile {
-  name: string | null;
+  name: string | null
   /** Human word from insights ("Word", "Excel", "Whiteboard", …) — not a MIME. */
-  type: string | null;
+  type: string | null
   /** When the item was last changed / last opened by this user. */
-  modified: string | null;
-  accessed: string | null;
+  modified: string | null
+  accessed: string | null
   /** Handoff pair, parsed from the insight's resourceReference; null when the
    *  insight didn't point at an addressable driveItem. */
-  drive_id: string | null;
-  item_id: string | null;
-  webUrl: string | null;
+  drive_id: string | null
+  item_id: string | null
+  webUrl: string | null
 }
 
 export interface GraphRecentFilesResult {
-  items: GraphRecentFile[];
+  items: GraphRecentFile[]
   /** Present when insights were unavailable (tenant policy) — tells the model
    *  where to go instead rather than failing the run. */
-  note?: string;
+  note?: string
 }
 
 /** Shape one /me/insights/used row; null when it isn't a driveItem. */
 export function shapeUsedInsight(raw: unknown): GraphRecentFile | null {
-  const it = (raw ?? {}) as Record<string, unknown>;
-  const ref = (it.resourceReference ?? {}) as Record<string, unknown>;
-  if (ref.type !== "microsoft.graph.driveItem") return null;
-  const vis = (it.resourceVisualization ?? {}) as Record<string, unknown>;
-  const used = (it.lastUsed ?? {}) as Record<string, unknown>;
-  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+  const it = (raw ?? {}) as Record<string, unknown>
+  const ref = (it.resourceReference ?? {}) as Record<string, unknown>
+  if (ref.type !== 'microsoft.graph.driveItem') return null
+  const vis = (it.resourceVisualization ?? {}) as Record<string, unknown>
+  const used = (it.lastUsed ?? {}) as Record<string, unknown>
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null)
   // resourceReference.id is "drives/{driveId}/items/{itemId}" — the same
   // handoff pair search hits carry. An unparseable id keeps the row (name and
   // dates still inform) with null ids.
-  const ids = /^drives\/([^/]+)\/items\/(.+)$/.exec(str(ref.id) ?? "");
+  const ids = /^drives\/([^/]+)\/items\/(.+)$/.exec(str(ref.id) ?? '')
   return {
     name: str(vis.title),
     type: str(vis.type),
@@ -1172,39 +1160,39 @@ export function shapeUsedInsight(raw: unknown): GraphRecentFile | null {
     drive_id: ids ? ids[1] : null,
     item_id: ids ? ids[2] : null,
     webUrl: str(ref.webUrl),
-  };
+  }
 }
 
 registerAppTool({
-  name: "graph_files_recent",
-  namespace: "graph",
+  name: 'graph_files_recent',
+  namespace: 'graph',
   description:
-    "List the files the signed-in person recently used — opened or edited — " +
+    'List the files the signed-in person recently used — opened or edited — ' +
     "newest first, from Microsoft 365's insights. No query needed; this is the " +
-    "right tool for \"my recent files\" or \"what did I work on lately\". Each " +
-    "item carries the drive_id + item_id pair the other file tools accept. Use " +
-    "graph_files_search (optionally with sort=\"newest\") to find files by " +
-    "words or by other people. Acts as the current signed-in person.",
+    'right tool for "my recent files" or "what did I work on lately". Each ' +
+    'item carries the drive_id + item_id pair the other file tools accept. Use ' +
+    'graph_files_search (optionally with sort="newest") to find files by ' +
+    'words or by other people. Acts as the current signed-in person.',
   inputSchema: {
-    type: "object",
+    type: 'object',
     properties: {
       limit: {
-        type: "integer",
-        description: "How many files to return, 1-25 (default 10).",
+        type: 'integer',
+        description: 'How many files to return, 1-25 (default 10).',
       },
     },
     additionalProperties: false,
   },
   execute: async (args, { userId }): Promise<GraphRecentFilesResult> => {
-    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25);
-    let raw: unknown;
+    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
+    let raw: unknown
     try {
       // `$top` applies BEFORE our driveItem filter and insights mixes in
       // non-file rows (sites, …), so the request is inflated and the shaped
       // list sliced back down to `limit`.
       raw = await graphFetch(userId, `/me/insights/used?$top=${Math.min(limit * 2, 50)}`, {
-        scopes: ["Sites.Read.All"],
-      });
+        scopes: ['Sites.Read.All'],
+      })
     } catch (err) {
       // A 403 here is almost always itemInsights disabled by tenant policy —
       // not a sign-in problem, so a re-auth prompt would be wrong AND the
@@ -1214,64 +1202,64 @@ registerAppTool({
         return {
           items: [],
           note:
-            "Item insights are disabled by tenant policy (or this account lacks " +
+            'Item insights are disabled by tenant policy (or this account lacks ' +
             'consent for them) — use graph_files_search with sort="newest" instead.',
-        };
+        }
       }
-      throw err;
+      throw err
     }
     const rows = ((raw as { value?: unknown[] })?.value ?? [])
       .map(shapeUsedInsight)
       .filter((r): r is GraphRecentFile => r !== null)
-      .slice(0, limit);
-    return { items: rows };
+      .slice(0, limit)
+    return { items: rows }
   },
-});
+})
 
 // ----------------------------------------------------------------------------
 // Shared with me (Office Graph insights)
 // ----------------------------------------------------------------------------
 
 /** How something reached the user — the distinction `how` fails to make. */
-export type GraphSharedVia = "email" | "teams" | "link";
+export type GraphSharedVia = 'email' | 'teams' | 'link'
 
-export const GRAPH_SHARED_VIA: readonly GraphSharedVia[] = ["email", "teams", "link"];
+export const GRAPH_SHARED_VIA: readonly GraphSharedVia[] = ['email', 'teams', 'link']
 
 /** One thing shared with the signed-in user. */
 export interface GraphSharedFile {
   /** For an email attachment this is the true filename recovered from the
    *  message, which carries the extension the insights title drops (measured
    *  2026-08-03: 14 of 15 attachment rows, e.g. "20260802-07346747"). */
-  name: string | null;
+  name: string | null
   /** "file" (a driveItem — carries the handoff pair) or "attachment" (an email
    *  attachment — lives in a mailbox, so there are no drive ids to hand on). */
-  kind: "file" | "attachment";
-  shared_by: string | null;
-  shared_when: string | null;
+  kind: 'file' | 'attachment'
+  shared_by: string | null
+  shared_when: string | null
   /** Graph's own `lastShared.sharingType` — "Link", "Attachment", "Direct".
    *  It does NOT identify the mechanism: measured 2026-08-03 (N=25), 23 rows
    *  said "Attachment" while at least three unrelated URL shapes hid behind
    *  that single label. Reason about `via` instead. Kept because "Link" is the
    *  one signal separating a Share-dialog link from a drive file sent as an
    *  attachment — a distinction `via` deliberately does not draw. */
-  how: string | null;
+  how: string | null
   /** How it actually reached the user. See `deriveVia`. */
-  via: GraphSharedVia;
-  drive_id: string | null;
-  item_id: string | null;
-  webUrl: string | null;
+  via: GraphSharedVia
+  drive_id: string | null
+  item_id: string | null
+  webUrl: string | null
   /** Set only when this response carries several attachments from the SAME
    *  email: every row of one message shares an ordinal, so an answer can cite
    *  the message once instead of repeating an identical link per file. Absent
    *  on a row that is the only one from its message. */
-  email_group?: number;
+  email_group?: number
 }
 
 export interface GraphSharedFilesResult {
-  items: GraphSharedFile[];
+  items: GraphSharedFile[]
   /** Present when insights were unavailable (tenant policy) or when the
    *  filters matched nothing — steers instead of failing. */
-  note?: string;
+  note?: string
 }
 
 /**
@@ -1290,8 +1278,8 @@ export interface GraphSharedFilesResult {
  * "Microsoft%20Teams" already lowercases to something containing "teams".
  */
 function looksLikeTeamsChatPath(webUrl: string): boolean {
-  const folders = webUrl.split("?")[0].split("/").slice(0, -1).join("/").toLowerCase();
-  return folders.includes("/personal/") && folders.includes("teams");
+  const folders = webUrl.split('?')[0].split('/').slice(0, -1).join('/').toLowerCase()
+  return folders.includes('/personal/') && folders.includes('teams')
 }
 
 /**
@@ -1309,10 +1297,10 @@ function looksLikeTeamsChatPath(webUrl: string): boolean {
  * query, with a visible OneDrive path in the answer. Neither ever yields
  * "email", and the result is never null.
  */
-export function deriveVia(kind: GraphSharedFile["kind"], webUrl: string | null): GraphSharedVia {
-  if (kind === "attachment") return "email";
-  if (webUrl && looksLikeTeamsChatPath(webUrl)) return "teams";
-  return "link";
+export function deriveVia(kind: GraphSharedFile['kind'], webUrl: string | null): GraphSharedVia {
+  if (kind === 'attachment') return 'email'
+  if (webUrl && looksLikeTeamsChatPath(webUrl)) return 'teams'
+  return 'link'
 }
 
 /**
@@ -1340,12 +1328,12 @@ export function deriveVia(kind: GraphSharedFile["kind"], webUrl: string | null):
 export function parseOwaAttachmentUrl(
   webUrl: string | null,
 ): { itemId: string; attachmentName: string | null; messageUrl: string } | null {
-  if (!webUrl) return null;
-  let url: URL;
+  if (!webUrl) return null
+  let url: URL
   try {
-    url = new URL(webUrl);
+    url = new URL(webUrl)
   } catch {
-    return null;
+    return null
   }
   // Case-INSENSITIVE lookup: insights spells it `ItemId`, Graph's own webLink
   // spells it `ItemID`, and URLSearchParams.get() is case-sensitive — reading
@@ -1354,25 +1342,25 @@ export function parseOwaAttachmentUrl(
   // decodeURIComponent (throws URIError).
   const param = (want: string): string | null => {
     for (const [k, v] of url.searchParams) {
-      if (k.toLowerCase() === want && v.trim()) return v;
+      if (k.toLowerCase() === want && v.trim()) return v
     }
-    return null;
-  };
-  const itemId = param("itemid");
-  if (!itemId) return null;
+    return null
+  }
+  const itemId = param('itemid')
+  if (!itemId) return null
   return {
     itemId,
-    attachmentName: param("attachmentname"),
+    attachmentName: param('attachmentname'),
     messageUrl:
       `${url.origin}${url.pathname}` +
       `?ItemID=${encodeURIComponent(itemId)}&exvsurl=1&viewmodel=ReadMessageItem`,
-  };
+  }
 }
 
 /** Epoch ms for sorting; an unparseable date sorts last rather than first. */
 function sharedAt(r: GraphSharedFile): number {
-  const t = Date.parse(r.shared_when ?? "");
-  return Number.isNaN(t) ? -Infinity : t;
+  const t = Date.parse(r.shared_when ?? '')
+  return Number.isNaN(t) ? -Infinity : t
 }
 
 /**
@@ -1385,13 +1373,13 @@ function sharedAt(r: GraphSharedFile): number {
  * Case is normalized first, so the likeliest mistake ("Teams") costs nothing.
  */
 function parseVia(raw: unknown): GraphSharedVia | null {
-  if (typeof raw !== "string" || !raw.trim()) return null;
-  const want = raw.trim().toLowerCase();
-  const hit = GRAPH_SHARED_VIA.find((v) => v === want);
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  const want = raw.trim().toLowerCase()
+  const hit = GRAPH_SHARED_VIA.find((v) => v === want)
   if (!hit) {
-    throw new Error(`Unknown via "${raw}". Valid values: ${GRAPH_SHARED_VIA.join(", ")}.`);
+    throw new Error(`Unknown via "${raw}". Valid values: ${GRAPH_SHARED_VIA.join(', ')}.`)
   }
-  return hit;
+  return hit
 }
 
 /**
@@ -1414,26 +1402,26 @@ function parseVia(raw: unknown): GraphSharedVia | null {
  * See docs/graph-api-notes.md ("Not verified").
  */
 export function shapeSharedInsight(raw: unknown): GraphSharedFile | null {
-  const it = (raw ?? {}) as Record<string, unknown>;
-  const ref = (it.resourceReference ?? {}) as Record<string, unknown>;
+  const it = (raw ?? {}) as Record<string, unknown>
+  const ref = (it.resourceReference ?? {}) as Record<string, unknown>
   const kind =
-    ref.type === "microsoft.graph.driveItem"
-      ? ("file" as const)
-      : ref.type === "microsoft.graph.fileAttachment"
-        ? ("attachment" as const)
-        : null;
-  if (!kind) return null;
-  const vis = (it.resourceVisualization ?? {}) as Record<string, unknown>;
-  const last = (it.lastShared ?? {}) as Record<string, unknown>;
-  const by = (last.sharedBy ?? {}) as Record<string, unknown>;
-  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
-  const ids = kind === "file" ? /^drives\/([^/]+)\/items\/(.+)$/.exec(str(ref.id) ?? "") : null;
-  const webUrl = str(ref.webUrl);
+    ref.type === 'microsoft.graph.driveItem'
+      ? ('file' as const)
+      : ref.type === 'microsoft.graph.fileAttachment'
+        ? ('attachment' as const)
+        : null
+  if (!kind) return null
+  const vis = (it.resourceVisualization ?? {}) as Record<string, unknown>
+  const last = (it.lastShared ?? {}) as Record<string, unknown>
+  const by = (last.sharedBy ?? {}) as Record<string, unknown>
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null)
+  const ids = kind === 'file' ? /^drives\/([^/]+)\/items\/(.+)$/.exec(str(ref.id) ?? '') : null
+  const webUrl = str(ref.webUrl)
   // An attachment row points at the attachment popout, and its insights title
   // has had the extension stripped. Both are recoverable from that same URL, so
   // rewrite to the email and take the real filename. A URL we cannot parse
   // leaves both fields exactly as they were before this existed.
-  const owa = kind === "attachment" ? parseOwaAttachmentUrl(webUrl) : null;
+  const owa = kind === 'attachment' ? parseOwaAttachmentUrl(webUrl) : null
   return {
     name: owa?.attachmentName ?? str(vis.title),
     kind,
@@ -1444,81 +1432,81 @@ export function shapeSharedInsight(raw: unknown): GraphSharedFile | null {
     drive_id: ids ? ids[1] : null,
     item_id: ids ? ids[2] : null,
     webUrl: owa?.messageUrl ?? webUrl,
-  };
+  }
 }
 
 registerAppTool({
-  name: "graph_files_shared",
-  namespace: "graph",
+  name: 'graph_files_shared',
+  namespace: 'graph',
   description:
-    "List what was recently shared WITH the signed-in person — OneDrive/" +
-    "SharePoint links, files pasted into a Teams chat, and email attachments — " +
-    "newest first, with who shared it, when and through which channel (via). " +
+    'List what was recently shared WITH the signed-in person — OneDrive/' +
+    'SharePoint links, files pasted into a Teams chat, and email attachments — ' +
+    'newest first, with who shared it, when and through which channel (via). ' +
     "Filter to one sharer with shared_by (a person's name) and/or one channel " +
-    "with via. This " +
-    "answers \"what was shared with me\" and \"what did X share with me\". " +
-    "shared_by names whoever performed the share, which is usually someone else " +
-    "but is sometimes the signed-in person — a few of their own outbound shares " +
-    "do surface. It is NOT a reliable record of what they shared with others, so " +
-    "do not answer that question from it alone. " +
-    "Files carry the drive_id + item_id pair the other " +
-    "file tools accept; email attachments do not (they live in the mailbox) and " +
-    "link to the message rather than to the file. Several attachments from one " +
-    "email share an email_group number, so cite that message once. " +
-    "Acts as the current signed-in person.",
+    'with via. This ' +
+    'answers "what was shared with me" and "what did X share with me". ' +
+    'shared_by names whoever performed the share, which is usually someone else ' +
+    'but is sometimes the signed-in person — a few of their own outbound shares ' +
+    'do surface. It is NOT a reliable record of what they shared with others, so ' +
+    'do not answer that question from it alone. ' +
+    'Files carry the drive_id + item_id pair the other ' +
+    'file tools accept; email attachments do not (they live in the mailbox) and ' +
+    'link to the message rather than to the file. Several attachments from one ' +
+    'email share an email_group number, so cite that message once. ' +
+    'Acts as the current signed-in person.',
   inputSchema: {
-    type: "object",
+    type: 'object',
     properties: {
       shared_by: {
-        type: "string",
+        type: 'string',
         description: 'Only items shared by this person, e.g. "Thibault" or "Thibault Draye".',
       },
       via: {
-        type: "string",
-        enum: ["email", "teams", "link"],
+        type: 'string',
+        enum: ['email', 'teams', 'link'],
         description:
           'Only items that arrived this way: "email" (attached to a message), ' +
           '"teams" (pasted into a Teams chat), "link" (a OneDrive or SharePoint ' +
-          "link). Omit to list every channel.",
+          'link). Omit to list every channel.',
       },
       limit: {
-        type: "integer",
-        description: "How many items to return, 1-25 (default 10).",
+        type: 'integer',
+        description: 'How many items to return, 1-25 (default 10).',
       },
     },
     additionalProperties: false,
   },
   execute: async (args, { userId }): Promise<GraphSharedFilesResult> => {
-    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25);
-    const sharedBy = typeof args.shared_by === "string" ? args.shared_by.trim() : "";
-    const via = parseVia(args.via);
+    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
+    const sharedBy = typeof args.shared_by === 'string' ? args.shared_by.trim() : ''
+    const via = parseVia(args.via)
     // Same inflation rationale as graph_files_recent ($top precedes our row
     // filter), amplified when a filter will discard most rows — a via filter
     // over a narrow window would report "no Teams files" when they were merely
     // outside the slice.
-    const top = sharedBy || via ? 50 : Math.min(limit * 2, 50);
-    let raw: unknown;
+    const top = sharedBy || via ? 50 : Math.min(limit * 2, 50)
+    let raw: unknown
     try {
       raw = await graphFetch(userId, `/me/insights/shared?$top=${top}`, {
-        scopes: ["Sites.Read.All"],
-      });
+        scopes: ['Sites.Read.All'],
+      })
     } catch (err) {
       if (err instanceof GraphAuthRequiredError && err.status === 403) {
         return {
           items: [],
           note:
-            "Item insights are disabled by tenant policy (or this account lacks " +
+            'Item insights are disabled by tenant policy (or this account lacks ' +
             'consent for them) — use graph_files_search with sort="newest" instead.',
-        };
+        }
       }
-      throw err;
+      throw err
     }
-    const needle = sharedBy.toLowerCase();
-    const seen = new Set<string>();
+    const needle = sharedBy.toLowerCase()
+    const seen = new Set<string>()
     const rows = ((raw as { value?: unknown[] })?.value ?? [])
       .map(shapeSharedInsight)
       .filter((r): r is GraphSharedFile => r !== null)
-      .filter((r) => !needle || (r.shared_by ?? "").toLowerCase().includes(needle))
+      .filter((r) => !needle || (r.shared_by ?? '').toLowerCase().includes(needle))
       .filter((r) => !via || r.via === via)
       // The insights order is empirically newest-first, but nothing contracts it
       // — no $orderby is sent, and adding one to this surface is unverified (an
@@ -1530,12 +1518,12 @@ registerAppTool({
       // twice; the newest copy survives because the sort already ran. Done
       // before the slice so a duplicate never costs a slot.
       .filter((r) => {
-        const key = `${r.webUrl ?? ""} ${r.name ?? ""}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
+        const key = `${r.webUrl ?? ''} ${r.name ?? ''}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
       })
-      .slice(0, limit);
+      .slice(0, limit)
 
     // Several attachments from ONE email arrive as several rows carrying the
     // identical rewritten message URL, so that URL *is* the message key — no
@@ -1543,36 +1531,36 @@ registerAppTool({
     // Only a group of two or more earns an ordinal; a lone attachment needs no
     // cross-reference. Deliberately NOT collapsed into one row: those really
     // are different files, and their names are the useful part.
-    const byMessage = new Map<string, GraphSharedFile[]>();
+    const byMessage = new Map<string, GraphSharedFile[]>()
     for (const r of rows) {
-      if (r.via !== "email" || !r.webUrl) continue;
-      const group = byMessage.get(r.webUrl);
-      if (group) group.push(r);
-      else byMessage.set(r.webUrl, [r]);
+      if (r.via !== 'email' || !r.webUrl) continue
+      const group = byMessage.get(r.webUrl)
+      if (group) group.push(r)
+      else byMessage.set(r.webUrl, [r])
     }
-    let ordinal = 0;
+    let ordinal = 0
     for (const group of byMessage.values()) {
-      if (group.length < 2) continue;
-      ordinal += 1;
-      for (const r of group) r.email_group = ordinal;
+      if (group.length < 2) continue
+      ordinal += 1
+      for (const r of group) r.email_group = ordinal
     }
 
     if (rows.length === 0 && (sharedBy || via)) {
       const filters = [
         ...(sharedBy ? [`by "${sharedBy}"`] : []),
         ...(via ? [`via ${via}`] : []),
-      ].join(" and ");
+      ].join(' and ')
       return {
         items: [],
         note:
           `Nothing in the recent sharing activity was shared ${filters}. ` +
-          "The window covers recent items only — try graph_files_search with " +
-          "author for older files.",
-      };
+          'The window covers recent items only — try graph_files_search with ' +
+          'author for older files.',
+      }
     }
-    return { items: rows };
+    return { items: rows }
   },
-});
+})
 
 // ----------------------------------------------------------------------------
 // Mail with attachments (sent or received)
@@ -1580,126 +1568,123 @@ registerAppTool({
 
 /** One attachment on a message — name/size/type only, never content bytes. */
 export interface GraphMailAttachment {
-  name: string | null;
-  size: number | null;
-  contentType: string | null;
+  name: string | null
+  size: number | null
+  contentType: string | null
 }
 
 export interface GraphMailAttachmentMessage {
-  subject: string | null;
+  subject: string | null
   /** The other side of the exchange: recipients for sent mail, sender for
    *  received mail. */
-  with: string[];
-  date: string | null;
-  attachments: GraphMailAttachment[];
-  webLink: string | null;
+  with: string[]
+  date: string | null
+  attachments: GraphMailAttachment[]
+  webLink: string | null
 }
 
 export interface GraphMailAttachmentsResult {
-  direction: "sent" | "received";
-  messages: GraphMailAttachmentMessage[];
+  direction: 'sent' | 'received'
+  messages: GraphMailAttachmentMessage[]
 }
 
 /** Case-insensitive person match against a display name or address. */
 function personMatches(needle: string, name: unknown, address: unknown): boolean {
-  const n = needle.toLowerCase();
+  const n = needle.toLowerCase()
   return (
-    (typeof name === "string" && name.toLowerCase().includes(n)) ||
-    (typeof address === "string" && address.toLowerCase().includes(n))
-  );
+    (typeof name === 'string' && name.toLowerCase().includes(n)) ||
+    (typeof address === 'string' && address.toLowerCase().includes(n))
+  )
 }
 
 /** Shape one message row from the attachments query. */
 export function shapeAttachmentMessage(
   raw: unknown,
-  direction: "sent" | "received",
+  direction: 'sent' | 'received',
 ): GraphMailAttachmentMessage {
-  const m = (raw ?? {}) as Record<string, unknown>;
-  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+  const m = (raw ?? {}) as Record<string, unknown>
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null)
   const recips = (Array.isArray(m.toRecipients) ? m.toRecipients : []) as Array<
     Record<string, unknown>
-  >;
+  >
   const from = ((m.from ?? {}) as Record<string, unknown>).emailAddress as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined
   const withNames =
-    direction === "sent"
+    direction === 'sent'
       ? recips
           .map((r) => str((r.emailAddress as Record<string, unknown> | undefined)?.name))
           .filter((n): n is string => n !== null)
-      : [str(from?.name)].filter((n): n is string => n !== null);
-  const atts = (Array.isArray(m.attachments) ? m.attachments : []) as Array<
-    Record<string, unknown>
-  >;
+      : [str(from?.name)].filter((n): n is string => n !== null)
+  const atts = (Array.isArray(m.attachments) ? m.attachments : []) as Array<Record<string, unknown>>
   return {
     subject: str(m.subject),
     with: withNames,
     date: str(m.sentDateTime) ?? str(m.receivedDateTime),
     attachments: atts.map((a) => ({
       name: str(a.name),
-      size: typeof a.size === "number" && Number.isFinite(a.size) ? a.size : null,
+      size: typeof a.size === 'number' && Number.isFinite(a.size) ? a.size : null,
       contentType: str(a.contentType),
     })),
     webLink: str(m.webLink),
-  };
+  }
 }
 
 registerAppTool({
-  name: "graph_mail_attachments",
-  namespace: "graph",
+  name: 'graph_mail_attachments',
+  namespace: 'graph',
   description:
     "List the signed-in person's emails that carry file attachments — what was " +
-    "SENT (default) or RECEIVED, newest first, with the attachment names. " +
-    "Filter to one person and/or a start date. Useful for \"what files did I " +
-    "send X\" — but note it only sees files that travelled through email: " +
-    "OneDrive/SharePoint shares made from the Share dialog do not appear in " +
-    "sent mail. Returns attachment names and sizes, not their contents. Acts " +
-    "as the current signed-in person.",
+    'SENT (default) or RECEIVED, newest first, with the attachment names. ' +
+    'Filter to one person and/or a start date. Useful for "what files did I ' +
+    'send X" — but note it only sees files that travelled through email: ' +
+    'OneDrive/SharePoint shares made from the Share dialog do not appear in ' +
+    'sent mail. Returns attachment names and sizes, not their contents. Acts ' +
+    'as the current signed-in person.',
   inputSchema: {
-    type: "object",
+    type: 'object',
     properties: {
       person: {
-        type: "string",
+        type: 'string',
         description:
-          "Only exchanges with this person (name or email), e.g. \"Thibault\". " +
-          "Matches recipients for sent mail, the sender for received mail.",
+          'Only exchanges with this person (name or email), e.g. "Thibault". ' +
+          'Matches recipients for sent mail, the sender for received mail.',
       },
       direction: {
-        type: "string",
-        enum: ["sent", "received"],
-        description: "Look in sent mail (default) or received mail.",
+        type: 'string',
+        enum: ['sent', 'received'],
+        description: 'Look in sent mail (default) or received mail.',
       },
       since: {
-        type: "string",
-        description: "Only messages on/after this date, e.g. 2026-07-01.",
+        type: 'string',
+        description: 'Only messages on/after this date, e.g. 2026-07-01.',
       },
       limit: {
-        type: "integer",
-        description: "How many messages to return, 1-25 (default 10).",
+        type: 'integer',
+        description: 'How many messages to return, 1-25 (default 10).',
       },
     },
     additionalProperties: false,
   },
   execute: async (args, { userId }): Promise<GraphMailAttachmentsResult> => {
-    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25);
-    const direction = args.direction === "received" ? ("received" as const) : ("sent" as const);
-    const person = typeof args.person === "string" ? args.person.trim() : "";
+    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
+    const direction = args.direction === 'received' ? ('received' as const) : ('sent' as const)
+    const person = typeof args.person === 'string' ? args.person.trim() : ''
 
     // Same reject-don't-drop rule as the search date args: a silently ignored
     // `since` is a silently wrong answer.
-    let sinceClause = "";
-    if (typeof args.since === "string" && args.since.trim()) {
-      const d = new Date(args.since.trim());
+    let sinceClause = ''
+    if (typeof args.since === 'string' && args.since.trim()) {
+      const d = new Date(args.since.trim())
       if (Number.isNaN(d.getTime())) {
-        throw new Error(`since must be a date like 2026-07-01 (got "${args.since}").`);
+        throw new Error(`since must be a date like 2026-07-01 (got "${args.since}").`)
       }
-      sinceClause = ` and receivedDateTime ge ${d.toISOString().slice(0, 10)}T00:00:00Z`;
+      sinceClause = ` and receivedDateTime ge ${d.toISOString().slice(0, 10)}T00:00:00Z`
     }
 
-    const folder = direction === "sent" ? "sentitems" : "inbox";
+    const folder = direction === 'sent' ? 'sentitems' : 'inbox'
     // The person filter runs app-side (recipient matching in OData is awkward
     // and unindexed), so the request is inflated and sliced after filtering.
-    const top = person ? 50 : Math.min(limit * 2, 50);
+    const top = person ? 50 : Math.min(limit * 2, 50)
     // No $orderby: combined with $filter Graph requires the sort property to
     // lead the filter, and the default order is already newest-first.
     // Attachments are expanded WITHOUT contentBytes — names and sizes only.
@@ -1710,35 +1695,34 @@ registerAppTool({
         `&$select=subject,toRecipients,from,sentDateTime,receivedDateTime,webLink` +
         `&$expand=attachments($select=name,size,contentType)` +
         `&$top=${top}`,
-      { scopes: ["Mail.Read"] },
-    );
+      { scopes: ['Mail.Read'] },
+    )
 
     const messages = ((raw as { value?: unknown[] })?.value ?? [])
       .map((m) => ({ raw: m, shaped: shapeAttachmentMessage(m, direction) }))
       .filter(({ raw: m }) => {
-        if (!person) return true;
-        const msg = (m ?? {}) as Record<string, unknown>;
-        if (direction === "received") {
+        if (!person) return true
+        const msg = (m ?? {}) as Record<string, unknown>
+        if (direction === 'received') {
           const from = ((msg.from ?? {}) as Record<string, unknown>).emailAddress as
-            | Record<string, unknown>
-            | undefined;
-          return personMatches(person, from?.name, from?.address);
+            Record<string, unknown> | undefined
+          return personMatches(person, from?.name, from?.address)
         }
         const recips = (Array.isArray(msg.toRecipients) ? msg.toRecipients : []) as Array<
           Record<string, unknown>
-        >;
+        >
         return recips.some((r) => {
-          const ea = (r.emailAddress ?? {}) as Record<string, unknown>;
-          return personMatches(person, ea.name, ea.address);
-        });
+          const ea = (r.emailAddress ?? {}) as Record<string, unknown>
+          return personMatches(person, ea.name, ea.address)
+        })
       })
       .map(({ shaped }) => shaped)
       // Real attachments only: inline images and signature logos also set
       // hasAttachments, but arrive with isInline — Graph still lists them, so
       // an empty attachments array can slip through for filtered $selects.
       .filter((m) => m.attachments.length > 0)
-      .slice(0, limit);
+      .slice(0, limit)
 
-    return { direction, messages };
+    return { direction, messages }
   },
-});
+})

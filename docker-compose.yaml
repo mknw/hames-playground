@@ -1,3 +1,8 @@
+# Pin the compose project name. Without this it defaults to the directory name,
+# so renaming the checkout would silently orphan the `kg-agent_*` named volumes
+# (Postgres, Neo4j, Redis) and bring the stack up against empty new ones.
+name: kg-agent
+
 services:
   n8n:
     image: 'docker.n8n.io/n8nio/n8n'

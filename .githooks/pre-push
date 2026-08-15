@@ -1,0 +1,25 @@
+#!/bin/sh
+# Typecheck before anything leaves the machine (~4s). Blocking here is the point:
+# a type error that reaches GitHub costs a CI round-trip and a red PR.
+#
+# Bypass with `git push --no-verify` when you genuinely need to (e.g. pushing a
+# WIP branch for someone else to look at).
+
+command -v pnpm >/dev/null 2>&1 || {
+  echo "pre-push: pnpm not on PATH — skipping typecheck (are you in the nix shell?)"
+  exit 0
+}
+
+cd "$(git rev-parse --show-toplevel)/ui" 2>/dev/null || exit 0
+[ -d node_modules ] || { echo "pre-push: no node_modules — skipping"; exit 0; }
+
+# baml_client/ is generated and gitignored; a stale one produces type errors
+# that are an artefact of the checkout, not of the code being pushed.
+[ -d baml_client ] || { echo "pre-push: generating BAML client…"; pnpm baml-generate >/dev/null 2>&1; }
+
+echo "pre-push: typechecking…"
+pnpm exec tsc --noEmit --project tsconfig.json || {
+  echo ""
+  echo "pre-push: type errors above — fix them, or push with --no-verify."
+  exit 1
+}

@@ -80,7 +80,28 @@ jobs:
           # shellcheck disable=SC2086
           ./ui/node_modules/.bin/prettier --check $files
 
-      - run: pnpm test:run
+      # Coverage is measured on the same vitest invocation (v8 instrumentation
+      # is near-free here — under a second of extra wall clock locally). The
+      # thresholds live in ui/vitest.config.ts and are backstop floors: the job
+      # goes red if coverage regresses below the recorded baseline.
+      - name: Test (with coverage floor)
+        run: |
+          set -o pipefail
+          pnpm test:run --coverage 2>&1 | tee coverage-run.log
+
+      - name: Publish coverage summary
+        if: always()
+        run: |
+          if [ ! -f coverage-run.log ]; then
+            exit 0
+          fi
+          {
+            echo '### Coverage'
+            echo
+            echo '```'
+            sed -n '/Coverage summary/,/^=====/p' coverage-run.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Catches SSR/vinxi breakage the unit tests cannot see.
       - run: pnpm build

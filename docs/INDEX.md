@@ -21,6 +21,7 @@ Forward-looking design docs. Live item-tracking stays on the GitHub project boar
 | [plan/ROADMAP.md](plan/ROADMAP.md) | Multi-user target architecture + phased MoSCoW roadmap (#107 identity patterns, #119–#122) |
 | [plan/sandbox.md](plan/sandbox.md) | Sandbox compute design — core shipped (#79/#89/#97/#78 flavours); still plan-only: Swarm, Firecracker, ephemeral one-shot, #82 |
 | [plan/graph-pseudonymisation.md](plan/graph-pseudonymisation.md) | Stripping people out of Graph tool results **without NER** — Graph's own labelled identity fields are the roster (data-privacy plan item 3). The pure core in `lib/privacy/` is built and tested but wired to nothing; where to hook, what `conversations.context` stores and where the (personal-data) table lives are open questions |
+| [plan/pseudonym-fidelity-bench.md](plan/pseudonym-fidelity-bench.md) | Measured answer to open question 4 of the above: **do `PERSON_1` placeholders survive an LLM paraphrase?** Live Synthesize run over NL/FR/EN × prompt-guidance off/on, with per-language survival/mangle/hallucination rates and a recommendation on wiring the guidance and on widening `reverse` |
 
 ---
 
@@ -141,7 +142,9 @@ kg-agent/
 │   ├── sandbox-flavours.md      # Rootfs flavours (#78): image-processing/data/office
 │   ├── plan/                    # Forward-looking design docs
 │   │   ├── ROADMAP.md           # Multi-user architecture + phased MoSCoW roadmap
-│   │   └── sandbox.md           # Sandbox design (core shipped; Swarm/Firecracker = plan)
+│   │   ├── sandbox.md           # Sandbox design (core shipped; Swarm/Firecracker = plan)
+│   │   ├── graph-pseudonymisation.md      # No-NER identity stripping over Graph's own labels
+│   │   └── pseudonym-fidelity-bench.md    # Do PERSON_1 placeholders survive an LLM paraphrase?
 │   ├── deploy/
 │   │   ├── azure-vm.md          # Single-VM deployment runbook
 │   │   └── entra-setup.md       # Entra tenant provisioning + consent (#119)

@@ -170,6 +170,8 @@ Tool namespaces in `tools.server.ts`: `neo4j`, `web`, `context7`, `filesystem`, 
 
 `KNOWN_TOOL_SERVERS` maps tool names to namespaces when auto-detection would fail.
 
+**Connection pool (#120):** `mcp-client.server.ts` keeps a pool of gateway connections (`MCP_GATEWAY_POOL_SIZE`, default 4) instead of one singleton. Each `callTool`/`listTools` leases a connection for the duration of the call and releases it in a `finally`, so the reconnect-once retry rebuilds only the failing connection and never disturbs other in-flight calls. Above the pool size, calls open a short-lived overflow connection (closed on release) rather than queueing behind a busy slot. This multiplexes the client→gateway hop only — per-server serialization (e.g. redis over serial stdio) is enforced inside the gateway and is unchanged.
+
 **Redis MCP quirks** (encapsulated by `document-store.server.ts` / `document-ingest.server.ts`; full detail in [`docs/DATA_STASH.md`](docs/DATA_STASH.md)):
 - The `redis` service must be **redis-stack** (RedisJSON + RediSearch); plain `redis` has no modules. On Apple-Silicon/colima, run it `platform: linux/amd64` (a git-ignored `docker-compose.override.yml`) — the arm64 `redisearch.so` SIGILLs on vector ops.
 - Param names: `json_get`/`json_set` use `name`/`path`; `expire`/`hset`/`sadd` take `expire_seconds`; `delete` uses `key` (not `name`); `set_vector_in_hash`/`vector_search_hash` use `name`/`index_name` + a float `vector`/`query_vector`.

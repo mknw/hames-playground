@@ -20,33 +20,107 @@ assertServerOnImport()
 
 const MCP_GATEWAY_URL = process.env.MCP_GATEWAY_URL || 'http://localhost:8811/mcp'
 
-// ============================================================================
-// Client Singleton
-// ============================================================================
+/** Number of warm gateway connections kept in the pool (#120).
+ *  `MCP_GATEWAY_POOL_SIZE`, default 4. Small on purpose: the pool exists to
+ *  isolate reconnects, not to fan out load onto the gateway. */
+const POOL_SIZE = (() => {
+  const raw = Number.parseInt(process.env.MCP_GATEWAY_POOL_SIZE ?? '', 10)
+  return Number.isFinite(raw) && raw > 0 ? raw : 4
+})()
 
-let client: Client | null = null
-let transport: StreamableHTTPClientTransport | null = null
+// ============================================================================
+// Client Pool (#120)
+// ============================================================================
+//
+// Before: one module-level client singleton. A transport blip on ANY call
+// dropped that shared client, tearing down every other in-flight request.
+//
+// Now: N connections, each leased exclusively for the duration of one
+// operation. A reconnect rebuilds only the leased connection — the other
+// connections (and the calls riding them) are untouched.
+//
+// Note this multiplexes the *client → gateway* hop only. Per-server
+// serialization (e.g. the redis MCP server running over serial stdio) is
+// enforced inside the gateway process, so more client connections cannot
+// reorder or interleave a server's calls beyond what the gateway already
+// allows.
 
-export async function getMcpClient(): Promise<Client> {
-  if (client) {
-    return client
+interface PooledConnection {
+  client: Client | null
+  transport: StreamableHTTPClientTransport | null
+  leased: boolean
+  /** Warm connections live in `pool` and are kept open between leases.
+   *  Overflow connections are created past POOL_SIZE and closed on release. */
+  warm: boolean
+}
+
+/** Warm connections, created lazily up to POOL_SIZE. */
+const pool: PooledConnection[] = []
+
+/** Lease a connection. Exhaustion behavior: the pool GROWS rather than
+ *  queueing — when every warm slot is leased, an extra (overflow) connection
+ *  is opened for this call and closed when released. Queueing was rejected
+ *  because it would cap concurrent gateway calls at POOL_SIZE, a throughput
+ *  regression versus the old singleton (which multiplexed unlimited calls
+ *  over one client) and a head-of-line stall risk behind slow tools. Growth
+ *  keeps the old concurrency, at the cost of a connect handshake per
+ *  overflow call — which only happens above POOL_SIZE concurrent calls.
+ *
+ *  Slot selection is synchronous (no await before `leased = true`), so two
+ *  concurrent callers can never be handed the same connection. */
+function acquireConnection(): PooledConnection {
+  const free = pool.find((c) => !c.leased)
+  if (free) {
+    free.leased = true
+    return free
   }
 
-  client = new Client({
+  if (pool.length < POOL_SIZE) {
+    const conn: PooledConnection = { client: null, transport: null, leased: true, warm: true }
+    pool.push(conn)
+    return conn
+  }
+
+  return { client: null, transport: null, leased: true, warm: false }
+}
+
+/** Release a lease. Never throws — callers release from a `finally`. */
+async function releaseConnection(conn: PooledConnection): Promise<void> {
+  conn.leased = false
+  if (!conn.warm) {
+    await closeConnection(conn)
+  }
+}
+
+/** Connect this connection if it has no live client. The client is only
+ *  stored after `connect()` resolves, so a failed handshake leaves the
+ *  connection clean (and the next lease retries from scratch). */
+async function ensureConnected(conn: PooledConnection): Promise<Client> {
+  if (conn.client) {
+    return conn.client
+  }
+
+  const client = new Client({
     name: 'harness-patterns',
     version: '1.0.0',
   })
-
-  transport = new StreamableHTTPClientTransport(new URL(MCP_GATEWAY_URL))
+  const transport = new StreamableHTTPClientTransport(new URL(MCP_GATEWAY_URL))
   await client.connect(transport)
 
+  conn.client = client
+  conn.transport = transport
   return client
 }
 
-/** Drop the singleton so the next getMcpClient() reconnects. Used by the
- *  reconnect-once retry below when an operation fails with a transport-level
- *  error (the gateway restarted while we held a stale connection). */
-async function resetMcpClient(): Promise<void> {
+/** Best-effort close of ONE connection's client, so the next
+ *  ensureConnected() rebuilds it. Also the reconnect path of the retry below
+ *  (the gateway restarted while we held a stale connection). Other pooled
+ *  connections are deliberately left alone — that is the whole point of
+ *  #120. */
+async function closeConnection(conn: PooledConnection): Promise<void> {
+  const { client } = conn
+  conn.client = null
+  conn.transport = null
   if (client) {
     try {
       await client.close()
@@ -54,8 +128,20 @@ async function resetMcpClient(): Promise<void> {
       // best-effort; the connection is already broken
     }
   }
-  client = null
-  transport = null
+}
+
+/** Direct access to a gateway client, outside the lease protocol. Kept for
+ *  callers that want a raw MCP client (and for connectivity checks); it
+ *  returns the first warm connection's client without leasing it, so it must
+ *  not be used for operations that need reconnect isolation — use
+ *  `callTool` / `listTools`, which lease. */
+export async function getMcpClient(): Promise<Client> {
+  let conn = pool[0]
+  if (!conn) {
+    conn = { client: null, transport: null, leased: false, warm: true }
+    pool.push(conn)
+  }
+  return ensureConnected(conn)
 }
 
 /** Heuristic: does this error look like a dead/closed transport rather than
@@ -76,21 +162,28 @@ function isConnectionError(err: unknown): boolean {
   )
 }
 
-/** Run an MCP operation with a single reconnect attempt on connection errors.
- *  The first failure resets the client singleton; the second attempt builds a
- *  fresh transport. If that still fails, the error is propagated.
+/** Run an MCP operation on a leased connection, with a single reconnect
+ *  attempt on connection errors. The first failure resets ONLY the leased
+ *  connection; the second attempt builds a fresh transport for it. If that
+ *  still fails, the error is propagated. Concurrent operations on other
+ *  leases are unaffected by the reset.
  *
  *  Tool-level errors (the gateway responding with a structured failure) are
- *  not retried — only transport-level errors trigger reconnect. */
+ *  not retried — only transport-level errors trigger reconnect.
+ *
+ *  The lease is released in `finally`, so it survives any throw. */
 async function withReconnect<T>(op: (c: Client) => Promise<T>): Promise<T> {
+  const conn = acquireConnection()
   try {
-    const c = await getMcpClient()
-    return await op(c)
-  } catch (err) {
-    if (!isConnectionError(err)) throw err
-    await resetMcpClient()
-    const c = await getMcpClient()
-    return await op(c)
+    try {
+      return await op(await ensureConnected(conn))
+    } catch (err) {
+      if (!isConnectionError(err)) throw err
+      await closeConnection(conn)
+      return await op(await ensureConnected(conn))
+    }
+  } finally {
+    await releaseConnection(conn)
   }
 }
 
@@ -206,6 +299,10 @@ export async function listTools(): Promise<MCPToolDescription[]> {
   // hence they are appended on both the success and the failure path.
   const appTools = appToolDescriptions()
   try {
+    // The tool catalog is not memoized here (callers such as tool-config do
+    // their own caching), so this stays one live fetch per call — it just
+    // rides whichever connection the lease hands out. Every connection talks
+    // to the same gateway, so any of them yields the same catalog.
     const { tools } = await withReconnect((c) => c.listTools())
     return [
       ...tools.map((t) => ({
@@ -232,17 +329,28 @@ export async function listTools(): Promise<MCPToolDescription[]> {
 // Connection Management
 // ============================================================================
 
+/** Close every pooled connection and empty the pool. Overflow connections
+ *  (created above POOL_SIZE, see acquireConnection) are not in the pool —
+ *  they close themselves when their lease is released. */
 export async function closeMcpClient(): Promise<void> {
-  if (client) {
+  const conns = pool.splice(0)
+  let firstError: unknown = null
+
+  for (const conn of conns) {
+    const { client } = conn
+    conn.client = null
+    conn.transport = null
+    if (!client) continue
     try {
       await client.close()
-    } finally {
-      client = null
-      transport = null
+    } catch (err) {
+      firstError ??= err
     }
   }
+
+  if (firstError) throw firstError
 }
 
 export function isConnected(): boolean {
-  return client !== null
+  return pool.some((c) => c.client !== null)
 }

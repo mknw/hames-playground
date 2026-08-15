@@ -18,11 +18,23 @@ const mockClose = vi.fn()
 const mockCallTool = vi.fn()
 const mockListTools = vi.fn()
 
+// Every client the module builds is recorded, so the pool tests (#120) can
+// assert WHICH connection was closed by a reconnect.
+const clientInstances: MockClient[] = []
+
 class MockClient {
+  closed = false
   connect = mockConnect
-  close = mockClose
+  close = async () => {
+    this.closed = true
+    return mockClose()
+  }
   callTool = mockCallTool
   listTools = mockListTools
+
+  constructor() {
+    clientInstances.push(this)
+  }
 }
 
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
@@ -38,6 +50,7 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
 describe('mcp-client', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    clientInstances.length = 0
     mockConnect.mockResolvedValue(undefined)
     mockClose.mockResolvedValue(undefined)
     mockCallTool.mockResolvedValue({
@@ -51,6 +64,7 @@ describe('mcp-client', () => {
   afterEach(async () => {
     // Reset module state between tests
     vi.resetModules()
+    vi.unstubAllEnvs()
   })
 
   describe('getMcpClient', () => {
@@ -448,6 +462,134 @@ describe('mcp-client', () => {
 
       expect(result.success).toBe(true)
       expect(mockCallTool).toHaveBeenCalledOnce()
+    })
+  })
+
+  // Issue #120: the gateway client used to be a module-level singleton, so a
+  // transport blip on ANY call dropped the shared client and tore down every
+  // other in-flight request. Calls now lease one of N pooled connections and a
+  // reconnect rebuilds only the leased one.
+  describe('connection pool (#120)', () => {
+    function deferred<T = void>() {
+      let resolve!: (value: T) => void
+      const promise = new Promise<T>((res) => {
+        resolve = res
+      })
+      return { promise, resolve }
+    }
+
+    it('scopes a mid-flight reconnect to the failing lease; the other call is untouched', async () => {
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const steadyStarted = deferred()
+      const releaseSteady = deferred()
+      let flakyAttempts = 0
+
+      mockCallTool.mockImplementation(async ({ name }: { name: string }) => {
+        if (name === 'steady') {
+          steadyStarted.resolve()
+          await releaseSteady.promise
+          return { content: [{ type: 'text', text: 'steady-ok' }] }
+        }
+        flakyAttempts++
+        if (flakyAttempts === 1) {
+          // Only fail once the other call is provably mid-flight.
+          await steadyStarted.promise
+          throw new Error('socket hang up')
+        }
+        return { content: [{ type: 'text', text: 'flaky-ok' }] }
+      })
+
+      const flaky = callTool('flaky_tool', {})
+      const steady = callTool('steady', {})
+
+      expect(await flaky).toEqual({ success: true, data: 'flaky-ok' })
+
+      // Three clients: the flaky call's original, the steady call's, and the
+      // flaky call's rebuilt one. Only the failing connection was closed.
+      expect(clientInstances).toHaveLength(3)
+      expect(clientInstances[0].closed).toBe(true)
+      expect(clientInstances[1].closed).toBe(false)
+      expect(mockClose).toHaveBeenCalledTimes(1)
+
+      // …and the untouched connection's call still completes normally.
+      releaseSteady.resolve()
+      expect(await steady).toEqual({ success: true, data: 'steady-ok' })
+      expect(clientInstances[1].closed).toBe(false)
+    })
+
+    it('retries a transport error exactly once on a rebuilt connection', async () => {
+      mockCallTool.mockRejectedValue(new Error('fetch failed'))
+
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const result = await callTool('test_tool', {})
+
+      expect(result.success).toBe(false)
+      expect(result.error).toBe('fetch failed')
+      expect(mockCallTool).toHaveBeenCalledTimes(2)
+      // Exactly one reconnect: original closed, one replacement built.
+      expect(clientInstances).toHaveLength(2)
+      expect(clientInstances[0].closed).toBe(true)
+    })
+
+    it('never retries a tool-level error', async () => {
+      mockCallTool.mockRejectedValue(new Error('Tool execution failed: unknown argument'))
+
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const result = await callTool('test_tool', {})
+
+      expect(result.success).toBe(false)
+      expect(mockCallTool).toHaveBeenCalledTimes(1)
+      expect(mockClose).not.toHaveBeenCalled()
+      expect(clientInstances).toHaveLength(1)
+    })
+
+    it('releases the lease when the call throws, so the connection is reused', async () => {
+      mockCallTool.mockRejectedValueOnce(new Error('Tool execution failed: bad args'))
+
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const failed = await callTool('test_tool', {})
+      const ok = await callTool('test_tool', {})
+
+      expect(failed.success).toBe(false)
+      expect(ok.success).toBe(true)
+      // The finally-release put the warm connection back — no second client.
+      expect(clientInstances).toHaveLength(1)
+    })
+
+    // Exhaustion contract: the pool GROWS (an overflow connection is opened
+    // for the extra call and closed on release) rather than queueing, so a
+    // slow tool can't stall unrelated calls behind a busy slot.
+    it('grows past the pool size instead of queueing, and closes the overflow', async () => {
+      vi.stubEnv('MCP_GATEWAY_POOL_SIZE', '1')
+
+      const { callTool, isConnected } =
+        await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const release = deferred()
+      mockCallTool.mockImplementation(async () => {
+        await release.promise
+        return { content: [{ type: 'text', text: 'ok' }] }
+      })
+
+      const first = callTool('a', {})
+      const second = callTool('b', {})
+
+      // The second call got its own connection immediately — it did not wait
+      // for the single warm slot to free up.
+      expect(clientInstances).toHaveLength(2)
+
+      release.resolve()
+      const results = await Promise.all([first, second])
+
+      expect(results.every((r) => r.success)).toBe(true)
+      expect(mockCallTool).toHaveBeenCalledTimes(2)
+      expect(clientInstances[0].closed).toBe(false) // warm slot stays open
+      expect(clientInstances[1].closed).toBe(true) // overflow closed on release
+      expect(isConnected()).toBe(true)
     })
   })
 })

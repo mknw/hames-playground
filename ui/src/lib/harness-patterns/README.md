@@ -1190,7 +1190,7 @@ harness-patterns/
 ├── tools.server.ts         # Tools() — groups MCP tools by namespace
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? callback
 ├── routing.server.ts       # BAML router integration (routeMessageOp)
-├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE tool transports — sandbox (in-VM) → app-side in-process → MCP gateway; demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
+├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE tool transports — sandbox (in-VM) → app-side in-process → MCP gateway; leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, describeToolResultOp, etc.
 ├── summarize.server.ts     # scheduleSummarization() — background tool result summarization via DescribeFallback
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)

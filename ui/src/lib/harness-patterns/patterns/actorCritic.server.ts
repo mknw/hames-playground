@@ -20,9 +20,8 @@ import type {
   ToolCallEventData,
   ToolResultEventData,
   ControllerActionEventData,
-  CriticResultEventData
+  CriticResultEventData,
 } from '../types'
-import { MAX_RETRIES } from '../types'
 import type { ErrorEventData, MultiCallMode } from '../types'
 import { runBatch, combineOutcomes } from '../parallel-tools.server'
 import type { SubCall } from '../parallel-tools.server'
@@ -68,15 +67,12 @@ export function actorCritic<T extends ActorCriticData>(
   actor: CodeModeControllerFnWithLLMData,
   critic: CriticFnWithLLMData,
   tools: string[],
-  config?: ActorCriticConfig
+  config?: ActorCriticConfig,
 ): ConfiguredPattern<T> {
   const availableTools = config?.availableTools ?? tools
   const resolved = resolveConfig('actorCritic', config)
 
-  const fn = async (
-    scope: PatternScope<T>,
-    view: EventView
-  ): Promise<PatternScope<T>> => {
+  const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
     const maxRetries = config?.maxRetries ?? getRequestSettings().maxRetries
     // Critic cadence: run the critic every Nth *successful* actor turn (default
     // 1 = every turn, the original behavior). Clamped to >= 1 so a stray 0 /
@@ -115,14 +111,12 @@ export function actorCritic<T extends ActorCriticData>(
       action: ControllerAction,
       resultData: unknown,
       attempt: number,
-      intent: string
+      intent: string,
     ): Promise<'accepted' | 'continue'> => {
       successfulTurns++
       const isLastAttempt = attempt === maxRetries - 1
       const shouldCritique =
-        action.is_final === true ||
-        isLastAttempt ||
-        successfulTurns % criticCadence === 0
+        action.is_final === true || isLastAttempt || successfulTurns % criticCadence === 0
 
       if (!shouldCritique) {
         // Skip the critic this turn and let the actor take the next step. The
@@ -138,21 +132,25 @@ export function actorCritic<T extends ActorCriticData>(
       }
 
       const criticCollector = new Collector('critic')
-      const { result: evalResult, llmCall: criticLlmCall } = await critic(intent, previousAttempts, criticCollector)
+      const { result: evalResult, llmCall: criticLlmCall } = await critic(
+        intent,
+        previousAttempts,
+        criticCollector,
+      )
 
       trackEvent(
         scope,
         'critic_result',
         { result: evalResult } as CriticResultEventData,
         resolved.trackHistory,
-        criticLlmCall
+        criticLlmCall,
       )
 
       const evaluation = {
         ok: evalResult.is_sufficient,
         feedback: evalResult.is_sufficient
           ? undefined
-          : evalResult.suggested_approach ?? evalResult.explanation
+          : (evalResult.suggested_approach ?? evalResult.explanation),
       }
 
       if (evaluation.ok) {
@@ -160,7 +158,7 @@ export function actorCritic<T extends ActorCriticData>(
           ...scope.data,
           attempt,
           lastAction: action,
-          result: resultData
+          result: resultData,
         }
         return 'accepted'
       }
@@ -171,7 +169,7 @@ export function actorCritic<T extends ActorCriticData>(
         attempt,
         lastAction: action,
         lastResult: resultData,
-        feedback: evaluation.feedback
+        feedback: evaluation.feedback,
       }
       return 'continue'
     }
@@ -186,9 +184,7 @@ export function actorCritic<T extends ActorCriticData>(
         // in the actor prompt. `fromAll()` bypasses the per-pattern view scope —
         // the user_message lives at the harness level, outside this loop's id.
         const userMessage = view.fromAll().ofType('user_message').last(1).get()[0]
-        const userContent = userMessage
-          ? (userMessage.data as { content: string }).content
-          : ''
+        const userContent = userMessage ? (userMessage.data as { content: string }).content : ''
         const intent = scope.data.intent ?? userContent
 
         // Call actor. We pass `attempt + 1` (1-indexed for the prompt) and
@@ -214,7 +210,7 @@ export function actorCritic<T extends ActorCriticData>(
           'controller_action',
           { action, turn: attempt, maxTurns: maxRetries } as ControllerActionEventData,
           resolved.trackHistory,
-          actorLlmCall
+          actorLlmCall,
         )
 
         // P0 (Return-from-critic redesign): the actor cannot EXIT the loop on
@@ -262,7 +258,10 @@ export function actorCritic<T extends ActorCriticData>(
               (config?.dynamicToolPattern?.test(c.tool_name) ?? false)
             if (!callAllowed) {
               trackedArgs.push(c.tool_args)
-              subCalls.push({ tool: c.tool_name, precheckError: `Tool not allowed: ${c.tool_name}` })
+              subCalls.push({
+                tool: c.tool_name,
+                precheckError: `Tool not allowed: ${c.tool_name}`,
+              })
               continue
             }
             let callArgs: Record<string, unknown>
@@ -296,11 +295,10 @@ export function actorCritic<T extends ActorCriticData>(
                 }
                 if (config?.onToolResult) {
                   try {
-                    const hookResult = await config.onToolResult(
-                      c.tool_name,
-                      result,
-                      { callId, args: callArgs }
-                    )
+                    const hookResult = await config.onToolResult(c.tool_name, result, {
+                      callId,
+                      args: callArgs,
+                    })
                     if (hookResult && 'data' in hookResult && hookResult.data !== undefined) {
                       result.data = hookResult.data
                     }
@@ -313,7 +311,7 @@ export function actorCritic<T extends ActorCriticData>(
                         error: `onToolResult hook failed for ${c.tool_name}: ${message}`,
                         severity: 'recoverable',
                       },
-                      true
+                      true,
                     )
                   }
                 }
@@ -326,9 +324,14 @@ export function actorCritic<T extends ActorCriticData>(
             trackEvent(
               scope,
               'tool_call',
-              { callId: callIds[i], batchId, tool: sc.tool, args: trackedArgs[i] } as ToolCallEventData,
-              resolved.trackHistory
-            )
+              {
+                callId: callIds[i],
+                batchId,
+                tool: sc.tool,
+                args: trackedArgs[i],
+              } as ToolCallEventData,
+              resolved.trackHistory,
+            ),
           )
 
           const outcomes = await runBatch(subCalls, multiMode)
@@ -345,8 +348,8 @@ export function actorCritic<T extends ActorCriticData>(
                 success: o.success,
                 error: o.error,
               } as ToolResultEventData,
-              resolved.trackHistory
-            )
+              resolved.trackHistory,
+            ),
           )
 
           const { combined, anySucceeded, errors } = combineOutcomes(outcomes)
@@ -367,7 +370,9 @@ export function actorCritic<T extends ActorCriticData>(
             continue
           }
 
-          if (await runCadenceAndCritic(scope, action, combined, attempt, intent) === 'accepted') {
+          if (
+            (await runCadenceAndCritic(scope, action, combined, attempt, intent)) === 'accepted'
+          ) {
             return scope
           }
           continue
@@ -484,7 +489,7 @@ export function actorCritic<T extends ActorCriticData>(
           scope,
           'tool_call',
           { callId, tool: action.tool_name, args } as ToolCallEventData,
-          resolved.trackHistory
+          resolved.trackHistory,
         )
 
         // Execute tool
@@ -499,7 +504,7 @@ export function actorCritic<T extends ActorCriticData>(
         if (result.success && action.tool_name === 'code-mode') {
           invalidateToolDescriptions()
           try {
-            await mcpListTools()  // warm the gateway's own cache; non-fatal
+            await mcpListTools() // warm the gateway's own cache; non-fatal
           } catch {
             // Non-fatal — the actor can still try to invoke the new tool by name.
           }
@@ -508,11 +513,7 @@ export function actorCritic<T extends ActorCriticData>(
         // onToolResult hook: enrich/transform result before commit. See SimpleLoop for full doc.
         if (config?.onToolResult) {
           try {
-            const hookResult = await config.onToolResult(
-              action.tool_name,
-              result,
-              { callId, args }
-            )
+            const hookResult = await config.onToolResult(action.tool_name, result, { callId, args })
             if (hookResult && 'data' in hookResult && hookResult.data !== undefined) {
               result.data = hookResult.data
             }
@@ -525,7 +526,7 @@ export function actorCritic<T extends ActorCriticData>(
                 error: `onToolResult hook failed for ${action.tool_name}: ${message}`,
                 severity: 'recoverable',
               },
-              true
+              true,
             )
           }
         }
@@ -536,7 +537,7 @@ export function actorCritic<T extends ActorCriticData>(
           toolName: action.tool_name,
           script,
           output: result.success ? JSON.stringify(result.data) : '',
-          error: result.success ? null : (result.error ?? 'Execution failed')
+          error: result.success ? null : (result.error ?? 'Execution failed'),
         })
 
         trackEvent(
@@ -547,28 +548,35 @@ export function actorCritic<T extends ActorCriticData>(
             tool: action.tool_name,
             result: result.data,
             success: result.success,
-            error: result.error
+            error: result.error,
           } as ToolResultEventData,
-          resolved.trackHistory
+          resolved.trackHistory,
         )
 
         if (!result.success) {
           continue
         }
 
-        if (await runCadenceAndCritic(scope, action, result.data, attempt, intent) === 'accepted') {
+        if (
+          (await runCadenceAndCritic(scope, action, result.data, attempt, intent)) === 'accepted'
+        ) {
           return scope
         }
       }
 
       // Exhausted retries
       errorMessage = `Max retries (${maxRetries}) exceeded`
-      trackEvent(scope, 'error', {
-        error: errorMessage,
-        severity: resolved.errorSeverity,
-        hint: getErrorHint(errorMessage),
-        iteration: maxRetries - 1,
-      } as ErrorEventData, true)
+      trackEvent(
+        scope,
+        'error',
+        {
+          error: errorMessage,
+          severity: resolved.errorSeverity,
+          hint: getErrorHint(errorMessage),
+          iteration: maxRetries - 1,
+        } as ErrorEventData,
+        true,
+      )
 
       return scope
     } catch (error) {
@@ -576,12 +584,18 @@ export function actorCritic<T extends ActorCriticData>(
       // Preserve LLM call data through to the error event so the panel can
       // show the prompt drill-down for failed BAML calls (actor or critic).
       const llmCall = error instanceof LLMCallError ? error.llmCall : undefined
-      trackEvent(scope, 'error', {
-        error: msg,
-        severity: resolved.errorSeverity,
-        hint: getErrorHint(msg),
-        ...(llmCall ? { kind: 'llm_call' as const } : {}),
-      } as ErrorEventData, true, llmCall)
+      trackEvent(
+        scope,
+        'error',
+        {
+          error: msg,
+          severity: resolved.errorSeverity,
+          hint: getErrorHint(msg),
+          ...(llmCall ? { kind: 'llm_call' as const } : {}),
+        } as ErrorEventData,
+        true,
+        llmCall,
+      )
       return scope
     }
   }
@@ -590,6 +604,6 @@ export function actorCritic<T extends ActorCriticData>(
     name: 'actorCritic',
     fn,
     config: resolved,
-    estimateTurns: (s) => config?.maxRetries ?? s.maxRetries
+    estimateTurns: (s) => config?.maxRetries ?? s.maxRetries,
   }
 }

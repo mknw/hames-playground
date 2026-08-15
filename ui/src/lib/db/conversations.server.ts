@@ -86,11 +86,11 @@ function rowToConversation(row: DbRow): ConversationRow {
  */
 export async function loadConversation(
   id: string,
-  userId: string
+  userId: string,
 ): Promise<ConversationRow | null> {
   const { rows } = await query<DbRow>(
     'SELECT id, user_id, agent_id, title, context, kind, source, status, created_at, updated_at FROM conversations WHERE id = $1 AND user_id = $2',
-    [id, userId]
+    [id, userId],
   )
   if (rows.length === 0) return null
   return rowToConversation(rows[0])
@@ -134,9 +134,7 @@ export interface SaveConversationInput {
  *     only mutator of `kind` (see {@link promoteConversation}).
  *   - `status`          — always refreshed from the latest context.
  */
-export async function saveConversation(
-  input: SaveConversationInput
-): Promise<void> {
+export async function saveConversation(input: SaveConversationInput): Promise<void> {
   await query(
     `INSERT INTO conversations (id, user_id, agent_id, title, context, kind, source, status)
      VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
@@ -155,7 +153,7 @@ export async function saveConversation(
       input.kind ?? 'conversation',
       input.source ?? 'chat',
       input.status ?? 'running',
-    ]
+    ],
   )
 }
 
@@ -164,14 +162,11 @@ export async function saveConversation(
  * user_id, so a wrong userId silently no-ops. Idempotent — promoting an
  * already-promoted row is a harmless no-op write.
  */
-export async function promoteConversation(
-  id: string,
-  userId: string
-): Promise<void> {
+export async function promoteConversation(id: string, userId: string): Promise<void> {
   await query(
     `UPDATE conversations SET kind = 'conversation', updated_at = NOW()
      WHERE id = $1 AND user_id = $2 AND kind = 'action'`,
-    [id, userId]
+    [id, userId],
   )
 }
 
@@ -183,12 +178,12 @@ export async function promoteConversation(
 export async function setConversationStatus(
   id: string,
   userId: string,
-  status: ConversationStatus
+  status: ConversationStatus,
 ): Promise<void> {
   await query(
     `UPDATE conversations SET status = $1, updated_at = NOW()
      WHERE id = $2 AND user_id = $3`,
-    [status, id, userId]
+    [status, id, userId],
   )
 }
 
@@ -201,12 +196,10 @@ export async function setConversationStatus(
  * order is stable for a conversation's whole lifetime. `updated_at` is still
  * returned for display ("x ago" shows activity, it just doesn't sort).
  */
-export async function listConversations(
-  userId: string
-): Promise<ConversationListItem[]> {
+export async function listConversations(userId: string): Promise<ConversationListItem[]> {
   const { rows } = await query<DbListRow>(
     'SELECT id, agent_id, title, kind, source, status, updated_at FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200',
-    [userId]
+    [userId],
   )
   return rows.map((r) => ({
     id: r.id,
@@ -238,9 +231,7 @@ export interface ConversationEventsRow {
  * {@link listConversations} so a long-lived account can't turn one page load
  * into an unbounded read.
  */
-export async function listConversationEvents(
-  userId: string
-): Promise<ConversationEventsRow[]> {
+export async function listConversationEvents(userId: string): Promise<ConversationEventsRow[]> {
   const { rows } = await query<{
     id: string
     agent_id: string
@@ -250,7 +241,7 @@ export async function listConversationEvents(
   }>(
     `SELECT id, agent_id, title, updated_at, context -> 'events' AS events
      FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200`,
-    [userId]
+    [userId],
   )
   return rows.map((r) => ({
     id: r.id,
@@ -264,14 +255,8 @@ export async function listConversationEvents(
 /**
  * Delete a conversation. No-op when the id doesn't belong to the user.
  */
-export async function deleteConversation(
-  id: string,
-  userId: string
-): Promise<void> {
-  await query(
-    'DELETE FROM conversations WHERE id = $1 AND user_id = $2',
-    [id, userId]
-  )
+export async function deleteConversation(id: string, userId: string): Promise<void> {
+  await query('DELETE FROM conversations WHERE id = $1 AND user_id = $2', [id, userId])
 }
 
 /**
@@ -280,14 +265,11 @@ export async function deleteConversation(
  * same contract as {@link deleteConversation}. Returns the ids actually
  * deleted so callers can patch caches from ground truth.
  */
-export async function deleteConversations(
-  ids: string[],
-  userId: string
-): Promise<string[]> {
+export async function deleteConversations(ids: string[], userId: string): Promise<string[]> {
   if (ids.length === 0) return []
   const { rows } = await query<{ id: string }>(
     'DELETE FROM conversations WHERE id = ANY($1) AND user_id = $2 RETURNING id',
-    [ids, userId]
+    [ids, userId],
   )
   return rows.map((r) => r.id)
 }

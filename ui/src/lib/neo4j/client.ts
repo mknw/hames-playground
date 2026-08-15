@@ -11,24 +11,24 @@
  * Client-side localStorage credentials must be passed as parameters.
  */
 
-import neo4j, { Driver } from 'neo4j-driver';
-import { getEndpoints } from '../config/endpoints';
+import neo4j, { Driver } from 'neo4j-driver'
+import { getEndpoints } from '../config/endpoints'
 
 // ============================================================================
 // Types
 // ============================================================================
 
 export interface Neo4jCredentials {
-  user?: string;
-  password?: string;
+  user?: string
+  password?: string
 }
 
 // ============================================================================
 // Driver Management
 // ============================================================================
 
-let driver: Driver | null = null;
-let currentCredentials: { user: string; password: string } | null = null;
+let driver: Driver | null = null
+let currentCredentials: { user: string; password: string } | null = null
 
 /**
  * Get default credentials from environment or defaults
@@ -36,8 +36,8 @@ let currentCredentials: { user: string; password: string } | null = null;
 function getDefaultCredentials(): { user: string; password: string } {
   return {
     user: process.env.NEO4J_USER || 'neo4j',
-    password: process.env.NEO4J_PASSWORD || 'password'
-  };
+    password: process.env.NEO4J_PASSWORD || 'password',
+  }
 }
 
 /**
@@ -48,35 +48,31 @@ function getDefaultCredentials(): { user: string; password: string } {
 export function getNeo4jDriver(credentials?: Neo4jCredentials): Driver {
   const creds = {
     user: credentials?.user || getDefaultCredentials().user,
-    password: credentials?.password || getDefaultCredentials().password
-  };
+    password: credentials?.password || getDefaultCredentials().password,
+  }
 
   // Check if we need to recreate the driver (credentials changed)
   const credentialsChanged =
     currentCredentials &&
-    (currentCredentials.user !== creds.user ||
-      currentCredentials.password !== creds.password);
+    (currentCredentials.user !== creds.user || currentCredentials.password !== creds.password)
 
   if (credentialsChanged && driver) {
     // Close existing driver and recreate
-    driver.close().catch(console.error);
-    driver = null;
+    driver.close().catch(console.error)
+    driver = null
   }
 
   if (!driver) {
-    const endpoints = getEndpoints();
-    driver = neo4j.driver(
-      endpoints.neo4j.bolt,
-      neo4j.auth.basic(creds.user, creds.password)
-    );
-    currentCredentials = creds;
+    const endpoints = getEndpoints()
+    driver = neo4j.driver(endpoints.neo4j.bolt, neo4j.auth.basic(creds.user, creds.password))
+    currentCredentials = creds
 
-    console.log('✅ Neo4j driver initialized');
-    console.log(`   - URI: ${endpoints.neo4j.bolt}`);
-    console.log(`   - User: ${creds.user}`);
+    console.log('✅ Neo4j driver initialized')
+    console.log(`   - URI: ${endpoints.neo4j.bolt}`)
+    console.log(`   - User: ${creds.user}`)
   }
 
-  return driver;
+  return driver
 }
 
 /**
@@ -85,10 +81,10 @@ export function getNeo4jDriver(credentials?: Neo4jCredentials): Driver {
  */
 export async function resetDriver(): Promise<void> {
   if (driver) {
-    await driver.close();
-    driver = null;
-    currentCredentials = null;
-    console.log('✅ Neo4j driver reset');
+    await driver.close()
+    driver = null
+    currentCredentials = null
+    console.log('✅ Neo4j driver reset')
   }
 }
 
@@ -97,11 +93,11 @@ export async function resetDriver(): Promise<void> {
  */
 export async function verifyConnection(credentials?: Neo4jCredentials): Promise<boolean> {
   try {
-    const drv = getNeo4jDriver(credentials);
-    await drv.verifyConnectivity();
-    return true;
+    const drv = getNeo4jDriver(credentials)
+    await drv.verifyConnectivity()
+    return true
   } catch (error) {
-    console.error('Neo4j connection verification failed:', error);
-    return false;
+    console.error('Neo4j connection verification failed:', error)
+    return false
   }
 }

@@ -19,11 +19,11 @@ export default function NotFound() {
       </p>
       <p class="my-4">
         <A href="/" class="text-sky-600 hover:underline">
-          Home
+          Chat
         </A>
         {" - "}
-        <A href="/about" class="text-sky-600 hover:underline">
-          About Page
+        <A href="/dashboard" class="text-sky-600 hover:underline">
+          Metrics
         </A>
       </p>
     </main>

@@ -9,42 +9,42 @@
  * never yields it. Tenant-owner provisioning is documented in
  * `docs/deploy/entra-setup.md`.
  */
-import { assertServerOnImport } from "../harness-patterns/assert.server";
-import type { Configuration } from "@azure/msal-node";
+import { assertServerOnImport } from '../harness-patterns/assert.server'
+import type { Configuration } from '@azure/msal-node'
 
-assertServerOnImport();
+assertServerOnImport()
 
 /** Public Azure AD (Entra) authority host. */
-export const AAD_HOST = "https://login.microsoftonline.com";
+export const AAD_HOST = 'https://login.microsoftonline.com'
 
 export interface EntraConfig {
-  tenantId: string;
-  clientId: string;
-  clientSecret: string;
+  tenantId: string
+  clientId: string
+  clientSecret: string
   /** `${AAD_HOST}/${tenantId}` — single-tenant authority. */
-  authority: string;
+  authority: string
   /** Must match a Redirect URI registered on the app (Web platform). */
-  redirectUri: string;
+  redirectUri: string
   /** Where Entra returns the browser after sign-out. */
-  postLogoutRedirectUri: string;
+  postLogoutRedirectUri: string
   /**
    * Resource scopes requested at sign-in. `openid` / `profile` /
    * `offline_access` are reserved and added by MSAL automatically — do NOT
    * list them here (MSAL throws if you do). `offline_access` is what yields
    * the refresh token we persist for the future OBO exchange (#110).
    */
-  scopes: string[];
+  scopes: string[]
 }
 
-const DEFAULT_REDIRECT_URI = "http://localhost:3444/api/auth/callback";
-const DEFAULT_POST_LOGOUT_REDIRECT_URI = "http://localhost:3444/auth/signin";
+const DEFAULT_REDIRECT_URI = 'http://localhost:3444/api/auth/callback'
+const DEFAULT_POST_LOGOUT_REDIRECT_URI = 'http://localhost:3444/auth/signin'
 
 /**
  * Reserved OIDC scopes MSAL adds itself; passing them explicitly makes MSAL
  * throw. Filtered defensively so an operator-supplied `AZURE_GRAPH_SCOPES`
  * can't break sign-in by including them.
  */
-const RESERVED_SCOPES = new Set(["openid", "profile", "offline_access"]);
+const RESERVED_SCOPES = new Set(['openid', 'profile', 'offline_access'])
 
 /**
  * Delegated Graph scopes requested **at sign-in**, so one consent covers every
@@ -65,27 +65,28 @@ const RESERVED_SCOPES = new Set(["openid", "profile", "offline_access"]);
  *
  * WRITE scopes are included deliberately (one-and-done consent). Note that a
  * granted scope is not a capability: the model can only do what a *registered
- * tool* exposes, and today only the read-only `graph_me` exists. Any future
- * write tool should carry its own confirmation gate.
+ * tool* exposes, and every `graph` tool registered so far only reads — the
+ * consented scope set deliberately runs ahead of the implemented tools. Any
+ * future write tool should carry its own confirmation gate.
  */
 export const DEFAULT_GRAPH_SCOPES: readonly string[] = [
-  "User.Read", // own profile
-  "email",
-  "Mail.Read", // read mailbox
-  "Mail.Send", // WRITE: send as the user
-  "Calendars.ReadWrite", // WRITE: create/modify events
-  "Files.Read.All", // OneDrive + SharePoint files the user can access
-  "Sites.Read.All", // SharePoint sites the user can access
-];
+  'User.Read', // own profile
+  'email',
+  'Mail.Read', // read mailbox
+  'Mail.Send', // WRITE: send as the user
+  'Calendars.ReadWrite', // WRITE: create/modify events
+  'Files.Read.All', // OneDrive + SharePoint files the user can access
+  'Sites.Read.All', // SharePoint sites the user can access
+]
 
 /** Parse an operator-supplied scope override (comma or whitespace separated). */
 function parseScopes(raw: string | undefined): string[] | null {
-  if (!raw?.trim()) return null;
+  if (!raw?.trim()) return null
   const list = raw
     .split(/[\s,]+/)
     .map((s) => s.trim())
-    .filter((s) => s.length > 0 && !RESERVED_SCOPES.has(s.toLowerCase()));
-  return list.length > 0 ? list : null;
+    .filter((s) => s.length > 0 && !RESERVED_SCOPES.has(s.toLowerCase()))
+  return list.length > 0 ? list : null
 }
 
 /**
@@ -93,14 +94,10 @@ function parseScopes(raw: string | undefined): string[] | null {
  * this and returns a helpful error instead of a raw MSAL crash when the tenant
  * config hasn't been filled in yet (dev-bypass remains the zero-config path).
  */
-export function isEntraConfigured(
-  env: Record<string, string | undefined> = process.env,
-): boolean {
+export function isEntraConfigured(env: Record<string, string | undefined> = process.env): boolean {
   return Boolean(
-    env.AZURE_TENANT_ID?.trim() &&
-      env.AZURE_CLIENT_ID?.trim() &&
-      env.AZURE_CLIENT_SECRET?.trim(),
-  );
+    env.AZURE_TENANT_ID?.trim() && env.AZURE_CLIENT_ID?.trim() && env.AZURE_CLIENT_SECRET?.trim(),
+  )
 }
 
 /**
@@ -111,9 +108,9 @@ export function isEntraConfigured(
 export function buildEntraConfig(
   env: Record<string, string | undefined> = process.env,
 ): EntraConfig {
-  const tenantId = required(env, "AZURE_TENANT_ID");
-  const clientId = required(env, "AZURE_CLIENT_ID");
-  const clientSecret = required(env, "AZURE_CLIENT_SECRET");
+  const tenantId = required(env, 'AZURE_TENANT_ID')
+  const clientId = required(env, 'AZURE_CLIENT_ID')
+  const clientSecret = required(env, 'AZURE_CLIENT_SECRET')
   return {
     tenantId,
     clientId,
@@ -121,25 +118,21 @@ export function buildEntraConfig(
     authority: `${AAD_HOST}/${tenantId}`,
     redirectUri: env.AUTH_REDIRECT_URI?.trim() || DEFAULT_REDIRECT_URI,
     postLogoutRedirectUri:
-      env.AUTH_POST_LOGOUT_REDIRECT_URI?.trim() ||
-      DEFAULT_POST_LOGOUT_REDIRECT_URI,
+      env.AUTH_POST_LOGOUT_REDIRECT_URI?.trim() || DEFAULT_POST_LOGOUT_REDIRECT_URI,
     scopes: parseScopes(env.AZURE_GRAPH_SCOPES) ?? [...DEFAULT_GRAPH_SCOPES],
-  };
+  }
 }
 
-function required(
-  env: Record<string, string | undefined>,
-  key: string,
-): string {
-  const v = env[key]?.trim();
+function required(env: Record<string, string | undefined>, key: string): string {
+  const v = env[key]?.trim()
   if (!v) {
     throw new Error(
       `[entra] ${key} is not set. Entra SSO is not configured — set ` +
         `AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET (see ` +
         `docs/deploy/entra-setup.md), or run dev with VITE_DEV_BYPASS_AUTH=true.`,
-    );
+    )
   }
-  return v;
+  return v
 }
 
 /**
@@ -155,5 +148,5 @@ export function msalConfiguration(cfg: EntraConfig): Configuration {
       authority: cfg.authority,
       clientSecret: cfg.clientSecret,
     },
-  };
+  }
 }

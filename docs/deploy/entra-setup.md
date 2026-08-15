@@ -52,9 +52,14 @@ set a rotation reminder. (Rotate out any secret previously shared with Stack.)
 | `User.Read` | grant tenant-wide admin consent |
 | `Mail.Read`, `Mail.Send`, `Calendars.ReadWrite`, `Files.Read.All`, `Sites.Read.All` | add + grant admin consent before enabling the connectors — see "Scopes are requested up front" below |
 
-`offline_access` is what yields the refresh token the app persists for the
-future OBO exchange (#110). Additional Graph scopes for #110 (e.g. `Mail.Read`,
-`Files.Read.All`) are added there, with admin consent, when that work starts.
+`offline_access` is what yields the refresh token the app persists so Graph calls
+can be made later without dragging the user back through sign-in (#110).
+
+⚠ **Every scope in the third row is already requested at sign-in today** — see
+`DEFAULT_GRAPH_SCOPES` in `lib/auth/entra-config.server.ts`. They are not
+optional extras to add once the connectors ship: a scope that is requested but
+not consented fails **the entire sign-in**, not just the connector that wanted
+it. Grant all of them before the first user signs in.
 
 ---
 

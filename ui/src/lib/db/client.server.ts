@@ -13,8 +13,7 @@ assertServerOnImport()
 
 const { Pool } = pg
 
-const DEFAULT_DATABASE_URL =
-  'postgresql://postgres:password@localhost:5432/kgagent'
+const DEFAULT_DATABASE_URL = 'postgresql://postgres:password@localhost:5432/kgagent'
 
 let _pool: pg.Pool | null = null
 let _initPromise: Promise<void> | null = null
@@ -89,7 +88,7 @@ async function initSchema(): Promise<void> {
  */
 export async function query<R extends pg.QueryResultRow = pg.QueryResultRow>(
   text: string,
-  params?: unknown[]
+  params?: unknown[],
 ): Promise<pg.QueryResult<R>> {
   if (!_initPromise) {
     _initPromise = initSchema().catch((err) => {

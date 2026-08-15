@@ -22,6 +22,7 @@ import {
   deleteConversation,
   deleteConversations,
   deriveTitle,
+  getConversationOwner,
   promoteConversation,
   setConversationStatus,
 } from '../../../lib/db/conversations.server'
@@ -138,6 +139,20 @@ describe('conversations CRUD', () => {
     const otherUser = `other-${Math.random().toString(36).slice(2, 10)}`
     const stolen = await loadConversation(id, otherUser)
     expect(stolen).toBeNull()
+  })
+
+  it('getConversationOwner answers who a row belongs to, and null for an unknown id', async () => {
+    if (!dbAvailable) return
+    const id = `conv-${Math.random().toString(36).slice(2, 10)}`
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'default',
+      title: 't',
+      serializedContext: '{}',
+    })
+    expect(await getConversationOwner(id)).toBe(TEST_USER)
+    expect(await getConversationOwner(`missing-${id}`)).toBeNull()
   })
 
   it('lists newest-created first, scoped to user', async () => {

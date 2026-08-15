@@ -96,6 +96,22 @@ export async function loadConversation(
   return rowToConversation(rows[0])
 }
 
+/**
+ * The user a conversation belongs to, or null when the id is unknown.
+ *
+ * Unlike {@link loadConversation} this is not scoped to a caller — it answers
+ * "who owns this id?" rather than "may I read it?", which is what the Data
+ * Stash ownership resolver needs to compare an id against the requesting user
+ * (see `lib/stash/ownership.server.ts`). Returns only the id, never content.
+ */
+export async function getConversationOwner(id: string): Promise<string | null> {
+  const { rows } = await query<{ user_id: string }>(
+    'SELECT user_id FROM conversations WHERE id = $1',
+    [id]
+  )
+  return rows.length > 0 ? rows[0].user_id : null
+}
+
 export interface SaveConversationInput {
   id: string
   userId: string

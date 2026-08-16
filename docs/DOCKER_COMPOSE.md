@@ -70,6 +70,10 @@ All services communicate via a shared bridge network (`app-network`).
 - **Config**: `env_file: app/.env` (optional), with the in-network endpoints
   overridden in `environment:`
 - **Dependencies**: postgres / neo4j / redis healthy, mcp-gateway started
+- **Requires Compose ≥ 2.24** for the `env_file: [{path, required: false}]` long
+  syntax that makes `app/.env` optional. Older Compose rejects the whole file,
+  not just this service — so check `docker compose version` first if the bring-up
+  suddenly fails on an otherwise untouched stack.
 
 **Deployment/parity, not the dev loop.** `pnpm dev` on the host is unchanged and
 remains how you develop; this service exists so the same code can be run the way

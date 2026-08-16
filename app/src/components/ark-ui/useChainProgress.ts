@@ -13,6 +13,7 @@
  * `currentTurn` advances on:
  *   - `controller_action` (per-turn for loops)
  *   - `assistant_message` from a non-final pattern (router, synthesizer)
+ *   - `plan_created` (the `planner`'s only output — it emits no action)
  *   - leaf `pattern_exit` (no-op leaf advances)
  *
  * Status text is whatever the latest `controller_action.action.status` /
@@ -81,14 +82,11 @@ export function createChainProgress(): ChainProgressController {
 
   /** Single-shot snapshot mutator — every ingest path applies one update so
    *  Solid only schedules one downstream re-run per event. */
-  const update = (
-    fn: (prev: ChainProgressSnapshot) => Partial<ChainProgressSnapshot>
-  ) => setSnapshot((prev) => ({ ...prev, ...fn(prev) }))
+  const update = (fn: (prev: ChainProgressSnapshot) => Partial<ChainProgressSnapshot>) =>
+    setSnapshot((prev) => ({ ...prev, ...fn(prev) }))
 
   /** Compute pathProjection delta from a flushed pending enter (fallback path). */
-  const flushPending = (
-    prev: ChainProgressSnapshot
-  ): { pathProjection: number } | null => {
+  const flushPending = (prev: ChainProgressSnapshot): { pathProjection: number } | null => {
     if (seeded || !pendingEnter) {
       pendingEnter = null
       return null
@@ -158,6 +156,27 @@ export function createChainProgress(): ChainProgressController {
               currentTurn: Math.min(prev.currentTurn + 1, prev.maxProjection || path),
               pathProjection: path,
               status: status ?? prev.status,
+            }
+          })
+          advancedForPattern = event.patternId
+          break
+        }
+
+        // A `planner` contributes 1 to the chain estimate (estimateTurns: () => 1)
+        // but emits neither a controller_action nor an assistant_message, so
+        // without this the bar can never reach its own denominator — every
+        // planned run visibly finished at 9/10. Guarded like assistant_message:
+        // one advance per pattern, whatever it emits.
+        case 'plan_created': {
+          if (advancedForPattern === event.patternId) break
+          const d = event.data as { skipped?: string }
+          update((prev) => {
+            const flushed = flushPending(prev)
+            const path = flushed?.pathProjection ?? prev.pathProjection
+            return {
+              currentTurn: Math.min(prev.currentTurn + 1, prev.maxProjection || path),
+              pathProjection: path,
+              status: d.skipped ? prev.status : 'Planned the approach…',
             }
           })
           advancedForPattern = event.patternId

@@ -188,8 +188,11 @@ export function actorCritic<T extends ActorCriticData>(
         // other upstream pattern emitting an intermediate `assistant_message`
         // (e.g. a transient "Looking into that..." status) can't bump itself
         // into the "last message" slot and end up rendered as the user's input
-        // in the actor prompt. `fromAll()` bypasses the per-pattern view scope —
-        // the user_message lives at the harness level, outside this loop's id.
+        // in the actor prompt. `fromAll()` drops the per-pattern scope — the
+        // user_message lives at the harness level, outside this loop's id.
+        // It does NOT drop a caller-supplied `viewConfig`'s own filters
+        // (`fromAll()` is `clone()`, and `clone()` copies them); `unfiltered()`
+        // is the method that does, as `planner` uses.
         const userMessage = view.fromAll().ofType('user_message').last(1).get()[0]
         const userContent = userMessage ? (userMessage.data as { content: string }).content : ''
         const intent = scope.data.intent ?? userContent

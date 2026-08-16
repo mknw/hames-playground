@@ -397,7 +397,10 @@ export interface EventView {
   fromPatterns(patternIds: string[]): EventView
   fromLastPattern(): EventView
   fromLastNPatterns(n: number): EventView
+  /** No pattern filter — but the ViewConfig's own filters still apply. */
   fromAll(): EventView
+  /** Same context, NO filters at all (ViewConfig included). */
+  unfiltered(): EventView
   ofType(type: EventType): EventView
   ofTypes(types: EventType[]): EventView
   tools(): EventView
@@ -704,12 +707,18 @@ export interface IntentCompactedEventData {
  *  render as a tool call that never happened. `llmCall` (on the ContextEvent)
  *  holds the BAML call detail. */
 export interface PlanCreatedEventData {
-  /** The plan written to `scope.data.plan` (post-truncation). */
-  plan: import('../../../baml_client/types').PlanResult
-  /** Number of tools the planner was shown. */
+  /** The plan written to `scope.data.plan` (post-truncation). Absent when
+   *  `skipped` is set — there is no plan in that case. */
+  plan?: import('../../../baml_client/types').PlanResult
+  /** Number of tools the planner was shown — the catalog the adapter actually
+   *  resolved (sandbox + gateway), not the raw name list the factory took. */
   toolCount: number
   /** Set when the plan text was capped by `PlannerConfig.maxPlanChars`. */
   truncated?: boolean
+  /** Set when no LLM call was made: the context held no user message to plan
+   *  for, so the chain runs unplanned. Mirrors
+   *  `IntentCompactedEventData.skipped`. */
+  skipped?: 'no-message'
 }
 
 // ============================================================================
@@ -832,8 +841,9 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   // compactIntent is best-effort: on failure it leaves intent unset and the
   // downstream actor falls back to the raw user message — never fatal.
   compactIntent: 'recoverable',
-  // planner is best-effort: on failure it leaves scope.data.plan unset and the
-  // downstream loop runs exactly as it does today (unplanned) — never fatal.
+  // planner is best-effort: on failure it CLEARS scope.data.plan (which is
+  // carried across turns, so leaving it alone would re-inject the previous
+  // question's plan) and the downstream loop runs unplanned — never fatal.
   planner: 'recoverable',
   // retriever is best-effort: a backend failure yields empty matches and the
   // synthesizer answers from whatever else is in context — never fatal.

@@ -164,7 +164,25 @@ describe('planner', () => {
     expect((created.data as { truncated?: boolean }).truncated).toBe(true)
   })
 
-  it('does nothing when there is no user message in context', async () => {
+  it('records the tool count the model was actually shown, not the name list', async () => {
+    const { planner, createScope, createEventView } = await load()
+    // 'not_a_real_tool' resolves to nothing in the mocked catalog, so the
+    // model sees 2 descriptions while the factory was handed 3 names.
+    const pattern = planner([...TOOLS, 'not_a_real_tool'], { patternId: PATTERN_ID })
+    const scope = createScope(PATTERN_ID, {})
+    const view = createEventView(
+      ctxOf(userTurn('plan this')),
+      pattern.config.viewConfig,
+      PATTERN_ID,
+    )
+
+    const result = await pattern.fn(scope, view)
+
+    const created = result.events.find((e) => e.type === 'plan_created')!
+    expect((created.data as { toolCount: number }).toolCount).toBe(2)
+  })
+
+  it('emits a skipped plan_created when there is no user message in context', async () => {
     const { planner, createScope, createEventView } = await load()
     const ctx = ctxOf([])
     const pattern = planner(TOOLS, { patternId: PATTERN_ID })
@@ -175,7 +193,56 @@ describe('planner', () => {
 
     expect(mockPlanner).not.toHaveBeenCalled()
     expect((result.data as { plan?: unknown }).plan).toBeUndefined()
-    expect(result.events).toHaveLength(0)
+    // Visible in the panel as a deliberate skip, not as a planner that never ran.
+    const created = result.events.filter((e) => e.type === 'plan_created')
+    expect(created).toHaveLength(1)
+    expect((created[0].data as { skipped?: string }).skipped).toBe('no-message')
+    expect((created[0].data as { plan?: unknown }).plan).toBeUndefined()
+  })
+
+  it('reads the user message through a view its own viewConfig cannot hide', async () => {
+    const { planner, createScope, createEventView } = await load()
+    // A caller-supplied viewConfig REPLACES the default. This one scopes to the
+    // last pattern, which excludes the harness-level user_message — `fromAll()`
+    // would inherit that filter and leave the planner with nothing to plan for.
+    const pattern = planner(TOOLS, {
+      patternId: PATTERN_ID,
+      viewConfig: { fromLastNTurns: 3 },
+    })
+    const scope = createScope(PATTERN_ID, {})
+    const view = createEventView(
+      ctxOf(userTurn('narrow view')),
+      pattern.config.viewConfig,
+      PATTERN_ID,
+    )
+
+    const result = await pattern.fn(scope, view)
+
+    expect(mockPlanner).toHaveBeenCalledTimes(1)
+    expect(mockPlanner.mock.calls[0][0]).toBe('narrow view')
+    expect((result.data as { plan?: unknown }).plan).toEqual(PLAN)
+  })
+
+  it('treats an empty plan as an error, not as a plan', async () => {
+    const { planner, createScope, createEventView } = await load()
+    // `PlanResult.plan` is a required string and '' satisfies it: the pattern
+    // would store it, report "0 steps" in the panel, and inject nothing.
+    mockPlanner.mockResolvedValue({ reasoning: 'thought about it', plan: '   ', n_steps: 0 })
+    const pattern = planner(TOOLS, { patternId: PATTERN_ID })
+    const scope = createScope(PATTERN_ID, {})
+    const view = createEventView(
+      ctxOf(userTurn('plan this')),
+      pattern.config.viewConfig,
+      PATTERN_ID,
+    )
+
+    const result = await pattern.fn(scope, view)
+
+    expect((result.data as { plan?: unknown }).plan).toBeUndefined()
+    expect(result.events.filter((e) => e.type === 'plan_created')).toHaveLength(0)
+    const errors = result.events.filter((e) => e.type === 'error')
+    expect(errors).toHaveLength(1)
+    expect(JSON.stringify(errors[0].data)).toContain('empty plan')
   })
 
   it('is best-effort: a BAML failure leaves the plan unset and tracks an error', async () => {
@@ -194,6 +261,70 @@ describe('planner', () => {
     expect(JSON.stringify(errors[0].data)).toContain('planner model unavailable')
     // Best-effort: the downstream loop still runs.
     expect((errors[0].data as { severity?: string }).severity).toBe('recoverable')
+  })
+})
+
+/**
+ * `scope.data` is carried from turn to turn: the harness resets only
+ * `hasError` / `errorMessage` / `response`, and `serializeContext` is a plain
+ * `JSON.stringify`. So every planner exit path that produces no NEW plan must
+ * actively clear the old one — otherwise turn 2 executes turn 1's plan, under
+ * wording that tells it to prefer the plan over its own judgement.
+ */
+describe('planner — a carried-over plan never survives a turn without one', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockPlanner.mockResolvedValue(PLAN)
+  })
+
+  it('clears turn 1s plan when the BAML call fails on turn 2', async () => {
+    const { planner, formatPlanContext, createScope, createEventView } = await load()
+    mockPlanner.mockRejectedValue(new Error('overloaded'))
+    const pattern = planner(TOOLS, { patternId: PATTERN_ID })
+    // Turn 2 opens with turn 1's plan already in data — exactly what the chain
+    // forwards and what `deserializeContext` restores.
+    const scope = createScope(PATTERN_ID, { plan: PLAN })
+    const view = createEventView(
+      ctxOf([
+        ...userTurn('how many nodes are in the graph?'),
+        ...userTurn("what's the weather in Paris?"),
+      ]),
+      pattern.config.viewConfig,
+      PATTERN_ID,
+    )
+
+    const result = await pattern.fn(scope, view)
+
+    expect((result.data as { plan?: unknown }).plan).toBeUndefined()
+    // The executor gets nothing to follow — not the previous question's plan.
+    expect(formatPlanContext((result.data as { plan?: typeof PLAN }).plan)).toBeUndefined()
+  })
+
+  it('clears a carried plan when there is no user message to plan for', async () => {
+    const { planner, createScope, createEventView } = await load()
+    const pattern = planner(TOOLS, { patternId: PATTERN_ID })
+    const scope = createScope(PATTERN_ID, { plan: PLAN })
+    const view = createEventView(ctxOf([]), pattern.config.viewConfig, PATTERN_ID)
+
+    const result = await pattern.fn(scope, view)
+
+    expect((result.data as { plan?: unknown }).plan).toBeUndefined()
+  })
+
+  it('clears a carried plan when the new plan comes back empty', async () => {
+    const { planner, createScope, createEventView } = await load()
+    mockPlanner.mockResolvedValue({ reasoning: '', plan: '', n_steps: 0 })
+    const pattern = planner(TOOLS, { patternId: PATTERN_ID })
+    const scope = createScope(PATTERN_ID, { plan: PLAN })
+    const view = createEventView(
+      ctxOf(userTurn('a new question')),
+      pattern.config.viewConfig,
+      PATTERN_ID,
+    )
+
+    const result = await pattern.fn(scope, view)
+
+    expect((result.data as { plan?: unknown }).plan).toBeUndefined()
   })
 })
 

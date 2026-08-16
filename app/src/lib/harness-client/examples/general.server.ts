@@ -32,15 +32,36 @@ import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
 
 /** Best-effort graph schema — the planner and the executor both benefit from
- *  knowing the shape of the graph before proposing Cypher. */
+ *  knowing the shape of the graph before proposing Cypher.
+ *
+ *  A failure is logged, never swallowed: `planner.baml` tells the model "only
+ *  plan steps the listed tools can actually perform", so a silently empty
+ *  schema shows up as worse plans rather than as an error. `listTools` logs on
+ *  the same principle. */
 async function getSchema(): Promise<string> {
   const result = await callTool('get_neo4j_schema', {})
-  return result.success ? JSON.stringify(result.data) : ''
+  if (!result.success) {
+    console.warn(
+      `[general] graph schema unavailable (${result.error ?? 'unknown error'}) — the planner ` +
+        'and executor run without it this turn; patterns will be rebuilt on the next message.',
+    )
+    return ''
+  }
+  return JSON.stringify(result.data)
 }
 
-async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
+async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools()
   const schema = await getSchema()
+
+  // Patterns are cached per session and never rebuilt, so a transient schema
+  // failure would otherwise freeze a schema-less planner AND executor into the
+  // whole conversation. Keep this build (it works, just blind) but refuse the
+  // cache entry so the next message retries the fetch.
+  if (!schema) {
+    const { doNotCachePatterns } = await import('../session.server')
+    doNotCachePatterns(sessionId)
+  }
 
   // The planner sees exactly the tool surface the executor will have — a plan
   // that names a tool the loop cannot call is worse than no plan.
@@ -63,10 +84,26 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
     },
   )
 
+  // Scoped view, as `code-mode` and `sandbox-session` do. Without one,
+  // `createEventView` installs no filters at all and `view.hasErrors()` sees
+  // EVERY error the conversation ever recorded — including the planner's,
+  // which is best-effort by design. One planner 429 on turn 2 would otherwise
+  // have `Synthesize` apologise for a turn whose tool calls all succeeded, and
+  // then again on turn 3, 4, 5…, because events persist across
+  // `continueSession`. Scoping to the executor's own events, in this turn,
+  // makes the error signal mean "the work failed" again.
+  // `user_message` (patternId 'harness') is listed so the synthesizer still
+  // sees the question: this chain has no router or compactIntent to set
+  // `data.intent`, so an executor-only window would leave it with neither.
   const responseSynth = synthesizer<SessionData>({
     mode: 'thread',
     patternId: 'response-synth',
     liveEvents: true,
+    viewConfig: {
+      fromPatterns: ['harness', 'execute'],
+      fromLastNTurns: 1,
+      eventTypes: ['user_message', 'controller_action', 'tool_call', 'tool_result', 'error'],
+    },
   })
 
   return [planPattern, executePattern, responseSynth]

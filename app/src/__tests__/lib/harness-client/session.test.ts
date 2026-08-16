@@ -40,6 +40,7 @@ const { createContext, serializeContext } = await import('../../../lib/harness-p
 const {
   getOrBuildPatterns,
   evictPatterns,
+  doNotCachePatterns,
   loadSession,
   saveSession,
   deleteSession,
@@ -81,6 +82,37 @@ describe('pattern cache', () => {
 
   it('refuses an unregistered agent', async () => {
     await expect(getOrBuildPatterns('cache-4', 'ghost')).rejects.toThrow('Unknown agent: ghost')
+  })
+
+  it('skips the cache when the build called doNotCachePatterns', async () => {
+    // A degraded build (e.g. the general agent's graph-schema fetch failing)
+    // is usable now but must not be frozen into the session — an eviction from
+    // inside createPatterns would be overwritten by the write that follows it.
+    createPatterns.mockImplementationOnce(async (sessionId: string) => {
+      doNotCachePatterns(sessionId)
+      return [{ id: `degraded-${sessionId}` }]
+    })
+
+    const degraded = await getOrBuildPatterns('cache-5', 'known')
+    const rebuilt = await getOrBuildPatterns('cache-5', 'known')
+
+    expect(degraded).toEqual([{ id: 'degraded-cache-5' }])
+    expect(rebuilt).not.toBe(degraded)
+    expect(createPatterns).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops a previously cached entry when a rebuild comes out degraded', async () => {
+    await getOrBuildPatterns('cache-6', 'known')
+    evictPatterns('cache-6')
+    createPatterns.mockImplementationOnce(async (sessionId: string) => {
+      doNotCachePatterns(sessionId)
+      return [{ id: `degraded-${sessionId}` }]
+    })
+    await getOrBuildPatterns('cache-6', 'known')
+
+    // Third call must build again rather than serve the degraded one.
+    await getOrBuildPatterns('cache-6', 'known')
+    expect(createPatterns).toHaveBeenCalledTimes(3)
   })
 })
 

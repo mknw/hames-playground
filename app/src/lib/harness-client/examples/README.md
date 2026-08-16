@@ -92,8 +92,9 @@ return [
 ```
 
 The planner sees exactly the tool surface the executor will have, emits a
-numbered plan, and the loop receives it prepended to its controller's `context`
-— so the controller stops re-deriving the approach on every turn. Registered
+numbered plan, and the loop receives it as the controller's `plan_context` —
+rendered beside the intent, outside the agent-static cached prefix — so the
+controller stops re-deriving the approach on every turn. Registered
 alongside `default` on purpose: same session shape, different strategy, so the
 two can be A/B'd on the same question.
 

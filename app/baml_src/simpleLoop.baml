@@ -195,7 +195,15 @@ function LoopController(
   context: string?,
   turns_previous_runs: PriorResult[]?,
   few_shots: FewShot[]?,
-  multi_call_mode: string?
+  multi_call_mode: string?,
+  // Plan from an upstream `planner`, issue #27. A SEPARATE parameter, never
+  // folded into `context`: `context` is agent-static — graph schema, enabled
+  // servers — and renders inside the tier-1 cache marker, while the plan is
+  // written per QUESTION. Prepending it to `context` made the tier-1 prefix
+  // vary per run, turning every cache read on the tool catalog into a cache
+  // write, issue #122. It renders in tier 2 instead, beside the intent it
+  // belongs with.
+  plan_context: string?
 ) -> ControllerAction {
   client ControllerAnthropic
   prompt #"
@@ -227,8 +235,13 @@ function LoopController(
     {{ LoopMultiCalls(multi_call_mode) }}
     {{ LoopFewShots(few_shots) }}
 
-    {# ────────── CACHED TIER 2 · run-static: intent · instructions · prior results ────────── #}
+    {# ────────── CACHED TIER 2 · run-static: plan · intent · instructions · prior results ────────── #}
     {{ _.role("user", cache_control={"type": "ephemeral"}) }}
+    {% if plan_context %}
+    {{ plan_context }}
+
+    ---
+    {% endif %}
     INTENT: {{ intent }}
 
     ---

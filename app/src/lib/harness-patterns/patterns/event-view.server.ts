@@ -16,7 +16,7 @@ import type {
   UserMessageEventData,
   AssistantMessageEventData,
   ToolCallEventData,
-  ToolResultEventData
+  ToolResultEventData,
 } from '../types'
 
 assertServerOnImport()
@@ -43,7 +43,7 @@ export class EventViewImpl implements IEventView {
     private ctx: UnifiedContext,
     config?: ViewConfig,
     /** Pattern ID of the current scope — excluded from fromLastPattern() */
-    private selfPatternId?: string
+    private selfPatternId?: string,
   ) {
     // Apply initial config
     if (config) {
@@ -75,7 +75,7 @@ export class EventViewImpl implements IEventView {
       this.filters.push((e) => idSet.has(e.patternId))
     } else if (config.fromLastN !== undefined) {
       const all = this.selfPatternId
-        ? this.getPatternIds().filter(id => id !== this.selfPatternId)
+        ? this.getPatternIds().filter((id) => id !== this.selfPatternId)
         : this.getPatternIds()
       const ids = new Set(all.slice(-config.fromLastN))
       if (ids.size > 0) this.filters.push((e) => ids.has(e.patternId))
@@ -170,7 +170,7 @@ export class EventViewImpl implements IEventView {
   /** Events from the last N patterns in execution order (excluding self) */
   fromLastNPatterns(n: number): EventViewImpl {
     const ids = this.selfPatternId
-      ? this.getPatternIds().filter(id => id !== this.selfPatternId)
+      ? this.getPatternIds().filter((id) => id !== this.selfPatternId)
       : this.getPatternIds()
     const patternIds = ids.slice(-n)
     if (patternIds.length === 0) {
@@ -181,9 +181,26 @@ export class EventViewImpl implements IEventView {
     return this.fromPatterns(patternIds)
   }
 
-  /** Events from all patterns (no pattern filter) */
+  /** Events from all patterns (no pattern filter).
+   *
+   *  NOTE: this only skips ADDING a pattern filter — it does not remove the
+   *  ones the constructor installed from `ViewConfig` (see `clone()`), so a
+   *  narrow `viewConfig` still applies. When a pattern must see an event that
+   *  its own config could hide — a harness-level `user_message`, say — use
+   *  `unfiltered()`. */
   fromAll(): EventViewImpl {
     return this.clone()
+  }
+
+  /** A view over the same context with NO filters at all: every ViewConfig
+   *  filter, limit, turn window and transform is dropped.
+   *
+   *  For the one thing a pattern needs regardless of how it was configured —
+   *  the user's message. `fromAll()` cannot do this (it preserves the
+   *  config's filters), so a caller-supplied `viewConfig` could otherwise
+   *  leave a pattern with no input at all. */
+  unfiltered(): EventViewImpl {
+    return new EventViewImpl(this.ctx, undefined, this.selfPatternId)
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -233,9 +250,7 @@ export class EventViewImpl implements IEventView {
   /** Get last error message */
   lastError(): string | undefined {
     const errors = this.errors().last(1).get()
-    return errors.length > 0
-      ? (errors[0].data as { error: string })?.error
-      : undefined
+    return errors.length > 0 ? (errors[0].data as { error: string })?.error : undefined
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -319,9 +334,7 @@ export class EventViewImpl implements IEventView {
 
     // 5. Content transforms (read-time lens — never mutates ctx.events)
     if (this.contentTransforms?.length) {
-      events = events.map(e =>
-        this.contentTransforms!.reduce((evt, fn) => fn(evt), e)
-      )
+      events = events.map((e) => this.contentTransforms!.reduce((evt, fn) => fn(evt), e))
     }
 
     return events
@@ -364,7 +377,7 @@ export class EventViewImpl implements IEventView {
     }
 
     // Exclude hidden/archived tool_results from LLM context
-    const visibleEvents = events.filter(event => {
+    const visibleEvents = events.filter((event) => {
       if (event.type !== 'tool_result') return true
       const d = event.data as ToolResultEventData
       return !d.hidden && !d.archived
@@ -420,7 +433,7 @@ export class EventViewImpl implements IEventView {
   /** Get the ID of the last pattern that entered (excluding self) */
   private getLastPatternId(): string | undefined {
     const ids = this.selfPatternId
-      ? this.getPatternIds().filter(id => id !== this.selfPatternId)
+      ? this.getPatternIds().filter((id) => id !== this.selfPatternId)
       : this.getPatternIds()
     return ids.at(-1)
   }
@@ -468,14 +481,12 @@ function sliceByLastNTurns(events: ContextEvent[], n: number): ContextEvent[] {
   // Find indices of all user_message events — these mark turn boundaries
   const userMsgIndices = events
     .map((e, i) => (e.type === 'user_message' ? i : -1))
-    .filter(i => i >= 0)
+    .filter((i) => i >= 0)
 
   if (userMsgIndices.length === 0) return events
 
   // Slice from the Nth-to-last user_message onwards
-  const startIdx = userMsgIndices.length > n
-    ? userMsgIndices[userMsgIndices.length - n]
-    : 0
+  const startIdx = userMsgIndices.length > n ? userMsgIndices[userMsgIndices.length - n] : 0
 
   return events.slice(startIdx)
 }
@@ -493,9 +504,7 @@ function formatEvent(event: ContextEvent): string {
 /** Format a tool_result event as a compact pointer (uses summary if available) */
 function formatEventCompact(event: ContextEvent): string {
   const data = event.data as ToolResultEventData
-  const resultStr = typeof data.result === 'string'
-    ? data.result
-    : JSON.stringify(data.result)
+  const resultStr = typeof data.result === 'string' ? data.result : JSON.stringify(data.result)
   // Prefer LLM-generated summary over raw result slice for the compact preview
   const preview = data.summary ?? resultStr.slice(0, 120).replace(/\n/g, ' ')
   const suffix = !data.summary && resultStr.length > 120 ? '...' : ''
@@ -526,9 +535,7 @@ function formatEventData(event: ContextEvent): string {
       return data.summary ? `${base}\n[Summary: ${data.summary}]` : base
     }
     default:
-      return typeof event.data === 'object'
-        ? JSON.stringify(event.data)
-        : String(event.data)
+      return typeof event.data === 'object' ? JSON.stringify(event.data) : String(event.data)
   }
 }
 
@@ -540,7 +547,7 @@ function formatEventData(event: ContextEvent): string {
 export function createEventView(
   ctx: UnifiedContext,
   config?: ViewConfig,
-  selfPatternId?: string
+  selfPatternId?: string,
 ): EventViewImpl {
   return new EventViewImpl(ctx, config, selfPatternId)
 }

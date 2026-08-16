@@ -20,12 +20,21 @@
  * uses for refs: it writes `scope.data.plan`, the chain forwards `scope.data`
  * as the next pattern's `currentData`, and `simpleLoop` / `actorCritic` format
  * it (`formatPlanContext`) and pass it to their controller adapter as the
- * trailing `planContext` argument. The adapters prepend it to the BAML
- * `context` string, so no existing BAML signature changes and any controller
- * taking `context: string?` benefits automatically.
+ * trailing `planContext` argument. `LoopController` takes it as its own
+ * `plan_context` parameter — rendered in the prompt's tier-2 (run-static)
+ * block, never inside the agent-static tier-1 prefix a per-question plan would
+ * re-write on every run (#122). `ActorController` merges it into `context`,
+ * which is cache-safe there because its only marker is already run-scoped.
  *
- * Best-effort: on any failure it leaves `scope.data.plan` unset and the
- * downstream loop runs exactly as it does today (unplanned) — never fatal.
+ * Best-effort: on any failure it CLEARS `scope.data.plan` and the downstream
+ * loop runs exactly as it does today (unplanned) — never fatal. Clearing, not
+ * merely "leaving unset": `scope.data` is carried across turns (the harness
+ * only resets `hasError` / `errorMessage` / `response`, and `serializeContext`
+ * is a plain `JSON.stringify`), so a turn-2 failure that returned `scope`
+ * untouched would hand the executor turn 1's plan — a plan for a different
+ * question, under wording that tells it to prefer the plan over its own
+ * judgement. Same reason `compactIntent` overwrites `data.intent` on its skip
+ * path.
  */
 
 import { assertServerOnImport } from '../assert.server'
@@ -63,7 +72,10 @@ export interface PlannerConfig extends PatternConfig {
 
 export interface PlannerData {
   /** Set by `planner`; read by `simpleLoop` / `actorCritic`. Absent means
-   *  "no plan" — every consumer must behave exactly as it did before #27. */
+   *  "no plan" — every consumer must behave exactly as it did before #27.
+   *  The planner CLEARS it on every turn it does not produce one, so absence
+   *  is a live statement about this turn, not a stale value from an earlier
+   *  one. */
   plan?: PlanResult
   intent?: string
 }
@@ -118,19 +130,55 @@ export function planner<T extends PlannerData>(
   const maxPlanChars = config?.maxPlanChars ?? DEFAULT_MAX_PLAN_CHARS
   const plannerFn = createPlannerAdapter(tools)
 
+  /** Drop a plan carried over from an earlier turn. Every exit path that does
+   *  not produce a NEW plan goes through this: `scope.data` survives the turn
+   *  boundary, so returning it untouched would silently re-inject the previous
+   *  question's plan. */
+  const clearPlan = (scope: PatternScope<T>): PatternScope<T> => {
+    scope.data = { ...scope.data, plan: undefined }
+    return scope
+  }
+
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
     try {
       // The user_message lives at the harness level, outside this pattern's
-      // scope — `fromAll()` so a narrow viewConfig can't hide it.
-      const userMessage = view.fromAll().ofType('user_message').last(1).get()[0]
+      // scope. `unfiltered()` — NOT `fromAll()`, which keeps the filters the
+      // constructor installed from `viewConfig` — so a caller-supplied view
+      // window can never leave the planner with no message to plan for.
+      const userMessage = view.unfiltered().ofType('user_message').last(1).get()[0]
       const userContent = userMessage ? (userMessage.data as UserMessageEventData).content : ''
 
-      // Nothing to plan for — leave `plan` unset; the loop runs unplanned.
-      if (!userContent) return scope
+      // Nothing to plan for — the loop runs unplanned. Emitted (not silent) so
+      // a chain that never plans is visible in the panel rather than looking
+      // like a planner that simply wasn't reached; mirrors
+      // `intent_compacted.skipped`.
+      if (!userContent) {
+        trackEvent(
+          scope,
+          'plan_created',
+          // No adapter call happened, so there is no resolved catalog to
+          // report — the requested surface is the honest number here.
+          { toolCount: tools.length, skipped: 'no-message' } as PlanCreatedEventData,
+          resolved.trackHistory,
+        )
+        return clearPlan(scope)
+      }
 
       const intent = scope.data.intent ?? userContent
       const collector = new Collector('planner')
-      const { plan: raw, llmCall } = await plannerFn(userContent, intent, collector, config?.schema)
+      const {
+        plan: raw,
+        llmCall,
+        toolCount,
+      } = await plannerFn(userContent, intent, collector, config?.schema)
+
+      // An empty plan parses fine (`PlanResult.plan` is a required string and
+      // `""` satisfies it) but injects NOTHING downstream — `formatPlanContext`
+      // returns undefined. Reporting that as a success would show "0 steps" in
+      // the panel over a run that is really unplanned, so it is an error.
+      if (!raw.plan?.trim()) {
+        throw new Error('Planner returned an empty plan')
+      }
 
       // Cap the plan text: the executor re-reads it every turn.
       const truncated = raw.plan.length > maxPlanChars
@@ -144,7 +192,10 @@ export function planner<T extends PlannerData>(
         'plan_created',
         {
           plan,
-          toolCount: tools.length,
+          // The catalog the model was actually shown (resolved by the adapter:
+          // sandbox tools + the gateway names that resolved), not the raw name
+          // list this factory was handed.
+          toolCount,
           ...(truncated ? { truncated: true } : {}),
         } as PlanCreatedEventData,
         resolved.trackHistory,
@@ -170,7 +221,7 @@ export function planner<T extends PlannerData>(
         true,
         failedLlmCall,
       )
-      return scope
+      return clearPlan(scope)
     }
   }
 

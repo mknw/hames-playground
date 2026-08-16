@@ -35,11 +35,7 @@ assertServerOnImport()
 // ============================================================================
 
 export interface SessionData
-  extends HarnessData,
-    RouterData,
-    SimpleLoopData,
-    RetrieverData,
-    WithApproval {
+  extends HarnessData, RouterData, SimpleLoopData, RetrieverData, WithApproval {
   response?: string
   /** User-curated allowlist for the code-mode actor's tool selection.
    *  Undefined → fall back to the agent's hardcoded CODE_MODE_TOOLS. Set
@@ -65,9 +61,30 @@ interface PatternCacheEntry {
 
 const patternCache = new Map<string, PatternCacheEntry>()
 
+/** Sessions whose in-flight build asked not to be cached. Set DURING
+ *  `createPatterns`, consumed by `getOrBuildPatterns` right after. */
+const uncacheable = new Set<string>()
+
+/**
+ * Ask the cache to discard this session's patterns once they are built, so the
+ * next turn builds them again.
+ *
+ * Called from inside an agent's `createPatterns` when the build came out
+ * DEGRADED but usable — the `general` agent's graph-schema fetch failing, say.
+ * Without it a 30-second backend blip during the first message would hand that
+ * conversation a schema-less planner and executor for its entire life, since
+ * patterns are cached per session and never rebuilt.
+ *
+ * Deliberately not `evictPatterns`: the cache is written AFTER `createPatterns`
+ * resolves, so an eviction from inside the build would be overwritten.
+ */
+export function doNotCachePatterns(sessionId: string): void {
+  uncacheable.add(sessionId)
+}
+
 export async function getOrBuildPatterns(
   sessionId: string,
-  agentId: string
+  agentId: string,
 ): Promise<ConfiguredPattern<SessionData>[]> {
   const cached = patternCache.get(sessionId)
   if (cached && cached.agentId === agentId) return cached.patterns
@@ -75,6 +92,12 @@ export async function getOrBuildPatterns(
   const agent = getAgent(agentId)
   if (!agent) throw new Error(`Unknown agent: ${agentId}`)
   const patterns = await agent.createPatterns(sessionId)
+  if (uncacheable.delete(sessionId)) {
+    // Degraded build: usable now, rebuilt next turn. Drop any stale entry too,
+    // so a previously cached (also degraded) build can't be served instead.
+    patternCache.delete(sessionId)
+    return patterns
+  }
   patternCache.set(sessionId, { agentId, patterns })
   return patterns
 }
@@ -100,7 +123,7 @@ export interface LoadedSession {
 /** Load a serialized context for (sessionId, userId), or null if not found. */
 export async function loadSession(
   sessionId: string,
-  userId: string
+  userId: string,
 ): Promise<LoadedSession | null> {
   const row = await loadConversation(sessionId, userId)
   if (!row) return null
@@ -121,7 +144,7 @@ export async function saveSession(
   sessionId: string,
   userId: string,
   agentId: string,
-  serializedContext: string
+  serializedContext: string,
 ): Promise<void> {
   const title = extractTitleFromContext(serializedContext)
   const status = extractStatusFromContext(serializedContext)
@@ -139,19 +162,13 @@ export async function saveSession(
   })
 }
 
-export async function deleteSession(
-  sessionId: string,
-  userId: string
-): Promise<void> {
+export async function deleteSession(sessionId: string, userId: string): Promise<void> {
   evictPatterns(sessionId)
   await deleteConversation(sessionId, userId)
 }
 
 /** True when the persisted context is in `paused` status (awaiting approval). */
-export async function hasPendingApproval(
-  sessionId: string,
-  userId: string
-): Promise<boolean> {
+export async function hasPendingApproval(sessionId: string, userId: string): Promise<boolean> {
   const loaded = await loadSession(sessionId, userId)
   if (!loaded) return false
   try {
@@ -212,7 +229,7 @@ export async function persistContext(
   sessionId: string,
   userId: string,
   agentId: string,
-  ctx: UnifiedContext
+  ctx: UnifiedContext,
 ): Promise<void> {
   await saveSession(sessionId, userId, agentId, serializeContext(ctx))
 }

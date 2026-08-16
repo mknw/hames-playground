@@ -11,7 +11,8 @@
  * fallback (`ControllerFallback`, `CriticFallback`, etc.) defined in
  * `baml_src/clients.baml`. Call sites spread the override into the BAML
  * options bag to swap at runtime. Production deployments and occasional
- * mixed-chain testing both go through this.
+ * mixed-chain testing both go through this. One role opts out — the `planner`
+ * pins its Anthropic client in both modes; the reason is on the map entry.
  *
  * Why default to Anthropic: cross-provider rate limits (Groq + OpenRouter +
  * OpenAI) interfered too much during dev iteration of multi-turn / actorCritic
@@ -32,11 +33,21 @@ export type BamlRole =
 
 const MIXED_CLIENT_BY_ROLE: Record<BamlRole, string> = {
   controller: 'ControllerFallback',
-  // No PlannerFallback exists: the mixed chains are per-role, and planning is
-  // the same "reason over a tool catalog, emit structured output" workload the
-  // controller chain is tuned for. Reuse it rather than adding a chain that
-  // would need its own provider budget.
-  planner: 'ControllerFallback',
+  // The planner does NOT join the mixed chains — it stays on the client
+  // planner.baml declares, in both modes.
+  //
+  // Why not `ControllerFallback` (which it used to borrow, as the same
+  // "reason over a tool catalog, emit structured output" workload): that
+  // chain's Groq `gpt-oss-120b` is the one client documented to fail
+  // structured output on larger context, which is exactly why BOTH controller
+  // adapters carry a manual GroqGPT120B → GroqFast escalation on
+  // `BamlValidationError`. The planner has no such ladder — it runs ONCE per
+  // chain, over `tools.all` (the largest catalog in the repo), so it is the
+  // likeliest call to hit that failure and the least able to absorb it: it
+  // just throws, and the chain silently runs unplanned. Pinning the declared
+  // Anthropic client is the smaller, simpler correction; the planner's share
+  // of a mixed-provider budget is one call per conversation turn anyway.
+  planner: 'PlannerAnthropic',
   critic: 'CriticFallback',
   synth: 'SynthesizerFallback',
   router: 'RouterFallback',

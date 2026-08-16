@@ -56,12 +56,17 @@ const captured: Body[] = []
 /** Flatten a body to an ordered block list: system param first, then messages. */
 function wireBlocks(body: Body): WireBlock[] {
   const sys = (body.system ?? []).map((blk) => ({
-    role: 'system', text: blk.text ?? '', marked: !!blk.cache_control,
+    role: 'system',
+    text: blk.text ?? '',
+    marked: !!blk.cache_control,
   }))
   const msgs = body.messages.flatMap((m) =>
     (Array.isArray(m.content) ? m.content : []).map((blk) => ({
-      role: m.role, text: blk.text ?? '', marked: !!blk.cache_control,
-    })))
+      role: m.role,
+      text: blk.text ?? '',
+      marked: !!blk.cache_control,
+    })),
+  )
   return [...sys, ...msgs]
 }
 
@@ -81,13 +86,17 @@ function expectMarkedPrefixReused(prev: Body, next: Body, label: string): void {
   expect(lastMarked, `${label}: previous call had no marker at all`).toBeGreaterThanOrEqual(0)
 
   const cachedPrefix = prevBlocks.slice(0, lastMarked + 1)
-  expect(nextBlocks.length, `${label}: next call is shorter than the cached prefix`)
-    .toBeGreaterThanOrEqual(cachedPrefix.length)
+  expect(
+    nextBlocks.length,
+    `${label}: next call is shorter than the cached prefix`,
+  ).toBeGreaterThanOrEqual(cachedPrefix.length)
 
   cachedPrefix.forEach((blk, i) => {
     expect(nextBlocks[i].role, `${label}: role drift at prefix block ${i}`).toBe(blk.role)
-    expect(nextBlocks[i].text, `${label}: BYTE DRIFT at prefix block ${i} — cache read would MISS`)
-      .toBe(blk.text)
+    expect(
+      nextBlocks[i].text,
+      `${label}: BYTE DRIFT at prefix block ${i} — cache read would MISS`,
+    ).toBe(blk.text)
   })
 }
 
@@ -98,34 +107,78 @@ function tailAfterLastMarker(body: Body): WireBlock[] {
 }
 
 async function loadHarness() {
-  const actual = await vi.importActual<typeof import('../../../../baml_client')>(
-    '../../../../baml_client')
+  const actual =
+    await vi.importActual<typeof import('../../../../baml_client')>('../../../../baml_client')
 
   // Intercept the two controller calls: render the real HTTP body (never
   // sent), record it, and hand the loop a scripted action so it keeps going.
   let loopCall = 0
   let actorCall = 0
   const loopScript = [
-    { reasoning: 'query the graph', tool_name: 'read_neo4j_cypher', tool_args: '{"query":"MATCH (n) RETURN n"}', status: 'working', is_final: false },
-    { reasoning: 'query again', tool_name: 'read_neo4j_cypher', tool_args: '{"query":"MATCH (m) RETURN m"}', status: 'working', is_final: false },
-    { reasoning: 'done', tool_name: 'Return', tool_args: 'Here is the answer', status: 'done', is_final: true },
+    {
+      reasoning: 'query the graph',
+      tool_name: 'read_neo4j_cypher',
+      tool_args: '{"query":"MATCH (n) RETURN n"}',
+      status: 'working',
+      is_final: false,
+    },
+    {
+      reasoning: 'query again',
+      tool_name: 'read_neo4j_cypher',
+      tool_args: '{"query":"MATCH (m) RETURN m"}',
+      status: 'working',
+      is_final: false,
+    },
+    {
+      reasoning: 'done',
+      tool_name: 'Return',
+      tool_args: 'Here is the answer',
+      status: 'done',
+      is_final: true,
+    },
   ]
   const actorScript = [
-    { reasoning: 'first script', tool_name: 'code-mode', tool_args: '{"script":"return 1"}', status: 'working', is_final: false },
-    { reasoning: 'second script', tool_name: 'code-mode', tool_args: '{"script":"return 2"}', status: 'working', is_final: false },
-    { reasoning: 'third script', tool_name: 'code-mode', tool_args: '{"script":"return 3"}', status: 'working', is_final: false },
+    {
+      reasoning: 'first script',
+      tool_name: 'code-mode',
+      tool_args: '{"script":"return 1"}',
+      status: 'working',
+      is_final: false,
+    },
+    {
+      reasoning: 'second script',
+      tool_name: 'code-mode',
+      tool_args: '{"script":"return 2"}',
+      status: 'working',
+      is_final: false,
+    },
+    {
+      reasoning: 'third script',
+      tool_name: 'code-mode',
+      tool_args: '{"script":"return 3"}',
+      status: 'working',
+      is_final: false,
+    },
   ]
 
   vi.doMock('../../../../baml_client', () => ({
     b: {
       request: actual.b.request,
       LoopController: async (...args: unknown[]) => {
-        const req = await (actual.b.request.LoopController as (...a: unknown[]) => Promise<{ body: { json(): unknown } }>)(...args)
+        const req = await (
+          actual.b.request.LoopController as (
+            ...a: unknown[]
+          ) => Promise<{ body: { json(): unknown } }>
+        )(...args)
         captured.push(req.body.json() as Body)
         return loopScript[Math.min(loopCall++, loopScript.length - 1)]
       },
       ActorController: async (...args: unknown[]) => {
-        const req = await (actual.b.request.ActorController as (...a: unknown[]) => Promise<{ body: { json(): unknown } }>)(...args)
+        const req = await (
+          actual.b.request.ActorController as (
+            ...a: unknown[]
+          ) => Promise<{ body: { json(): unknown } }>
+        )(...args)
         captured.push(req.body.json() as Body)
         return actorScript[Math.min(actorCall++, actorScript.length - 1)]
       },
@@ -144,7 +197,15 @@ async function loadHarness() {
     await import('../../../lib/harness-patterns/baml-adapters.server')
   const { createScope } = await import('../../../lib/harness-patterns/context.server')
   const { createEventView } = await import('../../../lib/harness-patterns/patterns')
-  return { simpleLoop, actorCritic, createLoopControllerAdapter, createActorControllerAdapter, createCriticAdapter, createScope, createEventView }
+  return {
+    simpleLoop,
+    actorCritic,
+    createLoopControllerAdapter,
+    createActorControllerAdapter,
+    createCriticAdapter,
+    createScope,
+    createEventView,
+  }
 }
 
 function mockContext(input: string) {
@@ -152,7 +213,12 @@ function mockContext(input: string) {
     sessionId: 'cache-test',
     createdAt: Date.now(),
     events: [
-      { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: input } },
+      {
+        type: 'user_message' as const,
+        ts: Date.now(),
+        patternId: 'harness',
+        data: { content: input },
+      },
     ],
     status: 'running' as const,
     data: {},
@@ -169,7 +235,10 @@ beforeEach(() => {
 describe('simpleLoop (scheme B) — real loop, rendered per turn', () => {
   async function runLoop() {
     const h = await loadHarness()
-    const controller = h.createLoopControllerAdapter(['read_neo4j_cypher', 'Return'], 'GRAPH SCHEMA: (Person)')
+    const controller = h.createLoopControllerAdapter(
+      ['read_neo4j_cypher', 'Return'],
+      'GRAPH SCHEMA: (Person)',
+    )
     const pattern = h.simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
       patternId: 'cache-loop',
       maxTurns: 5,
@@ -183,8 +252,9 @@ describe('simpleLoop (scheme B) — real loop, rendered per turn', () => {
     const bodies = await runLoop()
     expect(bodies).toHaveLength(3)
     // history really did grow turn over turn
-    const turnCounts = bodies.map((b) =>
-      wireBlocks(b).filter((blk) => /^Turn \d+ result:/m.test(blk.text)).length)
+    const turnCounts = bodies.map(
+      (b) => wireBlocks(b).filter((blk) => /^Turn \d+ result:/m.test(blk.text)).length,
+    )
     expect(turnCounts).toEqual([0, 1, 2])
   })
 
@@ -205,11 +275,97 @@ describe('simpleLoop (scheme B) — real loop, rendered per turn', () => {
   it('only the volatile tail changes after the last marker', async () => {
     const bodies = await runLoop()
     // the tail is the turn counter + output format, and it DOES change
-    const tails = bodies.map((b) => tailAfterLastMarker(b).map((blk) => blk.text).join('\n'))
+    const tails = bodies.map((b) =>
+      tailAfterLastMarker(b)
+        .map((blk) => blk.text)
+        .join('\n'),
+    )
     // 0-indexed: iteration 1 has no completed turns and asks for turn 0.
     expect(tails[0]).toContain('Turn 0. Decide the next action.')
     expect(tails[1]).toContain('Turn 1. Decide the next action.')
     expect(tails[0]).not.toBe(tails[1])
+  })
+})
+
+describe('simpleLoop with an upstream plan (#27) — the plan stays out of tier 1', () => {
+  const PLAN = {
+    reasoning: 'The graph already holds the concepts.',
+    plan: '1. Query the graph for Concept nodes.\n2. Search the web for gaps.',
+    n_steps: 2,
+  }
+
+  async function runPlannedLoop() {
+    const h = await loadHarness()
+    const controller = h.createLoopControllerAdapter(
+      ['read_neo4j_cypher', 'Return'],
+      'GRAPH SCHEMA: (Person)',
+    )
+    const pattern = h.simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'cache-loop',
+      maxTurns: 5,
+    })
+    const scope = h.createScope('cache-loop', { intent: 'list the people', plan: PLAN })
+    await pattern.fn(scope, h.createEventView(mockContext('list the people')))
+    return captured.slice()
+  }
+
+  /** Blocks up to and including the FIRST marker — the tier-1 prefix, which is
+   *  agent-static (tool catalog + schema) and must not vary per question. */
+  function tier1(body: Body): string {
+    const blocks = wireBlocks(body)
+    const firstMarker = blocks.map((blk) => blk.marked).indexOf(true)
+    return blocks
+      .slice(0, firstMarker + 1)
+      .map((blk) => blk.text)
+      .join('\n')
+  }
+
+  it('renders the plan after the tier-1 marker, never inside it', async () => {
+    const bodies = await runPlannedLoop()
+    expect(bodies.length).toBeGreaterThan(0)
+
+    for (const [i, body] of bodies.entries()) {
+      const head = tier1(body)
+      // The catalog and the schema are what tier 1 is for …
+      expect(head, `call ${i} tier 1`).toContain('AVAILABLE TOOLS')
+      expect(head, `call ${i} tier 1`).toContain('GRAPH SCHEMA:')
+      // … and the per-question plan is not.
+      expect(head, `call ${i} tier 1`).not.toContain('PLAN (from previous step')
+      // It is still in the prompt, just further down.
+      const whole = wireBlocks(body)
+        .map((blk) => blk.text)
+        .join('\n')
+      expect(whole, `call ${i}`).toContain('1. Query the graph for Concept nodes.')
+    }
+  })
+
+  it('keeps the same tier-1 prefix a planless run would produce', async () => {
+    const planned = await runPlannedLoop()
+    captured.length = 0
+    vi.resetModules()
+    const h = await loadHarness()
+    const controller = h.createLoopControllerAdapter(
+      ['read_neo4j_cypher', 'Return'],
+      'GRAPH SCHEMA: (Person)',
+    )
+    const pattern = h.simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'cache-loop',
+      maxTurns: 5,
+    })
+    const scope = h.createScope('cache-loop', { intent: 'list the people' })
+    await pattern.fn(scope, h.createEventView(mockContext('list the people')))
+    const planless = captured.slice()
+
+    // Byte-identical agent-static prefix: two different questions against the
+    // same agent still share the tool-catalog cache entry.
+    expect(tier1(planned[0])).toBe(tier1(planless[0]))
+  })
+
+  it('still re-reads the previous call’s marked prefix on every turn', async () => {
+    const bodies = await runPlannedLoop()
+    for (let i = 1; i < bodies.length; i++) {
+      expectMarkedPrefixReused(bodies[i - 1], bodies[i], `planned turn ${i} -> ${i + 1}`)
+    }
   })
 })
 
@@ -232,8 +388,9 @@ describe('actorCritic → ActorController — real loop, rendered per attempt', 
   it('drives multiple real attempts and renders each one', async () => {
     const bodies = await runActor()
     expect(bodies.length).toBeGreaterThanOrEqual(2)
-    const attemptCounts = bodies.map((b) =>
-      wireBlocks(b).filter((blk) => /^Attempt \d+ result:/m.test(blk.text)).length)
+    const attemptCounts = bodies.map(
+      (b) => wireBlocks(b).filter((blk) => /^Attempt \d+ result:/m.test(blk.text)).length,
+    )
     expect(attemptCounts[0]).toBe(0)
     expect(attemptCounts[1]).toBe(1)
   })

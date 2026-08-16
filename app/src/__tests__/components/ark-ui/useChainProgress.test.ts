@@ -15,7 +15,12 @@ import { createRoot } from 'solid-js'
 import { createChainProgress } from '../../../components/ark-ui/useChainProgress'
 import type { ContextEvent } from '~/lib/harness-patterns'
 
-const ev = (type: ContextEvent['type'], patternId: string, data: unknown = {}, id?: string): ContextEvent => ({
+const ev = (
+  type: ContextEvent['type'],
+  patternId: string,
+  data: unknown = {},
+  id?: string,
+): ContextEvent => ({
   id: id ?? `ev-${Math.random().toString(36).slice(2, 7)}`,
   type,
   ts: Date.now(),
@@ -54,7 +59,7 @@ describe('createChainProgress', () => {
           action: { status: 's' },
           turn: 0,
           maxTurns: 5,
-        })
+        }),
       )
       expect(p.snapshot().maxProjection).toBe(7)
       expect(p.snapshot().pathProjection).toBe(7)
@@ -84,7 +89,7 @@ describe('createChainProgress', () => {
             action: { status: `Step ${i + 1}` },
             turn: i,
             maxTurns: 5,
-          })
+          }),
         )
       }
       // 1 (router) + 5 (loop) = 6
@@ -130,6 +135,52 @@ describe('createChainProgress', () => {
     })
   })
 
+  it('general-agent stream: plan_created advances the bar to its own estimate', () => {
+    createRoot(() => {
+      const p = createChainProgress()
+      // planner(1) + simpleLoop(8) + synth(1) — the planner emits neither a
+      // controller_action nor an assistant_message, so without a plan_created
+      // advance the bar can only ever reach 9 of its own 10.
+      p.ingest(ev('user_message', 'harness', { content: 'hi', chainTurnEstimate: 10 }))
+
+      p.ingest(ev('pattern_enter', 'plan', { pattern: 'planner' }))
+      p.ingest(ev('plan_created', 'plan', { plan: { plan: '1. Look.', n_steps: 1 }, toolCount: 4 }))
+      expect(p.snapshot().currentTurn).toBe(1)
+
+      p.ingest(ev('pattern_enter', 'execute', { pattern: 'simpleLoop', maxTurns: 8 }))
+      for (let i = 0; i < 8; i++) {
+        p.ingest(
+          ev('controller_action', 'execute', { action: { status: `turn ${i}` }, maxTurns: 8 }),
+        )
+      }
+      p.ingest(ev('assistant_message', 'response-synth', { content: 'Here you go.' }))
+
+      expect(p.snapshot().currentTurn).toBe(10)
+      expect(p.snapshot().maxProjection).toBe(10)
+    })
+  })
+
+  it('advances once per planner, even if plan_created repeats', () => {
+    createRoot(() => {
+      const p = createChainProgress()
+      p.ingest(ev('user_message', 'harness', { content: 'hi', chainTurnEstimate: 4 }))
+      p.ingest(ev('plan_created', 'plan', { plan: { plan: '1. Look.', n_steps: 1 }, toolCount: 4 }))
+      p.ingest(ev('plan_created', 'plan', { plan: { plan: '1. Look.', n_steps: 1 }, toolCount: 4 }))
+      expect(p.snapshot().currentTurn).toBe(1)
+    })
+  })
+
+  it('advances on a skipped plan too — the pattern still ran', () => {
+    createRoot(() => {
+      const p = createChainProgress()
+      p.ingest(ev('user_message', 'harness', { content: 'hi', chainTurnEstimate: 4 }))
+      p.ingest(ev('plan_created', 'plan', { toolCount: 4, skipped: 'no-message' }))
+      expect(p.snapshot().currentTurn).toBe(1)
+      // Nothing was planned, so nothing to announce.
+      expect(p.snapshot().status).toBeNull()
+    })
+  })
+
   it('reset clears all state', () => {
     createRoot(() => {
       const p = createChainProgress()
@@ -157,8 +208,20 @@ describe('createChainProgress', () => {
 
         a.ingest(ev('user_message', 'harness', { content: 'A', chainTurnEstimate: 5 }))
         a.ingest(ev('pattern_enter', 'a-loop', { pattern: 'simpleLoop', maxTurns: 5 }))
-        a.ingest(ev('controller_action', 'a-loop', { action: { status: 'a step 1' }, turn: 0, maxTurns: 5 }))
-        a.ingest(ev('controller_action', 'a-loop', { action: { status: 'a step 2' }, turn: 1, maxTurns: 5 }))
+        a.ingest(
+          ev('controller_action', 'a-loop', {
+            action: { status: 'a step 1' },
+            turn: 0,
+            maxTurns: 5,
+          }),
+        )
+        a.ingest(
+          ev('controller_action', 'a-loop', {
+            action: { status: 'a step 2' },
+            turn: 1,
+            maxTurns: 5,
+          }),
+        )
 
         // B receives nothing — it's idle.
         expect(b.snapshot()).toEqual({
@@ -176,7 +239,13 @@ describe('createChainProgress', () => {
 
         // Now B starts its own run — A's still-in-flight state is untouched.
         b.ingest(ev('user_message', 'harness', { content: 'B', chainTurnEstimate: 2 }))
-        b.ingest(ev('controller_action', 'b-router', { action: { status: 'b step 1' }, turn: 0, maxTurns: 2 }))
+        b.ingest(
+          ev('controller_action', 'b-router', {
+            action: { status: 'b step 1' },
+            turn: 0,
+            maxTurns: 2,
+          }),
+        )
         expect(b.snapshot().status).toBe('b step 1')
         expect(a.snapshot().status).toBe('a step 2')
         expect(a.snapshot().currentTurn).toBe(2)
@@ -201,7 +270,9 @@ describe('createChainProgress', () => {
         const p = createChainProgress()
         p.ingest(ev('pattern_enter', 'wrapper', { pattern: 'guardrail' }))
         p.ingest(ev('pattern_enter', 'inner', { pattern: 'simpleLoop', maxTurns: 3 }))
-        p.ingest(ev('controller_action', 'inner', { action: { status: 's' }, turn: 0, maxTurns: 3 }))
+        p.ingest(
+          ev('controller_action', 'inner', { action: { status: 's' }, turn: 0, maxTurns: 3 }),
+        )
         // Wrapper discarded; only inner's 3 contributes
         expect(p.snapshot().pathProjection).toBe(3)
         expect(p.snapshot().currentTurn).toBe(1)

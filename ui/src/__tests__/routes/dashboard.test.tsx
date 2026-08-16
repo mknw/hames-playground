@@ -63,6 +63,7 @@ describe('Dashboard route', () => {
         conversation('beta', [metered('web-search', 0.1)]),
       ]),
       generatedAt: 1_700_000_000_000,
+      conversationScanLimit: 200,
     })
 
     const { container } = render(() => <Dashboard />)
@@ -84,14 +85,34 @@ describe('Dashboard route', () => {
     // Legacy events are surfaced, not silently absorbed.
     expect(text).toContain('unmetered')
 
+    // Under the ceiling, the header states the real count.
+    expect(text).toContain('2 conversations')
+
     const rows = container.querySelectorAll('tbody tr')
     expect(rows.length).toBe(4) // 2 patterns + 2 conversations
+  })
+
+  it('says "most recent N" when the load hit its row ceiling', async () => {
+    getMetricsDashboard.mockResolvedValue({
+      ...buildDashboard([
+        conversation('alpha', [metered('neo4j-query', 0.4)]),
+        conversation('beta', [metered('web-search', 0.1)]),
+      ]),
+      generatedAt: 1_700_000_000_000,
+      conversationScanLimit: 2,
+    })
+
+    const { container } = render(() => <Dashboard />)
+    await tick()
+
+    expect(container.textContent).toContain('most recent 2 conversations')
   })
 
   it('shows an empty state when nothing has been run', async () => {
     getMetricsDashboard.mockResolvedValue({
       ...buildDashboard([conversation('quiet', [])]),
       generatedAt: 1_700_000_000_000,
+      conversationScanLimit: 200,
     })
 
     const { container } = render(() => <Dashboard />)

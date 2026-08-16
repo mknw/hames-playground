@@ -41,7 +41,10 @@ const Card = (props: {
   label: string
   value: string
   hint?: string
-  accent?: string
+  /** Colour token for the value. Named `tone`, not `accent`: attributify reads
+   *  an `accent=` attribute as the `accent-color` utility and would emit a
+   *  stray rule on the card. */
+  tone?: string
   title?: string
   children?: import('solid-js').JSX.Element
 }) => (
@@ -57,7 +60,7 @@ const Card = (props: {
     <span text="xs dark-text-tertiary" tracking="wide" uppercase>
       {props.label}
     </span>
-    <span text={`2xl ${props.accent ?? 'dark-text-primary'}`} font="mono">
+    <span text={`2xl ${props.tone ?? 'dark-text-primary'}`} font="mono">
       {props.value}
     </span>
     <Show when={props.hint}>
@@ -106,6 +109,8 @@ const CompositionBar = (props: { summary: MetricSummary }) => {
 }
 
 const Th = (props: { children: import('solid-js').JSX.Element; right?: boolean }) => (
+  // Alignment stays an inline style: `text="right"` emits no CSS under this
+  // UnoCSS config (verified against the built stylesheet), unlike `text="left"`.
   <th
     p="x-3 y-2"
     text="xs dark-text-tertiary"
@@ -183,22 +188,16 @@ export default function Dashboard() {
     return !!t && (t.meteredCalls > 0 || t.unmeteredCalls > 0)
   }
 
+  // No `min-h="screen"` on <main>: `Nav` sits above this route in the root
+  // layout, so a full viewport here would always overflow by the nav's height.
   return (
-    <main
-      flex="~ col"
-      gap="6"
-      p="6"
-      min-h="screen"
-      bg="dark-bg-primary"
-      text="dark-text-primary"
-      font="sans"
-    >
+    <main flex="~ col" gap="6" p="6" bg="dark-bg-primary" text="dark-text-primary" font="sans">
       <header flex="~ wrap" items="center" gap="4">
         <div flex="~ col" gap="1">
           <h1 text="2xl dark-text-primary" font="medium">
             Metrics
           </h1>
-          <span text="xs dark-text-tertiary">
+          <span text="xs dark-text-secondary">
             Tokens, cache and estimated cost across your conversations
           </span>
         </div>
@@ -206,8 +205,12 @@ export default function Dashboard() {
           <Show when={data()}>
             {(d) => (
               <span text="xs dark-text-tertiary" font="mono">
-                {d().conversationCount} conversations · {d().eventCount} events ·{' '}
-                {fmtWhen(d().generatedAt)}
+                {/* Say so when the load hit its ceiling — "N conversations" would
+                    otherwise read as "all of them". */}
+                {d().conversationCount >= d().conversationScanLimit
+                  ? `most recent ${d().conversationScanLimit} conversations`
+                  : `${d().conversationCount} conversations`}{' '}
+                · {d().eventCount} events · {fmtWhen(d().generatedAt)}
               </span>
             )}
           </Show>
@@ -225,29 +228,11 @@ export default function Dashboard() {
             transition="all"
             disabled={data.loading}
           >
-            <span class="i-material-symbols-refresh" style={{ width: '16px', height: '16px' }} />
+            <span class="i-material-symbols-refresh" w="4" h="4" aria-hidden="true" />
             Refresh
           </button>
-          {/* Plain anchor, like Nav's own links: a full navigation back to the
-              chat, which remounts its heavy panel tree cleanly. */}
-          <a
-            href="/"
-            flex="~"
-            items="center"
-            gap="2"
-            p="x-3 y-2"
-            rounded="md"
-            bg="dark-bg-secondary hover:dark-bg-hover"
-            border="1 dark-border-primary"
-            text="xs dark-text-secondary"
-            transition="all"
-          >
-            <span
-              class="i-material-symbols-chat-outline"
-              style={{ width: '16px', height: '16px' }}
-            />
-            Back to chat
-          </a>
+          {/* No "back to chat" control here: `Nav` renders on every route and
+              already flips to a chat-icon link while you are on /dashboard. */}
         </div>
       </header>
 
@@ -294,10 +279,12 @@ export default function Dashboard() {
                 }`}
               />
               <div grid="~ cols-1 sm:cols-2 lg:cols-4" gap="4">
+                {/* Same rule as the table's cost column: no priced step means no
+                    figure, not $0.0000. */}
                 <Card
                   label="Estimated cost"
-                  value={fmtUsd(totals()!.costUsd)}
-                  accent="neon-cyan"
+                  value={totals()!.pricedCalls > 0 ? fmtUsd(totals()!.costUsd) : '—'}
+                  tone={totals()!.pricedCalls > 0 ? 'neon-cyan' : 'dark-text-tertiary'}
                   hint={
                     totals()!.pricedCalls < totals()!.meteredCalls
                       ? `${totals()!.pricedCalls}/${totals()!.meteredCalls} steps priced`
@@ -308,14 +295,14 @@ export default function Dashboard() {
                 <Card
                   label="Saved by caching"
                   value={fmtUsd(totals()!.savingsUsd)}
-                  accent="neon-green"
+                  tone="neon-green"
                   hint={`${fmtPct(totals()!.savingsPct)} off ${fmtUsd(totals()!.noCacheUsd)} uncached`}
                   title="Difference between the billed estimate and the same tokens priced with no caching"
                 />
                 <Card
                   label="Cache hit-rate"
                   value={fmtPct(totals()!.cacheHitRate)}
-                  accent="violet-400"
+                  tone="violet-400"
                   hint={`${fmtTok(totals()!.inputCacheReadTokens)} of ${fmtTok(
                     totals()!.inputTotalTokens,
                   )} input tokens`}
@@ -324,7 +311,7 @@ export default function Dashboard() {
                 <Card
                   label="Output tokens"
                   value={fmtTok(totals()!.outputTokens)}
-                  accent="neon-cyan"
+                  tone="neon-cyan"
                   hint={`${fmtTok(totals()!.totalTokens)} tokens in total`}
                 />
                 <div
@@ -358,10 +345,7 @@ export default function Dashboard() {
                   gap="2"
                   text="xs amber-300"
                 >
-                  <span
-                    class="i-material-symbols-info-outline"
-                    style={{ width: '16px', height: '16px' }}
-                  />
+                  <span class="i-material-symbols-info-outline" w="4" h="4" aria-hidden="true" />
                   <span>
                     {totals()!.unmeteredCalls} LLM steps are <strong>unmetered</strong> — they
                     predate per-event metrics and are excluded from every number above.
@@ -381,7 +365,7 @@ export default function Dashboard() {
                 border="1 dark-border-primary"
                 overflow="auto"
               >
-                <table w="full" style={{ 'border-collapse': 'collapse' }}>
+                <table w="full" border="collapse">
                   <thead bg="dark-bg-tertiary">
                     <tr>
                       <Th>Pattern</Th>
@@ -433,7 +417,7 @@ export default function Dashboard() {
                 border="1 dark-border-primary"
                 overflow="auto"
               >
-                <table w="full" style={{ 'border-collapse': 'collapse' }}>
+                <table w="full" border="collapse">
                   <thead bg="dark-bg-tertiary">
                     <tr>
                       <Th>Conversation</Th>
@@ -471,7 +455,7 @@ export default function Dashboard() {
               </div>
             </section>
 
-            <footer text="xs dark-text-tertiary" m="t-2">
+            <footer text="xs dark-text-secondary" m="t-2">
               Costs are estimates: each step is priced at the $/MTok rates in force for the client
               that served it (see <span font="mono">CLIENT_PRICING</span> in{' '}
               <span font="mono">lib/settings.ts</span>), with cache reads at 0.1× and cache writes

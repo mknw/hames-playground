@@ -27,12 +27,16 @@ export default function Nav() {
             border="1 cyber-700/50"
             transition="all"
             title={onDashboard() ? 'Back to chat' : 'Metrics dashboard — tokens, cache, costs'}
+            aria-label={onDashboard() ? 'Back to chat' : 'Metrics dashboard'}
           >
             <span
               class={
                 onDashboard() ? 'i-material-symbols-chat-outline' : 'i-material-symbols-monitoring'
               }
-              style={{ width: '20px', height: '20px', color: '#00ffff' }}
+              w="5"
+              h="5"
+              text="neon-cyan"
+              aria-hidden="true"
             />
           </a>
           <ThemeSwitcher />

@@ -14,7 +14,7 @@
 
 import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
-import { listConversationEvents } from '../db/conversations.server'
+import { CONVERSATION_EVENTS_SCAN_LIMIT, listConversationEvents } from '../db/conversations.server'
 import type { ContextEvent } from '../harness-patterns/types'
 import { buildDashboard, type ConversationEvents, type DashboardData } from './aggregate'
 
@@ -35,6 +35,10 @@ async function requireUser(): Promise<{ id: string }> {
 export interface MetricsDashboard extends DashboardData {
   /** When the fold ran (epoch millis) — stamped server-side. */
   generatedAt: number
+  /** Row ceiling the load ran under. `conversationCount` reaching it means the
+   *  fold covers the most recent N conversations, not all of them — the page
+   *  says so rather than presenting a partial total as complete. */
+  conversationScanLimit: number
 }
 
 /** A JSONB blob written by an older/partial run may have no `events` array. */
@@ -62,5 +66,6 @@ export async function getMetricsDashboard(topConversations = 10): Promise<Metric
   return {
     ...buildDashboard(conversations, { topConversations }),
     generatedAt: Date.now(),
+    conversationScanLimit: CONVERSATION_EVENTS_SCAN_LIMIT,
   }
 }

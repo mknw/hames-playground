@@ -222,6 +222,10 @@ export interface ConversationEventsRow {
   events: unknown
 }
 
+/** Row ceiling for {@link listConversationEvents}. Exported so the dashboard can
+ *  say "most recent N" instead of implying it folded everything. */
+export const CONVERSATION_EVENTS_SCAN_LIMIT = 200
+
 /**
  * Load every conversation's event stream for a user (#132).
  *
@@ -240,7 +244,7 @@ export async function listConversationEvents(userId: string): Promise<Conversati
     events: unknown
   }>(
     `SELECT id, agent_id, title, updated_at, context -> 'events' AS events
-     FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200`,
+     FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT ${CONVERSATION_EVENTS_SCAN_LIMIT}`,
     [userId],
   )
   return rows.map((r) => ({

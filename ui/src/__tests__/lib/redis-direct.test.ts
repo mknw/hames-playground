@@ -117,7 +117,12 @@ describe('redis-direct adapter', () => {
     fake.setFtSearch([
       1,
       'stashvec:s:t:d1:0',
-      ['meta', encodeMeta({ content: 'hello', doc_id: 'd1', chunk_index: 0, _vid: 'd1:0' }), 'score', '0.25'],
+      [
+        'meta',
+        encodeMeta({ content: 'hello', doc_id: 'd1', chunk_index: 0, _vid: 'd1:0' }),
+        'score',
+        '0.25',
+      ],
     ])
     const hits = await store.search([1, 2, 3], 5)
     expect(hits).toHaveLength(1)
@@ -176,6 +181,143 @@ describe('redis-direct adapter', () => {
 
   it('smembers passes through the set members as an array', async () => {
     const ct = makeDirectCallTool(asRedis(makeFakeIoredis({ smembers: ['a', 'b'] })))
-    expect(await ct('smembers', { name: 'stash:docs:s' })).toEqual({ success: true, data: ['a', 'b'] })
+    expect(await ct('smembers', { name: 'stash:docs:s' })).toEqual({
+      success: true,
+      data: ['a', 'b'],
+    })
+  })
+
+  it('sadd adds the member and returns the insert count', async () => {
+    const fake = makeFakeIoredis()
+    const ct = makeDirectCallTool(asRedis(fake))
+
+    expect(await ct('sadd', { name: 'stash:docs:s', value: 'd1' })).toEqual({
+      success: true,
+      data: 1,
+    })
+    expect(fake.ops.find(([m]) => m === 'sadd')![1]).toEqual(['stash:docs:s', 'd1'])
+    // No TTL asked for → none applied (the session index must not silently expire).
+    expect(fake.ops.some(([m]) => m === 'expire')).toBe(false)
+  })
+
+  it('sadd applies a TTL only when expire_seconds is given', async () => {
+    const fake = makeFakeIoredis()
+    const ct = makeDirectCallTool(asRedis(fake))
+
+    await ct('sadd', { name: 'stash:docs:s', value: 'd1', expire_seconds: 3600 })
+
+    expect(fake.ops.find(([m]) => m === 'expire')![1]).toEqual(['stash:docs:s', 3600])
+  })
+
+  it('srem removes the member from the session index', async () => {
+    const fake = makeFakeIoredis()
+    const ct = makeDirectCallTool(asRedis(fake))
+
+    expect(await ct('srem', { name: 'stash:docs:s', value: 'd1' })).toEqual({
+      success: true,
+      data: 1,
+    })
+    expect(fake.ops.find(([m]) => m === 'srem')![1]).toEqual(['stash:docs:s', 'd1'])
+  })
+
+  it('expire uses args.name + numeric expire_seconds', async () => {
+    const fake = makeFakeIoredis()
+    const ct = makeDirectCallTool(asRedis(fake))
+
+    expect(await ct('expire', { name: 'stash:doc:s:d1', expire_seconds: '120' })).toEqual({
+      success: true,
+      data: 1,
+    })
+    expect(fake.ops.find(([m]) => m === 'expire')![1]).toEqual(['stash:doc:s:d1', 120])
+  })
+
+  it('hset writes the named field and honours expire_seconds', async () => {
+    const fake = makeFakeIoredis()
+    const ct = makeDirectCallTool(asRedis(fake))
+
+    expect(await ct('hset', { name: 'k', key: 'meta', value: 'YmFzZTY0' })).toEqual({
+      success: true,
+      data: 1,
+    })
+    expect(fake.ops.find(([m]) => m === 'hset')![1]).toEqual(['k', 'meta', 'YmFzZTY0'])
+
+    await ct('hset', { name: 'k', key: 'meta', value: 'YmFzZTY0', expire_seconds: 60 })
+    expect(fake.ops.find(([m]) => m === 'expire')![1]).toEqual(['k', 60])
+  })
+
+  it('create_vector_index_hash declares the FLOAT32 vector + meta schema', async () => {
+    const fake = makeFakeIoredis()
+    const ct = makeDirectCallTool(asRedis(fake))
+
+    expect(
+      await ct('create_vector_index_hash', {
+        index_name: 'idx',
+        prefix: 'stashvec:s:t:',
+        dim: 1024,
+      }),
+    ).toEqual({ success: true, data: 'OK' })
+
+    const args = fake.ops.find(([m]) => m === 'call:FT.CREATE')![1] as string[]
+    expect(args.slice(0, 6)).toEqual(['idx', 'ON', 'HASH', 'PREFIX', '1', 'stashvec:s:t:'])
+    expect(args).toContain('FLOAT32')
+    expect(args[args.indexOf('DIM') + 1]).toBe('1024')
+    // Metric defaults to COSINE, matching what the gateway path wrote.
+    expect(args[args.indexOf('DISTANCE_METRIC') + 1]).toBe('COSINE')
+  })
+
+  it('reports an unhandled tool as a failed result rather than throwing', async () => {
+    const ct = makeDirectCallTool(asRedis(makeFakeIoredis()))
+
+    expect(await ct('publish', { channel: 'x' })).toEqual({
+      success: false,
+      data: null,
+      error: 'redis-direct: unhandled tool "publish"',
+    })
+  })
+
+  it('turns a redis failure into a failed result carrying the message', async () => {
+    const fake = makeFakeIoredis()
+    fake.setFtCreateErr(new Error('boom'))
+    const ct = makeDirectCallTool(asRedis(fake))
+
+    expect(
+      await ct('create_vector_index_hash', { index_name: 'idx', prefix: 'p', dim: 3 }),
+    ).toEqual({ success: false, data: null, error: 'boom' })
+  })
+
+  it('skips rows whose fields are not an array (defensive against a RESP shape change)', async () => {
+    const fake = makeFakeIoredis()
+    fake.setFtSearch([1, 'stashvec:s:t:d1:0', 'not-an-array'])
+    const ct = makeDirectCallTool(asRedis(fake))
+
+    const res = await ct('vector_search_hash', { index_name: 'idx', query_vector: [1, 2, 3], k: 1 })
+
+    expect(res.success).toBe(true)
+    expect(res.data).toEqual([{ id: 'stashvec:s:t:d1:0' }])
+  })
+
+  it('passes a caller-supplied filter into the KNN query (dedup hook)', async () => {
+    const fake = makeFakeIoredis()
+    const ct = makeDirectCallTool(asRedis(fake))
+
+    await ct('vector_search_hash', {
+      index_name: 'idx',
+      query_vector: [1, 2, 3],
+      k: 3,
+      filter: '@session_ids:{s1}',
+    })
+
+    const args = fake.ops.find(([m]) => m === 'call:FT.SEARCH')![1] as unknown[]
+    expect(args[1]).toBe('@session_ids:{s1}=>[KNN 3 @vector $BLOB AS score]')
+  })
+
+  it('defaults to an unfiltered KNN of 5 when neither filter nor k is given', async () => {
+    const fake = makeFakeIoredis()
+    const ct = makeDirectCallTool(asRedis(fake))
+
+    await ct('vector_search_hash', { index_name: 'idx', query_vector: [1, 2, 3] })
+
+    const args = fake.ops.find(([m]) => m === 'call:FT.SEARCH')![1] as unknown[]
+    expect(args[1]).toBe('*=>[KNN 5 @vector $BLOB AS score]')
   })
 })

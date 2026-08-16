@@ -148,6 +148,15 @@ describe("getUserGraphToken", () => {
     acquireTokenSilent.mockRejectedValue(new Error("network boom"));
     await expect(getUserGraphToken(USER)).rejects.toThrow("network boom");
   });
+
+  it("demands re-auth when MSAL resolves without an access token", async () => {
+    for (const result of [null, {}, { accessToken: "" }]) {
+      acquireTokenSilent.mockResolvedValueOnce(result);
+      await expect(getUserGraphToken(USER)).rejects.toBeInstanceOf(GraphAuthRequiredError);
+    }
+    // The empty-token exit must not be mistaken for success and written back.
+    expect(saveUserTokenCache).not.toHaveBeenCalled();
+  });
 });
 
 describe("graphFetch", () => {

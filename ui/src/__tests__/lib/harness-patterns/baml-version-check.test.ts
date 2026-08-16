@@ -136,4 +136,51 @@ describe('runBamlClientCheckOnce', () => {
     expect(warnSpy).not.toHaveBeenCalled()
     warnSpy.mockRestore()
   })
+
+  it('warns once per finding when the vitest guard is lifted, never twice', async () => {
+    const { runBamlClientCheckOnce, collectBamlClientWarnings, __resetBamlClientCheckForTests } =
+      await load()
+    // The check reads the real tree; whatever it finds there, the boot hook
+    // must report it exactly once no matter how many times boot calls it.
+    const expected = await collectBamlClientWarnings()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const savedVitest = process.env.VITEST
+    delete process.env.VITEST
+    __resetBamlClientCheckForTests()
+
+    try {
+      runBamlClientCheckOnce()
+      runBamlClientCheckOnce()
+      await vi.waitFor(() => expect(warnSpy.mock.calls).toHaveLength(expected.length))
+    } finally {
+      if (savedVitest === undefined) delete process.env.VITEST
+      else process.env.VITEST = savedVitest
+      warnSpy.mockRestore()
+      __resetBamlClientCheckForTests()
+    }
+  })
+})
+
+describe('collectBamlClientWarnings', () => {
+  it('reads the real baml_src / baml_client and returns well-formed warnings', async () => {
+    const { collectBamlClientWarnings } = await load()
+
+    const warnings = await collectBamlClientWarnings()
+
+    expect(Array.isArray(warnings)).toBe(true)
+    for (const w of warnings) {
+      expect(['stale-client', 'version-mismatch']).toContain(w.kind)
+      expect(w.message).toMatch(/baml/i)
+    }
+  })
+
+  it('reports no staleness against a freshly generated client', async () => {
+    // `pnpm baml-generate` runs before the suite (predev / CI step), so a
+    // stale-client warning here means the generated client really has drifted.
+    const { collectBamlClientWarnings } = await load()
+
+    const warnings = await collectBamlClientWarnings()
+
+    expect(warnings.filter((w) => w.kind === 'stale-client')).toEqual([])
+  })
 })

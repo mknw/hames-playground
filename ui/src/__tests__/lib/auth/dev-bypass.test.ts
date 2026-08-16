@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { isBypassEnabled, BYPASS_USER } from "../../../lib/auth/dev-bypass";
 
 // `isBypassEnabled()` reads `import.meta.env` at call-time, so we can mutate
@@ -55,6 +55,43 @@ describe("isBypassEnabled", () => {
     expect(isBypassEnabled()).toBe(false);
     (import.meta.env as Record<string, unknown>).VITE_DEV_BYPASS_AUTH = "1";
     expect(isBypassEnabled()).toBe(false);
+  });
+});
+
+describe("misconfiguration warning at module load", () => {
+  const env = import.meta.env as Record<string, unknown>;
+  const originalDev = env.DEV;
+  const originalBypass = env.VITE_DEV_BYPASS_AUTH;
+
+  afterEach(() => {
+    env.DEV = originalDev;
+    env.VITE_DEV_BYPASS_AUTH = originalBypass;
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  it("warns when a production build still has the bypass env var set", async () => {
+    env.DEV = false;
+    env.VITE_DEV_BYPASS_AUTH = "true";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.resetModules();
+
+    await import("../../../lib/auth/dev-bypass");
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("VITE_DEV_BYPASS_AUTH=true is set in a production build"),
+    );
+  });
+
+  it("stays silent in a production build without the env var", async () => {
+    env.DEV = false;
+    env.VITE_DEV_BYPASS_AUTH = "false";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.resetModules();
+
+    await import("../../../lib/auth/dev-bypass");
+
+    expect(warn).not.toHaveBeenCalled();
   });
 });
 

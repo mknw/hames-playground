@@ -12,14 +12,9 @@ this file, not a substitute for it.
 Per-file provenance, upstream pins, and the adaptations applied to each file
 live in [`PROVENANCE.md`](PROVENANCE.md).
 
-| Source                                 | Vendored here from                        |
-| --------------------------------------- | ------------------------------------------ |
-| `mattpocock/skills`                    | see the Sources table in `PROVENANCE.md`  |
-| `affaan-m/ECC`                         | see the Sources table in `PROVENANCE.md`  |
-| `nextlevelbuilder/ui-ux-pro-max-skill` | see the Sources table in `PROVENANCE.md`  |
-| `DietrichGebert/ponytail`              | see the Sources table in `PROVENANCE.md`  |
-
-All four texts are recorded now so that no later wave has to edit this file;
+The four sources whose licences are reproduced below are `mattpocock/skills`,
+`affaan-m/ECC`, `nextlevelbuilder/ui-ux-pro-max-skill` and
+`DietrichGebert/ponytail`. All four texts are recorded now so that no later wave has to edit this file;
 a notice present before its material is harmless, the reverse is a licence
 breach.
 

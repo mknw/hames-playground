@@ -50,6 +50,12 @@ git add neo4j_dumps/seed-data.cypher
 git commit -m "Update graph seed data"
 ```
 
+> **⚠️ Before committing the copy, re-check its path properties.** A live
+> database still holds nodes seeded before the #193 `ui/` → `app/` rename (and
+> before the #151 module removals), so a straight `cp` of an export reintroduces
+> stale `ui/...` paths that were fixed by hand in `seed-data.cypher`. Diff the
+> new seed against the old one and carry the corrections forward.
+
 ## Fresh Clone Setup
 
 After cloning the repo:

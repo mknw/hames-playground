@@ -163,11 +163,26 @@ describe('claimRoutineRun', () => {
     const prev = new Date('2026-08-15T23:00:00Z')
     expect(await claimRoutineRun('r1', prev)).toBe(true)
     const { text, params } = lastCall()
-    expect(text).toContain('SET last_run_at = NOW()')
     // NOT `= $2`: a never-run routine's NULL must compare equal.
     expect(text).toContain('last_run_at IS NOT DISTINCT FROM $2')
     expect(text).toContain('enabled = TRUE')
     expect(params).toEqual(['r1', prev])
+  })
+
+  it('stores a millisecond-precision, strictly advancing timestamp', async () => {
+    // A raw NOW() writes microseconds, but `pg` reads TIMESTAMPTZ back into a
+    // millisecond-only Date — so the next claim's $2 could never match the
+    // stored value and every routine fired exactly once, then jammed. The
+    // written value must therefore survive the Postgres -> JS -> Postgres
+    // round trip, and must advance strictly so two claimants inside one
+    // millisecond can't both win. `db/routines.test.ts` proves the behaviour
+    // against a live container; this pins the SQL that delivers it.
+    await claimRoutineRun('r1', new Date('2026-08-15T23:00:00Z'))
+    const { text } = lastCall()
+    expect(text).toContain("date_trunc('milliseconds', NOW())")
+    expect(text).toContain("last_run_at + interval '1 millisecond'")
+    expect(text).toContain('GREATEST')
+    expect(text).not.toContain('SET last_run_at = NOW()')
   })
 
   it('reports a lost claim when no row was updated', async () => {

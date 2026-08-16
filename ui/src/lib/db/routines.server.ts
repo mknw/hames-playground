@@ -299,12 +299,29 @@ export async function listEnabledRoutinesForUser(
  * unlikely: a second app instance, an HMR reload that re-armed the timer, or
  * an overlapping tick all lose the CAS and skip. `IS NOT DISTINCT FROM` (not
  * `=`) so the NULL of a never-run routine compares correctly.
+ *
+ * The stored value is deliberately millisecond-precision, not raw `NOW()`.
+ * Postgres keeps a TIMESTAMPTZ to the microsecond, but `pg` hands JavaScript a
+ * `Date`, which only holds milliseconds — so a `last_run_at` read back through
+ * a `RoutineRow` and passed here as `$2` never equals the microsecond value
+ * still in the column, and the CAS could only ever match on the NULL of a
+ * never-run routine. Every routine fired exactly once and then jammed. Storing
+ * `date_trunc('milliseconds', ...)` makes the value survive the
+ * Postgres -> JS -> Postgres round trip intact.
+ *
+ * `GREATEST(..., last_run_at + 1ms)` then forces the timestamp to advance
+ * strictly, so two claimants that read the same value inside a single
+ * millisecond still cannot both win. `GREATEST` ignores NULLs, so the
+ * never-run case takes the truncated `NOW()`.
  */
 export async function claimRoutineRun(id: string, lastRunAt: Date | null): Promise<boolean> {
   await ensureSchema()
   const { rowCount } = await query(
-    `UPDATE routines SET last_run_at = NOW(), updated_at = NOW()
-     WHERE id = $1 AND enabled = TRUE AND last_run_at IS NOT DISTINCT FROM $2`,
+    `UPDATE routines
+        SET last_run_at = GREATEST(date_trunc('milliseconds', NOW()),
+                                   last_run_at + interval '1 millisecond'),
+            updated_at = NOW()
+      WHERE id = $1 AND enabled = TRUE AND last_run_at IS NOT DISTINCT FROM $2`,
     [id, lastRunAt],
   )
   return (rowCount ?? 0) > 0

@@ -89,6 +89,9 @@ descriptions; the only one you have to ask for by name is `/grill-me`.
   only true of this repo.
 - A `kg-*` skill may call a generic skill. A generic skill must never call a
   `kg-*` skill — that invariant is what keeps the generic set portable.
+- Data the skills read: house vocabulary in [`GLOSSARY.md`](GLOSSARY.md),
+  decision records in [`docs/adr/`](docs/adr/README.md) (which also states when
+  one gets written, and that they are not to be re-litigated).
 - Provenance and upstream pins for vendored files: `.claude/skills/PROVENANCE.md`;
   licences: `.claude/skills/NOTICE.md`. Adoption programme:
   [`docs/plan/skills-adoption.md`](docs/plan/skills-adoption.md).

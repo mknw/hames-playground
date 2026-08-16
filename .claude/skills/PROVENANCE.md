@@ -129,6 +129,58 @@ LICENSE file at `2c60614`, so all-rights-reserved by default and not vendorable.
 
 ---
 
+## Wave 2 — ADR mechanism + seed records
+
+`docs(adr): ADR mechanism + seed records`
+
+**No skill files are vendored in this wave.** What it ships is one derivative
+work outside `.claude/`, recorded here because the pin belongs in one place:
+
+| Our path             | Upstream repo       | Upstream path                                      | Pinned commit | Bundle |
+| -------------------- | ------------------- | -------------------------------------------------- | ------------- | ------ |
+| `docs/adr/README.md` | `mattpocock/skills` | `skills/engineering/domain-modeling/ADR-FORMAT.md` | `068b6e0`     | —      |
+| `docs/adr/README.md` | `affaan-m/ECC`      | `skills/architecture-decision-records/SKILL.md`    | `50743ce`     | —      |
+
+It is a **synthesis, not a copy** — the two upstreams disagree, and
+[`docs/plan/skills-adoption.md` §3.2](../../docs/plan/skills-adoption.md)
+decides between them. What was taken from each:
+
+- **mattpocock — the body format and the write gate.** The 1–3 sentence body,
+  the optional-sections list, `NNNN-slug.md` numbering, and the three-condition
+  gate (hard to reverse **and** surprising without context **and** the result of
+  a real trade-off). ECC's Nygard-style template was **dropped**: it makes every
+  ADR a small essay while its own guidance warns that a context section over ten
+  lines is too long.
+- **ECC — the index, the lifecycle, and the gates around writing.** The
+  `| ADR | Title | Status | Date |` index table as the single place statuses are
+  aggregated, `proposed → accepted → [deprecated | superseded by ADR-NNNN]`, the
+  explicit + implicit detection signals, the confirm-before-write step (present
+  the draft; write only on approval; discard silently on decline), and the two
+  rules kept verbatim in spirit — _"we just picked it" is not a valid rationale_
+  and _never back-fill without marking it_.
+
+Deviations from both, on this repo's own authority:
+
+- **No `template.md`.** ECC's directory layout includes one; a three-line format
+  does not need a file to copy, and a template file drifts from its own
+  documentation.
+- **No `metadata: origin:` and no frontmatter.** ADR files carry ECC's bold
+  `**Date**` / `**Status**` lines rather than mattpocock's optional status
+  frontmatter, so the file and the index row read the same way.
+- **A `## Sources` section** was added to the optional list — it does not appear
+  upstream. It exists to make ECC's don't-back-fill-silently rule enforceable
+  rather than aspirational, and all five seed records carry one.
+
+The attribution comment sits at the top of `docs/adr/README.md` as an HTML
+comment, per the two-part mechanism in the plan's §8. The five ADR files
+themselves are entirely this repo's content and carry no attribution.
+
+`GLOSSARY.md` (repo root) and the `docs/INDEX.md` rows are original, with no
+vendored material. `GLOSSARY.md` is the file the Wave 1 adaptation **A** call
+sites point at; those two data hooks now resolve.
+
+---
+
 <!-- Later waves append their own `## Wave N` section here. Do not edit the
      sections above; a wave that needs to change an earlier row bumps that row
      in place and says why in its own section. -->

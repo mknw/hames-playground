@@ -21,7 +21,11 @@ vi.mock('../../../lib/document-store.server', () => ({
 import type { McpTransport } from '../../../lib/sandbox/types'
 import type { ToolCallResult } from '../../../lib/harness-patterns/types'
 import { listDocuments, getDocument, storeDocument } from '../../../lib/document-store.server'
-import { hydrateWorkspace, promoteOutputs } from '../../../lib/sandbox/work-artifacts.server'
+import {
+  hydrateWorkspace,
+  promoteOutputs,
+  snapshotOutputs,
+} from '../../../lib/sandbox/work-artifacts.server'
 
 const unq = (s: string): string => s.replace(/^'|'$/g, '').replace(/'\\''/g, "'")
 function bashOk(stdout = ''): ToolCallResult {
@@ -69,7 +73,9 @@ function makeFsTransport() {
       }
       if (name === 'sandbox_read') {
         const p = args.path as string
-        return fs.has(p) ? { success: true, data: fs.get(p) } : { success: false, data: null, error: 'nf' }
+        return fs.has(p)
+          ? { success: true, data: fs.get(p) }
+          : { success: false, data: null, error: 'nf' }
       }
       if (name === 'sandbox_bash') return runBash(args.command as string)
       return { success: false, data: null, error: 'unknown' }
@@ -83,19 +89,64 @@ beforeEach(() => vi.clearAllMocks())
 describe('hydrateWorkspace', () => {
   it('writes visible docs into /work/in (text verbatim, binary decoded) and skips hidden/archived', async () => {
     vi.mocked(listDocuments).mockResolvedValue([
-      { id: 'd1', sessionId: 's', filename: 'data.csv', mimeType: 'text/csv', size: 3, uploadedAt: 1 },
-      { id: 'd2', sessionId: 's', filename: 'sheet.xlsx', mimeType: 'application/vnd…', size: 4, uploadedAt: 2, encoding: 'base64' },
-      { id: 'd3', sessionId: 's', filename: 'old.txt', mimeType: 'text/plain', size: 1, uploadedAt: 3, hidden: true },
+      {
+        id: 'd1',
+        sessionId: 's',
+        filename: 'data.csv',
+        mimeType: 'text/csv',
+        size: 3,
+        uploadedAt: 1,
+      },
+      {
+        id: 'd2',
+        sessionId: 's',
+        filename: 'sheet.xlsx',
+        mimeType: 'application/vnd…',
+        size: 4,
+        uploadedAt: 2,
+        encoding: 'base64',
+      },
+      {
+        id: 'd3',
+        sessionId: 's',
+        filename: 'old.txt',
+        mimeType: 'text/plain',
+        size: 1,
+        uploadedAt: 3,
+        hidden: true,
+      },
     ] as never)
     const xlsxBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04]) // "PK.." zip/xlsx magic
     vi.mocked(getDocument).mockImplementation(async (_s, id) => {
-      if (id === 'd1') return { id: 'd1', sessionId: 's', filename: 'data.csv', mimeType: 'text/csv', size: 3, uploadedAt: 1, content: 'a,b' } as never
-      if (id === 'd2') return { id: 'd2', sessionId: 's', filename: 'sheet.xlsx', mimeType: 'x', size: 4, uploadedAt: 2, encoding: 'base64', content: xlsxBytes.toString('base64') } as never
+      if (id === 'd1')
+        return {
+          id: 'd1',
+          sessionId: 's',
+          filename: 'data.csv',
+          mimeType: 'text/csv',
+          size: 3,
+          uploadedAt: 1,
+          content: 'a,b',
+        } as never
+      if (id === 'd2')
+        return {
+          id: 'd2',
+          sessionId: 's',
+          filename: 'sheet.xlsx',
+          mimeType: 'x',
+          size: 4,
+          uploadedAt: 2,
+          encoding: 'base64',
+          content: xlsxBytes.toString('base64'),
+        } as never
       return null
     })
 
     const { transport, fs } = makeFsTransport()
-    const n = await hydrateWorkspace(transport, 's', (async () => ({ success: true, data: null })) as never)
+    const n = await hydrateWorkspace(transport, 's', (async () => ({
+      success: true,
+      data: null,
+    })) as never)
 
     expect(n).toBe(2) // d3 skipped (hidden)
     expect(fs.get('/work/in/data.csv')).toBe('a,b')
@@ -103,6 +154,65 @@ describe('hydrateWorkspace', () => {
     expect(fs.has('/work/in/old.txt')).toBe(false)
     // getDocument never fetched the hidden doc.
     expect(vi.mocked(getDocument)).not.toHaveBeenCalledWith('s', 'd3', expect.anything())
+  })
+
+  it('skips a doc whose body has gone missing between list and fetch', async () => {
+    vi.mocked(listDocuments).mockResolvedValue([
+      {
+        id: 'd1',
+        sessionId: 's',
+        filename: 'gone.csv',
+        mimeType: 'text/csv',
+        size: 3,
+        uploadedAt: 1,
+      },
+      {
+        id: 'd2',
+        sessionId: 's',
+        filename: 'here.csv',
+        mimeType: 'text/csv',
+        size: 3,
+        uploadedAt: 2,
+      },
+    ] as never)
+    vi.mocked(getDocument).mockImplementation(async (_s, id) =>
+      id === 'd2'
+        ? ({
+            id: 'd2',
+            sessionId: 's',
+            filename: 'here.csv',
+            mimeType: 'text/csv',
+            size: 3,
+            uploadedAt: 2,
+            content: 'a,b',
+          } as never)
+        : null,
+    )
+
+    const { transport, fs } = makeFsTransport()
+    const n = await hydrateWorkspace(transport, 's', (async () => ({
+      success: true,
+      data: null,
+    })) as never)
+
+    expect(n).toBe(1)
+    expect(fs.has('/work/in/gone.csv')).toBe(false)
+    expect(fs.get('/work/in/here.csv')).toBe('a,b')
+  })
+})
+
+describe('snapshotOutputs', () => {
+  it('hashes the contents of /work/out so a later promote can diff against it', async () => {
+    const { transport, fs } = makeFsTransport()
+    fs.set('/work/out/report.csv', 'x,y')
+    fs.set('/work/in/ignored.csv', 'not an output') // /work/in is not snapshotted
+
+    const snap = await snapshotOutputs(transport)
+
+    expect([...snap.keys()]).toEqual(['report.csv'])
+    expect(snap.get('report.csv')).toBe(
+      createHash('sha256').update(Buffer.from('x,y', 'latin1')).digest('hex'),
+    )
   })
 })
 
@@ -115,10 +225,15 @@ describe('promoteOutputs', () => {
     const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47])
     fs.set('/work/out/chart.png', pngBytes.toString('latin1'))
 
-    const notesHash = createHash('sha256').update(Buffer.from('# unchanged', 'latin1')).digest('hex')
+    const notesHash = createHash('sha256')
+      .update(Buffer.from('# unchanged', 'latin1'))
+      .digest('hex')
     const baseline = new Map([['notes.md', notesHash]])
 
-    const promoted = await promoteOutputs(transport, 's', baseline, (async () => ({ success: true, data: null })) as never)
+    const promoted = await promoteOutputs(transport, 's', baseline, (async () => ({
+      success: true,
+      data: null,
+    })) as never)
 
     expect(promoted.sort()).toEqual(['chart.png', 'report.csv'])
     const calls = vi.mocked(storeDocument).mock.calls.map((c) => c[0])

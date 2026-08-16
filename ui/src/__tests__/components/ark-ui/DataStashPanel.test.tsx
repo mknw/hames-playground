@@ -1,634 +1,650 @@
 /**
- * DataStashPanel — uploads, tool-result partitioning, and the inline viewer.
+ * DataStashPanel — the uploads gallery, the tool-result partition, and the
+ * inline file viewer.
  *
- * Everything the panel does that matters crosses one of two boundaries: the
- * `/api/stash/*` routes (asserted through a stubbed `fetch`) and the props it
- * is handed (`events`, `pendingReference`, `onStashAction`). Both are exercised
- * here; the reference extractor is left real, since it is the thing that decides
- * which lines the viewer highlights.
+ * The panel joins two unrelated stores: Redis-backed uploads it fetches over
+ * /api/stash/* itself, and the `tool_result` events handed to it as props. The
+ * behaviours worth pinning are the seams between them — how results split into
+ * Current Turn / Previous Turns / Archived, what each chip's context menu
+ * offers for a given hidden/archived state, what an upload does optimistically
+ * before the server confirms, and how a chat citation drives the viewer to a
+ * specific char range.
  *
- * Note the panel keeps a module-level document cache keyed by session, so each
- * test uses its own session id.
+ * `fetch` is stubbed per-route. Every test uses a distinct sessionId because
+ * the panel keeps a module-level document cache keyed by session.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
+import { render, fireEvent } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
-import { installDomStubs } from './dom-stubs'
-import type { ContextEvent } from '../../../lib/harness-patterns/types'
-import type { StashDocumentMeta } from '../../../lib/document-store.server'
+import type { ContextEvent } from '~/lib/harness-patterns'
+import type { OpenReferenceTarget } from '~/lib/harness-client/reference-extractor'
+import type { StashDocumentMeta } from '~/lib/document-store.server'
 
-beforeAll(() => installDomStubs())
-
-const { render } = await import('@solidjs/testing-library')
 const { DataStashPanel } = await import('../../../components/ark-ui/DataStashPanel')
 
-const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms))
-
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
-
-let sessionCounter = 0
-/** A fresh session per test, so the panel's module-level doc cache can't leak. */
-let sid = ''
-
-function doc(over: Partial<StashDocumentMeta> = {}): StashDocumentMeta {
-  return {
-    id: 'doc-1',
-    sessionId: 's',
-    filename: 'notes.md',
-    mimeType: 'text/markdown',
-    size: 2048,
-    uploadedAt: 1_700_000_000_000,
-    ...over,
-  }
-}
-
-function toolResult(
-  id: string,
-  tool: string,
-  over: Partial<{ summary: string; success: boolean; hidden: boolean; archived: boolean }> = {},
-): ContextEvent {
-  return {
-    id,
-    type: 'tool_result',
-    ts: 1,
-    patternId: 'p',
-    data: { tool, result: 'raw payload', success: true, ...over },
-  } as ContextEvent
-}
-
-const userMessage = (): ContextEvent =>
-  ({
-    id: 'u1',
-    type: 'user_message',
-    ts: 2,
-    patternId: 'p',
-    data: { content: 'hi' },
-  }) as ContextEvent
-
-function retrieverEvent(docId: string, spans: [number, number][]): ContextEvent {
-  return {
-    id: 'r1',
-    type: 'tool_result',
-    ts: 3,
-    patternId: 'p',
-    data: {
-      tool: 'retriever',
-      success: true,
-      result: {
-        references: spans.map(([startOffset, endOffset], i) => ({
-          source: 'notes.md',
-          docId,
-          chunkIndex: i,
-          startOffset,
-          endOffset,
-        })),
-      },
-    },
-  } as ContextEvent
-}
-
-// ---------------------------------------------------------------------------
-// fetch routing
-// ---------------------------------------------------------------------------
-
-let listResponse: StashDocumentMeta[] = []
-let documentBody: unknown = {
-  document: { content: 'alpha\nbravo\ncharlie\ndelta', encoding: 'utf8' },
-}
-let uploadResponse: { ok: boolean; body: unknown } = { ok: true, body: {} }
-const calls: { url: string; method: string; body?: unknown }[] = []
-
-const json = (body: unknown, ok = true) =>
-  Promise.resolve({
-    ok,
-    status: ok ? 200 : 500,
-    json: async () => body,
-  } as Response)
-
-const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-  const method = init?.method ?? 'GET'
-  calls.push({ url, method, body: init?.body })
-  if (url.startsWith('/api/stash/upload') && method === 'POST') {
-    return json(uploadResponse.body, uploadResponse.ok)
-  }
-  if (url.startsWith('/api/stash/upload')) return json({ documents: listResponse })
-  if (url.startsWith('/api/stash/document/')) {
-    if (method === 'GET') return json(documentBody)
-    return json({ ok: true })
-  }
-  return json({})
+// The viewer scrolls the focused highlight into view; jsdom implements no
+// scrollIntoView, and the call sits in a createEffect where a throw surfaces
+// as an unhandled error rather than a test failure.
+beforeAll(() => {
+  Element.prototype.scrollIntoView = () => {}
 })
 
-const chips = (container: HTMLElement) =>
-  [...container.querySelectorAll<HTMLElement>('div[title]')].filter((el) =>
-    el.getAttribute('title')?.includes('\n'),
+const settle = () => new Promise((r) => setTimeout(r, 30))
+
+/** Hoisted out of JSX: an inline `async () => {}` inside a tracked scope
+ *  trips solid/reactivity. */
+const noopAction = async () => {}
+
+let sessionSeq = 0
+/** A fresh session id per test — the panel's doc cache is module-level. */
+const newSession = () => `sess-${++sessionSeq}`
+
+let evSeq = 0
+const userMessage = (): ContextEvent => ({
+  type: 'user_message',
+  ts: ++evSeq,
+  patternId: 'harness',
+  data: { content: 'go' },
+})
+const toolResult = (
+  tool: string,
+  over: Record<string, unknown> = {},
+  id = `ev-${evSeq}${tool}`,
+): ContextEvent => ({
+  id,
+  type: 'tool_result',
+  ts: ++evSeq,
+  patternId: 'neo4j-query',
+  data: { tool, success: true, result: { rows: [] }, ...over },
+})
+
+const doc = (over: Partial<StashDocumentMeta> = {}): StashDocumentMeta =>
+  ({
+    id: 'doc-1',
+    filename: 'notes.md',
+    mimeType: 'text/markdown',
+    size: 2560,
+    uploadedAt: '2026-08-01T00:00:00Z',
+    ...over,
+  }) as StashDocumentMeta
+
+/** Route-aware fetch stub. Each entry is matched as a substring of the URL. */
+interface FetchPlan {
+  documents?: StashDocumentMeta[]
+  documentBody?: unknown
+  documentStatus?: number
+  uploadResponse?: { ok?: boolean; body: unknown }
+}
+let calls: { url: string; init?: RequestInit }[] = []
+const stubFetch = (plan: FetchPlan = {}) => {
+  const fn = vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url: String(url), init })
+    const u = String(url)
+    if (u.startsWith('/api/stash/upload') && init?.method === 'POST') {
+      const r = plan.uploadResponse ?? { ok: true, body: {} }
+      return { ok: r.ok ?? true, status: r.ok === false ? 500 : 200, json: async () => r.body }
+    }
+    if (u.startsWith('/api/stash/upload')) {
+      return { ok: true, status: 200, json: async () => ({ documents: plan.documents ?? [] }) }
+    }
+    if (u.startsWith('/api/stash/document/')) {
+      const status = plan.documentStatus ?? 200
+      return { ok: status < 400, status, json: async () => plan.documentBody ?? {} }
+    }
+    return { ok: true, status: 200, json: async () => ({}) }
+  })
+  globalThis.fetch = fn as unknown as typeof fetch
+  return fn
+}
+
+const renderPanel = async (
+  props: Partial<Parameters<typeof DataStashPanel>[0]> & { sessionId?: string } = {},
+) => {
+  // Resolved once: the panel's doc cache and its `sid === props.sessionId`
+  // guard both key off a stable id.
+  const sessionId = props.sessionId ?? newSession()
+  const rendered = render(() => (
+    <DataStashPanel
+      events={props.events ?? []}
+      sessionId={sessionId}
+      agentId={props.agentId}
+      onStashAction={props.onStashAction ?? (async () => {})}
+      pendingReference={props.pendingReference}
+      onUploaded={props.onUploaded}
+    />
+  ))
+  await settle()
+  return rendered
+}
+
+/** The positioned wrapper that holds a chip, its menu and its player. */
+const shell = (chip: HTMLElement) => chip.closest<HTMLElement>('div[style*="inline-block"]')!
+
+/** Menu buttons only — the tool chips sit inside a Tooltip.Trigger button,
+ *  and doc chips carry a bare-icon "View file" button. */
+const menuButtons = (chip: HTMLElement) =>
+  [...shell(chip).querySelectorAll('button')].filter((b) => !b.contains(chip) && !!b.textContent)
+
+/** Open a chip's context menu by clicking the chip body; returns its labels. */
+const chipMenu = (chip: HTMLElement) => {
+  fireEvent.click(chip)
+  return menuButtons(chip).map((b) => b.textContent)
+}
+const menuButton = (chip: HTMLElement, label: string) => {
+  const open = menuButtons(chip)
+  const found = (open.length ? open : (chipMenu(chip), menuButtons(chip))).find(
+    (b) => b.textContent === label,
   )
-const menuButton = (label: string) =>
-  [...document.querySelectorAll<HTMLElement>('button')].find((b) => b.textContent === label)
+  return found!
+}
+
+/** Tool-result chips (the ones carrying a `ref:` style label). */
+const toolChips = (container: HTMLElement) => [
+  ...container.querySelectorAll<HTMLElement>('[data-part="trigger"] > div'),
+]
+
+/** Document chips (identified by their native title tooltip). */
+const docChips = (container: HTMLElement) =>
+  [...container.querySelectorAll<HTMLElement>('div[title]')].filter((el) =>
+    el.getAttribute('title')?.includes('·'),
+  )
 
 beforeEach(() => {
-  sid = `sess-${++sessionCounter}`
-  calls.length = 0
-  fetchMock.mockClear()
-  listResponse = []
-  uploadResponse = { ok: true, body: {} }
-  documentBody = { document: { content: 'alpha\nbravo\ncharlie\ndelta', encoding: 'utf8' } }
-  vi.stubGlobal('fetch', fetchMock)
+  calls = []
+  stubFetch()
 })
 
 afterEach(() => {
-  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
-// ---------------------------------------------------------------------------
+describe('DataStashPanel — tool result partition', () => {
+  it('shows an empty findings state and a zero item count', async () => {
+    const { container } = await renderPanel()
 
-describe('DataStashPanel — tool results', () => {
-  it('splits results into the current turn, previous turns and the archive', async () => {
-    const events = [
-      toolResult('ev-old', 'read_neo4j_cypher'),
-      toolResult('ev-arch', 'web_search', { archived: true }),
-      userMessage(),
-      toolResult('ev-new', 'fetch_content'),
-    ]
-    const { container } = render(() => (
-      <DataStashPanel events={events} sessionId={sid} onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
-
-    expect(container.textContent).toContain('Current Turn')
-    expect(container.textContent).toContain('Previous Turns')
-    expect(container.textContent).toContain('Archived')
-    expect(container.textContent).toContain('3 items')
+    expect(container.textContent).toContain('0 items')
+    expect(container.textContent).toContain('No tool results yet')
   })
 
-  it('shows the empty state when the agent has produced nothing', async () => {
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId={sid} onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
+  it('splits results into the current turn and previous turns', async () => {
+    const events = [
+      userMessage(),
+      toolResult('read_neo4j_cypher', {}, 'ev-old1'),
+      userMessage(),
+      toolResult('web_search', {}, 'ev-new1'),
+      toolResult('read_graph', {}, 'ev-new2'),
+    ]
+    const { container } = await renderPanel({ events })
 
-    expect(container.textContent).toContain('No tool results yet')
+    expect(container.textContent).toContain('3 items')
+    expect(container.textContent).toContain('Current Turn')
+    expect(container.textContent).toContain('Previous Turns')
+    // Labels drop the generic verb ("read_") in favour of the first
+    // domain segment — `web_search` keeps `web`, `read_graph` keeps `graph`.
+    expect(container.textContent).toContain('neo4j:old1')
+    expect(container.textContent).toContain('web:new1')
+    expect(container.textContent).toContain('graph:new2')
+  })
+
+  it('treats every result as previous when no user message has landed', async () => {
+    const { container } = await renderPanel({ events: [toolResult('web_search', {}, 'ev-a')] })
+
+    expect(container.textContent).toContain('Previous Turns')
+    expect(container.textContent).not.toContain('Current Turn')
+  })
+
+  it('files archived results into their own collapsed section', async () => {
+    const events = [
+      userMessage(),
+      toolResult('web_search', { archived: true }, 'ev-arch'),
+      toolResult('read_graph', {}, 'ev-live'),
+    ]
+    const { container, getByText } = await renderPanel({ events })
+
+    expect(container.textContent).toContain('Archived')
+    // Closed by default — the chip is not rendered until expanded.
+    expect(container.textContent).not.toContain('web:arch')
+
+    fireEvent.click(getByText('Archived'))
+    expect(container.textContent).toContain('web:arch')
+  })
+
+  it('skips tool results that carry no event id', async () => {
+    const withoutId = { ...toolResult('web_search'), id: undefined }
+    const { container } = await renderPanel({ events: [userMessage(), withoutId] })
+
     expect(container.textContent).toContain('0 items')
   })
 
-  it('labels a chip by the informative segment of its tool name', async () => {
-    const { container } = render(() => (
-      <DataStashPanel
-        events={[toolResult('ev-fr1y8p', 'read_neo4j_cypher')]}
-        sessionId={sid}
-        onStashAction={vi.fn(async () => {})}
-      />
-    ))
-    await tick()
+  it('collapses and re-expands a section', async () => {
+    const events = [userMessage(), toolResult('web_search', {}, 'ev-x')]
+    const { container, getByText } = await renderPanel({ events })
+    expect(container.textContent).toContain('web:x')
 
-    // `read` is a generic verb and is skipped in favour of `neo4j`.
-    expect(container.textContent).toContain('neo4j:fr1y8p')
+    fireEvent.click(getByText('Agent Findings'))
+    expect(container.textContent).not.toContain('web:x')
+
+    fireEvent.click(getByText('Agent Findings'))
+    expect(container.textContent).toContain('web:x')
+  })
+})
+
+describe('DataStashPanel — tool result chips', () => {
+  it('offers hide and archive for a live result, and reports the action', async () => {
+    const onStashAction = vi.fn(async () => {})
+    const events = [userMessage(), toolResult('web_search', {}, 'ev-a')]
+    const { container } = await renderPanel({ events, onStashAction })
+
+    const chip = toolChips(container)[0]
+    expect(chipMenu(chip)).toEqual(['Hide', 'Archive', 'Cancel'])
+
+    fireEvent.click(menuButton(chip, 'Hide'))
+    await settle()
+    expect(onStashAction).toHaveBeenCalledWith('ev-a', 'hide')
   })
 
-  it('offers hide/archive on a live result and reports the choice', async () => {
-    const onStashAction = vi.fn(async () => {})
-    const { container } = render(() => (
-      <DataStashPanel
-        events={[toolResult('ev-1', 'web_search')]}
-        sessionId={sid}
-        onStashAction={onStashAction}
-      />
-    ))
-    await tick()
+  it('offers unhide and archive for a hidden result', async () => {
+    const events = [userMessage(), toolResult('web_search', { hidden: true }, 'ev-a')]
+    const { container } = await renderPanel({ events })
 
-    container.querySelector<HTMLElement>('[data-part="trigger"] > div')!.click()
-    await tick()
-    expect(menuButton('Hide')).toBeTruthy()
-    expect(menuButton('Unhide')).toBeUndefined()
-
-    menuButton('Archive')!.click()
-    await tick()
-    expect(onStashAction).toHaveBeenCalledWith('ev-1', 'archive')
+    expect(chipMenu(toolChips(container)[0])).toEqual(['Unhide', 'Archive', 'Cancel'])
   })
 
-  it('offers unarchive — and only that — on an archived result', async () => {
-    const onStashAction = vi.fn(async () => {})
-    const { container } = render(() => (
-      <DataStashPanel
-        events={[toolResult('ev-2', 'web_search', { archived: true })]}
-        sessionId={sid}
-        onStashAction={onStashAction}
-      />
-    ))
-    await tick()
+  it('offers only unarchive for an archived result', async () => {
+    const events = [userMessage(), toolResult('web_search', { archived: true }, 'ev-a')]
+    const { container, getByText } = await renderPanel({ events })
+    fireEvent.click(getByText('Archived'))
 
-    // The Archived section is collapsed by default.
-    const archived = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Archived'),
-    )!
-    archived.click()
-    await tick()
-
-    container.querySelector<HTMLElement>('[data-part="trigger"] > div')!.click()
-    await tick()
-
-    expect(menuButton('Unarchive')).toBeTruthy()
-    expect(menuButton('Hide')).toBeUndefined()
-    menuButton('Unarchive')!.click()
-    await tick()
-    expect(onStashAction).toHaveBeenCalledWith('ev-2', 'unarchive')
+    expect(chipMenu(toolChips(container)[0])).toEqual(['Unarchive', 'Cancel'])
   })
 
-  it('offers unhide + archive on a hidden result and can be cancelled', async () => {
+  it('closes the menu on Cancel without acting', async () => {
     const onStashAction = vi.fn(async () => {})
-    const { container } = render(() => (
-      <DataStashPanel
-        events={[toolResult('ev-3', 'web_search', { hidden: true })]}
-        sessionId={sid}
-        onStashAction={onStashAction}
-      />
-    ))
-    await tick()
+    const events = [userMessage(), toolResult('web_search', {}, 'ev-a')]
+    const { container } = await renderPanel({ events, onStashAction })
 
-    container.querySelector<HTMLElement>('[data-part="trigger"] > div')!.click()
-    await tick()
-    expect(menuButton('Unhide')).toBeTruthy()
+    const chip = toolChips(container)[0]
+    chipMenu(chip)
+    fireEvent.click(menuButton(chip, 'Cancel'))
 
-    menuButton('Cancel')!.click()
-    await tick()
-    expect(menuButton('Unhide')).toBeUndefined()
+    expect(menuButtons(chip)).toHaveLength(0)
     expect(onStashAction).not.toHaveBeenCalled()
   })
 
-  it('collapses a section from its header', async () => {
-    const { container } = render(() => (
-      <DataStashPanel
-        events={[toolResult('ev-4', 'web_search')]}
-        sessionId={sid}
-        onStashAction={vi.fn(async () => {})}
-      />
-    ))
-    await tick()
+  it('shows the LLM summary in the tooltip, or a raw preview marked pending', async () => {
+    const events = [
+      userMessage(),
+      toolResult('web_search', { summary: 'three articles about graphs' }, 'ev-sum'),
+      toolResult('read_graph', { result: { entities: ['a'] } }, 'ev-raw'),
+    ]
+    const { container } = await renderPanel({ events })
 
-    const header = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Agent Findings'),
-    )!
-    expect(container.textContent).toContain('web:4')
-
-    header.click()
-    await tick()
-    expect(container.textContent).not.toContain('web:4')
+    expect(container.textContent).toContain('three articles about graphs')
+    expect(container.textContent).toContain('{"entities":["a"]}')
+    // Only the summary-less chip advertises a pending summary.
+    expect(container.textContent.match(/Summary pending…/g)).toHaveLength(1)
   })
 })
 
 describe('DataStashPanel — uploads', () => {
-  it('lists the session documents fetched on mount', async () => {
-    listResponse = [doc({ id: 'd1', filename: 'report.csv', mimeType: 'text/csv' })]
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId={sid} onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
+  const upload = async (container: HTMLElement, files: File[]) => {
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!
+    Object.defineProperty(input, 'files', { value: files, configurable: true })
+    fireEvent.change(input)
+    await settle()
+  }
 
-    expect(calls[0].url).toBe(`/api/stash/upload?sessionId=${sid}`)
+  it('lists documents fetched for the session', async () => {
+    stubFetch({ documents: [doc({ filename: 'report.csv', mimeType: 'text/csv', size: 4096 })] })
+    const { container } = await renderPanel()
+
     expect(container.textContent).toContain('report.csv')
     expect(container.textContent).toContain('1 items')
+    expect(docChips(container)[0].getAttribute('title')).toContain('4.0 KB')
   })
 
-  it('posts a picked file with the session and agent, then shows it immediately', async () => {
-    const stored = doc({ id: 'd9', filename: 'uploaded.txt', ingestStatus: 'pending' })
-    uploadResponse = { ok: true, body: { document: stored } }
+  it('posts each picked file and shows it before the list refreshes', async () => {
+    const uploaded = doc({ id: 'doc-9', filename: 'fresh.md' })
+    const fetchFn = stubFetch({ uploadResponse: { body: { document: uploaded } } })
     const onUploaded = vi.fn()
-    const { container } = render(() => (
-      <DataStashPanel
-        events={[]}
-        sessionId="sess-upload"
-        agentId="code-mode"
-        onStashAction={vi.fn(async () => {})}
-        onUploaded={onUploaded}
-      />
-    ))
-    await tick()
+    const { container } = await renderPanel({ agentId: 'researcher', onUploaded })
 
-    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!
-    const file = new File(['hello'], 'uploaded.txt', { type: 'text/plain' })
-    Object.defineProperty(input, 'files', { value: [file], configurable: true })
-    input.dispatchEvent(new Event('change', { bubbles: true }))
-    await tick()
+    await upload(container, [new File(['hello'], 'fresh.md', { type: 'text/markdown' })])
 
-    const post = calls.find((c) => c.method === 'POST')!
-    const form = post.body as FormData
-    expect(form.get('sessionId')).toBe('sess-upload')
-    expect(form.get('agentId')).toBe('code-mode')
-    expect((form.get('file') as File).name).toBe('uploaded.txt')
-
-    expect(container.textContent).toContain('uploaded.txt')
-    expect(container.textContent, 'ingest status shows straight away').toContain('embedding…')
-    expect(onUploaded).toHaveBeenCalled()
+    const post = calls.find((c) => c.init?.method === 'POST')!
+    const form = post.init!.body as FormData
+    expect(form.get('agentId')).toBe('researcher')
+    expect((form.get('file') as File).name).toBe('fresh.md')
+    expect(container.textContent).toContain('fresh.md')
+    expect(onUploaded).toHaveBeenCalledOnce()
+    expect(fetchFn).toHaveBeenCalled()
   })
 
-  it('reports the server error message when an upload is rejected', async () => {
-    uploadResponse = { ok: false, body: { error: 'File too large' } }
-    const { container } = render(() => (
-      <DataStashPanel
-        events={[]}
-        sessionId="sess-badupload"
-        onStashAction={vi.fn(async () => {})}
-      />
-    ))
-    await tick()
+  it('surfaces the server error message from a failed upload', async () => {
+    stubFetch({ uploadResponse: { ok: false, body: { error: 'file too large' } } })
+    const { container } = await renderPanel()
 
-    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!
-    Object.defineProperty(input, 'files', {
-      value: [new File(['x'], 'big.bin')],
-      configurable: true,
-    })
-    input.dispatchEvent(new Event('change', { bubbles: true }))
-    await tick()
-
-    expect(container.textContent).toContain('File too large')
+    await upload(container, [new File(['x'], 'big.bin')])
+    expect(container.textContent).toContain('file too large')
   })
 
   it('refuses to upload before a conversation exists', async () => {
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId="" onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
+    const { container } = await renderPanel({ sessionId: '' })
 
-    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!
-    Object.defineProperty(input, 'files', { value: [new File(['x'], 'a.txt')], configurable: true })
-    input.dispatchEvent(new Event('change', { bubbles: true }))
-    await tick()
-
+    await upload(container, [new File(['x'], 'a.md')])
     expect(container.textContent).toContain('Start a conversation before uploading')
-    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+    expect(calls.some((c) => c.init?.method === 'POST')).toBe(false)
   })
 
-  it('takes files dropped on the zone', async () => {
-    uploadResponse = { ok: true, body: { document: doc({ id: 'dd', filename: 'dropped.md' }) } }
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId="sess-drop" onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
+  it('accepts a drag-and-drop as an upload', async () => {
+    stubFetch({ uploadResponse: { body: { document: doc({ filename: 'dropped.txt' }) } } })
+    const { container } = await renderPanel()
 
-    const zone = container.querySelector<HTMLElement>('div[border^="2 dashed"]')!
-    const drop = new Event('drop', { bubbles: true, cancelable: true }) as DragEvent
-    Object.defineProperty(drop, 'dataTransfer', {
-      value: { files: [new File(['x'], 'dropped.md')] },
-    })
-    zone.dispatchEvent(drop)
-    await tick()
+    const zone = container.querySelector<HTMLElement>('input[type="file"]')!.parentElement!
+    fireEvent.dragOver(zone)
+    fireEvent.drop(zone, { dataTransfer: { files: [new File(['x'], 'dropped.txt')] } })
+    await settle()
 
-    expect(calls.some((c) => c.method === 'POST')).toBe(true)
-    expect(container.textContent).toContain('dropped.md')
+    expect(container.textContent).toContain('dropped.txt')
   })
 
-  it('flags a failed vector ingest on the chip', async () => {
-    listResponse = [doc({ id: 'd2', filename: 'broken.md', ingestStatus: 'failed' })]
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId={sid} onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
+  it('ignores a drag that leaves without dropping', async () => {
+    const { container } = await renderPanel()
+    const zone = container.querySelector<HTMLElement>('input[type="file"]')!.parentElement!
+
+    fireEvent.dragOver(zone)
+    fireEvent.dragLeave(zone)
+    fireEvent.drop(zone, { dataTransfer: { files: [] } })
+    await settle()
+
+    expect(calls.some((c) => c.init?.method === 'POST')).toBe(false)
+  })
+})
+
+describe('DataStashPanel — document chips', () => {
+  it('flags a document still being embedded', async () => {
+    stubFetch({ documents: [doc({ ingestStatus: 'pending' })] })
+    const { container } = await renderPanel()
+
+    expect(container.textContent).toContain('embedding…')
+  })
+
+  it('flags a document whose ingest failed', async () => {
+    stubFetch({ documents: [doc({ ingestStatus: 'failed' })] })
+    const { container } = await renderPanel()
 
     expect(container.textContent).toContain('index failed')
   })
 
-  it('deletes a document optimistically and calls the route', async () => {
-    listResponse = [doc({ id: 'd3', filename: 'stale.md' })]
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId="sess-del" onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
+  it('offers download, hide, archive and delete', async () => {
+    stubFetch({ documents: [doc()] })
+    const { container } = await renderPanel()
 
-    chips(container)[0].click()
-    await tick()
-    listResponse = []
-    menuButton('Delete')!.click()
-    await tick()
-
-    expect(container.textContent).not.toContain('stale.md')
-    expect(calls.some((c) => c.method === 'DELETE' && c.url.includes('d3'))).toBe(true)
+    expect(chipMenu(docChips(container)[0])).toEqual(['Download', 'Hide', 'Archive', 'Delete'])
   })
 
-  it('patches hide/archive state through the document route', async () => {
-    listResponse = [doc({ id: 'd4', filename: 'keep.md' })]
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId="sess-patch" onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
+  it('swaps hide for unhide once a document is hidden', async () => {
+    stubFetch({ documents: [doc({ hidden: true })] })
+    const { container } = await renderPanel()
 
-    chips(container)[0].click()
-    await tick()
-    menuButton('Archive')!.click()
-    await tick()
+    expect(chipMenu(docChips(container)[0])).toEqual(['Download', 'Unhide', 'Archive', 'Delete'])
+  })
 
-    const patch = calls.find((c) => c.method === 'PATCH')!
-    expect(JSON.parse(patch.body as string)).toEqual({
+  it('offers only unarchive for an archived document', async () => {
+    stubFetch({ documents: [doc({ archived: true })] })
+    const { container } = await renderPanel()
+
+    expect(chipMenu(docChips(container)[0])).toEqual(['Download', 'Unarchive', 'Delete'])
+  })
+
+  it('patches the hidden flag through the document route', async () => {
+    stubFetch({ documents: [doc()] })
+    const { container } = await renderPanel({ sessionId: 'sess-patch' })
+
+    fireEvent.click(menuButton(docChips(container)[0], 'Hide'))
+    await settle()
+
+    const patch = calls.find((c) => c.init?.method === 'PATCH')!
+    expect(JSON.parse(patch.init!.body as string)).toEqual({
       sessionId: 'sess-patch',
+      hidden: true,
+    })
+  })
+
+  it('archives by setting archived and clearing hidden together', async () => {
+    stubFetch({ documents: [doc({ hidden: true })] })
+    const { container } = await renderPanel()
+
+    fireEvent.click(menuButton(docChips(container)[0], 'Archive'))
+    await settle()
+
+    const patch = calls.find((c) => c.init?.method === 'PATCH')!
+    expect(JSON.parse(patch.init!.body as string)).toMatchObject({
       archived: true,
       hidden: false,
     })
   })
 
-  it('downloads through an anchor rather than a fetch', async () => {
-    listResponse = [doc({ id: 'd5', filename: 'binary.xlsx', encoding: 'base64' })]
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId="sess-dl" onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
-    const clicks: string[] = []
-    const realClick = HTMLAnchorElement.prototype.click
-    HTMLAnchorElement.prototype.click = function () {
-      clicks.push(this.getAttribute('href')!)
-    }
+  it('removes a deleted document optimistically and calls DELETE', async () => {
+    stubFetch({ documents: [doc({ filename: 'doomed.md' })] })
+    const { container } = await renderPanel()
+    expect(container.textContent).toContain('doomed.md')
 
-    chips(container)[0].click()
-    await tick()
-    menuButton('Download')!.click()
-    await tick()
+    fireEvent.click(menuButton(docChips(container)[0], 'Delete'))
+    expect(container.textContent).not.toContain('doomed.md')
 
-    HTMLAnchorElement.prototype.click = realClick
-    expect(clicks[0]).toBe('/api/stash/document/d5?sessionId=sess-dl&download')
+    await settle()
+    expect(calls.some((c) => c.init?.method === 'DELETE')).toBe(true)
   })
 
-  it('offers a player for an audio upload only', async () => {
-    listResponse = [
-      doc({ id: 'd6', filename: 'memo.m4a', mimeType: 'application/octet-stream' }),
-      doc({ id: 'd7', filename: 'notes.md' }),
-    ]
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId="sess-audio" onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
+  it('downloads through an anchor rather than a fetch', async () => {
+    stubFetch({ documents: [doc({ id: 'doc-dl' })] })
+    const { container } = await renderPanel({ sessionId: 'sess-dl' })
 
-    chips(container)[1].click()
-    await tick()
-    expect(menuButton('Play'), 'a markdown file gets no player').toBeUndefined()
-    menuButton('Cancel') // no-op; close by re-clicking the chip
-    chips(container)[1].click()
-    await tick()
+    const clicked: HTMLAnchorElement[] = []
+    const create = document.createElement.bind(document)
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = create(tag)
+      if (tag === 'a') (el as HTMLAnchorElement).click = () => clicked.push(el as HTMLAnchorElement)
+      return el
+    })
 
-    chips(container)[0].click()
-    await tick()
-    menuButton('Play')!.click()
-    await tick()
+    fireEvent.click(menuButton(docChips(container)[0], 'Download'))
+    await settle()
 
+    expect(clicked).toHaveLength(1)
+    expect(clicked[0].getAttribute('href')).toBe(
+      '/api/stash/document/doc-dl?sessionId=sess-dl&download',
+    )
+    expect(calls.some((c) => c.url.includes('&download'))).toBe(false)
+  })
+
+  it('offers an inline player for an audio recording and mounts it on Play', async () => {
+    stubFetch({ documents: [doc({ id: 'rec-1', filename: 'note.m4a', mimeType: 'audio/mp4' })] })
+    const { container } = await renderPanel({ sessionId: 'sess-audio' })
+
+    const chip = docChips(container)[0]
+    expect(chipMenu(chip)).toContain('Play')
+
+    fireEvent.click(menuButton(chip, 'Play'))
     const audio = container.querySelector('audio')!
-    expect(audio.getAttribute('src')).toBe('/api/stash/document/d6?sessionId=sess-audio&download')
+    expect(audio.getAttribute('src')).toBe(
+      '/api/stash/document/rec-1?sessionId=sess-audio&download',
+    )
+  })
+
+  it('offers no player for a text document', async () => {
+    stubFetch({ documents: [doc()] })
+    const { container } = await renderPanel()
+
+    expect(chipMenu(docChips(container)[0])).not.toContain('Play')
+  })
+
+  it('hides the view button for a raw binary upload', async () => {
+    stubFetch({ documents: [doc({ filename: 'scan.pdf', encoding: 'base64' })] })
+    const { container } = await renderPanel()
+
+    expect(container.querySelector('[title="View file"]')).toBeNull()
+  })
+
+  it('keeps the view button for a converted binary', async () => {
+    stubFetch({ documents: [doc({ filename: 'scan.pdf', encoding: 'base64', converted: true })] })
+    const { container } = await renderPanel()
+
+    expect(container.querySelector('[title="View file"]')).toBeTruthy()
   })
 })
 
-describe('DataStashPanel — inline viewer', () => {
-  it('opens a text document and numbers its lines', async () => {
-    listResponse = [doc({ id: 'v1', filename: 'notes.md' })]
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId="sess-view" onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
+describe('DataStashPanel — inline file viewer', () => {
+  const openViewer = async (container: HTMLElement) => {
+    fireEvent.click(container.querySelector<HTMLElement>('[title="View file"]')!)
+    await settle()
+  }
 
-    container.querySelector<HTMLElement>('button[title="View file"]')!.click()
-    await tick()
+  it('renders the file with line numbers', async () => {
+    stubFetch({
+      documents: [doc({ filename: 'a.md' })],
+      documentBody: { document: { content: 'line one\nline two\n\nline four' } },
+    })
+    const { container } = await renderPanel()
+    await openViewer(container)
 
-    expect(container.textContent).toContain('charlie')
-    expect(calls.some((c) => c.url === '/api/stash/document/v1?sessionId=sess-view')).toBe(true)
+    expect(container.textContent).toContain('line one')
+    expect(container.textContent).toContain('line four')
+    // Four lines, numbered — the blank third line still gets a row.
+    expect(container.textContent).toContain('4')
   })
 
-  it('offers no text view for an unconverted binary', async () => {
-    listResponse = [doc({ id: 'v2', filename: 'sheet.xlsx', encoding: 'base64' })]
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId={sid} onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
-
-    expect(container.querySelector('button[title="View file"]')).toBeNull()
-  })
-
-  it('offers the text view for a converted binary', async () => {
-    listResponse = [doc({ id: 'v3', filename: 'brief.docx', encoding: 'base64', converted: true })]
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId={sid} onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
-
-    expect(container.querySelector('button[title="View file"]')).toBeTruthy()
-  })
-
-  it('surfaces a failed load instead of an empty file', async () => {
-    listResponse = [doc({ id: 'v4', filename: 'gone.md' })]
-    documentBody = {}
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId="sess-missing" onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
-
-    container.querySelector<HTMLElement>('button[title="View file"]')!.click()
-    await tick()
-
-    expect(container.textContent).toContain('Document not found')
-  })
-
-  it('says so when the stored bytes have no text preview', async () => {
-    listResponse = [doc({ id: 'v5', filename: 'img.png', encoding: 'base64', converted: true })]
-    documentBody = { document: { content: 'AAAA', encoding: 'base64' } }
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId="sess-binary" onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
-
-    container.querySelector<HTMLElement>('button[title="View file"]')!.click()
-    await tick()
+  it('reports a binary file as having no text preview', async () => {
+    stubFetch({
+      documents: [doc({ converted: true, encoding: 'base64' })],
+      documentBody: { document: { content: 'AAA', encoding: 'base64' } },
+    })
+    const { container } = await renderPanel()
+    await openViewer(container)
 
     expect(container.textContent).toContain('Binary file — no text preview')
   })
 
-  it('opens at the cited chunk and steps through the rest', async () => {
-    listResponse = [doc({ id: 'v6', filename: 'notes.md' })]
-    // 'alpha\nbravo\ncharlie\ndelta' — offsets 0..5 = line 1, 12..19 = line 3.
-    const events = [
-      retrieverEvent('v6', [
-        [0, 5],
-        [12, 19],
-      ]),
-    ]
-    const [pending, setPending] = createSignal<{
-      docId: string
-      startOffset?: number
-      endOffset?: number
-    } | null>(null)
+  it('reports a missing document', async () => {
+    stubFetch({ documents: [doc()], documentBody: {} })
+    const { container } = await renderPanel()
+    await openViewer(container)
+
+    expect(container.textContent).toContain('Document not found')
+  })
+
+  it('reports an HTTP failure', async () => {
+    stubFetch({ documents: [doc()], documentStatus: 404 })
+    const { container } = await renderPanel()
+    await openViewer(container)
+
+    expect(container.textContent).toContain('HTTP 404')
+  })
+
+  it('closes on the ✕ and toggles shut from the eye button', async () => {
+    stubFetch({ documents: [doc()], documentBody: { document: { content: 'x' } } })
+    const { container, getByText } = await renderPanel()
+
+    await openViewer(container)
+    expect(container.querySelector('[title="Close viewer"]')).toBeTruthy()
+
+    fireEvent.click(getByText('✕'))
+    expect(container.querySelector('[title="Close viewer"]')).toBeNull()
+
+    await openViewer(container)
+    await openViewer(container)
+    expect(container.querySelector('[title="Close viewer"]')).toBeNull()
+  })
+
+  it('closes itself when its document is deleted', async () => {
+    stubFetch({ documents: [doc()], documentBody: { document: { content: 'x' } } })
+    const { container } = await renderPanel()
+    await openViewer(container)
+    expect(container.querySelector('[title="Close viewer"]')).toBeTruthy()
+
+    fireEvent.click(menuButton(docChips(container)[0], 'Delete'))
+    await settle()
+    expect(container.querySelector('[title="Close viewer"]')).toBeNull()
+  })
+})
+
+describe('DataStashPanel — chat citations', () => {
+  const content = 'alpha\nbravo\ncharlie\ndelta\necho'
+  /** A retriever result whose references point into `doc-1`. */
+  const retrieverEvent = (): ContextEvent => ({
+    id: 'ev-retr',
+    type: 'tool_result',
+    ts: ++evSeq,
+    patternId: 'retriever',
+    data: {
+      tool: 'retriever',
+      success: true,
+      result: {
+        references: [
+          { docId: 'doc-1', filename: 'notes.md', startOffset: 0, endOffset: 5, chunkIndex: 0 },
+          { docId: 'doc-1', filename: 'notes.md', startOffset: 12, endOffset: 19, chunkIndex: 1 },
+        ],
+      },
+    },
+  })
+
+  it('opens the viewer at the cited range and steps between references', async () => {
+    stubFetch({ documents: [doc()], documentBody: { document: { content } } })
+    const events = [userMessage(), retrieverEvent()]
+    // The citation arrives from the chat after the doc list has loaded — the
+    // panel can only resolve `docId` against documents it already holds.
+    const [ref, setRef] = createSignal<OpenReferenceTarget | null>(null)
     const { container } = render(() => (
       <DataStashPanel
         events={events}
         sessionId="sess-cite"
-        onStashAction={vi.fn(async () => {})}
-        pendingReference={pending()}
+        onStashAction={noopAction}
+        pendingReference={ref()}
       />
     ))
-    await tick()
+    await settle()
 
-    setPending({ docId: 'v6', startOffset: 12, endOffset: 19 })
-    await tick()
+    setRef({ docId: 'doc-1', startOffset: 12, endOffset: 19 })
+    await settle()
 
+    // Second reference is focused: chars 12–19 sit on line 3.
     expect(container.textContent).toContain('L3')
     expect(container.textContent).toContain('2/2')
 
-    const prev = container.querySelector<HTMLButtonElement>('button[title="Previous reference"]')!
-    prev.click()
-    await tick()
+    fireEvent.click(container.querySelector<HTMLElement>('[title="Previous reference"]')!)
     expect(container.textContent).toContain('1/2')
-    expect(prev.disabled, 'no further back to go').toBe(true)
+    expect(container.textContent).toContain('L1')
 
-    container.querySelector<HTMLButtonElement>('button[title="Next reference"]')!.click()
-    await tick()
+    fireEvent.click(container.querySelector<HTMLElement>('[title="Next reference"]')!)
     expect(container.textContent).toContain('2/2')
   })
 
-  it('ignores a citation for a document this session does not hold', async () => {
-    listResponse = [doc({ id: 'v7', filename: 'notes.md' })]
-    const [pending, setPending] = createSignal<{ docId: string } | null>(null)
+  it('ignores a citation for a document this session never uploaded', async () => {
+    stubFetch({ documents: [doc()] })
+    const [ref, setRef] = createSignal<OpenReferenceTarget | null>(null)
     const { container } = render(() => (
       <DataStashPanel
         events={[]}
-        sessionId="sess-foreign"
-        onStashAction={vi.fn(async () => {})}
-        pendingReference={pending()}
+        sessionId="sess-cite-miss"
+        onStashAction={noopAction}
+        pendingReference={ref()}
       />
     ))
-    await tick()
+    await settle()
 
-    setPending({ docId: 'not-mine' })
-    await tick()
-
-    expect(container.querySelector('button[title="Close viewer"]')).toBeNull()
+    setRef({ docId: 'not-here', startOffset: 0, endOffset: 1 })
+    await settle()
+    expect(container.querySelector('[title="Close viewer"]')).toBeNull()
   })
 
-  it('closes the viewer from its header', async () => {
-    listResponse = [doc({ id: 'v8', filename: 'notes.md' })]
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId="sess-close" onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
+  it('shows no navigator when the doc is opened without references', async () => {
+    stubFetch({ documents: [doc()], documentBody: { document: { content } } })
+    const { container } = await renderPanel()
 
-    container.querySelector<HTMLElement>('button[title="View file"]')!.click()
-    await tick()
-    expect(container.textContent).toContain('charlie')
+    fireEvent.click(container.querySelector<HTMLElement>('[title="View file"]')!)
+    await settle()
 
-    container.querySelector<HTMLElement>('button[title="Close viewer"]')!.click()
-    await tick()
-    expect(container.textContent).not.toContain('charlie')
-  })
-
-  it('closes the viewer when its document is deleted', async () => {
-    listResponse = [doc({ id: 'v9', filename: 'doomed.md' })]
-    const { container } = render(() => (
-      <DataStashPanel events={[]} sessionId="sess-vdel" onStashAction={vi.fn(async () => {})} />
-    ))
-    await tick()
-
-    container.querySelector<HTMLElement>('button[title="View file"]')!.click()
-    await tick()
-    expect(container.querySelector('button[title="Close viewer"]')).toBeTruthy()
-
-    chips(container)[0].click()
-    await tick()
-    listResponse = []
-    menuButton('Delete')!.click()
-    await tick()
-
-    expect(container.querySelector('button[title="Close viewer"]')).toBeNull()
+    expect(container.querySelector('[title="Next reference"]')).toBeNull()
   })
 })

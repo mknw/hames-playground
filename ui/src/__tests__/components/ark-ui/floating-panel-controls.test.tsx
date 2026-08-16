@@ -32,8 +32,8 @@ const tick = () => new Promise((r) => setTimeout(r, 30))
 const part = (root: HTMLElement | Document, name: string) =>
   root.querySelector<HTMLElement>(`[data-scope="floating-panel"][data-part="${name}"]`)
 const stageTriggers = (root: HTMLElement | Document) =>
-  [...root.querySelectorAll<HTMLElement>('[data-part="stage-trigger"]')].map(
-    (el) => el.getAttribute('title'),
+  [...root.querySelectorAll<HTMLElement>('[data-part="stage-trigger"]')].map((el) =>
+    el.getAttribute('title'),
   )
 
 describe('SettingsPanel window controls', () => {
@@ -75,9 +75,7 @@ describe('SettingsPanel window controls', () => {
 
 describe('AllGraphTab Turn Explorer window controls', () => {
   it('offers minimize+maximize+close, and restore while staged', async () => {
-    const { container } = render(() => (
-      <AllGraphTabWrapper contextEvents={[]} />
-    ))
+    const { container } = render(() => <AllGraphTabWrapper contextEvents={[]} />)
     container.querySelector<HTMLElement>('[data-part="trigger"]')!.click()
     await tick()
 

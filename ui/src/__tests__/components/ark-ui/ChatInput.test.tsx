@@ -1,104 +1,162 @@
 /**
- * ChatInput — the composer's submit rules and its blocked state (#47).
+ * ChatInput — the composer's send contract and the #47 "draft survives a
+ * block" rule.
  *
- * The draft deliberately survives a block (the textarea stays editable and is
- * never cleared), so the assertions here are about what does and does not reach
- * `onSend`, and what the user is told while submit is refused.
+ * The composer is deliberately NOT disabled at the DOM level while a run is in
+ * flight: the textarea stays editable so a half-typed message isn't lost, and
+ * only *submission* is refused. These cases pin both halves of that, plus the
+ * Enter/Shift+Enter split and the focus token the route uses after "+ New Chat".
  */
 import { describe, it, expect, vi, beforeAll } from 'vitest'
+import { render } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
-import { installDomStubs } from './dom-stubs'
+import { ChatInput } from '~/components/ark-ui/ChatInput'
 
-// Field.Textarea is `autoresize`, which observes the element.
-beforeAll(() => installDomStubs())
+// Ark's `autoresize` textarea observes its own size — jsdom has no
+// ResizeObserver (same stub as floating-panel-controls.test.tsx).
+beforeAll(() => {
+  ;(globalThis as Record<string, unknown>).ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+})
 
-const { render } = await import('@solidjs/testing-library')
-const { ChatInput } = await import('../../../components/ark-ui/ChatInput')
+const tick = () => new Promise((r) => setTimeout(r, 20))
 
-const type = (el: HTMLTextAreaElement, text: string) => {
+const textarea = (root: HTMLElement) => root.querySelector('textarea')!
+
+/** Type into the composer the way a user would (input event, not assignment). */
+const type = (root: HTMLElement, text: string) => {
+  const el = textarea(root)
   el.value = text
   el.dispatchEvent(new Event('input', { bubbles: true }))
+  return el
 }
 
-const press = (el: HTMLTextAreaElement, key: string, shiftKey = false) => {
-  const ev = new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true })
-  el.dispatchEvent(ev)
-  return ev
+const pressEnter = (el: HTMLTextAreaElement, opts: { shift?: boolean } = {}) => {
+  const evt = new KeyboardEvent('keydown', {
+    key: 'Enter',
+    shiftKey: !!opts.shift,
+    bubbles: true,
+    cancelable: true,
+  })
+  el.dispatchEvent(evt)
+  return evt
 }
 
-const textarea = (container: HTMLElement) => container.querySelector('textarea')!
-
-describe('ChatInput', () => {
-  it('sends the trimmed draft on Enter and clears the box', () => {
+describe('ChatInput — sending', () => {
+  it('sends the typed message on Enter and clears the composer', () => {
     const onSend = vi.fn()
     const { container } = render(() => <ChatInput onSend={onSend} />)
-    const box = textarea(container)
+    const el = type(container, 'what nodes exist?')
 
-    type(box, '  what is in the graph?  ')
-    const ev = press(box, 'Enter')
+    pressEnter(el)
 
-    expect(onSend).toHaveBeenCalledWith('what is in the graph?')
-    expect(ev.defaultPrevented, 'Enter must not insert a newline').toBe(true)
-    expect(box.value).toBe('')
+    expect(onSend).toHaveBeenCalledWith('what nodes exist?')
+    expect(el.value).toBe('')
   })
 
-  it('leaves Shift+Enter to the textarea as a newline', () => {
+  it('trims surrounding whitespace off the sent message', () => {
     const onSend = vi.fn()
     const { container } = render(() => <ChatInput onSend={onSend} />)
-    const box = textarea(container)
-
-    type(box, 'first line')
-    const ev = press(box, 'Enter', true)
-
-    expect(onSend).not.toHaveBeenCalled()
-    expect(ev.defaultPrevented).toBe(false)
-    expect(box.value).toBe('first line')
+    pressEnter(type(container, '   hello   '))
+    expect(onSend).toHaveBeenCalledWith('hello')
   })
 
-  it('does not send a whitespace-only draft', () => {
+  it('refuses to send a blank or whitespace-only draft', () => {
     const onSend = vi.fn()
     const { container } = render(() => <ChatInput onSend={onSend} />)
-    const box = textarea(container)
 
-    type(box, '   ')
-    press(box, 'Enter')
+    pressEnter(textarea(container)) // never typed anything
+    pressEnter(type(container, '    '))
 
     expect(onSend).not.toHaveBeenCalled()
   })
 
-  it('refuses to send while blocked but keeps the draft', () => {
+  it('inserts a newline on Shift+Enter instead of sending', () => {
     const onSend = vi.fn()
-    const { container } = render(() => (
-      <ChatInput onSend={onSend} disabled blockedMessage="Waiting for `web_search`." />
-    ))
-    const box = textarea(container)
+    const { container } = render(() => <ChatInput onSend={onSend} />)
+    const el = type(container, 'line one')
 
-    type(box, 'queued question')
-    press(box, 'Enter')
+    const evt = pressEnter(el, { shift: true })
 
     expect(onSend).not.toHaveBeenCalled()
-    expect(box.value, 'the draft survives the block').toBe('queued question')
-    expect(box.getAttribute('aria-disabled')).toBe('true')
-    expect(container.querySelector('[data-role="composer-guard"]')?.textContent).toContain(
-      'Waiting for `web_search`.',
-    )
+    // Not prevented → the browser's own newline insertion still happens.
+    expect(evt.defaultPrevented).toBe(false)
+    expect(el.value).toBe('line one')
   })
 
-  it('shows no guard banner when nothing is blocking', () => {
+  it('prevents the default Enter so no stray newline is left behind on send', () => {
     const { container } = render(() => <ChatInput onSend={vi.fn()} />)
+    const evt = pressEnter(type(container, 'go'))
+    expect(evt.defaultPrevented).toBe(true)
+  })
+})
 
-    expect(container.querySelector('[data-role="composer-guard"]')).toBeNull()
-    expect(textarea(container).getAttribute('aria-disabled')).toBeNull()
+describe('ChatInput — blocked state (#47)', () => {
+  it('refuses to send while blocked but keeps the draft in the textarea', () => {
+    const onSend = vi.fn()
+    const { container } = render(() => <ChatInput onSend={onSend} disabled />)
+    const el = type(container, 'queued thought')
+
+    pressEnter(el)
+
+    expect(onSend).not.toHaveBeenCalled()
+    expect(el.value, 'the draft must survive the block').toBe('queued thought')
   })
 
-  it('focuses the composer when the focus token changes, not on first mount', () => {
-    const [token, setToken] = createSignal(1)
+  // Editable-but-unsubmittable is the whole point: a hard `disabled` would
+  // make the textarea read-only and lose the draft on focus changes.
+  it('marks the textarea aria-disabled rather than natively disabled', () => {
+    const { container } = render(() => <ChatInput onSend={vi.fn()} disabled />)
+    const el = textarea(container)
+    expect(el.getAttribute('aria-disabled')).toBe('true')
+    expect(el.disabled).toBe(false)
+  })
+
+  it('carries no aria-disabled when the composer is free', () => {
+    const { container } = render(() => <ChatInput onSend={vi.fn()} />)
+    expect(textarea(container).hasAttribute('aria-disabled')).toBe(false)
+  })
+
+  it('shows the guard banner only when a block message accompanies the block', () => {
+    const guard = (root: HTMLElement) => root.querySelector('[data-role="composer-guard"]')
+
+    const blocked = render(() => (
+      <ChatInput onSend={vi.fn()} disabled blockedMessage="Waiting for `web_search`." />
+    ))
+    expect(guard(blocked.container)?.textContent).toContain('Waiting for `web_search`.')
+    blocked.unmount()
+
+    // Blocked with no message (e.g. the run just started) — no empty banner.
+    const silent = render(() => <ChatInput onSend={vi.fn()} disabled />)
+    expect(guard(silent.container)).toBeNull()
+    silent.unmount()
+
+    // A stale message left on a freed composer must not keep the banner up.
+    const free = render(() => (
+      <ChatInput onSend={vi.fn()} blockedMessage="Waiting for `web_search`." />
+    ))
+    expect(guard(free.container)).toBeNull()
+  })
+})
+
+describe('ChatInput — focus token', () => {
+  it('does not steal focus on mount', async () => {
+    const { container } = render(() => <ChatInput onSend={vi.fn()} focusToken={1} />)
+    await tick()
+    expect(document.activeElement).not.toBe(textarea(container))
+  })
+
+  it('focuses the composer when the token changes', async () => {
+    const [token, setToken] = createSignal(0)
     const { container } = render(() => <ChatInput onSend={vi.fn()} focusToken={token()} />)
-    const box = textarea(container)
+    await tick()
 
-    expect(document.activeElement).not.toBe(box)
+    setToken(1)
+    await tick()
 
-    setToken(2)
-    expect(document.activeElement).toBe(box)
+    expect(document.activeElement).toBe(textarea(container))
   })
 })

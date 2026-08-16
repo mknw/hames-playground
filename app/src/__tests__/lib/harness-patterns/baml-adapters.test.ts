@@ -120,7 +120,7 @@ describe('createLoopControllerAdapter', () => {
     expect(context).toContain('Node: Person, Company')
   })
 
-  it('should prepend planContext ahead of contextPrefix and schema (#27)', async () => {
+  it('sends planContext as its own BAML argument, never merged into context (#27)', async () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
@@ -141,11 +141,15 @@ describe('createLoopControllerAdapter', () => {
       'PLAN (from previous step):\n1. Look it up.',
     )
 
-    const [, , , , context] = mockLoopController.mock.calls[0]
-    expect(context).toContain('PLAN (from previous step)')
-    // The plan leads: it is the strategy the rest of the context serves.
-    expect(context.indexOf('PLAN')).toBeLessThan(context.indexOf('Domain instructions'))
-    expect(context.indexOf('Domain instructions')).toBeLessThan(context.indexOf('GRAPH SCHEMA:'))
+    const [, , , , context, , , , planContext] = mockLoopController.mock.calls[0]
+    // `context` is the agent-static half and sits inside the prompt's tier-1
+    // cache marker: a per-question plan in there re-writes the tool-catalog
+    // cache on every run (#122). It must carry ONLY schema + contextPrefix.
+    expect(context).toContain('Domain instructions')
+    expect(context).toContain('GRAPH SCHEMA:')
+    expect(context).not.toContain('PLAN (from previous step)')
+    // The plan rides its own parameter, which the prompt renders in tier 2.
+    expect(planContext).toContain('PLAN (from previous step)')
   })
 
   it('should pass undefined context when neither contextPrefix nor schema', async () => {
@@ -248,6 +252,37 @@ describe('createPlannerAdapter', () => {
     await expect(plannerFn('msg', 'intent')).rejects.toBeInstanceOf(LLMCallError)
     // No retry for a plain failure — the retry path is truncation/empty only.
     expect(mockPlanner).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports the tool count the model was actually shown', async () => {
+    const { createPlannerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    // 'ghost_tool' resolves to no description, so the model sees 2 of 3 names.
+    const plannerFn = createPlannerAdapter([
+      'read_neo4j_cypher',
+      'write_neo4j_cypher',
+      'ghost_tool',
+    ])
+    const result = await plannerFn('msg', 'intent')
+
+    const [, , tools] = mockPlanner.mock.calls[0]
+    expect(result.toolCount).toBe((tools as unknown[]).length)
+    expect(result.toolCount).toBe(2)
+  })
+
+  it('stays on PlannerAnthropic even under USE_MIXED_CHAINS (#27 review)', async () => {
+    // The whole file runs with USE_MIXED_CHAINS=1. The controllers swap to
+    // ControllerFallback here — the planner must NOT: that chain's Groq
+    // gpt-oss-120b is the documented structured-output failure, and unlike the
+    // controllers the planner carries no Groq→Groq escalation to survive it.
+    const { createPlannerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    await createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent')
+
+    const opts = mockPlanner.mock.calls[0][4] as { client?: string }
+    expect(opts.client).toBe('PlannerAnthropic')
   })
 })
 
@@ -733,9 +768,9 @@ describe('LoopController BamlValidationError fallback', () => {
     expect(result.action.is_final).toBe(true)
     expect(mockLoopController).toHaveBeenCalledTimes(2)
     // Second call should use GroqGPT120B client override. Options ride after
-    // the 8 data params (multi_call_mode is 8th since the multi-call feature).
+    // the 9 data params (plan_context is 9th since #27's cache split).
     const secondCallOptions =
-      mockLoopController.mock.calls[1][8] ?? mockLoopController.mock.calls[1][7]
+      mockLoopController.mock.calls[1][9] ?? mockLoopController.mock.calls[1][8]
     expect(secondCallOptions).toEqual(expect.objectContaining({ client: 'GroqGPT120B' }))
   })
 
@@ -758,7 +793,7 @@ describe('LoopController BamlValidationError fallback', () => {
     expect(mockLoopController).toHaveBeenCalledTimes(3)
     // Third call should use GroqFast client override. Same slot shift as above.
     const thirdCallOptions =
-      mockLoopController.mock.calls[2][8] ?? mockLoopController.mock.calls[2][7]
+      mockLoopController.mock.calls[2][9] ?? mockLoopController.mock.calls[2][8]
     expect(thirdCallOptions).toEqual(expect.objectContaining({ client: 'GroqFast' }))
   })
 

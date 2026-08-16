@@ -132,6 +132,7 @@ function getEventPreview(type: EventType, data: unknown): string {
     }
     case 'plan_created': {
       const d = data as PlanCreatedEventData
+      if (d.skipped) return `skipped (${d.skipped})`
       const steps = d.plan?.n_steps ?? 0
       const first = (d.plan?.plan ?? '').split('\n')[0] ?? ''
       const head = `${steps} step${steps === 1 ? '' : 's'}: ${first}`

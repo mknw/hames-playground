@@ -77,12 +77,13 @@ Ark UI is the chosen primitive layer; never replace Ark components with native e
 
 Project skills live in `.claude/skills/` (tracked in git, so worktrees inherit
 them — no copy step); all carry the `kg-` prefix and encode something only true
-of this repo. The **generic set** (bare names: `grilling`, `codebase-design`,
-`dispatching-work`, …) was extracted to `~/Code/muster-skills` and is installed
-globally via `~/.claude/skills` symlinks, so it is available here and in every
-other project without copies. Model-invoked skills announce themselves through
-their own descriptions; the ones you have to ask for by name are `/grill-me`
-and `/improve-codebase-architecture`.
+of this repo. The **generic set** (bare names: `grilling`, `codebase-design`, …)
+was extracted to `~/Code/muster-skills` and is installed globally via
+`~/.claude/skills` symlinks, so it is available here and in every other project
+without copies. `dispatching-work` lives in the same `~/Code/muster-skills` repo
+but was authored there directly — it was never extracted from this one. Model-
+invoked skills announce themselves through their own descriptions; the ones you
+have to ask for by name are `/grill-me` and `/improve-codebase-architecture`.
 
 - A `kg-*` skill may call a generic skill (global scope is visible in every
   project). A generic skill must never call a `kg-*` skill — that invariant is
@@ -190,7 +191,7 @@ thinking-only response with no text is retried once by the adapters.
 
 **Multi-call turns:** both loop patterns accept `multiToolCalls: 'parallel' | 'sequential' | 'off'` (default `'parallel'`) — the controller batches several tool calls into one turn via `ControllerAction.additional_calls`, saving one controller round-trip per batched call. `'sequential'` runs in order with stop-on-failure (sandbox agents); `'off'` suppresses the prompt affordance but still executes un-advertised batches serially (code-mode). Full semantics: `app/src/lib/harness-patterns/README.md`.
 
-**Mixed-provider chains** (gated by `USE_MIXED_CHAINS=1`, see top of file) — `RouterFallback` / `ControllerFallback` / `CriticFallback` / `SynthesizerFallback` / `DescribeFallback`, each spreading its role across OpenRouter, Groq and OpenAI with an Anthropic backstop last. There is no `ActorFallback` and no `PlannerFallback` — the planner reuses `ControllerFallback` (same reason-over-a-tool-catalog workload). Declared in `baml_src/clients.baml`.
+**Mixed-provider chains** (gated by `USE_MIXED_CHAINS=1`, see top of file) — `RouterFallback` / `ControllerFallback` / `CriticFallback` / `SynthesizerFallback` / `DescribeFallback`, each spreading its role across OpenRouter, Groq and OpenAI with an Anthropic backstop last. There is no `ActorFallback` and no `PlannerFallback`. **The planner opts out of mixed chains entirely** — `MIXED_CLIENT_BY_ROLE.planner` pins `PlannerAnthropic` in both modes. It used to borrow `ControllerFallback` as the same reason-over-a-tool-catalog workload, but that chain's Groq `gpt-oss-120b` is the client documented below to fail structured output on larger context, which is why both controllers carry a manual `GroqGPT120B` → `GroqFast` escalation. The planner has no such ladder, runs once per chain over the largest catalog in the repo (`tools.all`), and a throw there means the chain silently runs unplanned. Declared in `baml_src/clients.baml`.
 
 Local inference (`LocalGLM` — GLM 4.7 Flash on localhost:8080) is defined in `baml_src/local-client.baml` and available for manual wiring but not used in any fallback chain.
 

@@ -233,6 +233,21 @@ Every var the server reads (`grep process.env src/`), with its localhost default
 
 ## 10. Operations
 
+**One-time `ui/` → `app/` rename migration** (only if this VM was deployed before
+the #193 rename): the systemd unit above already assumes `app/`, but an existing
+install still has the old dir, `.env` and unit paths.
+
+```bash
+cd /opt/kg-agent && git pull
+mv ui/.env app/.env
+sudo sed -i \
+  -e 's#WorkingDirectory=/opt/kg-agent/ui#WorkingDirectory=/opt/kg-agent/app#' \
+  -e 's#EnvironmentFile=/opt/kg-agent/ui/.env#EnvironmentFile=/opt/kg-agent/app/.env#' \
+  /etc/systemd/system/kg-agent.service
+sudo systemctl daemon-reload
+rm -rf ui
+```
+
 **Update / redeploy:**
 
 ```bash

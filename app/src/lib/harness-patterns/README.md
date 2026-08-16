@@ -671,11 +671,22 @@ changes:
 1. **`scope.data.plan: PlanResult`** — the chain forwards `scope.data` to the
    next pattern as its `currentData`. `simpleLoop` and `actorCritic` read it,
    render it with `formatPlanContext()`, and pass the string to their
-   controller adapter as the **trailing optional `planContext` argument**;
-   the adapters prepend it to the BAML `context`, ahead of `contextPrefix` and
-   `GRAPH SCHEMA`. Any controller taking `context: string?` benefits
-   automatically. (`planContext` is appended, never inserted: the generated BAML
-   functions take arguments positionally — see `warnIfCollectorEmpty`.)
+   controller adapter as the **trailing optional `planContext` argument**.
+   (`planContext` is appended, never inserted: the generated BAML functions
+   take arguments positionally — see `warnIfCollectorEmpty`.)
+
+   From there the two loops differ, and the difference is prompt caching:
+
+   - **`simpleLoop`** passes it as its own BAML parameter, `plan_context`,
+     which `LoopController` renders in **tier 2** (run-static: plan · intent ·
+     instructions · prior results). It must NOT ride `context`: `context` is
+     tier 1, the agent-static prefix holding the tool catalog and the graph
+     schema, so a per-question plan in there turns every tool-catalog cache
+     read into a cache write (#122).
+   - **`actorCritic`** merges it into `context` ahead of `contextPrefix`.
+     Safe there: `ActorController`'s single marker already ends on the
+     run-specific USER REQUEST and fires only on attempt 1, so the plan is
+     constant for everything that re-reads that prefix.
 
    ```
    PLAN (from previous step — follow it unless a result contradicts it):
@@ -696,9 +707,19 @@ changes:
 `viewConfig` of the last 2 message turns (same shape as `router`, so a
 multi-turn intent shift is visible).
 
-**Best-effort.** On any failure the pattern leaves `scope.data.plan` unset and
-tracks an `error` event; the downstream loop then runs exactly as it does
-without a planner — never fatal.
+**Best-effort.** On any failure the pattern CLEARS `scope.data.plan` and tracks
+an `error` event; the downstream loop then runs exactly as it does without a
+planner — never fatal. An empty or whitespace-only plan counts as a failure: it
+injects nothing downstream, so reporting it as a success would show a planned
+run that is really unplanned. When the context holds no user message the
+pattern emits `plan_created` with `skipped: 'no-message'` instead — a visible
+skip rather than silence, mirroring `intent_compacted.skipped`.
+
+**Clearing matters.** `scope.data` survives the turn boundary (the harness
+resets only `hasError` / `errorMessage` / `response`, and `serializeContext` is
+a plain `JSON.stringify`). A path that returned the scope untouched would hand
+turn 2's executor turn 1's plan — for a different question, under wording that
+tells it to prefer the plan over its own judgement.
 
 **One-shot.** Replanning on failure is out of scope: a failed step is handled by
 `simpleLoop`'s own error path. `n_steps` is exposed on `scope.data.plan` as a
@@ -1173,8 +1194,10 @@ BAML Return → PlanResult:
   plan      : string  → capped at config.maxPlanChars (default 2000)
   n_steps   : int     → soft hint on scope.data.plan; never clamps maxTurns
   → written to scope.data.plan
-  → stored as a plan_created event (with the LLM call)
-  → downstream: formatPlanContext(plan) → controller `planContext` → BAML `context`
+  → stored as a plan_created event (with the LLM call + the RESOLVED tool count)
+  → downstream: formatPlanContext(plan) → controller `planContext`
+                → simpleLoop: BAML `plan_context` (tier 2, uncached prefix)
+                → actorCritic: merged into BAML `context`
 ```
 
 #### router() + routes()

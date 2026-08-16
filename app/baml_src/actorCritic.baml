@@ -85,6 +85,12 @@ template_string ActorMultiCalls(multi_call_mode: string?) #"
 // (`== 0` is defensive: it can never fire under the current convention.)
 // CONTEXT is authored as a system role for template-level semantics — the
 // Anthropic provider coerces mid-conversation system to `user` on the wire.
+// An upstream planner's plan (#27) rides `context` here and stays cache-safe:
+// unlike LoopController's tier 1, this marker's prefix is already RUN-scoped
+// (it ends on USER REQUEST, and fires only on call 1), and the plan is fixed
+// for the run — so every later attempt still re-reads it byte-identically.
+// LoopController needed the plan split into its own `plan_context` parameter
+// precisely because its tier-1 prefix is agent-static.
 template_string ActorTaskFrame(intent: string, context: string?, user_message: string, attempt_n: int?) #"
   {{ _.role("user") }}
   USER INTENT: {{ intent }}

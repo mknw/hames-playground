@@ -12,12 +12,12 @@ this file, not a substitute for it.
 Per-file provenance, upstream pins, and the adaptations applied to each file
 live in [`PROVENANCE.md`](PROVENANCE.md).
 
-| Source                                 | Vendored here from                           |
-| -------------------------------------- | -------------------------------------------- |
-| `mattpocock/skills`                    | Wave 1 (see `PROVENANCE.md`)                 |
-| `affaan-m/ECC`                         | Wave 3 onward — notice recorded ahead of use |
-| `nextlevelbuilder/ui-ux-pro-max-skill` | Wave 6 — notice recorded ahead of use        |
-| `DietrichGebert/ponytail`              | Wave 5 (`CLAUDE.md` prose) — ahead of use    |
+| Source                                 | Vendored here from                        |
+| --------------------------------------- | ------------------------------------------ |
+| `mattpocock/skills`                    | see the Sources table in `PROVENANCE.md`  |
+| `affaan-m/ECC`                         | see the Sources table in `PROVENANCE.md`  |
+| `nextlevelbuilder/ui-ux-pro-max-skill` | see the Sources table in `PROVENANCE.md`  |
+| `DietrichGebert/ponytail`              | see the Sources table in `PROVENANCE.md`  |
 
 All four texts are recorded now so that no later wave has to edit this file;
 a notice present before its material is harmless, the reverse is a licence

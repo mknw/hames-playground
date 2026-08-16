@@ -68,6 +68,12 @@ export interface CriticCallResult {
 export interface PlanCallResult {
   plan: PlanResult
   llmCall?: LLMCallData
+  /** How many tool descriptions the model was ACTUALLY shown — the resolved
+   *  catalog (an active sandbox scope's in-VM tools + the gateway tools that
+   *  resolved), not the raw name list the factory was handed. The pattern
+   *  records this on `plan_created.toolCount`, which documents itself as
+   *  "number of tools the planner was shown". */
+  toolCount: number
 }
 
 /** Controller function that returns action + observability data.
@@ -557,7 +563,13 @@ function loadTemplatesFromDisk(cache: Record<string, string>): void {
 /** Parse BAML source to extract function prompt blocks */
 function extractPromptTemplates(source: string, cache: Record<string, string>): void {
   // Match: function FunctionName(...) -> ReturnType { ... prompt #"..."# }
-  const funcRegex = /function\s+(\w+)\s*\([^)]*\)\s*->\s*\S+\s*\{[^}]*?prompt\s+#"([\s\S]*?)"#/g
+  //
+  // The parameter list is `[^{}]*?`, not `[^)]*`: signatures carry `//`
+  // comments, and one parenthesis in a comment — an issue number, an aside —
+  // used to make the whole function unmatchable, which shows up only as a
+  // missing prompt template in the observability panel. Braces still bound it,
+  // so the match can never run past its own function body into the next one.
+  const funcRegex = /function\s+(\w+)\s*\([^{}]*?\)\s*->\s*\S+\s*\{[^}]*?prompt\s+#"([\s\S]*?)"#/g
   let match: RegExpExecArray | null
   while ((match = funcRegex.exec(source)) !== null) {
     cache[match[1]] = match[2]
@@ -665,13 +677,15 @@ export function createLoopControllerAdapter(
     // Parse previous results into LoopTurn format
     const turns: LoopTurn[] = parseResultsToTurns(previous_results, n_turn)
 
-    // Build context from the upstream plan, schema and contextPrefix only
-    // (prior tool results go into priorResults). The plan leads: it is the
-    // strategy the rest of the context serves.
+    // Build context from schema and contextPrefix only (prior tool results go
+    // into priorResults). The plan is NOT merged in here: `context` renders
+    // inside the prompt's tier-1 cache marker, which is agent-static, and a
+    // per-question plan in there would turn every tool-catalog cache read into
+    // a write (#122). It travels as its own `plan_context` argument and
+    // renders in tier 2, beside the intent.
     let context: string | undefined
-    if (planContext || schema || contextPrefix) {
+    if (schema || contextPrefix) {
       const parts: string[] = []
-      if (planContext) parts.push(planContext)
       if (contextPrefix) parts.push(contextPrefix)
       if (schema) parts.push(`GRAPH SCHEMA:\n${schema}`)
       context = parts.join('\n\n')
@@ -686,6 +700,7 @@ export function createLoopControllerAdapter(
       turns_previous_runs: priorResults,
       few_shots: fewShots,
       multi_call_mode: multiCallMode,
+      plan_context: planContext,
     }
 
     // Call with or without collector.
@@ -716,6 +731,7 @@ export function createLoopControllerAdapter(
             priorResults,
             fewShots,
             multiCallMode,
+            planContext,
             baseOpts,
           )
         : await b.LoopController(
@@ -727,6 +743,7 @@ export function createLoopControllerAdapter(
             priorResults,
             fewShots,
             multiCallMode,
+            planContext,
           )
     } catch (e) {
       // Recoverable parse failures (any chain, incl. Anthropic-only): the parse
@@ -750,6 +767,7 @@ export function createLoopControllerAdapter(
                 priorResults,
                 fewShots,
                 multiCallMode,
+                planContext,
                 baseOpts,
               )
             : await b.LoopController(
@@ -761,6 +779,7 @@ export function createLoopControllerAdapter(
                 priorResults,
                 fewShots,
                 multiCallMode,
+                planContext,
               )
           const llmCall = collector
             ? extractLLMCallData(collector, 'LoopController', variables, startTime, action)
@@ -783,6 +802,7 @@ export function createLoopControllerAdapter(
           priorResults,
           fewShots,
           multiCallMode,
+          planContext,
           collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' },
         )
       } catch (e2) {
@@ -799,6 +819,7 @@ export function createLoopControllerAdapter(
             priorResults,
             fewShots,
             multiCallMode,
+            planContext,
             collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' },
           )
         } catch (e3) {
@@ -909,10 +930,12 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData 
 
     const variables = { user_message, intent, tools, context }
 
-    // Default (no override): BAML routes to `PlannerAnthropic` (declared in
-    // planner.baml). `USE_MIXED_CHAINS=1` swaps in `ControllerFallback` —
-    // planning is the same reason-over-a-tool-catalog workload, so it shares
-    // the controller chain rather than owning a provider budget of its own.
+    // `PlannerAnthropic` either way: it is what planner.baml declares, and
+    // `clientOverrideFor('planner')` pins the same client under
+    // `USE_MIXED_CHAINS=1` (see clients.server.ts for why the mixed chain is
+    // the wrong home for this call). So the escalation ladder the controllers
+    // carry for Groq's structured-output failure has nothing to escalate to
+    // here — the retry below is the whole policy.
     const baseOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('planner') }
     const hasBaseOpts = Object.keys(baseOpts).length > 0
     let plan: PlanResult
@@ -921,10 +944,11 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData 
         ? await b.Planner(user_message, intent, tools, context, baseOpts)
         : await b.Planner(user_message, intent, tools, context)
     } catch (e) {
-      // Same ONE-retry policy as the controllers: a cut-off or empty
-      // completion is worth asking again (with corrective guidance only when
-      // there is something to correct); a genuine structured-output failure
-      // propagates as an LLMCallError the pattern turns into an error event.
+      // ONE retry on a cut-off or empty completion, with corrective guidance
+      // only when there is something to correct; a genuine structured-output
+      // failure propagates as an LLMCallError the pattern turns into an error
+      // event. The controllers' extra Groq→Groq escalation has no counterpart
+      // here on purpose: this call never runs on a Groq client.
       const retry = planParseRetry(e, collector)
       if (!retry) throw wrapAsLLMCallError(e, 'Planner', variables, startTime, collector)
       const retryContext = retry.guidance
@@ -944,7 +968,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData 
       ? extractLLMCallData(collector, 'Planner', variables, startTime, plan)
       : undefined
 
-    return { plan, llmCall }
+    return { plan, llmCall, toolCount: tools.length }
   }
 }
 

@@ -14,6 +14,8 @@ export function installDomStubs({ prefersDark = true } = {}) {
     unobserve() {}
     disconnect() {}
   }
+  // jsdom implements no layout, so scrolling a node into view is a no-op.
+  Element.prototype.scrollIntoView ??= function () {}
   vi.stubGlobal(
     'matchMedia',
     vi.fn((query: string) => ({

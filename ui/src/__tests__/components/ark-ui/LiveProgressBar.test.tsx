@@ -26,8 +26,9 @@ beforeEach(() => {
   vi.useFakeTimers()
   // The entry animation is scheduled on a frame; run it as a macrotask so the
   // fake clock drives it.
-  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) =>
-    setTimeout(() => cb(0), 0) as unknown as number,
+  vi.stubGlobal(
+    'requestAnimationFrame',
+    (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number,
   )
 })
 
@@ -76,13 +77,7 @@ describe('LiveProgressBar', () => {
 
   it('scales the fill by the chosen path, not the worst-case denominator', () => {
     const { container } = render(() => (
-      <LiveProgressBar
-        status="Working"
-        current={2}
-        pathProjection={4}
-        maxProjection={8}
-        visible
-      />
+      <LiveProgressBar status="Working" current={2} pathProjection={4} maxProjection={8} visible />
     ))
     vi.advanceTimersByTime(MOUNT_DELAY_MS + 10)
 
@@ -121,7 +116,13 @@ describe('LiveProgressBar', () => {
   it('unmounts only after the exit transition has run', () => {
     const [visible, setVisible] = createSignal(true)
     const { container } = render(() => (
-      <LiveProgressBar status="Working" current={1} pathProjection={4} maxProjection={8} visible={visible()} />
+      <LiveProgressBar
+        status="Working"
+        current={1}
+        pathProjection={4}
+        maxProjection={8}
+        visible={visible()}
+      />
     ))
     vi.advanceTimersByTime(MOUNT_DELAY_MS + 10)
     expect(bar(container)).toBeTruthy()
@@ -137,13 +138,7 @@ describe('LiveProgressBar', () => {
   it('crossfades the previous status alongside the new one', () => {
     const [status, setStatus] = createSignal<string | null>('Routing…')
     const { container } = render(() => (
-      <LiveProgressBar
-        status={status()}
-        current={1}
-        pathProjection={4}
-        maxProjection={8}
-        visible
-      />
+      <LiveProgressBar status={status()} current={1} pathProjection={4} maxProjection={8} visible />
     ))
     vi.advanceTimersByTime(MOUNT_DELAY_MS + 10)
 

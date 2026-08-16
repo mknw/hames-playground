@@ -62,7 +62,9 @@ const { render } = await import('@solidjs/testing-library')
 const { InteractiveTerminal } = await import('../../../components/ark-ui/InteractiveTerminal')
 
 const tick = () => new Promise((r) => setTimeout(r, 10))
-const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+  async () => new Response('{}', { status: 200 }),
+)
 
 const badge = (container: HTMLElement) => container.querySelectorAll('span')[1]?.textContent
 

@@ -160,7 +160,11 @@ describe('AuthProvider', () => {
     await tick()
 
     expect(getSessionUser).not.toHaveBeenCalled()
-    expect(seen).toMatchObject({ id: 'dev-user', email: 'dev@example.test', displayName: 'Dev User' })
+    expect(seen).toMatchObject({
+      id: 'dev-user',
+      email: 'dev@example.test',
+      displayName: 'Dev User',
+    })
     expect(navigate).not.toHaveBeenCalled()
   })
 

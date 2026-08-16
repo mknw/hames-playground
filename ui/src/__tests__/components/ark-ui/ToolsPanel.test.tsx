@@ -12,21 +12,25 @@
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { installDomStubs } from './dom-stubs'
-import type { CatalogServer, CodedTool } from '../../../lib/tool-config/constants'
+import type { CatalogServer, CodeModeToolsState } from '../../../lib/tool-config/constants'
+import type { CodedTool } from '../../../lib/tool-config/repository.server'
 
 beforeAll(() => installDomStubs())
 
-const getCodeModeAllowedTools = vi.fn()
-const setCodeModeAllowedTools = vi.fn(async () => {})
-const getServerCatalog = vi.fn()
-const searchMasterCatalog = vi.fn(async () => ({ matches: [] as string[], total: 0 }))
-const fetchCodedTools = vi.fn(async () => [] as CodedTool[])
+const getCodeModeAllowedTools =
+  vi.fn<(sessionId: string, agentId?: string) => Promise<CodeModeToolsState | null>>()
+const setCodeModeAllowedTools = vi.fn<(sessionId: string, tools: string[]) => Promise<void>>(
+  async () => {},
+)
+const getServerCatalog = vi.fn<() => Promise<CatalogServer[]>>()
+const searchMasterCatalog = vi.fn<(q: string) => Promise<{ matches: string[]; total: number }>>()
+const fetchCodedTools = vi.fn<() => Promise<CodedTool[]>>()
 
 vi.mock('~/lib/tool-config', () => ({
-  getCodeModeAllowedTools: (...args: unknown[]) => getCodeModeAllowedTools(...args),
-  setCodeModeAllowedTools: (...args: unknown[]) => setCodeModeAllowedTools(...args),
+  getCodeModeAllowedTools: (sid: string, agentId?: string) => getCodeModeAllowedTools(sid, agentId),
+  setCodeModeAllowedTools: (sid: string, tools: string[]) => setCodeModeAllowedTools(sid, tools),
   getServerCatalog: () => getServerCatalog(),
-  searchMasterCatalog: (...args: unknown[]) => searchMasterCatalog(...args),
+  searchMasterCatalog: (q: string) => searchMasterCatalog(q),
   fetchCodedTools: () => fetchCodedTools(),
   MINIMAL_TOOLS: ['read_neo4j_cypher'],
   CODE_MODE_PRESET_SERVERS: ['neo4j-cypher', 'web_search'],
@@ -65,7 +69,7 @@ const state = (allowed: string[], usesCodeMode = true) => ({
 })
 
 /** The list the panel last asked the server to persist. */
-const persisted = () => setCodeModeAllowedTools.mock.calls.at(-1)?.[1] as string[]
+const persisted = () => setCodeModeAllowedTools.mock.calls.at(-1)![1]
 
 const labelled = (container: HTMLElement, text: string) =>
   [...container.querySelectorAll<HTMLElement>('[data-part="label"]')].find(
@@ -231,9 +235,7 @@ describe('ToolsPanel', () => {
     expect(trigger(container, 'neo4j-cypher')!.textContent).toContain('1/2')
     const row = trigger(container, 'neo4j-cypher')!.parentElement!
     expect(
-      row
-        .querySelector('[data-scope="checkbox"][data-part="root"]')!
-        .getAttribute('data-state'),
+      row.querySelector('[data-scope="checkbox"][data-part="root"]')!.getAttribute('data-state'),
     ).toBe('indeterminate')
   })
 
@@ -265,7 +267,10 @@ describe('ToolsPanel', () => {
   })
 
   it('previews master-catalog hits the enabled catalog does not carry', async () => {
-    searchMasterCatalog.mockResolvedValue({ matches: ['slack', 'notion', 'jira', 'linear'], total: 9 })
+    searchMasterCatalog.mockResolvedValue({
+      matches: ['slack', 'notion', 'jira', 'linear'],
+      total: 9,
+    })
     const { container } = render(() => <ToolsPanel sessionId="s1" />)
     await tick()
 

@@ -67,30 +67,26 @@ describe('mcp-client', () => {
     vi.unstubAllEnvs()
   })
 
-  describe('getMcpClient', () => {
-    it('should export getMcpClient function', async () => {
-      const { getMcpClient } = await import('../../../lib/harness-patterns/mcp-client.server')
-      expect(getMcpClient).toBeDefined()
-      expect(typeof getMcpClient).toBe('function')
-    })
+  // There is no unleased accessor (#120): `callTool`/`listTools` are the only
+  // doors to the gateway, so connection lifecycle is asserted through them.
+  describe('connection lifecycle', () => {
+    it('should create and connect a client on first use', async () => {
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
 
-    it('should create and connect a client', async () => {
-      const { getMcpClient } = await import('../../../lib/harness-patterns/mcp-client.server')
+      await callTool('test_tool', {})
 
-      const client = await getMcpClient()
-
-      expect(client).toBeDefined()
       expect(mockConnect).toHaveBeenCalled()
+      expect(clientInstances).toHaveLength(1)
     })
 
-    it('should return the same client on subsequent calls', async () => {
-      const { getMcpClient } = await import('../../../lib/harness-patterns/mcp-client.server')
+    it('should reuse the same warm connection on subsequent calls', async () => {
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
 
-      const client1 = await getMcpClient()
-      const client2 = await getMcpClient()
+      await callTool('test_tool', {})
+      await callTool('test_tool', {})
 
-      expect(client1).toBe(client2)
-      // Connect should only be called once
+      // The lease came back to the pool, so no second client was built.
+      expect(clientInstances).toHaveLength(1)
       expect(mockConnect).toHaveBeenCalledTimes(1)
     })
   })
@@ -357,11 +353,11 @@ describe('mcp-client', () => {
     })
 
     it('should close the client', async () => {
-      const { getMcpClient, closeMcpClient } =
+      const { callTool, closeMcpClient } =
         await import('../../../lib/harness-patterns/mcp-client.server')
 
       // First create a client
-      await getMcpClient()
+      await callTool('test_tool', {})
 
       // Then close it
       await closeMcpClient()
@@ -393,11 +389,11 @@ describe('mcp-client', () => {
       expect(isConnected()).toBe(false)
     })
 
-    it('should return true after getMcpClient', async () => {
-      const { getMcpClient, isConnected } =
+    it('should return true after a call has warmed a connection', async () => {
+      const { callTool, isConnected } =
         await import('../../../lib/harness-patterns/mcp-client.server')
 
-      await getMcpClient()
+      await callTool('test_tool', {})
 
       expect(isConnected()).toBe(true)
     })
@@ -590,6 +586,43 @@ describe('mcp-client', () => {
       expect(clientInstances[0].closed).toBe(false) // warm slot stays open
       expect(clientInstances[1].closed).toBe(true) // overflow closed on release
       expect(isConnected()).toBe(true)
+    })
+
+    // Shutdown races an in-flight lease: closeMcpClient() drops the leased
+    // connection from the pool and closes its client, which the in-flight op
+    // sees as a transport error and reconnects on. That rebuild must not
+    // survive shutdown — closeMcpClient() demotes the connection to non-warm
+    // so its release closes it.
+    it('does not leak a connection rebuilt by a lease that outlived closeMcpClient', async () => {
+      const { callTool, closeMcpClient, isConnected } =
+        await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const held = deferred()
+      let attempts = 0
+      mockCallTool.mockImplementation(async () => {
+        attempts++
+        if (attempts === 1) {
+          await held.promise
+          throw new Error('connection closed')
+        }
+        return { content: [{ type: 'text', text: 'late-ok' }] }
+      })
+
+      const inflight = callTool('slow', {})
+      await Promise.resolve() // let the call take its lease and connect
+
+      await closeMcpClient()
+      expect(isConnected()).toBe(false)
+
+      // The in-flight call now fails, reconnects on its orphaned connection
+      // and completes — on a client nothing else is tracking.
+      held.resolve()
+      expect(await inflight).toEqual({ success: true, data: 'late-ok' })
+
+      // Both the closed original AND the post-shutdown rebuild are shut down.
+      expect(clientInstances).toHaveLength(2)
+      expect(clientInstances.every((c) => c.closed)).toBe(true)
+      expect(isConnected()).toBe(false)
     })
   })
 })

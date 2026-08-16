@@ -39,6 +39,12 @@ const POOL_SIZE = (() => {
 // operation. A reconnect rebuilds only the leased connection — the other
 // connections (and the calls riding them) are untouched.
 //
+// EVERY gateway operation goes through a lease — `callTool` and `listTools`
+// are the only doors, and both route through `withReconnect`. There is
+// deliberately no unleased accessor: one would hand out a client that another
+// lease's reconnect can close underneath it, which is the exact disruption
+// #120 exists to remove.
+//
 // Note this multiplexes the *client → gateway* hop only. Per-server
 // serialization (e.g. the redis MCP server running over serial stdio) is
 // enforced inside the gateway process, so more client connections cannot
@@ -47,7 +53,6 @@ const POOL_SIZE = (() => {
 
 interface PooledConnection {
   client: Client | null
-  transport: StreamableHTTPClientTransport | null
   leased: boolean
   /** Warm connections live in `pool` and are kept open between leases.
    *  Overflow connections are created past POOL_SIZE and closed on release. */
@@ -76,12 +81,12 @@ function acquireConnection(): PooledConnection {
   }
 
   if (pool.length < POOL_SIZE) {
-    const conn: PooledConnection = { client: null, transport: null, leased: true, warm: true }
+    const conn: PooledConnection = { client: null, leased: true, warm: true }
     pool.push(conn)
     return conn
   }
 
-  return { client: null, transport: null, leased: true, warm: false }
+  return { client: null, leased: true, warm: false }
 }
 
 /** Release a lease. Never throws — callers release from a `finally`. */
@@ -104,11 +109,9 @@ async function ensureConnected(conn: PooledConnection): Promise<Client> {
     name: 'harness-patterns',
     version: '1.0.0',
   })
-  const transport = new StreamableHTTPClientTransport(new URL(MCP_GATEWAY_URL))
-  await client.connect(transport)
+  await client.connect(new StreamableHTTPClientTransport(new URL(MCP_GATEWAY_URL)))
 
   conn.client = client
-  conn.transport = transport
   return client
 }
 
@@ -120,7 +123,6 @@ async function ensureConnected(conn: PooledConnection): Promise<Client> {
 async function closeConnection(conn: PooledConnection): Promise<void> {
   const { client } = conn
   conn.client = null
-  conn.transport = null
   if (client) {
     try {
       await client.close()
@@ -128,20 +130,6 @@ async function closeConnection(conn: PooledConnection): Promise<void> {
       // best-effort; the connection is already broken
     }
   }
-}
-
-/** Direct access to a gateway client, outside the lease protocol. Kept for
- *  callers that want a raw MCP client (and for connectivity checks); it
- *  returns the first warm connection's client without leasing it, so it must
- *  not be used for operations that need reconnect isolation — use
- *  `callTool` / `listTools`, which lease. */
-export async function getMcpClient(): Promise<Client> {
-  let conn = pool[0]
-  if (!conn) {
-    conn = { client: null, transport: null, leased: false, warm: true }
-    pool.push(conn)
-  }
-  return ensureConnected(conn)
 }
 
 /** Heuristic: does this error look like a dead/closed transport rather than
@@ -331,7 +319,15 @@ export async function listTools(): Promise<MCPToolDescription[]> {
 
 /** Close every pooled connection and empty the pool. Overflow connections
  *  (created above POOL_SIZE, see acquireConnection) are not in the pool —
- *  they close themselves when their lease is released. */
+ *  they close themselves when their lease is released.
+ *
+ *  A connection can still be LEASED when we get here (shutdown while a call is
+ *  in flight). Closing its client makes that call fail with "connection
+ *  closed", which withReconnect treats as a transport error and reconnects —
+ *  on a connection we have just dropped from the pool. Demoting it to
+ *  non-warm makes releaseConnection close that rebuild too; otherwise it would
+ *  survive shutdown, unreachable by a second closeMcpClient() and invisible to
+ *  isConnected(). */
 export async function closeMcpClient(): Promise<void> {
   const conns = pool.splice(0)
   let firstError: unknown = null
@@ -339,7 +335,7 @@ export async function closeMcpClient(): Promise<void> {
   for (const conn of conns) {
     const { client } = conn
     conn.client = null
-    conn.transport = null
+    conn.warm = false
     if (!client) continue
     try {
       await client.close()

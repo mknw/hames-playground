@@ -16,7 +16,11 @@ describe('repairJson', () => {
     })
 
     it('should parse valid JSON with booleans and null', () => {
-      expect(repairJson('{"a": true, "b": false, "c": null}')).toEqual({ a: true, b: false, c: null })
+      expect(repairJson('{"a": true, "b": false, "c": null}')).toEqual({
+        a: true,
+        b: false,
+        c: null,
+      })
     })
 
     it('should parse valid nested JSON', () => {
@@ -34,7 +38,10 @@ describe('repairJson', () => {
     })
 
     it('should fix multiple unquoted keys', () => {
-      expect(repairJson('{query: "movies", max_results: 10}')).toEqual({ query: 'movies', max_results: 10 })
+      expect(repairJson('{query: "movies", max_results: 10}')).toEqual({
+        query: 'movies',
+        max_results: 10,
+      })
     })
 
     it('should fix keys with dollar signs', () => {
@@ -69,6 +76,58 @@ describe('repairJson', () => {
     })
   })
 
+  describe('bracket-valued unquoted args', () => {
+    it('keeps sibling keys when an unquoted value starts with [', () => {
+      // Regression: the value repair used to skip `[`-leading values, letting the
+      // last-resort single-key handler swallow `, limit: 5` into the author string.
+      expect(repairJson('{author: [X], limit: 5}')).toEqual({ author: ['X'], limit: 5 })
+    })
+
+    it('keeps sibling keys when an unquoted value starts with {', () => {
+      expect(repairJson('{filter: {status: open}, limit: 5}')).toEqual({
+        filter: { status: 'open' },
+        limit: 5,
+      })
+    })
+
+    it('repairs nested brackets', () => {
+      expect(repairJson('{tags: [a, [b, c], {k: v}], limit: 5}')).toEqual({
+        tags: ['a', ['b', 'c'], { k: 'v' }],
+        limit: 5,
+      })
+    })
+
+    it('ignores brackets inside quoted strings when balancing', () => {
+      expect(repairJson('{items: [x, "y], z"], limit: 5}')).toEqual({
+        items: ['x', 'y], z'],
+        limit: 5,
+      })
+    })
+
+    it('preserves valid element types inside a repaired array', () => {
+      expect(repairJson('{items: [1, true, null, bare, "quoted"], limit: 5}')).toEqual({
+        items: [1, true, null, 'bare', 'quoted'],
+        limit: 5,
+      })
+    })
+
+    it('normalises single-quoted elements inside a repaired array', () => {
+      expect(repairJson("{items: [x, 'y'], limit: 5}")).toEqual({ items: ['x', 'y'], limit: 5 })
+    })
+
+    it('handles empty and multi-word bracket values', () => {
+      expect(repairJson('{items: [], limit: 5}')).toEqual({ items: [], limit: 5 })
+      expect(repairJson('{items: [two words, other], limit: 5}')).toEqual({
+        items: ['two words', 'other'],
+        limit: 5,
+      })
+    })
+
+    it('repairs a bracket value as the only key', () => {
+      expect(repairJson('{author: [X]}')).toEqual({ author: ['X'] })
+    })
+  })
+
   describe('trailing commas', () => {
     it('should remove trailing comma in object', () => {
       expect(repairJson('{"a": 1, "b": 2,}')).toEqual({ a: 1, b: 2 })
@@ -87,9 +146,11 @@ describe('repairJson', () => {
 
   describe('real-world LLM outputs', () => {
     it('should handle typical search tool args', () => {
-      const result = repairJson('{query: movies showtimes Cinema Palace Brussels February 13th 2026}')
+      const result = repairJson(
+        '{query: movies showtimes Cinema Palace Brussels February 13th 2026}',
+      )
       expect(result).toEqual({
-        query: 'movies showtimes Cinema Palace Brussels February 13th 2026'
+        query: 'movies showtimes Cinema Palace Brussels February 13th 2026',
       })
     })
 
@@ -99,7 +160,7 @@ describe('repairJson', () => {
 
     it('should handle neo4j query args', () => {
       expect(repairJson('{query: "MATCH (n) RETURN n LIMIT 10"}')).toEqual({
-        query: 'MATCH (n) RETURN n LIMIT 10'
+        query: 'MATCH (n) RETURN n LIMIT 10',
       })
     })
 
@@ -107,9 +168,11 @@ describe('repairJson', () => {
       // Reproduction of the failure case observed in `neo4j-query` (turn 1):
       // BAML lossily stringified {query: "..."} to a JS-style object literal,
       // dropping all quotes. The value contains commas and parens from the Cypher.
-      const input = '{query: MATCH (c:Concept)-[r]-() RETURN c.name AS name, count(r) AS degree ORDER BY degree DESC LIMIT 1}'
+      const input =
+        '{query: MATCH (c:Concept)-[r]-() RETURN c.name AS name, count(r) AS degree ORDER BY degree DESC LIMIT 1}'
       expect(repairJson(input)).toEqual({
-        query: 'MATCH (c:Concept)-[r]-() RETURN c.name AS name, count(r) AS degree ORDER BY degree DESC LIMIT 1'
+        query:
+          'MATCH (c:Concept)-[r]-() RETURN c.name AS name, count(r) AS degree ORDER BY degree DESC LIMIT 1',
       })
     })
 
@@ -126,6 +189,10 @@ describe('repairJson', () => {
 
     it('should throw on empty string', () => {
       expect(() => repairJson('')).toThrow()
+    })
+
+    it('should throw on bracket soup that is not an object', () => {
+      expect(() => repairJson('nonsense [x] { y')).toThrow()
     })
   })
 })

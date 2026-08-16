@@ -10,16 +10,14 @@
  */
 
 import type { APIEvent } from '@solidjs/start/server'
-import {
-  storeDocument,
-  listDocuments,
-} from '../../../lib/document-store.server'
+import { storeDocument, listDocuments } from '../../../lib/document-store.server'
 import { ingestStashDocument } from '../../../lib/document-ingest.server'
 import { loadSession } from '../../../lib/harness-client/session.server'
 import { agentUsesRedisRetriever } from '../../../lib/harness-client/registry.server'
 import { parseUploadRequest } from '../../../lib/stash/upload-service.server'
 import { conversionEnabled, isConvertible } from '../../../lib/doc-convert.server'
-import { json, withUser } from '../../../lib/stash/http.server'
+import { claimSession, json, sessionNotFound, withUser } from '../../../lib/stash/http.server'
+import { resolveSessionOwner } from '../../../lib/stash/ownership.server'
 
 export async function POST(event: APIEvent) {
   return withUser(async (userId) => {
@@ -27,12 +25,17 @@ export async function POST(event: APIEvent) {
     try {
       input = await parseUploadRequest(event.request)
     } catch (err) {
-      return json(
-        { error: err instanceof Error ? err.message : 'Invalid upload' },
-        400,
-      )
+      return json({ error: err instanceof Error ? err.message : 'Invalid upload' }, 400)
     }
     if (!input.sessionId) return json({ error: 'sessionId is required' }, 400)
+
+    // An upload is the session's first touch as often as not (a file dropped
+    // before the first chat message), so this both records the uploader as the
+    // owner of a fresh session and rejects a session that is already someone
+    // else's. Everything downstream — reads, ingest, flag edits — is checked
+    // against what this establishes.
+    const denied = await claimSession(input.sessionId, userId)
+    if (denied) return denied
 
     try {
       const { agentId, ...storeInput } = input
@@ -103,9 +106,17 @@ async function willAutoIngest(
 }
 
 export async function GET(event: APIEvent) {
-  return withUser(async () => {
+  return withUser(async (userId) => {
     const sessionId = new URL(event.request.url).searchParams.get('sessionId')
     if (!sessionId) return json({ error: 'sessionId is required' }, 400)
+    // The panel lists a session's documents from the moment it opens, which
+    // includes a brand-new session nobody has claimed yet. An unclaimed session
+    // holds no documents (every write path claims before it stores), so it
+    // lists as empty — the honest answer, and one that keeps a fresh chat from
+    // opening on an error. Anyone else's session is 404, as everywhere.
+    const owner = await resolveSessionOwner(sessionId)
+    if (owner === null) return json({ documents: [] })
+    if (owner !== userId) return sessionNotFound()
     const documents = await listDocuments(sessionId)
     return json({ documents })
   })

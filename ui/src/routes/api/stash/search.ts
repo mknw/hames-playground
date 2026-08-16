@@ -9,10 +9,10 @@
 
 import type { APIEvent } from '@solidjs/start/server'
 import { searchDocuments } from '../../../lib/document-ingest.server'
-import { json, withUser } from '../../../lib/stash/http.server'
+import { json, requireSessionOwner, withUser } from '../../../lib/stash/http.server'
 
 export async function GET(event: APIEvent) {
-  return withUser(async () => {
+  return withUser(async (userId) => {
     const url = new URL(event.request.url)
     const sessionId = url.searchParams.get('sessionId')
     const q = url.searchParams.get('q')
@@ -20,6 +20,8 @@ export async function GET(event: APIEvent) {
     if (!sessionId || !q) {
       return json({ error: 'sessionId and q are required' }, 400)
     }
+    const denied = await requireSessionOwner(sessionId, userId)
+    if (denied) return denied
     const k = kRaw && Number.isFinite(Number(kRaw)) ? Number(kRaw) : undefined
 
     try {

@@ -38,8 +38,14 @@ import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
 import { clientOverrideFor } from './clients.server'
 import { CLIENT_MAX_OUTPUT_TOKENS, estimateLlmCostUsd } from '../settings'
+import { runBamlClientCheckOnce } from './baml-version-check.server'
 
 assertServerOnImport()
+
+// Boot-time staleness warning (#154), fired once per process from the first
+// module every BAML path goes through — the same lazy one-shot seam the
+// sandbox orphan reaper uses (#97). Fire-and-forget; never blocks.
+runBamlClientCheckOnce()
 
 // ============================================================================
 // Types for LLM Call Results
@@ -77,6 +83,44 @@ export type CriticFnWithLLMData = (
   collector?: Collector,
 ) => Promise<CriticCallResult>
 
+/**
+ * Loud signal that a BAML call captured NOTHING despite being handed a
+ * collector — `collector.last` is still null after the call returned.
+ *
+ * This is a proven data-loss signal and never a normal state on a call that
+ * succeeded: BAML populates the collector for every request it actually issues,
+ * so a null `last` means the collector never reached BAML at all. The known
+ * cause is a STALE `baml_client/` (it is git-ignored and generated). The
+ * generated functions take their arguments POSITIONALLY, so appending a
+ * parameter to a BAML function signature and then running new adapter code
+ * against an old client shifts every later argument by one slot and pushes the
+ * `__baml_options__` object — which carries both the collector and the
+ * `clientOverrideFor(...)` routing — off the end. The calls still succeed, so
+ * nothing in the logs or the UI hints at it: issue #154 lost ~18 hours of
+ * prompt/output/metrics/cost data exactly this way before anyone noticed.
+ *
+ * Remedy when this fires: `pnpm baml-generate`.
+ *
+ * Call this on SUCCESS paths only. After a thrown call the collector may
+ * legitimately be empty (e.g. a pre-request network failure), which is why
+ * `extractFailureLLMCallData` deliberately stays silent.
+ *
+ * @returns true when a warning was emitted (i.e. observability data was lost).
+ */
+export function warnIfCollectorEmpty(
+  collector: Collector | undefined,
+  functionName: string,
+): boolean {
+  if (!collector || collector.last) return false
+  console.warn(
+    `[baml] ${functionName} was called WITH a collector but captured nothing ` +
+      '(collector.last === null): no prompt, output, metrics or cost for this step. ' +
+      'This is a data-loss signal, never a normal state — the usual cause is a stale ' +
+      'baml_client after a BAML signature change (#154). Run `pnpm baml-generate`.',
+  )
+  return true
+}
+
 /** Extract LLM call data from a collector */
 export function extractLLMCallData(
   collector: Collector,
@@ -86,7 +130,14 @@ export function extractLLMCallData(
   parsedOutput?: unknown,
 ): LLMCallData | undefined {
   const last = collector.last
-  if (!last) return undefined
+  if (!last) {
+    // Not a benign miss — see warnIfCollectorEmpty. This is the shared choke
+    // point for LoopController / ActorController / Critic / Router /
+    // RetrieveQuery / CompactIntent; the sites that build their own
+    // LLMCallData call the helper directly.
+    warnIfCollectorEmpty(collector, functionName)
+    return undefined
+  }
   const llmCall = buildLLMCallDataFromLog(last, functionName, variables, startTime, parsedOutput)
   llmCall.metrics = computeEventMetrics(collector)
   return llmCall

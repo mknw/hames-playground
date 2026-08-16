@@ -9,7 +9,7 @@
  * The full UnifiedContext is stored as a single JSONB blob in Postgres —
  * see `lib/db/conversations.server.ts`.
  */
-"use server";
+'use server'
 
 import {
   harness,
@@ -19,7 +19,7 @@ import {
   serializeContext,
   type HarnessResultScoped,
   type ContextEvent,
-} from "../harness-patterns";
+} from '../harness-patterns'
 import {
   getOrBuildPatterns,
   loadSession,
@@ -27,8 +27,8 @@ import {
   deleteSession,
   evictPatterns,
   type SessionData,
-} from "./session.server";
-import { getAgent, getAgentMetadata } from "./registry.server";
+} from './session.server'
+import { getAgent, getAgentMetadata } from './registry.server'
 import {
   listConversations as dbListConversations,
   promoteConversation as dbPromoteConversation,
@@ -38,12 +38,12 @@ import {
   type ConversationKind,
   type ConversationSource,
   type ConversationStatus,
-} from "../db/conversations.server";
-import type { HarnessSettings } from "../settings";
-import { runWithSettings } from "../settings-context.server";
-import { getAuthenticatedUser } from "../auth/server";
-import { BYPASS_USER, isBypassEnabled } from "../auth/dev-bypass";
-import { runWithRequestContext } from "./request-user.server";
+} from '../db/conversations.server'
+import type { HarnessSettings } from '../settings'
+import { runWithSettings } from '../settings-context.server'
+import { getAuthenticatedUser } from '../auth/server'
+import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
+import { runWithRequestContext } from './request-user.server'
 
 // ============================================================================
 // Auth helper
@@ -56,10 +56,10 @@ import { runWithRequestContext } from "./request-user.server";
  */
 async function requireUser(): Promise<{ id: string; email: string }> {
   if (isBypassEnabled()) {
-    return { id: BYPASS_USER.id, email: BYPASS_USER.email };
+    return { id: BYPASS_USER.id, email: BYPASS_USER.email }
   }
-  const u = await getAuthenticatedUser();
-  return { id: u.id, email: u.email };
+  const u = await getAuthenticatedUser()
+  return { id: u.id, email: u.email }
 }
 
 // ============================================================================
@@ -73,7 +73,7 @@ export async function processMessage(
   sessionId: string,
   message: string,
 ): Promise<HarnessResultScoped<SessionData>> {
-  return processMessageWithAgent(sessionId, message, "default");
+  return processMessageWithAgent(sessionId, message, 'default')
 }
 
 /**
@@ -82,10 +82,10 @@ export async function processMessage(
 export async function processMessageWithAgent(
   sessionId: string,
   message: string,
-  agentId: string = "default",
+  agentId: string = 'default',
 ): Promise<HarnessResultScoped<SessionData>> {
-  const user = await requireUser();
-  return runTurn(sessionId, user.id, message, agentId);
+  const user = await requireUser()
+  return runTurn(sessionId, user.id, message, agentId)
 }
 
 /**
@@ -95,14 +95,12 @@ export async function processMessageWithAgent(
 export async function processMessageStreaming(
   sessionId: string,
   message: string,
-  agentId: string = "default",
+  agentId: string = 'default',
   onEvent: (event: ContextEvent) => void,
   settings?: HarnessSettings,
 ): Promise<HarnessResultScoped<SessionData>> {
-  const user = await requireUser();
-  return runWithSettings(settings, () =>
-    runTurn(sessionId, user.id, message, agentId, onEvent),
-  );
+  const user = await requireUser()
+  return runWithSettings(settings, () => runTurn(sessionId, user.id, message, agentId, onEvent))
 }
 
 async function runTurn(
@@ -121,7 +119,7 @@ async function runTurn(
     // a fresh conversation by ignoring the prior serialized context. The UI is
     // expected to mint a new sessionId on agent change, but we double-guard
     // here so a stale id can't continue with a different agent's patterns.
-    const loaded = await loadSession(sessionId, userId);
+    const loaded = await loadSession(sessionId, userId)
 
     // Brand-new conversation: persist the row BEFORE the run so it exists in
     // the sidebar for its whole first turn (#105) — previously the row only
@@ -139,31 +137,24 @@ async function runTurn(
         userId,
         agentId,
         title: deriveTitle(message),
-        serializedContext: serializeContext(
-          createContext(message, undefined, sessionId),
-        ),
-        status: "running",
-      });
+        serializedContext: serializeContext(createContext(message, undefined, sessionId)),
+        status: 'running',
+      })
     }
 
-    const patterns = await getOrBuildPatterns(sessionId, agentId);
+    const patterns = await getOrBuildPatterns(sessionId, agentId)
 
-    let result: HarnessResultScoped<SessionData>;
+    let result: HarnessResultScoped<SessionData>
     if (loaded && loaded.agentId === agentId) {
-      result = await continueSession(
-        loaded.serializedContext,
-        patterns,
-        message,
-        onEvent,
-      );
+      result = await continueSession(loaded.serializedContext, patterns, message, onEvent)
     } else {
-      const agent = harness(...patterns);
-      result = await agent(message, sessionId, undefined, onEvent);
+      const agent = harness(...patterns)
+      result = await agent(message, sessionId, undefined, onEvent)
     }
 
-    await saveSession(sessionId, userId, agentId, result.serialized);
-    return result;
-  });
+    await saveSession(sessionId, userId, agentId, result.serialized)
+    return result
+  })
 }
 
 /**
@@ -172,17 +163,15 @@ async function runTurn(
  * authenticating — safe to expose as a server action.
  */
 export async function promoteAction(sessionId: string): Promise<void> {
-  const user = await requireUser();
-  await dbPromoteConversation(sessionId, user.id);
+  const user = await requireUser()
+  await dbPromoteConversation(sessionId, user.id)
 }
 
 /**
  * Approve a pending action.
  */
-export async function approveAction(
-  sessionId: string,
-): Promise<HarnessResultScoped<SessionData>> {
-  return resolveApproval(sessionId, true);
+export async function approveAction(sessionId: string): Promise<HarnessResultScoped<SessionData>> {
+  return resolveApproval(sessionId, true)
 }
 
 /**
@@ -192,28 +181,24 @@ export async function rejectAction(
   sessionId: string,
   _reason?: string,
 ): Promise<HarnessResultScoped<SessionData>> {
-  return resolveApproval(sessionId, false);
+  return resolveApproval(sessionId, false)
 }
 
 async function resolveApproval(
   sessionId: string,
   approved: boolean,
 ): Promise<HarnessResultScoped<SessionData>> {
-  const user = await requireUser();
-  const loaded = await loadSession(sessionId, user.id);
+  const user = await requireUser()
+  const loaded = await loadSession(sessionId, user.id)
   if (!loaded) {
-    throw new Error("No active session");
+    throw new Error('No active session')
   }
   return runWithRequestContext({ userId: user.id, sessionId }, async () => {
-    const patterns = await getOrBuildPatterns(sessionId, loaded.agentId);
-    const result = await resumeHarness(
-      loaded.serializedContext,
-      patterns,
-      approved,
-    );
-    await saveSession(sessionId, user.id, loaded.agentId, result.serialized);
-    return result;
-  });
+    const patterns = await getOrBuildPatterns(sessionId, loaded.agentId)
+    const result = await resumeHarness(loaded.serializedContext, patterns, approved)
+    await saveSession(sessionId, user.id, loaded.agentId, result.serialized)
+    return result
+  })
 }
 
 /**
@@ -221,8 +206,8 @@ async function resolveApproval(
  * pattern cache.
  */
 export async function clearSession(sessionId: string): Promise<void> {
-  const user = await requireUser();
-  await deleteSession(sessionId, user.id);
+  const user = await requireUser()
+  await deleteSession(sessionId, user.id)
 }
 
 /**
@@ -232,16 +217,14 @@ export async function clearSession(sessionId: string): Promise<void> {
  * so the sidebar can patch its cache from ground truth. Serves both the
  * per-row delete (one id) and select-mode bulk delete — one code path.
  */
-export async function deleteConversationsBulk(
-  ids: string[],
-): Promise<{ deleted: string[] }> {
-  const user = await requireUser();
+export async function deleteConversationsBulk(ids: string[]): Promise<{ deleted: string[] }> {
+  const user = await requireUser()
   // Dedupe and cap at the sidebar's list size — nothing legitimate selects
   // more rows than the list can show.
-  const unique = [...new Set(ids)].slice(0, 200);
-  const deleted = await dbDeleteConversations(unique, user.id);
-  for (const id of deleted) evictPatterns(id);
-  return { deleted };
+  const unique = [...new Set(ids)].slice(0, 200)
+  const deleted = await dbDeleteConversations(unique, user.id)
+  for (const id of deleted) evictPatterns(id)
+  return { deleted }
 }
 
 /**
@@ -249,16 +232,16 @@ export async function deleteConversationsBulk(
  */
 export async function getAgentList(): Promise<
   Array<{
-    id: string;
-    name: string;
-    description: string;
-    icon: string;
+    id: string
+    name: string
+    description: string
+    icon: string
     /** Accent-family token; resolve with `accentColor()` (lib/agent-palette). */
-    accent: string;
-    servers: string[];
+    accent: string
+    servers: string[]
   }>
 > {
-  return getAgentMetadata();
+  return getAgentMetadata()
 }
 
 // ============================================================================
@@ -266,26 +249,26 @@ export async function getAgentList(): Promise<
 // ============================================================================
 
 export interface ConversationSummary {
-  id: string;
-  agentId: string;
+  id: string
+  agentId: string
   /** The agent's iconify class, pre-resolved from the registry so the
    *  sidebar needs no registry import and no second round trip (#60).
    *  Undefined when the agent no longer exists (e.g. removed agents). */
-  agentIcon?: string;
+  agentIcon?: string
   /** The agent's accent-family token (see lib/agent-palette.ts), resolved
    *  from the registry alongside the icon. The client maps it to a hex via
    *  `accentColor()` — sending the token rather than the colour keeps a
    *  future light theme free to remap. Undefined for removed agents. */
-  agentAccent?: string;
-  title: string | null;
+  agentAccent?: string
+  title: string | null
   /** 'conversation' | 'action' — drives the sidebar's segmented filter. */
-  kind: ConversationKind;
-  /** 'chat' | 'post' — immutable provenance. */
-  source: ConversationSource;
+  kind: ConversationKind
+  /** 'chat' | 'post' | 'routine' — immutable provenance. */
+  source: ConversationSource
   /** Lifted status — drives the in-flight spinner/badge. */
-  status: ConversationStatus;
+  status: ConversationStatus
   /** ISO 8601 — Date doesn't survive server-action serialization unscathed. */
-  updatedAt: string;
+  updatedAt: string
 }
 
 /**
@@ -297,13 +280,13 @@ export interface ConversationSummary {
  * crash the route render.
  */
 export async function listConversations(): Promise<ConversationSummary[]> {
-  let userId: string;
+  let userId: string
   try {
-    userId = (await requireUser()).id;
+    userId = (await requireUser()).id
   } catch {
-    return [];
+    return []
   }
-  const rows = await dbListConversations(userId);
+  const rows = await dbListConversations(userId)
   return rows.map((r) => ({
     id: r.id,
     agentId: r.agentId,
@@ -314,48 +297,46 @@ export async function listConversations(): Promise<ConversationSummary[]> {
     source: r.source,
     status: r.status,
     updatedAt: r.updatedAt.toISOString(),
-  }));
+  }))
 }
 
 // Replay helper extracted to a dependency-free module so it can be unit-tested
 // without dragging in the auth/DB import graph. Re-export the type for callers.
-import { replayMessages, type ReplayedMessage } from "./replay";
-export type { ReplayedMessage };
+import { replayMessages, type ReplayedMessage } from './replay'
+export type { ReplayedMessage }
 
 export interface LoadedConversation {
-  id: string;
-  agentId: string;
-  messages: ReplayedMessage[];
+  id: string
+  agentId: string
+  messages: ReplayedMessage[]
   /** Row kind — the chat view reads this to gate the promotion confirm on
    *  send (only actions prompt). Authoritative (from the DB), unlike the
    *  possibly-stale sidebar threads cache. */
-  kind: ConversationKind;
+  kind: ConversationKind
   /** Serialized UnifiedContext. The events array can be replayed by the UI
    *  to repopulate the graph and observability panel. */
-  serialized: string;
+  serialized: string
 }
 
 /**
  * Load a conversation for the current user. Returns the serialized context
  * plus a chat-ready replay of user/assistant messages.
  */
-export async function loadConversation(
-  sessionId: string,
-): Promise<LoadedConversation> {
-  const user = await requireUser();
-  const loaded = await loadSession(sessionId, user.id);
+export async function loadConversation(sessionId: string): Promise<LoadedConversation> {
+  const user = await requireUser()
+  const loaded = await loadSession(sessionId, user.id)
   if (!loaded) {
-    throw new Error("Conversation not found");
+    throw new Error('Conversation not found')
   }
 
-  const messages = replayMessages(loaded.serializedContext);
+  const messages = replayMessages(loaded.serializedContext)
   return {
     id: sessionId,
     agentId: loaded.agentId,
     messages,
     kind: loaded.kind,
     serialized: loaded.serializedContext,
-  };
+  }
 }
 
 /**
@@ -369,17 +350,12 @@ export async function loadConversation(
  * no user messages, isn't found, or the LLM call fails — silent failure
  * leaves the existing title in place.
  */
-export async function regenerateConversationTitle(
-  sessionId: string,
-): Promise<string | null> {
-  const user = await requireUser();
-  const loaded = await loadSession(sessionId, user.id);
-  if (!loaded) return null;
-  const { deserializeContext } = await import("../harness-patterns");
-  const { runRegenerateTitle } = await import(
-    "./examples/title-generator.server"
-  );
-  const ctx = deserializeContext(loaded.serializedContext);
-  return runRegenerateTitle(ctx, sessionId, user.id);
+export async function regenerateConversationTitle(sessionId: string): Promise<string | null> {
+  const user = await requireUser()
+  const loaded = await loadSession(sessionId, user.id)
+  if (!loaded) return null
+  const { deserializeContext } = await import('../harness-patterns')
+  const { runRegenerateTitle } = await import('./examples/title-generator.server')
+  const ctx = deserializeContext(loaded.serializedContext)
+  return runRegenerateTitle(ctx, sessionId, user.id)
 }
-

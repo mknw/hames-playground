@@ -13,8 +13,7 @@ assertServerOnImport()
 
 const { Pool } = pg
 
-const DEFAULT_DATABASE_URL =
-  'postgresql://postgres:password@localhost:5432/kgagent'
+const DEFAULT_DATABASE_URL = 'postgresql://postgres:password@localhost:5432/kgagent'
 
 let _pool: pg.Pool | null = null
 let _initPromise: Promise<void> | null = null
@@ -49,7 +48,7 @@ const SCHEMA_SQL = `
   -- when the table is absent. The defaults backfill existing rows correctly:
   -- everything created before this migration is a completed chat conversation.
   --   kind    — mutable; promotion flips 'action' -> 'conversation'.
-  --   source  — immutable provenance ('chat' | 'post').
+  --   source  — immutable provenance ('chat' | 'post' | 'routine').
   --   status  — copy of UnifiedContext.status, for cheap list filtering + badge.
   ALTER TABLE conversations
     ADD COLUMN IF NOT EXISTS kind   TEXT NOT NULL DEFAULT 'conversation';
@@ -59,6 +58,22 @@ const SCHEMA_SQL = `
     ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'done';
   CREATE INDEX IF NOT EXISTS conversations_user_kind_updated_idx
     ON conversations (user_id, kind, updated_at DESC);
+
+  -- Session ownership claims. A Data Stash upload can arrive before the
+  -- session has any conversation row (a file dropped before the first chat
+  -- message), so there is a window in which \`conversations.user_id\` cannot
+  -- answer "who owns this session?". This table records the owner at first
+  -- touch instead: the primary key makes the insert a first-toucher-wins
+  -- race, and \`expires_at\` mirrors the Data Stash document TTL so a claim
+  -- never outlives the documents it scopes. See \`lib/stash/ownership.server.ts\`.
+  CREATE TABLE IF NOT EXISTS session_claims (
+    session_id  TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at  TIMESTAMPTZ NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS session_claims_expires_idx
+    ON session_claims (expires_at);
 `
 
 async function initSchema(): Promise<void> {
@@ -73,7 +88,7 @@ async function initSchema(): Promise<void> {
  */
 export async function query<R extends pg.QueryResultRow = pg.QueryResultRow>(
   text: string,
-  params?: unknown[]
+  params?: unknown[],
 ): Promise<pg.QueryResult<R>> {
   if (!_initPromise) {
     _initPromise = initSchema().catch((err) => {

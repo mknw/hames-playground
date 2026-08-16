@@ -9,6 +9,7 @@ Functional, composable framework for agentic tool execution.
 > `harness-client/examples/`).
 >
 > Library boundary rules — keep them strict so extraction stays cheap:
+>
 > 1. `harness-patterns/` MUST NOT import from `harness-client/`, `components/`,
 >    or any other consumer.
 > 2. Pattern primitives are framework-neutral — no SolidJS, no UI types.
@@ -103,40 +104,55 @@ The framework uses **UnifiedContext** as the single source of truth for session 
 interface UnifiedContext<T> {
   sessionId: string
   createdAt: number
-  events: ContextEvent[]      // Full event stream
-  status: CtxStatus           // 'running' | 'paused' | 'done' | 'error'
+  events: ContextEvent[] // Full event stream
+  status: CtxStatus // 'running' | 'paused' | 'done' | 'error'
   error?: string
-  data: T                     // Accumulated pattern data
-  input: string               // Current user input
+  data: T // Accumulated pattern data
+  input: string // Current user input
 }
 
 // Events tagged with pattern origin
 interface ContextEvent {
-  id?: string             // Auto-generated unique ID (e.g. 'ev-a1b2c3')
+  id?: string // Auto-generated unique ID (e.g. 'ev-a1b2c3')
   type: EventType
   ts: number
   patternId: string
-  data: unknown           // Typed per EventType (see Event → BAML Type Mapping)
+  data: unknown // Typed per EventType (see Event → BAML Type Mapping)
 }
 
 // Tool event data includes optional callId for pairing call↔result in the UI
-interface ToolCallEventData   { callId?: string; tool: string; args: unknown }
-interface ToolResultEventData { callId?: string; tool: string; result: unknown; success: boolean; error?: string }
+interface ToolCallEventData {
+  callId?: string
+  tool: string
+  args: unknown
+}
+interface ToolResultEventData {
+  callId?: string
+  tool: string
+  result: unknown
+  success: boolean
+  error?: string
+}
 
 type EventType =
-  | 'user_message' | 'assistant_message'
-  | 'tool_call' | 'tool_result'
-  | 'controller_action' | 'critic_result'
-  | 'pattern_enter' | 'pattern_exit'
-  | 'approval_request' | 'approval_response'
+  | 'user_message'
+  | 'assistant_message'
+  | 'tool_call'
+  | 'tool_result'
+  | 'controller_action'
+  | 'critic_result'
+  | 'pattern_enter'
+  | 'pattern_exit'
+  | 'approval_request'
+  | 'approval_response'
   | 'error'
-  | 'reference_attached'   // withReferences — selector decision (observability)
-  | 'intent_compacted'     // compactIntent — rewritten brief (observability)
+  | 'reference_attached' // withReferences — selector decision (observability)
+  | 'intent_compacted' // compactIntent — rewritten brief (observability)
 
 // Isolated workspace for each pattern
 interface PatternScope<T> {
   id: string
-  events: ContextEvent[]      // Local events (not yet committed)
+  events: ContextEvent[] // Local events (not yet committed)
   data: T
   startTime: number
 }
@@ -157,16 +173,19 @@ interface ConfiguredPattern<T> {
 ```typescript
 // Controller output (standardized across all BAML controllers)
 interface ControllerAction {
-  reasoning: string      // Chain-of-thought
-  tool_name: string      // Tool to call. simpleLoop: `'Return'` exits the loop. actorCritic: actor's `'Return'` is ignored — the critic alone owns termination.
-  tool_args: string      // JSON payload
-  additional_calls?: ToolCallRequest[]  // Calls 2..N of a multi-call turn ({tool_name, tool_args} each).
-                         // Executed per the pattern's `multiToolCalls` mode: 'parallel' (default,
-                         // concurrent, ≤ MAX_PARALLEL_TOOL_CALLS in flight) | 'sequential' (in order,
-                         // stop-on-failure) | 'off' (no prompt affordance; tolerated batches run serially).
-                         // Singular-only actions: Return, expandPreviousResult.
-  status: string         // User-facing message
-  is_final: boolean      // simpleLoop: exits the loop. actorCritic: cannot exit (critic owns that), but is an advisory *critic trigger* — see criticCadence.
+  reasoning: string // Chain-of-thought
+  tool_name: string // Tool to call. simpleLoop: `'Return'` exits the loop. actorCritic: actor's `'Return'` is ignored — the critic alone owns termination.
+  tool_args: string // JSON payload
+  additional_calls?: ToolCallRequest[] // Calls 2..N of a multi-call turn ({tool_name, tool_args} each).
+  // Executed per the pattern's `multiToolCalls` mode: 'parallel' (default,
+  // concurrent, ≤ MAX_PARALLEL_TOOL_CALLS in flight) | 'sequential' (in order,
+  // stop-on-failure) | 'off' (no prompt affordance; tolerated batches run serially).
+  // Singular-only actions: Return, expandPreviousResult.
+  status?: string // User-facing message. Optional (#144) — omittable on the terminal turn, where nothing is in progress.
+  is_final?: boolean // simpleLoop: exits the loop. actorCritic: cannot exit (critic owns that), but is an advisory *critic trigger* — see criticCadence.
+  // Optional (#159), DEFAULT FALSE: the patterns normalise an absent value to `false` via
+  // `normalizeControllerAction()` before anything reads it, so absence can never end a loop or
+  // claim finality — `tool_name: 'Return'` stays the independent terminal signal.
 }
 
 // Critic result for actor-critic pattern
@@ -178,9 +197,9 @@ interface CriticResult {
 
 // Compact reference to a tool result from a prior turn (for cross-turn memory)
 interface PriorResult {
-  ref_id: string        // Event ID — LLM passes as ref:<ref_id> in tool args
-  tool: string          // Tool that produced the result
-  summary: string       // LLM-generated summary or truncated preview
+  ref_id: string // Event ID — LLM passes as ref:<ref_id> in tool args
+  tool: string // Tool that produced the result
+  summary: string // LLM-generated summary or truncated preview
 }
 ```
 
@@ -243,7 +262,7 @@ The entire event stream persists, enabling multi-turn conversations:
 ```typescript
 // End of turn → serialize
 const result = await agent('query')
-store(result.serialized)  // JSON string of full context
+store(result.serialized) // JSON string of full context
 
 // Next turn → continue
 const continued = await continueSession(serialized, patterns, 'follow-up')
@@ -260,10 +279,10 @@ Fetch MCP tools and group by server namespace.
 
 ```typescript
 const tools = await Tools()
-tools.neo4j  // ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema']
-tools.web    // ['search', 'fetch', 'fetch_content']
-tools.graph  // app-side, per-user (see below)
-tools.all    // all tool names
+tools.neo4j // ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema']
+tools.web // ['search', 'fetch', 'fetch_content']
+tools.graph // app-side, per-user (see below)
+tools.all // all tool names
 ```
 
 **Three transports.** `callTool()` routes a tool name to whichever transport
@@ -286,32 +305,32 @@ usually one tool call, but the controller may emit a **multi-call turn**
 simpleLoop(b.Neo4jController.bind(b), tools.neo4j, {
   patternId: 'neo4j-query',
   schema,
-  maxTurns: 5
+  maxTurns: 5,
 })
 
 interface SimpleLoopConfig extends PatternConfig {
-  schema?: string              // Injected as context to controller
-  maxTurns?: number            // Default: 5
+  schema?: string // Injected as context to controller
+  maxTurns?: number // Default: 5
   rememberPriorTurns?: boolean // Include prior tool results (default: true)
-  priorTurnCount?: number      // How many prior user turns (default: 3)
+  priorTurnCount?: number // How many prior user turns (default: 3)
   includeFailedResults?: boolean // Include failed tool results in prior context (default: false)
-  fewShots?: FewShot[]         // Domain-specific examples rendered into the LoopController prompt
-  onToolResult?: OnToolResult  // Enrich/transform tool results before they're committed (see "Hooks" below)
+  fewShots?: FewShot[] // Domain-specific examples rendered into the LoopController prompt
+  onToolResult?: OnToolResult // Enrich/transform tool results before they're committed (see "Hooks" below)
   resultOmit?: Record<string, string[]> // Per-tool fields hidden from the controller turn log (see below)
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Multi-call turns (default: 'parallel'; see below)
 }
 
 interface FewShot {
-  user: string         // Example user request
-  reasoning: string    // Reasoning the agent followed
-  tool: string         // Tool name selected
-  args: string         // JSON-encoded tool arguments
+  user: string // Example user request
+  reasoning: string // Reasoning the agent followed
+  tool: string // Tool name selected
+  args: string // JSON-encoded tool arguments
 }
 
 type OnToolResult = (
   toolName: string,
   result: { success: boolean; data: unknown; error?: string },
-  context: { callId?: string; args: unknown }
+  context: { callId?: string; args: unknown },
 ) => Promise<{ data?: unknown } | void> | { data?: unknown } | void
 ```
 
@@ -365,7 +384,7 @@ simpleLoop(controller, graphTools, {
 ```
 
 Also applied when `expandPreviousResult` replays a prior result, keyed by that
-result's *origin* tool. NOT applied to `ref:` substitution into real tool args —
+result's _origin_ tool. NOT applied to `ref:` substitution into real tool args —
 those are actual tool inputs, and the args record must stay faithful to the call
 that was made.
 
@@ -374,11 +393,11 @@ turn in `ControllerAction.additional_calls` (call 1 stays in
 `tool_name`/`tool_args`), collapsing M independent lookups from M×(controller
 LLM call + tool call) into ONE controller call. Three modes:
 
-- `'parallel'` (default) — the prompt advertises *independent* calls; the loop
+- `'parallel'` (default) — the prompt advertises _independent_ calls; the loop
   runs them concurrently (≤ `MAX_PARALLEL_TOOL_CALLS` = 4 in flight). A failed
   sub-call reports per-call; the others still run.
 - `'sequential'` — advertised, but calls run strictly in order: a later call
-  sees earlier calls' *side effects* (files, state), never their *outputs*. The
+  sees earlier calls' _side effects_ (files, state), never their _outputs_. The
   first failure skips the rest of the batch (`__skipped`). For linear
   effect-chains — the sandbox agents use this.
 - `'off'` — no prompt affordance. The schema field is shared by every agent, so
@@ -397,6 +416,7 @@ path. `Return` and `expandPreviousResult` are singular-only — inside a batch
 they get a per-call error.
 
 **How it works:**
+
 1. Extract params from context: `input`, `intent`, `previous_results`, `turn`
 2. Call BAML controller with extracted params (+ optional schema)
 3. Execute returned tool via MCP
@@ -412,20 +432,21 @@ Generate-evaluate loop with retry. For code mode workflows.
 ```typescript
 actorCritic(b.CodeModeController.bind(b), b.CodeModeCritic.bind(b), tools.all, {
   patternId: 'code-mode',
-  maxRetries: 3
+  maxRetries: 3,
 })
 
 interface ActorCriticConfig extends PatternConfig {
-  maxRetries?: number             // Default: 3
-  onToolResult?: OnToolResult     // Same shape + semantics as in SimpleLoopConfig
-  criticCadence?: number          // Default: 1 (critic every turn). See below.
+  maxRetries?: number // Default: 3
+  onToolResult?: OnToolResult // Same shape + semantics as in SimpleLoopConfig
+  criticCadence?: number // Default: 1 (critic every turn). See below.
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Same semantics as simpleLoop's (see above);
-                                  // a batch records as ONE Attempt whose result is the combined map
-                                  // the critic evaluates. Sandbox agents use 'sequential', code-mode 'off'.
+  // a batch records as ONE Attempt whose result is the combined map
+  // the critic evaluates. Sandbox agents use 'sequential', code-mode 'off'.
 }
 ```
 
 **How it works:**
+
 1. Actor generates script/action
 2. Execute via MCP
 3. Critic evaluates result
@@ -435,14 +456,14 @@ interface ActorCriticConfig extends PatternConfig {
 **`criticCadence` — let the actor free-run a multi-step sequence.** By default
 (`1`) the critic runs after every successful turn. This interrupts multi-step
 deliverables mid-plan: the actor writes a script, and the critic — the loop's
-*sole* exit authority — can wrongly accept the written-but-unrun script as "done"
+_sole_ exit authority — can wrongly accept the written-but-unrun script as "done"
 (observed live: a report loop exited with no `.docx` because the critic judged the
 generator script before it ran). With `criticCadence: N` the actor free-runs and
 the critic evaluates only (a) every Nth successful turn, (b) when the actor sets
 `is_final: true` ("I think I'm done" — it still can't exit by itself; the critic
 verifies), and (c) on the final attempt. This is the composable "actor free-runs,
 judge gates exit" shape without a second pattern. `is_final` is thus an advisory
-critic *trigger* here, never an exit. With `N > 1`, `maxRetries` bounds actor
+critic _trigger_ here, never an exit. With `N > 1`, `maxRetries` bounds actor
 turns (tool steps), not critic calls; values `< 1` are clamped to `1` so the
 critic can never be disabled.
 
@@ -453,11 +474,12 @@ Execute multiple patterns concurrently via `Promise.allSettled`, then merge resu
 ```typescript
 parallel(
   simpleLoop(b.WebSearchController.bind(b), tools.web ?? [], { patternId: 'web-search' }),
-  simpleLoop(b.Neo4jController.bind(b), tools.neo4j ?? [], { patternId: 'kg-lookup', schema })
+  simpleLoop(b.Neo4jController.bind(b), tools.neo4j ?? [], { patternId: 'kg-lookup', schema }),
 )
 ```
 
 **How it works:**
+
 1. Each branch gets an isolated child scope (`events: []`, same `data`)
 2. All branches run concurrently via `Promise.allSettled`
 3. Fulfilled branches: events wrapped with `pattern_enter` / `pattern_exit` markers, then merged into parent scope
@@ -475,6 +497,7 @@ interface GuardrailConfig extends PatternConfig {
 ```
 
 **How it works:**
+
 1. Input rails run before the pattern — can block or redact the input
 2. The inner pattern executes; its events are wrapped with `pattern_enter` / `pattern_exit`
 3. Output rails run after — can warn, retry, or block on bad results
@@ -487,17 +510,18 @@ Wrap a pattern as a lifecycle hook. Optionally runs in the background without bl
 ```typescript
 interface HookConfig extends PatternConfig {
   trigger: 'session_close' | 'error' | 'approval_timeout' | 'custom'
-  background?: boolean  // fire-and-forget via queueMicrotask
+  background?: boolean // fire-and-forget via queueMicrotask
 }
 
 const distillHook = hook(distillChain, {
   patternId: 'session-close-hook',
   trigger: 'session_close',
-  background: true
+  background: true,
 })
 ```
 
 **How it works:**
+
 - `background: true` — schedules the inner pattern via `queueMicrotask` and returns immediately
 - `background: false` (default) — runs synchronously; inner events are wrapped with `pattern_enter` / `pattern_exit`
 
@@ -510,29 +534,31 @@ adapter merges these into BAML's `turns_previous_runs` argument — **zero
 controller-prompt changes**.
 
 ```typescript
-withReferences(
-  simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema }),
-  { scope: 'global', maxRefs: 5 }
-)
+withReferences(simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema }), {
+  scope: 'global',
+  maxRefs: 5,
+})
 ```
 
 **Config:**
 
-| Field | Type | Default | Notes |
-|---|---|---|---|
-| `scope` | `'self' \| 'global'` | `'global'` | `'self'` = only the wrapper's own `patternId`. |
-| `source` | `string \| string[]` | — | Explicit `patternId` allow-list. Overrides `scope`. |
-| `maxRefs` | `number` | `5` | Cap on attached refs after selection. |
-| `selector` | `SelectorFn` | LLM-driven (`b.ReferenceSelector`) | Override for tests, evals, or deterministic policies. |
+| Field      | Type                 | Default                            | Notes                                                 |
+| ---------- | -------------------- | ---------------------------------- | ----------------------------------------------------- |
+| `scope`    | `'self' \| 'global'` | `'global'`                         | `'self'` = only the wrapper's own `patternId`.        |
+| `source`   | `string \| string[]` | —                                  | Explicit `patternId` allow-list. Overrides `scope`.   |
+| `maxRefs`  | `number`             | `5`                                | Cap on attached refs after selection.                 |
+| `selector` | `SelectorFn`         | LLM-driven (`b.ReferenceSelector`) | Override for tests, evals, or deterministic policies. |
 
 **Skip optimizations** — the selector is bypassed when:
+
 - the eligible stash is empty → `skipped: 'empty'`, no refs attached
 - there is exactly one candidate → `skipped: 'single'`, attached unconditionally
 - a cache hit on `(intent_hash, stash_snapshot_hash)` → `skipped: 'cached'`, prior decision reused
 
 Each entry exit emits a `reference_attached` event with `{ candidates, selected, reasoning, skipped? }` for observability.
 
-**Composes with `expandPreviousResult`.** The wrapper attaches *compact* refs (summary only). Inside the loop, the controller can either:
+**Composes with `expandPreviousResult`.** The wrapper attaches _compact_ refs (summary only). Inside the loop, the controller can either:
+
 - pass `ref:<ref_id>` as a tool argument — the system inlines the full data into that tool's args before dispatch, **or**
 - call the synthetic `expandPreviousResult` tool (auto-injected by simpleLoop when prior results are present) with `tool_args = ref:<ref_id>` to load the full content into a turn record.
 
@@ -541,9 +567,9 @@ Either path records an `expansions[]` entry on the `LoopTurn`; the compact ref e
 ```typescript
 // Default agent migration (excerpt from examples/default.server.ts)
 const routesPattern = routes<SessionData>({
-  neo4j:       withReferences(neo4jPattern,       { scope: 'global' }),
-  web_search:  withReferences(webPattern,         { scope: 'global' }),
-  code_mode:   withReferences(codePattern,        { scope: 'global' })
+  neo4j: withReferences(neo4jPattern, { scope: 'global' }),
+  web_search: withReferences(webPattern, { scope: 'global' }),
+  code_mode: withReferences(codePattern, { scope: 'global' }),
 })
 ```
 
@@ -555,14 +581,14 @@ Synthesizes final response from previous pattern's output using BAML `CreateTool
 synthesizer({ mode: 'thread', patternId: 'response-synth' })
 
 // Three modes
-synthesizer({ mode: 'message' })   // Receives only response string
-synthesizer({ mode: 'response' })  // Receives { data, response } object
-synthesizer({ mode: 'thread' })    // Receives full loop history
+synthesizer({ mode: 'message' }) // Receives only response string
+synthesizer({ mode: 'response' }) // Receives { data, response } object
+synthesizer({ mode: 'thread' }) // Receives full loop history
 
 // Custom synthesis function
 synthesizer({
   mode: 'response',
-  synthesize: async (input) => `Found: ${input.response}`
+  synthesize: async (input) => `Found: ${input.response}`,
 })
 ```
 
@@ -586,17 +612,19 @@ type CompactIntentConfig = PatternConfig
 ```
 
 **How it works:**
+
 1. Reads recent message history from its view (default `viewConfig`:
    `{ fromLast: false, fromLastNTurns: 5, eventTypes: ['user_message', 'assistant_message'] }`,
    think-blocks stripped — mirrors `router`).
 2. Splits into the latest user message + prior history, then calls BAML
    `CompactIntent` on the cheap `DescribeAnthropic` client (one call per chain
-   invocation) to resolve back-references (*"try again"*, *"I can't find the
-   file"*) into a standalone instruction.
+   invocation) to resolve back-references (_"try again"_, _"I can't find the
+   file"_) into a standalone instruction.
 3. Writes `scope.data.intent`; emits an `intent_compacted` event carrying the
    LLM call for observability (mirrors `withReferences`' `reference_attached`).
 
 **Skip / safety:**
+
 - **Turn 1 (no history):** skips the LLM call, passes the message through
   unchanged (`skipped: 'no-history'`).
 - **Backward-safe:** on any failure it leaves `intent` unset, so the actor falls
@@ -619,19 +647,20 @@ returning normalized matches-with-references for a downstream `synthesizer`.
 retriever({ backends: [redisBackend], k: 5, generateQuery: true })
 
 interface RetrieverConfig extends PatternConfig {
-  backends: RetrieverBackend[]   // injected DB sources (app-side)
-  k?: number                     // max hits, default 5
-  generateQuery?: boolean        // RetrieveQuery rewrite, ONLY when history exists
-  turnWindow?: number            // no-LLM: widen the query to the last N user turns
+  backends: RetrieverBackend[] // injected DB sources (app-side)
+  k?: number // max hits, default 5
+  generateQuery?: boolean // RetrieveQuery rewrite, ONLY when history exists
+  turnWindow?: number // no-LLM: widen the query to the last N user turns
 }
 interface RetrieverBackend {
   name: string
-  type: 'vector' | 'keyword' | 'graph' | 'web'   // only 'vector' backends embed
+  type: 'vector' | 'keyword' | 'graph' | 'web' // only 'vector' backends embed
   search(q: { text: string; intent?: string }, opts: { k: number }): Promise<RetrievalHit[]>
 }
 ```
 
 **How it works:**
+
 1. **Query**: the user's **raw last message** by default (their own words embed
    best). `generateQuery: true` rewrites it via a cheap `RetrieveQuery` (Haiku)
    call **only when the turn has history** — resolving "more on that" / "those
@@ -674,7 +703,7 @@ router({ neo4j: '...' }, { directResponseRoute: 'conversational' })
 
 ```typescript
 interface RouterConfig extends PatternConfig {
-  directResponseRoute?: string  // Default: 'user'
+  directResponseRoute?: string // Default: 'user'
 }
 ```
 
@@ -699,7 +728,7 @@ routes({ neo4j: neo4jPattern }, { directResponseRoute: 'conversational' })
 
 ```typescript
 interface RoutesConfig extends PatternConfig {
-  directResponseRoute?: string  // Default: 'user' — must match paired router()
+  directResponseRoute?: string // Default: 'user' — must match paired router()
 }
 ```
 
@@ -710,11 +739,12 @@ Evaluation pattern that scores or classifies pattern output. Used for quality ga
 ```typescript
 judge(evaluatorFn, {
   patternId: 'quality-check',
-  threshold: 0.7
+  threshold: 0.7,
 })
 ```
 
 **How it works:**
+
 1. Receives output from preceding pattern via EventView
 2. Calls evaluator function to score/classify
 3. Sets `data.judgment` with result
@@ -752,7 +782,7 @@ interface HarnessResultScoped<T> {
   status: 'running' | 'paused' | 'done' | 'error'
   duration_ms: number
   context: UnifiedContext<T>
-  serialized: string  // JSON for session persistence
+  serialized: string // JSON for session persistence
 }
 ```
 
@@ -785,40 +815,43 @@ const view = createEventView(ctx, viewConfig, selfPatternId)
 // Pattern selectors
 view.fromPattern('neo4j-query')
 view.fromPatterns(['neo4j-query', 'web-enrich'])
-view.fromLastPattern()       // Excludes self when selfPatternId is set
-view.fromLastNPatterns(2)    // Excludes self when selfPatternId is set
+view.fromLastPattern() // Excludes self when selfPatternId is set
+view.fromLastNPatterns(2) // Excludes self when selfPatternId is set
 view.fromAll()
 
 // Type selectors
 view.ofType('tool_result')
 view.ofTypes(['tool_call', 'tool_result'])
-view.tools()      // Shorthand: tool_call + tool_result
-view.messages()   // Shorthand: user_message + assistant_message
-view.actions()    // Shorthand: controller_action
+view.tools() // Shorthand: tool_call + tool_result
+view.messages() // Shorthand: user_message + assistant_message
+view.actions() // Shorthand: controller_action
 
 // Quantity selectors
 view.last(5)
 view.first(3)
 view.since(timestamp)
-view.fromLastNTurns(3)   // Rolling window: last 3 user turns
+view.fromLastNTurns(3) // Rolling window: last 3 user turns
 
 // Execution
-view.get()        // ContextEvent[]
-view.serialize()  // XML format for LLM
-view.serializeCompact({ recentTurns: 1 })  // Compact pointers for older results, full for recent
-view.exists()     // boolean
-view.count()      // number
+view.get() // ContextEvent[]
+view.serialize() // XML format for LLM
+view.serializeCompact({ recentTurns: 1 }) // Compact pointers for older results, full for recent
+view.exists() // boolean
+view.count() // number
 ```
 
 **Compact serialization**: `serializeCompact()` renders older `tool_result` events as compact pointers. If an LLM-generated summary exists (via `scheduleSummarization()`), it replaces the raw preview:
+
 ```xml
 <tool_result id="ev-abc123" tool="search" compact="true">
 Returned 247 results including... (12,847 chars). Use ref:ev-abc123 to access full data.
 </tool_result>
 ```
+
 Events within the last `recentTurns` user turns are rendered in full. Hidden or archived events (`ToolResultEventData.hidden` / `.archived`) are excluded from compact output. The LLM can use `ref:<eventId>` in tool args; `resolveRefs()` in simpleLoop auto-expands them before MCP execution (also skips hidden/archived events).
 
 **Data Stash**: `ToolResultEventData` supports three visibility fields:
+
 - `summary?: string` — LLM-generated summary (populated async by `scheduleSummarization()`)
 - `hidden?: boolean` — excluded from LLM context, shown grayed-out in UI
 - `archived?: boolean` — excluded from LLM context, moved to Archived section in UI
@@ -829,10 +862,10 @@ These are mutated post-commit via `enrichToolResult(ctx, eventId, { summary?, hi
 
 Two orthogonal configuration axes:
 
-| Axis | Controls | Options |
-|------|----------|---------|
-| **commitStrategy** | *When* to commit | `'always'`, `'on-success'`, `'last'`, `'never'` |
-| **trackHistory** | *What types* to track | `true`, `false`, `EventType`, or `EventType[]` |
+| Axis               | Controls              | Options                                         |
+| ------------------ | --------------------- | ----------------------------------------------- |
+| **commitStrategy** | _When_ to commit      | `'always'`, `'on-success'`, `'last'`, `'never'` |
+| **trackHistory**   | _What types_ to track | `true`, `false`, `EventType`, or `EventType[]`  |
 
 ```typescript
 interface PatternConfig {
@@ -849,31 +882,32 @@ Controls what events a pattern can "see" via its EventView:
 
 ```typescript
 interface ViewConfig {
-  fromPatterns?: string[]            // Specific pattern IDs to read from
-  fromLastN?: number                 // Last N patterns
-  fromLast?: boolean                 // Only previous pattern (default: true)
-  eventTypes?: EventType[]           // Filter by event type
-  limit?: number                     // Max events to include
-  fromLastNTurns?: number            // Rolling window: last N user turns
-  contentTransforms?: ContentTransform[]  // Read-time transforms applied in get()/serialize()
+  fromPatterns?: string[] // Specific pattern IDs to read from
+  fromLastN?: number // Last N patterns
+  fromLast?: boolean // Only previous pattern (default: true)
+  eventTypes?: EventType[] // Filter by event type
+  limit?: number // Max events to include
+  fromLastNTurns?: number // Rolling window: last N user turns
+  contentTransforms?: ContentTransform[] // Read-time transforms applied in get()/serialize()
 }
 ```
 
-| Option | Effect | Example |
-|--------|--------|---------|
-| `fromLast: true` | See only the previous pattern's events | Default behavior |
-| `fromPatterns: ['neo4j']` | See events from specific pattern(s) | Cross-pattern queries |
-| `fromLastN: 3` | See events from last 3 patterns | Broader context |
-| `fromLastNTurns: 5` | Rolling window over last 5 user turns | Multi-turn history |
-| `eventTypes: ['tool_result']` | Filter to specific event types | Focus on results |
-| `limit: 10` | Cap number of events returned | Limit context size |
-| `contentTransforms: [fn]` | Read-time event transformations (never mutates `ctx.events`) | Strip think blocks, truncate results |
+| Option                        | Effect                                                       | Example                              |
+| ----------------------------- | ------------------------------------------------------------ | ------------------------------------ |
+| `fromLast: true`              | See only the previous pattern's events                       | Default behavior                     |
+| `fromPatterns: ['neo4j']`     | See events from specific pattern(s)                          | Cross-pattern queries                |
+| `fromLastN: 3`                | See events from last 3 patterns                              | Broader context                      |
+| `fromLastNTurns: 5`           | Rolling window over last 5 user turns                        | Multi-turn history                   |
+| `eventTypes: ['tool_result']` | Filter to specific event types                               | Focus on results                     |
+| `limit: 10`                   | Cap number of events returned                                | Limit context size                   |
+| `contentTransforms: [fn]`     | Read-time event transformations (never mutates `ctx.events`) | Strip think blocks, truncate results |
 
 **ContentTransform** is `(event: ContextEvent) => ContextEvent`. Built-in transforms in `content-transforms.ts`:
+
 - `stripThinkBlocks` — removes `<think>...</think>` reasoning from assistant messages (router uses this by default)
 - `truncateToolResults(maxChars)` — factory that truncates long tool results to N chars
 
-A "turn" is defined by a `user_message` event. `fromLastNTurns` slices the event stream at the Nth-to-last `user_message` boundary. It is applied *before* type filters so that boundary detection works regardless of which `eventTypes` are selected.
+A "turn" is defined by a `user_message` event. `fromLastNTurns` slices the event stream at the Nth-to-last `user_message` boundary. It is applied _before_ type filters so that boundary detection works regardless of which `eventTypes` are selected.
 
 > **Note:** `since(ts)` is available on the fluent API (`view.since(timestamp)`) but is not a ViewConfig option.
 
@@ -881,16 +915,24 @@ A "turn" is defined by a `user_message` event. `fromLastNTurns` slices the event
 // Example: synthesizer needs to see tool results from neo4j pattern
 synthesizer({
   mode: 'thread',
-  viewConfig: { fromPatterns: ['neo4j-query'], eventTypes: ['tool_result'] }
+  viewConfig: { fromPatterns: ['neo4j-query'], eventTypes: ['tool_result'] },
 })
 
 // Example: router with cross-turn message history (3-turn window)
-router({ neo4j: 'Database queries' }, {
-  viewConfig: { fromLast: false, fromLastNTurns: 3, eventTypes: ['user_message', 'assistant_message'] }
-})
+router(
+  { neo4j: 'Database queries' },
+  {
+    viewConfig: {
+      fromLast: false,
+      fromLastNTurns: 3,
+      eventTypes: ['user_message', 'assistant_message'],
+    },
+  },
+)
 ```
 
 **Defaults by pattern:**
+
 - `router`: `viewConfig: { fromLast: false, fromLastNTurns: 5, eventTypes: ['user_message', 'assistant_message'] }`
 - `simpleLoop`: `trackHistory: 'tool_result'`, `commitStrategy: 'on-success'`
 - `actorCritic`: `trackHistory: 'tool_result'`, `commitStrategy: 'on-success'`
@@ -905,21 +947,21 @@ transformed into prompt-friendly types. The table below shows which harness
 
 ### Harness EventType → BAML Input Type
 
-| Harness `EventType` | Event Payload (TS) | BAML Type | Consumed By |
-|---|---|---|---|
-| `tool_call` | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`) | `ToolCall` | `LoopTurn.tool_call`, `Attempt.action` |
-| `tool_result` | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`) | `ToolResult` | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
-| `controller_action` | `ControllerActionEventData` | _(embedded in `LoopTurn.reasoning`)_ | simpleLoop, actorCritic |
-| `critic_result` | `CriticResultEventData` | _(embedded in `Attempt.feedback`)_ | actorCritic |
-| `user_message` | `UserMessageEventData` | `Message { role, content }` | router (history) |
-| `assistant_message` | `AssistantMessageEventData` | `Message { role, content }` | router (history) |
-| `pattern_enter` | `PatternEnterEventData` | _(not sent to BAML)_ | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail` |
-| `pattern_exit` | `PatternExitEventData` | _(not sent to BAML)_ | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail` |
-| `approval_request` | `ApprovalRequestEventData` | _(not sent to BAML)_ | (reserved — no active emitter) |
-| `approval_response` | `ApprovalResponseEventData` | _(not sent to BAML)_ | (reserved — no active emitter) |
-| `error` | `ErrorEventData` | _(read via `view.hasErrors()`)_ | synthesizer (error context), harness error handling |
-| `reference_attached` | `ReferenceAttachedEventData` | _(not sent to BAML)_ | withReferences only (observability) |
-| `intent_compacted` | `IntentCompactedEventData` | _(not sent to BAML)_ | compactIntent only (observability) |
+| Harness `EventType`  | Event Payload (TS)                                                                                                       | BAML Type                            | Consumed By                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------ | ------------------------------------------------------------- |
+| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                              | `ToolCall`                           | `LoopTurn.tool_call`, `Attempt.action`                        |
+| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`) | `ToolResult`                         | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
+| `controller_action`  | `ControllerActionEventData`                                                                                              | _(embedded in `LoopTurn.reasoning`)_ | simpleLoop, actorCritic                                       |
+| `critic_result`      | `CriticResultEventData`                                                                                                  | _(embedded in `Attempt.feedback`)_   | actorCritic                                                   |
+| `user_message`       | `UserMessageEventData`                                                                                                   | `Message { role, content }`          | router (history)                                              |
+| `assistant_message`  | `AssistantMessageEventData`                                                                                              | `Message { role, content }`          | router (history)                                              |
+| `pattern_enter`      | `PatternEnterEventData`                                                                                                  | _(not sent to BAML)_                 | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
+| `pattern_exit`       | `PatternExitEventData`                                                                                                   | _(not sent to BAML)_                 | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
+| `approval_request`   | `ApprovalRequestEventData`                                                                                               | _(not sent to BAML)_                 | (reserved — no active emitter)                                |
+| `approval_response`  | `ApprovalResponseEventData`                                                                                              | _(not sent to BAML)_                 | (reserved — no active emitter)                                |
+| `error`              | `ErrorEventData`                                                                                                         | _(read via `view.hasErrors()`)_      | synthesizer (error context), harness error handling           |
+| `reference_attached` | `ReferenceAttachedEventData`                                                                                             | _(not sent to BAML)_                 | withReferences only (observability)                           |
+| `intent_compacted`   | `IntentCompactedEventData`                                                                                               | _(not sent to BAML)_                 | compactIntent only (observability)                            |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
 
@@ -950,8 +992,8 @@ BAML Return → ControllerAction:
                                           index-keyed map ({tool, result} | {tool, __error} |
                                           {tool, __skipped}). Partial failure → loop continues;
                                           ALL sub-calls failed → recoverable-error break path.
-  status           : string             → user-facing status
-  is_final         : bool               → terminates loop
+  status           : string?            → user-facing status
+  is_final         : bool?              → terminates loop; absent is normalised to false
 ```
 
 #### actorCritic → `ActorController` + `Critic`
@@ -1100,7 +1142,7 @@ import {
   createNeo4jController,
   createWebSearchController,
   createActorControllerAdapter,
-  createCriticAdapter
+  createCriticAdapter,
 } from '../harness-patterns'
 
 async function getSchema(): Promise<string> {
@@ -1120,32 +1162,32 @@ async function createPatterns() {
 
   const neo4jPattern = simpleLoop(neo4jController, tools.neo4j ?? [], {
     patternId: 'neo4j-query',
-    schema
+    schema,
   })
 
   const webPattern = simpleLoop(webController, tools.web ?? [], {
-    patternId: 'web-search'
+    patternId: 'web-search',
   })
 
   const codePattern = actorCritic(actor, critic, tools.all, {
-    patternId: 'code-mode'
+    patternId: 'code-mode',
   })
 
   const routerPattern = router({
     neo4j: 'Database queries and graph operations',
     web_search: 'Web lookups and information retrieval',
-    code_mode: 'Multi-tool script composition'
+    code_mode: 'Multi-tool script composition',
   })
 
   const routesPattern = routes({
     neo4j: neo4jPattern,
     web_search: webPattern,
-    code_mode: codePattern
+    code_mode: codePattern,
   })
 
   const responseSynth = synthesizer({
     mode: 'thread',
-    patternId: 'response-synth'
+    patternId: 'response-synth',
   })
 
   return [routerPattern, routesPattern, responseSynth]
@@ -1169,6 +1211,7 @@ All patterns include built-in OTel tracing with `CompactSpanExporter`:
 ```
 
 Span names:
+
 - `harness.run` - Top-level span
 - `harness.resume` - Resume from paused state
 - `harness.continue` - Continue session with new input
@@ -1190,7 +1233,7 @@ harness-patterns/
 ├── tools.server.ts         # Tools() — groups MCP tools by namespace
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? callback
 ├── routing.server.ts       # BAML router integration (routeMessageOp)
-├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE tool transports — sandbox (in-VM) → app-side in-process → MCP gateway; demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
+├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE tool transports — sandbox (in-VM) → app-side in-process → MCP gateway; leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, describeToolResultOp, etc.
 ├── summarize.server.ts     # scheduleSummarization() — background tool result summarization via DescribeFallback
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)

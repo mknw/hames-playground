@@ -205,6 +205,7 @@ Every var the server reads (`grep process.env src/`), with its localhost default
 | `OPENROUTER_API_KEY` | mixed chains + possibly embeddings | needed iff `USE_MIXED_CHAINS=1` |
 | `DATABASE_URL` | Postgres (conversations) | `postgresql://postgres:password@localhost:5432/kgagent` — **override the password** |
 | `MCP_GATEWAY_URL` | MCP gateway endpoint | `http://localhost:8811/mcp` |
+| `MCP_GATEWAY_POOL_SIZE` | warm gateway connections kept in the client pool (#120) | `4` — leases isolate reconnects; extra concurrent calls open a short-lived overflow connection rather than queueing |
 | `NEO4J_USER` / `NEO4J_PASSWORD` | direct Neo4j driver | resolves to `bolt://localhost:7687` on host (`config/endpoints.ts:37`) |
 | `COMPUTE_BACKEND` | sandbox backend | `docker` (firecracker `#78` not implemented) |
 | `SANDBOX_IMAGE` | sandbox container image | `kg-sandbox:base` (built in step 5) |

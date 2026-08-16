@@ -1175,3 +1175,104 @@ describe('sandbox tool descriptions in prompt', () => {
     expect(names.slice(0, 2)).toEqual(['sandbox_bash', 'sandbox_read'])
   })
 })
+
+// ============================================================================
+// Stale-client data-loss signal (#154)
+// ============================================================================
+
+describe('warnIfCollectorEmpty', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockLoopController.mockResolvedValue(mockFinalAction())
+    mockCritic.mockResolvedValue(mockCriticResult())
+  })
+
+  it('returns false and stays silent when no collector was passed', async () => {
+    const { warnIfCollectorEmpty } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(warnIfCollectorEmpty(undefined, 'LoopController')).toBe(false)
+    expect(warnSpy).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('returns false and stays silent when the collector captured a call', async () => {
+    const { warnIfCollectorEmpty } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { Collector } = await import('@boundaryml/baml')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // A Collector that saw a call — the shape this module reads is `.last`.
+    const collector = Object.create(Collector.prototype) as InstanceType<typeof Collector>
+    Object.defineProperty(collector, 'last', { get: () => ({ rawLlmResponse: 'ok' }) })
+
+    expect(warnIfCollectorEmpty(collector, 'LoopController')).toBe(false)
+    expect(warnSpy).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('warns naming the BAML function when a collector came back empty', async () => {
+    const { warnIfCollectorEmpty } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { Collector } = await import('@boundaryml/baml')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(warnIfCollectorEmpty(new Collector('test'), 'ActorController')).toBe(true)
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    const message = warnSpy.mock.calls[0][0] as string
+    expect(message).toContain('ActorController')
+    expect(message).toContain('pnpm baml-generate')
+    warnSpy.mockRestore()
+  })
+
+  it('fires on a SUCCESSFUL LoopController call whose collector stayed empty', async () => {
+    // This is the #154 shape: a stale client drops the options object, so the
+    // call succeeds while the collector never reaches BAML.
+    const { createLoopControllerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { Collector } = await import('@boundaryml/baml')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const controller = createLoopControllerAdapter(['Return'])
+    const result = await controller('msg', 'intent', '[]', 0, undefined, new Collector('test'))
+
+    expect(result.action).toBeDefined()
+    expect(result.llmCall).toBeUndefined()
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(warnSpy.mock.calls[0][0] as string).toContain('LoopController')
+    warnSpy.mockRestore()
+  })
+
+  it('fires for Critic too, naming Critic', async () => {
+    const { createCriticAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { Collector } = await import('@boundaryml/baml')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await createCriticAdapter()('intent', [], new Collector('test'))
+
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(warnSpy.mock.calls[0][0] as string).toContain('Critic')
+    warnSpy.mockRestore()
+  })
+
+  it('stays silent on a FAILED call — an empty collector is legitimate there', async () => {
+    // A pre-request failure (DNS, 5xx before a body) leaves the collector
+    // empty for a benign reason, so the failure path must not cry wolf.
+    const { createLoopControllerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { Collector } = await import('@boundaryml/baml')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    mockLoopController.mockRejectedValue(new Error('DNS lookup failed'))
+    const controller = createLoopControllerAdapter(['Return'])
+
+    await expect(
+      controller('msg', 'intent', '[]', 0, undefined, new Collector('test')),
+    ).rejects.toThrow('DNS lookup failed')
+
+    expect(warnSpy).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+})

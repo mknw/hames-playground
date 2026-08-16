@@ -26,6 +26,26 @@ function Router(
     - If needs_tool=false, provide a direct conversational reply
     - NEVER generate a substantive answer when routing to a tool — the tool will provide the real answer
 
+    INTENT FORMULATION:
+    Downstream patterns receive `intent` and NOTHING ELSE from this conversation —
+    they cannot see the history below. An intent that only makes sense next to the
+    previous turns is useless to them.
+    - `intent` MUST be a self-contained statement of what the user wants right now.
+    - If the latest message is a back-reference to earlier context — "try again",
+      "do it", "more of those", "the second one", "now in TypeScript", "and also Y" —
+      expand it using the conversation history so it stands alone.
+      Example:
+        HISTORY: USER: "search the web for SolidJS resources"
+                 ASSISTANT: "<rate-limit error, no results>"
+        MESSAGE: "try again"
+        intent:  "search the web for SolidJS resources (retry of the previous turn)"
+    - Resolve pronouns and ordinals ("it", "that one", "the second") into the
+      concrete nouns they refer to in the history.
+    - If the latest message is already self-contained, intent may mirror it.
+    - NEVER set intent to a bare back-reference phrase on its own.
+    - Preserve the user's actual request: expand references, but do not answer it,
+      add steps, or widen the scope.
+
     {% if history|length > 0 %}
     CONVERSATION HISTORY (most recent last):
     {% for m in history %}

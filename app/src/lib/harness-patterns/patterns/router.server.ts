@@ -21,7 +21,7 @@ import type {
   UserMessageEventData,
   RouterConfig,
   RoutesConfig,
-  ViewConfig
+  ViewConfig,
 } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import { trackEvent, resolveConfig, createEvent, createScope } from '../context.server'
@@ -41,6 +41,13 @@ export type RoutePatterns<T> = Record<string, ConfiguredPattern<T>>
 
 export interface RouterData {
   route?: string
+  /**
+   * Self-contained statement of what the user wants — back-references
+   * ("try again", "the second one") already expanded from the conversation
+   * history by the Router prompt's INTENT FORMULATION rules (#53). It is the
+   * only conversational context routes() hands to the dispatched pattern, so
+   * a bare follow-up phrase here leaves that pattern blind.
+   */
   intent?: string
   routerResponse?: string
   response?: string
@@ -72,52 +79,47 @@ export interface RouterData {
  */
 export function router<T extends RouterData>(
   routeDescriptions: Routes,
-  config?: RouterConfig
+  config?: RouterConfig,
 ): ConfiguredPattern<T> {
   // Default viewConfig: cross-turn visibility of the last 5 turns, messages only.
   // Caller can override entirely by passing their own viewConfig in config.
   const DEFAULT_ROUTER_VIEW: ViewConfig = {
-    fromLast: false,           // no pattern scope filter → see all events across turns
+    fromLast: false, // no pattern scope filter → see all events across turns
     fromLastNTurns: getRequestSettings().routerTurnWindow,
     eventTypes: ['user_message', 'assistant_message'],
-    contentTransforms: [stripThinkBlocks]  // Strip <think> blocks from history — saves tokens, avoids confusing classifier
+    contentTransforms: [stripThinkBlocks], // Strip <think> blocks from history — saves tokens, avoids confusing classifier
   }
   const resolved = resolveConfig('router', {
     viewConfig: DEFAULT_ROUTER_VIEW,
-    ...config,                 // caller's config overrides defaults (including viewConfig)
+    ...config, // caller's config overrides defaults (including viewConfig)
   })
   const directRoute = config?.directResponseRoute ?? DIRECT_RESPONSE_ROUTE
 
-  const fn = async (
-    scope: PatternScope<T>,
-    view: EventView
-  ): Promise<PatternScope<T>> => {
+  const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
     try {
       // view is pre-configured by viewConfig (last N turns of user/assistant messages).
       // Extract all messages, then split into current user message + prior history.
       const allMessages = view.get()
 
       // Current user message = the last user_message in the window
-      const currentMsg = [...allMessages].reverse().find(e => e.type === 'user_message')
-      const userContent = currentMsg
-        ? (currentMsg.data as UserMessageEventData).content
-        : ''
+      const currentMsg = [...allMessages].reverse().find((e) => e.type === 'user_message')
+      const userContent = currentMsg ? (currentMsg.data as UserMessageEventData).content : ''
 
       // History = all messages except the current user_message, mapped to {role, content}
       // Trim oldest if context would overflow the router's model
       const rawHistory = allMessages
-        .filter(e => e !== currentMsg)
-        .map(e => ({
+        .filter((e) => e !== currentMsg)
+        .map((e) => ({
           role: e.type === 'user_message' ? 'user' : 'assistant',
-          content: (e.data as UserMessageEventData | AssistantMessageEventData).content
+          content: (e.data as UserMessageEventData | AssistantMessageEventData).content,
         }))
       const contextWindow = getContextWindow(resolveClientForRole('router'))
-      const history = trimToFit(rawHistory, h => JSON.stringify(h), 300, contextWindow)
+      const history = trimToFit(rawHistory, (h) => JSON.stringify(h), 300, contextWindow)
 
       // Convert routes Record<string,string> to Array<{name,description}>
       const routeArray = Object.entries(routeDescriptions).map(([name, description]) => ({
         name,
-        description
+        description,
       }))
 
       // Route message using BAML with collector for observability
@@ -132,7 +134,7 @@ export function router<T extends RouterData>(
           route: directRoute,
           intent: result.intent,
           routerResponse: responseText,
-          response: responseText
+          response: responseText,
         }
 
         // Track assistant message with LLM call data. `final: true` because
@@ -143,7 +145,7 @@ export function router<T extends RouterData>(
           'assistant_message',
           { content: responseText, final: true } as AssistantMessageEventData,
           resolved.trackHistory,
-          result.llmCall
+          result.llmCall,
         )
 
         return scope
@@ -152,7 +154,12 @@ export function router<T extends RouterData>(
       // Tool needed — record routing decision, let routes() dispatch
       const routeName = result.tool_name
       if (!routeName) {
-        trackEvent(scope, 'error', { error: 'Router returned tool_call_needed but no tool_name' }, true)
+        trackEvent(
+          scope,
+          'error',
+          { error: 'Router returned tool_call_needed but no tool_name' },
+          true,
+        )
         return scope
       }
 
@@ -167,7 +174,7 @@ export function router<T extends RouterData>(
           'assistant_message',
           { content: statusText } as AssistantMessageEventData,
           resolved.trackHistory,
-          result.llmCall
+          result.llmCall,
         )
       }
 
@@ -176,7 +183,7 @@ export function router<T extends RouterData>(
         ...scope.data,
         route: routeName,
         intent: result.intent,
-        routerResponse: statusText
+        routerResponse: statusText,
       }
 
       return scope
@@ -191,7 +198,7 @@ export function router<T extends RouterData>(
     name: 'router',
     fn,
     config: resolved,
-    estimateTurns: () => 1
+    estimateTurns: () => 1,
   }
 }
 
@@ -217,7 +224,7 @@ export function router<T extends RouterData>(
  */
 export function routes<T extends RouterData & Record<string, unknown>>(
   patternMap: RoutePatterns<T>,
-  config?: RoutesConfig
+  config?: RoutesConfig,
 ): ConfiguredPattern<T> {
   const resolved = resolveConfig('routes', config)
   const directRoute = config?.directResponseRoute ?? DIRECT_RESPONSE_ROUTE
@@ -253,7 +260,7 @@ export function routes<T extends RouterData & Record<string, unknown>>(
       const enterEvent = createEvent('pattern_enter', childId, {
         pattern: pattern.name,
         route: routeName,
-        ...(childMaxTurns !== undefined ? { maxTurns: childMaxTurns } : {})
+        ...(childMaxTurns !== undefined ? { maxTurns: childMaxTurns } : {}),
       })
       scope.events.push(enterEvent)
       emitLive(enterEvent)
@@ -274,6 +281,6 @@ export function routes<T extends RouterData & Record<string, unknown>>(
     // dispatched branch's `pattern_enter` arrives.
     estimateTurns: (s) =>
       Math.max(...Object.values(patternMap).map((p) => p.estimateTurns?.(s) ?? 1)),
-    children: Object.values(patternMap)
+    children: Object.values(patternMap),
   }
 }

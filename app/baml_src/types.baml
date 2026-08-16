@@ -194,7 +194,7 @@ class CriticResult {
 
 /// Routing decision
 class RoutingResult {
-  intent string @description("Detected user intention")
+  intent string @description("Self-contained statement of what the user wants now, with back-references resolved from the history — never a bare 'try again' / 'the second one'")
   needs_tool bool @description("Whether a tool call is required")
   route string? @description("Selected route name, null if no tool needed")
   response string? @description("Brief status message when routing, or conversational reply when no tool needed")

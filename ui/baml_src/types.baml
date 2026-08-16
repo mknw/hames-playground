@@ -147,7 +147,42 @@ class ControllerAction {
   // `status` and failed with missing=1, discarding the answer. A required field
   // the system treats as optional punishes the model for being right.
   status string? @description("Short user-facing status message describing what you are doing. Omit it on the final Return turn if nothing is in progress.")
-  is_final bool @description("True when the loop should terminate")
+  // OPTIONAL with a documented default of FALSE — absent means "not final" —
+  // and normalised to `false` by both loop patterns (`normalizeControllerAction`
+  // in harness-patterns/controller-action.ts) before anything reads it, so no
+  // consumer ever sees `undefined`.
+  //
+  // Third instance of one failure class (#159; #144 fixed the other two —
+  // few-shot `tool_args` encoding, then `status`). Observed live: a turn-0
+  // action with valid JSON, a real tool, correct args and 135 output tokens
+  // against a 32768 cap — so neither truncation nor an empty completion, and
+  // neither retry trigger matched — that simply omitted `is_final` and failed
+  // with missing=1. The turn was discarded and the user got an apology.
+  //
+  // The omission is structural, not a one-off: the field is only ever
+  // DEMONSTRATED as false. `LoopTurnLog` renders a literal `false` (the loop
+  // breaks before pushing a final action) and few-shots carry no action fields
+  // at all, so a turn-0 call with empty `turns` and no few-shots — exactly the
+  // failing shape — has `ctx.output_format` as its only description of the
+  // field. A field whose sole demonstrated value is the default is the field a
+  // model drops.
+  //
+  // False is the safe default in both patterns, so absence can never end a loop
+  // early or claim finality: simpleLoop exits on `is_final || tool_name ===
+  // 'Return'` (the tool name is an independent terminal signal), and actorCritic
+  // tests `is_final === true` merely to TRIGGER the critic, which owns exit —
+  // at worst an omission costs one more actor turn before the cadence gate.
+  //
+  // The description is PATTERN-NEUTRAL and defers to the prompt for what
+  // "complete" means, for the same reason `additional_calls` above defers: one
+  // ControllerAction class serves both loop patterns, so this text renders into
+  // `ctx.output_format` for BOTH — and what ends the turn differs between them.
+  // simpleLoop finishes with `tool_name: 'Return'` (simpleLoop.baml states it in
+  // the system spine); the actorCritic actor has no `Return` — it is rejected by
+  // the allowlist — and sets `is_final` merely to summon the critic, which owns
+  // the exit (actorCritic.baml states that). Naming `Return` here would tell the
+  // actor its only critic trigger requires a tool it is forbidden to call.
+  is_final bool? @description("Set to true on the turn where you consider the task complete, as your instructions define completion. On every other turn set it to false or omit it — an absent value is read as false and the loop continues.")
 }
 
 /// Critic evaluation result

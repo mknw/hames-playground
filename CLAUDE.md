@@ -51,7 +51,7 @@ Docker services (Neo4j, MCP Gateway, Redis) come up with `docker compose up -d` 
 
 **Server/client boundary:** Files with `.server.ts` suffix are server-only; `assertServerOnImport()` is enforced at runtime. Keep this convention strictly.
 
-**BAML regeneration:** Always run `pnpm baml-generate` after editing any file in `baml_src/`. Never edit `baml_client/` directly.
+**BAML regeneration:** Always run `pnpm baml-generate` after editing any file in `baml_src/`. Never edit `baml_client/` directly. `pnpm dev` / `pnpm dev:exposed` regenerate first via their `predev` hooks (#154), and three guards cover the rest: a boot-time warning when the on-disk `baml_src/` no longer matches the snapshot baked into `baml_client/` (`baml-version-check.server.ts`), and a per-call warning when a BAML call was handed a collector but captured nothing (`warnIfCollectorEmpty`). A stale client does NOT error — the generated functions take their arguments positionally, so a signature change silently shifts every later argument and drops the trailing options object (collector + client override).
 
 **UnoCSS attributify:** The `color` HTML attribute conflicts with UnoCSS attributify. Use `text="xs cyan-400"` (combined) instead of separate `color="cyan-400"`.
 

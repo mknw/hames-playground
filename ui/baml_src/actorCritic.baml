@@ -119,10 +119,15 @@ template_string ActorTaskFrame(intent: string, context: string?, user_message: s
 // and the demonstrations outnumber the instruction. Unlike simpleLoop, `is_final`
 // comes from the DATA here: the critic verifies and can reject, so an attempt
 // with is_final=true legitimately appears in history followed by another attempt.
+// `| default(false)` because the field is optional since #159: the patterns
+// normalise an omitted value to false before it is recorded, and this filter is
+// the second line of defence — a bare `tojson` of an absent value would render
+// `"is_final": null` into one of the model's OWN prior messages, demonstrating a
+// third value for a boolean field.
 template_string ActorAttemptLog(attempts: Attempt[], attempt_n: int?) #"
   {% for attempt in attempts %}
   {{ _.role("assistant") }}
-  {"reasoning": {{ attempt.action.reasoning | default("") | tojson }}, "tool_name": {{ attempt.action.tool_name | tojson }}, "tool_args": {{ attempt.action.tool_args | tojson }}{% if attempt.action.additional_calls %}, "additional_calls": [{% for c in attempt.action.additional_calls %}{"tool_name": {{ c.tool_name | tojson }}, "tool_args": {{ c.tool_args | tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}, "status": {{ attempt.action.status | default("") | tojson }}, "is_final": {{ attempt.action.is_final | tojson }}}
+  {"reasoning": {{ attempt.action.reasoning | default("") | tojson }}, "tool_name": {{ attempt.action.tool_name | tojson }}, "tool_args": {{ attempt.action.tool_args | tojson }}{% if attempt.action.additional_calls %}, "additional_calls": [{% for c in attempt.action.additional_calls %}{"tool_name": {{ c.tool_name | tojson }}, "tool_args": {{ c.tool_args | tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}, "status": {{ attempt.action.status | default("") | tojson }}, "is_final": {{ attempt.action.is_final | default(false) | tojson }}}
       {% if loop.index0 >= (attempt_n - 2) %}
       {{ _.role("system", cache_control={"type": "ephemeral"}) }}
       {% else %}

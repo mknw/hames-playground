@@ -20,6 +20,7 @@ Forward-looking design docs. Live item-tracking stays on the GitHub project boar
 |----------|-------------|
 | [plan/ROADMAP.md](plan/ROADMAP.md) | Multi-user target architecture + phased MoSCoW roadmap (#107 identity patterns, #119–#122) |
 | [plan/sandbox.md](plan/sandbox.md) | Sandbox compute design — core shipped (#79/#89/#97/#78 flavours); still plan-only: Swarm, Firecracker, ephemeral one-shot, #82 |
+| [plan/skills-adoption.md](plan/skills-adoption.md) | Adopting a curated set of Claude Code **agent skills** as our own bundle: one directory with two namespaces (bare = OSS-portable, `kg-` = project-only), the per-skill adaptation sheet for 19 vendored files, ADR-mechanism and `grilling`/`council` overlap reconciliation, pinned-commit upstream sync, MIT attribution, and the `.gitignore` fix that makes `.claude/skills/` reach Orca workers at all |
 | [plan/graph-pseudonymisation.md](plan/graph-pseudonymisation.md) | Stripping people out of Graph tool results **without NER** — Graph's own labelled identity fields are the roster (data-privacy plan item 3). The pure core in `lib/privacy/` is built and tested but wired to nothing; where to hook, what `conversations.context` stores and where the (personal-data) table lives are open questions |
 
 ---

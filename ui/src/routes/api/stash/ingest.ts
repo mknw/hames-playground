@@ -12,10 +12,10 @@
 import type { APIEvent } from '@solidjs/start/server'
 import { getDocument } from '../../../lib/document-store.server'
 import { ingestDocument } from '../../../lib/document-ingest.server'
-import { json, withUser } from '../../../lib/stash/http.server'
+import { claimSession, json, withUser } from '../../../lib/stash/http.server'
 
 export async function POST(event: APIEvent) {
-  return withUser(async () => {
+  return withUser(async (userId) => {
     let body: {
       sessionId?: string
       docId?: string
@@ -31,6 +31,11 @@ export async function POST(event: APIEvent) {
     if (!body.sessionId || !body.docId) {
       return json({ error: 'sessionId and docId are required' }, 400)
     }
+    // Like upload, ingest can be the first touch of a session that has no
+    // conversation row yet, so it records ownership rather than requiring it —
+    // and refuses a session that already belongs to someone else.
+    const denied = await claimSession(body.sessionId, userId)
+    if (denied) return denied
 
     const doc = await getDocument(body.sessionId, body.docId)
     if (!doc) return json({ error: 'Document not found' }, 404)

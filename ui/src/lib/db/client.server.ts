@@ -48,7 +48,7 @@ const SCHEMA_SQL = `
   -- when the table is absent. The defaults backfill existing rows correctly:
   -- everything created before this migration is a completed chat conversation.
   --   kind    — mutable; promotion flips 'action' -> 'conversation'.
-  --   source  — immutable provenance ('chat' | 'post').
+  --   source  — immutable provenance ('chat' | 'post' | 'routine').
   --   status  — copy of UnifiedContext.status, for cheap list filtering + badge.
   ALTER TABLE conversations
     ADD COLUMN IF NOT EXISTS kind   TEXT NOT NULL DEFAULT 'conversation';

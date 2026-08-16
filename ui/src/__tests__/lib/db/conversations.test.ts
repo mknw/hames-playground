@@ -22,6 +22,7 @@ import {
   deleteConversation,
   deleteConversations,
   deriveTitle,
+  getConversationOwner,
   promoteConversation,
   setConversationStatus,
 } from '../../../lib/db/conversations.server'
@@ -74,7 +75,13 @@ describe('conversations CRUD', () => {
       createdAt: 1730000000000,
       events: [
         { id: 'ev-1', type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'hi' } },
-        { id: 'ev-2', type: 'tool_result', ts: 2, patternId: 'neo4j-query', data: { tool: 'read_neo4j_cypher', result: { rows: [] }, success: true } },
+        {
+          id: 'ev-2',
+          type: 'tool_result',
+          ts: 2,
+          patternId: 'neo4j-query',
+          data: { tool: 'read_neo4j_cypher', result: { rows: [] }, success: true },
+        },
       ],
       status: 'done',
       data: { intent: 'neo4j' },
@@ -138,6 +145,20 @@ describe('conversations CRUD', () => {
     const otherUser = `other-${Math.random().toString(36).slice(2, 10)}`
     const stolen = await loadConversation(id, otherUser)
     expect(stolen).toBeNull()
+  })
+
+  it('getConversationOwner answers who a row belongs to, and null for an unknown id', async () => {
+    if (!dbAvailable) return
+    const id = `conv-${Math.random().toString(36).slice(2, 10)}`
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'default',
+      title: 't',
+      serializedContext: '{}',
+    })
+    expect(await getConversationOwner(id)).toBe(TEST_USER)
+    expect(await getConversationOwner(`missing-${id}`)).toBeNull()
   })
 
   it('lists newest-created first, scoped to user', async () => {
@@ -215,7 +236,7 @@ describe('conversations CRUD', () => {
   })
 
   // #71 bulk delete: one round trip, user-scoped, returns ground truth.
-  it('deleteConversations removes only the caller\'s own rows and reports them', async () => {
+  it("deleteConversations removes only the caller's own rows and reports them", async () => {
     if (!dbAvailable) return
     const mk = () => `conv-bulk-${Math.random().toString(36).slice(2, 10)}`
     const own1 = mk()
@@ -236,10 +257,7 @@ describe('conversations CRUD', () => {
       })
     }
     try {
-      const deleted = await deleteConversations(
-        [own1, own2, foreignId, 'missing-id'],
-        TEST_USER,
-      )
+      const deleted = await deleteConversations([own1, own2, foreignId, 'missing-id'], TEST_USER)
       // Own rows deleted and reported; foreign + unknown ids silently skipped.
       expect([...deleted].sort()).toEqual([own1, own2].sort())
       expect(await loadConversation(own1, TEST_USER)).toBeNull()

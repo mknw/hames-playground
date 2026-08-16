@@ -7,6 +7,7 @@
 | Document | Description |
 |----------|-------------|
 | [README.md](../README.md) | Project overview and quick start |
+| [GLOSSARY.md](../GLOSSARY.md) | **The house vocabulary** — *pattern*, *controller*, *actor*, *critic*, *harness*, *EventView*, *ContextEvent*, *tool namespace*, *Data Stash*, *stash session*, *sandbox flavour*, *action*, *routine*. Terms only, never implementation; each entry points at the doc that owns the mechanism |
 | [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Live planning board (Status / Priority / MSCW per issue) |
 | [plan/ROADMAP.md](plan/ROADMAP.md) | The roadmap *shape*: target multi-user architecture, phases 0–4 with MoSCoW ratings + dependency spine (Entra SSO #119 as the gate) |
 
@@ -22,6 +23,18 @@ Forward-looking design docs. Live item-tracking stays on the GitHub project boar
 | [plan/sandbox.md](plan/sandbox.md) | Sandbox compute design — core shipped (#79/#89/#97/#78 flavours); still plan-only: Swarm, Firecracker, ephemeral one-shot, #82 |
 | [plan/skills-adoption.md](plan/skills-adoption.md) | Adopting a curated set of Claude Code **agent skills** as our own bundle: one directory with two namespaces (bare = OSS-portable, `kg-` = project-only), the per-skill adaptation sheet for 19 vendored files, ADR-mechanism and `grilling`/`council` overlap reconciliation, pinned-commit upstream sync, MIT attribution, and the `.gitignore` fix that makes `.claude/skills/` reach Orca workers at all |
 | [plan/graph-pseudonymisation.md](plan/graph-pseudonymisation.md) | Stripping people out of Graph tool results **without NER** — Graph's own labelled identity fields are the roster (data-privacy plan item 3). The pure core in `lib/privacy/` is built and tested but wired to nothing; where to hook, what `conversations.context` stores and where the (personal-data) table lives are open questions |
+
+---
+
+## Decision Records (`docs/adr/`)
+
+Irreversible one-liners with a why — too small for a `docs/plan/` doc, too durable for a PR body. The `docs/plan/` ⇄ PR-body ⇄ `CLAUDE.md` ⇄ `docs/adr/` division of labour is stated in the README below.
+
+| Document | Description |
+|----------|-------------|
+| [adr/README.md](adr/README.md) | **The ADR mechanism + the index table.** Format (1–3 sentences), numbering, the three-condition write gate (hard to reverse · surprising without context · a real trade-off), confirm-before-write, the `proposed → accepted → [deprecated \| superseded]` lifecycle, and the two non-negotiables: *"we just picked it" is not a valid rationale*, and *never back-fill silently* |
+
+Records: [0001](adr/0001-anthropic-only-default-chains.md) Anthropic-only default chains · [0002](adr/0002-controller-nothink-clients.md) controller on `*NoThink` · [0003](adr/0003-redis-stack-amd64.md) redis-stack + `linux/amd64` · [0004](adr/0004-server-only-suffix-boundary.md) `.server.ts` boundary · [0005](adr/0005-harness-patterns-replaces-baml-agent.md) harness-patterns replaces `baml-agent`. All five are back-filled and carry their original decision date plus the sources the rationale was mined from.
 
 ---
 
@@ -129,6 +142,7 @@ Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/rese
 
 ```
 kg-agent/
+├── GLOSSARY.md                  # House vocabulary (terms only, no implementation)
 ├── docs/
 │   ├── INDEX.md                 # You are here
 │   ├── UI_ARCHITECTURE.md       # Frontend architecture
@@ -140,6 +154,9 @@ kg-agent/
 │   ├── MICROSOFT_GRAPH.md       # Per-user Graph access (Pattern C, #110)
 │   ├── graph-api-notes.md       # What Graph actually returns: ids, quirks, deprecations
 │   ├── sandbox-flavours.md      # Rootfs flavours (#78): image-processing/data/office
+│   ├── adr/                     # Architecture decision records
+│   │   ├── README.md            # The mechanism + the index table (statuses live here)
+│   │   └── NNNN-<slug>.md       # One decision each, 1–3 sentences + optional sections
 │   ├── plan/                    # Forward-looking design docs
 │   │   ├── ROADMAP.md           # Multi-user architecture + phased MoSCoW roadmap
 │   │   └── sandbox.md           # Sandbox design (core shipped; Swarm/Firecracker = plan)

@@ -12,7 +12,7 @@ tool dispatch / topology — see the Mermaid diagrams in
 ## How to identify sandbox containers
 
 Every sandbox container carries two labels (set in
-[`ui/src/lib/sandbox/docker-backend.server.ts`](../../ui/src/lib/sandbox/docker-backend.server.ts)):
+[`app/src/lib/sandbox/docker-backend.server.ts`](../../app/src/lib/sandbox/docker-backend.server.ts)):
 
 | Label                    | Value                       | Purpose                                          |
 |--------------------------|-----------------------------|--------------------------------------------------|
@@ -93,7 +93,7 @@ up against `globalCap`.
 **Automatic reap on startup ([#97](https://github.com/mknw/harness-playground/issues/97)
 Gap 1):** the next process clears the previous generation itself. The first
 time the default sandbox singletons are built (`getDefaultBackend` in
-[`with-sandbox.server.ts`](../../ui/src/lib/sandbox/with-sandbox.server.ts)),
+[`with-sandbox.server.ts`](../../app/src/lib/sandbox/with-sandbox.server.ts)),
 `DockerBackend.reapOrphans()` runs once — fire-and-forget, before any sandbox
 is allocated — and logs `[sandbox] reaped N orphaned container(s) …` when it
 removes anything. So a normal dev-server restart already cleans up after a
@@ -113,7 +113,7 @@ docker ps -a --filter label=kg-sandbox=1 -q | xargs -r docker rm -f
 
 Safe by construction — only touches `kg-sandbox=1`-labelled containers, never
 anything else. Same command is in
-[`ui/src/lib/sandbox/scripts/README.md`](../../ui/src/lib/sandbox/scripts/README.md).
+[`app/src/lib/sandbox/scripts/README.md`](../../app/src/lib/sandbox/scripts/README.md).
 
 ## What you'll see in practice
 
@@ -192,8 +192,8 @@ jq -r '.events[] | select(.type=="error") | .data.error' "$LOG"
   interface, build order).
 - [`rootfs/README.md`](../../rootfs/README.md) — how the `kg-sandbox:base`
   image is built and what's inside.
-- [`ui/src/lib/sandbox/scripts/README.md`](../../ui/src/lib/sandbox/scripts/README.md)
+- [`app/src/lib/sandbox/scripts/README.md`](../../app/src/lib/sandbox/scripts/README.md)
   — LLM-free and real-LLM live-container smoke scripts (`smoke-scripted.ts`,
   `smoke-llm.ts`).
-- [`ui/src/lib/harness-patterns/README.md`](../../ui/src/lib/harness-patterns/README.md)
+- [`app/src/lib/harness-patterns/README.md`](../../app/src/lib/harness-patterns/README.md)
   — harness patterns overview (event types, EventView, trackEvent).

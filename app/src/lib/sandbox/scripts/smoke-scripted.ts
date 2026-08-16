@@ -17,7 +17,7 @@
  *     (Inside the nix shell, the flake's shellHook bridges
  *     ~/.docker/contexts. See rootfs/README.md → "Inside the nix shell".)
  *
- * Run from `ui/`:
+ * Run from `app/`:
  *   pnpm dlx tsx src/lib/sandbox/scripts/smoke-scripted.ts
  *
  * Expected: each invocation writes a Python script counting words in a

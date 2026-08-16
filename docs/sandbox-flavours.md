@@ -12,7 +12,7 @@
 Sandbox v0 shipped one rootfs, `base` ([`rootfs/Dockerfile`](../rootfs/Dockerfile)):
 `node:22-bookworm-slim` + `python3`/`pip`/`venv` + `curl` + the two in-VM MCP
 servers. No image/data/office tooling, and the default `egress: 'mcp-only'` sets
-`--network none` ([`docker-backend.server.ts`](../ui/src/lib/sandbox/docker-backend.server.ts)),
+`--network none` ([`docker-backend.server.ts`](../app/src/lib/sandbox/docker-backend.server.ts)),
 so the actor can't install packages at runtime either. Image processing, data
 analysis, and office-document generation were effectively blocked.
 
@@ -46,16 +46,16 @@ write engine for `pd.ExcelWriter` / `pl.DataFrame.write_excel`.
 
 ## What already existed (the plumbing)
 
-- `RootfsId` is an open string; widened here to `'base' | 'image-processing' | 'data' | (string & {})` ([`types.ts`](../ui/src/lib/sandbox/types.ts)).
-- `imageForRootfs` maps `base` → `SANDBOX_IMAGE` and falls through to `kg-sandbox:${rootfs}` — no backend change to add a flavour ([`docker-backend.server.ts`](../ui/src/lib/sandbox/docker-backend.server.ts)).
-- `WarmPool` is keyed by rootfs flavour ([`warm-pool.server.ts`](../ui/src/lib/sandbox/warm-pool.server.ts)); caps added for the new flavours in `DEFAULT_SETTINGS.sandbox.warmPool`.
+- `RootfsId` is an open string; widened here to `'base' | 'image-processing' | 'data' | (string & {})` ([`types.ts`](../app/src/lib/sandbox/types.ts)).
+- `imageForRootfs` maps `base` → `SANDBOX_IMAGE` and falls through to `kg-sandbox:${rootfs}` — no backend change to add a flavour ([`docker-backend.server.ts`](../app/src/lib/sandbox/docker-backend.server.ts)).
+- `WarmPool` is keyed by rootfs flavour ([`warm-pool.server.ts`](../app/src/lib/sandbox/warm-pool.server.ts)); caps added for the new flavours in `DEFAULT_SETTINGS.sandbox.warmPool`.
 
 ## The composable recipe — router over flavoured sandboxes
 
 `withSandbox(config)(pattern)` returns a `ConfiguredPattern`; `router(name→description)`
 + `routes(name→pattern)` compose them. A route can be a flavoured, sandboxed
 controller — so flavour selection lives entirely in the harness. The demonstrator
-([`examples/flavoured-sandbox.server.ts`](../ui/src/lib/harness-client/examples/flavoured-sandbox.server.ts)):
+([`examples/flavoured-sandbox.server.ts`](../app/src/lib/harness-client/examples/flavoured-sandbox.server.ts)):
 
 ```ts
 // one ephemeral (base) + two persistent (data, image-processing) routes
@@ -116,7 +116,7 @@ works today (the demonstrator does exactly this).
   (today `AttachmentTable.acquire` reuses by `id`, ignoring `rootfs`). Ergonomic/safety,
   not a correctness blocker given the convention works now.
 - **Flavour-aware Shell.** `PtyManager.start` acquires `(sessionId, 'base')`
-  ([`pty-manager.server.ts`](../ui/src/lib/sandbox/pty-manager.server.ts)) — with
+  ([`pty-manager.server.ts`](../app/src/lib/sandbox/pty-manager.server.ts)) — with
   flavour-scoped agent containers the terminal opens a *separate* base box (it still
   hydrates `/work/in` from the shared Data Stash, so it shows promoted deliverables
   but not the flavoured containers' live scratch). Make the tab pick a flavour and

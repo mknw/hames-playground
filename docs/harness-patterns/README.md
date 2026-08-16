@@ -2,7 +2,7 @@
 
 A functional, composable framework for building agentic tool execution pipelines.
 
-> **Full Documentation:** See [`ui/src/lib/harness-patterns/README.md`](../../ui/src/lib/harness-patterns/README.md) for complete API documentation, type definitions, and implementation details.
+> **Full Documentation:** See [`app/src/lib/harness-patterns/README.md`](../../app/src/lib/harness-patterns/README.md) for complete API documentation, type definitions, and implementation details.
 
 ## Quick Navigation
 
@@ -44,7 +44,7 @@ MCP Tools ───────┘
 
 > **Synthetic tool:** when prior results are present, simpleLoop's `LoopController` prompt also exposes `expandPreviousResult` — a virtual tool that loads the full data behind a `ref:<id>` and records it as a normal turn so subsequent iterations see it inline. See [`with-references.md`](with-references.md) for the full ingress/expansion taxonomy. (Singular-only: it cannot appear inside a multi-call turn's `additional_calls`.)
 
-> **Multi-call turns:** both loop patterns accept `multiToolCalls: 'parallel' | 'sequential' | 'off'` (default `'parallel'`) — the controller can batch several tool calls into one turn via `ControllerAction.additional_calls`, saving one controller LLM round-trip per batched call. See the API README (`ui/src/lib/harness-patterns/README.md`) for the mode semantics and failure rules.
+> **Multi-call turns:** both loop patterns accept `multiToolCalls: 'parallel' | 'sequential' | 'off'` (default `'parallel'`) — the controller can batch several tool calls into one turn via `ControllerAction.additional_calls`, saving one controller LLM round-trip per batched call. See the API README (`app/src/lib/harness-patterns/README.md`) for the mode semantics and failure rules.
 
 ---
 

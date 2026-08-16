@@ -18,7 +18,7 @@ query ─────────────────────── embe
 > diagrams for this pipeline (upload → store → ingest → search) and how it
 > bridges into the sandbox `/work` durable workspace (#89).
 
-## Modules (`ui/src/lib/`)
+## Modules (`app/src/lib/`)
 
 | Module | Role |
 |--------|------|
@@ -31,7 +31,7 @@ query ─────────────────────── embe
 | `retriever/redis-backend.server.ts`, `retriever/supabase-backend.server.ts` | `RetrieverBackend` impls for the harness `retriever` pattern — local Data Stash (`redis`, live) + company pgvector via the Supabase MCP (`supabase`, deferred stub) |
 | `stash/upload-service.server.ts`, `stash/http.server.ts` | Upload request parsing (multipart + JSON), auth/response helpers |
 
-## API routes (`ui/src/routes/api/stash/`)
+## API routes (`app/src/routes/api/stash/`)
 
 | Method · Path | Purpose |
 |---|---|
@@ -105,7 +105,7 @@ synthesizer({ mode: 'thread' }),
 
 **Query formulation.** By default the query is the user's **raw last message** — their own words embed better than a paraphrase (a generic rewrite like *"search the documents for all sections that discuss X"* dilutes the vector). `generateQuery: true` rewrites it with a cheap `RetrieveQuery` (Haiku) call **only when the turn has history** — to resolve back-references (*"more on that"*, *"those sections"*) into a self-contained query; turn-1 messages are searched verbatim. `turnWindow: N` is a no-LLM alternative that concatenates the last N user turns.
 
-**Backends** (`ui/src/lib/retriever/`) implement `RetrieverBackend { name, type, search() }`:
+**Backends** (`app/src/lib/retriever/`) implement `RetrieverBackend { name, type, search() }`:
 
 - **`redis`** (`createRedisBackend`, `type: 'vector'`) — wraps `searchDocuments` (local Data Stash KNN), embedding the query locally with the corpus's recorded model. **Live.**
 - **`supabase`** (`createSupabaseBackend`, `type: 'vector'`) — the company pgvector corpus via the **Supabase MCP** server; **text-in** (Supabase embeds server-side via Automatic Embeddings / Edge Functions, so no client-side embedding and no OpenAI provider here). **Deferred stub** pending IT access: when `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` land, add the Supabase MCP to `configs/custom-catalog.yaml` and implement `search()` against its match RPC. Until then `search()` throws and the retriever's per-backend guard turns it into an empty result + error event — a misconfigured backend never sinks a run.

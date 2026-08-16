@@ -3,7 +3,7 @@
 > **Status:** Implemented. Shipped in [PR #34](https://github.com/mknw/harness-playground/pull/34) ([issue #30](https://github.com/mknw/harness-playground/issues/30)).
 > **Supersedes:** #26, #29 (both marked `[SUPERSEDED by #30]`).
 > **Companion:** #19's `expandPreviousResult` synthetic tool also landed in PR #34 — see [§4 Mechanism](#4-mechanism) for how the two compose.
-> **API reference:** [`ui/src/lib/harness-patterns/README.md#withreferencespattern-config`](../../ui/src/lib/harness-patterns/README.md#withreferencespattern-config).
+> **API reference:** [`app/src/lib/harness-patterns/README.md#withreferencespattern-config`](../../app/src/lib/harness-patterns/README.md#withreferencespattern-config).
 
 ## 1. Problem
 
@@ -226,7 +226,7 @@ Dedup by `ref_id` — if `withReferences` and the existing `priorTurnCount` mech
 
 ## 9. Eval suite (canonical cases)
 
-A `ui/src/__tests__/lib/harness-patterns/with-references-eval.test.ts` file with manually-curated cases:
+A `app/src/__tests__/lib/harness-patterns/with-references-eval.test.ts` file with manually-curated cases:
 
 | Case | Stash | Intent | Expected selection |
 |---|---|---|---|
@@ -242,7 +242,7 @@ Each case stubs the LLM (or runs against the real fallback model with a recorded
 
 1. **Types** — `WithReferencesConfig`, `SelectorFn`, `ReferenceAttachedEventData`, new `EventType`.
 2. **BAML** — `b.ReferenceSelector` function in `baml_src/with-references.baml`.
-3. **Pattern** — `ui/src/lib/harness-patterns/patterns/with-references.server.ts`.
+3. **Pattern** — `app/src/lib/harness-patterns/patterns/with-references.server.ts`.
 4. **Adapter merge** — extend `baml-adapters.server.ts` to read `scope.data.attachedRefs` and merge into `priorResults`.
 5. **Cache** — small in-memory `Map<sessionId, Map<hash, decision>>` cleared on session end.
 6. **Tests** — unit tests for skip optimizations + eval suite.

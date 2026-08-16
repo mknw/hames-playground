@@ -10,7 +10,7 @@ command -v pnpm >/dev/null 2>&1 || {
   exit 0
 }
 
-cd "$(git rev-parse --show-toplevel)/ui" 2>/dev/null || exit 0
+cd "$(git rev-parse --show-toplevel)/app" 2>/dev/null || exit 0
 [ -d node_modules ] || { echo "pre-push: no node_modules — skipping"; exit 0; }
 
 # baml_client/ is generated and gitignored; a stale one produces type errors

@@ -12,6 +12,6 @@ description: "Use when you need to resolve an in-progress git merge/rebase confl
 
 3. **Resolve each hunk.** Preserve both intents where possible. Where incompatible, pick the one matching the merge's stated goal and note the trade-off. Do **not** invent new behaviour. Always resolve; never `--abort`.
 
-4. Run the project's **automated checks** — from `ui/`: `pnpm exec tsc --noEmit --project tsconfig.json`, then `pnpm test:run`, then `pnpm lint`, then prettier on the changed files. Fix anything the merge broke.
+4. Run the project's **automated checks** — from `app/`: `pnpm exec tsc --noEmit --project tsconfig.json`, then `pnpm test:run`, then `pnpm lint`, then prettier on the changed files. Fix anything the merge broke.
 
 5. **Finish the merge/rebase.** Stage everything and commit. If rebasing, continue the rebase process until all commits are rebased.

@@ -2,7 +2,7 @@
 
 Catalog of 7 pre-built agents demonstrating pattern compositions.
 
-> **Full Code:** See [`ui/src/lib/harness-client/examples/`](../../ui/src/lib/harness-client/examples/) for complete implementations.
+> **Full Code:** See [`app/src/lib/harness-client/examples/`](../../app/src/lib/harness-client/examples/) for complete implementations.
 
 ---
 

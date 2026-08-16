@@ -34,7 +34,7 @@ import {
 // Config file location
 // ============================================================================
 
-/** `process.cwd()` is the `ui/` dir (mirrors baml-adapters.server.ts:235), so
+/** `process.cwd()` is the `app/` dir (mirrors baml-adapters.server.ts:235), so
  *  the repo-root `configs/` is one level up. Fall back to a few candidates so
  *  a differently-rooted process (CI, prod) still resolves. */
 function resolveConfigPath(file: string): string | null {

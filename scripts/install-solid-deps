@@ -1,2 +1,2 @@
-cd ui
+cd app
 pnpm add -D @types/node eslint eslint-plugin-solid typescript-eslint @eslint/js @unocss/eslint-config #unocss/transformer-attributify-jsx

@@ -10,11 +10,11 @@
  *
  * OFF by default (skipped) so `pnpm test:run` stays offline. Run with:
  *
- *   cd ui && PSEUDO_BENCH=1 pnpm vitest run src/__tests__/bench/pseudonym-fidelity-bench.test.ts
+ *   cd app && PSEUDO_BENCH=1 pnpm vitest run src/__tests__/bench/pseudonym-fidelity-bench.test.ts
  *
  * Report: printed to stdout AND written to `.harness-logs/pseudonym-bench-latest.md`
  * (plus a timestamped copy). Follows `prompt-cache-bench.test.ts` for its API
- * plumbing — key from `ui/.env`, `b.request.*` rendered then POSTed raw, so
+ * plumbing — key from `app/.env`, `b.request.*` rendered then POSTed raw, so
  * `usage` is read from the API rather than through a Collector.
  *
  * ## Method
@@ -238,11 +238,11 @@ type Body = { max_tokens?: number }
 
 function apiKey(): string {
   if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY
-  // vitest cwd is ui/ — fall back to ui/.env
+  // vitest cwd is app/ — fall back to app/.env
   const line = readFileSync('.env', 'utf8')
     .split('\n')
     .find((l) => l.startsWith('ANTHROPIC_API_KEY='))
-  if (!line) throw new Error('ANTHROPIC_API_KEY not in env or ui/.env')
+  if (!line) throw new Error('ANTHROPIC_API_KEY not in env or app/.env')
   return line
     .slice('ANTHROPIC_API_KEY='.length)
     .trim()
@@ -586,7 +586,7 @@ describe('placeholder-fidelity live bench', () => {
         `.harness-logs/pseudonym-bench-${stamp}.samples.json`,
         JSON.stringify(samples, null, 2),
       )
-      process.stdout.write(`\n${report}\n\nReport → ui/.harness-logs/pseudonym-bench-latest.md\n`)
+      process.stdout.write(`\n${report}\n\nReport → app/.harness-logs/pseudonym-bench-latest.md\n`)
 
       expect(samples.length).toBeGreaterThan(0)
       expect(spend).toBeLessThanOrEqual(MAX_SPEND_USD)

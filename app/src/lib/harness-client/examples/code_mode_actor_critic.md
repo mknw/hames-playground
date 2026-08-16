@@ -135,7 +135,7 @@ invented confident-but-fake content over incomplete tool results (see
 
 Error scoping is naturally bounded by the synthesizer's own view window —
 see the "Error scoping" note in
-[`ui/src/lib/harness-patterns/README.md`](../../harness-patterns/README.md).
+[`app/src/lib/harness-patterns/README.md`](../../harness-patterns/README.md).
 
 ### Synthesizer fidelity (no invented links)
 

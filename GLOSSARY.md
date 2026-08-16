@@ -18,9 +18,9 @@ and takes the skills' output with it.
 **Harness** — the composed, callable agent: `harness(...patterns)` runs its
 patterns in order over one `UnifiedContext` and returns a response plus a
 serialised context for the next turn. "The harness" without qualification also
-means the framework as a whole, `ui/src/lib/harness-patterns/`, which replaced
+means the framework as a whole, `app/src/lib/harness-patterns/`, which replaced
 the older `baml-agent` module (ADR-0005). See
-[`ui/src/lib/harness-patterns/README.md`](ui/src/lib/harness-patterns/README.md).
+[`app/src/lib/harness-patterns/README.md`](app/src/lib/harness-patterns/README.md).
 
 **Pattern** — one composable step inside a harness: a named function that runs in
 its own isolated scope and commits its events back to the shared context when it

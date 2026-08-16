@@ -23,7 +23,7 @@ export default defineConfig({
   //  2. each listed file carries a literal `@unocss-include` comment —
   //     filesystem-globbed files still pass through the pipeline filter,
   //     which rejects `.ts` paths unless that marker appears in the code.
-  // Globs are relative to ui/; entries are watched in dev.
+  // Globs are relative to app/; entries are watched in dev.
   content: {
     filesystem: ["src/lib/harness-client/examples/*.server.ts"],
   },

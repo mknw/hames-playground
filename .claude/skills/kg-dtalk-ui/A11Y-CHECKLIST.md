@@ -16,7 +16,7 @@ Read this before shipping an interactive surface, and when reviewing one.
 Two measured gaps to hold in mind — both are why this file exists rather than
 being assumed:
 
-- **6 of 60 buttons** in `ui/src/components` carry an `aria-label`. 39 carry a
+- **6 of 60 buttons** in `app/src/components` carry an `aria-label`. 39 carry a
   `title`, which is not a substitute.
 - **2 focus styles** exist across the whole component tree
   (`ChatInput.tsx:81`, `GraphVisualization.tsx:807`).

@@ -339,7 +339,7 @@ block into the controller prompt. Best for routes with a narrow tool surface whe
 LLM benefits from seeing the canonical query shape (e.g., parameterized Cypher with
 `MERGE` semantics, bulk `UNWIND` patterns, idiomatic `toLower()` substring search).
 Keep the list short (3-5) — the prompt grows with every shot and is sent on every turn.
-See `ui/src/lib/harness-client/examples/neo4j-fewshots.server.ts` for a worked example
+See `app/src/lib/harness-client/examples/neo4j-fewshots.server.ts` for a worked example
 verified against the live Neo4j MCP.
 
 **Hooks: `onToolResult`** (closes #7). Called between `callTool()` and the
@@ -359,7 +359,7 @@ simpleLoop(neo4jController, tools.neo4j, {
 })
 ```
 
-The `enrichNeo4jResult` recipe (`ui/src/lib/harness-client/neo4j-enricher.server.ts`)
+The `enrichNeo4jResult` recipe (`app/src/lib/harness-client/neo4j-enricher.server.ts`)
 walks the tool's returned rows for `name` strings, fetches a 1-hop neighborhood
 directly via the `neo4j-driver` singleton, and emits an enriched payload of shape
 `{ rows, _neighborhood: { rows }, _touched: [...names] }`. The graph extractor
@@ -674,7 +674,7 @@ interface RetrieverBackend {
    (`tool: 'retriever'`) — the same channel `synthesizer` reads via
    `view.fromLastPattern()`.
 
-Framework-pure: concrete backends live app-side (`ui/src/lib/retriever/` —
+Framework-pure: concrete backends live app-side (`app/src/lib/retriever/` —
 `createRedisBackend` is live; `createSupabaseBackend` is a deferred stub). The
 resolved config carries a `backendKinds: string[]` marker so
 `harnessHasRedisRetriever` (pattern-capabilities) can gate the Data Stash's

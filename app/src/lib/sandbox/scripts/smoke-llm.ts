@@ -19,7 +19,7 @@
  *     provider chain instead, set `USE_MIXED_CHAINS=1` and the corresponding
  *     keys.
  *
- * Run from `ui/`:
+ * Run from `app/`:
  *   pnpm dlx tsx src/lib/sandbox/scripts/smoke-llm.ts
  *
  * Cost: a handful of Sonnet calls (actor + critic per turn). Should be a

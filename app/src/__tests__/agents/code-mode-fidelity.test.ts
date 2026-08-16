@@ -180,7 +180,7 @@ describe('code-mode agent — synth fidelity + script-hygiene guidance', () => {
 
 // ---------------------------------------------------------------------------
 // Prompt-content guards: the refinement rules must stay on the committed BAML
-// templates. process.cwd() is the `ui/` dir, so baml_src is one level up
+// templates. process.cwd() is the `app/` dir, so baml_src is one level up
 // (mirrors server-catalog.server.ts / baml-adapters.server.ts path resolution).
 // ---------------------------------------------------------------------------
 

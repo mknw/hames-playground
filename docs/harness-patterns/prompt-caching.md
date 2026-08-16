@@ -47,7 +47,7 @@ Salt: `bench-1785100111411` · model per ControllerAnthropic chain · pricing $2
 
 **Totals:** input 25359t (69.8% served from cache) · $0.032337 with caching vs $0.060918 without → **46.9% saved**
 
-Report → ui/.harness-logs/cache-bench-latest.md
+Report → app/.harness-logs/cache-bench-latest.md
  ✓ src/__tests__/bench/prompt-cache-bench.test.ts (1 test) 40677ms
    ✓ prompt-cache live bench: V1 vs V2 (1)
      ✓ runs both variants and writes the report  40676ms

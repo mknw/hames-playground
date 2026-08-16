@@ -133,6 +133,10 @@ ingestion pipeline (binary is skipped by ingest). See [DATA_STASH.md](DATA_STASH
   `GET /api/stash/document/:id?sessionId=&download`. Media elements ignore the
   `Content-Disposition: attachment` header, so the same route serves both download
   and playback — no new endpoint.
+- That route is scoped to the session's owner ([DATA_STASH.md](DATA_STASH.md#session-ownership)),
+  which for a triggered run is the token's `userId`: `seedActionRow` writes the
+  conversation row for that user inside the same request that stores the
+  recording, so playback resolves through it with no extra bookkeeping.
 
 ## UI — left sidebar & promotion (`ChatSidebar.tsx`, `ChatInterface.tsx`, `routes/index.tsx`)
 

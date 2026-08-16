@@ -49,8 +49,10 @@ export async function GET(event: APIEvent): Promise<Response> {
   }
 
   const handshake = verifyPayload<Handshake>(readCookie(event.request, HANDSHAKE_COOKIE))
+  // verifyPayload also enforces the handshake's age (#129), so a cookie whose
+  // signed payload is older than SIGNED_PAYLOAD_MAX_AGE_MS lands here too.
   if (!handshake || handshake.state !== state) {
-    console.warn('[auth/callback] state mismatch or missing handshake cookie.')
+    console.warn('[auth/callback] handshake cookie missing, expired, or state mismatch.')
     return redirect('/auth/signin', clearCookie(HANDSHAKE_COOKIE))
   }
 

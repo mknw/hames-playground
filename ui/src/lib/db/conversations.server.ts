@@ -235,6 +235,50 @@ export async function listConversations(userId: string): Promise<ConversationLis
   }))
 }
 
+/** A conversation reduced to its event stream — the metrics dashboard's input. */
+export interface ConversationEventsRow {
+  id: string
+  agentId: string
+  title: string | null
+  updatedAt: Date
+  /** `context.events` straight out of the JSONB blob (already parsed by pg). */
+  events: unknown
+}
+
+/** Row ceiling for {@link listConversationEvents}. Exported so the dashboard can
+ *  say "most recent N" instead of implying it folded everything. */
+export const CONVERSATION_EVENTS_SCAN_LIMIT = 200
+
+/**
+ * Load every conversation's event stream for a user (#132).
+ *
+ * Projects `context -> 'events'` in SQL rather than selecting the whole blob:
+ * the dashboard only folds events, and pattern `data` payloads (graph
+ * elements, tool outputs) can dwarf them. Same 200-row ceiling as
+ * {@link listConversations} so a long-lived account can't turn one page load
+ * into an unbounded read.
+ */
+export async function listConversationEvents(userId: string): Promise<ConversationEventsRow[]> {
+  const { rows } = await query<{
+    id: string
+    agent_id: string
+    title: string | null
+    updated_at: Date
+    events: unknown
+  }>(
+    `SELECT id, agent_id, title, updated_at, context -> 'events' AS events
+     FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT ${CONVERSATION_EVENTS_SCAN_LIMIT}`,
+    [userId],
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    agentId: r.agent_id,
+    title: r.title,
+    updatedAt: r.updated_at,
+    events: r.events,
+  }))
+}
+
 /**
  * Delete a conversation. No-op when the id doesn't belong to the user.
  */

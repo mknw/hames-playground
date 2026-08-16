@@ -271,7 +271,7 @@ import { UserMenu } from "~/components/ark-ui/UserMenu"
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ Nav (dark-bg-secondary)                                 │
-│  Home | About          [Theme] [Avatar Menu]            │
+│               [Metrics] [Theme] [Avatar Menu]           │
 ├────────────┬──────────────────────────┬─────────────────┤
 │            │                          │                 │
 │  Sidebar   │   Chat Messages          │  Support Panel  │
@@ -573,6 +573,24 @@ interface Message {
   }
 }
 ```
+
+### Metrics dashboard route (#132)
+
+A second page — `routes/dashboard.tsx`, reached from the monitoring icon in the
+nav (the old "Home"/"About" text links are gone; the chat *is* `/`). It shows
+token, cache and cost aggregates across everything the signed-in user has run.
+
+| Layer | File | Role |
+|-------|------|------|
+| Fold | `lib/metrics/aggregate.ts` | Pure, client-safe folds over `ContextEvent[]`: `getEventMetrics` (the single accessor for step accounting), `foldEvents`, `aggregateByPattern`, `aggregateByConversation`, `buildDashboard` |
+| Action | `lib/metrics/dashboard.server.ts` | `getMetricsDashboard(topN)` — `requireUser()`, load, fold, return aggregates only (raw events never cross the wire) |
+| Query | `lib/db/conversations.server.ts` | `listConversationEvents(userId)` projects `context -> 'events'` in SQL (same 200-row ceiling as the sidebar list) |
+| Page | `routes/dashboard.tsx` | Global cards + input-composition bar, per-pattern table, top-N conversations. No chart library — bars are divs |
+
+Numbers come from `event.metrics` (#122 / PR #130) and **only** from there:
+`llmCall.usage` has no cache-write bucket and no cost, so folding it in would
+understate spend while looking complete. LLM steps predating the attribute are
+counted as *unmetered* and called out in the UI rather than silently dropped.
 
 ---
 
@@ -898,10 +916,11 @@ ui/
 ├── src/
 │   ├── shims.d.ts                # TypeScript augmentation
 │   ├── routes/
-│   │   └── index.tsx             # Main page with Splitter layout
+│   │   ├── index.tsx             # Main page with Splitter layout
+│   │   └── dashboard.tsx         # Metrics dashboard (#132): tokens, cache, costs
 │   ├── components/
 │   │   ├── AuthProvider.tsx      # Auth context provider
-│   │   ├── Nav.tsx               # Main navigation with theme switcher
+│   │   ├── Nav.tsx               # Top bar: metrics link, theme switcher, user menu
 │   │   └── ark-ui/
 │   │       ├── UserMenu.tsx           # Avatar dropdown menu
 │   │       ├── ThemeSwitcher.tsx      # Dark/light theme toggle

@@ -205,7 +205,7 @@ export {
 // Infrastructure (Server-only)
 // ============================================================================
 
-export { callTool, listTools, getMcpClient, closeMcpClient } from './mcp-client.server'
+export { callTool, listTools, closeMcpClient } from './mcp-client.server'
 export { assertServer, ServerOnlyError } from './assert.server'
 export { routeMessageOp } from './routing.server'
 export { scheduleSummarization } from './summarize.server'

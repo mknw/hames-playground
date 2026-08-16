@@ -30,7 +30,13 @@ n8n_data/
 # UI Solid Start Frontend
 **/node_modules
 **/.env
-.claude/
+# Agent skills and subagents are source: they travel to worktrees via git, not
+# via orca.yaml's copy loop. Everything else under .claude/ (settings.json,
+# settings.local.json, transcripts) stays local. The `.claude/*` form is
+# required — `.claude/` makes git skip the directory, so negations never apply.
+.claude/*
+!.claude/skills/
+!.claude/agents/
 
 # Nix direnv
 .direnv/

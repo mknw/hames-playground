@@ -573,8 +573,7 @@ own criteria, so a dispatch never has to restate the house rules:
 
 - [ ] CI green: typecheck · lint · test · build (`.github/workflows/ci.yml`)
 - [ ] Coverage floors not regressed — statements 43 / branches 45 /
-      functions 30 / lines 47 ⚠ lands with PR #165; until it merges this
-      criterion is advisory, not enforced
+      functions 30 / lines 47
 - [ ] Prettier clean on changed files (`ui/.prettierrc.json`; the CI gate checks
       changed files under `ui/` only — see the note below)
 - [ ] Conventional-commit subject line
@@ -584,12 +583,8 @@ own criteria, so a dispatch never has to restate the house rules:
       `baml_client/` never hand-edited
 ```
 
-Two verified caveats worth keeping in the template:
+One verified caveat worth keeping in the template:
 
-- The coverage floors **43 / 45 / 30 / 47** are real but not yet on `main` — they
-  live in `ui/vitest.config.ts` on branch `mknw/ci-coverage-floor` (open **PR
-  #165**). Briefs written before it merges should say so rather than assert a gate
-  that will not fire.
 - The CI **Format check** step globs `ui/**/*.{ts,tsx,js,jsx,json,css,md}` only —
   it does **not** cover `docs/**` or `.claude/**`. The `.githooks/pre-commit`
   → lint-staged path does format staged `*.md` anywhere in the tree, and it

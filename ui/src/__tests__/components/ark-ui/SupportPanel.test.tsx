@@ -17,6 +17,7 @@ import { render, fireEvent } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
 import type { ContextEvent } from '~/lib/harness-patterns'
 import type { GraphElement } from '~/lib/harness-client/types'
+import type { OpenReferenceTarget } from '~/lib/harness-client/reference-extractor'
 
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -133,14 +134,13 @@ describe('SupportPanel — tab routing', () => {
   })
 
   it('jumps to the Data tab when a chat citation is clicked', async () => {
-    const [ref, setRef] = createSignal<{ eventId: string } | null>(null)
+    const [ref, setRef] = createSignal<OpenReferenceTarget | null>(null)
     const { container } = render(() => (
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      <SupportPanel graphElements={[]} pendingReference={ref() as any} sessionId="s" />
+      <SupportPanel graphElements={[]} pendingReference={ref()} sessionId="s" />
     ))
     expect(container.querySelector('[data-testid="data-stash"]')).toBeNull()
 
-    setRef({ eventId: 'evt-1' })
+    setRef({ docId: 'doc-1' })
     await tick()
     expect(container.querySelector('[data-testid="data-stash"]')).toBeTruthy()
   })

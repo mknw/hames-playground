@@ -19,7 +19,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, fireEvent } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
-import type { ContextEvent, EventMetrics, LLMCallData } from '~/lib/harness-patterns'
+import type { ContextEvent, LLMCallData } from '~/lib/harness-patterns'
+import type { EventMetrics } from '~/lib/harness-patterns/types'
 
 const { ObservabilityPanel } = await import('../../../components/ark-ui/ObservabilityPanel')
 
@@ -717,7 +718,7 @@ describe('ObservabilityPanel — save session', () => {
   afterEach(() => {
     URL.createObjectURL = originalCreate
     URL.revokeObjectURL = originalRevoke
-    delete (window as Record<string, unknown>).showSaveFilePicker
+    delete (window as unknown as Record<string, unknown>).showSaveFilePicker
     vi.restoreAllMocks()
   })
 
@@ -763,8 +764,10 @@ describe('ObservabilityPanel — save session', () => {
       write: vi.fn(async (s: string) => void written.push(s)),
       close: vi.fn(async () => {}),
     }
-    const picker = vi.fn(async () => ({ createWritable: async () => writable }))
-    ;(window as Record<string, unknown>).showSaveFilePicker = picker
+    const picker = vi.fn(async (_opts: { suggestedName?: string }) => ({
+      createWritable: async () => writable,
+    }))
+    ;(window as unknown as Record<string, unknown>).showSaveFilePicker = picker
 
     const events = [ev('user_message', { content: 'hi' })]
     const context = {
@@ -787,7 +790,7 @@ describe('ObservabilityPanel — save session', () => {
 
   it('stays quiet when the user cancels the save dialog', async () => {
     const abort = Object.assign(new Error('cancelled'), { name: 'AbortError' })
-    ;(window as Record<string, unknown>).showSaveFilePicker = vi.fn(async () => {
+    ;(window as unknown as Record<string, unknown>).showSaveFilePicker = vi.fn(async () => {
       throw abort
     })
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -801,7 +804,7 @@ describe('ObservabilityPanel — save session', () => {
   })
 
   it('logs a genuine save failure', async () => {
-    ;(window as Record<string, unknown>).showSaveFilePicker = vi.fn(async () => {
+    ;(window as unknown as Record<string, unknown>).showSaveFilePicker = vi.fn(async () => {
       throw new Error('disk full')
     })
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -817,15 +820,14 @@ describe('ObservabilityPanel — save session', () => {
 
 describe('ObservabilityPanel — live updates', () => {
   it('grows the timeline and the totals as events stream in', () => {
-    const [events, setEvents] = createSignal<ContextEvent[]>([
-      ev('user_message', { content: 'hi' }),
-    ])
+    const first = ev('user_message', { content: 'hi' })
+    const [events, setEvents] = createSignal<ContextEvent[]>([first])
     const { container } = render(() => <ObservabilityPanel events={events()} />)
 
     expect(rows(container)).toHaveLength(1)
 
     setEvents([
-      ...events(),
+      first,
       ev('tool_call', { callId: 'c1', tool: 'read_neo4j_cypher', args: {} }),
       ev('tool_result', { callId: 'c1', tool: 'read_neo4j_cypher', success: true, result: {} }),
     ])

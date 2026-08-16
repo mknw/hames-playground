@@ -30,7 +30,7 @@ a payload**. Every person arrives in a structured, labelled field:
 `organizer`, `attendees[].emailAddress`, `createdBy.user`,
 `lastModifiedBy.user`, `shared.sharedBy.user`, `mentions[].mentioned.user`,
 `scoredEmailAddresses[]`. The free-text fields — `subject`, `bodyPreview`,
-`body.content`, a file `name` — are the _only_ place identity is unlabelled, and
+`body.content`, a file `name` — are the *only* place identity is unlabelled, and
 the people they name are, overwhelmingly, the same people the labelled fields
 just declared. So: **harvest the labelled fields into a payload-scoped roster,
 then do exact-match substitution of those known strings over the free text.**
@@ -38,7 +38,7 @@ Finding people becomes a schema walk, not an inference.
 
 What that buys is not a slightly cheaper NER. It is a different class of
 mechanism: deterministic (same payload, same output, forever), auditable (the
-table _is_ the audit record — every replacement can be shown to a DPO with the
+table *is* the audit record — every replacement can be shown to a DPO with the
 field it came from), language-independent (Dutch genitives and French prose are
 just strings), zero-latency and zero-dependency, and **reversible**, so the user
 can be shown real names in the final answer while the model only ever saw
@@ -62,7 +62,7 @@ flatten a person to a single string (`from: 'Jan Van Damme'`,
 at any depth. `roles` records the field each identity was found under, which is
 what makes the output explainable.
 
-It also reads one _negative_ label: an `attendees[]` entry marked
+It also reads one *negative* label: an `attendees[]` entry marked
 `type: 'resource'` is a meeting room, not a person, so "Vergaderzaal Brussel"
 stays in clear text. A room is not personal data and pseudonymising it would
 cost the model a fact for nothing. The same principle as the rest of the design
@@ -88,11 +88,11 @@ be re-matched by a later needle.
 
 Three hazards were worth solving explicitly, and each has tests:
 
-| Hazard        | What breaks naively                                                              | What is done                                                                                                                                                                     |
-| ------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Substrings    | replacing "Michael" corrupts "Michaelson"                                        | Unicode boundary lookarounds on every needle                                                                                                                                     |
-| Unicode names | JS `\b` fires _inside_ "José" and "Müller", so `\bJosé\b` matches within "Josée" | `(?<![\p{L}\p{N}_])` / `(?![\p{L}\p{N}_])` under the `u` flag                                                                                                                    |
-| HTML bodies   | `body.content` is usually HTML; a blind replace can rewrite a tag                | markup and text are separated first: text nodes and _quoted attribute values_ are rewritten (so `href="mailto:…"` and `title="…"` are caught), tag and attribute names never are |
+| Hazard | What breaks naively | What is done |
+|---|---|---|
+| Substrings | replacing "Michael" corrupts "Michaelson" | Unicode boundary lookarounds on every needle |
+| Unicode names | JS `\b` fires *inside* "José" and "Müller", so `\bJosé\b` matches within "Josée" | `(?<![\p{L}\p{N}_])` / `(?![\p{L}\p{N}_])` under the `u` flag |
+| HTML bodies | `body.content` is usually HTML; a blind replace can rewrite a tag | markup and text are separated first: text nodes and *quoted attribute values* are rewritten (so `href="mailto:…"` and `title="…"` are caught), tag and attribute names never are |
 
 Derived name parts get a stricter fence that also refuses to match beside a
 hyphen, so the "Jan" of "Jan Van Damme" cannot take the head off an unrelated
@@ -123,7 +123,7 @@ passing test, so a future change that "fixes" one has to say so out loud.
    two cannot both be had with this mechanism. A suffix allowance (`'s`, `s`) is
    possible and was not taken, because it trades a hard guarantee for a heuristic.
 3. **The app's own projections cost the roster information.** `shapeMessages`
-   flattens a sender to `name ?? address` — _one_ of the two. When a message's
+   flattens a sender to `name ?? address` — *one* of the two. When a message's
    sender arrives as an address, that payload's roster never learns their display
    name, and their name in the body text is not replaced. This is not a defect in
    the core; it is an argument about where to hook (below), and it is the single
@@ -132,14 +132,15 @@ passing test, so a future change that "fixes" one has to say so out loud.
    are still replaced; they are conflated onto one placeholder rather than being
    split at random. Conflation is the safe direction to fail in.
 5. **A percent-encoded name inside a URL path survives.** A SharePoint
-   `driveItem.webUrl` carries the file name encoded — `Offerte%20Van%20Damme%202026.docx`
-   — and `%20` breaks the literal the roster searches for, so the surname is not
-   replaced there. The `_SLUG` form in the _same_ URL (`jan_vandamme_dtsc_be`) and
-   the un-encoded `name` field of the same item both substitute correctly, so this
-   is narrow, but it is a real leak of a real surname into the prompt. Decoding the
-   URL before matching would fix it and is not done: it widens `apply` from "replace
-   literals" to "replace literals under an encoding", which is the kind of heuristic
-   limitation 2 declines. Found while building the fidelity bench; see
+   `driveItem.webUrl` carries the file name encoded —
+   `Offerte%20Van%20Damme%202026.docx` — and `%20` breaks the literal the roster
+   searches for, so the surname is not replaced there. The `_SLUG` form in the
+   *same* URL (`jan_vandamme_dtsc_be`) and the un-encoded `name` field of the same
+   item both substitute correctly, so this is narrow, but it is a real surname
+   reaching the prompt. Decoding the URL before matching would fix it and is not
+   done: it widens `apply` from "replace literals" to "replace literals under an
+   encoding", which is the kind of heuristic limitation 2 declines. Found while
+   building the fidelity bench; see
    [`pseudonym-fidelity-bench.md`](pseudonym-fidelity-bench.md).
 
 ## Open questions
@@ -150,17 +151,17 @@ inside this PR would lock in a default the reader would have redirected.
 
 **1. Where does this hook?** Three candidate seams, with real trade-offs:
 
-- _The app-tools transport_ (`runAppTool` / `callTool`), before the projection
+- *The app-tools transport* (`runAppTool` / `callTool`), before the projection
   functions run. Earliest point, and it is the only place where the full Graph
   payload is still present — which limitation 3 says matters, because the
   projections have already discarded half of each identity by the time the
   result is shaped. But it puts privacy logic in the tool dispatch path for
   every namespace, not just `graph`.
-- _The event store_, when a `tool_result` is written to `conversations.context`.
+- *The event store*, when a `tool_result` is written to `conversations.context`.
   Narrowest change, and it is precisely the store plan item 3 names. But the
   model has already seen the clear text by then, so it protects the database and
   not the transfer — which is the larger of the two exposures.
-- _The prompt/synthesizer boundary_, pseudonymising on the way into the LLM and
+- *The prompt/synthesizer boundary*, pseudonymising on the way into the LLM and
   reversing on the way out. Protects the transfer, but every pattern that reads
   `view.serialize()` has to be in on it, and any tool argument the model composes
   from a placeholder (a search `author`, a filter `person`) has to be reversed
@@ -172,8 +173,8 @@ display needs the table; if clear, the table is only a transfer control. This
 decision interacts with retention (plan item 2) and with erasure (finding 3):
 pseudonymised-at-rest changes what "delete everything about me" has to reach.
 
-**3. Where does the table live — and for how long?** The table is _itself
-personal data_: it maps `PERSON_1` to a named employee. Persisting it beside the
+**3. Where does the table live — and for how long?** The table is *itself
+personal data*: it maps `PERSON_1` to a named employee. Persisting it beside the
 conversation recreates the exposure the pseudonymisation removed, unless it is
 encrypted (the `user_tokens` AES-256-GCM pattern is right there) or given a much
 shorter TTL than the conversation. Not persisting it makes historical
@@ -181,8 +182,8 @@ conversations permanently unreadable — arguably a feature, arguably a support
 problem. Note that a per-payload table also means one conversation accumulates
 many tables.
 
-**4. Do placeholders survive an LLM paraphrase?** — **ANSWERED, for the
-Anthropic chain only.** Measured in
+**4. Do placeholders survive an LLM paraphrase?** — **ANSWERED, for the Anthropic
+chain only.** Measured in
 [`pseudonym-fidelity-bench.md`](pseudonym-fidelity-bench.md): over 96 live
 `Synthesize` calls (NL/FR/EN × prompt-guidance off/on) the model echoed 1826
 placeholder occurrences and mangled none — no case changes, no Markdown-escaped
@@ -190,12 +191,12 @@ underscores, no inflected or invented ids. **`reverse` does not need a lenient
 pass**, and the bench's scorer stays in the tree as the regression instrument
 that says so.
 
-Two things it does **not** settle, so the question is not closed in general:
-only `claude-sonnet-5` was measured — the Haiku backstop and the whole
-mixed-provider `SynthesizerFallback` chain (Gemma leads it) are unmeasured, and
-this result must not be assumed to transfer; and only the `Synthesize` prompt
-shape was measured, not a controller composing a _tool argument_ from a
-placeholder, which is the harder case question 1 raises for the prompt seam.
+Two things it does *not* settle, so the question is not closed in general: only
+`claude-sonnet-5` was measured — the Haiku backstop and the whole mixed-provider
+`SynthesizerFallback` chain (Gemma leads it) are unmeasured, and this result must
+not be assumed to transfer; and only the `Synthesize` prompt shape was measured,
+not a controller composing a *tool argument* from a placeholder, which is the
+harder case question 1 raises for the prompt seam.
 
 The original statement of the question, for the record: `reverse` assumes the
 model echoes `PERSON_1` verbatim. Real models sometimes write "Person 1", "the

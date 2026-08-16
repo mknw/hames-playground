@@ -21,17 +21,17 @@ The run writes its raw report and all 96 answers to
 
 ## Headline
 
-|                                                           |                                                                    |
-| --------------------------------------------------------- | ------------------------------------------------------------------ |
-| Calls                                                     | 96 completed, 0 failed, 0 truncated (planned 96, hard ceiling 120) |
-| Spend                                                     | **$0.9212** of the $4 budget                                       |
-| Placeholder _ids_ presented                               | 888 (148 per cell × 6 cells)                                       |
-| Survived **verbatim**                                     | 645 (72.6%)                                                        |
-| Survived **only leniently** (mangled but resolvable)      | **0** (0.0%)                                                       |
-| **Residue** (`PERSON`-shaped token neither pass resolves) | **0**                                                              |
-| **Hallucinated** out-of-range `PERSON_n`                  | **0**                                                              |
-| Dropped (absent from the answer in any form)              | 243 (27.4%)                                                        |
-| Placeholder _occurrences_ echoed verbatim                 | **1826**                                                           |
+| | |
+|---|---|
+| Calls | 96 completed, 0 failed, 0 truncated (planned 96, hard ceiling 120) |
+| Spend | **$0.9212** of the $4 budget |
+| Placeholder *ids* presented | 888 (148 per cell × 6 cells) |
+| Survived **verbatim** | 645 (72.6%) |
+| Survived **only leniently** (mangled but resolvable) | **0** (0.0%) |
+| **Residue** (`PERSON`-shaped token neither pass resolves) | **0** |
+| **Hallucinated** out-of-range `PERSON_n` | **0** |
+| Dropped (absent from the answer in any form) | 243 (27.4%) |
+| Placeholder *occurrences* echoed verbatim | **1826** |
 
 The only non-zero failure column is `dropped`, and
 [it is not a fidelity failure](#the-27-that-was-dropped-is-not-a-fidelity-failure):
@@ -77,14 +77,14 @@ the cap).
 measures the model and not the instrument. Three passes consume the answer in
 order, so each `PERSON`-shaped token is counted exactly once:
 
-| Outcome          | Meaning                                               | Does `reverse` recover it today?                                          |
-| ---------------- | ----------------------------------------------------- | ------------------------------------------------------------------------- |
-| **exact**        | back byte-for-byte                                    | yes                                                                       |
-| **recoverable**  | mangled within the lenient family below               | no — this is what a wider `reverse` would win                             |
-| **residue**      | `PERSON`-shaped, neither pass resolves it             | no; the user would see it raw                                             |
-| **dropped**      | an input placeholder absent in any form               | nothing to recover                                                        |
-| **hallucinated** | a `PERSON_n` whose `n` was never minted               | no — and reversing it would name the _wrong person_                       |
-| **unpresented**  | a minted placeholder the input never showed the model | yes — and _that_ is the problem: it prints a real value never in evidence |
+| Outcome | Meaning | Does `reverse` recover it today? |
+|---|---|---|
+| **exact** | back byte-for-byte | yes |
+| **recoverable** | mangled within the lenient family below | no — this is what a wider `reverse` would win |
+| **residue** | `PERSON`-shaped, neither pass resolves it | no; the user would see it raw |
+| **dropped** | an input placeholder absent in any form | nothing to recover |
+| **hallucinated** | a `PERSON_n` whose `n` was never minted | no — and reversing it would name the *wrong person* |
+| **unpresented** | a minted placeholder the input never showed the model | yes — and *that* is the problem: it prints a real value never in evidence |
 
 `unpresented` cuts across the first two rather than being a sixth bucket: the
 occurrence is still counted as `exact` or `recoverable`, and flagged again here.
@@ -100,24 +100,24 @@ near-miss.
 > One clarification the unit tests forced: the apostrophe genitive `PERSON_1's`
 > is scored **exact**, not recoverable. `reverse` fences on `[A-Za-z0-9_]` and an
 > apostrophe is none of those, so that spelling already round-trips today. 25 of
-> the 96 answers used it. Only the _glued_ `s` would have been a real mangle.
+> the 96 answers used it. Only the *glued* `s` would have been a real mangle.
 
 ## Results
 
 ### Per language × guidance
 
-Percentages are over placeholder _ids_ summed across the cell's 16 samples (an
+Percentages are over placeholder *ids* summed across the cell's 16 samples (an
 id present in two samples counts twice). `residue` and `hallucinated` are
 occurrence counts — they have no natural denominator.
 
-| lang | guidance | ids in | exact       | recoverable | dropped    | residue | hallucinated |
-| ---- | -------- | ------ | ----------- | ----------- | ---------- | ------- | ------------ |
-| NL   | off      | 148    | 103 (69.6%) | 0           | 45 (30.4%) | 0       | 0            |
-| NL   | on       | 148    | 110 (74.3%) | 0           | 38 (25.7%) | 0       | 0            |
-| FR   | off      | 148    | 99 (66.9%)  | 0           | 49 (33.1%) | 0       | 0            |
-| FR   | on       | 148    | 122 (82.4%) | 0           | 26 (17.6%) | 0       | 0            |
-| EN   | off      | 148    | 95 (64.2%)  | 0           | 53 (35.8%) | 0       | 0            |
-| EN   | on       | 148    | 116 (78.4%) | 0           | 32 (21.6%) | 0       | 0            |
+| lang | guidance | ids in | exact | recoverable | dropped | residue | hallucinated |
+|---|---|---|---|---|---|---|---|
+| NL | off | 148 | 103 (69.6%) | 0 | 45 (30.4%) | 0 | 0 |
+| NL | on  | 148 | 110 (74.3%) | 0 | 38 (25.7%) | 0 | 0 |
+| FR | off | 148 | 99 (66.9%)  | 0 | 49 (33.1%) | 0 | 0 |
+| FR | on  | 148 | 122 (82.4%) | 0 | 26 (17.6%) | 0 | 0 |
+| EN | off | 148 | 95 (64.2%)  | 0 | 53 (35.8%) | 0 | 0 |
+| EN | on  | 148 | 116 (78.4%) | 0 | 32 (21.6%) | 0 | 0 |
 
 The `recoverable` / `residue` / `hallucinated` columns are zero in every cell.
 That is the finding; the rest of this document is about the one column that
@@ -125,59 +125,59 @@ moves.
 
 ### The guidance delta
 
-| lang | exact, off → on             | residue | hallucinated |
-| ---- | --------------------------- | ------- | ------------ |
-| NL   | 69.6% → **74.3%** (+4.7pp)  | 0 → 0   | 0 → 0        |
-| FR   | 66.9% → **82.4%** (+15.5pp) | 0 → 0   | 0 → 0        |
-| EN   | 64.2% → **78.4%** (+14.2pp) | 0 → 0   | 0 → 0        |
+| lang | exact, off → on | residue | hallucinated |
+|---|---|---|---|
+| NL | 69.6% → **74.3%** (+4.7pp) | 0 → 0 | 0 → 0 |
+| FR | 66.9% → **82.4%** (+15.5pp) | 0 → 0 | 0 → 0 |
+| EN | 64.2% → **78.4%** (+14.2pp) | 0 → 0 | 0 → 0 |
 
-Guidance cannot have improved _fidelity_, because fidelity was already perfect
+Guidance cannot have improved *fidelity*, because fidelity was already perfect
 in both arms. What it improved is **coverage** — how many of the available
 placeholders the answer bothers to mention. And that is not a length artifact:
 guided answers are marginally **shorter** while carrying more placeholders.
 
 | guidance | answers | mean chars | mean occurrences | density /1k chars |
-| -------- | ------- | ---------- | ---------------- | ----------------- |
-| off      | 48      | 1367       | 18.4             | 13.46             |
-| on       | 48      | 1341       | 19.7             | 14.69             |
+|---|---|---|---|---|
+| off | 48 | 1367 | 18.4 | 13.46 |
+| on  | 48 | 1341 | 19.7 | 14.69 |
 
 **`density` is a ratio of means** — total occurrences over total characters,
 ×1000 — and not the mean of the per-answer ratios, which is a different number.
 Saying which is meant is the whole point of the column header: an earlier draft
-of this document quoted the per-answer mean ratio beside the ratio-of-means
-inputs, and the two did not reconcile. Dutch benefits least, which is consistent
-with Dutch already being the language the fixture bodies are written in.
+quoted the per-answer mean ratio beside the ratio-of-means inputs, and the two
+did not reconcile. Dutch benefits least, which is consistent with Dutch already
+being the language the fixture bodies are written in.
 
 ### The 27% that was "dropped" is not a fidelity failure
 
 Splitting drops by placeholder kind reframes the whole number:
 
-| placeholder kind  | presented | dropped | drop rate |
-| ----------------- | --------- | ------- | --------- |
-| `PERSON_n` (bare) | 300       | 11      | **3.7%**  |
-| `PERSON_n_FAMILY` | 84        | 3       | 3.6%      |
-| `PERSON_n_SLUG`   | 24        | 0       | 0.0%      |
-| `PERSON_n_NAME2`  | 36        | 6       | 16.7%     |
-| `PERSON_n_EMAIL`  | 228       | 112     | 49.1%     |
-| `PERSON_n_GIVEN`  | 180       | 92      | 51.1%     |
-| `PERSON_n_NAME3`  | 36        | 19      | 52.8%     |
+| placeholder kind | presented | dropped | drop rate |
+|---|---|---|---|
+| `PERSON_n` (bare) | 300 | 11 | **3.7%** |
+| `PERSON_n_FAMILY` | 84 | 3 | 3.6% |
+| `PERSON_n_SLUG` | 24 | 0 | 0.0% |
+| `PERSON_n_NAME2` | 36 | 6 | 16.7% |
+| `PERSON_n_EMAIL` | 228 | 112 | 49.1% |
+| `PERSON_n_GIVEN` | 180 | 92 | 51.1% |
+| `PERSON_n_NAME3` | 36 | 19 | 52.8% |
 
 A summariser that has already written `PERSON_1` does not also need to print
-`PERSON_1_EMAIL`, `PERSON_1_GIVEN` and `PERSON_1_NAME3` — those are the _same
-person_ in four encodings, and omitting three of them is the behaviour you want.
+`PERSON_1_EMAIL`, `PERSON_1_GIVEN` and `PERSON_1_NAME3` — those are the *same
+person* in four encodings, and omitting three of them is the behaviour you want.
 The drop rate is a property of the table minting several forms per person, not
 of the model losing people.
 
 Restricted to the identity-bearing bare placeholder:
 
 | lang | guidance | bare ids | survived verbatim | dropped |
-| ---- | -------- | -------- | ----------------- | ------- |
-| NL   | off      | 50       | 48 (96.0%)        | 2       |
-| NL   | on       | 50       | 48 (96.0%)        | 2       |
-| FR   | off      | 50       | 47 (94.0%)        | 3       |
-| FR   | on       | 50       | **49 (98.0%)**    | 1       |
-| EN   | off      | 50       | 48 (96.0%)        | 2       |
-| EN   | on       | 50       | **49 (98.0%)**    | 1       |
+|---|---|---|---|---|
+| NL | off | 50 | 48 (96.0%) | 2 |
+| NL | on  | 50 | 48 (96.0%) | 2 |
+| FR | off | 50 | 47 (94.0%) | 3 |
+| FR | on  | 50 | **49 (98.0%)** | 1 |
+| EN | off | 50 | 48 (96.0%) | 2 |
+| EN | on  | 50 | **49 (98.0%)** | 1 |
 
 **All 11 of those drops are the mailbox owner.** Nine are `PERSON_1` in
 `me-mail-chat` and one is `PERSON_1` in `projection-mixed` — both transcripts
@@ -198,7 +198,6 @@ is exactly as the model wrote it.
 `PERSON\_1`. It never did, in any of them:
 
 > …ferte PERSON_1_FAMILY — feedback gevraagd"** (11 aug 2026, ongelezen, met bijlage)
->
 > - Van: **PERSON_1** (PERSON_1_EMAIL)
 > - Aan: **PERSON_2**, **PERSON_3**
 > - Cc: **PERSON_4**
@@ -206,13 +205,12 @@ is exactly as the model wrote it.
 **2 — French, mixed bold and inline.** Suffixed ids survive the same treatment:
 
 > …**réponse** directement à son adresse (PERSON_1_EMAIL).
->
 > - 👉 **Action requise :** répondre à **PERSON_1**.
->   **2. « Devis — relance »**
+> **2. « Devis — relance »**
 > - **De :** PERSON_5 (PERSON_5_EMAIL)
 
 **3 — Dutch, possessive.** The inflection the plan doc's limitation 2 warns
-about on the _input_ side does occur on the output side — with an apostrophe,
+about on the *input* side does occur on the output side — with an apostrophe,
 which `reverse` already handles:
 
 > …doorgestuurd naar PERSON_3. PERSON_3 kijkt ernaar voor vrijdag, en PERSON_1
@@ -221,10 +219,10 @@ which `reverse` already handles:
 **4 — English, reformatted into a Markdown table.** A structural rewrite of the
 input, and the ids still come through intact:
 
-> | Person   | Role                                    |
-> | -------- | --------------------------------------- |
+> | Person | Role |
+> |---|---|
 > | PERSON_1 | Sender of thread 1, awaiting your reply |
-> | PERSON_2 | You — recipient in both threads         |
+> | PERSON_2 | You — recipient in both threads |
 
 **5 — Dutch, placeholder inside a URL path.** The model reproduced a
 SharePoint personal-site slug it could not possibly have parsed as a name:
@@ -233,9 +231,9 @@ SharePoint personal-site slug it could not possibly have parsed as a name:
 
 That last excerpt also carries an **incidental finding about `apply`, not about
 the model**: the `_SLUG` form (`jan_vandamme_dtsc_be`) is substituted, but the
-**percent-encoded** copy of the same surname in the URL _path_
+**percent-encoded** copy of the same surname in the URL *path*
 (`Offerte%20Van%20…%202026.docx`) is not — `%20` breaks the literal, so the
-needle never matches. The un-encoded `name` field of the same driveItem _is_
+needle never matches. The un-encoded `name` field of the same driveItem *is*
 substituted correctly. It is now recorded as **limitation 5** in
 [`graph-pseudonymisation.md`](graph-pseudonymisation.md#known-limitations) and is
 independent of everything measured here; it was noticed while building the
@@ -260,14 +258,14 @@ wiring it:
 
 - The benefit lands on `_EMAIL` / `_GIVEN` mention rates, a metric this bench
   did not set out to optimise. Whether "the answer names more email placeholders"
-  is _good_ depends on the product, and it is not obviously good — those are
+  is *good* depends on the product, and it is not obviously good — those are
   reversed to real addresses in front of the user.
 - Guidance only makes sense at the **prompt/synthesizer seam** (option 3 of open
   question 1). If the hook lands at the app-tools transport or the event store,
   the synthesizer prompt is the wrong place to put it and this recommendation
   does not apply.
 
-So: wire it _if and when_ the prompt seam is chosen, as a one-paragraph addition
+So: wire it *if and when* the prompt seam is chosen, as a one-paragraph addition
 to `synthesizer.baml`. It is not a prerequisite for `reverse` to work.
 
 **3. Open question 4 can be closed** for the Anthropic synthesizer chain. It
@@ -284,8 +282,8 @@ Stated plainly, because the result is clean enough to be over-read.
    model; **do not assume this result transfers to it.** If mixed chains are ever
    the production default, this bench must be re-run against them before open
    question 4 is closed there.
-2. **One prompt shape.** `Synthesize` only. A controller that has to _compose a
-   tool argument_ from a placeholder — the reversal problem open question 1
+2. **One prompt shape.** `Synthesize` only. A controller that has to *compose a
+   tool argument* from a placeholder — the reversal problem open question 1
    raises for the prompt seam — is a different and harder test that this bench
    does not attempt.
 3. **Fictional fixtures.** 11 payloads, invented names on `dtsc.be` /
@@ -295,12 +293,12 @@ Stated plainly, because the result is clean enough to be over-read.
    no transcript exceeded 5 people.
 4. **`dropped` is a soft metric.** There is no ground truth for how many people
    a good three-paragraph summary should name, so drop rates are only comparable
-   _between arms of this bench_, not against an absolute standard.
+   *between arms of this bench*, not against an absolute standard.
 5. **2 samples per cell** at default temperature. Enough to establish that
    mangling is rare; not enough to put a confidence interval on a 4pp coverage
    difference. The zero columns are the robust part of this result.
 6. **The `unpresented` column was added after this run.** The scorer now also
-   reports an _in-range invented form_ — a placeholder the table minted but the
+   reports an *in-range invented form* — a placeholder the table minted but the
    input never showed the model (prompt carried `PERSON_2`, answer says
    `PERSON_2_EMAIL`). That has the right shape, so the five original outcomes all
    read clean, yet `reverse` resolves it and prints a real address never in
@@ -308,7 +306,7 @@ Stated plainly, because the result is clean enough to be over-read.
    The 96 answers of this run are saved in `.samples.json` and can be rescored
    offline, but **the numbers in the tables above predate the column**, so this
    document reports no measurement for it. Treat "zero invented ids" as
-   established for out-of-range `n` only until a re-run fills it in.
+   established for out-of-range `n` only, until a re-run fills it in.
 
 ## Reproducing
 

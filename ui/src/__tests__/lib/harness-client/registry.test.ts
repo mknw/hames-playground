@@ -1,0 +1,211 @@
+/**
+ * Agent registry (`lib/harness-client/registry.server.ts`) — registration,
+ * client-safe metadata, and the three structural capability probes
+ * (code-mode / redis-retriever / durable sandbox workspace).
+ *
+ * The structural detectors from harness-patterns are mocked so the probes can
+ * be driven independently of any real pattern graph; the example agents that
+ * the module registers on import are exercised through the public listing.
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { AgentConfig } from '../../../lib/harness-client/registry.server'
+
+vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+  assertServerOnImport: vi.fn(),
+  assertServer: vi.fn(),
+}))
+
+const usesCodeMode = vi.fn(() => false)
+const harnessHasRedisRetriever = vi.fn(() => false)
+const harnessUsesSyncWorkspace = vi.fn(() => false)
+vi.mock('../../../lib/harness-patterns', () => ({
+  usesCodeMode,
+  harnessHasRedisRetriever,
+  harnessUsesSyncWorkspace,
+}))
+
+// The module registers the seven example agents on import; each example pulls
+// in the whole pattern/tool graph, so stub them down to bare configs.
+function stubAgent(id: string): AgentConfig {
+  return {
+    id,
+    name: id,
+    description: id,
+    icon: `i-${id}`,
+    accent: 'blue',
+    servers: [],
+    createPatterns: async () => [],
+  }
+}
+vi.mock('../../../lib/harness-client/examples/default.server', () => ({
+  defaultAgent: stubAgent('default'),
+}))
+vi.mock('../../../lib/harness-client/examples/code-mode.server', () => ({
+  codeModeAgent: stubAgent('code-mode'),
+}))
+vi.mock('../../../lib/harness-client/examples/multi-source-research.server', () => ({
+  multiSourceResearchAgent: stubAgent('multi-source-research'),
+}))
+vi.mock('../../../lib/harness-client/examples/sandbox-session.server', () => ({
+  sandboxSessionAgent: stubAgent('sandbox-session'),
+}))
+vi.mock('../../../lib/harness-client/examples/flavoured-sandbox.server', () => ({
+  flavouredSandboxAgent: stubAgent('flavoured-sandbox'),
+}))
+vi.mock('../../../lib/harness-client/examples/retriever-agent.server', () => ({
+  retrieverAgent: stubAgent('retriever'),
+}))
+vi.mock('../../../lib/harness-client/examples/microsoft-365.server', () => ({
+  microsoft365Agent: stubAgent('microsoft-365'),
+}))
+
+const {
+  registerAgent,
+  getAgent,
+  getAllAgents,
+  getAgentMetadata,
+  agentUsesCodeMode,
+  agentUsesRedisRetriever,
+  agentUsesSyncWorkspace,
+} = await import('../../../lib/harness-client/registry.server')
+
+/** Unique ids per test keep the module-level capability caches from bleeding. */
+let seq = 0
+type PatternFactory = AgentConfig['createPatterns']
+
+function freshAgent(overrides: Partial<{ createPatterns: PatternFactory }> = {}) {
+  const id = `probe-${seq++}`
+  const createPatterns = vi.fn<PatternFactory>(
+    overrides.createPatterns ?? (async () => [{ patternId: 'x' }] as never),
+  )
+  registerAgent({
+    id,
+    name: `Agent ${id}`,
+    description: 'probe',
+    icon: `i-${id}`,
+    accent: 'violet',
+    servers: ['neo4j'],
+    createPatterns,
+  })
+  return { id, createPatterns }
+}
+
+beforeEach(() => {
+  usesCodeMode.mockReturnValue(false)
+  harnessHasRedisRetriever.mockReturnValue(false)
+  harnessUsesSyncWorkspace.mockReturnValue(false)
+})
+
+describe('registration + lookup', () => {
+  it('registers the example agents on import', () => {
+    expect(getAllAgents().map((a) => a.id)).toEqual(
+      expect.arrayContaining([
+        'default',
+        'code-mode',
+        'multi-source-research',
+        'sandbox-session',
+        'flavoured-sandbox',
+        'retriever',
+        'microsoft-365',
+      ]),
+    )
+  })
+
+  it('returns undefined for an unknown id rather than throwing', () => {
+    expect(getAgent('no-such-agent')).toBeUndefined()
+  })
+
+  it('replaces an agent registered twice under the same id', () => {
+    const before = getAllAgents().length
+    registerAgent({ ...stubAgent('default'), name: 'Renamed' })
+    expect(getAgent('default')?.name).toBe('Renamed')
+    expect(getAllAgents()).toHaveLength(before)
+  })
+
+  it('exposes metadata without the non-serializable pattern factory', () => {
+    const { id } = freshAgent()
+    const meta = getAgentMetadata().find((m) => m.id === id)!
+    expect(meta).toEqual({
+      id,
+      name: `Agent ${id}`,
+      description: 'probe',
+      icon: `i-${id}`,
+      accent: 'violet',
+      servers: ['neo4j'],
+    })
+    expect('createPatterns' in meta).toBe(false)
+  })
+})
+
+describe.each([
+  ['agentUsesCodeMode', agentUsesCodeMode, usesCodeMode],
+  ['agentUsesRedisRetriever', agentUsesRedisRetriever, harnessHasRedisRetriever],
+  ['agentUsesSyncWorkspace', agentUsesSyncWorkspace, harnessUsesSyncWorkspace],
+] as const)('%s — structural capability probe', (_name, probe, detector) => {
+  it('reports what the structural detector saw in the built patterns', async () => {
+    detector.mockReturnValue(true)
+    const { id, createPatterns } = freshAgent()
+
+    await expect(probe(id, 'sess-1')).resolves.toBe(true)
+    expect(createPatterns).toHaveBeenCalledWith('sess-1')
+    expect(detector).toHaveBeenCalledWith([{ patternId: 'x' }])
+  })
+
+  it('memoizes per agentId — patterns are built once, not once per session', async () => {
+    detector.mockReturnValue(true)
+    const { id, createPatterns } = freshAgent()
+
+    await probe(id, 'sess-1')
+    await probe(id, 'sess-2')
+
+    expect(createPatterns).toHaveBeenCalledTimes(1)
+  })
+
+  it('is false for an unregistered agent', async () => {
+    await expect(probe('no-such-agent', 'sess-1')).resolves.toBe(false)
+  })
+
+  it('does not cache a pattern-construction failure, so the next call re-probes', async () => {
+    let attempts = 0
+    const { id } = freshAgent({
+      createPatterns: async () => {
+        if (attempts++ === 0) throw new Error('gateway down')
+        return [{ patternId: 'x' }] as never
+      },
+    })
+    detector.mockReturnValue(true)
+
+    // First call falls back (no real detection possible)...
+    await probe(id, 'sess-1')
+    // ...and the second one gets the real answer.
+    await expect(probe(id, 'sess-2')).resolves.toBe(true)
+    expect(attempts).toBe(2)
+  })
+})
+
+describe('agentUsesCodeMode — failure fallback', () => {
+  it('assumes code-mode only for the agent literally named code-mode', async () => {
+    const boom = async () => {
+      throw new Error('gateway down')
+    }
+    registerAgent({ ...stubAgent('code-mode'), createPatterns: boom })
+    const { id } = freshAgent({ createPatterns: boom })
+
+    await expect(agentUsesCodeMode('code-mode', 's')).resolves.toBe(true)
+    await expect(agentUsesCodeMode(id, 's')).resolves.toBe(false)
+  })
+})
+
+describe('agentUsesRedisRetriever / agentUsesSyncWorkspace — failure fallback', () => {
+  it('fails closed to false, with no name-based special case', async () => {
+    const boom = async () => {
+      throw new Error('gateway down')
+    }
+    const a = freshAgent({ createPatterns: boom })
+    const b = freshAgent({ createPatterns: boom })
+
+    await expect(agentUsesRedisRetriever(a.id, 's')).resolves.toBe(false)
+    await expect(agentUsesSyncWorkspace(b.id, 's')).resolves.toBe(false)
+  })
+})

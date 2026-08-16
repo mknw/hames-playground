@@ -9,7 +9,9 @@
  *                                               body: { sessionId, hidden?, archived? }
  *
  * Documents are keyed by (sessionId, id); the session is supplied as a query
- * param (GET/DELETE) or in the JSON body (PATCH).
+ * param (GET/DELETE) or in the JSON body (PATCH). Every method resolves the
+ * session's owner first and answers 404 unless it is the caller's — see
+ * `lib/stash/ownership.server.ts`.
  */
 
 import type { APIEvent } from '@solidjs/start/server'
@@ -19,16 +21,23 @@ import {
   setDocumentFlags,
   stripContent,
 } from '../../../../lib/document-store.server'
-import { json, withUser } from '../../../../lib/stash/http.server'
+import {
+  claimSession,
+  json,
+  requireSessionOwner,
+  withUser,
+} from '../../../../lib/stash/http.server'
 
 function sessionParam(event: APIEvent): string | null {
   return new URL(event.request.url).searchParams.get('sessionId')
 }
 
 export async function GET(event: APIEvent) {
-  return withUser(async () => {
+  return withUser(async (userId) => {
     const sessionId = sessionParam(event)
     if (!sessionId) return json({ error: 'sessionId is required' }, 400)
+    const denied = await requireSessionOwner(sessionId, userId)
+    if (denied) return denied
     const doc = await getDocument(sessionId, event.params.id)
     if (!doc) return json({ error: 'Document not found' }, 404)
 
@@ -44,9 +53,7 @@ export async function GET(event: APIEvent) {
           'Content-Type': doc.mimeType || 'application/octet-stream',
           'Content-Disposition': `attachment; filename="${filename}"`,
           'Content-Length': String(
-            isBinary
-              ? (body as Buffer).length
-              : Buffer.byteLength(doc.content, 'utf8'),
+            isBinary ? (body as Buffer).length : Buffer.byteLength(doc.content, 'utf8'),
           ),
         },
       })
@@ -67,16 +74,18 @@ export async function GET(event: APIEvent) {
 }
 
 export async function DELETE(event: APIEvent) {
-  return withUser(async () => {
+  return withUser(async (userId) => {
     const sessionId = sessionParam(event)
     if (!sessionId) return json({ error: 'sessionId is required' }, 400)
+    const denied = await requireSessionOwner(sessionId, userId)
+    if (denied) return denied
     await deleteDocument(sessionId, event.params.id)
     return json({ ok: true })
   })
 }
 
 export async function PATCH(event: APIEvent) {
-  return withUser(async () => {
+  return withUser(async (userId) => {
     let body: { sessionId?: string; hidden?: boolean; archived?: boolean }
     try {
       body = await event.request.json()
@@ -84,6 +93,11 @@ export async function PATCH(event: APIEvent) {
       return json({ error: 'Request body must be JSON' }, 400)
     }
     if (!body.sessionId) return json({ error: 'sessionId is required' }, 400)
+    // The write gate, because `setDocumentFlags` refreshes the document's TTL:
+    // re-claiming moves the ownership window along with it, so a session whose
+    // documents are still being edited never outlives the record of who owns it.
+    const denied = await claimSession(body.sessionId, userId)
+    if (denied) return denied
 
     const updated = await setDocumentFlags(body.sessionId, event.params.id, {
       hidden: body.hidden,

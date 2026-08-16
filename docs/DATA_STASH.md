@@ -44,13 +44,40 @@ query ─────────────────────── embe
 | `POST /api/stash/ingest` | Chunk → embed → index a stored doc (`{sessionId, docId, chunk?, embedding?}`) |
 | `GET /api/stash/search?sessionId=&q=&k=` | KNN similarity search over a session's chunks |
 
-Auth follows the existing posture (dev-bypass aware; see `lib/auth/dev-bypass.ts`). Ingest runs two ways: **explicitly** via `POST /api/stash/ingest`, or **automatically on upload** when the session's agent composes a `retriever` wired to the redis backend (see [Harness-aware ingest](#harness-aware-ingest-the-retriever-pattern) below). Either way it needs an embedding backend and binds the corpus to one model.
+Auth follows the existing posture (dev-bypass aware; see `lib/auth/dev-bypass.ts`), and every route additionally scopes the `sessionId` it is given to the caller — see [Session ownership](#session-ownership) below. Ingest runs two ways: **explicitly** via `POST /api/stash/ingest`, or **automatically on upload** when the session's agent composes a `retriever` wired to the redis backend (see [Harness-aware ingest](#harness-aware-ingest-the-retriever-pattern) below). Either way it needs an embedding backend and binds the corpus to one model.
 
 Documents don't only arrive over HTTP: the `graph_file_ingest` app tool calls
 `storeDocument` + `ingestStashDocument` in-process to copy one of the signed-in
 person's Microsoft 365 files into the session's stash, under the same store/ingest
 contract as the upload route — see
 [MICROSOFT_GRAPH.md](MICROSOFT_GRAPH.md#files--the-data-stash).
+
+## Session ownership
+
+Documents are keyed by `sessionId`, so each route resolves that session's owner
+and answers **404** unless it is the caller's — the same response an unknown
+session gets, so "not yours" and "not there" read alike. `lib/stash/ownership.server.ts`
+is the single resolver; `lib/stash/http.server.ts` exposes it to routes as
+`requireSessionOwner` (reads) and `claimSession` (writes).
+
+Ownership comes from two records:
+
+| Record | Written by | Covers |
+|---|---|---|
+| `session_claims` (Postgres, TTL = `DEFAULT_TTL_SECONDS`) | every stash write for a session (`POST /api/stash/upload`, `POST /api/stash/ingest`, `PATCH /api/stash/document/:id`), which records the first writer and refreshes the window for the holder | an upload that precedes the conversation row — a file dropped before the first chat message |
+| `conversations.user_id` | `actions.server.ts` (row seeded before the first turn runs, #105) and `seedActionRow` (agent trigger, same request that stores the recording) | everything after the session is persisted |
+
+First toucher wins, in both records: the claim upsert only re-targets a row that
+is already the caller's or has expired, and `saveConversation` never updates
+`user_id`. A live claim outranks the conversation row, since it is the earlier of
+the two touches whenever both exist; once it expires, the conversation row is the
+remaining record. A session with neither record has no documents (writes claim
+before they store), so `GET /api/stash/upload?sessionId=` lists it as empty
+rather than as an error — that is the state a brand-new chat opens in.
+
+The agent-trigger recording (`docs/AGENT_TRIGGER.md`) needs no claim: the run's
+conversation row is written for the token's user inside the same request that
+stores the recording, so playback resolves through it.
 
 ## Harness-aware ingest (the `retriever` pattern)
 

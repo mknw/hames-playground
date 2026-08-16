@@ -1,5 +1,11 @@
 # Adopting agent skills — a curated procedure bundle (Plan)
 
+> **Superseded by extraction (2026-08-17).** The generic bundle this plan
+> shipped into `.claude/skills/` was later extracted to `~/Code/muster-skills`
+> and installed globally via `~/.claude/skills` symlinks; only `kg-*` skills
+> and the two sub-agents remain in-repo. This document stays as the record of
+> how the set was chosen, adapted and delivered — read it as history.
+
 > **Status: plan only. No `.claude/skills/` files ship in this PR.** This document
 > operationalises decisions already taken with the user on 2026-08-16 after a
 > three-researcher evaluation of five public skill collections. It does not

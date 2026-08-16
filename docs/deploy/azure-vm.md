@@ -239,13 +239,26 @@ install still has the old dir, `.env` and unit paths.
 
 ```bash
 cd /opt/kg-agent && git pull
-mv ui/.env app/.env
+mv -n ui/.env app/.env          # -n: re-running the migration must not clobber app/.env
 sudo sed -i \
   -e 's#WorkingDirectory=/opt/kg-agent/ui#WorkingDirectory=/opt/kg-agent/app#' \
   -e 's#EnvironmentFile=/opt/kg-agent/ui/.env#EnvironmentFile=/opt/kg-agent/app/.env#' \
   /etc/systemd/system/kg-agent.service
 sudo systemctl daemon-reload
-rm -rf ui
+```
+
+Then run the **Update / redeploy** recipe below (install + build under `app/` +
+restart) and confirm the service is actually up:
+
+```bash
+systemctl is-active kg-agent && journalctl -u kg-agent -n 20 --no-pager
+```
+
+Only once that restart is verified, drop the old tree — it is the rollback copy
+until then:
+
+```bash
+rm -rf /opt/kg-agent/ui
 ```
 
 **Update / redeploy:**

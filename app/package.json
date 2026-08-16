@@ -19,7 +19,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit --project tsconfig.json",
-    "prepare": "git config core.hooksPath .githooks"
+    "prepare": "git rev-parse --is-inside-work-tree > /dev/null 2>&1 || exit 0; git config core.hooksPath .githooks"
   },
   "dependencies": {
     "@ark-ui/solid": "^5.36.1",

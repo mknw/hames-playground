@@ -110,6 +110,11 @@ pnpm baml-generate    # Regenerate baml_client/
 pnpm baml-test        # Run BAML tests
 ```
 
+To run this app as a container instead of natively — deployment parity, not the
+dev loop — build `Dockerfile` through the `app` compose service from the repo
+root: `docker compose build app && docker compose up -d app`. Details and the
+env-var rewrites: [`docs/DOCKER_COMPOSE.md`](../docs/DOCKER_COMPOSE.md#app-the-solidstart-app-197).
+
 ## Adding a New Agent
 
 1. Create `src/lib/harness-client/examples/<name>.server.ts` exporting an `AgentConfig`

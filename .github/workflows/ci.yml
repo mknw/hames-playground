@@ -116,3 +116,50 @@ jobs:
 
       # Catches SSR/vinxi breakage the unit tests cannot see.
       - run: pnpm build
+
+  image:
+    name: docker image · build · boot
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    # Independent of `check` on purpose: it builds the same code a different
+    # way (inside the image, from the lockfile, with the BAML client generated
+    # there), so running them in parallel costs nothing and a red one localises
+    # the breakage by itself.
+    steps:
+      - uses: actions/checkout@v4
+
+      # `defaults.run.working-directory` is app/, which is also the build
+      # context — the Dockerfile needs nothing outside it (baml_src/ lives here).
+      - name: Build the image
+        run: docker build --tag kg-agent-app:ci .
+
+      # A container that builds but does not boot is not a passing gate. This
+      # runs the image with NO dependencies attached: /api/health is a liveness
+      # probe that touches none of them, and the routine scheduler's tick
+      # catches its own DB errors, so "serves 200" is the honest bar here.
+      # Postgres/Neo4j/gateway wiring is exercised by `docker compose up -d app`,
+      # not by CI.
+      - name: Boot it and hit /api/health
+        run: |
+          docker run -d --name app-smoke -p 3444:3444 kg-agent-app:ci
+          served=""
+          for i in $(seq 1 30); do
+            if [ -z "$served" ] && curl -fsS localhost:3444/api/health; then
+              echo && echo "healthy after ${i}s"
+              served=1
+            fi
+            health_status=$(docker inspect -f '{{.State.Health.Status}}' app-smoke)
+            echo "HEALTHCHECK status: ${health_status}"
+            if [ -n "$served" ] && [ "$health_status" = "healthy" ]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::container did not serve /api/health and report HEALTHCHECK=healthy within 30s"
+          docker logs app-smoke
+          exit 1
+
+      - name: Container logs
+        if: always()
+        run: docker logs app-smoke || true

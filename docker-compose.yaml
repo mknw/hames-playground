@@ -121,6 +121,73 @@ services:
     networks:
       - app-network
 
+  app:
+    # The SolidStart app (#197). Deployment/parity — NOT the dev loop: `pnpm dev`
+    # on the host is still the way to develop, and this service is not part of
+    # the `docker compose up -d` bring-up that supports it (start it explicitly:
+    # `docker compose up -d app`, or bring the whole stack up with `--profile app`).
+    profiles: ["app"]
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    image: kg-agent-app:local
+    container_name: kg-agent-app
+    restart: unless-stopped
+    ports:
+      - "3444:3444"
+    env_file:
+      # Secrets and per-tenant config (ANTHROPIC_API_KEY, AZURE_*, allow-list).
+      # Optional so a fresh clone without an app/.env can still bring the rest
+      # of the stack up — the app itself will not start usefully without it.
+      - path: ./app/.env
+        required: false
+    environment:
+      # `environment` wins over `env_file`, which is what makes these the
+      # in-network rewrites of app/.env's host-facing defaults. Neo4j needs no
+      # entry: config/endpoints.ts resolves bolt://neo4j:7687 in a production
+      # build (the localhost form is the `import.meta.env.DEV` branch).
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/kgagent
+      - MCP_GATEWAY_URL=http://mcp-gateway:8811/mcp
+      - REDIS_HOST_DIRECT=redis
+      - DOC_CONVERT_URL=http://doc-convert:8000
+      # Data Stash embeddings run on a llama-server on the HOST (port 8090, see
+      # CLAUDE.md), which is not a compose service — hence host.docker.internal.
+      - EMBEDDINGS_LOCAL_URL=http://host.docker.internal:8090/v1
+    extra_hosts:
+      # Linux hosts need this mapping spelled out; Docker Desktop/colima provide
+      # host.docker.internal anyway and ignore it.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # The compute sandbox shells `docker run`/`docker exec` (sandbox
+      # containers are siblings on the host, not children — none of those calls
+      # bind-mount host paths, so they behave the same from in here). This mount
+      # is root-equivalent on the host: drop it, and only the sandbox agents
+      # stop working.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # process.cwd() is /app at runtime, so server-catalog.server.ts and
+      # action-tokens.server.ts's `../configs` candidate resolves to /configs —
+      # without this mount the catalog/action-token lookups silently miss.
+      - ./configs:/configs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mcp-gateway:
+        # No healthcheck on the gateway image, and the app reconnects per call
+        # anyway (mcp-client.server.ts pools + retries), so started is enough.
+        condition: service_started
+      doc-convert:
+        # No healthcheck on the doc-convert image; STASH_CONVERT_DOCS defaults
+        # off so a slow/unready sidecar isn't on the critical path.
+        condition: service_started
+    networks:
+      - app-network
+    # The healthcheck lives in the image (app/Dockerfile) so `docker run` gets
+    # it too; nothing to restate here.
+
 networks:
   app-network:
     driver: bridge

@@ -35,13 +35,26 @@ app needs at runtime, so it works on a plain VPS or an Azure VM identically —
    redis-stack :6379 (DataStash)   │ mounts docker.sock, spawns 1 container/MCP-server
 ```
 
-**Why the UI runs on the host, not in a container:** it shells out to
-`docker run -d --rm …` for compute sandboxes (`docker-backend.server.ts:291`) and
-uses `node-pty` for the Shell terminal. There is **no UI Dockerfile** today (only
-`rootfs/Dockerfile`, which is the sandbox image). Running the UI as a host
-`systemd` service gives it a native `docker` CLI and native `node-pty` with the
-least friction. Containerizing it later is possible but needs a socket mount +
-`docker` CLI in the image + native rebuild.
+**Why this guide runs the UI on the host:** it shells out to `docker run -d --rm …`
+for compute sandboxes (`docker-backend.server.ts:291`) and uses `node-pty` for the
+Shell terminal, and a host `systemd` service gives it a native `docker` CLI and a
+native `node-pty` with the least friction. That is still the deployment shape
+described below.
+
+The container route now exists as an alternative (#197): `app/Dockerfile` plus the
+`app` compose service, which covers exactly those two needs — the image carries a
+`docker` CLI and mounts `/var/run/docker.sock` (sandbox containers become siblings
+on the host), and `node-pty` is compiled inside the image for the image's own
+platform. Everything else in this guide (§4 `.env`, §6 secrets, §8 Caddy) applies
+either way; the difference is that steps 6–7's `pnpm build` + `systemd` unit become
+`docker compose build app && docker compose up -d app`, with Caddy proxying to the
+same `127.0.0.1:3444`. See [`docs/DOCKER_COMPOSE.md`](../DOCKER_COMPOSE.md#app-the-solidstart-app-197).
+Note the gap with the rest of this VM's shape: the compose `app` service
+publishes `3444:3444`, which Docker binds to `0.0.0.0` and — because Docker
+writes its own iptables rules — reaches the host regardless of `ufw`, unlike
+every other port pinned to `127.0.0.1` in the diagram above; the container
+route should rewrite that mapping to `127.0.0.1:3444:3444` or otherwise rely
+on the NSG to keep 3444 off the public interface.
 
 ---
 
@@ -51,7 +64,7 @@ least friction. Containerizing it later is possible but needs a socket mount +
   (see `docker-compose.override.yml`); on x86 the native image just works, delete
   that override.
 - **Size:** start around **4 vCPU / 16 GB** (e.g. Azure `Standard_D4s_v5`). Neo4j
-  (+apoc+n10s), redis-stack, Postgres, the Node server, *and* N concurrent sandbox
+  (+apoc+n10s), redis-stack, Postgres, the Node server, _and_ N concurrent sandbox
   containers all share this box. Bump RAM if you raise the sandbox cap.
 - **OS:** Ubuntu 22.04 / 24.04 LTS.
 - **Disk:** Premium SSD, 64 GB+ (Docker images + the three data volumes).
@@ -89,6 +102,7 @@ server resolves the MCP catalog via `path.resolve(process.cwd(), '..', 'configs'
 with cwd = `app/` (`server-catalog.server.ts:42`).
 
 Create the git-ignored config files with **real** values:
+
 - **`configs/mcp-config.yaml`** — the enabled-servers list + secrets (GitHub PAT,
   neo4j password, …). Per #88, scope the GitHub token to **public/read-only** and
   pre-provision statically; there is no runtime secret-setting on a Linux host.
@@ -173,6 +187,7 @@ journalctl -u kg-agent -f
 ## 7. Embeddings backend (only if you use DataStash / retriever search)
 
 The Data Stash pipeline needs an embedder. Two options:
+
 - **Self-host** a `llama-server --embedding` on `:8090` (needs the GGUF model on
   disk) as its own systemd unit, and set `EMBEDDINGS_PROVIDER=local` +
   `EMBEDDINGS_LOCAL_URL=http://127.0.0.1:8090`.
@@ -198,20 +213,20 @@ sudo systemctl reload caddy    # auto-provisions a Let's Encrypt cert
 
 Every var the server reads (`grep process.env src/`), with its localhost default:
 
-| Var | Purpose | Default / note |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | **Required** — all default BAML chains | — |
-| `USE_MIXED_CHAINS` | `1` to use mixed-provider chains | unset = Anthropic-only |
-| `OPENROUTER_API_KEY` | mixed chains + possibly embeddings | needed iff `USE_MIXED_CHAINS=1` |
-| `DATABASE_URL` | Postgres (conversations) | `postgresql://postgres:password@localhost:5432/kgagent` — **override the password** |
-| `MCP_GATEWAY_URL` | MCP gateway endpoint | `http://localhost:8811/mcp` |
-| `MCP_GATEWAY_POOL_SIZE` | warm gateway connections kept in the client pool (#120) | `4` — leases isolate reconnects; extra concurrent calls open a short-lived overflow connection rather than queueing |
-| `NEO4J_USER` / `NEO4J_PASSWORD` | direct Neo4j driver | resolves to `bolt://localhost:7687` on host (`config/endpoints.ts:37`) |
-| `COMPUTE_BACKEND` | sandbox backend | `docker` (firecracker `#78` not implemented) |
-| `SANDBOX_IMAGE` | sandbox container image | `kg-sandbox:base` (built in step 5) |
-| `DOCKER_BIN` | docker CLI path | `docker` |
-| `EMBEDDINGS_PROVIDER` / `EMBEDDINGS_LOCAL_URL` / `EMBEDDINGS_LOCAL_MODEL` | DataStash embedder | see step 7 |
-| `STACK_SECRET_SERVER_KEY` | auth (Stack Auth) | configure a real project; **do not** ship `DEV_BYPASS_AUTH=true` to prod |
+| Var                                                                       | Purpose                                                 | Default / note                                                                                                      |
+| ------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`                                                       | **Required** — all default BAML chains                  | —                                                                                                                   |
+| `USE_MIXED_CHAINS`                                                        | `1` to use mixed-provider chains                        | unset = Anthropic-only                                                                                              |
+| `OPENROUTER_API_KEY`                                                      | mixed chains + possibly embeddings                      | needed iff `USE_MIXED_CHAINS=1`                                                                                     |
+| `DATABASE_URL`                                                            | Postgres (conversations)                                | `postgresql://postgres:password@localhost:5432/kgagent` — **override the password**                                 |
+| `MCP_GATEWAY_URL`                                                         | MCP gateway endpoint                                    | `http://localhost:8811/mcp`                                                                                         |
+| `MCP_GATEWAY_POOL_SIZE`                                                   | warm gateway connections kept in the client pool (#120) | `4` — leases isolate reconnects; extra concurrent calls open a short-lived overflow connection rather than queueing |
+| `NEO4J_USER` / `NEO4J_PASSWORD`                                           | direct Neo4j driver                                     | resolves to `bolt://localhost:7687` on host (`config/endpoints.ts:37`)                                              |
+| `COMPUTE_BACKEND`                                                         | sandbox backend                                         | `docker` (firecracker `#78` not implemented)                                                                        |
+| `SANDBOX_IMAGE`                                                           | sandbox container image                                 | `kg-sandbox:base` (built in step 5)                                                                                 |
+| `DOCKER_BIN`                                                              | docker CLI path                                         | `docker`                                                                                                            |
+| `EMBEDDINGS_PROVIDER` / `EMBEDDINGS_LOCAL_URL` / `EMBEDDINGS_LOCAL_MODEL` | DataStash embedder                                      | see step 7                                                                                                          |
+| `STACK_SECRET_SERVER_KEY`                                                 | auth (Stack Auth)                                       | configure a real project; **do not** ship `DEV_BYPASS_AUTH=true` to prod                                            |
 
 > Redis is **not** a direct env connection — all Redis access is via the gateway's
 > redis MCP server, so there's no `REDIS_URL` to set.
@@ -234,6 +249,7 @@ rm -rf ui
 ```
 
 **Update / redeploy:**
+
 ```bash
 cd /opt/kg-agent && git pull
 cd app && pnpm install --frozen-lockfile && pnpm build
@@ -262,8 +278,9 @@ dump` + Redis RDB). These hold all conversations, the graph, and the Data Stash.
   plaintext `app/.env` + `configs/mcp-config.yaml`.
 - **Auth.** Confirm a real Stack Auth project (or the email allow-list) is wired
   and `DEV_BYPASS_AUTH` is off.
-- **No UI Dockerfile.** If you later want everything under compose, add one
-  (socket mount + docker CLI in-image + native `node-pty` rebuild).
+- **Two supported run shapes.** Host `systemd` (this guide) or the `app` compose
+  service (#197). The container shape has not yet been exercised on a real
+  deployment — the `systemd` path is the one with mileage.
 
 ## 12. Azure niceties (optional)
 

@@ -459,3 +459,86 @@ this" rule in `CLAUDE.md`.
   npm install or a background daemon — both excluded by the no-daemons
   constraint, and they would be a second memory system beside our notes and
   h9s), and the ~280 remaining skills.
+## Wave 6 — `kg-dtalk-ui`
+
+`chore(skills): kg-dtalk-ui styleguide`
+
+`kg-dtalk-ui` is **ours** — a project styleguide of recipes and rules derived by
+reading `ui/uno.config.ts` and measuring the real duplication in `ui/src`.
+Bundle `project` (the `kg-` prefix; it never ships with the open-source split).
+Invocation: **model**. Two pieces inside it are vendored, which makes the skill a
+**derivative work**, and every file carries an attribution comment naming the
+source.
+
+All vendored rows: upstream `nextlevelbuilder/ui-ux-pro-max-skill` @ `a38d04c`.
+
+| Our path                        | Upstream path                                                     | Vendored?         | Adapted        |
+| ------------------------------- | ----------------------------------------------------------------- | ----------------- | -------------- |
+| `kg-dtalk-ui/SKILL.md`          | —                                                                 | no — written here | —              |
+| `kg-dtalk-ui/A11Y-CHECKLIST.md` | `.claude/skills/ui-ux-pro-max/references/quick-reference.md` §1–2 | **yes**           | **yes** — D, E |
+| `kg-dtalk-ui/GRAPH-VIZ.md`      | `.claude/skills/ui-ux-pro-max/data/charts.csv` row 16             | **yes**           | **yes** — F    |
+
+### Adaptations
+
+**D — WCAG §1–2 rewritten in this stack's syntax.** Upstream ships §1
+"Accessibility (CRITICAL)" (25 rules) and §2 "Touch & Interaction (CRITICAL)"
+(17 rules) as flat `id` — `prose` bullets. **Rule IDs and WCAG conformance
+levels are preserved verbatim**, so `git diff a38d04c..HEAD` against the upstream
+path stays readable; the guidance column is rewritten as attributify /
+Ark UI / this-repo instructions, with concrete file:line anchors.
+
+**E — the six native-only §2 rules are grouped, not dropped.** `gesture-conflicts`,
+`standard-gestures`, `system-gestures`, `haptic-feedback`, `safe-area-awareness`
+and `swipe-clarity` cannot fire on a desktop web app. They are kept **by ID** in
+a single closing line rather than expanded — the diff-against-upstream property
+survives at one line of cost, instead of six rules of dead context.
+
+**F — charts.csv row 16 → prose.** The row's `Data Volume Threshold`,
+`Color Guidance`, `Accessibility Risk`, `Accessibility Notes`, `A11y Fallback`
+and `Library Recommendation` cells are carried faithfully (≤100 SVG / 101–500
+Canvas / >500 clustering-or-LOD; edges `#90A4AE` @60%; highlight `#F59E0B`; the
+adjacency view as the accessible source of truth; focus-reveals / Enter-drills /
+move-buttons-replace-drag). What is added is the mapping onto Cytoscape.js and
+onto this repo's actual graph components, including the current gaps stated as
+gaps.
+
+**Formatting exception to the convention above.** Neither vendored file is a
+verbatim copy — both are rewrites that preserve upstream's identifiers, not its
+prose — so the "keep upstream formatting" rule has nothing to preserve. All
+three files are prettier-formatted like any other document we author.
+`NOTICE.md` already carried this source's full MIT text from Wave 1; nothing
+was added to it.
+
+### Deliberately **not** vendored from this source
+
+Recorded so it is not re-litigated (plan §2.3):
+
+- **The search tool and `--stack uno`.** In that repo `uno` is the .NET **Uno
+  Platform** (XAML/WinUI), not UnoCSS. An agent auto-detecting "uno" from
+  `package.json` would get C#/XAML guidance.
+- **The `--design-system` generator.** It always generates a _fresh_ palette from
+  its 192-product database, with no flag to validate against an existing token
+  set — it would fight `ui/uno.config.ts` rather than serve it.
+- The remaining eight `quick-reference.md` categories and the other 15+
+  `charts.csv` rows: no consumer here today.
+
+### Not a token cache
+
+Per OQ‑6 (user decision): the skill **points at `ui/uno.config.ts`** for the
+token list and never restates it. What it carries instead is the part that is
+_not_ derivable from the config — the attributify rules and their exceptions,
+the four house recipes, and a **proposed** role→token mapping measured from
+usage. That table is marked in the skill as awaiting a one-time confirmation and
+carries no authority until it gets one.
+
+### CLAUDE.md
+
+Per OQ‑7 (user decision), this wave also fixes `CLAUDE.md`'s stale **Icons**
+subsection: `material-symbols` (+ `-light`) is stated as the icon set, and the
+`i-mdi-*` guidance is corrected to a warning — `@iconify-json/mdi` is installed
+but **not registered** as a collection in `uno.config.ts`, so the 41 surviving
+`i-mdi-*` classes emit no CSS. The edit is confined to that subsection.
+
+**No component code is migrated by this wave.** No `i-mdi-*` renames, no
+hex→token changes, no `class=` fixes. Those are recorded in the skill as
+evidence for its rules; the migration is separate future work.

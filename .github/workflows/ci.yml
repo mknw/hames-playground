@@ -65,15 +65,17 @@ jobs:
       # converges as files are edited (see the pre-commit hook). New and edited
       # code still has to be formatted.
       #
-      # Renames (R) are excluded, and the paths are filtered with grep rather
-      # than a pathspec: a pathspec hides the deleted side of a rename, so git
-      # scores every moved file as an Add and a directory move (#192, ui/ → app/)
-      # would drag the whole legacy tree into the check.
+      # Renames (R) are included: a git mv + edit in the same PR must not
+      # bypass prettier as standing policy. The paths are filtered with grep
+      # rather than a pathspec: a pathspec hides the deleted side of a rename,
+      # so git scores every moved file as an Add and a directory move (#192,
+      # ui/ → app/) would drag the whole legacy tree into the check. Guard
+      # bulk moves by count, not by dropping the rename class outright.
       - name: Format check (changed files)
         if: github.event_name == 'pull_request'
         working-directory: .
         run: |
-          files=$(git diff --name-only --diff-filter=ACM \
+          files=$(git diff --name-only --diff-filter=ACMR \
                     "${{ github.event.pull_request.base.sha }}" HEAD \
                     | grep -E '^app/.*\.(ts|tsx|js|jsx|json|css|md)$' || true)
           if [ -z "$files" ]; then

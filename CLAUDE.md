@@ -208,11 +208,12 @@ UnoCSS attributify mode — always use attribute syntax:
 
 Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secondary,tertiary}`, `dark-border-{primary,secondary}`, `neon-{cyan,magenta,purple}`, `cyber-{600,700,800}`.
 
-**Icons** (`@unocss/preset-icons` + `@iconify-json/mdi` installed):
-- Use MDI icons via `class="i-mdi-<icon-name>"` (note: requires `class=`, not attributify syntax)
-- Example: `<span class="i-mdi-database-outline" style={{ width: '20px', height: '20px', color: '#22d3ee' }} />`
-- Browse icons at [https://icones.js.org](https://icones.js.org) — filter by `mdi`
-- The `color` HTML attribute conflicts with attributify; use inline `style={{ color: '...' }}` for icon color
+**Icons** — `material-symbols` (+ `material-symbols-light`) is **the** icon set; they are the only two collections registered in `presetIcons` (`ui/uno.config.ts`):
+- Use via `class="i-material-symbols-<icon-name>"` — icon classes are the one sanctioned `class=` exception, since `presetIcons` has no attributify form
+- Example: `<span class="i-material-symbols-database-outline" w="5" h="5" text="neon-cyan" aria-hidden="true" />`
+- Browse icons at [https://icones.js.org](https://icones.js.org) — filter by `material-symbols`
+- ⚠️ `@iconify-json/mdi` is still in `package.json` and `i-mdi-*` classes survive in `ui/src`, but **mdi is not registered**, so those classes emit no CSS. Treat every `i-mdi-*` as a bug; do not add more
+- Full styleguide (attributify rules, house recipes, role→colour mapping, a11y + graph checklists): the `kg-dtalk-ui` skill
 
 ---
 

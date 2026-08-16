@@ -1,0 +1,337 @@
+---
+name: kg-dtalk-ui
+description: House styleguide for this repo's SolidStart + Ark UI + UnoCSS-attributify interface. Use before writing or reviewing any .tsx under ui/src — carries the attributify-only rule and its exceptions, the four house recipes, the role-to-colour mapping, the icon set, and pointers to the accessibility and network-graph checklists.
+---
+
+<!-- Derivative work. Mostly ours; the accessibility checklist and the
+     network-graph guidance are adapted from nextlevelbuilder/ui-ux-pro-max-skill
+     (MIT © 2024 Next Level Builder). Pin + adaptations:
+     .claude/skills/PROVENANCE.md · full licence: .claude/skills/NOTICE.md -->
+
+# kg-dtalk-ui — house styleguide
+
+The UI is `ui/` — SolidStart routes and components, Ark UI headless primitives,
+UnoCSS with attributify mode, Cytoscape.js for graphs.
+
+**This skill is recipes and rules. It is not a token cache.** The token list —
+every `dark-bg-*`, `dark-text-*`, `dark-border-*`, `neon-*`, `cyber-*` value —
+lives in [`ui/uno.config.ts`](../../../ui/uno.config.ts) under `theme.colors`, and
+that file is the only place it is written down. Read it when you need a value.
+Restating it here would be a cache of a one-file lookup, and it would go stale.
+
+Two reference files carry the long checklists:
+
+- [`A11Y-CHECKLIST.md`](A11Y-CHECKLIST.md) — accessibility and interaction rules,
+  each rewritten in this stack's syntax. Read it when building or reviewing an
+  interactive surface.
+- [`GRAPH-VIZ.md`](GRAPH-VIZ.md) — Cytoscape / network-graph rules: render
+  thresholds, the adjacency table as the accessible source of truth, the
+  keyboard contract that replaces drag.
+
+---
+
+## 1. Attributify only
+
+Every utility goes in an attribute. Never `class=`.
+
+```tsx
+<div flex="~ col" gap="2" p="4" bg="dark-bg-secondary" text="sm dark-text-secondary">
+```
+
+### The three exceptions, and nothing else
+
+1. **Icon glyphs.** `presetIcons` emits a class, not an attribute:
+   `<span class="i-material-symbols-database-outline" />`. There is no
+   attributify form; this one is structural.
+2. **Preflight classes.** `uno.config.ts` defines real CSS classes in its
+   `preflights` block — `prose-chat`, `graph-entity`, `doc-ref`, `doc-ref-mark`,
+   `doc-ref-chip`, `doc-ref-footer`, `think-root`/`-trigger`/`-preview`/
+   `-content`/`-body`, `thread-flash-done`/`-error`,
+   `thread-progress-indeterminate`, `agent-glyph`. These are hand-written CSS,
+   not utilities. Use them by name with `class=`.
+3. **Strings crossing the HTML sanitiser.** `ChatMessages.tsx` builds markup as
+   a string for sanitised chat HTML; those carry preflight class names by
+   necessity. Do not introduce new ones without a preflight rule to back them.
+
+Anything else in a `class=` is a violation, and the fix is mechanical. Measured
+on this branch, the live violations are `Counter.tsx`, `AuthProvider.tsx`,
+`AgentSelector.tsx:99`, `ChatSidebar.tsx:939`, `ChatInput.tsx:59` and
+`LiveProgressBar.tsx:164`. Migrating them is not this skill's job — not writing
+new ones is.
+
+### Three traps, verified against this config
+
+| Trap                                                                                     | Wrong                                             | Right                                     |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------- |
+| `color` is a real HTML attribute and collides with attributify                           | `color="cyan-400"`                                | fold it into `text`: `text="xs cyan-400"` |
+| `opacity` does **not** resolve as an attributify attribute; the short alias does         | `opacity="0 group-hover:100"` → emits **nothing** | `op="0 group-hover:100"`                  |
+| Shortcuts work as **valueless** attributes — this is what makes recipe R1 below possible | `class="cyber-button"`                            | `<button cyber-button p="2">`             |
+
+The `opacity` one is the expensive kind of bug: no error, no CSS, an element
+that is simply always visible. If a utility silently emits nothing, try the
+short alias before assuming the value is wrong.
+
+### `.ts` files are not scanned by default
+
+UnoCSS only extracts from `[jt]sx` and friends. Agent icon classes live as
+string literals in `src/lib/harness-client/examples/*.server.ts`, so those files
+need **both** halves of the escape hatch: the `content.filesystem` glob in
+`uno.config.ts` **and** a literal `@unocss-include` comment in the file. Adding
+a new agent with an icon means adding that comment; the top of `uno.config.ts`
+explains why both are required.
+
+---
+
+## 2. Dark only, in practice
+
+There is one palette and it is dark. `theme.colors.dark.*` names the surfaces,
+the preflight CSS hard-codes `#0a0a0f` and `rgba(255,255,255,0.06)` hairlines,
+and every component is tuned for that ground.
+
+There is a `ThemeSwitcher` component, but no light token set exists behind it.
+**Do not write `dark:` variants and do not add light-mode branches** — they are
+untestable today and they double the surface of every recipe. If light mode is
+ever wanted it is a design project, not a per-component flag.
+
+Practical consequence: contrast is checked against `#0a0a0f` / `#12121a` /
+`#1a1a24`, never against white.
+
+---
+
+## 3. Icons: material-symbols
+
+**`material-symbols` and `material-symbols-light` are the icon set.** They are
+the only two collections registered in `presetIcons` in `uno.config.ts`.
+
+```tsx
+<span
+  class="i-material-symbols-database-outline"
+  w="5"
+  h="5"
+  text="neon-cyan"
+  aria-hidden="true"
+/>
+```
+
+- `@iconify-json/mdi` is still in `package.json` and 41 `i-mdi-*` references
+  survive in `src/` — but **mdi is not a registered collection**, so those
+  classes emit no CSS. Treat every `i-mdi-*` you meet as a live bug, not as
+  precedent. Do not add more.
+- Migrating the existing 41 is separate future work. This skill states the set;
+  it does not perform the migration.
+- Browse names at [icones.js.org](https://icones.js.org), filtered to
+  `material-symbols`.
+- Size and colour the glyph with attributify (`w="5" h="5" text="neon-cyan"`),
+  not with an inline `style` object. Inline `style` on an icon is only correct
+  when the colour is genuinely dynamic — see §4.
+
+Decorative glyphs sitting next to visible text take `aria-hidden="true"`. An
+icon that is the button's only content means the **button** needs an
+`aria-label` — see `A11Y-CHECKLIST.md`.
+
+---
+
+## 4. Colour: token before hex
+
+**If a value has a token, use the token.** These hexes are hand-written in
+`ui/src` where a token already exists. Counts are literal occurrences measured
+across `ui/src` on this branch (`grep -rhoE '#[0-9a-fA-F]{6}' src`), tests and
+comments included — re-run it rather than trusting the number:
+
+| Hex       | Uses | Token it should have been |
+| --------- | ---- | ------------------------- |
+| `#a1a1aa` | 18   | `dark-text-secondary`     |
+| `#00ffff` | 15   | `neon-cyan`               |
+| `#71717a` | 11   | `dark-text-tertiary`      |
+| `#4f46e5` | 8    | `cyber-600`               |
+| `#ff00ff` | 7    | `neon-magenta`            |
+| `#e4e4e7` | 3    | `dark-text-primary`       |
+| `#2a2a3a` | 3    | `dark-border-primary`     |
+| `#0a0a0f` | 3    | `dark-bg-primary`         |
+| `#22222f` | 3    | `dark-bg-hover`           |
+| `#1a1a24` | 2    | `dark-bg-tertiary`        |
+
+**The one legitimate reason to write a hex inline** is a value the build cannot
+see: a per-row accent resolved at runtime. `src/lib/agent-palette.ts` documents
+this deliberately — its values are applied through inline `style` or a CSS
+custom property (`--agent-accent`) precisely because a dynamic utility class
+would never be extracted. That module is the pattern to copy for anything
+per-entity; do not invent a second one.
+
+### Role → token — **PROPOSAL, not yet confirmed**
+
+> ⚠️ **This table is a proposal awaiting one-time confirmation from the repo
+> owner.** It was derived by measuring which hex is spent on which role across
+> `ui/src`; it is not derivable from `uno.config.ts`, because **none of these
+> semantic roles has a token today**. Until it is confirmed, treat it as
+> documentation of current practice, not as a rule to enforce — and do not add
+> tokens to `uno.config.ts` on its authority.
+
+| Role                            | Hex in use | Uses | Where it is spent                                                                | Proposed token  |
+| ------------------------------- | ---------- | ---- | -------------------------------------------------------------------------------- | --------------- |
+| citation / retrieval / live run | `#22d3ee`  | 18   | `doc-ref*` chips, Data Stash tab, live-run rail dot, selected row, `tool_result` | `info` / `cite` |
+| warning / pending / degraded    | `#f59e0b`  | 11   | shell "connecting", non-error alert messages, Redis chips, Stats tab             | `warning`       |
+| error                           | `#ef4444`  | 7    | error events, failed tool calls, shell "closed", destructive confirm             | `error`         |
+| success / connected / approved  | `#10b981`  | 6    | shell "connected", approval responses, Terminal tab                              | `success`       |
+| assistant output / filesystem   | `#34d399`  | 5    | assistant messages, filesystem tools                                             | `success-alt`   |
+| user input                      | `#60a5fa`  | 4    | user messages, web/search tools, `blue` agent family                             | `user`          |
+| system / tool call / memory     | `#a78bfa`  | 5    | system events, `tool_call`, memory tools, `violet` agent family                  | `system`        |
+
+Two collisions the confirmation has to settle, because a naive mapping breaks
+something real:
+
+1. **Two cyans, two jobs.** `neon-cyan` (`#00ffff`) is the _brand_ accent — graph
+   entities, prose links, LLM chips. `#22d3ee` (cyan-400) is _retrieval and run
+   status_. They are not interchangeable and merging them would erase the
+   distinction between "this is ours" and "this is a citation".
+2. **Three greens, and status colours are reserved.** Green is spent three ways
+   — `#10b981` (connected/approved), `#34d399` (assistant output), `#4ade80`
+   (the completion flash). Cutting that to one token is probably right, but
+   `agent-palette.ts` **reserves** `#22d3ee` / `#4ade80` / `#f87171` for run
+   status specifically so status stays readable on top of agent identity. So
+   whatever `success` becomes, it must not also be assignable to an agent
+   family — the reservation comment in that file is the authority.
+
+---
+
+## 5. The four house recipes
+
+Derived from the actual duplication in `ui/src`. Each is what the codebase
+already converged on; the job of writing them down is to stop the next
+component re-deriving it slightly differently.
+
+### R1 — Primary button: **use the `cyber-button` shortcut**
+
+`uno.config.ts` defines it and **nothing uses it**, while
+`ChatSidebar.tsx:1000-1010` hand-copies its declaration list verbatim and
+`ChatInterface.tsx:713-719` copies it minus the glow. That is the exact shape a
+shortcut exists to prevent.
+
+```tsx
+<button cyber-button p="2" text="sm">
+  + New Chat
+</button>
+```
+
+Valueless attributify resolves shortcuts — verified against this config, the
+attribute `cyber-button` matches and emits the full rule set. Add only what
+genuinely differs (padding, text size, `flex="1"`); do **not** restate
+`bg="cyber-700 hover:cyber-600"`, `text="white"`, `font="medium"`,
+`rounded="md"`, `transition="all"` or the hover glow — the shortcut is those.
+
+If a variant needs a different glow or colour, change the shortcut or add a
+sibling shortcut in `uno.config.ts`. Do not fork it inline.
+
+`glass-panel` and `neon-border` are in the same state — defined, unused. Same
+rule: reach for them before hand-rolling a blurred panel or a glowing border.
+
+### R2 — Panel header chrome
+
+Thirty header rows share this. It is the strip at the top of every panel:
+title on the left, controls on the right, one hairline under it.
+
+```tsx
+<div
+  flex="~"
+  items="center"
+  justify="between"
+  p="2 3"
+  bg="dark-bg-tertiary"
+  border="b dark-border-primary"
+>
+  <div flex="~" items="center" gap="2">
+    <span
+      class="i-material-symbols-terminal"
+      w="4"
+      h="4"
+      text="neon-cyan"
+      aria-hidden="true"
+    />
+    <span text="xs dark-text-secondary">…title…</span>
+  </div>
+  <div flex="~" items="center" gap="1">
+    {/* controls */}
+  </div>
+</div>
+```
+
+- `p="4"` instead of `p="2 3"` for a full-width page-level header
+  (`ObservabilityPanel.tsx:703`); `p="2 3"` for a panel strip.
+- `bg="dark-bg-tertiary"` when the header must separate from a
+  `dark-bg-secondary` body; omit `bg` when the panel is already tertiary.
+- The bottom hairline is always `border="b dark-border-primary"`. Never a
+  hand-written `rgba(255,255,255,0.06)` in a component — that value belongs to
+  the preflight CSS only.
+
+### R3 — Icon button
+
+Eighteen ghost buttons share the transparent/hover-fill pattern.
+
+```tsx
+<button
+  onClick={…}
+  title="New chat"
+  aria-label="New chat"
+  w="8" h="8" flex="~" items="center" justify="center"
+  bg="transparent hover:dark-bg-hover"
+  border="1 dark-border-secondary"
+  rounded="md"
+  transition="all"
+>
+  <span class="i-material-symbols-add-2" w="4" h="4" aria-hidden="true" />
+</button>
+```
+
+Three non-negotiables, all of them accessibility:
+
+- **`aria-label` is required** when the button's only content is a glyph.
+  `title` alone is not an accessible name for every assistive technology, and
+  measured on this branch only 6 of 60 buttons carry one.
+- **`aria-hidden="true"` on the glyph**, so the label is not read twice.
+- **Size with `w`/`h`, not inline `style`.** `ChatSidebar.tsx:702` sets a 32×32
+  box through a `style` object; `w="8" h="8"` is the same box and stays in the
+  attributify pipeline.
+
+Use `cyber-button` instead when the button is the primary action in its region;
+this recipe is for secondary and tertiary affordances.
+
+### R4 — Chip
+
+The small monospace label that tags a value with a role — `LLM`, a tool
+namespace, a document reference.
+
+```tsx
+<span
+  text="xs neon-cyan"
+  bg="neon-cyan/10"
+  p="x-1.5 y-0.5"
+  rounded="sm"
+  font="mono"
+>
+  LLM
+</span>
+```
+
+The shape is fixed — `x-1.5 y-0.5`, `rounded="sm"`, `font="mono"`, `text="xs"`
+— and **only the hue varies**, always as the `/10` tint of the same colour used
+for the text. In use today: `neon-cyan`, `neon-orange`, `neon-magenta`,
+`red-500`. A chip whose text colour and background tint disagree is a bug.
+
+The chat-message equivalent is the `doc-ref-chip` preflight class; do not
+re-implement it in attributify, and do not use this recipe inside sanitised
+chat HTML.
+
+---
+
+## 6. What this skill does not do
+
+- It does not restate tokens. `ui/uno.config.ts` owns them.
+- It does not migrate existing code. The `i-mdi-*` references, the hex-instead-
+  of-token sites, and the `class=` violations named above are all recorded as
+  _evidence for the rules_, not as a work list this skill executes.
+- It does not add tokens. The role table in §4 is a proposal; adding
+  `theme.colors` entries needs the confirmation first.
+- It does not cover light mode, native mobile, or any surface outside `ui/src`.
+
+Related repo documentation: [`docs/UI_ARCHITECTURE.md`](../../../docs/UI_ARCHITECTURE.md)
+for component structure and data flow.

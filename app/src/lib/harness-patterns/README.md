@@ -691,6 +691,15 @@ Classifies intent via BAML and sets `scope.data.route`. The first half of the ro
 - **Tool needed** → `data.route = <toolName>`, `data.intent`, `data.routerResponse`; tracks optional `assistant_message`
 - **Conversational** → `data.route = 'user'` (the `DIRECT_RESPONSE_ROUTE` sentinel), `data.response = responseText`; tracks `assistant_message` directly; downstream `synthesizer()` skips BAML
 
+`data.intent` is a **self-contained** statement of what the user wants, not an
+echo of the latest message: the router sees the last `routerTurnWindow` turns
+and the prompt's INTENT FORMULATION rules make it expand back-references
+("try again", "the second one", "now in TypeScript") into the nouns they refer
+to ([#53](https://github.com/mknw/harness-playground/issues/53)). This matters
+because `routes()` passes `data.intent` — and nothing else from the
+conversation — to the dispatched pattern's controller. The router-less
+equivalent is [`compactIntent()`](#compactintentconfig).
+
 ```typescript
 router({
   neo4j: 'Database queries and graph operations',

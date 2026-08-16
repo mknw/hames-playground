@@ -41,6 +41,13 @@ export type RoutePatterns<T> = Record<string, ConfiguredPattern<T>>
 
 export interface RouterData {
   route?: string
+  /**
+   * Self-contained statement of what the user wants — back-references
+   * ("try again", "the second one") already expanded from the conversation
+   * history by the Router prompt's INTENT FORMULATION rules (#53). It is the
+   * only conversational context routes() hands to the dispatched pattern, so
+   * a bare follow-up phrase here leaves that pattern blind.
+   */
   intent?: string
   routerResponse?: string
   response?: string

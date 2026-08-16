@@ -107,8 +107,8 @@ so a dispatch never has to restate them:
 **Standing acceptance criteria** (every brief in this repo):
 
 - [ ] CI green: typecheck · lint · test · build (`.github/workflows/ci.yml`)
-- [ ] Coverage floors not regressed — statements 43 / branches 45 /
-      functions 30 / lines 47
+- [ ] Coverage floors not regressed — statements 93 / branches 82 /
+      functions 92 / lines 94
 - [ ] Prettier clean on changed files (`ui/.prettierrc.json`; the CI gate covers
       changed files under `ui/` only — see the caveat below)
 - [ ] Conventional-commit subject line

@@ -34,19 +34,23 @@ export default defineConfig({
         // dropped from the report — naming it just keeps the stack trace out
         // of the log. Drop this line if a test ever mounts the app shell.
         'src/app.tsx',
+        // Manual smoke-test scripts (run by hand against a live sandbox),
+        // not unit-testable — recommendation from the sandbox coverage lane.
+        'src/lib/sandbox/scripts/smoke-*.ts',
       ],
       // Backstop floors, not aspirations. Measured on 2026-08-16 against the
-      // scope above and set 2pp below the baseline so ordinary churn does not
-      // trip the gate. Baseline is the CI number (Node 22, run 31914658201),
-      // which is the authoritative one — local Node 24 reads ~1pp higher:
-      //   statements 45.21  branches 47.48  functions 32.96  lines 49.85
+      // scope above (post smoke-script exclude) and set 2pp below the
+      // baseline so ordinary churn does not trip the gate. This closes the
+      // 85%-coverage programme (PRs #182-#189), which raised repo-wide
+      // coverage from ~52% to:
+      //   statements 95.26  branches 84.87  functions 94.58  lines 96.57
       // The job fails if coverage drops below these. Raise them by hand as
       // coverage grows; never lower them to make a red run green.
       thresholds: {
-        statements: 43,
-        branches: 45,
-        functions: 30,
-        lines: 47,
+        statements: 93,
+        branches: 82,
+        functions: 92,
+        lines: 94,
       },
     },
   },

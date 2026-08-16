@@ -129,6 +129,65 @@ LICENSE file at `2c60614`, so all-rights-reserved by default and not vendorable.
 
 ---
 
+## Wave 5 — dispatch brief + `CLAUDE.md` pruning
+
+`docs(agents): AGENT-BRIEF template + CLAUDE.md pruning`
+
+Both rows land **outside `.claude/`** — the first is a doc, the second is prose
+merged into `CLAUDE.md` — so neither carries the usual per-file comment
+placement. `AGENT-BRIEF.md` gets the same two-line attribution comment at the
+head of its body; `CLAUDE.md` gets a one-line in-section credit instead, because
+a licence header on the project's own constitution would misattribute the file
+as a whole.
+
+| Our path                      | Upstream repo             | Upstream path                              | Pinned commit | Invocation | Adapted        | Bundle  |
+| ----------------------------- | ------------------------- | ------------------------------------------ | ------------- | ---------- | -------------- | ------- |
+| `docs/agents/AGENT-BRIEF.md`  | `mattpocock/skills`       | `skills/engineering/triage/AGENT-BRIEF.md` | `068b6e0`     | — (a doc)  | **yes** — D, E | generic |
+| `CLAUDE.md` § Code minimalism | `DietrichGebert/ponytail` | `AGENTS.md`                                | `2ed6c52`     | — (prose)  | **yes** — F    | project |
+
+### Adaptations
+
+**D — `AGENT-BRIEF.md` framing and examples.** Upstream frames a brief as "a
+structured comment posted on a GitHub issue when it moves to `ready-for-agent`".
+We adopted neither `triage` nor its label vocabulary, so the framing is retargeted
+to what we actually dispatch through: an Orca worker dispatch body, or a GitHub
+issue body handed to an agent. All four worked examples (three good, one bad) are
+replaced with kg-agent ones. The **Principles** section is verbatim, including its
+inline `SkillConfig` / `/triage` illustrations — they illustrate the _form_ of a
+good criterion, and rewriting them would have been a change for its own sake.
+
+**E — the standing acceptance-criteria block.** New, ours, not upstream: the
+house rules a dispatch would otherwise restate every time (CI gate, coverage
+floors, prettier on changed files, conventional commits, no attribution
+trailers, `pnpm`-only from `ui/`, `baml-generate` after `baml_src/` edits), plus
+the two caveats that make them honest — the floors are not on `main` until PR
+#165 merges, and the CI format check globs `ui/**` only, so a docs-only PR can
+be prettier-dirty and still go green.
+
+**F — ponytail → `CLAUDE.md` prose.** Not vendored: **rewritten in our own
+words**, because the upstream file is a whole-agent persona (`AGENTS.md`,
+"you are a lazy senior developer") and we wanted a disposition, not a persona.
+What carries over is the 7-rung ladder and the not-lazy-about guardrails. What
+does **not**: the persona framing, the `ponytail:` comment convention, the
+one-runnable-check rule (this repo has vitest and a CI gate), and the plugin —
+it injects its ruleset through SessionStart / SubagentStart / UserPromptSubmit
+hooks, excluded by the programme's no-hooks constraint.
+
+One line is **added** and is the reason the section is worth writing down at
+all: _Ark UI is the chosen primitive layer; never replace Ark components with
+native elements._ Ponytail's own rung 5 ("an already-installed dependency
+solves it") protects Ark UI only once the project states that Ark UI _is_ the
+chosen layer — its flagship published example replaces Radix Dialog with a
+native `<dialog>`, so without that line the ladder argues against our stack.
+
+### Not vendored
+
+`ponytail`'s plugin, hooks, MCP server and commands — see F. From
+`mattpocock/skills/engineering/triage/`, only `AGENT-BRIEF.md`: the `triage`
+skill itself was declined in Wave 1.
+
+---
+
 <!-- Later waves append their own `## Wave N` section here. Do not edit the
      sections above; a wave that needs to change an earlier row bumps that row
      in place and says why in its own section. -->

@@ -25,6 +25,16 @@ Forward-looking design docs. Live item-tracking stays on the GitHub project boar
 
 ---
 
+## Agent Working Docs (`docs/agents/`)
+
+How agents are briefed and what they are held to. Procedures themselves live in `.claude/skills/` (see [plan/skills-adoption.md](plan/skills-adoption.md)).
+
+| Document | Description |
+|----------|-------------|
+| [agents/AGENT-BRIEF.md](agents/AGENT-BRIEF.md) | **The dispatch spec template** — the body of an Orca worker dispatch or of an agent-ready GitHub issue. Behavioural contracts and complete acceptance criteria, never file paths or line numbers (a brief outlives the tree it was written against), plus explicit out-of-scope. Carries this repo's **standing acceptance criteria**: CI gate, coverage floors (once #165 lands), prettier on changed files, conventional commits, no attribution trailers, `pnpm`-only from `ui/` |
+
+---
+
 ## Architecture Documentation
 
 ### Harness Patterns Framework
@@ -140,6 +150,8 @@ kg-agent/
 │   ├── MICROSOFT_GRAPH.md       # Per-user Graph access (Pattern C, #110)
 │   ├── graph-api-notes.md       # What Graph actually returns: ids, quirks, deprecations
 │   ├── sandbox-flavours.md      # Rootfs flavours (#78): image-processing/data/office
+│   ├── agents/
+│   │   └── AGENT-BRIEF.md       # Dispatch spec template + standing acceptance criteria
 │   ├── plan/                    # Forward-looking design docs
 │   │   ├── ROADMAP.md           # Multi-user architecture + phased MoSCoW roadmap
 │   │   └── sandbox.md           # Sandbox design (core shipped; Swarm/Firecracker = plan)

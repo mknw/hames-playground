@@ -17,7 +17,7 @@
     "paths": {
       "~/*": ["./src/*"]
     },
-    "baseUrl": "./",
+    "baseUrl": "./"
   },
   "exclude": ["./node_modules", ".output", ".vinxi"],
   "include": ["src"]

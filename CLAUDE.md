@@ -77,13 +77,23 @@ Ark UI is the chosen primitive layer; never replace Ark components with native e
 
 Procedures live in `.claude/skills/` (tracked in git, so worktrees inherit them —
 no copy step). Model-invoked skills announce themselves through their own
-descriptions; the only one you have to ask for by name is `/grill-me`.
+descriptions; the ones you have to ask for by name are `/grill-me` and
+`/improve-codebase-architecture`.
 
 - Bare names (`grilling`, `codebase-design`, …) are stack-agnostic and are the
   candidate set for the open-source split. `kg-`-prefixed ones encode something
   only true of this repo.
 - A `kg-*` skill may call a generic skill. A generic skill must never call a
   `kg-*` skill — that invariant is what keeps the generic set portable.
+- Sub-agents live beside them in `.claude/agents/` (`code-reviewer`,
+  `silent-failure-hunter`), tracked the same way and dispatched via the Agent
+  tool's `subagent_type`.
+- Issue-tracker workflow — how a skill fetches the spec for a change:
+  [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md). The issue body
+  is the spec; the project board is scheduling, read-only context.
+- Data the skills read: house vocabulary in [`GLOSSARY.md`](GLOSSARY.md),
+  decision records in [`docs/adr/`](docs/adr/README.md) (which also states when
+  one gets written, and that they are not to be re-litigated).
 - Provenance and upstream pins for vendored files: `.claude/skills/PROVENANCE.md`;
   licences: `.claude/skills/NOTICE.md`. Adoption programme:
   [`docs/plan/skills-adoption.md`](docs/plan/skills-adoption.md).
@@ -91,6 +101,10 @@ descriptions; the only one you have to ask for by name is `/grill-me`.
 It names paths and invariants, never contents: every model-invoked skill's
 description is already permanently loaded, so listing them here would restate it
 at full context cost.
+
+`/kg-code-review` (conventions + spec fidelity, two unmerged axes) complements
+the built-in `/code-review` (correctness bugs + cleanups). Run the built-in
+first — it can fix what it finds.
 
 ---
 
@@ -211,12 +225,12 @@ UnoCSS attributify mode — always use attribute syntax:
 
 Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secondary,tertiary}`, `dark-border-{primary,secondary}`, `neon-{cyan,magenta,purple}`, `cyber-{600,700,800}`.
 
-**Icons** (`@unocss/preset-icons` + `@iconify-json/mdi` installed):
-
-- Use MDI icons via `class="i-mdi-<icon-name>"` (note: requires `class=`, not attributify syntax)
-- Example: `<span class="i-mdi-database-outline" style={{ width: '20px', height: '20px', color: '#22d3ee' }} />`
-- Browse icons at [https://icones.js.org](https://icones.js.org) — filter by `mdi`
-- The `color` HTML attribute conflicts with attributify; use inline `style={{ color: '...' }}` for icon color
+**Icons** — `material-symbols` (+ `material-symbols-light`) is **the** icon set; they are the only two collections registered in `presetIcons` (`ui/uno.config.ts`):
+- Use via `class="i-material-symbols-<icon-name>"` — icon classes are the one sanctioned `class=` exception, since `presetIcons` has no attributify form
+- Example: `<span class="i-material-symbols-database-outline" w="5" h="5" text="neon-cyan" aria-hidden="true" />`
+- Browse icons at [https://icones.js.org](https://icones.js.org) — filter by `material-symbols`
+- ⚠️ `@iconify-json/mdi` is still in `package.json` and `i-mdi-*` classes survive in `ui/src`, but **mdi is not registered**, so those classes emit no CSS. Treat every `i-mdi-*` as a bug; do not add more
+- Full styleguide (attributify rules, house recipes, role→colour mapping, a11y + graph checklists): the `kg-dtalk-ui` skill
 
 ---
 

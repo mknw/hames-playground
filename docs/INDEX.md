@@ -7,6 +7,7 @@
 | Document | Description |
 |----------|-------------|
 | [README.md](../README.md) | Project overview and quick start |
+| [GLOSSARY.md](../GLOSSARY.md) | **The house vocabulary** — *pattern*, *controller*, *actor*, *critic*, *harness*, *EventView*, *ContextEvent*, *tool namespace*, *Data Stash*, *stash session*, *sandbox flavour*, *action*, *routine*. Terms only, never implementation; each entry points at the doc that owns the mechanism |
 | [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Live planning board (Status / Priority / MSCW per issue) |
 | [plan/ROADMAP.md](plan/ROADMAP.md) | The roadmap *shape*: target multi-user architecture, phases 0–4 with MoSCoW ratings + dependency spine (Entra SSO #119 as the gate) |
 
@@ -32,6 +33,15 @@ How agents are briefed and what they are held to. Procedures themselves live in 
 | Document | Description |
 |----------|-------------|
 | [agents/AGENT-BRIEF.md](agents/AGENT-BRIEF.md) | **The dispatch spec template** — the body of an Orca worker dispatch or of an agent-ready GitHub issue. Behavioural contracts and complete acceptance criteria, never file paths or line numbers (a brief outlives the tree it was written against), plus explicit out-of-scope. Carries this repo's **standing acceptance criteria**: CI gate, coverage floors (once #165 lands), prettier on changed files, conventional commits, no attribution trailers, `pnpm`-only from `ui/` |
+## Decision Records (`docs/adr/`)
+
+Irreversible one-liners with a why — too small for a `docs/plan/` doc, too durable for a PR body. The `docs/plan/` ⇄ PR-body ⇄ `CLAUDE.md` ⇄ `docs/adr/` division of labour is stated in the README below.
+
+| Document | Description |
+|----------|-------------|
+| [adr/README.md](adr/README.md) | **The ADR mechanism + the index table.** Format (1–3 sentences), numbering, the three-condition write gate (hard to reverse · surprising without context · a real trade-off), confirm-before-write, the `proposed → accepted → [deprecated \| superseded]` lifecycle, and the two non-negotiables: *"we just picked it" is not a valid rationale*, and *never back-fill silently* |
+
+Records: [0001](adr/0001-anthropic-only-default-chains.md) Anthropic-only default chains · [0002](adr/0002-controller-nothink-clients.md) controller on `*NoThink` · [0003](adr/0003-redis-stack-amd64.md) redis-stack + `linux/amd64` · [0004](adr/0004-server-only-suffix-boundary.md) `.server.ts` boundary · [0005](adr/0005-harness-patterns-replaces-baml-agent.md) harness-patterns replaces `baml-agent`. All five are back-filled and carry their original decision date plus the sources the rationale was mined from.
 
 ---
 
@@ -67,6 +77,12 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 |----------|-------------|
 | [DATA_STASH.md](DATA_STASH.md) | Document upload → chunk → embed → search pipeline (#6/#9/#8): modules, API routes, Redis storage model (incl. base64 binary, #89), embedding-space rule, redis-stack + local-embedder requirements |
 | [data-flow.md](data-flow.md) | **Visual data-flow diagrams** (Mermaid) — Data Stash pipeline, sandbox attachment lifecycle (#79/#97), `/work` ⇄ Data Stash sync (#89), and sandbox tool dispatch / runtime topology. Spans Data Stash + sandbox |
+
+### Agent Workflow (`docs/agents/`)
+
+| Document | Description |
+|----------|-------------|
+| [agents/issue-tracker.md](agents/issue-tracker.md) | **How a skill fetches a spec**: the `gh` commands for issues/PRs, resolving a bare `#42`, the label set, and the spec/scheduling split — the issue body is the spec, the [project board](https://github.com/users/mknw/projects/5) (Status/Priority/MSCW) is read-only context. Named by `/kg-code-review`'s Spec axis |
 
 ### Agent Trigger Endpoint
 
@@ -139,6 +155,7 @@ Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/rese
 
 ```
 kg-agent/
+├── GLOSSARY.md                  # House vocabulary (terms only, no implementation)
 ├── docs/
 │   ├── INDEX.md                 # You are here
 │   ├── UI_ARCHITECTURE.md       # Frontend architecture
@@ -152,9 +169,14 @@ kg-agent/
 │   ├── sandbox-flavours.md      # Rootfs flavours (#78): image-processing/data/office
 │   ├── agents/
 │   │   └── AGENT-BRIEF.md       # Dispatch spec template + standing acceptance criteria
+│   ├── adr/                     # Architecture decision records
+│   │   ├── README.md            # The mechanism + the index table (statuses live here)
+│   │   └── NNNN-<slug>.md       # One decision each, 1–3 sentences + optional sections
 │   ├── plan/                    # Forward-looking design docs
 │   │   ├── ROADMAP.md           # Multi-user architecture + phased MoSCoW roadmap
 │   │   └── sandbox.md           # Sandbox design (core shipped; Swarm/Firecracker = plan)
+│   ├── agents/
+│   │   └── issue-tracker.md     # gh commands + the issue-body-is-the-spec rule
 │   ├── deploy/
 │   │   ├── azure-vm.md          # Single-VM deployment runbook
 │   │   └── entra-setup.md       # Entra tenant provisioning + consent (#119)

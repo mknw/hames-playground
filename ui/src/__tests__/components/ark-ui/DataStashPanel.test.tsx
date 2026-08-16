@@ -13,7 +13,7 @@
  * `fetch` is stubbed per-route. Every test uses a distinct sessionId because
  * the panel keeps a module-level document cache keyed by session.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { render, fireEvent } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
 import type { ContextEvent } from '~/lib/harness-patterns'
@@ -21,6 +21,13 @@ import type { OpenReferenceTarget } from '~/lib/harness-client/reference-extract
 import type { StashDocumentMeta } from '~/lib/document-store.server'
 
 const { DataStashPanel } = await import('../../../components/ark-ui/DataStashPanel')
+
+// The viewer scrolls the focused highlight into view; jsdom implements no
+// scrollIntoView, and the call sits in a createEffect where a throw surfaces
+// as an unhandled error rather than a test failure.
+beforeAll(() => {
+  Element.prototype.scrollIntoView = () => {}
+})
 
 const settle = () => new Promise((r) => setTimeout(r, 30))
 

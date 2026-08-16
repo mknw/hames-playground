@@ -19,11 +19,13 @@ pnpm exec tsc --noEmit --project tsconfig.json  # Type-check (from ui/)
 ```
 
 Local **embedding** server for the Data Stash pipeline (separate from `dev:llama`'s chat model — different model, port 8090):
+
 ```bash
 llama-server --embedding -m models/Qwen3-Embedding-0.6B-Q8_0.gguf --port 8090 --ctx-size 8192
 ```
 
 Run a single test file:
+
 ```bash
 cd ui && pnpm vitest run src/__tests__/lib/harness-patterns/simpleLoop.test.ts
 ```
@@ -41,6 +43,7 @@ USE_MIXED_CHAINS=1 pnpm dev:exposed
 This unsets the override and lets each BAML function fall back to its declared chain. Production deployments and occasional mixed-chain testing both use this. See `ui/src/lib/harness-patterns/clients.server.ts` for the toggle.
 
 Docker services (Neo4j, MCP Gateway, Redis):
+
 ```bash
 docker compose up -d
 docker compose ps
@@ -74,7 +77,7 @@ docker compose ps
 
 **Graph tabs:** `SupportPanel` uses `lazyMount` + `unmountOnExit` on `Tabs.Root` — Cytoscape instances only exist for the active tab. The Neo4j/Memory tabs consume accumulated `graphElements` from `index.tsx`. The All tab derives elements on-demand from `contextEvents` via `turn-utils.ts` based on user-selected turns, with per-turn color coding via `GraphVisualization`'s `extraStyles` prop.
 
-**Probe before scaffolding:** For architectural questions (new patterns, infrastructure, deployment shapes, anything with multiple non-obvious options), sample the option space first and converge with the user on the shape before writing implementation docs or code. Going straight to a fully-detailed design tends to lock in defaults the user would have redirected. See [`docs/plan/sandbox.md`](docs/plan/sandbox.md) for the kind of doc that should *follow* such a conversation, not start it.
+**Probe before scaffolding:** For architectural questions (new patterns, infrastructure, deployment shapes, anything with multiple non-obvious options), sample the option space first and converge with the user on the shape before writing implementation docs or code. Going straight to a fully-detailed design tends to lock in defaults the user would have redirected. See [`docs/plan/sandbox.md`](docs/plan/sandbox.md) for the kind of doc that should _follow_ such a conversation, not start it.
 
 ---
 
@@ -103,12 +106,20 @@ at full context cost.
 
 Framework in `ui/src/lib/harness-patterns/`. Full API: [`ui/src/lib/harness-patterns/README.md`](ui/src/lib/harness-patterns/README.md).
 
+<!-- The `prettier-ignore` markers below are load-bearing: the repo root has no
+     .prettierrc, so prettier's defaults would rewrite these samples to double
+     quotes + semicolons, against ui/.prettierrc.json. -->
+
 **BAML functions must use `.bind(b)`:**
+
+<!-- prettier-ignore -->
 ```typescript
 simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { patternId: 'neo4j-query', schema })
 ```
 
 **Preferred: use adapter factories instead:**
+
+<!-- prettier-ignore -->
 ```typescript
 const controller = createNeo4jController(tools.neo4j ?? [])
 const actor = createActorControllerAdapter(tools.all)
@@ -116,6 +127,8 @@ const critic = createCriticAdapter()
 ```
 
 **Multi-turn sessions:**
+
+<!-- prettier-ignore -->
 ```typescript
 // Continue: pass serialized from previous turn
 continueSession(serialized, patterns, newInput)
@@ -124,6 +137,8 @@ resumeHarness(serialized, patterns, approved)
 ```
 
 **EventView inside patterns:**
+
+<!-- prettier-ignore -->
 ```typescript
 view.fromLastPattern().ofType('tool_result').get()   // → ContextEvent[]
 view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
@@ -140,14 +155,14 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 
 **Default (Anthropic-only)** — declared in `baml_src/anthropic-only.baml`:
 
-| Client | Role | Chain |
-|--------|------|-------|
-| `RouterAnthropic` | Intent classification | AnthropicHaiku45 → AnthropicSonnet5 |
-| `ControllerAnthropic` | simpleLoop tool-loop controller | AnthropicSonnet5**NoThink** → AnthropicSonnet46**NoThink** (backstop stays Sonnet-tier — no Haiku fallback on structured output) |
-| `ActorAnthropic` | actorCritic actor | AnthropicSonnet5 → AnthropicSonnet46 (same models, thinking left ON) |
-| `CriticAnthropic` | Evaluation/critique | AnthropicHaiku45 → AnthropicSonnet5 |
-| `SynthesizerAnthropic` | Response synthesis | AnthropicSonnet5 → AnthropicHaiku45 |
-| `DescribeAnthropic` | Lightweight tool result summarization, titles, intent compaction (`compactIntent`) | AnthropicHaiku45 |
+| Client                 | Role                                                                               | Chain                                                                                                                            |
+| ---------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `RouterAnthropic`      | Intent classification                                                              | AnthropicHaiku45 → AnthropicSonnet5                                                                                              |
+| `ControllerAnthropic`  | simpleLoop tool-loop controller                                                    | AnthropicSonnet5**NoThink** → AnthropicSonnet46**NoThink** (backstop stays Sonnet-tier — no Haiku fallback on structured output) |
+| `ActorAnthropic`       | actorCritic actor                                                                  | AnthropicSonnet5 → AnthropicSonnet46 (same models, thinking left ON)                                                             |
+| `CriticAnthropic`      | Evaluation/critique                                                                | AnthropicHaiku45 → AnthropicSonnet5                                                                                              |
+| `SynthesizerAnthropic` | Response synthesis                                                                 | AnthropicSonnet5 → AnthropicHaiku45                                                                                              |
+| `DescribeAnthropic`    | Lightweight tool result summarization, titles, intent compaction (`compactIntent`) | AnthropicHaiku45                                                                                                                 |
 
 **Extended thinking (#139):** these models think by default — no request asks for
 it — and the trace is never exposed (empty string + signature), so it cannot feed
@@ -164,13 +179,13 @@ thinking-only response with no text is retried once by the adapters.
 
 **Mixed-provider chains** (gated by `USE_MIXED_CHAINS=1`, see top of file) — declared in `baml_src/clients.baml`:
 
-| Client | Chain |
-|--------|-------|
-| `RouterFallback` | OpenRouterGemma4 → GroqFast → GroqGPT120B |
-| `ControllerFallback` | OpenRouterNemotron120B → OpenAIGPT5 → OpenRouterMiniMax2_5 → GroqGPT120B |
-| `CriticFallback` | GroqQwen3_32b → GroqGPT120B → OpenRouterMiniMax2_5 |
-| `SynthesizerFallback` | OpenRouterGemma4 → GroqQwen3_32b → OpenAIGPT5 |
-| `DescribeFallback` | GroqFast → OpenRouterGemma4 → OpenAIGPT5Mini |
+| Client                | Chain                                                                    |
+| --------------------- | ------------------------------------------------------------------------ |
+| `RouterFallback`      | OpenRouterGemma4 → GroqFast → GroqGPT120B                                |
+| `ControllerFallback`  | OpenRouterNemotron120B → OpenAIGPT5 → OpenRouterMiniMax2_5 → GroqGPT120B |
+| `CriticFallback`      | GroqQwen3_32b → GroqGPT120B → OpenRouterMiniMax2_5                       |
+| `SynthesizerFallback` | OpenRouterGemma4 → GroqQwen3_32b → OpenAIGPT5                            |
+| `DescribeFallback`    | GroqFast → OpenRouterGemma4 → OpenAIGPT5Mini                             |
 
 Local inference (`LocalGLM` — GLM 4.7 Flash on localhost:8080) is defined in `baml_src/local-client.baml` and available for manual wiring but not used in any fallback chain.
 
@@ -192,6 +207,7 @@ Tool namespaces in `tools.server.ts`: `neo4j`, `web`, `context7`, `filesystem`, 
 `KNOWN_TOOL_SERVERS` maps tool names to namespaces when auto-detection would fail.
 
 **Redis MCP quirks** (encapsulated by `document-store.server.ts` / `document-ingest.server.ts`; full detail in [`docs/DATA_STASH.md`](docs/DATA_STASH.md)):
+
 - The `redis` service must be **redis-stack** (RedisJSON + RediSearch); plain `redis` has no modules. On Apple-Silicon/colima, run it `platform: linux/amd64` (a git-ignored `docker-compose.override.yml`) — the arm64 `redisearch.so` SIGILLs on vector ops.
 - Param names: `json_get`/`json_set` use `name`/`path`; `expire`/`hset`/`sadd` take `expire_seconds`; `delete` uses `key` (not `name`); `set_vector_in_hash`/`vector_search_hash` use `name`/`index_name` + a float `vector`/`query_vector`.
 - The gateway runs each redis server over **serial stdio** (so bulk writes are sequential), returns multi-value results (e.g. `smembers`) as **one text block per element** (`callTool` aggregates these into an array), and **auto-parses JSON-looking string args into objects** (so chunk metadata is base64-encoded before `hset`).
@@ -201,6 +217,7 @@ Tool namespaces in `tools.server.ts`: `neo4j`, `web`, `context7`, `filesystem`, 
 ## Styling
 
 UnoCSS attributify mode — always use attribute syntax:
+
 ```tsx
 <div flex="~ col" text="sm gray-600" p="4" gap="2">
 <button bg="cyan-600/10 hover:cyan-600/20" text="xs cyan-400">
@@ -209,6 +226,7 @@ UnoCSS attributify mode — always use attribute syntax:
 Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secondary,tertiary}`, `dark-border-{primary,secondary}`, `neon-{cyan,magenta,purple}`, `cyber-{600,700,800}`.
 
 **Icons** (`@unocss/preset-icons` + `@iconify-json/mdi` installed):
+
 - Use MDI icons via `class="i-mdi-<icon-name>"` (note: requires `class=`, not attributify syntax)
 - Example: `<span class="i-mdi-database-outline" style={{ width: '20px', height: '20px', color: '#22d3ee' }} />`
 - Browse icons at [https://icones.js.org](https://icones.js.org) — filter by `mdi`
@@ -218,15 +236,15 @@ Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secon
 
 ## Documentation
 
-| Doc | Contents |
-|-----|----------|
-| [`docs/INDEX.md`](docs/INDEX.md) | Full documentation index |
-| [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Live planning board (Status / Priority / MSCW per issue) — item tracking lives here |
-| [`docs/plan/ROADMAP.md`](docs/plan/ROADMAP.md) | Roadmap *shape*: multi-user target architecture + phased MoSCoW plan (Entra SSO #119 gates; keep in sync with the board's MSCW field) |
-| [`docs/UI_ARCHITECTURE.md`](docs/UI_ARCHITECTURE.md) | Component structure, data flow, Chat-Graph linking |
-| [`docs/DATA_STASH.md`](docs/DATA_STASH.md) | Data Stash pipeline: upload → chunk → embed → search (#6/#9/#8), API routes, Redis storage, redis-stack + local-embedder requirements |
-| [`docs/AGENT_TRIGGER.md`](docs/AGENT_TRIGGER.md) | `POST /api/agents/:id` async agent trigger → action rows: contract, fire-and-forget model, `kind`/`source`/`status` columns, token auth (`configs/action-tokens.yaml`), recording playback via Data Stash, promotion gate |
-| [`docs/MICROSOFT_GRAPH.md`](docs/MICROSOFT_GRAPH.md) | Per-user Microsoft Graph (Pattern C, #110): the Microsoft 365 agent's tools, the app-side tool transport (third transport beside gateway + sandbox), cross-user isolation, encrypted per-user token lifecycle, adding a connector. Tenant setup: [`docs/deploy/entra-setup.md`](docs/deploy/entra-setup.md) |
-| [`docs/graph-api-notes.md`](docs/graph-api-notes.md) | What Microsoft Graph actually returns (as opposed to what it looks like): endpoint map + deprecation dates, identifier formats, response envelopes, a field-reliability table, query-language traps, what each error really means, and an explicit "not verified" list. Open this when a Graph response surprises you |
-| [`ui/README.md`](ui/README.md) | UI quick start and file index |
-| [`ui/src/lib/harness-patterns/README.md`](ui/src/lib/harness-patterns/README.md) | Harness patterns full API |
+| Doc                                                                                     | Contents                                                                                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`docs/INDEX.md`](docs/INDEX.md)                                                        | Full documentation index                                                                                                                                                                                                                                                                                              |
+| [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Live planning board (Status / Priority / MSCW per issue) — item tracking lives here                                                                                                                                                                                                                                   |
+| [`docs/plan/ROADMAP.md`](docs/plan/ROADMAP.md)                                          | Roadmap _shape_: multi-user target architecture + phased MoSCoW plan (Entra SSO #119 gates; keep in sync with the board's MSCW field)                                                                                                                                                                                 |
+| [`docs/UI_ARCHITECTURE.md`](docs/UI_ARCHITECTURE.md)                                    | Component structure, data flow, Chat-Graph linking                                                                                                                                                                                                                                                                    |
+| [`docs/DATA_STASH.md`](docs/DATA_STASH.md)                                              | Data Stash pipeline: upload → chunk → embed → search (#6/#9/#8), API routes, Redis storage, redis-stack + local-embedder requirements                                                                                                                                                                                 |
+| [`docs/AGENT_TRIGGER.md`](docs/AGENT_TRIGGER.md)                                        | `POST /api/agents/:id` async agent trigger → action rows: contract, fire-and-forget model, `kind`/`source`/`status` columns, token auth (`configs/action-tokens.yaml`), recording playback via Data Stash, promotion gate                                                                                             |
+| [`docs/MICROSOFT_GRAPH.md`](docs/MICROSOFT_GRAPH.md)                                    | Per-user Microsoft Graph (Pattern C, #110): the Microsoft 365 agent's tools, the app-side tool transport (third transport beside gateway + sandbox), cross-user isolation, encrypted per-user token lifecycle, adding a connector. Tenant setup: [`docs/deploy/entra-setup.md`](docs/deploy/entra-setup.md)           |
+| [`docs/graph-api-notes.md`](docs/graph-api-notes.md)                                    | What Microsoft Graph actually returns (as opposed to what it looks like): endpoint map + deprecation dates, identifier formats, response envelopes, a field-reliability table, query-language traps, what each error really means, and an explicit "not verified" list. Open this when a Graph response surprises you |
+| [`ui/README.md`](ui/README.md)                                                          | UI quick start and file index                                                                                                                                                                                                                                                                                         |
+| [`ui/src/lib/harness-patterns/README.md`](ui/src/lib/harness-patterns/README.md)        | Harness patterns full API                                                                                                                                                                                                                                                                                             |

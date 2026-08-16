@@ -66,7 +66,12 @@ pnpm install
 pnpm dev
 ```
 
+The app itself runs natively here on purpose — that is the development loop, and
+step 1 deliberately does not start it. To run it as a container instead (parity
+with deployment), see [Running the app in a container](#running-the-app-in-a-container).
+
 **Access Points:**
+
 - **UI**: http://localhost:3444
 - **Neo4j Browser**: http://localhost:7474 (neo4j/password)
 - **MCP Gateway**: http://localhost:8811/mcp
@@ -77,13 +82,59 @@ pnpm dev
 
 All services run in Docker containers via the `app-network` bridge network:
 
-| Service | Port | Description |
-|---------|------|-------------|
-| **Neo4j** | 7474, 7687 | Graph database with APOC and n10s plugins |
-| **MCP Gateway** | 8811 | Model Context Protocol gateway for AI tools |
-| **Postgres** | 5432 | Conversation history (per-user, persisted across restarts) |
-| **Redis** | 6379 | Guardrail circuit-breaker state, ephemeral cache |
-| **n8n** | 5678 | Workflow automation (optional) |
+| Service         | Port       | Description                                                     |
+| --------------- | ---------- | --------------------------------------------------------------- |
+| **Neo4j**       | 7474, 7687 | Graph database with APOC and n10s plugins                       |
+| **MCP Gateway** | 8811       | Model Context Protocol gateway for AI tools                     |
+| **Postgres**    | 5432       | Conversation history (per-user, persisted across restarts)      |
+| **Redis**       | 6379       | Guardrail circuit-breaker state, ephemeral cache                |
+| **n8n**         | 5678       | Workflow automation (optional)                                  |
+| **app**         | 3444       | The SolidStart app itself — opt-in (`--profile app`), see below |
+
+## Running the app in a container
+
+The app ships a Dockerfile (`app/Dockerfile`) and a compose service, `app`
+(#197). It is **deployment/parity, not the dev loop** — `pnpm dev` on the host
+stays the way to develop, and nothing about it changed.
+
+```bash
+docker compose build app        # multi-stage: pnpm install → baml-generate → vinxi build
+docker compose up -d app        # starts its dependencies too (postgres, neo4j, redis, gateway)
+curl localhost:3444/api/health  # {"status":"ok","uptimeSeconds":…}
+docker compose logs -f app
+```
+
+The service sits behind a compose **profile**, so a bare `docker compose up -d`
+still brings up only the backing services — naming `app` explicitly (as above)
+enables the profile. To bring up everything at once: `docker compose --profile app up -d`.
+
+Notes worth knowing before you run it:
+
+- **Config comes from `app/.env`** (`env_file`, optional so a fresh clone can
+  still start the rest of the stack). The compose service overrides the
+  host-facing endpoints in it with their in-network equivalents —
+  `postgres:5432`, `mcp-gateway:8811`, `redis`, `doc-convert:8000`. Neo4j needs
+  no override: `config/endpoints.ts` already resolves `bolt://neo4j:7687` in a
+  production build.
+- **Real auth is required.** The dev bypass is gated on `import.meta.env.DEV`,
+  which Vite replaces with `false` in the build that goes into the image — so
+  the container always runs the real Entra sign-in and needs `AZURE_*` +
+  `AUTH_SESSION_SECRET` + `VITE_ALLOWED_EMAILS` in `app/.env`
+  ([`docs/deploy/entra-setup.md`](docs/deploy/entra-setup.md)). The published
+  port is the same 3444, so the registered redirect URI keeps working.
+- **The Data Stash embedder is not a compose service** — it is a llama-server on
+  the host (port 8090). The container reaches it via
+  `EMBEDDINGS_LOCAL_URL=http://host.docker.internal:8090/v1`.
+- **`/var/run/docker.sock` is mounted** so the compute sandbox can keep shelling
+  out to `docker run` / `docker exec`; sandbox containers are then siblings on
+  the host. That mount is root-equivalent on the host — drop it (and add
+  `USER node` to the Dockerfile) if you do not need the sandbox agents. Building
+  `kg-sandbox:base` is still a separate step: `docker build -t kg-sandbox:base rootfs/`.
+- **Build resources:** the vinxi build peaks around 2.3 GB RSS. On
+  Docker Desktop / colima give the VM at least 4 GB, or the build is OOM-killed
+  mid-bundle (`cannot allocate memory`).
+
+Full service reference: [`docs/DOCKER_COMPOSE.md`](docs/DOCKER_COMPOSE.md).
 
 ## Harness Patterns Framework
 
@@ -115,18 +166,18 @@ Implementation: `app/src/lib/db/{client,conversations}.server.ts` and `app/src/l
 
 Configured in `configs/custom-catalog.yaml` and enabled via `configs/mcp-config.yaml`. The gateway runs with `--enable-all-servers`, so any registered server is exposed unless explicitly disabled.
 
-| Server | Tools | Purpose |
-|--------|-------|---------|
-| `neo4j-cypher` | `get_neo4j_schema`, `read_neo4j_cypher`, `write_neo4j_cypher` | Execute Cypher (uses fixed `NEO4J_URI` mapping, not `NEO4J_URL`) |
-| `fetch` | `fetch` | Retrieve content from the web |
-| `web_search` | `web_search` | DuckDuckGo web search |
-| `rust-mcp-filesystem` | filesystem ops | Sandboxed filesystem access via configured allowed directories |
-| `github` | repo / issue / PR ops | GitHub API |
-| `memory` | entity / observation / relation ops | Knowledge-graph–style scratch memory |
-| `redis` | key / hash / json / vector ops | Redis primitives + RediSearch |
-| `database-server` | SQL ops | Generic database access |
-| `playwright` | browser automation | E2E testing (requires `pnpm dev:exposed`) |
-| `context7` | `resolve-library-id`, `get-library-docs` | Library docs |
+| Server                | Tools                                                         | Purpose                                                          |
+| --------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `neo4j-cypher`        | `get_neo4j_schema`, `read_neo4j_cypher`, `write_neo4j_cypher` | Execute Cypher (uses fixed `NEO4J_URI` mapping, not `NEO4J_URL`) |
+| `fetch`               | `fetch`                                                       | Retrieve content from the web                                    |
+| `web_search`          | `web_search`                                                  | DuckDuckGo web search                                            |
+| `rust-mcp-filesystem` | filesystem ops                                                | Sandboxed filesystem access via configured allowed directories   |
+| `github`              | repo / issue / PR ops                                         | GitHub API                                                       |
+| `memory`              | entity / observation / relation ops                           | Knowledge-graph–style scratch memory                             |
+| `redis`               | key / hash / json / vector ops                                | Redis primitives + RediSearch                                    |
+| `database-server`     | SQL ops                                                       | Generic database access                                          |
+| `playwright`          | browser automation                                            | E2E testing (requires `pnpm dev:exposed`)                        |
+| `context7`            | `resolve-library-id`, `get-library-docs`                      | Library docs                                                     |
 
 Tool namespaces consumed by `harness-patterns/tools.server.ts`: `neo4j`, `web`, `context7`, `filesystem`, `github`, `memory`, `redis`, `database`, `code` (and `all`). See `KNOWN_TOOL_SERVERS` in that file for the namespace lookup.
 
@@ -166,13 +217,13 @@ docker compose up -d
 
 ## Configuration Files
 
-| File | Purpose | Key Settings |
-|------|---------|--------------|
-| `docker-compose.yaml` | Service orchestration | Ports, volumes, healthchecks |
-| `mcp-config.yaml` | MCP server connection parameters | Neo4j URI, credentials |
-| `custom-catalog.yaml` | Custom MCP catalog with tool definitions | Server images, env mappings |
-| `.mcp.json` | Claude Code MCP integration | Gateway endpoint |
-| `app/baml_src/*.baml` | BAML function definitions | Agent prompts, types |
+| File                  | Purpose                                  | Key Settings                 |
+| --------------------- | ---------------------------------------- | ---------------------------- |
+| `docker-compose.yaml` | Service orchestration                    | Ports, volumes, healthchecks |
+| `mcp-config.yaml`     | MCP server connection parameters         | Neo4j URI, credentials       |
+| `custom-catalog.yaml` | Custom MCP catalog with tool definitions | Server images, env mappings  |
+| `.mcp.json`           | Claude Code MCP integration              | Gateway endpoint             |
+| `app/baml_src/*.baml` | BAML function definitions                | Agent prompts, types         |
 
 ## Project Structure
 
@@ -204,12 +255,14 @@ kg-agent/
 ## Adding New MCP Servers
 
 1. **Find the server's image digest**:
+
    ```bash
    docker pull mcp/<server-name>
    docker inspect mcp/<server-name> --format='{{index .RepoDigests 0}}'
    ```
 
 2. **Add to `custom-catalog.yaml`**:
+
    ```yaml
    registry:
      your-server:
@@ -221,16 +274,18 @@ kg-agent/
          - name: tool_name
        env:
          - name: CONFIG_VAR
-           value: '{{your-server.config_key}}'
+           value: "{{your-server.config_key}}"
    ```
 
 3. **Add configuration to `mcp-config.yaml`** (if needed):
+
    ```yaml
    your-server:
      config_key: value
    ```
 
 4. **Update `docker-compose.yaml`**:
+
    ```yaml
    command:
      - --servers=neo4j-cypher,fetch,web_search,your-server
@@ -245,16 +300,16 @@ kg-agent/
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| [docs/INDEX.md](docs/INDEX.md) | Documentation index and overview |
-| [docs/UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md) | SolidStart UI structure and patterns |
-| [docs/DOCKER_COMPOSE.md](docs/DOCKER_COMPOSE.md) | Service configuration details |
-| [docs/MCP_GATEWAY.md](docs/MCP_GATEWAY.md) | MCP Gateway reference |
-| [GitHub Project](https://github.com/users/mknw/projects/5) | Development roadmap / planning board (replaced docs/ROADMAP.md) |
-| [docs/harness-patterns/README.md](docs/harness-patterns/README.md) | Harness patterns overview + tutorials |
-| [app/src/lib/harness-patterns/README.md](app/src/lib/harness-patterns/README.md) | Harness patterns API reference |
-| [neo4j_dumps/README.md](neo4j_dumps/README.md) | Neo4j data versioning workflow |
+| Document                                                                         | Description                                                     |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| [docs/INDEX.md](docs/INDEX.md)                                                   | Documentation index and overview                                |
+| [docs/UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md)                               | SolidStart UI structure and patterns                            |
+| [docs/DOCKER_COMPOSE.md](docs/DOCKER_COMPOSE.md)                                 | Service configuration details                                   |
+| [docs/MCP_GATEWAY.md](docs/MCP_GATEWAY.md)                                       | MCP Gateway reference                                           |
+| [GitHub Project](https://github.com/users/mknw/projects/5)                       | Development roadmap / planning board (replaced docs/ROADMAP.md) |
+| [docs/harness-patterns/README.md](docs/harness-patterns/README.md)               | Harness patterns overview + tutorials                           |
+| [app/src/lib/harness-patterns/README.md](app/src/lib/harness-patterns/README.md) | Harness patterns API reference                                  |
+| [neo4j_dumps/README.md](neo4j_dumps/README.md)                                   | Neo4j data versioning workflow                                  |
 
 ## Troubleshooting
 

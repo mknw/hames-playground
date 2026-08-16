@@ -64,12 +64,15 @@ src/
 ## Key Features
 
 ### SSE Event Streaming
+
 Agent events stream to the client in real-time via `POST /api/events`. The UI updates the graph visualization and observability panel incrementally as events arrive.
 
 ### Conversation Persistence
+
 Conversations are persisted to Postgres in a single `conversations` table; the `context` column holds the full `serializeContext()` blob. Rows are created **at run start** (#105) so a new chat is visible in the sidebar — with live progress — during its whole first turn; the run's final save overwrites the stub. The sidebar lists per-user threads via `listConversations()` (ordered by creation, not activity), and selecting a thread calls `loadConversation()` which rehydrates events into the graph + observability panel. Conversations are deletable from the sidebar (#71) — per-row or bulk via select mode — through a user-scoped atomic `DELETE … RETURNING`; running conversations are never deletable (the run's end-save would recreate the row). Titles are sticky (first 60 chars of the first user message). Auth is Microsoft Entra ID via server-side MSAL OIDC (`src/lib/auth/`, #119); in dev, `isBypassEnabled()` (in `src/lib/auth/dev-bypass.ts`, gated on `import.meta.env.DEV && VITE_DEV_BYPASS_AUTH === 'true'`) falls back to the shared `dev-bypass-user` literal. See [`src/lib/harness-client/README.md`](src/lib/harness-client/README.md#session-lifecycle) for the session lifecycle.
 
 ### Interactive Graph Visualization
+
 - Cytoscape.js rendering with dark theme and multiple layouts
 - Incremental graph updates (additive, preserves positions)
 - Entity names in chat messages are interactive: hover highlights graph elements, click toggles persistent highlight
@@ -79,16 +82,20 @@ Conversations are persisted to Postgres in a single `conversations` table; the `
 - `lazyMount` + `unmountOnExit` on tabs prevents idle Cytoscape instances
 
 ### Settings & Token Budget
+
 Harness parameters (max tool turns, retries, result truncation, etc.) are configurable via the Settings panel in the sidebar. Settings are persisted to localStorage and sent with each request. On the server, `AsyncLocalStorage` makes them available to all patterns without threading through function signatures. A `trimToFit()` utility in `token-budget.server.ts` drops oldest history entries when the prompt would overflow a model's context window.
 
 ### Graph Data Extraction
+
 `graph-extractor.ts` handles two Neo4j result formats:
+
 - **MCP format**: Flat record objects where nodes are `{ name, description, ... }` and relationships are `[startNode, "TYPE", endNode]` tuples
 - **Neo4j driver format**: Objects with `identity`/`elementId`, `labels[]`, `properties{}`
 
 It also recognises the **enriched payload** produced by `neo4j-enricher.server.ts` (`{ rows, _neighborhood, _touched }`) — the Neo4j panel uses the `data.touched` flag to highlight the nodes the agent's query actually targeted, while neighborhood context renders in the default cyan. `get_neo4j_schema` results are suppressed entirely (#14: prevented relationship-type names from being rendered as fake nodes). See [`harness-client/README.md`](src/lib/harness-client/README.md#graph-extraction) for the full pipeline.
 
 ### Agent Framework
+
 See [harness-patterns/README.md](src/lib/harness-patterns/README.md) for the full API reference. Cross-pattern data flow is handled by `withReferences` ([design](../docs/harness-patterns/with-references.md)) — every default-agent route is wrapped so the inner pattern receives an LLM-curated set of relevant prior `tool_result` events on entry, plus a synthetic `expandPreviousResult` tool the controller can call to load full content.
 
 ## Commands
@@ -103,6 +110,11 @@ pnpm baml-generate    # Regenerate baml_client/
 pnpm baml-test        # Run BAML tests
 ```
 
+To run this app as a container instead of natively — deployment parity, not the
+dev loop — build `Dockerfile` through the `app` compose service from the repo
+root: `docker compose build app && docker compose up -d app`. Details and the
+env-var rewrites: [`docs/DOCKER_COMPOSE.md`](../docs/DOCKER_COMPOSE.md#app-the-solidstart-app-197).
+
 ## Adding a New Agent
 
 1. Create `src/lib/harness-client/examples/<name>.server.ts` exporting an `AgentConfig`
@@ -114,11 +126,11 @@ See [examples/README.md](src/lib/harness-client/examples/README.md) for detailed
 
 ## Documentation Index
 
-| File | Contents |
-|------|----------|
-| [GitHub Project](https://github.com/users/mknw/projects/5) | Planning board / roadmap (replaced docs/ROADMAP.md) |
-| [src/lib/harness-patterns/README.md](src/lib/harness-patterns/README.md) | Harness patterns full API reference |
-| [src/lib/harness-client/examples/README.md](src/lib/harness-client/examples/README.md) | Example agent implementations (7 agents) |
-| [../docs/UI_ARCHITECTURE.md](../docs/UI_ARCHITECTURE.md) | Component structure, data flow, Chat-Graph linking |
-| [../docs/DATA_STASH.md](../docs/DATA_STASH.md) | Data Stash upload → chunk → embed → search pipeline (#6/#9/#8) |
-| [../docs/INDEX.md](../docs/INDEX.md) | Full project documentation index |
+| File                                                                                   | Contents                                                       |
+| -------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| [GitHub Project](https://github.com/users/mknw/projects/5)                             | Planning board / roadmap (replaced docs/ROADMAP.md)            |
+| [src/lib/harness-patterns/README.md](src/lib/harness-patterns/README.md)               | Harness patterns full API reference                            |
+| [src/lib/harness-client/examples/README.md](src/lib/harness-client/examples/README.md) | Example agent implementations (7 agents)                       |
+| [../docs/UI_ARCHITECTURE.md](../docs/UI_ARCHITECTURE.md)                               | Component structure, data flow, Chat-Graph linking             |
+| [../docs/DATA_STASH.md](../docs/DATA_STASH.md)                                         | Data Stash upload → chunk → embed → search pipeline (#6/#9/#8) |
+| [../docs/INDEX.md](../docs/INDEX.md)                                                   | Full project documentation index                               |

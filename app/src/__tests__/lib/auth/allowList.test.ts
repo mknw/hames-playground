@@ -28,6 +28,15 @@ describe('getAllowedEmails', () => {
     expect(getAllowedEmails()).toEqual(['ann@corp.com', 'bob@corp.com'])
   })
 
+  it('prefers the runtime process.env value over the build-time inlined one', () => {
+    // The container is built without app/.env, so the inlined value is absent
+    // or stale; compose supplies the real list as a plain env var (#197).
+    vi.stubEnv('VITE_ALLOWED_EMAILS', 'baked-in@corp.com')
+    process.env.VITE_ALLOWED_EMAILS = 'runtime@corp.com'
+
+    expect(getAllowedEmails()).toEqual(['runtime@corp.com'])
+  })
+
   it('returns an empty list and warns when the var is unset', () => {
     vi.stubEnv('VITE_ALLOWED_EMAILS', '')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

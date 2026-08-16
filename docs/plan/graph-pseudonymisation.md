@@ -131,6 +131,17 @@ passing test, so a future change that "fixes" one has to say so out loud.
 4. **A first name shared by two people is attributed to the first of them.** Both
    are still replaced; they are conflated onto one placeholder rather than being
    split at random. Conflation is the safe direction to fail in.
+5. **A percent-encoded name inside a URL path survives.** A SharePoint
+   `driveItem.webUrl` carries the file name encoded —
+   `Offerte%20Van%20Damme%202026.docx` — and `%20` breaks the literal the roster
+   searches for, so the surname is not replaced there. The `_SLUG` form in the
+   *same* URL (`jan_vandamme_dtsc_be`) and the un-encoded `name` field of the same
+   item both substitute correctly, so this is narrow, but it is a real surname
+   reaching the prompt. Decoding the URL before matching would fix it and is not
+   done: it widens `apply` from "replace literals" to "replace literals under an
+   encoding", which is the kind of heuristic limitation 2 declines. Found while
+   building the fidelity bench; see
+   [`pseudonym-fidelity-bench.md`](pseudonym-fidelity-bench.md).
 
 ## Open questions
 
@@ -171,13 +182,28 @@ conversations permanently unreadable — arguably a feature, arguably a support
 problem. Note that a per-payload table also means one conversation accumulates
 many tables.
 
-**4. Do placeholders survive an LLM paraphrase?** `reverse` assumes the model
-echoes `PERSON_1` verbatim. Real models sometimes write "Person 1", "the first
-person", or translate it. A mangled placeholder does not corrupt data — it just
-fails to reverse, and the user sees `PERSON_1` — but the failure mode should be
-measured before this is user-facing, and it is a prompt question as much as a
-code one. `reverse` already resolves a bare `PERSON_n` for a person known only
-by address, which is one small step in that direction.
+**4. Do placeholders survive an LLM paraphrase?** — **ANSWERED, for the Anthropic
+chain only.** Measured in
+[`pseudonym-fidelity-bench.md`](pseudonym-fidelity-bench.md): over 96 live
+`Synthesize` calls (NL/FR/EN × prompt-guidance off/on) the model echoed 1826
+placeholder occurrences and mangled none — no case changes, no Markdown-escaped
+underscores, no inflected or invented ids. **`reverse` does not need a lenient
+pass**, and the bench's scorer stays in the tree as the regression instrument
+that says so.
+
+Two things it does *not* settle, so the question is not closed in general: only
+`claude-sonnet-5` was measured — the Haiku backstop and the whole mixed-provider
+`SynthesizerFallback` chain (Gemma leads it) are unmeasured, and this result must
+not be assumed to transfer; and only the `Synthesize` prompt shape was measured,
+not a controller composing a *tool argument* from a placeholder, which is the
+harder case question 1 raises for the prompt seam.
+
+The original statement of the question, for the record: `reverse` assumes the
+model echoes `PERSON_1` verbatim. Real models sometimes write "Person 1", "the
+first person", or translate it. A mangled placeholder does not corrupt data — it
+just fails to reverse, and the user sees `PERSON_1` — but the failure mode should
+be measured before this is user-facing, and it is a prompt question as much as a
+code one.
 
 **5. Is a stable per-user pseudonym ever wanted?** Payload-scoped numbering is
 the privacy-maximal choice, and it means the model cannot tell that the `PERSON_2`

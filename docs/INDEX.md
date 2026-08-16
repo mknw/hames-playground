@@ -23,6 +23,7 @@ Forward-looking design docs. Live item-tracking stays on the GitHub project boar
 | [plan/sandbox.md](plan/sandbox.md) | Sandbox compute design — core shipped (#79/#89/#97/#78 flavours); still plan-only: Swarm, Firecracker, ephemeral one-shot, #82 |
 | [plan/skills-adoption.md](plan/skills-adoption.md) | Adopting a curated set of Claude Code **agent skills** as our own bundle: one directory with two namespaces (bare = OSS-portable, `kg-` = project-only), the per-skill adaptation sheet for 19 vendored files, ADR-mechanism and `grilling`/`council` overlap reconciliation, pinned-commit upstream sync, MIT attribution, and the `.gitignore` fix that makes `.claude/skills/` reach Orca workers at all |
 | [plan/graph-pseudonymisation.md](plan/graph-pseudonymisation.md) | Stripping people out of Graph tool results **without NER** — Graph's own labelled identity fields are the roster (data-privacy plan item 3). The pure core in `lib/privacy/` is built and tested but wired to nothing; where to hook, what `conversations.context` stores and where the (personal-data) table lives are open questions |
+| [plan/pseudonym-fidelity-bench.md](plan/pseudonym-fidelity-bench.md) | Measured answer to open question 4 of the above: **do `PERSON_1` placeholders survive an LLM paraphrase?** Live Synthesize run over NL/FR/EN × prompt-guidance off/on, with per-language survival/mangle/hallucination rates and a recommendation on wiring the guidance and on widening `reverse` |
 
 ---
 
@@ -89,12 +90,6 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 | Document | Description |
 |----------|-------------|
 | [AGENT_TRIGGER.md](AGENT_TRIGGER.md) | `POST /api/agents/:id` async agent trigger → **action** rows: endpoint contract, in-process fire-and-forget model, `kind`/`source`/`status` data model, per-user token auth (`configs/action-tokens.yaml`), recording storage + playback via the Data Stash, sidebar filter + promotion gate, status-lifecycle quirk |
-
-### Routines
-
-| Document | Description |
-|----------|-------------|
-| [ROUTINES.md](ROUTINES.md) | **Routines** (#131): trigger-driven harness runs — the extensible trigger registry (`interval` / `session_start` / `session_end`), the `routines` table, the boot-armed interval sweep + session-lifecycle hooks, the compare-and-set that prevents double-firing, and the minimal management API. A scheduling layer *over* AGENT_TRIGGER's path, not a second execution path |
 
 ### Auth & Deployment
 
@@ -180,7 +175,9 @@ kg-agent/
 │   │   └── NNNN-<slug>.md       # One decision each, 1–3 sentences + optional sections
 │   ├── plan/                    # Forward-looking design docs
 │   │   ├── ROADMAP.md           # Multi-user architecture + phased MoSCoW roadmap
-│   │   └── sandbox.md           # Sandbox design (core shipped; Swarm/Firecracker = plan)
+│   │   ├── sandbox.md           # Sandbox design (core shipped; Swarm/Firecracker = plan)
+│   │   ├── graph-pseudonymisation.md      # No-NER identity stripping over Graph's own labels
+│   │   └── pseudonym-fidelity-bench.md    # Do PERSON_1 placeholders survive an LLM paraphrase?
 │   ├── agents/
 │   │   └── issue-tracker.md     # gh commands + the issue-body-is-the-spec rule
 │   ├── deploy/

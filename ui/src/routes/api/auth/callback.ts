@@ -16,6 +16,7 @@ import { createSession, DEFAULT_SESSION_TTL_SECONDS } from '~/lib/auth/session-s
 import { upsertUser } from '~/lib/auth/users.server'
 import { saveUserTokenCache } from '~/lib/auth/user-tokens.server'
 import { isEmailAllowed } from '~/lib/auth/allowList'
+import { onSessionStart } from '~/lib/routines/dispatch.server'
 
 interface Handshake {
   state: string
@@ -90,6 +91,11 @@ export async function GET(event: APIEvent): Promise<Response> {
       displayName: identity.displayName,
       homeAccountId,
     })
+
+    // The session now exists: this is `session_start` (#131). Fire-and-forget
+    // by construction — the redirect must not wait on a harness run, and a
+    // routine failure must never cost the user their sign-in.
+    onSessionStart(identity.userId)
 
     return redirect(
       '/',

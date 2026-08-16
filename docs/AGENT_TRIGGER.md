@@ -15,7 +15,7 @@ iOS Shortcut ─▶ POST /api/agents/:id (multipart)
                         └─(fire-and-forget)─▶ harness run ─▶ save (status=done|error)
 ```
 
-Agents are **fixed per endpoint** — intent-routing belongs *inside* a general
+Agents are **fixed per endpoint** — intent-routing belongs _inside_ a general
 harness, never at this layer. As harnesses mature, more general ones can expose
 more routes.
 
@@ -38,13 +38,13 @@ failure (e.g. Redis down) is logged and the run still proceeds.
 
 ## Modules
 
-| Module | Role |
-|--------|------|
-| `routes/api/agents/[id].ts` | The route: auth, multipart parse, recording store, seed row, fire-and-forget, `202` |
-| `lib/auth/action-tokens.server.ts` | Parse `configs/action-tokens.yaml` → `secret → userId` map (cached); `bearerSecret()` header extraction |
+| Module                                       | Role                                                                                                                                                                                                                                                     |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `routes/api/agents/[id].ts`                  | The route: auth, multipart parse, recording store, seed row, fire-and-forget, `202`                                                                                                                                                                      |
+| `lib/auth/action-tokens.server.ts`           | Parse `configs/action-tokens.yaml` → `secret → userId` map (cached); `bearerSecret()` header extraction                                                                                                                                                  |
 | `lib/harness-client/action-runner.server.ts` | `seedActionRow` (observable `running` row) + `runAgentInBackground` (fresh harness run, off the request path). **Server-only, deliberately NOT `"use server"`** — it takes a `userId`, so exposing it as a client RPC would let a caller run as any user |
-| `lib/harness-client/actions.server.ts` | `promoteAction()` server action (flip `kind`); `ConversationSummary` carries `kind`/`source`/`status` |
-| `lib/db/conversations.server.ts` | `kind`/`source`/`status` columns; `promoteConversation`, `setConversationStatus`; `saveConversation` keeps `kind`/`source` immutable on update |
+| `lib/harness-client/actions.server.ts`       | `promoteAction()` server action (flip `kind`); `ConversationSummary` carries `kind`/`source`/`status`                                                                                                                                                    |
+| `lib/db/conversations.server.ts`             | `kind`/`source`/`status` columns; `promoteConversation`, `setConversationStatus`; `saveConversation` keeps `kind`/`source` immutable on update                                                                                                           |
 
 ## Execution model — in-process fire-and-forget (v1)
 
@@ -53,7 +53,7 @@ failure (e.g. Redis down) is logged and the run still proceeds.
    the command as the first `user_message` + `data.trigger`) so the action is
    observable — with a `running` spinner — the instant `202` returns.
 3. `runAgentInBackground` runs the harness to completion **without being awaited**
-   (a fresh `harness(...)` run, *not* `continueSession` — it never re-appends to
+   (a fresh `harness(...)` run, _not_ `continueSession` — it never re-appends to
    the seeded placeholder). It's wrapped in `runWithUserId(userId, …)` so pattern
    closures resolve the owner; request-scoped settings fall back to
    `DEFAULT_SETTINGS`. On completion `saveSession` overwrites the blob and lifts
@@ -74,27 +74,32 @@ field flip**. Three columns added via idempotent `ALTER TABLE … ADD COLUMN IF 
 EXISTS` (so existing DBs pick them up; the `CREATE` only runs when the table is
 absent):
 
-| Column | Values | Notes |
-|--------|--------|-------|
-| `kind` | `conversation` \| `action` | Mutable — **promotion flips it**. Immutable through `saveConversation`'s upsert (only `promoteConversation` changes it) |
-| `source` | `chat` \| `post` | Immutable provenance. `saveConversation` never updates it |
-| `status` | `running` \| `paused` \| `done` \| `error` | Lifted copy of `UnifiedContext.status`, refreshed on every save, for cheap list filtering + the sidebar badge |
+| Column   | Values                                     | Notes                                                                                                                   |
+| -------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `kind`   | `conversation` \| `action`                 | Mutable — **promotion flips it**. Immutable through `saveConversation`'s upsert (only `promoteConversation` changes it) |
+| `source` | `chat` \| `post` \| `routine`              | Immutable provenance. `saveConversation` never updates it                                                               |
+| `status` | `running` \| `paused` \| `done` \| `error` | Lifted copy of `UnifiedContext.status`, refreshed on every save, for cheap list filtering + the sidebar badge           |
 
 Existing chat flow → `kind='conversation'`, `source='chat'` (defaults; backfilled
-on existing rows). POST trigger → `kind='action'`, `source='post'`.
+on existing rows). POST trigger → `kind='action'`, `source='post'`. A routine
+firing on its trigger → `kind='action'`, `source='routine'` (#131) — the same
+`seedActionRow` + `runAgentInBackground` path described here, differing only in
+the `source` it seeds; see [ROUTINES.md](ROUTINES.md).
 
 Trigger provenance lives at `ctx.data.trigger`
 (`{ transcribedCommand, shortDescription, recordingDocId, recordingFilename,
-recordingMimeType }`). `short_description` also lands in the sticky `title` column
-(the route's insert sets it; the background run's `saveSession` can't clobber it
-via the `COALESCE`-sticky rule).
+recordingMimeType, routine }`). `short_description` also lands in the sticky
+`title` column (the route's insert sets it; the background run's `saveSession`
+can't clobber it via the `COALESCE`-sticky rule). `routine` is set only on
+routine-triggered runs and carries `{ id, trigger }` — which routine fired, and
+on what kind of trigger.
 
 ### Status lifecycle — a harness quirk
 
 The harness **never flips a successful run to `done`**: `runChain` leaves
 `ctx.status === 'running'` and the synthesizer emits the final `assistant_message`
 directly (`harness.server.ts`'s `status === 'done'` push is effectively dead).
-Since `saveSession` only runs *after* the harness returns, a persisted `running`
+Since `saveSession` only runs _after_ the harness returns, a persisted `running`
 means "completed, never flipped" → `extractStatusFromContext`
 (`session.server.ts`) maps `running → done` on save (`paused`/`error` preserved).
 The genuine in-flight `running` badge therefore comes **only** from
@@ -109,9 +114,9 @@ Per-user secret map (git-ignored, mirrors `configs/mcp-config.yaml`). Copy
 
 ```yaml
 tokens:
-  - label: "iphone"                 # bookkeeping only, never used at runtime
+  - label: "iphone" # bookkeeping only, never used at runtime
     secret: "<long-random-secret>"
-    userId: "<entra-oid>"           # caller's Entra object id (#119)
+    userId: "<entra-oid>" # caller's Entra object id (#119)
 ```
 
 Parsed once and cached (`resolveActionUser`). A missing file rejects every
@@ -123,7 +128,7 @@ triggered actions appear in the dev UI (which runs as `BYPASS_USER` when
 
 The `original_recording` is stored as a **Data Stash document keyed by `run_id`**
 (`storeDocument({ sessionId: run_id, encoding: 'base64', … })`), so it surfaces
-in that conversation's **"Your Uploads"** and is playable — *not* the searchable
+in that conversation's **"Your Uploads"** and is playable — _not_ the searchable
 ingestion pipeline (binary is skipped by ingest). See [DATA_STASH.md](DATA_STASH.md).
 
 - `upload-service.server.ts` maps audio extensions (`m4a`/`mp3`/`wav`/`aac`/`ogg`/…)
@@ -143,8 +148,8 @@ ingestion pipeline (binary is skipped by ingest). See [DATA_STASH.md](DATA_STASH
 - **Segmented filter: All / Chats / Actions** (queries `kind`).
 - **Status badge** on action rows: spinner (`running`), red (`error`), amber
   (`paused`), subtle bolt (`done`).
-- **Promotion gate:** opening an action and sending a message prompts *"Turn this
-  action into a conversation?"*. **Confirm** → `promoteAction()` flips `kind`, then
+- **Promotion gate:** opening an action and sending a message prompts _"Turn this
+  action into a conversation?"_. **Confirm** → `promoteAction()` flips `kind`, then
   the message sends. **Cancel** → the send is aborted entirely (hard gate — the
   draft is dropped; the row stays an action). Once promoted it never gates again.
 - Background completion has no browser channel, so the route **polls

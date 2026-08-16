@@ -108,10 +108,9 @@ so a dispatch never has to restate them:
 
 - [ ] CI green: typecheck · lint · test · build (`.github/workflows/ci.yml`)
 - [ ] Coverage floors not regressed — statements 43 / branches 45 /
-      functions 30 / lines 47 ⚠ these land with PR #165; until it merges this
-      criterion is advisory, not enforced
+      functions 30 / lines 47
 - [ ] Prettier clean on changed files (`ui/.prettierrc.json`; the CI gate covers
-      changed files under `ui/` only — see the caveats below)
+      changed files under `ui/` only — see the caveat below)
 - [ ] Conventional-commit subject line
 - [ ] **No** `Co-Authored-By` / "Generated with" attribution trailers
 - [ ] `pnpm` only, run from `ui/` (never npm/npx)
@@ -119,13 +118,9 @@ so a dispatch never has to restate them:
       `baml_client/` never hand-edited
 ```
 
-Two caveats that are easy to get wrong, and are the reason the block is worded
-the way it is:
+One caveat that is easy to get wrong, and is the reason the block is worded the
+way it is:
 
-- **The coverage floors are real but not yet enforced.** 43 / 45 / 30 / 47 live
-  on the branch of open **PR #165**, not on `main`. A brief written before that
-  merges should say so rather than assert a gate that will not fire. Once #165
-  lands, drop the ⚠ clause.
 - **The CI format check only globs `ui/**`.** It does not cover `docs/**` or
   `.claude/**`, so a docs-only PR can be prettier-dirty and still go green. The
   `.githooks/pre-commit` → lint-staged path does format staged `*.md` anywhere

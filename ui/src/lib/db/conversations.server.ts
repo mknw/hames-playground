@@ -10,10 +10,17 @@ import { query } from './client.server'
 
 assertServerOnImport()
 
-/** Whether a row is a chat conversation or a POST-triggered agent action. */
+/** Whether a row is a chat conversation or a triggered agent action. */
 export type ConversationKind = 'conversation' | 'action'
-/** Immutable provenance: where the row originated. */
-export type ConversationSource = 'chat' | 'post'
+/**
+ * Immutable provenance: where the row originated.
+ *   'chat'    — a user typed into the chat view.
+ *   'post'    — `POST /api/agents/:id` (docs/AGENT_TRIGGER.md).
+ *   'routine' — a routine fired on its trigger (#131, docs/ROUTINES.md).
+ * `'post'` and `'routine'` are both `kind='action'` rows; they differ only in
+ * what pulled the trigger.
+ */
+export type ConversationSource = 'chat' | 'post' | 'routine'
 /** Lifted copy of UnifiedContext.status for cheap list filtering + UI badge. */
 export type ConversationStatus = 'running' | 'paused' | 'done' | 'error'
 

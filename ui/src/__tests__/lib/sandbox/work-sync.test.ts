@@ -132,8 +132,79 @@ describe('work-sync: listWorkFiles + diff', () => {
   })
 
   it('ignores deletions (promotion never removes stored docs)', () => {
-    const baseline = new Map([['gone.txt', 'h1'], ['keep.txt', 'h2']])
+    const baseline = new Map([
+      ['gone.txt', 'h1'],
+      ['keep.txt', 'h2'],
+    ])
     const current = new Map([['keep.txt', 'h2']])
     expect(diffWorkFiles(baseline, current)).toEqual([])
+  })
+})
+
+describe('work-sync: in-VM failures surface with the path that failed', () => {
+  /** Transport where the named tool always fails, and bash reports a non-zero
+   *  exit — the shape a real container returns for a full disk / missing file. */
+  function failingTransport(opts: { failTool?: string; bashStderr?: string }): McpTransport {
+    return {
+      vmId: 'vm-broken',
+      toolNames: async () => [],
+      listTools: async () => [],
+      ownsTool: () => true,
+      close: async () => {},
+      callTool: async (name): Promise<ToolCallResult> => {
+        if (name === opts.failTool) {
+          return { success: false, data: null, error: 'no space left on device' }
+        }
+        if (name === 'sandbox_bash' && opts.bashStderr !== undefined) {
+          return {
+            success: true,
+            data: { stdout: '', stderr: opts.bashStderr, exit_code: 1, timed_out: false },
+          }
+        }
+        return { success: true, data: '' }
+      },
+    }
+  }
+
+  it('reports a failed utf8 write', async () => {
+    const t = failingTransport({ failTool: 'sandbox_write' })
+    await expect(writeWorkFile(t, '/work/in/a.txt', 'hi', 'utf8')).rejects.toThrow(
+      'sandbox_write failed for /work/in/a.txt: no space left on device',
+    )
+  })
+
+  it('reports a failed base64 staging write', async () => {
+    const t = failingTransport({ failTool: 'sandbox_write' })
+    await expect(writeWorkFile(t, '/work/in/a.bin', 'AAA=', 'base64')).rejects.toThrow(
+      'staging base64 write failed for /work/in/a.bin.b64: no space left on device',
+    )
+  })
+
+  it('reports a failed in-VM base64 decode', async () => {
+    const t = failingTransport({ bashStderr: 'base64: invalid input' })
+    await expect(writeWorkFile(t, '/work/in/a.bin', 'not-base64', 'base64')).rejects.toThrow(
+      'base64 decode failed for /work/in/a.bin: base64: invalid input',
+    )
+  })
+
+  it('reports a failed utf8 read', async () => {
+    const t = failingTransport({ failTool: 'sandbox_read' })
+    await expect(readWorkFile(t, '/work/out/missing.txt', 'utf8')).rejects.toThrow(
+      'sandbox_read failed for /work/out/missing.txt: no space left on device',
+    )
+  })
+
+  it('reports a failed in-VM base64 encode', async () => {
+    const t = failingTransport({ bashStderr: 'No such file or directory' })
+    await expect(readWorkFile(t, '/work/out/missing.bin', 'base64')).rejects.toThrow(
+      'base64 encode failed for /work/out/missing.bin: No such file or directory',
+    )
+  })
+
+  it('reports a staged base64 file it cannot read back', async () => {
+    const t = failingTransport({ failTool: 'sandbox_read' })
+    await expect(readWorkFile(t, '/work/out/a.bin', 'base64')).rejects.toThrow(
+      'reading staged base64 failed for /work/out/a.bin: no space left on device',
+    )
   })
 })

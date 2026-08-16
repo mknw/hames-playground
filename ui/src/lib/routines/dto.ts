@@ -8,7 +8,7 @@
  * (a `Date` doesn't survive JSON).
  */
 
-import { serializeTrigger, type RoutineTriggerKind } from './triggers'
+import { serializeTrigger, type RoutineTrigger, type RoutineTriggerKind } from './triggers'
 
 export interface RoutineDto {
   id: string
@@ -26,7 +26,7 @@ export interface RoutineDto {
 interface RoutineLike {
   id: string
   agentId: string
-  trigger: Parameters<typeof serializeTrigger>[0]
+  trigger: RoutineTrigger
   input: string
   label: string | null
   enabled: boolean

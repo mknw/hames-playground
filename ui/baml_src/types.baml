@@ -172,7 +172,17 @@ class ControllerAction {
   // 'Return'` (the tool name is an independent terminal signal), and actorCritic
   // tests `is_final === true` merely to TRIGGER the critic, which owns exit —
   // at worst an omission costs one more actor turn before the cadence gate.
-  is_final bool? @description("Set to true ONLY on the turn that ends the loop (tool_name 'Return', with the complete answer in tool_args). On every other turn set it to false or omit it — an absent value is read as false and the loop continues.")
+  //
+  // The description is PATTERN-NEUTRAL and defers to the prompt for what
+  // "complete" means, for the same reason `additional_calls` above defers: one
+  // ControllerAction class serves both loop patterns, so this text renders into
+  // `ctx.output_format` for BOTH — and what ends the turn differs between them.
+  // simpleLoop finishes with `tool_name: 'Return'` (simpleLoop.baml states it in
+  // the system spine); the actorCritic actor has no `Return` — it is rejected by
+  // the allowlist — and sets `is_final` merely to summon the critic, which owns
+  // the exit (actorCritic.baml states that). Naming `Return` here would tell the
+  // actor its only critic trigger requires a tool it is forbidden to call.
+  is_final bool? @description("Set to true on the turn where you consider the task complete, as your instructions define completion. On every other turn set it to false or omit it — an absent value is read as false and the loop continues.")
 }
 
 /// Critic evaluation result

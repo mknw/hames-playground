@@ -405,11 +405,57 @@ describe('an action that omits is_final', () => {
     expect((JSON.parse(texts[0]) as { is_final: unknown }).is_final).toBe(false)
   })
 
-  it('the output format tells the model what an absent value means', async () => {
+  it('the output format tells BOTH models what an absent value means', async () => {
     // `ctx.output_format` was the only shape description present on the failing
-    // call, and it said only when the value is TRUE. It now states the default.
-    const req = await b.request.LoopController('x', 'x', TOOLS, [] as never, null, null, null)
-    const text = allText(req.body.json() as Body)
-    expect(text).toMatch(/an absent value is read as false/)
+    // call, and it said only when the value is TRUE. It now states the default —
+    // and it must say so in both prompts, because one ControllerAction class
+    // serves both patterns.
+    const loop = await b.request.LoopController('x', 'x', TOOLS, TURNS as never, null, null, null)
+    const actor = await b.request.ActorController(
+      'x',
+      'x',
+      TOOLS,
+      ATTEMPTS as never,
+      null,
+      null,
+      3,
+      5,
+    )
+    for (const req of [loop, actor]) {
+      expect(allText(req.body.json() as Body)).toContain('an absent value is read as false')
+    }
+  })
+
+  it("the shared description does not tie is_final to simpleLoop's Return", async () => {
+    // One class, two patterns with different terminal shapes: simpleLoop
+    // finishes with `tool_name: 'Return'`, while the actor has no Return at all
+    // (the allowlist rejects it) and sets is_final only to summon the critic,
+    // which owns the exit. A description naming `Return` renders into the
+    // ACTOR's output format too and makes its one critic trigger unsatisfiable,
+    // so the terminal shape belongs to each prompt's own spine and the shared
+    // field description stays pattern-neutral.
+    const actor = await b.request.ActorController(
+      'x',
+      'x',
+      TOOLS,
+      ATTEMPTS as never,
+      null,
+      null,
+      3,
+      5,
+    )
+    const raw = allText(actor.body.json() as Body)
+    const start = raw.indexOf('Set to true on the turn')
+    expect(start).toBeGreaterThan(-1)
+    const END = 'the loop continues.'
+    const description = raw.slice(start, raw.indexOf(END, start) + END.length)
+    expect(description).not.toContain('Return')
+
+    // simpleLoop's own spine still carries the Return-specific instruction, so
+    // nothing was lost by taking it out of the shared description.
+    const loop = await b.request.LoopController('x', 'x', TOOLS, TURNS as never, null, null, null)
+    const loopRaw = allText(loop.body.json() as Body)
+    expect(loopRaw).toContain('set tool_name to')
+    expect(loopRaw).toContain('set is_final to true')
   })
 })

@@ -78,6 +78,27 @@ docker compose ps
 
 ---
 
+## Agent skills
+
+Procedures live in `.claude/skills/` (tracked in git, so worktrees inherit them —
+no copy step). Model-invoked skills announce themselves through their own
+descriptions; the only one you have to ask for by name is `/grill-me`.
+
+- Bare names (`grilling`, `codebase-design`, …) are stack-agnostic and are the
+  candidate set for the open-source split. `kg-`-prefixed ones encode something
+  only true of this repo.
+- A `kg-*` skill may call a generic skill. A generic skill must never call a
+  `kg-*` skill — that invariant is what keeps the generic set portable.
+- Provenance and upstream pins for vendored files: `.claude/skills/PROVENANCE.md`;
+  licences: `.claude/skills/NOTICE.md`. Adoption programme:
+  [`docs/plan/skills-adoption.md`](docs/plan/skills-adoption.md).
+
+It names paths and invariants, never contents: every model-invoked skill's
+description is already permanently loaded, so listing them here would restate it
+at full context cost.
+
+---
+
 ## Harness Patterns — Quick Reference
 
 Framework in `ui/src/lib/harness-patterns/`. Full API: [`ui/src/lib/harness-patterns/README.md`](ui/src/lib/harness-patterns/README.md).

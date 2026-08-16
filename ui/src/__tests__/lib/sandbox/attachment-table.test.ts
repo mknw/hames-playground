@@ -126,6 +126,21 @@ describe('AttachmentTable.acquire', () => {
     expect(a.refCount).toBe(2)
   })
 
+  it('returns the VM to the pool and records no attachment when connectMcp fails', async () => {
+    const backend = makeBackend({
+      connectMcp: vi.fn(async () => {
+        throw new Error('in-VM MCP handshake failed')
+      }),
+    })
+    const pool = new WarmPool(backend, { caps: { base: 1 }, idleEvictMs: 60_000 })
+    const table = new AttachmentTable(backend, pool, { idleMs: 60_000 })
+
+    await expect(table.acquire('alpha', 'base', {})).rejects.toThrow('in-VM MCP handshake failed')
+    expect(table.has('alpha')).toBe(false)
+    // The booted VM was parked, not leaked — a retry reuses it.
+    expect(pool.size('base')).toBe(1)
+  })
+
   it('isolates attachments under different ids', async () => {
     const backend = makeBackend()
     const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })

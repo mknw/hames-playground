@@ -1403,3 +1403,21 @@ describe('warnIfCollectorEmpty', () => {
     warnSpy.mockRestore()
   })
 })
+
+describe('extractPromptTemplates', () => {
+  it('matches a signature whose comment contains a parenthesis', async () => {
+    const { extractPromptTemplates } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const source = `function Planner(
+      user_message: string, // the ask (see #27)
+    ) -> PlanResult {
+      client PlannerAnthropic
+      prompt #"plan it"#
+    }`
+
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(source, cache)
+
+    expect(cache.Planner).toBe('plan it')
+  })
+})

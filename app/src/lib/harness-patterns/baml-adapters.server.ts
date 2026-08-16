@@ -560,8 +560,9 @@ function loadTemplatesFromDisk(cache: Record<string, string>): void {
   }
 }
 
-/** Parse BAML source to extract function prompt blocks */
-function extractPromptTemplates(source: string, cache: Record<string, string>): void {
+/** Parse BAML source to extract function prompt blocks. Exported for the
+ *  parenthesised-signature-comment pinning test. */
+export function extractPromptTemplates(source: string, cache: Record<string, string>): void {
   // Match: function FunctionName(...) -> ReturnType { ... prompt #"..."# }
   //
   // The parameter list is `[^{}]*?`, not `[^)]*`: signatures carry `//`

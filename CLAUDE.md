@@ -82,7 +82,8 @@ docker compose ps
 
 Procedures live in `.claude/skills/` (tracked in git, so worktrees inherit them —
 no copy step). Model-invoked skills announce themselves through their own
-descriptions; the only one you have to ask for by name is `/grill-me`.
+descriptions; the ones you have to ask for by name are `/grill-me` and
+`/improve-codebase-architecture`.
 
 - Bare names (`grilling`, `codebase-design`, …) are stack-agnostic and are the
   candidate set for the open-source split. `kg-`-prefixed ones encode something

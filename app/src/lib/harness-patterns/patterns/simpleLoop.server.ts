@@ -216,7 +216,10 @@ export function simpleLoop<T extends SimpleLoopData>(
     // Plan from an upstream `planner` pattern (#27), forwarded by the chain as
     // this pattern's `currentData`. Formatted ONCE per run (it cannot change
     // mid-loop) and passed to the controller as its trailing `planContext`
-    // argument; the adapter prepends it to the BAML `context`. Absent when no
+    // argument; the adapter forwards it as `LoopController`'s own
+    // `plan_context` parameter, NOT merged into `context` — `context` is the
+    // agent-static tier-1 prefix, and a per-question plan there would turn
+    // every tool-catalog cache read into a write (#122). Absent when no
     // planner ran — the loop then behaves exactly as it did before.
     const planContext = formatPlanContext((scope.data as PlannerData).plan)
 

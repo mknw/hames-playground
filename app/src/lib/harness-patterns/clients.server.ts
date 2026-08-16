@@ -23,14 +23,20 @@ import { assertServerOnImport } from './assert.server'
 assertServerOnImport()
 
 export type BamlRole =
-  | 'controller'   // ActorController + LoopController
-  | 'critic'       // Critic
-  | 'synth'        // Synthesize
-  | 'router'       // Router
-  | 'describe'     // ResultDescribe + GenerateConversationTitle + ReferenceSelector
+  | 'controller' // ActorController + LoopController
+  | 'planner' // Planner
+  | 'critic' // Critic
+  | 'synth' // Synthesize
+  | 'router' // Router
+  | 'describe' // ResultDescribe + GenerateConversationTitle + ReferenceSelector
 
 const MIXED_CLIENT_BY_ROLE: Record<BamlRole, string> = {
   controller: 'ControllerFallback',
+  // No PlannerFallback exists: the mixed chains are per-role, and planning is
+  // the same "reason over a tool catalog, emit structured output" workload the
+  // controller chain is tuned for. Reuse it rather than adding a chain that
+  // would need its own provider budget.
+  planner: 'ControllerFallback',
   critic: 'CriticFallback',
   synth: 'SynthesizerFallback',
   router: 'RouterFallback',
@@ -43,6 +49,7 @@ const MIXED_CLIENT_BY_ROLE: Record<BamlRole, string> = {
  *  `client X` lines in baml_src/*.baml. */
 const DECLARED_CLIENT_BY_ROLE: Record<BamlRole, string> = {
   controller: 'ControllerAnthropic',
+  planner: 'PlannerAnthropic',
   critic: 'CriticAnthropic',
   synth: 'SynthesizerAnthropic',
   router: 'RouterAnthropic',

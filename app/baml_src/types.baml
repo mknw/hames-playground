@@ -192,6 +192,18 @@ class CriticResult {
   suggested_approach string? @description("Guidance for next attempt if not sufficient")
 }
 
+/// Strategic plan produced by the `planner` pattern BEFORE any tool runs.
+/// The planner never executes a tool — it only describes the approach, which
+/// downstream loop patterns receive prepended to their `context` argument
+/// (harness-patterns/patterns/planner.server.ts → `formatPlanContext`).
+class PlanResult {
+  /// Field name deliberately matches ControllerAction.reasoning — one
+  /// vocabulary for "why this course of action", wherever it is produced.
+  reasoning string @description("Why this approach was chosen")
+  plan string @description("Numbered, executable plan in natural language")
+  n_steps int @description("Number of discrete steps in the plan")
+}
+
 /// Routing decision
 class RoutingResult {
   intent string @description("Self-contained statement of what the user wants now, with back-references resolved from the history — never a bare 'try again' / 'the second one'")

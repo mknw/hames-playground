@@ -20,7 +20,9 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
 
 // Stub out BAML-touching plumbing so these tests don't need the generated client.
 vi.mock('@boundaryml/baml', () => ({
-  Collector: class { constructor(_: unknown) {} },
+  Collector: class {
+    constructor(_: unknown) {}
+  },
   BamlValidationError: class extends Error {},
 }))
 vi.mock('../../../baml_client', () => ({ b: {} }))
@@ -42,7 +44,8 @@ describe('estimateTurns', () => {
   })
 
   it('actorCritic: uses config.maxRetries when present, else settings.maxRetries', async () => {
-    const { actorCritic } = await import('../../../lib/harness-patterns/patterns/actorCritic.server')
+    const { actorCritic } =
+      await import('../../../lib/harness-patterns/patterns/actorCritic.server')
 
     const fromSettings = actorCritic(vi.fn(), vi.fn(), [], { patternId: 'a' })
     expect(fromSettings.estimateTurns?.(settings)).toBe(3)
@@ -53,12 +56,19 @@ describe('estimateTurns', () => {
 
   it('router and synthesizer contribute 1', async () => {
     const { router } = await import('../../../lib/harness-patterns/patterns/router.server')
-    const { synthesizer } = await import('../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { synthesizer } =
+      await import('../../../lib/harness-patterns/patterns/synthesizer.server')
 
     const r = router({ neo4j: 'db' })
     const s = synthesizer({ mode: 'thread' })
     expect(r.estimateTurns?.(settings)).toBe(1)
     expect(s.estimateTurns?.(settings)).toBe(1)
+  })
+
+  it('planner contributes 1 (one call per chain invocation, never a loop)', async () => {
+    const { planner } = await import('../../../lib/harness-patterns/patterns/planner.server')
+
+    expect(planner([], { patternId: 'plan' }).estimateTurns?.(settings)).toBe(1)
   })
 
   it('routes: max over branches', async () => {
@@ -95,12 +105,17 @@ describe('estimateTurns', () => {
   it('chain: sums children', async () => {
     const { chain } = await import('../../../lib/harness-patterns/patterns/chain.server')
     const { router, routes } = await import('../../../lib/harness-patterns/patterns/router.server')
-    const { synthesizer } = await import('../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { synthesizer } =
+      await import('../../../lib/harness-patterns/patterns/synthesizer.server')
     const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
 
     const loop = asAny(simpleLoop(vi.fn(), [], { patternId: 'loop', maxTurns: 5 }))
     // Default agent shape: router(1) + routes-with-5-turn-loop(5) + synth(1) = 7
-    const agent = chain(asAny(router({ x: '' })), asAny(routes({ x: loop })), asAny(synthesizer({ mode: 'thread' })))
+    const agent = chain(
+      asAny(router({ x: '' })),
+      asAny(routes({ x: loop })),
+      asAny(synthesizer({ mode: 'thread' })),
+    )
     expect(agent.estimateTurns?.(settings)).toBe(7)
   })
 })

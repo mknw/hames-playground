@@ -32,6 +32,7 @@ import { getRequestSettings } from '../../settings-context.server'
 import { getActiveSandbox } from '../../sandbox/scope.server'
 import type { CodeModeControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
 import { LLMCallError, llmCallHitOutputCap } from '../baml-adapters.server'
+import { formatPlanContext, type PlannerData } from './planner.server'
 
 assertServerOnImport()
 
@@ -86,6 +87,11 @@ export function actorCritic<T extends ActorCriticData>(
     // simpleLoop.server.ts for the mode semantics ('off' executes serially,
     // it only suppresses the prompt affordance).
     const multiMode: MultiCallMode = config?.multiToolCalls ?? 'parallel'
+    // Plan from an upstream `planner` pattern (#27), forwarded by the chain as
+    // this pattern's `currentData`. Formatted once — it cannot change between
+    // attempts — and passed to the actor as its trailing `planContext`
+    // argument. Absent when no planner ran.
+    const planContext = formatPlanContext((scope.data as PlannerData).plan)
     let successfulTurns = 0
     const previousAttempts: ScriptExecutionEvent[] = []
     let errorMessage: string | undefined
@@ -201,6 +207,7 @@ export function actorCritic<T extends ActorCriticData>(
           attempt + 1,
           maxRetries,
           multiMode === 'off' ? undefined : multiMode,
+          planContext,
         )
 
         // Apply the contract's documented defaults ONCE, here, before the

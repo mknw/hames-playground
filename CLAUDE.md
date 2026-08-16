@@ -171,6 +171,7 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 | `RouterAnthropic`      | Intent classification                                                                                                           |
 | `ControllerAnthropic`  | simpleLoop tool-loop controller — `*NoThink` models, and the backstop stays Sonnet-tier: no Haiku fallback on structured output |
 | `ActorAnthropic`       | actorCritic actor — the same models as the controller, with thinking left ON                                                    |
+| `PlannerAnthropic`     | planner (#27) upfront decomposition — one call per chain, thinking left ON (the reasoning IS the deliverable)                    |
 | `CriticAnthropic`      | Evaluation/critique                                                                                                             |
 | `SynthesizerAnthropic` | Response synthesis                                                                                                              |
 | `DescribeAnthropic`    | Lightweight tool result summarization, titles, intent compaction (`compactIntent`)                                              |
@@ -180,7 +181,8 @@ it — and the trace is never exposed (empty string + signature), so it cannot f
 `reasoning`. Measured on 12 captured controller prompts × 6 samples: the simpleLoop
 controller is better WITHOUT it (72/72 valid actions vs 70/72; median output 438 →
 249 tokens; it stops re-querying when it already holds the answer), so
-`ControllerAnthropic` uses the `*NoThink` clients. The actor, router, critic and
+`ControllerAnthropic` uses the `*NoThink` clients. The actor, planner, router,
+critic and
 synthesizer keep thinking — unmeasured, and the corpus had no actor prompts. A
 thinking-only response with no text is retried once by the adapters.
 
@@ -188,7 +190,7 @@ thinking-only response with no text is retried once by the adapters.
 
 **Multi-call turns:** both loop patterns accept `multiToolCalls: 'parallel' | 'sequential' | 'off'` (default `'parallel'`) — the controller batches several tool calls into one turn via `ControllerAction.additional_calls`, saving one controller round-trip per batched call. `'sequential'` runs in order with stop-on-failure (sandbox agents); `'off'` suppresses the prompt affordance but still executes un-advertised batches serially (code-mode). Full semantics: `app/src/lib/harness-patterns/README.md`.
 
-**Mixed-provider chains** (gated by `USE_MIXED_CHAINS=1`, see top of file) — `RouterFallback` / `ControllerFallback` / `CriticFallback` / `SynthesizerFallback` / `DescribeFallback`, each spreading its role across OpenRouter, Groq and OpenAI with an Anthropic backstop last. There is no `ActorFallback`. Declared in `baml_src/clients.baml`.
+**Mixed-provider chains** (gated by `USE_MIXED_CHAINS=1`, see top of file) — `RouterFallback` / `ControllerFallback` / `CriticFallback` / `SynthesizerFallback` / `DescribeFallback`, each spreading its role across OpenRouter, Groq and OpenAI with an Anthropic backstop last. There is no `ActorFallback` and no `PlannerFallback` — the planner reuses `ControllerFallback` (same reason-over-a-tool-catalog workload). Declared in `baml_src/clients.baml`.
 
 Local inference (`LocalGLM` — GLM 4.7 Flash on localhost:8080) is defined in `baml_src/local-client.baml` and available for manual wiring but not used in any fallback chain.
 

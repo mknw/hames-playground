@@ -8,7 +8,18 @@ export { simpleLoop, type SimpleLoopData } from './simpleLoop.server'
 export { actorCritic, type ActorCriticData } from './actorCritic.server'
 export { chain, runChain, configurePattern } from './chain.server'
 export { synthesizer } from './synthesizer.server'
-export { compactIntent, type CompactIntentConfig, type CompactIntentData } from './compactIntent.server'
+export {
+  compactIntent,
+  type CompactIntentConfig,
+  type CompactIntentData,
+} from './compactIntent.server'
+export {
+  planner,
+  formatPlanContext,
+  DEFAULT_MAX_PLAN_CHARS,
+  type PlannerConfig,
+  type PlannerData,
+} from './planner.server'
 export {
   retriever,
   type RetrieverBackend,
@@ -20,7 +31,17 @@ export {
 } from './retriever.server'
 export { parallel } from './parallel.server'
 export { judge, type JudgeConfig, type JudgeData, type EvaluatorFn } from './judge.server'
-export { guardrail, piiScanRail, pathAllowlistRail, driftDetectorRail, type Rail, type RailResult, type RailContext, type GuardrailConfig, type CircuitBreakerConfig } from './guardrail.server'
+export {
+  guardrail,
+  piiScanRail,
+  pathAllowlistRail,
+  driftDetectorRail,
+  type Rail,
+  type RailResult,
+  type RailContext,
+  type GuardrailConfig,
+  type CircuitBreakerConfig,
+} from './guardrail.server'
 export { hook, type HookConfig, type HookTrigger } from './hook.server'
 export { withReferences, __clearReferenceCache } from './with-references.server'
 
@@ -55,5 +76,6 @@ export type {
   SelectorFn,
   ReferenceCandidate,
   ReferenceAttachedEventData,
-  IntentCompactedEventData
+  IntentCompactedEventData,
+  PlanCreatedEventData,
 } from '../types'

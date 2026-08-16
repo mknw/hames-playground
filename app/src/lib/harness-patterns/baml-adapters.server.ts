@@ -31,6 +31,7 @@ import type {
   Attempt,
   PriorResult,
   FewShot,
+  PlanResult,
 } from '../../../baml_client/types'
 import { listTools as mcpListTools } from './mcp-client.server'
 import { getActiveSandbox } from '../sandbox/scope.server'
@@ -63,7 +64,18 @@ export interface CriticCallResult {
   llmCall?: LLMCallData
 }
 
-/** Controller function that returns action + observability data */
+/** Result from a planner call with optional LLM observability data */
+export interface PlanCallResult {
+  plan: PlanResult
+  llmCall?: LLMCallData
+}
+
+/** Controller function that returns action + observability data.
+ *
+ *  `planContext` is LAST and optional on purpose (#27): the generated BAML
+ *  functions take their arguments POSITIONALLY, so inserting a parameter
+ *  anywhere but the end silently shifts every later argument — the failure
+ *  mode `warnIfCollectorEmpty` exists to catch (#154). */
 export type ControllerFnWithLLMData = (
   user_message: string,
   intent: string,
@@ -74,6 +86,7 @@ export type ControllerFnWithLLMData = (
   priorResults?: PriorResult[],
   fewShots?: FewShot[],
   multiCallMode?: 'parallel' | 'sequential',
+  planContext?: string,
 ) => Promise<ControllerCallResult>
 
 /** Critic function that returns result + observability data */
@@ -634,6 +647,10 @@ export function createLoopControllerAdapter(
     // 'off' never reaches the adapter — the pattern maps it to undefined so the
     // prompt renders no affordance (LoopMultiCalls stays empty).
     multiCallMode?: 'parallel' | 'sequential',
+    // Pre-formatted plan from an upstream `planner` pattern (#27). simpleLoop
+    // reads it off `scope.data.plan` and formats it — same shape as
+    // `withReferences` → `scope.data.attachedRefs` → `priorResults`.
+    planContext?: string,
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
@@ -648,10 +665,13 @@ export function createLoopControllerAdapter(
     // Parse previous results into LoopTurn format
     const turns: LoopTurn[] = parseResultsToTurns(previous_results, n_turn)
 
-    // Build context from schema and contextPrefix only (prior tool results go into priorResults)
+    // Build context from the upstream plan, schema and contextPrefix only
+    // (prior tool results go into priorResults). The plan leads: it is the
+    // strategy the rest of the context serves.
     let context: string | undefined
-    if (schema || contextPrefix) {
+    if (planContext || schema || contextPrefix) {
       const parts: string[] = []
+      if (planContext) parts.push(planContext)
       if (contextPrefix) parts.push(contextPrefix)
       if (schema) parts.push(`GRAPH SCHEMA:\n${schema}`)
       context = parts.join('\n\n')
@@ -853,6 +873,82 @@ export function annotateExpansions(refs: PriorResult[], turns: LoopTurn[]): Prio
 }
 
 // ============================================================================
+// Adapter for planner
+// ============================================================================
+
+/** Planner function that returns a plan + observability data. */
+export type PlannerFnWithLLMData = (
+  user_message: string,
+  intent: string,
+  collector?: Collector,
+  context?: string,
+) => Promise<PlanCallResult>
+
+/**
+ * Create a PlannerFn adapter backed by the generic `Planner` BAML function.
+ *
+ * Resolves the same tool surface a controller would see for `toolNames` —
+ * including an active `withSandbox` scope's in-VM tools — so the plan can only
+ * ever name tools the executor can actually call.
+ *
+ * @param toolNames - Tool names the downstream executor will have available
+ */
+export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData {
+  return async (
+    user_message: string,
+    intent: string,
+    collector?: Collector,
+    context?: string,
+  ): Promise<PlanCallResult> => {
+    const { b } = await import('../../../baml_client')
+    const startTime = Date.now()
+
+    const sandboxTools = await getActiveSandboxToolDescriptions()
+    const gatewayTools = await filterToolDescriptions(toolNames)
+    const tools = [...sandboxTools, ...gatewayTools]
+
+    const variables = { user_message, intent, tools, context }
+
+    // Default (no override): BAML routes to `PlannerAnthropic` (declared in
+    // planner.baml). `USE_MIXED_CHAINS=1` swaps in `ControllerFallback` —
+    // planning is the same reason-over-a-tool-catalog workload, so it shares
+    // the controller chain rather than owning a provider budget of its own.
+    const baseOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('planner') }
+    const hasBaseOpts = Object.keys(baseOpts).length > 0
+    let plan: PlanResult
+    try {
+      plan = hasBaseOpts
+        ? await b.Planner(user_message, intent, tools, context, baseOpts)
+        : await b.Planner(user_message, intent, tools, context)
+    } catch (e) {
+      // Same ONE-retry policy as the controllers: a cut-off or empty
+      // completion is worth asking again (with corrective guidance only when
+      // there is something to correct); a genuine structured-output failure
+      // propagates as an LLMCallError the pattern turns into an error event.
+      const retry = planParseRetry(e, collector)
+      if (!retry) throw wrapAsLLMCallError(e, 'Planner', variables, startTime, collector)
+      const retryContext = retry.guidance
+        ? [context, retry.guidance].filter(Boolean).join('\n\n')
+        : context
+      try {
+        plan = hasBaseOpts
+          ? await b.Planner(user_message, intent, tools, retryContext, baseOpts)
+          : await b.Planner(user_message, intent, tools, retryContext)
+      } catch (eRetry) {
+        throw wrapAsLLMCallError(eRetry, 'Planner', variables, startTime, collector)
+      }
+    }
+
+    // extractLLMCallData fires warnIfCollectorEmpty itself on an empty collector.
+    const llmCall = collector
+      ? extractLLMCallData(collector, 'Planner', variables, startTime, plan)
+      : undefined
+
+    return { plan, llmCall }
+  }
+}
+
+// ============================================================================
 // Adapters for actorCritic
 // ============================================================================
 
@@ -868,6 +964,9 @@ export type CodeModeControllerFnWithLLMData = (
   attemptNumber?: number,
   maxAttempts?: number,
   multiCallMode?: 'parallel' | 'sequential',
+  /** Pre-formatted plan from an upstream `planner` (#27). Trailing + optional
+   *  for the same positional-args reason as `ControllerFnWithLLMData`. */
+  planContext?: string,
 ) => Promise<ControllerCallResult>
 
 /** Options for `createActorControllerAdapter` when the actor's toolset may
@@ -934,6 +1033,7 @@ export function createActorControllerAdapter(
     // 'off' never reaches the adapter — the pattern maps it to undefined so the
     // prompt renders no affordance (ActorMultiCalls stays empty).
     multiCallMode?: 'parallel' | 'sequential',
+    planContext?: string,
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
@@ -978,9 +1078,12 @@ export function createActorControllerAdapter(
       feedback: undefined,
     }))
 
-    const context = options.contextProvider
+    // Adapter-level context (static prefix or per-call provider), with an
+    // upstream plan (#27) leading when one was threaded through by actorCritic.
+    const ownContext = options.contextProvider
       ? await options.contextProvider()
       : options.contextPrefix
+    const context = [planContext, ownContext].filter(Boolean).join('\n\n') || undefined
     const fewShots = options.fewShots
 
     const variables = {

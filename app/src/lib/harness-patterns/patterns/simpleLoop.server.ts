@@ -41,6 +41,7 @@ import {
   llmCallHitOutputCap,
 } from '../baml-adapters.server'
 import type { LLMCallData } from '../types'
+import { formatPlanContext, type PlannerData } from './planner.server'
 
 assertServerOnImport()
 
@@ -212,6 +213,13 @@ export function simpleLoop<T extends SimpleLoopData>(
     const basePriorResults: PriorResult[] | undefined =
       mergedRefs.length > 0 ? mergedRefs : undefined
 
+    // Plan from an upstream `planner` pattern (#27), forwarded by the chain as
+    // this pattern's `currentData`. Formatted ONCE per run (it cannot change
+    // mid-loop) and passed to the controller as its trailing `planContext`
+    // argument; the adapter prepends it to the BAML `context`. Absent when no
+    // planner ran — the loop then behaves exactly as it did before.
+    const planContext = formatPlanContext((scope.data as PlannerData).plan)
+
     try {
       for (let turn = 0; turn < maxTurns; turn++) {
         // Trim oldest turns if they would overflow the controller's context window
@@ -251,6 +259,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             priorResults,
             config?.fewShots,
             multiMode === 'off' ? undefined : multiMode,
+            planContext,
           )
           // Apply the contract's documented defaults ONCE, here, before the
           // action is recorded or read: `is_final` is optional (#159) and

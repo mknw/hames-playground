@@ -37,6 +37,7 @@ export type {
   CriticResult,
   ScriptExecutionEvent,
   FewShot,
+  PlanResult,
 
   // Router Config Types
   RouterConfig,
@@ -69,6 +70,7 @@ export type {
   ApprovalResponseEventData,
   ErrorEventData,
   IntentCompactedEventData,
+  PlanCreatedEventData,
 
   // LLM Observability
   LLMCallData,
@@ -142,6 +144,9 @@ export {
   runChain,
   synthesizer,
   compactIntent,
+  planner,
+  formatPlanContext,
+  DEFAULT_MAX_PLAN_CHARS,
   retriever,
   configurePattern,
   parallel,
@@ -155,6 +160,8 @@ export {
   type ActorCriticData,
   type CompactIntentConfig,
   type CompactIntentData,
+  type PlannerConfig,
+  type PlannerData,
   type RetrieverBackend,
   type RetrieverConfig,
   type RetrieverData,
@@ -217,6 +224,7 @@ export { normalizeControllerAction } from './controller-action'
 export {
   createLoopControllerAdapter,
   createActorControllerAdapter,
+  createPlannerAdapter,
   createCriticAdapter,
   createNeo4jController,
   createWebSearchController,

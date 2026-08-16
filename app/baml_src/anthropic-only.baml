@@ -45,6 +45,20 @@ client<llm> ActorAnthropic {
   }
 }
 
+client<llm> PlannerAnthropic {
+  provider fallback
+  options {
+    // Thinking left ON, like the actor and unlike ControllerAnthropic. The
+    // #139 measurement that disabled thinking covers the simpleLoop CONTROLLER
+    // — a per-turn "pick the next tool" decision where the model already holds
+    // the answer half the time. The planner is the opposite call: ONE
+    // strategic decomposition per chain, made before any tool has run, where
+    // the reasoning budget is the whole point. Do not flip this without its
+    // own measurement (that corpus contained no Planner prompts).
+    strategy [AnthropicSonnet5, AnthropicSonnet46]
+  }
+}
+
 client<llm> CriticAnthropic {
   provider fallback
   options {

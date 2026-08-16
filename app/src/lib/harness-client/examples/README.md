@@ -5,36 +5,37 @@ compositions across all available MCP servers.
 
 ## Available Servers
 
-| Server | Namespace | Capabilities |
-|--------|-----------|-------------|
-| neo4j-cypher | `tools.neo4j` | Graph queries, schema introspection, Cypher write |
-| fetch | `tools.web` | HTTP content retrieval |
-| web_search | `tools.web` | DuckDuckGo search + content parsing |
-| context7 | `tools.context7` | Library doc resolution + retrieval |
-| rust-mcp-filesystem | `tools.filesystem` | File read/write/search/edit |
-| github | `tools.github` | Issues, PRs, code search, commits |
-| memory | `tools.memory` | Entity/relation knowledge graph (ephemeral) |
-| redis | `tools.redis` | Key/value, hashes, lists, sets, sorted sets, streams, JSON, vector search |
-| database-server | `tools.database` | PostgreSQL/MySQL/SQLite query + schema introspection |
+| Server              | Namespace          | Capabilities                                                              |
+| ------------------- | ------------------ | ------------------------------------------------------------------------- |
+| neo4j-cypher        | `tools.neo4j`      | Graph queries, schema introspection, Cypher write                         |
+| fetch               | `tools.web`        | HTTP content retrieval                                                    |
+| web_search          | `tools.web`        | DuckDuckGo search + content parsing                                       |
+| context7            | `tools.context7`   | Library doc resolution + retrieval                                        |
+| rust-mcp-filesystem | `tools.filesystem` | File read/write/search/edit                                               |
+| github              | `tools.github`     | Issues, PRs, code search, commits                                         |
+| memory              | `tools.memory`     | Entity/relation knowledge graph (ephemeral)                               |
+| redis               | `tools.redis`      | Key/value, hashes, lists, sets, sorted sets, streams, JSON, vector search |
+| database-server     | `tools.database`   | PostgreSQL/MySQL/SQLite query + schema introspection                      |
 
 ## Pattern Catalog
 
 ### Existing Patterns
 
-| Pattern | Signature | Purpose |
-|---------|-----------|---------|
-| `simpleLoop` | `(controller, tools, config?)` | ReAct decide-execute loop; turns may batch calls (`multiToolCalls`, default `'parallel'`) |
-| `actorCritic` | `(actor, critic, tools, config?)` | Generate-evaluate with retry; attempts may batch calls too |
-| `withReferences` | `(pattern, config?)` | LLM-curated prior-result attachment at pattern ingress (cross-pattern data flow, [#30](../../../../docs/harness-patterns/with-references.md)) |
-| `synthesizer` | `(config)` | Transform tool results into natural language |
-| `compactIntent` | `(config?)` | Rewrite the latest message into a self-contained `data.intent` for a router-less actor ([#83](https://github.com/mknw/harness-playground/issues/83)) |
-| `router` | `(routeDescriptions, config?)` | Intent classification → sets `data.route` |
-| `routes` | `(patternMap, config?)` | Dispatch to matched sub-pattern; pass-through on `'user'` route |
-| `chain` | `(ctx, patterns)` | Sequential composition |
-| `harness` | `(...patterns)` | Top-level agent entry point |
-| `parallel` | `(...patterns)` | Execute multiple patterns concurrently, merge events with enter/exit markers |
-| `guardrail` | `(pattern, config)` | Multi-layered validation: input rails, execution rails, output rails, circuit breakers |
-| `hook` | `(pattern, config)` | Side-effect pattern triggered by lifecycle events; supports background fire-and-forget |
+| Pattern          | Signature                         | Purpose                                                                                                                                                           |
+| ---------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `simpleLoop`     | `(controller, tools, config?)`    | ReAct decide-execute loop; turns may batch calls (`multiToolCalls`, default `'parallel'`)                                                                         |
+| `actorCritic`    | `(actor, critic, tools, config?)` | Generate-evaluate with retry; attempts may batch calls too                                                                                                        |
+| `withReferences` | `(pattern, config?)`              | LLM-curated prior-result attachment at pattern ingress (cross-pattern data flow, [#30](../../../../docs/harness-patterns/with-references.md))                     |
+| `synthesizer`    | `(config)`                        | Transform tool results into natural language                                                                                                                      |
+| `compactIntent`  | `(config?)`                       | Rewrite the latest message into a self-contained `data.intent` for a router-less actor ([#83](https://github.com/mknw/harness-playground/issues/83))              |
+| `planner`        | `(tools, config?)`                | Upfront strategic decomposition → sets `data.plan`, injected into downstream controllers' `context` ([#27](https://github.com/mknw/harness-playground/issues/27)) |
+| `router`         | `(routeDescriptions, config?)`    | Intent classification → sets `data.route`                                                                                                                         |
+| `routes`         | `(patternMap, config?)`           | Dispatch to matched sub-pattern; pass-through on `'user'` route                                                                                                   |
+| `chain`          | `(ctx, patterns)`                 | Sequential composition                                                                                                                                            |
+| `harness`        | `(...patterns)`                   | Top-level agent entry point                                                                                                                                       |
+| `parallel`       | `(...patterns)`                   | Execute multiple patterns concurrently, merge events with enter/exit markers                                                                                      |
+| `guardrail`      | `(pattern, config)`               | Multi-layered validation: input rails, execution rails, output rails, circuit breakers                                                                            |
+| `hook`           | `(pattern, config)`               | Side-effect pattern triggered by lifecycle events; supports background fire-and-forget                                                                            |
 
 > **Synthetic tool:** simpleLoop's `LoopController` prompt also exposes `expandPreviousResult` when prior results are present — a virtual tool that loads the full data behind a `ref:<id>` and records it as a normal turn. See [`with-references.md`](../../../../docs/harness-patterns/with-references.md) for the ingress/expansion taxonomy.
 
@@ -70,6 +71,34 @@ export const titleAgent = harness<TitleAgentData>(
 
 ---
 
+### 0b. General Agent — plan first, then execute (`general.server.ts`)
+
+**Servers**: everything in `tools.all`
+**Patterns**: `planner` → `simpleLoop` → `synthesizer`
+**Use case**: cross-namespace questions the router-based `default` agent cannot
+serve, because a route can only be one namespace.
+
+```typescript
+// app/src/lib/harness-client/examples/general.server.ts
+return [
+  planner<SessionData>(tools.all, { patternId: 'plan', schema }),
+  simpleLoop<SessionData>(createLoopControllerAdapter(tools.all), tools.all, {
+    patternId: 'execute',
+    schema,
+    maxTurns: 8,
+  }),
+  synthesizer<SessionData>({ mode: 'thread', patternId: 'response-synth' }),
+]
+```
+
+The planner sees exactly the tool surface the executor will have, emits a
+numbered plan, and the loop receives it prepended to its controller's `context`
+— so the controller stops re-deriving the approach on every turn. Registered
+alongside `default` on purpose: same session shape, different strategy, so the
+two can be A/B'd on the same question.
+
+---
+
 ### 1. Multi-Source Research (parallel)
 
 **Servers**: web_search, github, context7, redis
@@ -98,36 +127,41 @@ synthesizer({ mode: 'response' })
 
 ```typescript
 function parallel<T>(...patterns: ConfiguredPattern<T>[]): ConfiguredPattern<T> {
-  const resolved = resolveConfig("parallel", { patternId: "parallel" });
+  const resolved = resolveConfig('parallel', { patternId: 'parallel' })
   return {
-    name: "parallel",
+    name: 'parallel',
     fn: async (scope, view) => {
-      return tracer.startActiveSpan("pattern.parallel", async (span) => {
-        span.setAttribute("branchCount", patterns.length);
+      return tracer.startActiveSpan('pattern.parallel', async (span) => {
+        span.setAttribute('branchCount', patterns.length)
         // Each branch gets an isolated scope with empty events
         const results = await Promise.allSettled(
           patterns.map((p) =>
             p.fn({ ...scope, id: p.name, events: [], startTime: Date.now() }, view),
           ),
-        );
+        )
         // Merge fulfilled events; log rejected branches
         for (const [i, r] of results.entries()) {
-          if (r.status === "fulfilled") {
-            scope.events.push(...r.value.events);
-            scope.data = { ...scope.data, ...r.value.data };
+          if (r.status === 'fulfilled') {
+            scope.events.push(...r.value.events)
+            scope.data = { ...scope.data, ...r.value.data }
           } else {
-            trackEvent(scope, "error", {
-              error: `Branch ${patterns[i].name} failed: ${r.reason}`,
-            }, true);
+            trackEvent(
+              scope,
+              'error',
+              {
+                error: `Branch ${patterns[i].name} failed: ${r.reason}`,
+              },
+              true,
+            )
           }
         }
-        span.setStatus({ code: SpanStatusCode.OK });
-        span.end();
-        return scope;
-      });
+        span.setStatus({ code: SpanStatusCode.OK })
+        span.end()
+        return scope
+      })
     },
     config: resolved,
-  };
+  }
 }
 
 // Cache layer: wrap each source to persist results in redis
@@ -138,38 +172,57 @@ function withCache<T>(
   return {
     ...pattern,
     fn: async (scope, view) => {
-      const cacheKey = `research:${pattern.name}:${hashInput(scope.data.input)}`;
+      const cacheKey = `research:${pattern.name}:${hashInput(scope.data.input)}`
       // Check redis cache first
-      const cached = await callTool("json_get", { key: cacheKey, path: "$" });
+      const cached = await callTool('json_get', { key: cacheKey, path: '$' })
       if (cached.success && cached.data) {
-        trackEvent(scope, "tool_result", {
-          tool: "cache_hit", result: cached.data, success: true,
-        }, true);
-        return scope;
+        trackEvent(
+          scope,
+          'tool_result',
+          {
+            tool: 'cache_hit',
+            result: cached.data,
+            success: true,
+          },
+          true,
+        )
+        return scope
       }
-      const result = await pattern.fn(scope, view);
+      const result = await pattern.fn(scope, view)
       // Store in redis with TTL
-      const lastResult = result.events.filter((e) => e.type === "tool_result").pop();
+      const lastResult = result.events.filter((e) => e.type === 'tool_result').pop()
       if (lastResult) {
-        await callTool("json_set", { key: cacheKey, path: "$", value: JSON.stringify(lastResult.data) });
-        await callTool("expire", { key: cacheKey, seconds: ttlSeconds });
+        await callTool('json_set', {
+          key: cacheKey,
+          path: '$',
+          value: JSON.stringify(lastResult.data),
+        })
+        await callTool('expire', { key: cacheKey, seconds: ttlSeconds })
       }
-      return result;
+      return result
     },
     config: pattern.config,
-  };
+  }
 }
 
 // Usage
 const researchPattern = parallel(
-  withCache(simpleLoop(b.WebSearchController.bind(b), tools.web ?? [], { patternId: "web-search" })),
-  withCache(simpleLoop(b.GitHubSearchController.bind(b), tools.github ?? [], { patternId: "github-search" })),
-  withCache(simpleLoop(b.Context7Controller.bind(b), tools.context7 ?? [], { patternId: "doc-lookup" })),
-);
+  withCache(
+    simpleLoop(b.WebSearchController.bind(b), tools.web ?? [], { patternId: 'web-search' }),
+  ),
+  withCache(
+    simpleLoop(b.GitHubSearchController.bind(b), tools.github ?? [], {
+      patternId: 'github-search',
+    }),
+  ),
+  withCache(
+    simpleLoop(b.Context7Controller.bind(b), tools.context7 ?? [], { patternId: 'doc-lookup' }),
+  ),
+)
 
-const evaluator = judge(b.JudgeController.bind(b), { patternId: "quality-judge" });
+const evaluator = judge(b.JudgeController.bind(b), { patternId: 'quality-judge' })
 
-return [researchPattern, evaluator, synthesizer({ mode: "response", patternId: "research-synth" })];
+return [researchPattern, evaluator, synthesizer({ mode: 'response', patternId: 'research-synth' })]
 ```
 
 ---
@@ -224,31 +277,35 @@ On session close, a background hook distills useful facts from memory into the K
 
 // Memory controller writes to memory MCP during conversation
 const memoryWriter = simpleLoop(b.MemoryWriter.bind(b), tools.memory ?? [], {
-  patternId: "memory-write",
+  patternId: 'memory-write',
   // Runs after each router result to capture key facts
-  viewConfig: { fromLast: true, eventTypes: ["tool_result"] },
-});
+  viewConfig: { fromLast: true, eventTypes: ['tool_result'] },
+})
 
 // Redis tracks session metadata (turn count, timestamps, topic drift)
 const sessionTracker: ConfiguredPattern<SessionData> = {
-  name: "session-tracker",
+  name: 'session-tracker',
   fn: async (scope, _view) => {
-    const sessionKey = `session:${scope.data.sessionId}`;
-    await callTool("hset", { key: sessionKey, field: "lastTurn", value: Date.now().toString() });
-    await callTool("hset", { key: sessionKey, field: "turnCount", value: String((scope.data.turnCount ?? 0) + 1) });
-    await callTool("expire", { key: sessionKey, seconds: 7200 }); // 2hr TTL
-    scope.data = { ...scope.data, turnCount: (scope.data.turnCount ?? 0) + 1 };
-    return scope;
+    const sessionKey = `session:${scope.data.sessionId}`
+    await callTool('hset', { key: sessionKey, field: 'lastTurn', value: Date.now().toString() })
+    await callTool('hset', {
+      key: sessionKey,
+      field: 'turnCount',
+      value: String((scope.data.turnCount ?? 0) + 1),
+    })
+    await callTool('expire', { key: sessionKey, seconds: 7200 }) // 2hr TTL
+    scope.data = { ...scope.data, turnCount: (scope.data.turnCount ?? 0) + 1 }
+    return scope
   },
-  config: resolveConfig("session-tracker", { patternId: "session-tracker" }),
-};
+  config: resolveConfig('session-tracker', { patternId: 'session-tracker' }),
+}
 
 // Router classifies intent; routes dispatches to domain patterns (neo4j, web)
-const routerPattern = router(routeDescriptions);
-const routesPattern = routes(domainPatterns);
+const routerPattern = router(routeDescriptions)
+const routesPattern = routes(domainPatterns)
 
 // Compose: track → route → dispatch → memorize → synthesize
-return [sessionTracker, routerPattern, routesPattern, memoryWriter, responseSynth];
+return [sessionTracker, routerPattern, routesPattern, memoryWriter, responseSynth]
 ```
 
 #### Session close hook (distillation)
@@ -257,15 +314,12 @@ return [sessionTracker, routerPattern, routesPattern, memoryWriter, responseSynt
 // --- hook pattern: triggered by lifecycle events ---
 
 interface HookConfig<T> extends PatternConfig {
-  trigger: "session_close" | "error" | "approval_timeout" | "custom";
-  background?: boolean; // Run async, don't block response
+  trigger: 'session_close' | 'error' | 'approval_timeout' | 'custom'
+  background?: boolean // Run async, don't block response
 }
 
-function hook<T>(
-  pattern: ConfiguredPattern<T>,
-  config: HookConfig<T>,
-): ConfiguredPattern<T> {
-  const resolved = resolveConfig("hook", config);
+function hook<T>(pattern: ConfiguredPattern<T>, config: HookConfig<T>): ConfiguredPattern<T> {
+  const resolved = resolveConfig('hook', config)
   return {
     name: `hook:${config.trigger}(${pattern.name})`,
     fn: async (scope, view) => {
@@ -273,15 +327,18 @@ function hook<T>(
       if (config.background) {
         // Fire-and-forget: schedule for execution after response
         queueMicrotask(async () => {
-          try { await pattern.fn(scope, view); }
-          catch (e) { console.error(`Hook ${config.trigger} failed:`, e); }
-        });
-        return scope;
+          try {
+            await pattern.fn(scope, view)
+          } catch (e) {
+            console.error(`Hook ${config.trigger} failed:`, e)
+          }
+        })
+        return scope
       }
-      return pattern.fn(scope, view);
+      return pattern.fn(scope, view)
     },
     config: resolved,
-  };
+  }
 }
 
 // --- Distillation workflow ---
@@ -289,69 +346,77 @@ function hook<T>(
 async function createDistillationHook(schema: string): Promise<ConfiguredPattern<SessionData>> {
   // Step 1: Read all memory entities from this session
   const readMemory = simpleLoop(b.MemoryReadController.bind(b), tools.memory ?? [], {
-    patternId: "distill-read",
+    patternId: 'distill-read',
     maxTurns: 2,
-  });
+  })
 
   // Step 2: BAML distill — filter noise, extract durable facts
   const distill: ConfiguredPattern<SessionData> = {
-    name: "distill-extract",
+    name: 'distill-extract',
     fn: async (scope, view) => {
-      const memoryEvents = view.fromPattern("distill-read").ofType("tool_result").get();
+      const memoryEvents = view.fromPattern('distill-read').ofType('tool_result').get()
       const distilled = await b.DistillController(
         JSON.stringify(memoryEvents.map((e) => e.data)),
-        scope.data.sessionId ?? "unknown",
-      );
-      scope.data = { ...scope.data, distilledFacts: distilled.facts, distilledRelations: distilled.relations };
-      return scope;
+        scope.data.sessionId ?? 'unknown',
+      )
+      scope.data = {
+        ...scope.data,
+        distilledFacts: distilled.facts,
+        distilledRelations: distilled.relations,
+      }
+      return scope
     },
-    config: resolveConfig("distill-extract", { patternId: "distill-extract" }),
-  };
+    config: resolveConfig('distill-extract', { patternId: 'distill-extract' }),
+  }
 
   // Step 3: Write to neo4j KB
   const persistToKB = simpleLoop(b.Neo4jController.bind(b), tools.neo4j ?? [], {
-    patternId: "distill-persist",
+    patternId: 'distill-persist',
     schema,
-  });
+  })
 
   // Step 4: Cleanup transient memory
   const cleanupMemory = simpleLoop(b.MemoryCleanupController.bind(b), tools.memory ?? [], {
-    patternId: "distill-cleanup",
-  });
+    patternId: 'distill-cleanup',
+  })
 
   // Wrap in chain as a single hook
   const distillChain: ConfiguredPattern<SessionData> = {
-    name: "distill-chain",
+    name: 'distill-chain',
     fn: async (scope, view) => {
       // Sequential: read → extract → persist → cleanup
       for (const p of [readMemory, distill, persistToKB, cleanupMemory]) {
-        const result = await p.fn(scope, view);
-        scope.events.push(...result.events);
-        scope.data = { ...scope.data, ...result.data };
+        const result = await p.fn(scope, view)
+        scope.events.push(...result.events)
+        scope.data = { ...scope.data, ...result.data }
       }
-      return scope;
+      return scope
     },
-    config: resolveConfig("distill-chain", { patternId: "distill-chain" }),
-  };
+    config: resolveConfig('distill-chain', { patternId: 'distill-chain' }),
+  }
 
-  return hook(distillChain, { patternId: "session-close-hook", trigger: "session_close", background: true });
+  return hook(distillChain, {
+    patternId: 'session-close-hook',
+    trigger: 'session_close',
+    background: true,
+  })
 }
 
 // --- Server action for session close ---
 export async function closeSession(sessionId: string): Promise<void> {
-  const session = getSession(sessionId);
-  if (!session?.serializedContext) return;
+  const session = getSession(sessionId)
+  if (!session?.serializedContext) return
 
-  const schema = await getSchema();
-  const distillHook = await createDistillationHook(schema);
+  const schema = await getSchema()
+  const distillHook = await createDistillationHook(schema)
 
   // Run distillation on the final session context
-  const ctx = deserializeContext(session.serializedContext);
-  const scope = createScope("distill", ctx.data);
-  const view = createEventView(ctx);
-  await distillHook.fn(scope, view);
+  const ctx = deserializeContext(session.serializedContext)
+  const scope = createScope('distill', ctx.data)
+  const view = createEventView(ctx)
+  await distillHook.fn(scope, view)
 
-  deleteSession(sessionId);
+  deleteSession(sessionId)
 }
 ```
 
@@ -375,7 +440,7 @@ live in [`docs/plan/sandbox.md → Durable workspaces`](../../../../docs/plan/sa
 
 Composes any actor-style pattern with id-addressable attachment. Because this
 agent is **router-less**, `compactIntent` runs first ([#83](https://github.com/mknw/harness-playground/issues/83)
-Part A) to rewrite bare follow-ups (*"I can't find the file"*) into a
+Part A) to rewrite bare follow-ups (_"I can't find the file"_) into a
 self-contained `data.intent` the actor can act on — turn 1 passes through
 unchanged. The actor also carries two `tool_args` few-shots
 ([#85](https://github.com/mknw/harness-playground/issues/85)) so multi-line
@@ -388,35 +453,35 @@ See `sandbox-session.server.ts`. Debugging modalities for live sandboxes:
 
 ## Pattern Composition Matrix
 
-| | neo4j | fetch | web_search | context7 | filesystem | github | memory | redis | database |
-|---|---|---|---|---|---|---|---|---|---|
-| **simpleLoop** | Query/write | Fetch URLs | Search | Resolve docs | Read/search | Issues/PRs | Entity CRUD | Get/set/hash | SQL query |
-| **actorCritic** | Complex queries | - | - | - | File refactoring | PR review | - | - | Schema migration |
-| **parallel** | Multi-query | Multi-fetch | Multi-search | Multi-lib | Multi-file | Multi-repo | - | - | Multi-DB |
-| **guardrail** | Cypher injection | URL allowlist | Topic scope | - | Path safety | Org/repo scope | - | Rate limit | SQL injection |
-| **judge** | - | - | Rank results | Rank docs | - | Rank code | - | Score cache | - |
-| **hook** | KB distill | - | - | - | Log to file | - | Session cleanup | TTL mgmt | Audit log |
+|                 | neo4j            | fetch         | web_search   | context7     | filesystem       | github         | memory          | redis        | database         |
+| --------------- | ---------------- | ------------- | ------------ | ------------ | ---------------- | -------------- | --------------- | ------------ | ---------------- |
+| **simpleLoop**  | Query/write      | Fetch URLs    | Search       | Resolve docs | Read/search      | Issues/PRs     | Entity CRUD     | Get/set/hash | SQL query        |
+| **actorCritic** | Complex queries  | -             | -            | -            | File refactoring | PR review      | -               | -            | Schema migration |
+| **parallel**    | Multi-query      | Multi-fetch   | Multi-search | Multi-lib    | Multi-file       | Multi-repo     | -               | -            | Multi-DB         |
+| **guardrail**   | Cypher injection | URL allowlist | Topic scope  | -            | Path safety      | Org/repo scope | -               | Rate limit   | SQL injection    |
+| **judge**       | -                | -             | Rank results | Rank docs    | -                | Rank code      | -               | Score cache  | -                |
+| **hook**        | KB distill       | -             | -            | -            | Log to file      | -              | Session cleanup | TTL mgmt     | Audit log        |
 
 ## BAML Functions Needed
 
-| BAML Function | Pattern | Servers Used |
-|---------------|---------|-------------|
-| `Context7Controller` | simpleLoop | context7 |
-| `MemoryController` / `MemoryWriter` | simpleLoop | memory |
-| `MemoryReadController` / `MemoryCleanupController` | simpleLoop (hook) | memory |
-| `MemoryExtractController` | simpleLoop | memory |
-| `DistillController` | custom (hook) | memory → neo4j |
-| `GitHubSearchController` / `GitHubIssueController` | simpleLoop | github |
-| `FileEditController` / `FileEditCritic` | actorCritic | rust-mcp-filesystem |
-| `JudgeController` | judge | (evaluator, no tools) |
-| `TopicClassifier` | guardrail (input rail) | (classifier, no tools) |
-| `OntologyScopingController` | simpleLoop | memory |
-| `OntologyProposalController` | custom (proposal loop) | memory |
-| `OntologyJudge` | custom (judge in loop) | (evaluator, no tools) |
-| `Neo4jOntologyCommitController` | simpleLoop | neo4j |
-| `OntologyDocController` / `OntologyDocCritic` | actorCritic | rust-mcp-filesystem |
-| `OntologyAnalysisController` / `OntologyAnalysisCritic` | actorCritic | neo4j + filesystem + database |
-| `EmbedQuery` | custom (cache) | (embedding, no tools) |
-| `Neo4jController` | simpleLoop | neo4j-cypher (existing) |
-| `WebSearchController` | simpleLoop | web_search (existing) |
-| `CodeModeController` / `CodeModeCritic` | actorCritic (existing) | all |
+| BAML Function                                           | Pattern                | Servers Used                  |
+| ------------------------------------------------------- | ---------------------- | ----------------------------- |
+| `Context7Controller`                                    | simpleLoop             | context7                      |
+| `MemoryController` / `MemoryWriter`                     | simpleLoop             | memory                        |
+| `MemoryReadController` / `MemoryCleanupController`      | simpleLoop (hook)      | memory                        |
+| `MemoryExtractController`                               | simpleLoop             | memory                        |
+| `DistillController`                                     | custom (hook)          | memory → neo4j                |
+| `GitHubSearchController` / `GitHubIssueController`      | simpleLoop             | github                        |
+| `FileEditController` / `FileEditCritic`                 | actorCritic            | rust-mcp-filesystem           |
+| `JudgeController`                                       | judge                  | (evaluator, no tools)         |
+| `TopicClassifier`                                       | guardrail (input rail) | (classifier, no tools)        |
+| `OntologyScopingController`                             | simpleLoop             | memory                        |
+| `OntologyProposalController`                            | custom (proposal loop) | memory                        |
+| `OntologyJudge`                                         | custom (judge in loop) | (evaluator, no tools)         |
+| `Neo4jOntologyCommitController`                         | simpleLoop             | neo4j                         |
+| `OntologyDocController` / `OntologyDocCritic`           | actorCritic            | rust-mcp-filesystem           |
+| `OntologyAnalysisController` / `OntologyAnalysisCritic` | actorCritic            | neo4j + filesystem + database |
+| `EmbedQuery`                                            | custom (cache)         | (embedding, no tools)         |
+| `Neo4jController`                                       | simpleLoop             | neo4j-cypher (existing)       |
+| `WebSearchController`                                   | simpleLoop             | web_search (existing)         |
+| `CodeModeController` / `CodeModeCritic`                 | actorCritic (existing) | all                           |

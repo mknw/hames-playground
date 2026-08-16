@@ -25,7 +25,7 @@ vi.mock('../../../lib/harness-patterns', () => ({
   harnessUsesSyncWorkspace,
 }))
 
-// The module registers the seven example agents on import; each example pulls
+// The module registers the eight example agents on import; each example pulls
 // in the whole pattern/tool graph, so stub them down to bare configs.
 function stubAgent(id: string): AgentConfig {
   return {
@@ -40,6 +40,9 @@ function stubAgent(id: string): AgentConfig {
 }
 vi.mock('../../../lib/harness-client/examples/default.server', () => ({
   defaultAgent: stubAgent('default'),
+}))
+vi.mock('../../../lib/harness-client/examples/general.server', () => ({
+  generalAgent: stubAgent('general'),
 }))
 vi.mock('../../../lib/harness-client/examples/code-mode.server', () => ({
   codeModeAgent: stubAgent('code-mode'),
@@ -102,6 +105,7 @@ describe('registration + lookup', () => {
     expect(getAllAgents().map((a) => a.id)).toEqual(
       expect.arrayContaining([
         'default',
+        'general',
         'code-mode',
         'multi-source-research',
         'sandbox-session',

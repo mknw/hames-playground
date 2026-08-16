@@ -36,6 +36,7 @@ const mockLoopController = vi.fn()
 const mockActorController = vi.fn()
 const mockCritic = vi.fn()
 const mockResultDescribe = vi.fn()
+const mockPlanner = vi.fn()
 
 vi.mock('../../../../baml_client', () => ({
   b: {
@@ -43,6 +44,7 @@ vi.mock('../../../../baml_client', () => ({
     ActorController: mockActorController,
     Critic: mockCritic,
     ResultDescribe: (...args: unknown[]) => mockResultDescribe(...args),
+    Planner: (...args: unknown[]) => mockPlanner(...args),
   },
 }))
 
@@ -118,6 +120,34 @@ describe('createLoopControllerAdapter', () => {
     expect(context).toContain('Node: Person, Company')
   })
 
+  it('should prepend planContext ahead of contextPrefix and schema (#27)', async () => {
+    const { createLoopControllerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const controller = createLoopControllerAdapter(['Return'], 'Domain instructions')
+
+    // planContext is the 10th (trailing, optional) arg — appended, never
+    // inserted, so existing positional args keep their slots.
+    await controller(
+      'msg',
+      'intent',
+      '[]',
+      0,
+      'Node: Person',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'PLAN (from previous step):\n1. Look it up.',
+    )
+
+    const [, , , , context] = mockLoopController.mock.calls[0]
+    expect(context).toContain('PLAN (from previous step)')
+    // The plan leads: it is the strategy the rest of the context serves.
+    expect(context.indexOf('PLAN')).toBeLessThan(context.indexOf('Domain instructions'))
+    expect(context.indexOf('Domain instructions')).toBeLessThan(context.indexOf('GRAPH SCHEMA:'))
+  })
+
   it('should pass undefined context when neither contextPrefix nor schema', async () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
@@ -156,6 +186,68 @@ describe('createActorControllerAdapter', () => {
 
     expect(result.action).toBeDefined()
     expect(result.action.is_final).toBe(true)
+  })
+
+  it('should prepend planContext ahead of its own contextPrefix (#27)', async () => {
+    const { createActorControllerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const controller = createActorControllerAdapter({
+      toolNames: ['code-mode'],
+      contextPrefix: 'Factory protocol notes',
+    })
+
+    await controller(
+      'msg',
+      'intent',
+      ['code-mode'],
+      [],
+      undefined,
+      1,
+      3,
+      undefined,
+      'PLAN (from previous step):\n1. Write the script.',
+    )
+
+    // context is the 5th arg to ActorController
+    const [, , , , context] = mockActorController.mock.calls[0]
+    expect(context.indexOf('PLAN')).toBeLessThan(context.indexOf('Factory protocol notes'))
+  })
+})
+
+describe('createPlannerAdapter', () => {
+  const PLAN = { reasoning: 'graph first', plan: '1. Query the graph.', n_steps: 1 }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockPlanner.mockResolvedValue(PLAN)
+  })
+
+  it('returns the plan and passes the resolved tool catalog + context', async () => {
+    const { createPlannerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const plannerFn = createPlannerAdapter(['read_neo4j_cypher'])
+    const result = await plannerFn('msg', 'intent', undefined, 'Node: Person')
+
+    expect(result.plan).toEqual(PLAN)
+    const [userMessage, intent, tools, context] = mockPlanner.mock.calls[0]
+    expect(userMessage).toBe('msg')
+    expect(intent).toBe('intent')
+    expect((tools as Array<{ name: string }>).map((t) => t.name)).toEqual(['read_neo4j_cypher'])
+    expect(context).toBe('Node: Person')
+  })
+
+  it('propagates a non-recoverable failure as an LLMCallError', async () => {
+    const { createPlannerAdapter, LLMCallError } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    mockPlanner.mockRejectedValue(new Error('planner unavailable'))
+    const plannerFn = createPlannerAdapter(['read_neo4j_cypher'])
+
+    await expect(plannerFn('msg', 'intent')).rejects.toBeInstanceOf(LLMCallError)
+    // No retry for a plain failure — the retry path is truncation/empty only.
+    expect(mockPlanner).toHaveBeenCalledTimes(1)
   })
 })
 

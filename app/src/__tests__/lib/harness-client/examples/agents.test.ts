@@ -232,6 +232,24 @@ describe('Agent Harnesses', () => {
     })
   })
 
+  describe('generalAgent', () => {
+    it('should have valid config', async () => {
+      const { generalAgent } =
+        await import('../../../../lib/harness-client/examples/general.server')
+      validateAgentConfig(generalAgent)
+      expect(generalAgent.id).toBe('general')
+      expect(generalAgent.servers).toContain('neo4j-cypher')
+    })
+
+    it('should create a planner → simpleLoop → synthesizer chain', async () => {
+      const { generalAgent } =
+        await import('../../../../lib/harness-client/examples/general.server')
+      const patterns = await validatePatterns(generalAgent)
+
+      expect(patterns.map((p) => p.name)).toEqual(['planner', 'simpleLoop', 'synthesizer'])
+    })
+  })
+
   describe('codeModeAgent', () => {
     it('should have valid config', async () => {
       const { codeModeAgent } =

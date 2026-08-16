@@ -37,20 +37,20 @@ export interface SandboxSettings {
 }
 
 export interface HarnessSettings {
-  maxToolTurns: number        // simpleLoop max iterations (default: 5)
-  maxRetries: number          // actorCritic max attempts (default: 3)
-  maxResultChars: number      // tool result truncation chars (default: 8000)
+  maxToolTurns: number // simpleLoop max iterations (default: 5)
+  maxRetries: number // actorCritic max attempts (default: 3)
+  maxResultChars: number // tool result truncation chars (default: 8000)
   maxResultForSummary: number // summarizer input limit chars (default: 3000)
-  priorTurnCount: number      // prior turns for tool result memory (default: 3)
-  routerTurnWindow: number    // router history window in turns (default: 5)
+  priorTurnCount: number // prior turns for tool result memory (default: 3)
+  routerTurnWindow: number // router history window in turns (default: 5)
   /**
    * How many conversations may stream at once (#105). Client-side policy —
    * the server places no such limit, so this rides along in the settings
    * payload without being read there. At the cap, a send into an *idle*
    * conversation is refused rather than queued or allowed to interrupt.
    */
-  maxConcurrentRuns: number   // concurrent streaming conversations (default: 3)
-  sandbox: SandboxSettings    // compute sandbox caps + defaults
+  maxConcurrentRuns: number // concurrent streaming conversations (default: 3)
+  sandbox: SandboxSettings // compute sandbox caps + defaults
 }
 
 export const DEFAULT_SETTINGS: HarnessSettings = {
@@ -87,13 +87,13 @@ export const DEFAULT_SETTINGS: HarnessSettings = {
 /** Context window limits per BAML client (tokens) */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Groq
-  GroqFast: 32_768,              // openai/gpt-oss-20b
-  GroqGPT120B: 131_072,          // openai/gpt-oss-120b
-  GroqQwen3_32b: 32_768,         // qwen/qwen3-32b
+  GroqFast: 32_768, // openai/gpt-oss-20b
+  GroqGPT120B: 131_072, // openai/gpt-oss-120b
+  GroqQwen3_32b: 32_768, // qwen/qwen3-32b
   // OpenRouter
-  OpenRouterNemotron120B: 131_072,  // nvidia/nemotron-3-super-120b-a12b
+  OpenRouterNemotron120B: 131_072, // nvidia/nemotron-3-super-120b-a12b
   OpenRouterNemotron3Nano30B: 32_768, // nvidia/nemotron-3-nano-30b-a3b
-  OpenRouterGemma4: 131_072,     // google/gemma-4-31b-it
+  OpenRouterGemma4: 131_072, // google/gemma-4-31b-it
   OpenRouterMiniMax2_5: 1_000_000, // minimax/minimax-m2.5
   // OpenAI
   OpenAIGPT5: 1_000_000,
@@ -105,11 +105,11 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   CustomOpus4: 200_000,
   CustomSonnet4: 200_000,
   AnthropicSonnet5: 1_000_000,
-  AnthropicSonnet5NoThink: 1_000_000,   // #139
+  AnthropicSonnet5NoThink: 1_000_000, // #139
   // Cerebras — separate-quota safety nets at end of each fallback chain
-  CerebrasGPT120B: 131_072,        // gpt-oss-120b
-  CerebrasZaiGLM4_7: 131_072,      // zai-glm-4.7
-  CerebrasQwen3_235B: 131_072,     // qwen-3-235b-a22b-instruct-2507
+  CerebrasGPT120B: 131_072, // gpt-oss-120b
+  CerebrasZaiGLM4_7: 131_072, // zai-glm-4.7
+  CerebrasQwen3_235B: 131_072, // qwen-3-235b-a22b-instruct-2507
   // Local (local-client.baml, not used in chains)
   LocalGLM: 16_384,
   // Strategy-level chain clients — the names patterns actually pass to
@@ -119,7 +119,8 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic-only chains (dev default) → Sonnet 4.6 / Haiku 4.5, 200K each.
   RouterAnthropic: 200_000,
   ControllerAnthropic: 200_000,
-  ActorAnthropic: 200_000,        // #139 — actor chain, split from ControllerAnthropic
+  ActorAnthropic: 200_000, // #139 — actor chain, split from ControllerAnthropic
+  PlannerAnthropic: 200_000, // #27 — planner chain (thinking ON)
   CriticAnthropic: 200_000,
   SynthesizerAnthropic: 200_000,
   DescribeAnthropic: 200_000,
@@ -197,14 +198,18 @@ export function estimateLlmCostUsd(
     outputTokens: number
   },
   clientName?: string,
-): { costUsd: number; noCacheUsd: number; rates: { inPerMTok: number; outPerMTok: number } } | undefined {
+):
+  | { costUsd: number; noCacheUsd: number; rates: { inPerMTok: number; outPerMTok: number } }
+  | undefined {
   const rates = clientName ? CLIENT_PRICING[clientName] : undefined
   if (!rates) return undefined
   const inUsd =
     (tokens.inputUncachedTokens +
       tokens.inputCacheWriteTokens * CACHE_WRITE_MULT +
-      tokens.inputCacheReadTokens * CACHE_READ_MULT) * rates.inPerMTok
-  const allIn = tokens.inputUncachedTokens + tokens.inputCacheWriteTokens + tokens.inputCacheReadTokens
+      tokens.inputCacheReadTokens * CACHE_READ_MULT) *
+    rates.inPerMTok
+  const allIn =
+    tokens.inputUncachedTokens + tokens.inputCacheWriteTokens + tokens.inputCacheReadTokens
   return {
     costUsd: (inUsd + tokens.outputTokens * rates.outPerMTok) / 1_000_000,
     noCacheUsd: (allIn * rates.inPerMTok + tokens.outputTokens * rates.outPerMTok) / 1_000_000,

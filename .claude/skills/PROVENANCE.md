@@ -129,6 +129,336 @@ LICENSE file at `2c60614`, so all-rights-reserved by default and not vendorable.
 
 ---
 
+## Wave 2 — ADR mechanism + seed records
+
+`docs(adr): ADR mechanism + seed records`
+
+**No skill files are vendored in this wave.** What it ships is one derivative
+work outside `.claude/`, recorded here because the pin belongs in one place:
+
+| Our path             | Upstream repo       | Upstream path                                      | Pinned commit | Bundle |
+| -------------------- | ------------------- | -------------------------------------------------- | ------------- | ------ |
+| `docs/adr/README.md` | `mattpocock/skills` | `skills/engineering/domain-modeling/ADR-FORMAT.md` | `068b6e0`     | —      |
+| `docs/adr/README.md` | `affaan-m/ECC`      | `skills/architecture-decision-records/SKILL.md`    | `50743ce`     | —      |
+
+It is a **synthesis, not a copy** — the two upstreams disagree, and
+[`docs/plan/skills-adoption.md` §3.2](../../docs/plan/skills-adoption.md)
+decides between them. What was taken from each:
+
+- **mattpocock — the body format and the write gate.** The 1–3 sentence body,
+  the optional-sections list, `NNNN-slug.md` numbering, and the three-condition
+  gate (hard to reverse **and** surprising without context **and** the result of
+  a real trade-off). ECC's Nygard-style template was **dropped**: it makes every
+  ADR a small essay while its own guidance warns that a context section over ten
+  lines is too long.
+- **ECC — the index, the lifecycle, and the gates around writing.** The
+  `| ADR | Title | Status | Date |` index table as the single place statuses are
+  aggregated, `proposed → accepted → [deprecated | superseded by ADR-NNNN]`, the
+  explicit + implicit detection signals, the confirm-before-write step (present
+  the draft; write only on approval; discard silently on decline), and the two
+  rules kept verbatim in spirit — _"we just picked it" is not a valid rationale_
+  and _never back-fill without marking it_.
+
+Deviations from both, on this repo's own authority:
+
+- **No `template.md`.** ECC's directory layout includes one; a three-line format
+  does not need a file to copy, and a template file drifts from its own
+  documentation.
+- **No `metadata: origin:` and no frontmatter.** ADR files carry ECC's bold
+  `**Date**` / `**Status**` lines rather than mattpocock's optional status
+  frontmatter, so the file and the index row read the same way.
+- **A `## Sources` section** was added to the optional list — it does not appear
+  upstream. It exists to make ECC's don't-back-fill-silently rule enforceable
+  rather than aspirational, and all five seed records carry one.
+
+The attribution comment sits at the top of `docs/adr/README.md` as an HTML
+comment, per the two-part mechanism in the plan's §8. The five ADR files
+themselves are entirely this repo's content and carry no attribution.
+
+`GLOSSARY.md` (repo root) and the `docs/INDEX.md` rows are original, with no
+vendored material. `GLOSSARY.md` is the file the Wave 1 adaptation **A** call
+sites point at; those two data hooks now resolve.
+
+---
+
+## Wave 3 — design + decision procedures
+
+`chore(skills): design + decision procedures`
+
+Five skills, all bundle `generic`, all model-invoked except
+`improve-codebase-architecture` — which keeps upstream's
+`disable-model-invocation: true` and is therefore reachable only by name.
+
+From `mattpocock/skills` @ `068b6e0`:
+
+| Our path                                       | Upstream path                                                     | Invocation | Adapted           |
+| ---------------------------------------------- | ----------------------------------------------------------------- | ---------- | ----------------- |
+| `domain-modeling/SKILL.md`                     | `skills/engineering/domain-modeling/SKILL.md`                     | model      | **yes** — D, E, F |
+| `domain-modeling/GLOSSARY-FORMAT.md`           | `skills/engineering/domain-modeling/CONTEXT-FORMAT.md`            | —          | **yes** — E, F    |
+| `improve-codebase-architecture/SKILL.md`       | `skills/engineering/improve-codebase-architecture/SKILL.md`       | **user**   | **yes** — E       |
+| `improve-codebase-architecture/HTML-REPORT.md` | `skills/engineering/improve-codebase-architecture/HTML-REPORT.md` | —          | no                |
+
+From `affaan-m/ECC` @ `50743ce`:
+
+| Our path                             | Upstream path                               | Invocation | Adapted        |
+| ------------------------------------ | ------------------------------------------- | ---------- | -------------- |
+| `council/SKILL.md`                   | `skills/council/SKILL.md`                   | model      | **yes** — G, H |
+| `intent-driven-development/SKILL.md` | `skills/intent-driven-development/SKILL.md` | model      | no — see J     |
+| `loop-design-check/SKILL.md`         | `skills/loop-design-check/SKILL.md`         | model      | **yes** — G, I |
+
+Every file also carries the two-line attribution comment; that is not counted
+as an adaptation. `HTML-REPORT.md` and `intent-driven-development/SKILL.md`
+differ from upstream by that comment and nothing else.
+
+**The cross-skill edges are the reason the invocation column matters here.**
+`improve-codebase-architecture` calls three skills through the Skill tool —
+`codebase-design` and `grilling` (both Wave 1) and `domain-modeling` (this
+wave). All three are model-invoked, which is what makes those calls resolve; a
+user-invoked dependency would fail silently, with no error to notice.
+
+### Adaptations
+
+**D — the ADR mechanism is repointed, not vendored.** Upstream
+`domain-modeling` carries its own `ADR-FORMAT.md` and links it from the "Offer
+ADRs sparingly" step. **That file is not vendored.** Wave 2 already shipped the
+reconciled mechanism at `docs/adr/README.md` — mattpocock's body format and
+three-condition gate, ECC's index, lifecycle and confirm-before-write step (the
+plan's §3.2) — so a second copy inside the skill would be a fork of a document
+this repo already owns. What survives in `SKILL.md` is the **three-condition
+gate itself**, verbatim, because it is the part that fires _during_ a modelling
+session; everything downstream of "yes, write one" is one pointer at
+`docs/adr/README.md`.
+
+**E — `CONTEXT.md` → `GLOSSARY.md`** (same user decision as Wave 1's adaptation
+A, applied to every call site in both skills — including `domain-modeling`'s
+`description`, the one field under permanent context load). The reference file
+is renamed with its subject: upstream `CONTEXT-FORMAT.md`
+ships here as **`GLOSSARY-FORMAT.md`**, and its `## Structure` example was
+rewritten to the shape the repo's `GLOSSARY.md` actually uses (bold term, em
+dash, optional `_Avoid_` line, grouped under `##` clusters). A format document
+that contradicts the only file it governs is worse than no format document. Its
+four upstream rules are kept verbatim; a fifth was added — _point at the
+authority, don't restate it_ — which is `GLOSSARY.md`'s own stated discipline
+and the reason it stays a glossary rather than drifting into a design doc.
+
+Both skills' glossary and ADR pointers are **data hooks**, not skill
+dependencies — a generic skill naming a stable project-supplied path — so they
+survive the open-source split. Both are phrased to degrade gracefully even
+though both targets now exist.
+
+**F — the multi-context branch is dropped.** Upstream infers a `CONTEXT-MAP.md`
+at the repo root and, if it finds one, resolves per-context glossaries and
+per-context `docs/adr/` directories. This repo is one `ui/` app with one root
+glossary, so that branch can never fire — it is pure context load by
+`writing-for-agents`' own no-op test. Removed from `SKILL.md`'s file-structure
+section and from `GLOSSARY-FORMAT.md`'s "Single vs multi-context repos" section.
+
+**G — the three standing ECC edits** (the plan's §2.2, applied to every ECC
+file): `metadata: origin:` dropped from the frontmatter, since provenance lives
+in this file; dangling cross-references to unadopted ECC skills deleted; Chinese
+trigger strings stripped from `description:`. `intent-driven-development` needed
+none of the three — it carries no `metadata:` block, no bilingual triggers, and
+its own handoff step already says "do not assume any named skill or tool is
+installed."
+
+**H — `council`.**
+
+- **`When NOT to Use` retargeted.** Its four right-column entries all named
+  unadopted ECC skills (`santa-method`, `planner`, `architect`, `code-reviewer`).
+  Replaced with this set's real alternatives: `grilling`,
+  `intent-driven-development`, `codebase-design` /
+  `/improve-codebase-architecture`, and the **built-in** `/code-review`. All
+  bare names — a generic skill must never point at a `kg-*` one, so the planned
+  `kg-code-review` is deliberately absent here.
+- **The grilling boundary stated** (the plan's §3.1). One paragraph on _who
+  holds the answer_ — the user's own preferences and constraints are grilled,
+  never delegated to subagents answering on their behalf — plus the one-way
+  composition. The two skills look similar and are not, and the failure mode is
+  convening a council when a user was available to ask.
+- **Persistence Rule repointed, not deleted.** Upstream sent durable outcomes to
+  `knowledge-ops` and `/save-session`, both unadopted. The section's actual
+  content — do not invent a shadow notes path; persist only when it changes
+  something real — is load-bearing and stack-agnostic, so only its targets
+  moved: an ADR via `docs/adr/README.md` for an architectural, hard-to-reverse
+  outcome; memory notes for a lesson; the GitHub issue when it changes active
+  execution truth. (The plan's §2.2 row proposed deleting the section wholesale;
+  keeping the rule and fixing its targets is a strictly smaller change and loses
+  nothing.)
+- **`Related Skills` deleted wholesale** — all four entries dangled. The one
+  that carried real information, `architecture-decision-records`, survives as
+  the `docs/adr/README.md` pointer inside the Persistence Rule.
+- **The worked example de-branded.** Upstream's question is "should we ship ECC
+  2.0 as alpha now" — a dangling product reference here. Two lines changed; the
+  four-voice shape it illustrates is untouched.
+
+**I — `loop-design-check`.** The `description` was ~1200 characters of bilingual
+trigger lists under permanent context load; rewritten to two sentences naming
+the two actions and the trigger. The mechanism-layer pointers to
+`autonomous-loops` / `continuous-agent-loop` (twice: the "don't use it for"
+list and the closing lineage note) became a statement of the same boundary
+without the dangling names — the scope claim is what mattered, not the
+referral. `/goal`-style in the loop-type table became "closed loop onto a
+target": `/loop` and `/schedule` resolve to real built-ins and are kept, `/goal`
+does not exist here. **No repo-specific content was added**, deliberately: this
+skill's five failure modes read directly onto `simpleLoop` / `actorCritic` /
+routines, and it is more useful staying portable than being annotated with them.
+
+**J — `intent-driven-development` ships verbatim, and one deferral is
+recorded.** The plan's §2.2 row 12 also asks for a trimmed `description` and for
+the Output Template's Status / Revision / Prepared-for header and Revision Log
+to be deleted, as part of reconciling this skill with `docs/agents/AGENT-BRIEF.md`
+(§3.4: the brief is the artifact, this skill is the procedure that produces one).
+**`AGENT-BRIEF.md` lands in Wave 5.** Deleting the header now would leave the
+template with no output shape at all until then, so that surgery moves to Wave 5
+where its replacement arrives in the same commit. Nothing else in the file needed
+changing — see G.
+
+### Accepted upstream behaviours
+
+Recorded so they are not re-flagged in review:
+
+- **`improve-codebase-architecture` emits a Tailwind-CDN + Mermaid-CDN HTML
+  report** (`HTML-REPORT.md` in full, and step 2 of `SKILL.md`). This repo is
+  UnoCSS-attributify, so it reads like a violation and is not one: the report is
+  written to `$TMPDIR/architecture-review-<timestamp>.html` and opened in a
+  browser, it never enters the repo, and no rule we have governs a throwaway
+  file. Converting it to UnoCSS would be pure cost. **Left exactly as upstream**
+  (user decision, the plan's OQ‑5).
+
+### Not vendored from these skill directories
+
+- `skills/engineering/domain-modeling/ADR-FORMAT.md` — superseded by
+  `docs/adr/README.md`; see adaptation D.
+- `agents/openai.yaml` in both mattpocock directories — Codex-format manifests
+  Claude Code does not read, same as Wave 1.
+
+---
+
+<!-- Later waves append their own `## Wave N` section here. Do not edit the
+     sections above; a wave that needs to change an earlier row bumps that row
+     in place and says why in its own section. -->
+## Wave 4 — the review pipeline
+
+`chore(skills): review pipeline`
+
+All vendored rows: upstream `affaan-m/ECC` @ `50743ce`, bundle `generic`. Every
+ECC file is model-invoked upstream (none carries `disable-model-invocation`), and
+that is preserved.
+
+| Our path                             | Upstream path                              | Invocation   | Adapted           |
+| ------------------------------------ | ------------------------------------------ | ------------ | ----------------- |
+| `../agents/code-reviewer.md`         | `agents/code-reviewer.md`                  | **subagent** | **yes** — D, E, F |
+| `../agents/silent-failure-hunter.md` | `agents/silent-failure-hunter.md`          | **subagent** | **yes** — E, F    |
+| `agent-architecture-audit/SKILL.md`  | `skills/agent-architecture-audit/SKILL.md` | model        | **yes** — G, H, I |
+| `living-docs-governance/SKILL.md`    | `skills/living-docs-governance/SKILL.md`   | model        | **yes** — G, J, K |
+
+`agent-architecture-audit`'s own upstream origin is **`oh-my-agent-check`**, not
+ECC — its frontmatter carried `metadata: origin: oh-my-agent-check`. ECC is the
+repo we took it from and the licence that covers our copy; the earlier origin is
+recorded here and in the file's attribution comment, and is the thing to check
+first if that skill ever needs a refresh.
+
+This wave also ships two files that are **not** vendored copies:
+
+| Our path                             | Bundle    | Origin                                                                                                                                                                                                                                                                              |
+| ------------------------------------ | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kg-code-review/SKILL.md`            | `project` | **Derivative work** — see below                                                                                                                                                                                                                                                     |
+| `../../docs/agents/issue-tracker.md` | —         | **Hand-written.** Seeded from the _shape_ of `mattpocock/skills` @ `068b6e0` `skills/engineering/setup-matt-pocock-skills/issue-tracker-github.md`, rewritten for this repo. The upstream setup skill is **never run** — it auto-edits `CLAUDE.md`, which this project does by hand |
+
+### `kg-code-review` — derivative work, two sources
+
+Written from scratch, but it carries MIT material from both upstreams, so its
+attribution header names both (plan §8):
+
+| Element                                                                                                                                        | Origin                                                                                 |
+| ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Two-axis shape, fixed-point discipline, aggregation rule, Fowler smell baseline                                                                | `mattpocock/skills` @ `068b6e0`, `skills/engineering/code-review/SKILL.md`             |
+| Review discipline — Pre-Report Gate, HIGH/CRITICAL-require-proof, "a clean review is a valid review", the 12-entry Common False Positives list | `affaan-m/ECC` @ `50743ce`, `agents/code-reviewer.md` — **by delegation, not by copy** |
+| Repo standards, the `/code-review` boundary, the spec/scheduling split                                                                         | this project                                                                           |
+
+The ECC material is adopted **exactly once**: the Standards axis dispatches the
+vendored `code-reviewer` sub-agent (`subagent_type: code-reviewer`) rather than
+inlining a reviewer prompt, so the false-positive list lives in one file. That is
+also why `kg-code-review` names a sub-agent, not a skill — the one-direction
+composition rule (a `kg-*` skill may call a generic skill, never the reverse) is
+untouched, and its only Skill-tool call is to `codebase-design`, which is
+model-invoked and therefore reachable.
+
+`mattpocock/skills`' own `code-review` skill is **not** vendored; this supersedes
+it. Recorded in Wave 1's declined list.
+
+### Adaptations
+
+**D — `code-reviewer`: React/Next.js block deleted.** The `### React/Next.js
+Patterns (HIGH)` section (upstream lines 181–213, its two `tsx` examples
+included) is gone. This is a SolidJS repo: `useEffect` dependency arrays, stale
+closures, and Server-Component boundaries do not exist here, so the section is
+guidance that can only produce false positives. The Node.js/Backend section is
+kept — SolidStart server actions and the `.server.ts` layer are real backend
+surface. The `v1.8 AI-Generated Code Review Addendum` is also deleted: it is
+vendor-flavoured and its cost-tier advice contradicts this repo's standing
+"subagents run on Opus" preference.
+
+**E — "Prompt Defense Baseline" preamble deleted** (both agents, 7 lines each).
+It fails `writing-for-agents`' no-op test — the model already does all of it —
+and it was costing that load on every dispatch.
+
+**F — `model: sonnet` → `model: opus`** (both agents). Standing preference for
+sub-agents in this repo. The plan states it for `silent-failure-hunter`; applied
+to `code-reviewer` for the same reason, and because `kg-code-review` dispatches
+it as its Standards axis.
+
+**G — `metadata: origin:` dropped** from the frontmatter (both skills).
+Provenance lives here, in one place.
+
+**H — `agent-architecture-audit`: evidence collection retargeted.** The Phase 2
+`rg` recipes pointed at `--type py` and a Chinese-language prompt pattern; both
+are dead here. They now scope to `ui/src/lib/harness-patterns/` and
+`ui/baml_src/`, with the source-code bullet naming the actual boundary files
+(`baml-adapters.server.ts`, `tools.server.ts`, `context.server.ts`). Every
+recipe was run against this tree and returns hits.
+
+**I — `agent-architecture-audit`: dangling references replaced.** The "Related
+Skills" section (five ECC skills, none adopted) is replaced by a **12-layer →
+this repo** ownership table, which is the lookup that section was standing in
+for. The "Do not use for" list now names real alternatives (`diagnosing-bugs`,
+the built-in `/code-review` and `/security-review`, the `code-reviewer`
+sub-agent) — deliberately **not** `kg-code-review`, which would break the
+generic set's portability.
+
+**J — `living-docs-governance`: Chinese trigger list stripped** from
+`description:`. Eight bilingual trigger strings under permanent context load for
+a single-locale user.
+
+**K — `living-docs-governance`: four roles mapped onto this repo.** The
+"Lightweight Adoption Template" generic example table is **replaced** (not
+supplemented — that would be the duplication the skill itself warns about) by
+the filled map: constitution = `CLAUDE.md`, map = `docs/INDEX.md`, status = the
+GitHub project board, history = `docs/adr/` + `docs/plan/` + PR bodies. Two
+consequences are spelled out — status is a live board and never a committed file,
+and history is tiered by durability — plus a graceful-degradation line for
+`docs/adr/`, which Wave 2 creates. The `codebase-onboarding` reference (ECC,
+not adopted) is replaced with the instruction it stood for. The two illustrative
+tables now use this repo's real examples: the delete-zone row is
+`ui/src/lib/baml-agent/` → `harness-patterns/`, which is a live "do not recreate
+this" rule in `CLAUDE.md`.
+
+> These are **data hooks** by the plan's §1 rule — a generic skill naming stable
+> project-supplied paths (`CLAUDE.md`, `docs/INDEX.md`, `docs/adr/`,
+> `ui/src/lib/harness-patterns/`) and degrading gracefully — not dependencies on
+> a project skill, so both skills survive the open-source split. H, I and K are
+> the lines to re-check at split time; none names a framework or a vendor.
+
+### Not vendored
+
+- ECC's `agents/openai.yaml`-equivalents and plugin manifest — Claude Code does
+  not read them.
+- The ECC plugin install itself (~21 k tokens of skill descriptions per
+  session), `plankton-code-quality` (ships a hook that blocks `pnpm`),
+  `continuous-learning-v2` / `unified-memory` / `plan-canvas` (require a global
+  npm install or a background daemon — both excluded by the no-daemons
+  constraint, and they would be a second memory system beside our notes and
+  h9s), and the ~280 remaining skills.
 ## Wave 6 — `kg-dtalk-ui`
 
 `chore(skills): kg-dtalk-ui styleguide`
@@ -212,9 +542,3 @@ but **not registered** as a collection in `uno.config.ts`, so the 41 surviving
 **No component code is migrated by this wave.** No `i-mdi-*` renames, no
 hex→token changes, no `class=` fixes. Those are recorded in the skill as
 evidence for its rules; the migration is separate future work.
-
----
-
-<!-- Later waves append their own `## Wave N` section here. Do not edit the
-     sections above; a wave that needs to change an earlier row bumps that row
-     in place and says why in its own section. -->

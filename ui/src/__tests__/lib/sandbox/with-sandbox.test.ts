@@ -6,11 +6,21 @@
  * close + destroy), cleanup discipline on partial failure, and the
  * visibility guarantee that the inner pattern sees the transport via ALS.
  */
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
+
+// The durable-workspace path (#89) talks to the document store through these;
+// mocked so the sync tests assert *when* they run, not what they store (that
+// is work-artifacts.test.ts's job).
+const artifacts = vi.hoisted(() => ({
+  hydrateWorkspace: vi.fn(async () => 0),
+  snapshotOutputs: vi.fn(async () => new Map<string, string>()),
+  promoteOutputs: vi.fn(async () => [] as string[]),
+}))
+vi.mock('../../../lib/sandbox/work-artifacts.server', () => artifacts)
 
 import {
   withSandbox,
@@ -45,9 +55,7 @@ type Calls = {
   reapOrphans: number
 }
 
-function fakeBackend(opts?: {
-  connectMcpFails?: boolean
-}): ComputeBackend & { calls: Calls } {
+function fakeBackend(opts?: { connectMcpFails?: boolean }): ComputeBackend & { calls: Calls } {
   const calls: Calls = { boot: [], destroy: [], connectMcp: [], closes: 0, reapOrphans: 0 }
   const handle: VMHandle = {
     id: 'sbx-test',
@@ -234,10 +242,7 @@ describe('withSandbox scheduler + pool wiring', () => {
     const releaseSpy = vi.spyOn(pool, 'release')
 
     const inner = fakePattern(async (scope) => scope)
-    await withSandbox({ backend, pool, rootfs: 'base' })(inner).fn(
-      fakeScope({}),
-      fakeView,
-    )
+    await withSandbox({ backend, pool, rootfs: 'base' })(inner).fn(fakeScope({}), fakeView)
 
     expect(acquireSpy).toHaveBeenCalledWith('base', expect.any(Object))
     expect(releaseSpy).toHaveBeenCalledTimes(1)
@@ -335,10 +340,7 @@ describe('withSandbox scheduler + pool wiring', () => {
     })
 
     await expect(
-      withSandbox({ backend, pool, scheduler, sessionId: 's1' })(inner).fn(
-        fakeScope({}),
-        fakeView,
-      ),
+      withSandbox({ backend, pool, scheduler, sessionId: 's1' })(inner).fn(fakeScope({}), fakeView),
     ).rejects.toThrow('inner went pop')
     expect(scheduler.inflightCount()).toBe(0)
   })
@@ -379,12 +381,20 @@ describe('withSandbox id/fresh (step 6)', () => {
     const attachments = new AttachmentTable(kit.backend, pool, { idleMs: 60_000 })
     const inner = fakePattern(async (scope) => scope)
 
-    await withSandbox({ backend: kit.backend, pool, scheduler: kit.scheduler, attachments, id: 'a' })(
-      inner,
-    ).fn(fakeScope({}), fakeView)
-    await withSandbox({ backend: kit.backend, pool, scheduler: kit.scheduler, attachments, id: 'b' })(
-      inner,
-    ).fn(fakeScope({}), fakeView)
+    await withSandbox({
+      backend: kit.backend,
+      pool,
+      scheduler: kit.scheduler,
+      attachments,
+      id: 'a',
+    })(inner).fn(fakeScope({}), fakeView)
+    await withSandbox({
+      backend: kit.backend,
+      pool,
+      scheduler: kit.scheduler,
+      attachments,
+      id: 'b',
+    })(inner).fn(fakeScope({}), fakeView)
 
     expect(kit.backend.calls.boot).toHaveLength(2)
     expect(attachments.has('a')).toBe(true)
@@ -399,10 +409,7 @@ describe('withSandbox id/fresh (step 6)', () => {
     await withSandbox({ ...kit, id: 'session-42' })(inner).fn(fakeScope({}), fakeView)
     expect(destroySpy).not.toHaveBeenCalled()
 
-    await withSandbox({ ...kit, id: 'session-42', fresh: true })(inner).fn(
-      fakeScope({}),
-      fakeView,
-    )
+    await withSandbox({ ...kit, id: 'session-42', fresh: true })(inner).fn(fakeScope({}), fakeView)
     expect(destroySpy).toHaveBeenCalledWith('session-42')
     expect(kit.attachments.has('session-42')).toBe(true)
     // Note: a pool-recycled VM may serve the re-acquire, so we don't assert
@@ -424,6 +431,17 @@ describe('withSandbox id/fresh (step 6)', () => {
     expect(kit.backend.calls.destroy).toHaveLength(1)
     expect(kit.attachments.size()).toBe(0)
     expect(kit.pool.size()).toBe(0)
+  })
+
+  it('{ fresh: true } (no id) destroys the VM when connectMcp fails', async () => {
+    const backend = fakeBackend({ connectMcpFails: true })
+    const wrap = withSandbox({ backend, fresh: true })(fakePattern(async (scope) => scope))
+
+    await expect(wrap.fn(fakeScope({}), fakeView)).rejects.toThrow('boom')
+
+    expect(backend.calls.boot).toHaveLength(1)
+    expect(backend.calls.destroy).toHaveLength(1) // no orphaned container
+    expect(backend.calls.closes).toBe(0) // transport never opened
   })
 
   it('{ fresh: true } (no id) destroys the VM even when the inner pattern throws', async () => {
@@ -516,7 +534,9 @@ describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
     const wrapped = withSandbox({ backend, id: 'sess-1' })(inner)
-    expect((wrapped.config as { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace).toBeUndefined()
+    expect(
+      (wrapped.config as { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace,
+    ).toBeUndefined()
     expect(wrapped.config).toEqual(inner.config)
     expect(harnessUsesSyncWorkspace([wrapped])).toBe(false)
   })
@@ -525,7 +545,155 @@ describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
     const wrapped = withSandbox({ backend, syncWorkspace: true })(inner)
-    expect((wrapped.config as { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace).toBeUndefined()
+    expect(
+      (wrapped.config as { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace,
+    ).toBeUndefined()
     expect(wrapped.config).toEqual(inner.config)
+  })
+})
+
+describe('withSandbox durable workspace at runtime (#89)', () => {
+  function buildKit() {
+    const backend = fakeBackend()
+    backend.reset = vi.fn(async () => {})
+    const pool = new WarmPool(backend, { caps: { base: 1 }, idleEvictMs: 60_000 })
+    const scheduler = new SandboxScheduler({ globalCap: 4, perSessionCap: 4 })
+    const attachments = new AttachmentTable(backend, pool, { idleMs: 60_000 })
+    return { backend, pool, scheduler, attachments }
+  }
+
+  beforeEach(() => {
+    artifacts.hydrateWorkspace.mockClear().mockResolvedValue(0)
+    artifacts.snapshotOutputs.mockClear().mockResolvedValue(new Map())
+    artifacts.promoteOutputs.mockClear().mockResolvedValue([])
+  })
+
+  it('hydrates /work/in on the first boot only, and promotes outputs every turn', async () => {
+    const kit = buildKit()
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async (scope) => scope),
+    )
+
+    await wrap.fn(fakeScope({}), fakeView)
+    await wrap.fn(fakeScope({}), fakeView)
+
+    // Restore-from-store happens once per container, not once per turn...
+    expect(artifacts.hydrateWorkspace).toHaveBeenCalledTimes(1)
+    expect(artifacts.hydrateWorkspace).toHaveBeenCalledWith(expect.anything(), 'sess-1')
+    // ...while the out-dir diff brackets every turn.
+    expect(artifacts.snapshotOutputs).toHaveBeenCalledTimes(2)
+    expect(artifacts.promoteOutputs).toHaveBeenCalledTimes(2)
+  })
+
+  it('promotes only what the turn produced, by diffing against the pre-turn snapshot', async () => {
+    const kit = buildKit()
+    const baseline = new Map([['old.csv', 'hash-1']])
+    artifacts.snapshotOutputs.mockResolvedValue(baseline)
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async (scope) => scope),
+    )
+
+    await wrap.fn(fakeScope({}), fakeView)
+
+    expect(artifacts.promoteOutputs).toHaveBeenCalledWith(expect.anything(), 'sess-1', baseline)
+  })
+
+  it('still runs the turn when hydrate fails (store/gateway down)', async () => {
+    const kit = buildKit()
+    artifacts.hydrateWorkspace.mockRejectedValue(new Error('gateway down'))
+    const inner = vi.fn(async (scope: PatternScope<Record<string, unknown>>) => scope)
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(inner),
+    )
+
+    await expect(wrap.fn(fakeScope({}), fakeView)).resolves.toBeDefined()
+    expect(inner).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats an unreadable /work/out as an empty baseline rather than failing the turn', async () => {
+    const kit = buildKit()
+    artifacts.snapshotOutputs.mockRejectedValue(new Error('no such directory'))
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async (scope) => scope),
+    )
+
+    await expect(wrap.fn(fakeScope({}), fakeView)).resolves.toBeDefined()
+    expect(artifacts.promoteOutputs).toHaveBeenCalledWith(expect.anything(), 'sess-1', new Map())
+  })
+
+  it('promotes deliverables even when the pattern throws mid-turn', async () => {
+    const kit = buildKit()
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async () => {
+        throw new Error('actor gave up')
+      }),
+    )
+
+    await expect(wrap.fn(fakeScope({}), fakeView)).rejects.toThrow('actor gave up')
+    expect(artifacts.promoteOutputs).toHaveBeenCalledTimes(1)
+  })
+
+  it('surfaces the pattern result even when promotion fails', async () => {
+    const kit = buildKit()
+    artifacts.promoteOutputs.mockRejectedValue(new Error('store write failed'))
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async (scope) => scope),
+    )
+
+    await expect(wrap.fn(fakeScope({}), fakeView)).resolves.toBeDefined()
+  })
+
+  it('skips the whole persistence path when syncWorkspace is off', async () => {
+    const kit = buildKit()
+    const wrap = withSandbox({ ...kit, id: 'sess-1' })(fakePattern(async (scope) => scope))
+
+    await wrap.fn(fakeScope({}), fakeView)
+
+    expect(artifacts.hydrateWorkspace).not.toHaveBeenCalled()
+    expect(artifacts.snapshotOutputs).not.toHaveBeenCalled()
+    expect(artifacts.promoteOutputs).not.toHaveBeenCalled()
+  })
+})
+
+describe('withSandbox orphan-reap reporting (#97 Gap 1)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __resetSandboxDefaultsForTests()
+  })
+
+  it('warns with the count when a prior process left containers behind', async () => {
+    __resetSandboxDefaultsForTests()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const reap = vi.spyOn(DockerBackend.prototype, 'reapOrphans').mockResolvedValue(3)
+
+    getDefaultAttachments()
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled())
+
+    expect(reap).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('reaped 3 orphaned container(s)')
+  })
+
+  it('stays quiet when there was nothing to reap', async () => {
+    __resetSandboxDefaultsForTests()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(DockerBackend.prototype, 'reapOrphans').mockResolvedValue(0)
+
+    getDefaultAttachments()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('logs and carries on when the reaper itself fails (docker engine down)', async () => {
+    __resetSandboxDefaultsForTests()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(DockerBackend.prototype, 'reapOrphans').mockRejectedValue(new Error('engine down'))
+
+    // A failed reap must not break the singleton it was fired from.
+    expect(getDefaultAttachments()).toBeDefined()
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled())
+
+    expect(warn.mock.calls[0][0]).toContain('orphan reap failed: engine down')
   })
 })

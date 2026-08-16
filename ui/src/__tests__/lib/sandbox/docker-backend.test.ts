@@ -19,9 +19,15 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
 // ---- mock node:child_process.spawn ---------------------------------------
 // Each spawn returns a fake child whose behavior is programmed per-test via
 // `spawnScript`. The script receives the argv and returns { stdout, code }.
-type SpawnPlan = (cmd: string, args: string[]) => { stdout?: string; stderr?: string; code?: number }
+// `error` makes the child fail to spawn; `hang` makes it never settle, so the
+// docker helper's own timeout is what resolves the call.
+type SpawnPlan = (
+  cmd: string,
+  args: string[],
+) => { stdout?: string; stderr?: string; code?: number; error?: Error; hang?: boolean }
 let spawnPlan: SpawnPlan = () => ({ stdout: '', code: 0 })
 const spawnCalls: Array<{ cmd: string; args: string[] }> = []
+let killedChildren = 0
 
 function mockSpawn(cmd: string, args: string[]) {
   spawnCalls.push({ cmd, args })
@@ -32,10 +38,17 @@ function mockSpawn(cmd: string, args: string[]) {
   }
   child.stdout = new EventEmitter()
   child.stderr = new EventEmitter()
-  child.kill = () => {}
+  child.kill = () => {
+    killedChildren += 1
+  }
   const plan = spawnPlan(cmd, args)
   // Emit asynchronously so listeners are attached first.
   queueMicrotask(() => {
+    if (plan.hang) return
+    if (plan.error) {
+      child.emit('error', plan.error)
+      return
+    }
     if (plan.stdout) child.stdout.emit('data', Buffer.from(plan.stdout))
     if (plan.stderr) child.stderr.emit('data', Buffer.from(plan.stderr))
     child.emit('close', plan.code ?? 0)
@@ -64,6 +77,14 @@ vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
   },
 }))
 
+/** Per-test overrides for the in-VM MCP servers. `listToolsPlan` lets a server
+ *  fail its handshake; `callToolPlan` shapes the raw MCP result so the
+ *  transport's payload unwrapping can be exercised. */
+let listToolsPlan: ((serverKey: string) => unknown) | null = null
+let callToolPlan: ((name: string) => unknown) | null = null
+/** Servers whose client.close() was awaited — proves teardown on partial connect. */
+let closedServers: string[] = []
+
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   Client: class {
     private serverKey = 'unknown'
@@ -72,6 +93,7 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
       this.serverKey = transport.args[transport.args.length - 1]
     }
     async listTools() {
+      if (listToolsPlan) return listToolsPlan(this.serverKey) as { tools: unknown[] }
       if (this.serverKey === 'filesystem') {
         return {
           tools: [
@@ -79,7 +101,11 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
             { name: 'write_file', description: 'write', inputSchema: { type: 'object' } },
             { name: 'edit_file', description: 'edit', inputSchema: { type: 'object' } },
             { name: 'list_directory', description: 'list', inputSchema: { type: 'object' } },
-            { name: 'search_files_content', description: 'search', inputSchema: { type: 'object' } },
+            {
+              name: 'search_files_content',
+              description: 'search',
+              inputSchema: { type: 'object' },
+            },
             { name: 'directory_tree', description: 'not exposed', inputSchema: {} },
           ],
         }
@@ -91,6 +117,11 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
     }
     async callTool({ name, arguments: args }: { name: string; arguments: unknown }) {
       callToolCalls.push({ server: this.serverKey, name, args })
+      if (callToolPlan) {
+        const planned = callToolPlan(name)
+        if (planned instanceof Error) throw planned
+        return planned as { content?: unknown[]; isError?: boolean }
+      }
       if (name === 'bash') {
         return {
           content: [{ type: 'text', text: JSON.stringify({ stdout: '3\n', exit_code: 0 }) }],
@@ -100,7 +131,9 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
       }
       return { content: [{ type: 'text', text: 'ok' }], isError: false }
     }
-    async close() {}
+    async close() {
+      closedServers.push(this.serverKey)
+    }
   },
 }))
 
@@ -108,6 +141,10 @@ beforeEach(() => {
   spawnCalls.length = 0
   callToolCalls.length = 0
   lastTransportArgs = []
+  closedServers = []
+  killedChildren = 0
+  listToolsPlan = null
+  callToolPlan = null
   spawnPlan = () => ({ stdout: '', code: 0 })
 })
 
@@ -153,6 +190,15 @@ describe('DockerBackend.boot', () => {
     expect(run.args).not.toContain('none')
   })
 
+  it('maps a non-base rootfs id onto its own image tag (flavour catalog, #78)', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('data' as never, {})
+
+    const run = spawnCalls.find((c) => c.args[0] === 'run')!
+    expect(run.args[run.args.length - 1]).toBe('kg-sandbox:data')
+  })
+
   it('throws SandboxBootError when docker run fails', async () => {
     spawnPlan = () => ({ stderr: 'no such image', code: 1 })
     const backend = await makeBackend()
@@ -173,7 +219,8 @@ describe('DockerBackend.destroy', () => {
 
   it('is idempotent — swallows errors when the container is already gone', async () => {
     // boot succeeds (returns a cid); the later `rm` fails (already gone).
-    spawnPlan = (cmd, args) => (args[0] === 'rm' ? { stderr: 'No such container', code: 1 } : { stdout: 'cid', code: 0 })
+    spawnPlan = (cmd, args) =>
+      args[0] === 'rm' ? { stderr: 'No such container', code: 1 } : { stdout: 'cid', code: 0 }
     const backend = await makeBackend()
     const handle = await backend.boot('base', {})
     await expect(backend.destroy(handle)).resolves.toBeUndefined()
@@ -182,14 +229,16 @@ describe('DockerBackend.destroy', () => {
 
 describe('DockerBackend.health', () => {
   it('reports healthy when running', async () => {
-    spawnPlan = (cmd, args) => (args[0] === 'inspect' ? { stdout: 'running', code: 0 } : { stdout: 'cid', code: 0 })
+    spawnPlan = (cmd, args) =>
+      args[0] === 'inspect' ? { stdout: 'running', code: 0 } : { stdout: 'cid', code: 0 }
     const backend = await makeBackend()
     const handle = await backend.boot('base', {})
     expect(await backend.health(handle)).toEqual({ state: 'healthy', detail: 'running' })
   })
 
   it('reports gone when inspect fails', async () => {
-    spawnPlan = (cmd, args) => (args[0] === 'inspect' ? { code: 1, stderr: 'no such container' } : { stdout: 'cid', code: 0 })
+    spawnPlan = (cmd, args) =>
+      args[0] === 'inspect' ? { code: 1, stderr: 'no such container' } : { stdout: 'cid', code: 0 }
     const backend = await makeBackend()
     const handle = await backend.boot('base', {})
     expect(await backend.health(handle)).toEqual({ state: 'gone' })
@@ -205,7 +254,14 @@ describe('DockerBackend.connectMcp', () => {
 
     const names = await transport.toolNames()
     expect(names.sort()).toEqual(
-      ['sandbox_bash', 'sandbox_edit', 'sandbox_list', 'sandbox_read', 'sandbox_search', 'sandbox_write'].sort(),
+      [
+        'sandbox_bash',
+        'sandbox_edit',
+        'sandbox_list',
+        'sandbox_read',
+        'sandbox_search',
+        'sandbox_write',
+      ].sort(),
     )
     // non-curated filesystem tools (directory_tree) are NOT exposed
     expect(names).not.toContain('sandbox_directory_tree')
@@ -224,7 +280,9 @@ describe('DockerBackend.connectMcp', () => {
     const handle = await backend.boot('base', {})
     const transport = await backend.connectMcp(handle)
 
-    const res = await transport.callTool('sandbox_bash', { command: "python3 -c 'print(len(\"a b c\".split()))'" })
+    const res = await transport.callTool('sandbox_bash', {
+      command: 'python3 -c \'print(len("a b c".split()))\'',
+    })
     expect(res.success).toBe(true)
     expect(res.data).toEqual({ stdout: '3\n', exit_code: 0 })
 
@@ -245,6 +303,143 @@ describe('DockerBackend.connectMcp', () => {
     expect(res.success).toBe(false)
     expect(res.error).toMatch(/not found/)
     await transport.close()
+  })
+
+  it('advertises each exposed tool with its in-VM description and schema', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    const transport = await backend.connectMcp(await backend.boot('base', {}))
+
+    const bash = (await transport.listTools()).find((t) => t.name === 'sandbox_bash')!
+    expect(bash.description).toBe('shell')
+    expect(bash.inputSchema).toEqual({ type: 'object' })
+
+    await transport.close()
+  })
+
+  it('passes non-JSON text through as a plain string', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    callToolPlan = () => ({ content: [{ type: 'text', text: 'hello world' }], isError: false })
+    const backend = await makeBackend()
+    const transport = await backend.connectMcp(await backend.boot('base', {}))
+
+    await expect(transport.callTool('sandbox_bash', {})).resolves.toEqual({
+      success: true,
+      data: 'hello world',
+    })
+    await transport.close()
+  })
+
+  it('falls back to structuredContent when the result carries no text block', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    callToolPlan = () => ({
+      content: [{ type: 'image', data: 'iVBOR' }],
+      structuredContent: { files: ['a.txt'] },
+      isError: false,
+    })
+    const backend = await makeBackend()
+    const transport = await backend.connectMcp(await backend.boot('base', {}))
+
+    await expect(transport.callTool('sandbox_list', {})).resolves.toEqual({
+      success: true,
+      data: { files: ['a.txt'] },
+    })
+    await transport.close()
+  })
+
+  it('reports isError results as failures without losing the payload', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    callToolPlan = () => ({ content: [{ type: 'text', text: 'no such file' }], isError: true })
+    const backend = await makeBackend()
+    const transport = await backend.connectMcp(await backend.boot('base', {}))
+
+    await expect(transport.callTool('sandbox_read', {})).resolves.toEqual({
+      success: false,
+      data: 'no such file',
+    })
+    await transport.close()
+  })
+
+  it('converts an in-VM MCP throw into a structured failure', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    callToolPlan = () => new Error('broken pipe')
+    const backend = await makeBackend()
+    const transport = await backend.connectMcp(await backend.boot('base', {}))
+
+    await expect(transport.callTool('sandbox_bash', {})).resolves.toEqual({
+      success: false,
+      data: null,
+      error: 'broken pipe',
+    })
+    await transport.close()
+  })
+
+  it('tears down already-opened clients when one in-VM server fails to hand shake', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    listToolsPlan = (key) => {
+      if (key === 'shell') throw new Error('shell server died')
+      return { tools: [{ name: 'read_text_file', description: 'read', inputSchema: {} }] }
+    }
+    const backend = await makeBackend()
+    const handle = await backend.boot('base', {})
+
+    await expect(backend.connectMcp(handle)).rejects.toThrow('shell server died')
+    // No leaked exec pipes: every client that connected was closed.
+    expect(closedServers.sort()).toEqual(['filesystem', 'shell'])
+  })
+
+  it('closes the transport only once', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    const transport = await backend.connectMcp(await backend.boot('base', {}))
+
+    await transport.close()
+    await transport.close()
+
+    expect(closedServers).toHaveLength(2) // two servers, one close each
+  })
+})
+
+describe('DockerBackend — handle validation and docker CLI failures', () => {
+  it('rejects a handle that carries no container id', async () => {
+    const backend = await makeBackend()
+    const handle = { id: 'sbx-bogus', backend: 'docker', rootfs: 'base', native: {} }
+
+    await expect(backend.health(handle as never)).rejects.toThrow(
+      /sbx-bogus has no docker containerId/,
+    )
+  })
+
+  it('reports unhealthy (not gone) for a container that exists but is not running', async () => {
+    spawnPlan = (_cmd, args) =>
+      args[0] === 'inspect' ? { stdout: 'exited', code: 0 } : { stdout: 'cid', code: 0 }
+    const backend = await makeBackend()
+    const handle = await backend.boot('base', {})
+
+    await expect(backend.health(handle)).resolves.toEqual({ state: 'unhealthy', detail: 'exited' })
+  })
+
+  it('surfaces a docker binary that cannot be spawned at all', async () => {
+    spawnPlan = () => ({ error: new Error('spawn docker ENOENT') })
+    const backend = await makeBackend()
+
+    await expect(backend.boot('base', {})).rejects.toThrow(/ENOENT/)
+  })
+
+  it('kills and reports a docker invocation that never returns', async () => {
+    vi.useFakeTimers()
+    try {
+      spawnPlan = () => ({ hang: true })
+      const backend = await makeBackend()
+      const booting = backend.boot('base', {})
+      const assertion = expect(booting).rejects.toThrow(/docker run timed out after 30000ms/)
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      await assertion
+      expect(killedChildren).toBe(1) // SIGKILLed rather than left dangling
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -369,7 +564,8 @@ describe('DockerBackend.reapOrphans', () => {
   })
 
   it('returns 0 and skips the remove when nothing is labelled', async () => {
-    spawnPlan = (cmd, args) => (args[0] === 'ps' ? { stdout: '', code: 0 } : { stdout: '', code: 0 })
+    spawnPlan = (cmd, args) =>
+      args[0] === 'ps' ? { stdout: '', code: 0 } : { stdout: '', code: 0 }
     const backend = await makeBackend()
     expect(await backend.reapOrphans()).toBe(0)
     expect(spawnCalls.some((c) => c.args[0] === 'rm')).toBe(false)
@@ -377,7 +573,9 @@ describe('DockerBackend.reapOrphans', () => {
 
   it('returns 0 (no throw) when the docker engine is unavailable', async () => {
     spawnPlan = (cmd, args) =>
-      args[0] === 'ps' ? { stderr: 'cannot connect to docker daemon', code: 1 } : { stdout: '', code: 0 }
+      args[0] === 'ps'
+        ? { stderr: 'cannot connect to docker daemon', code: 1 }
+        : { stdout: '', code: 0 }
     const backend = await makeBackend()
     await expect(backend.reapOrphans()).resolves.toBe(0)
     expect(spawnCalls.some((c) => c.args[0] === 'rm')).toBe(false)

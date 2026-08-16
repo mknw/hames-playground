@@ -8,9 +8,11 @@ import { describe, it, expect } from 'vitest'
 import { buildTable } from '../../../lib/privacy/pseudonymise'
 import type { PseudonymTable } from '../../../lib/privacy/pseudonymise'
 import {
+  kindOf,
   mintedPlaceholders,
   placeholdersIn,
   scoreFidelity,
+  splitByKind,
   totalFidelity,
 } from '../../../lib/privacy/pseudonym-metrics'
 import type { RosterEntry } from '../../../lib/privacy/graph-roster'
@@ -256,6 +258,81 @@ describe('totalFidelity', () => {
       recoverable: 0,
       residue: 0,
       hallucinatedOutOfRange: 0,
+      unpresentedIds: 0,
+      unpresented: 0,
     })
+  })
+})
+
+describe('scoreFidelity — in-range invented forms', () => {
+  it('flags a minted form the input never presented', () => {
+    // The model saw ONLY the bare PERSON_2 and answered with the email form.
+    // Every shape-based counter reads clean: the token is minted, so it is
+    // exact, and PERSON_2 is merely dropped. `reverse` would then print a real
+    // address that was never in evidence — which is what this metric exists for.
+    const r = scoreFidelity('Neem contact op met PERSON_2_EMAIL.', table, ['PERSON_2'])
+    expect(r.hallucinatedOutOfRange).toBe(0)
+    expect(r.residue).toBe(0)
+    expect(r.exact).toBe(1)
+    expect(r.unpresented).toBe(1)
+    expect(r.unpresentedIds).toEqual(['PERSON_2_EMAIL'])
+    expect(r.droppedIds).toEqual(['PERSON_2'])
+  })
+
+  it('does not flag a placeholder the input did present', () => {
+    const r = scoreFidelity('PERSON_1 en PERSON_1_EMAIL.', table, ['PERSON_1', 'PERSON_1_EMAIL'])
+    expect(r.unpresented).toBe(0)
+    expect(r.unpresentedIds).toEqual([])
+  })
+
+  it('flags an invented form that arrives mangled, on the lenient pass too', () => {
+    const r = scoreFidelity('Zie person-2-email hierboven.', table, ['PERSON_2'])
+    expect(r.recoverable).toBe(1)
+    expect(r.unpresented).toBe(1)
+    expect(r.unpresentedIds).toEqual(['PERSON_2_EMAIL'])
+  })
+
+  it('counts occurrences but reports ids distinctly', () => {
+    const r = scoreFidelity('PERSON_2_EMAIL, nogmaals PERSON_2_EMAIL.', table, ['PERSON_2'])
+    expect(r.unpresented).toBe(2)
+    expect(r.unpresentedIds).toEqual(['PERSON_2_EMAIL'])
+  })
+
+  it('is a SUBSET — the occurrence is still counted in exact', () => {
+    const r = scoreFidelity('PERSON_1 en PERSON_2_EMAIL.', table, ['PERSON_1'])
+    // The header invariant: exact + recoverable + residue is still every
+    // PERSON-shaped token in the answer, unpresented ones included.
+    expect(r.exact + r.recoverable + r.residue).toBe(2)
+    expect(r.unpresented).toBe(1)
+  })
+
+  it('an out-of-range id stays a hallucination, not an unpresented form', () => {
+    const r = scoreFidelity('PERSON_9 was er ook.', table, ['PERSON_1'])
+    expect(r.hallucinatedOutOfRange).toBe(1)
+    expect(r.unpresented).toBe(0)
+  })
+})
+
+describe('kindOf / splitByKind', () => {
+  it('reads the suffix, and gives the bare form the empty kind', () => {
+    expect(kindOf('PERSON_2')).toBe('')
+    expect(kindOf('PERSON_2_EMAIL')).toBe('EMAIL')
+    expect(kindOf('PERSON_10_GIVEN')).toBe('GIVEN')
+    // Unparseable keeps its own name rather than joining another bucket.
+    expect(kindOf('COMPANY_1')).toBe('COMPANY_1')
+  })
+
+  it('splits presented and dropped per kind, bare form first', () => {
+    const a = scoreFidelity('PERSON_1 schreef.', table, ['PERSON_1', 'PERSON_1_EMAIL'])
+    const b = scoreFidelity('PERSON_2 schreef.', table, ['PERSON_2', 'PERSON_2_EMAIL'])
+    const split = splitByKind([a, b])
+    expect(split).toEqual([
+      { kind: '', presented: 2, dropped: 0 },
+      { kind: 'EMAIL', presented: 2, dropped: 2 },
+    ])
+  })
+
+  it('is empty for no reports', () => {
+    expect(splitByKind([])).toEqual([])
   })
 })

@@ -23,6 +23,26 @@
  * synthesiser summarising ten people into three sentences legitimately omits
  * seven of them, so a drop is only interesting in bulk.
  *
+ * ## `unpresented` — the damage the other five cannot see
+ *
+ * The five above classify against the *shape* of a token. One failure has the
+ * right shape and is still wrong: a placeholder the table **did** mint but the
+ * input **never showed the model**. If the prompt carried only `PERSON_2` and the
+ * answer says `PERSON_2_EMAIL`, every counter above reads clean — the token is
+ * minted, so it is `exact`; `PERSON_2` itself is merely `dropped` — yet `reverse`
+ * resolves it happily and prints a real address that was never in evidence.
+ *
+ * That is an invented identity claim with an in-range id, and it is exactly what
+ * a prompt instructing the model to "never write such a token that does not
+ * appear in the input" is trying to prevent. `hallucinatedOutOfRange` cannot
+ * catch it, because the `n` is in range.
+ *
+ * So `unpresentedIds` / `unpresented` are reported as a **cross-cutting subset**
+ * of the survival side rather than as a sixth bucket: the occurrence is still
+ * counted in `exact` or `recoverable` (which keeps `exact + recoverable +
+ * residue` equal to the number of `PERSON`-shaped tokens in the answer), and is
+ * additionally flagged here.
+ *
  * ## The lenient family (what "recoverable" tolerates)
  *
  * Deliberately small, and every member is a mangle a *model* produces rather
@@ -78,6 +98,11 @@ export interface FidelityReport {
    *  minted — a subset of `residueTokens`, reported separately because it is
    *  the only outcome that could put the WRONG name in front of a user. */
   hallucinatedTokens: string[]
+  /** Minted placeholders the answer produced that the input never contained —
+   *  in-range invented forms. A cross-cutting subset of `exactIds` ∪
+   *  `recoveredIds` computed against `inputIds`, NOT a sixth bucket; see the
+   *  module header. `reverse` resolves these, which is precisely the problem. */
+  unpresentedIds: string[]
   /** Every lenient match, for qualitative reporting. */
   mangles: Mangle[]
   /** Occurrence counts (not distinct ids) — `exact` + `recoverable` + `residue`
@@ -89,6 +114,9 @@ export interface FidelityReport {
   dropped: number
   /** Occurrence count of `hallucinatedTokens`. */
   hallucinatedOutOfRange: number
+  /** Occurrence count of in-range invented forms. Already included in `exact`
+   *  or `recoverable` — see the module header on why this is a subset. */
+  unpresented: number
 }
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -186,8 +214,13 @@ function numericIdOf(token: string): number | null {
 }
 
 /** Blank a matched span without moving any other character: NUL is neither a
- *  letter nor a digit, so every remaining fence still reads the same. */
-const blank = (n: number): string => ' '.repeat(n)
+ *  letter nor a digit, so every remaining fence still reads the same.
+ *
+ *  It must not be a SPACE: a space is a member of `SEP` and a separator inside
+ *  `RESIDUE_RE`, so a blanked span would still be able to act as one. Written as
+ *  the `\0` escape rather than a raw NUL byte in the source, because a raw one
+ *  renders as a space in most viewers and reads as exactly the bug it isn't. */
+const blank = (n: number): string => '\0'.repeat(n)
 
 /**
  * Distinct minted placeholders appearing verbatim in `text`.
@@ -220,12 +253,26 @@ export function scoreFidelity(
 ): FidelityReport {
   const minted = mintedPlaceholders(table)
   const inputSet = [...new Set(inputIds)]
+  /** What the model was actually shown — the fence between "echoed" and
+   *  "invented", for placeholders whose id is in range either way. */
+  const presented = new Set(inputSet)
 
   const exactSeen = new Set<string>()
   const recoveredSeen = new Set<string>()
+  const unpresentedSeen = new Set<string>()
   const mangles: Mangle[] = []
   let exact = 0
   let recoverable = 0
+  let unpresented = 0
+
+  /** Called for every minted placeholder the answer resolved to, on either the
+   *  strict or the lenient pass. A minted id the input never carried is an
+   *  in-range invented form — see the module header. */
+  const noteResolved = (id: string): void => {
+    if (presented.has(id)) return
+    unpresented += 1
+    unpresentedSeen.add(id)
+  }
 
   let rest = output
 
@@ -234,6 +281,7 @@ export function scoreFidelity(
     rest = rest.replace(strict, (match) => {
       exact += 1
       exactSeen.add(match)
+      noteResolved(match)
       return blank(match.length)
     })
   }
@@ -256,6 +304,7 @@ export function scoreFidelity(
       if (!resolved) return match // leave it standing; residue will pick it up
       recoverable += 1
       recoveredSeen.add(resolved)
+      noteResolved(resolved)
       mangles.push({ found: match, resolved })
       return blank(match.length)
     })
@@ -280,12 +329,14 @@ export function scoreFidelity(
     droppedIds,
     residueTokens,
     hallucinatedTokens,
+    unpresentedIds: [...unpresentedSeen].sort(),
     mangles,
     exact,
     recoverable,
     residue: residueTokens.length,
     dropped: droppedIds.length,
     hallucinatedOutOfRange: hallucinatedTokens.length,
+    unpresented,
   }
 }
 
@@ -300,6 +351,10 @@ export interface FidelityTotals {
   recoverable: number
   residue: number
   hallucinatedOutOfRange: number
+  /** Distinct in-range invented ids, summed across samples. */
+  unpresentedIds: number
+  /** Occurrences of the same. Already inside `exact` + `recoverable`. */
+  unpresented: number
 }
 
 /**
@@ -320,5 +375,55 @@ export function totalFidelity(reports: readonly FidelityReport[]): FidelityTotal
     recoverable: sum((r) => r.recoverable),
     residue: sum((r) => r.residue),
     hallucinatedOutOfRange: sum((r) => r.hallucinatedOutOfRange),
+    unpresentedIds: sum((r) => r.unpresentedIds.length),
+    unpresented: sum((r) => r.unpresented),
   }
+}
+
+/** Presented/dropped counts for one kind of placeholder. */
+export interface KindSplit {
+  /** The suffix, or `''` for the identity-bearing bare `PERSON_n`. */
+  kind: string
+  presented: number
+  dropped: number
+}
+
+/** `PERSON_2_EMAIL` → `EMAIL`; `PERSON_2` → `''`. Anything unparseable keeps its
+ *  own name, so a surprise never silently joins another kind's bucket. */
+export function kindOf(placeholder: string): string {
+  const m = /^PERSONS?[_\- ]\d+(?:_(.+))?$/i.exec(placeholder)
+  if (!m) return placeholder
+  return m[1] ? m[1].toUpperCase() : ''
+}
+
+/**
+ * Split presented-vs-dropped by placeholder kind across a set of reports.
+ *
+ * This is the aggregation behind the bench's "the dropped fraction is not a
+ * fidelity failure" reading: bare `PERSON_n` is the identity-bearing form, while
+ * `_EMAIL` / `_GIVEN` / `_FAMILY` are redundant re-encodings of a person the
+ * answer has usually already named. Those two collapse into one number unless
+ * they are split, so the split lives here — pure and unit-tested — rather than
+ * being derived by hand from the saved samples afterwards.
+ *
+ * Sorted bare-first, then by descending presented count.
+ */
+export function splitByKind(reports: readonly FidelityReport[]): KindSplit[] {
+  const acc = new Map<string, KindSplit>()
+  const bump = (id: string, field: 'presented' | 'dropped'): void => {
+    const kind = kindOf(id)
+    const row = acc.get(kind) ?? { kind, presented: 0, dropped: 0 }
+    row[field] += 1
+    acc.set(kind, row)
+  }
+  for (const r of reports) {
+    for (const id of r.inputIds) bump(id, 'presented')
+    for (const id of r.droppedIds) bump(id, 'dropped')
+  }
+  return [...acc.values()].sort(
+    (a, b) =>
+      Number(a.kind !== '') - Number(b.kind !== '') ||
+      b.presented - a.presented ||
+      a.kind.localeCompare(b.kind),
+  )
 }

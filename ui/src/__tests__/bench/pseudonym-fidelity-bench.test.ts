@@ -33,7 +33,14 @@
  * - **Samples.** 2 per (transcript × language × guidance) cell = 96 calls, at
  *   the API's default temperature so the two samples are genuinely independent.
  * - **Scoring.** `pseudonym-metrics.ts`, unit-tested offline, classifies each
- *   answer into exact / recoverable / residue / dropped / hallucinated.
+ *   answer into exact / recoverable / residue / dropped / hallucinated, plus
+ *   `unpresented` — a minted placeholder the input never showed the model. That
+ *   last one has the right shape and is still wrong: `reverse` resolves it to a
+ *   real value that was never in evidence, and it is exactly what the guidance
+ *   arm instructs the model not to do, so no other column can stand in for it.
+ * - **Aggregation.** The by-kind drop split and the length/density table are
+ *   emitted by the reporter (`splitByKind`, `lengthTable`), not derived by hand
+ *   from the saved samples, so a re-run reproduces the whole document.
  *
  * ## Guards
  *
@@ -50,6 +57,7 @@ import type { PseudonymTable } from '../../lib/privacy/pseudonymise'
 import {
   placeholdersIn,
   scoreFidelity,
+  splitByKind,
   totalFidelity,
   type FidelityReport,
 } from '../../lib/privacy/pseudonym-metrics'
@@ -303,8 +311,8 @@ const pct = (n: number, d: number): string => (d === 0 ? '—' : `${((n / d) * 1
 
 function cellTable(samples: Sample[]): string {
   const header =
-    '| lang | guidance | placeholders in | exact | recoverable | dropped | residue | hallucinated |\n' +
-    '|---|---|---|---|---|---|---|---|'
+    '| lang | guidance | placeholders in | exact | recoverable | dropped | residue | hallucinated | unpresented |\n' +
+    '|---|---|---|---|---|---|---|---|---|'
   const lines: string[] = []
   for (const lang of LANGUAGES) {
     for (const arm of GUIDANCE_ARMS) {
@@ -314,11 +322,56 @@ function cellTable(samples: Sample[]): string {
       lines.push(
         `| ${lang.code} | ${arm.key} | ${t.inputIds} | ${t.exactIds} (${pct(t.exactIds, t.inputIds)}) | ` +
           `${t.recoveredIds} (${pct(t.recoveredIds, t.inputIds)}) | ` +
-          `${t.droppedIds} (${pct(t.droppedIds, t.inputIds)}) | ${t.residue} | ${t.hallucinatedOutOfRange} |`,
+          `${t.droppedIds} (${pct(t.droppedIds, t.inputIds)}) | ${t.residue} | ` +
+          `${t.hallucinatedOutOfRange} | ${t.unpresented} |`,
       )
     }
   }
   return [header, ...lines].join('\n')
+}
+
+/**
+ * Drops split by placeholder kind — the table behind the "the dropped fraction
+ * is not a fidelity failure" reading. Emitted by the reporter rather than
+ * derived by hand afterwards, so a re-run reproduces the document.
+ */
+function kindTable(samples: Sample[]): string {
+  const rows = splitByKind(samples.map((s) => s.report)).map((k) => {
+    const label = k.kind === '' ? '`PERSON_n` (bare)' : `\`PERSON_n_${k.kind}\``
+    return `| ${label} | ${k.presented} | ${k.dropped} | ${pct(k.dropped, k.presented)} |`
+  })
+  return [
+    '| placeholder kind | presented | dropped | drop rate |',
+    '|---|---|---|---|',
+    ...rows,
+  ].join('\n')
+}
+
+/**
+ * Answer length against placeholder density, per guidance arm — the check that
+ * a coverage gain is not just an answer-length artifact.
+ *
+ * `density` is a RATIO OF MEANS: total placeholder occurrences over total
+ * characters, ×1000. Stated explicitly because the mean of the per-answer
+ * ratios is a different number, and quoting one beside the other's inputs is
+ * how the first draft of this document ended up self-inconsistent.
+ */
+function lengthTable(samples: Sample[]): string {
+  const rows = GUIDANCE_ARMS.map((arm) => {
+    const cell = samples.filter((s) => s.guidance === arm.key)
+    if (cell.length === 0) return null
+    const chars = cell.reduce((a, s) => a + s.text.length, 0)
+    const occ = cell.reduce((a, s) => a + s.report.exact + s.report.recoverable, 0)
+    return (
+      `| ${arm.key} | ${cell.length} | ${(chars / cell.length).toFixed(0)} | ` +
+      `${(occ / cell.length).toFixed(1)} | ${((occ / chars) * 1000).toFixed(2)} |`
+    )
+  }).filter((r): r is string => r !== null)
+  return [
+    '| guidance | answers | mean chars | mean occurrences | density /1k chars |',
+    '|---|---|---|---|---|',
+    ...rows,
+  ].join('\n')
 }
 
 function guidanceDelta(samples: Sample[]): string {
@@ -362,6 +415,7 @@ function mangleExamples(samples: Sample[], limit = 12): string {
         token: t,
         note: s.report.hallucinatedTokens.includes(t) ? '(hallucinated)' : '(residue)',
       })),
+      ...s.report.unpresentedIds.map((t) => ({ token: t, note: '(invented, in range)' })),
     ]
     for (const b of bad) {
       const key = `${b.token}|${b.note}`
@@ -466,6 +520,17 @@ describe('placeholder-fidelity live bench', () => {
         '',
         cellTable(samples),
         '',
+        '## Drops by placeholder kind',
+        '',
+        'The bare `PERSON_n` is the identity-bearing form; the suffixed ones are',
+        'redundant re-encodings of a person the answer has usually already named.',
+        '',
+        kindTable(samples),
+        '',
+        '## Answer length vs placeholder density',
+        '',
+        lengthTable(samples),
+        '',
         '## Guidance delta',
         '',
         guidanceDelta(samples),
@@ -476,7 +541,12 @@ describe('placeholder-fidelity live bench', () => {
         `- survived verbatim: **${overall.exactIds}** (${pct(overall.exactIds, overall.inputIds)})`,
         `- survived only leniently: **${overall.recoveredIds}** (${pct(overall.recoveredIds, overall.inputIds)})`,
         `- dropped entirely: **${overall.droppedIds}** (${pct(overall.droppedIds, overall.inputIds)})`,
+        `- placeholder occurrences echoed: **${overall.exact + overall.recoverable}**`,
         `- residue tokens: **${overall.residue}** · hallucinated out-of-range: **${overall.hallucinatedOutOfRange}**`,
+        `- **in-range invented forms (never presented): ${overall.unpresented}** ` +
+          `(${overall.unpresentedIds} distinct ids) — these reverse cleanly to a real ` +
+          `value the model was never shown, so a non-zero here is a fidelity failure ` +
+          `no other column reports`,
         '',
         '## Mangle examples',
         '',

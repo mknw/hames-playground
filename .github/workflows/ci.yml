@@ -85,22 +85,27 @@ jobs:
       # thresholds live in ui/vitest.config.ts and are backstop floors: the job
       # goes red if coverage regresses below the recorded baseline.
       - name: Test (with coverage floor)
-        run: |
-          set -o pipefail
-          pnpm test:run --coverage 2>&1 | tee coverage-run.log
+        run: pnpm test:run --coverage
 
+      # Reads the json-summary reporter's output rather than scraping the test
+      # log, so the numbers survive whatever else vitest prints. Runs even on a
+      # red job because reportOnFailure is on: a run that broke for an unrelated
+      # reason still reports where coverage stands.
       - name: Publish coverage summary
         if: always()
         run: |
-          if [ ! -f coverage-run.log ]; then
+          if [ ! -f coverage/coverage-summary.json ]; then
             exit 0
           fi
           {
             echo '### Coverage'
             echo
-            echo '```'
-            sed -n '/Coverage summary/,/^=====/p' coverage-run.log
-            echo '```'
+            jq -r '
+              "| Metric | Covered | Total | % |",
+              "|---|---:|---:|---:|",
+              (.total | to_entries[] | select(.key != "branchesTrue")
+                | "| \(.key) | \(.value.covered) | \(.value.total) | \(.value.pct)% |")
+            ' coverage/coverage-summary.json
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Catches SSR/vinxi breakage the unit tests cannot see.

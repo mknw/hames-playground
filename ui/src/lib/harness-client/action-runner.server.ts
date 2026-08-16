@@ -1,7 +1,11 @@
 /**
- * POST-triggered Action Runner — Server Only
+ * Triggered Action Runner — Server Only
  *
- * In-process fire-and-forget execution for the `POST /api/agents/:id` endpoint.
+ * In-process fire-and-forget execution for the `POST /api/agents/:id` endpoint
+ * and, on exactly the same path, for routines (#131 — see
+ * `lib/routines/dispatch.server.ts`). Callers differ only in the `source` they
+ * seed the row with; the run itself is identical, so routine runs are ordinary
+ * observable action rows with ordinary harness events.
  *
  * Deliberately NOT a `"use server"` module: every export of a `"use server"`
  * file becomes a client-callable RPC endpoint, and these functions take a
@@ -16,34 +20,41 @@
  *   3. This module runs the harness to completion and persists the result.
  */
 
-import { assertServerOnImport } from "../harness-patterns/assert.server";
-import { harness, createContext, serializeContext } from "../harness-patterns";
-import { getOrBuildPatterns, saveSession, type SessionData } from "./session.server";
-import { runWithRequestContext } from "./request-user.server";
+import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { harness, createContext, serializeContext } from '../harness-patterns'
+import { getOrBuildPatterns, saveSession, type SessionData } from './session.server'
+import { runWithRequestContext } from './request-user.server'
 import {
   saveConversation as dbSaveConversation,
   setConversationStatus as dbSetConversationStatus,
-} from "../db/conversations.server";
+  type ConversationSource,
+} from '../db/conversations.server'
 
-assertServerOnImport();
+assertServerOnImport()
 
 /**
- * Trigger provenance, stored at `ctx.data.trigger` for POST-triggered runs.
+ * Trigger provenance, stored at `ctx.data.trigger` for triggered runs.
  * The recording itself lives in the Data Stash (keyed by the run id) — here we
  * only keep the raw transcription, the human-readable description, and a
  * pointer to the stored recording document.
  */
 export interface ActionTrigger {
-  /** Raw `transcribed_command` — the harness input verbatim. */
-  transcribedCommand: string;
+  /**
+   * The harness input, verbatim. Named for the endpoint that introduced it
+   * (`transcribed_command`); a routine run puts its configured input here so
+   * seeding, replay, and the UI need no second shape.
+   */
+  transcribedCommand: string
   /** `short_description` — also lifted to the sticky `title` column. */
-  shortDescription: string;
+  shortDescription: string
   /** Data Stash document id of the stored `original_recording` (if stored). */
-  recordingDocId?: string;
+  recordingDocId?: string
   /** Original recording filename, for display. */
-  recordingFilename?: string;
+  recordingFilename?: string
   /** Original recording MIME type, for the audio player. */
-  recordingMimeType?: string;
+  recordingMimeType?: string
+  /** Set when a routine fired this run (#131): which routine, and on what. */
+  routine?: { id: string; trigger: string }
 }
 
 /**
@@ -55,34 +66,35 @@ export interface ActionTrigger {
  * `data.trigger`. The background run produces its own context and overwrites
  * this blob via `saveSession`; the row's `kind`/`source`/sticky `title`
  * survive that overwrite (see `saveConversation`).
+ *
+ * `source` is the only thing that distinguishes a POST-triggered action from a
+ * routine-triggered one — both are `kind='action'`, both run identically.
  */
 export async function seedActionRow(
   runId: string,
   userId: string,
   agentId: string,
   trigger: ActionTrigger,
+  source: ConversationSource = 'post',
 ): Promise<void> {
-  const ctx = createContext(
-    trigger.transcribedCommand,
-    { trigger } as Partial<SessionData>,
-    runId,
-  );
+  const ctx = createContext(trigger.transcribedCommand, { trigger } as Partial<SessionData>, runId)
   await dbSaveConversation({
     id: runId,
     userId,
     agentId,
     title: trigger.shortDescription || null,
     serializedContext: serializeContext(ctx),
-    kind: "action",
-    source: "post",
-    status: "running",
-  });
+    kind: 'action',
+    source,
+    status: 'running',
+  })
 }
 
 /**
- * Run an agent to completion for a POST-triggered action, off the request
- * path. The route inserts the row (via {@link seedActionRow}) and calls this
- * WITHOUT awaiting, so the HTTP response is already sent. On completion the
+ * Run an agent to completion for a triggered action (POST endpoint or
+ * routine), off the request path. The caller inserts the row (via
+ * {@link seedActionRow}) and calls this WITHOUT awaiting, so the HTTP response
+ * is already sent — a routine has no response at all. On completion the
  * serialized context + lifted status are persisted; on an unexpected throw the
  * row is flipped to `error` so it never sticks on `running`.
  *
@@ -104,17 +116,17 @@ export async function runAgentInBackground(
 ): Promise<void> {
   try {
     await runWithRequestContext({ userId, sessionId: runId }, async () => {
-      const patterns = await getOrBuildPatterns(runId, agentId);
-      const agent = harness(...patterns);
+      const patterns = await getOrBuildPatterns(runId, agentId)
+      const agent = harness(...patterns)
       const result = await agent(message, runId, {
         trigger,
-      } as Partial<SessionData>);
-      await saveSession(runId, userId, agentId, result.serialized);
-    });
+      } as Partial<SessionData>)
+      await saveSession(runId, userId, agentId, result.serialized)
+    })
   } catch (err) {
-    console.error(`[action] background run failed for ${runId}:`, err);
+    console.error(`[action] background run failed for ${runId}:`, err)
     // The seeded row exists with status='running'; flip it so the UI doesn't
     // spin forever. Best-effort — a DB failure here is already logged above.
-    await dbSetConversationStatus(runId, userId, "error").catch(() => {});
+    await dbSetConversationStatus(runId, userId, 'error').catch(() => {})
   }
 }

@@ -93,6 +93,12 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [AGENT_TRIGGER.md](AGENT_TRIGGER.md) | `POST /api/agents/:id` async agent trigger → **action** rows: endpoint contract, in-process fire-and-forget model, `kind`/`source`/`status` data model, per-user token auth (`configs/action-tokens.yaml`), recording storage + playback via the Data Stash, sidebar filter + promotion gate, status-lifecycle quirk |
 
+### Routines
+
+| Document | Description |
+|----------|-------------|
+| [ROUTINES.md](ROUTINES.md) | **Routines** (#131): trigger-driven harness runs — the extensible trigger registry (`interval` / `session_start` / `session_end`), the `routines` table, the boot-armed interval sweep + session-lifecycle hooks, the compare-and-set that prevents double-firing, and the minimal management API. A scheduling layer *over* AGENT_TRIGGER's path, not a second execution path |
+
 ### Auth & Deployment
 
 | Document                                                         | Description                                                                                                                                                                                                                                                                                                                     |

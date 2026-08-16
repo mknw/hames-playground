@@ -94,4 +94,4 @@ promoted to a regular conversation the moment a user interacts with it. See
 **Routine** — a persisted "run agent X with input Y when Z happens". It is a
 scheduling layer over the action path rather than a second way to run an agent:
 when a routine's trigger fires, its run lands as an ordinary action row marked
-`source='routine'`. _(Lands with #131; not on `main` at the time of writing.)_
+`source='routine'`. See [`docs/ROUTINES.md`](docs/ROUTINES.md).

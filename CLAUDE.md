@@ -77,12 +77,13 @@ Ark UI is the chosen primitive layer; never replace Ark components with native e
 
 Project skills live in `.claude/skills/` (tracked in git, so worktrees inherit
 them — no copy step); all carry the `kg-` prefix and encode something only true
-of this repo. The **generic set** (bare names: `grilling`, `codebase-design`,
-`dispatching-work`, …) was extracted to `~/Code/muster-skills` and is installed
-globally via `~/.claude/skills` symlinks, so it is available here and in every
-other project without copies. Model-invoked skills announce themselves through
-their own descriptions; the ones you have to ask for by name are `/grill-me`
-and `/improve-codebase-architecture`.
+of this repo. The **generic set** (bare names: `grilling`, `codebase-design`, …)
+was extracted to `~/Code/muster-skills` and is installed globally via
+`~/.claude/skills` symlinks, so it is available here and in every other project
+without copies. `dispatching-work` lives in the same `~/Code/muster-skills` repo
+but was authored there directly — it was never extracted from this one. Model-
+invoked skills announce themselves through their own descriptions; the ones you
+have to ask for by name are `/grill-me` and `/improve-codebase-architecture`.
 
 - A `kg-*` skill may call a generic skill (global scope is visible in every
   project). A generic skill must never call a `kg-*` skill — that invariant is

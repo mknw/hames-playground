@@ -82,3 +82,10 @@ tool and `--stack uno` (there "uno" = .NET Uno Platform, not UnoCSS), and the
 
 Adapted, in our own words, from `DietrichGebert/ponytail` @ `2ed6c52` (the
 minimalism ladder). Licence text in `NOTICE.md`.
+
+## Docs outside `.claude/`
+
+| Our path                     | Upstream path                                                       | Adapted                                                                                                             |
+| ----------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `../../docs/adr/README.md`    | `mattpocock/skills` @ `068b6e0`, `skills/engineering/domain-modeling/ADR-FORMAT.md` (body format, gate) + `affaan-m/ECC` @ `50743ce`, `skills/architecture-decision-records/SKILL.md` (index table, lifecycle statuses) | Reconciled from both sources into one format |
+| `../../docs/agents/AGENT-BRIEF.md` | `mattpocock/skills` @ `068b6e0`, `skills/engineering/triage/AGENT-BRIEF.md` | Extended for this repo's dispatch/issue surfaces |

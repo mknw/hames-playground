@@ -14,27 +14,24 @@ const agentUsesCodeMode = vi.fn(async () => false)
 vi.mock('../../../lib/harness-client/registry.server', () => ({ agentUsesCodeMode }))
 
 const loadSession = vi.fn()
+const saveSession = vi.fn()
 vi.mock('../../../lib/harness-client/session.server', () => ({
   loadSession,
-  saveSession: vi.fn(),
+  saveSession,
 }))
 
-vi.mock('../../../lib/harness-patterns/mcp-client.server', () => ({
-  listTools: vi.fn(async () => [{ name: 'read_neo4j_cypher' }]),
-}))
+const listTools = vi.fn(async () => [{ name: 'read_neo4j_cypher' }])
+vi.mock('../../../lib/harness-patterns/mcp-client.server', () => ({ listTools }))
 
-vi.mock('../../../lib/harness-patterns', () => ({
-  deserializeContext: vi.fn(() => ({ data: {} })),
-  serializeContext: vi.fn(() => '{}'),
-}))
+const deserializeContext = vi.fn(() => ({ data: {} }) as { data?: Record<string, unknown> })
+const serializeContext = vi.fn(() => '{}')
+vi.mock('../../../lib/harness-patterns', () => ({ deserializeContext, serializeContext }))
 
-vi.mock('../../../lib/auth/server', () => ({
-  getAuthenticatedUser: vi.fn(async () => ({ id: 'u1' })),
-}))
+const getAuthenticatedUser = vi.fn(async () => ({ id: 'u1' }))
+vi.mock('../../../lib/auth/server', () => ({ getAuthenticatedUser }))
 
-vi.mock('../../../lib/tool-config/server-catalog.server', () => ({
-  getPresetTools: vi.fn(async () => ['read_neo4j_cypher']),
-}))
+const getPresetTools = vi.fn(async () => ['read_neo4j_cypher'])
+vi.mock('../../../lib/tool-config/server-catalog.server', () => ({ getPresetTools }))
 
 describe('getCodeModeAllowedTools — usesCodeMode gate source', () => {
   beforeEach(() => {
@@ -72,5 +69,129 @@ describe('getCodeModeAllowedTools — usesCodeMode gate source', () => {
 
     expect(agentUsesCodeMode).not.toHaveBeenCalled()
     expect(res.usesCodeMode).toBe(true)
+  })
+})
+
+describe('getCodeModeAllowedTools — the allowed set', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.unstubAllEnvs()
+    agentUsesCodeMode.mockResolvedValue(true)
+    deserializeContext.mockReturnValue({ data: {} })
+    getPresetTools.mockResolvedValue(['read_neo4j_cypher'])
+    listTools.mockResolvedValue([{ name: 'read_neo4j_cypher' }])
+  })
+
+  it('returns the persisted selection verbatim when the conversation has one', async () => {
+    loadSession.mockResolvedValue({ serializedContext: '{}', agentId: 'code-mode' })
+    deserializeContext.mockReturnValue({ data: { codeModeAllowedTools: ['search'] } })
+    const { getCodeModeAllowedTools } = await import('../../../lib/tool-config/config.server')
+
+    const res = await getCodeModeAllowedTools('s1')
+
+    // Persisted wins outright — no union with the preset or the meta-tools.
+    expect(res.allowed).toEqual(['search'])
+  })
+
+  it('falls back to meta-tools ∪ preset tools for a fresh conversation', async () => {
+    loadSession.mockResolvedValue(null)
+    getPresetTools.mockResolvedValue(['read_neo4j_cypher', 'mcp-find'])
+    const { getCodeModeAllowedTools } = await import('../../../lib/tool-config/config.server')
+
+    const res = await getCodeModeAllowedTools('s1')
+
+    expect(res.allowed).toContain('read_neo4j_cypher')
+    expect(res.defaults).toEqual(['mcp-find', 'mcp-add', 'code-mode', 'mcp-exec'])
+    for (const meta of res.defaults) expect(res.allowed).toContain(meta)
+    // Deduped — mcp-find appears in both the defaults and the preset.
+    expect(res.allowed.filter((t) => t === 'mcp-find')).toHaveLength(1)
+  })
+
+  it('falls back to defaults when the persisted blob is corrupt', async () => {
+    loadSession.mockResolvedValue({ serializedContext: 'not-json', agentId: 'code-mode' })
+    deserializeContext.mockImplementation(() => {
+      throw new Error('corrupt blob')
+    })
+    const { getCodeModeAllowedTools } = await import('../../../lib/tool-config/config.server')
+
+    const res = await getCodeModeAllowedTools('s1')
+
+    expect(res.allowed).toContain('mcp-exec')
+    deserializeContext.mockImplementation(() => ({ data: {} }))
+  })
+
+  it('still answers when the preset lookup fails (gateway/catalog down)', async () => {
+    loadSession.mockResolvedValue(null)
+    getPresetTools.mockRejectedValue(new Error('gateway down'))
+    const { getCodeModeAllowedTools } = await import('../../../lib/tool-config/config.server')
+
+    const res = await getCodeModeAllowedTools('s1')
+
+    expect(res.allowed).toEqual(['mcp-find', 'mcp-add', 'code-mode', 'mcp-exec'])
+  })
+
+  it('reports the live gateway tools, sorted', async () => {
+    loadSession.mockResolvedValue(null)
+    listTools.mockResolvedValue([{ name: 'search' }, { name: 'fetch' }, { name: 'code-mode' }])
+    const { getCodeModeAllowedTools } = await import('../../../lib/tool-config/config.server')
+
+    const res = await getCodeModeAllowedTools('s1')
+
+    expect(res.available).toEqual(['code-mode', 'fetch', 'search'])
+  })
+
+  it('skips the auth round-trip under the dev bypass', async () => {
+    vi.stubEnv('VITE_DEV_BYPASS_AUTH', 'true')
+    loadSession.mockResolvedValue(null)
+    const { getCodeModeAllowedTools } = await import('../../../lib/tool-config/config.server')
+
+    await getCodeModeAllowedTools('s1')
+
+    expect(getAuthenticatedUser).not.toHaveBeenCalled()
+    expect(loadSession).toHaveBeenCalledWith('s1', 'dev-bypass-user')
+    vi.unstubAllEnvs()
+  })
+})
+
+describe('setCodeModeAllowedTools', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    deserializeContext.mockReturnValue({ data: {} })
+  })
+
+  it('persists a copy of the selection onto the session context', async () => {
+    loadSession.mockResolvedValue({ serializedContext: '{}', agentId: 'code-mode' })
+    const ctx: { data?: Record<string, unknown> } = { data: { existing: 1 } }
+    deserializeContext.mockReturnValue(ctx)
+    const { setCodeModeAllowedTools } = await import('../../../lib/tool-config/config.server')
+
+    const selection = ['search', 'fetch']
+    await setCodeModeAllowedTools('s1', selection)
+
+    // Other context data survives; the array is copied, not aliased.
+    expect(ctx.data).toEqual({ existing: 1, codeModeAllowedTools: ['search', 'fetch'] })
+    expect(ctx.data!.codeModeAllowedTools).not.toBe(selection)
+    expect(serializeContext).toHaveBeenCalledWith(ctx)
+    expect(saveSession).toHaveBeenCalledWith('s1', 'u1', 'code-mode', '{}')
+  })
+
+  it('rejects for a conversation that has no row yet', async () => {
+    loadSession.mockResolvedValue(null)
+    const { setCodeModeAllowedTools } = await import('../../../lib/tool-config/config.server')
+
+    await expect(setCodeModeAllowedTools('ghost', ['search'])).rejects.toThrow(
+      /unknown session ghost/,
+    )
+    expect(saveSession).not.toHaveBeenCalled()
+  })
+})
+
+describe('getAvailableTools', () => {
+  it('returns the gateway tool names sorted', async () => {
+    vi.clearAllMocks()
+    listTools.mockResolvedValue([{ name: 'search' }, { name: 'add_observations' }])
+    const { getAvailableTools } = await import('../../../lib/tool-config/config.server')
+
+    await expect(getAvailableTools()).resolves.toEqual(['add_observations', 'search'])
   })
 })

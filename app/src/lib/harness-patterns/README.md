@@ -37,6 +37,7 @@ Functional, composable framework for agentic tool execution.
   - [withReferences()](#withreferencespattern-config)
   - [synthesizer()](#synthesizerconfig)
   - [compactIntent()](#compactintentconfig)
+  - [planner()](#plannertools-config)
   - [retriever()](#retrieverconfig)
   - [router()](#routerroutedescriptions-config)
   - [routes()](#routespatternmap-config)
@@ -148,6 +149,7 @@ type EventType =
   | 'error'
   | 'reference_attached' // withReferences — selector decision (observability)
   | 'intent_compacted' // compactIntent — rewritten brief (observability)
+  | 'plan_created' // planner — upfront plan (observability; the plan itself travels on scope.data)
 
 // Isolated workspace for each pattern
 interface PatternScope<T> {
@@ -635,6 +637,80 @@ type CompactIntentConfig = PatternConfig
 > Part E of [#83](https://github.com/mknw/harness-playground/issues/83) (the
 > `compact*` naming unification) is a deferred follow-up.
 
+### `planner(tools, config?)`
+
+Produces a natural-language plan ONCE, before any tool runs, and hands it to
+the next pattern in the chain. The planner does not execute tools — it reasons
+about them.
+
+```typescript
+chain(planner(tools.all), simpleLoop(controller, tools.all), synthesizer({ mode: 'thread' }))
+
+interface PlannerConfig extends PatternConfig {
+  schema?: string // Extra context (e.g. neo4j schema) — mirrors simpleLoop's
+  maxPlanChars?: number // Cap on the plan text handed downstream (default 2000)
+}
+```
+
+**Why.** A `simpleLoop` controller re-derives its high-level approach on every
+turn. With a diverse tool surface (`tools.all` spanning `neo4j-cypher` +
+`database` + `web_search` + `context7`) that re-derivation is both the
+expensive part of the prompt and the part most prone to greedy, locally
+coherent sequences ("search the web again" when turn 1 already pulled the
+docs). The planner pays for strategy once.
+
+**When it earns its cost:** a diverse tool surface, multi-step tasks where the
+strategy is non-obvious, long-running agents where a wasted turn is expensive.
+**When it doesn't:** single-namespace queries (`router` → `simpleLoop` is
+enough) and conversational replies (the router's `DIRECT_RESPONSE_ROUTE`
+already short-circuits).
+
+**How the plan reaches the next pattern.** Two channels, no BAML signature
+changes:
+
+1. **`scope.data.plan: PlanResult`** — the chain forwards `scope.data` to the
+   next pattern as its `currentData`. `simpleLoop` and `actorCritic` read it,
+   render it with `formatPlanContext()`, and pass the string to their
+   controller adapter as the **trailing optional `planContext` argument**;
+   the adapters prepend it to the BAML `context`, ahead of `contextPrefix` and
+   `GRAPH SCHEMA`. Any controller taking `context: string?` benefits
+   automatically. (`planContext` is appended, never inserted: the generated BAML
+   functions take arguments positionally — see `warnIfCollectorEmpty`.)
+
+   ```
+   PLAN (from previous step — follow it unless a result contradicts it):
+   <reasoning>
+   Steps:
+   <plan>
+   ```
+
+2. **`plan_created` event** — carries the plan, the tool count and a
+   `truncated` flag for the observability panel and any downstream consumer
+   (`view.ofType('plan_created')`). A dedicated event type, NOT
+   `controller_action`: that payload is a real `ControllerAction`, and the
+   synthesizer's thread mode renders every `controller_action` in view as a
+   tool iteration — a synthetic one would show a tool call that never happened.
+
+**Defaults:** `commitStrategy: 'always'` (the plan survives a downstream error),
+`trackHistory: 'plan_created'`, `errorSeverity: 'recoverable'`, and a
+`viewConfig` of the last 2 message turns (same shape as `router`, so a
+multi-turn intent shift is visible).
+
+**Best-effort.** On any failure the pattern leaves `scope.data.plan` unset and
+tracks an `error` event; the downstream loop then runs exactly as it does
+without a planner — never fatal.
+
+**One-shot.** Replanning on failure is out of scope: a failed step is handled by
+`simpleLoop`'s own error path. `n_steps` is exposed on `scope.data.plan` as a
+soft hint (steps are not tool calls) — it does not clamp `maxTurns`.
+
+> `planner` and `router` solve different problems and compose: router is cheap
+> one-of-N intent classification; planner is strategic decomposition before
+> execution. `chain(router(...), routes({ x: chain(planner(...), simpleLoop(...)) }))`
+> is valid. The `general` agent
+> (`harness-client/examples/general.server.ts`) demonstrates the flat
+> planner → simpleLoop → synthesizer chain alongside the router-based `default`.
+
 ### `retriever(config)`
 
 A low-latency alternative to a tool-calling `simpleLoop`: instead of an LLM loop
@@ -938,6 +1014,7 @@ router(
 - `actorCritic`: `trackHistory: 'tool_result'`, `commitStrategy: 'on-success'`
 - `synthesizer`: `trackHistory: 'assistant_message'`, `commitStrategy: 'always'`
 - `compactIntent`: `trackHistory: 'intent_compacted'`, `commitStrategy: 'always'`, default `viewConfig` of last 5 message turns
+- `planner`: `trackHistory: 'plan_created'`, `commitStrategy: 'always'`, default `viewConfig` of last 2 message turns
 
 ## Event → BAML Type Mapping
 
@@ -947,21 +1024,22 @@ transformed into prompt-friendly types. The table below shows which harness
 
 ### Harness EventType → BAML Input Type
 
-| Harness `EventType`  | Event Payload (TS)                                                                                                       | BAML Type                            | Consumed By                                                   |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------ | ------------------------------------------------------------- |
-| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                              | `ToolCall`                           | `LoopTurn.tool_call`, `Attempt.action`                        |
-| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`) | `ToolResult`                         | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
-| `controller_action`  | `ControllerActionEventData`                                                                                              | _(embedded in `LoopTurn.reasoning`)_ | simpleLoop, actorCritic                                       |
-| `critic_result`      | `CriticResultEventData`                                                                                                  | _(embedded in `Attempt.feedback`)_   | actorCritic                                                   |
-| `user_message`       | `UserMessageEventData`                                                                                                   | `Message { role, content }`          | router (history)                                              |
-| `assistant_message`  | `AssistantMessageEventData`                                                                                              | `Message { role, content }`          | router (history)                                              |
-| `pattern_enter`      | `PatternEnterEventData`                                                                                                  | _(not sent to BAML)_                 | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
-| `pattern_exit`       | `PatternExitEventData`                                                                                                   | _(not sent to BAML)_                 | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
-| `approval_request`   | `ApprovalRequestEventData`                                                                                               | _(not sent to BAML)_                 | (reserved — no active emitter)                                |
-| `approval_response`  | `ApprovalResponseEventData`                                                                                              | _(not sent to BAML)_                 | (reserved — no active emitter)                                |
-| `error`              | `ErrorEventData`                                                                                                         | _(read via `view.hasErrors()`)_      | synthesizer (error context), harness error handling           |
-| `reference_attached` | `ReferenceAttachedEventData`                                                                                             | _(not sent to BAML)_                 | withReferences only (observability)                           |
-| `intent_compacted`   | `IntentCompactedEventData`                                                                                               | _(not sent to BAML)_                 | compactIntent only (observability)                            |
+| Harness `EventType`  | Event Payload (TS)                                                                                                       | BAML Type                              | Consumed By                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- | ------------------------------------------------------------- |
+| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                              | `ToolCall`                             | `LoopTurn.tool_call`, `Attempt.action`                        |
+| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`) | `ToolResult`                           | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
+| `controller_action`  | `ControllerActionEventData`                                                                                              | _(embedded in `LoopTurn.reasoning`)_   | simpleLoop, actorCritic                                       |
+| `critic_result`      | `CriticResultEventData`                                                                                                  | _(embedded in `Attempt.feedback`)_     | actorCritic                                                   |
+| `user_message`       | `UserMessageEventData`                                                                                                   | `Message { role, content }`            | router (history)                                              |
+| `assistant_message`  | `AssistantMessageEventData`                                                                                              | `Message { role, content }`            | router (history)                                              |
+| `pattern_enter`      | `PatternEnterEventData`                                                                                                  | _(not sent to BAML)_                   | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
+| `pattern_exit`       | `PatternExitEventData`                                                                                                   | _(not sent to BAML)_                   | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
+| `approval_request`   | `ApprovalRequestEventData`                                                                                               | _(not sent to BAML)_                   | (reserved — no active emitter)                                |
+| `approval_response`  | `ApprovalResponseEventData`                                                                                              | _(not sent to BAML)_                   | (reserved — no active emitter)                                |
+| `error`              | `ErrorEventData`                                                                                                         | _(read via `view.hasErrors()`)_        | synthesizer (error context), harness error handling           |
+| `reference_attached` | `ReferenceAttachedEventData`                                                                                             | _(not sent to BAML)_                   | withReferences only (observability)                           |
+| `intent_compacted`   | `IntentCompactedEventData`                                                                                               | _(not sent to BAML)_                   | compactIntent only (observability)                            |
+| `plan_created`       | `PlanCreatedEventData`                                                                                                   | _(the plan reaches BAML as `context`)_ | planner only; loops read `scope.data.plan`, not the event     |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
 
@@ -1065,6 +1143,29 @@ BAML Return → string (the rewritten brief)
   → stored as an intent_compacted event (with the LLM call)
 
 Turn 1 (no history): LLM call skipped, latest passes through unchanged.
+```
+
+#### planner → `Planner`
+
+```
+Events read (ViewConfig default: fromLastNTurns: 2, messages only; the
+user_message itself is read via fromAll() so a narrow view can't hide it)
+└── user_message  ──► user_message + intent (data.intent ?? latest message)
+
+BAML Inputs:
+  user_message : string            ← latest user_message content
+  intent       : string            ← scope.data.intent ?? user_message
+  tools        : ToolDescription[] ← the DOWNSTREAM executor's tool surface
+                                     (+ active withSandbox in-VM tools)
+  context      : string?           ← config.schema
+
+BAML Return → PlanResult:
+  reasoning : string  → rendered into the plan block
+  plan      : string  → capped at config.maxPlanChars (default 2000)
+  n_steps   : int     → soft hint on scope.data.plan; never clamps maxTurns
+  → written to scope.data.plan
+  → stored as a plan_created event (with the LLM call)
+  → downstream: formatPlanContext(plan) → controller `planContext` → BAML `context`
 ```
 
 #### router() + routes()
@@ -1234,7 +1335,7 @@ harness-patterns/
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? callback
 ├── routing.server.ts       # BAML router integration (routeMessageOp)
 ├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE tool transports — sandbox (in-VM) → app-side in-process → MCP gateway; leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
-├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, describeToolResultOp, etc.
+├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, etc.
 ├── summarize.server.ts     # scheduleSummarization() — background tool result summarization via DescribeFallback
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
 ├── token-budget.server.ts  # trimToFit(), getContextWindow(), estimateTokens() — rolling context window
@@ -1252,6 +1353,7 @@ harness-patterns/
     ├── chain.server.ts         # Sequential composition; accepts onEvent? for SSE streaming
     ├── synthesizer.server.ts   # Final response synthesis; skips BAML for DIRECT_RESPONSE_ROUTE
     ├── compactIntent.server.ts # Rewrites latest message → scope.data.intent for router-less actors; emits intent_compacted
+    ├── planner.server.ts       # Upfront decomposition → scope.data.plan (+ formatPlanContext, read by both loop patterns); emits plan_created
     └── event-view.server.ts    # EventViewImpl (fluent query API, serializeCompact)
 ```
 

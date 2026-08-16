@@ -10,7 +10,8 @@ export type {
   CriticResult,
   Attempt,
   FewShot,
-  ToolCallRequest
+  ToolCallRequest,
+  PlanResult,
 } from '../../../baml_client/types'
 
 /** How a loop pattern handles multi-call turns (ControllerAction.additional_calls).
@@ -75,6 +76,7 @@ export type EventType =
   | 'error'
   | 'reference_attached'
   | 'intent_compacted'
+  | 'plan_created'
 
 /** Accounting record for one harness step (#122): token and cost totals
  *  summed across EVERY physical API call the step made — including truncation
@@ -155,16 +157,16 @@ export interface PatternScope<T = Record<string, unknown>> {
 
 /** When to commit events to context */
 export type CommitStrategy =
-  | 'always'      // Commit all tracked events regardless of outcome
-  | 'on-success'  // Commit only if pattern completes without error
-  | 'last'        // Commit only the final event
-  | 'never'       // Discard all events (dry-run / preview mode)
+  | 'always' // Commit all tracked events regardless of outcome
+  | 'on-success' // Commit only if pattern completes without error
+  | 'last' // Commit only the final event
+  | 'never' // Discard all events (dry-run / preview mode)
 
 /** What event types to track */
 export type TrackHistory =
-  | boolean       // true = all types, false = none
-  | EventType     // Single type: 'tool_result'
-  | EventType[]   // Multiple: ['tool_call', 'tool_result']
+  | boolean // true = all types, false = none
+  | EventType // Single type: 'tool_result'
+  | EventType[] // Multiple: ['tool_call', 'tool_result']
 
 /** Configuration for what events a pattern receives */
 /** Read-time event transform — takes a ContextEvent, returns a new one (never mutates).
@@ -235,7 +237,7 @@ export type ControllerFn = (
  */
 export type CriticFn = (
   intent: string,
-  previous_attempts: ScriptExecutionEvent[]
+  previous_attempts: ScriptExecutionEvent[],
 ) => Promise<import('../../../baml_client/types').CriticResult>
 
 /**
@@ -246,7 +248,7 @@ export type CodeModeControllerFn = (
   user_message: string,
   intent: string,
   available_tools: string[],
-  previous_attempts: ScriptExecutionEvent[]
+  previous_attempts: ScriptExecutionEvent[],
 ) => Promise<import('../../../baml_client/types').ControllerAction>
 
 // ============================================================================
@@ -268,7 +270,7 @@ export interface ToolCallResult {
 export type OnToolResult = (
   toolName: string,
   result: ToolCallResult,
-  context: { callId?: string; args: unknown }
+  context: { callId?: string; args: unknown },
 ) => Promise<{ data?: unknown } | void> | { data?: unknown } | void
 
 /** Configuration for simpleLoop pattern */
@@ -417,10 +419,7 @@ export interface EventView {
 }
 
 /** Pattern signature with isolated scope and event view */
-export type ScopedPattern<T> = (
-  scope: PatternScope<T>,
-  view: EventView
-) => Promise<PatternScope<T>>
+export type ScopedPattern<T> = (scope: PatternScope<T>, view: EventView) => Promise<PatternScope<T>>
 
 /** Settings consulted by `estimateTurns` — patterns whose effective `maxTurns`
  *  / `maxRetries` come from runtime settings need these to project a cost. */
@@ -696,6 +695,23 @@ export interface IntentCompactedEventData {
   skipped?: 'no-history'
 }
 
+/** Data payload for plan_created event — emitted by `planner` once per chain
+ *  invocation. Mirrors `intent_compacted`: a dedicated observability event for
+ *  an LLM step that produces no tool call. Deliberately NOT a
+ *  `controller_action` (which #27 originally proposed): that payload is a real
+ *  `ControllerAction`, and `synthesizer`'s thread mode turns every
+ *  controller_action in view into a tool iteration — a synthetic one would
+ *  render as a tool call that never happened. `llmCall` (on the ContextEvent)
+ *  holds the BAML call detail. */
+export interface PlanCreatedEventData {
+  /** The plan written to `scope.data.plan` (post-truncation). */
+  plan: import('../../../baml_client/types').PlanResult
+  /** Number of tools the planner was shown. */
+  toolCount: number
+  /** Set when the plan text was capped by `PlannerConfig.maxPlanChars`. */
+  truncated?: boolean
+}
+
 // ============================================================================
 // LLM Call Observability
 // ============================================================================
@@ -782,9 +798,12 @@ export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
   routes: false,
   chain: false,
   compactIntent: 'intent_compacted',
+  // The plan IS the planner's deliverable — track it so it survives in
+  // ctx.events (and the observability panel) even when a later pattern errors.
+  planner: 'plan_created',
   // The retriever's matches are surfaced as a tool_result (the channel the
   // synthesizer reads via view.fromLastPattern()) — same as a simpleLoop tool.
-  retriever: ['tool_result']
+  retriever: ['tool_result'],
 }
 
 /** Default commitStrategy by pattern type */
@@ -796,7 +815,8 @@ export const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy> = {
   routes: 'always',
   chain: 'always',
   compactIntent: 'always',
-  retriever: 'always'
+  planner: 'always',
+  retriever: 'always',
 }
 
 /** Default errorSeverity by pattern type.
@@ -812,6 +832,9 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   // compactIntent is best-effort: on failure it leaves intent unset and the
   // downstream actor falls back to the raw user message — never fatal.
   compactIntent: 'recoverable',
+  // planner is best-effort: on failure it leaves scope.data.plan unset and the
+  // downstream loop runs exactly as it does today (unplanned) — never fatal.
+  planner: 'recoverable',
   // retriever is best-effort: a backend failure yields empty matches and the
   // synthesizer answers from whatever else is in context — never fatal.
   retriever: 'recoverable',

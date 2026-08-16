@@ -21,6 +21,7 @@ import type {
   ApprovalRequestEventData,
   ErrorEventData,
   IntentCompactedEventData,
+  PlanCreatedEventData,
   LLMCallData,
   UnifiedContext,
 } from '~/lib/harness-patterns'
@@ -69,6 +70,7 @@ const eventIcons: Record<EventType, string> = {
   error: '❌',
   reference_attached: '🔗',
   intent_compacted: '🎯',
+  plan_created: '🗺️',
 }
 
 const eventColors: Record<EventType, string> = {
@@ -85,6 +87,7 @@ const eventColors: Record<EventType, string> = {
   error: '#ef4444', // red-500
   reference_attached: '#c084fc', // purple-400
   intent_compacted: '#fbbf24', // amber-400 (an LLM reasoning step, like controller_action)
+  plan_created: '#fbbf24', // amber-400 (same family: an LLM reasoning step, no tool call)
 }
 
 // ============================================================================
@@ -126,6 +129,13 @@ function getEventPreview(type: EventType, data: unknown): string {
       const d = data as IntentCompactedEventData
       const brief = d.intent || ''
       return brief.length > 50 ? brief.slice(0, 50) + '...' : brief
+    }
+    case 'plan_created': {
+      const d = data as PlanCreatedEventData
+      const steps = d.plan?.n_steps ?? 0
+      const first = (d.plan?.plan ?? '').split('\n')[0] ?? ''
+      const head = `${steps} step${steps === 1 ? '' : 's'}: ${first}`
+      return head.length > 50 ? head.slice(0, 50) + '...' : head
     }
     case 'pattern_enter':
     case 'pattern_exit':

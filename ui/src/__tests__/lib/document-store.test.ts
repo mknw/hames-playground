@@ -46,7 +46,10 @@ interface FakeRedis {
   expires: Map<string, number>
 }
 
-function makeFakeRedis(): { redis: FakeRedis; callTool: CallTool & { calls: Array<[string, Record<string, unknown>]> } } {
+function makeFakeRedis(): {
+  redis: FakeRedis
+  callTool: CallTool & { calls: Array<[string, Record<string, unknown>]> }
+} {
   const redis: FakeRedis = { json: new Map(), sets: new Map(), expires: new Map() }
   const calls: Array<[string, Record<string, unknown>]> = []
 
@@ -133,7 +136,13 @@ describe('document-store (Issue #6)', () => {
       // The upload gate persists 'pending' in this FIRST write so a status poll
       // can't read a no-status gap and flicker; it must round-trip from Redis.
       const pending = await storeDocument(
-        { sessionId: 's1', filename: 'b.txt', mimeType: 'text/plain', content: 'y', ingestStatus: 'pending' },
+        {
+          sessionId: 's1',
+          filename: 'b.txt',
+          mimeType: 'text/plain',
+          content: 'y',
+          ingestStatus: 'pending',
+        },
         fake.callTool,
       )
       expect(pending.ingestStatus).toBe('pending')
@@ -142,7 +151,13 @@ describe('document-store (Issue #6)', () => {
 
     it('writes to the namespaced key and registers the session index with a TTL', async () => {
       const doc = await storeDocument(
-        { sessionId: 's1', filename: 'a.txt', mimeType: 'text/plain', content: 'x', id: 'fixed-id' },
+        {
+          sessionId: 's1',
+          filename: 'a.txt',
+          mimeType: 'text/plain',
+          content: 'x',
+          id: 'fixed-id',
+        },
         fake.callTool,
       )
 
@@ -159,7 +174,13 @@ describe('document-store (Issue #6)', () => {
 
     it('honours a custom TTL override', async () => {
       await storeDocument(
-        { sessionId: 's1', filename: 'a.txt', mimeType: 'text/plain', content: 'x', ttlSeconds: 60 },
+        {
+          sessionId: 's1',
+          filename: 'a.txt',
+          mimeType: 'text/plain',
+          content: 'x',
+          ttlSeconds: 60,
+        },
         fake.callTool,
       )
       const jsonSet = fake.callTool.calls.find((c) => c[0] === 'json_set')!
@@ -169,14 +190,20 @@ describe('document-store (Issue #6)', () => {
     it('rejects content larger than the size limit', async () => {
       const huge = 'a'.repeat(MAX_CONTENT_BYTES + 1)
       await expect(
-        storeDocument({ sessionId: 's1', filename: 'big', mimeType: 'text/plain', content: huge }, fake.callTool),
+        storeDocument(
+          { sessionId: 's1', filename: 'big', mimeType: 'text/plain', content: huge },
+          fake.callTool,
+        ),
       ).rejects.toThrow(/too large/i)
     })
 
     it('throws when the Redis write fails', async () => {
       const failing: CallTool = async () => ({ success: false, data: null, error: 'boom' })
       await expect(
-        storeDocument({ sessionId: 's1', filename: 'a', mimeType: 'text/plain', content: 'x' }, failing),
+        storeDocument(
+          { sessionId: 's1', filename: 'a', mimeType: 'text/plain', content: 'x' },
+          failing,
+        ),
       ).rejects.toThrow(/boom/)
     })
 
@@ -191,7 +218,10 @@ describe('document-store (Issue #6)', () => {
             }
           : { success: true, data: 1 }
       await expect(
-        storeDocument({ sessionId: 's1', filename: 'a', mimeType: 'text/plain', content: 'x' }, authFail),
+        storeDocument(
+          { sessionId: 's1', filename: 'a', mimeType: 'text/plain', content: 'x' },
+          authFail,
+        ),
       ).rejects.toThrow(/AUTH|Failed to store/)
     })
   })
@@ -205,11 +235,18 @@ describe('document-store (Issue #6)', () => {
       expect(redisWriteError({ success: false, data: null, error: 'boom' })).toBe('boom')
     })
     it('flags Redis errors smuggled in as success-data', () => {
-      expect(redisWriteError({ success: true, data: 'Error doing thing: WRONGTYPE' })).toMatch(/WRONGTYPE/)
+      expect(redisWriteError({ success: true, data: 'Error doing thing: WRONGTYPE' })).toMatch(
+        /WRONGTYPE/,
+      )
       expect(
-        redisWriteError({ success: true, data: 'AUTH <password> called without any password configured' }),
+        redisWriteError({
+          success: true,
+          data: 'AUTH <password> called without any password configured',
+        }),
       ).toMatch(/AUTH/)
-      expect(redisWriteError({ success: true, data: { result: 'Error: NOAUTH' } })).toMatch(/NOAUTH/)
+      expect(redisWriteError({ success: true, data: { result: 'Error: NOAUTH' } })).toMatch(
+        /NOAUTH/,
+      )
     })
     it('does not false-positive on normal content containing the word later', () => {
       expect(redisWriteError({ success: true, data: 'stored without issue' })).toBeNull()
@@ -243,7 +280,13 @@ describe('document-store (Issue #6)', () => {
 
     it('surfaces derivedText as a `converted` flag in meta, never the markdown itself', async () => {
       const stored = await storeDocument(
-        { sessionId: 's1', filename: 'report.pdf', mimeType: 'application/pdf', content: 'Ym9keQ==', encoding: 'base64' },
+        {
+          sessionId: 's1',
+          filename: 'report.pdf',
+          mimeType: 'application/pdf',
+          content: 'Ym9keQ==',
+          encoding: 'base64',
+        },
         fake.callTool,
       )
       // No derivation yet → not converted.
@@ -336,6 +379,100 @@ describe('document-store (Issue #6)', () => {
       const list = await listDocuments('s2', liveShape)
       expect(list.map((d) => d.id).sort()).toEqual(['id-a', 'id-b'])
     })
+
+    // Further shapes the gateway has been observed to return for `smembers`.
+    // Each one previously read as "session has no documents", which silently
+    // empties the panel rather than erroring.
+    it.each([
+      ['object-wrapped array', { result: ['id-a', 'id-b'] }],
+      ['object-wrapped JSON string', { members: JSON.stringify(['id-a', 'id-b']) }],
+      ['double-encoded JSON string', JSON.stringify(JSON.stringify(['id-a', 'id-b']))],
+      ['array with non-string junk', ['id-a', 42, null, 'id-b']],
+    ])('resolves the index when smembers returns a %s', async (_label, data) => {
+      await storeDocument(
+        { sessionId: 's3', filename: 'a', mimeType: 'text/plain', content: 'x', id: 'id-a' },
+        fake.callTool,
+      )
+      await storeDocument(
+        { sessionId: 's3', filename: 'b', mimeType: 'text/plain', content: 'y', id: 'id-b' },
+        fake.callTool,
+      )
+      const liveShape: CallTool = async (name, args) =>
+        name === 'smembers' ? { success: true, data } : fake.callTool(name, args)
+
+      const list = await listDocuments('s3', liveShape)
+
+      expect(list.map((d) => d.id).sort()).toEqual(['id-a', 'id-b'])
+    })
+
+    it.each([
+      ['an empty string', ''],
+      ['a whitespace-only string', '   '],
+      ['an unparseable object wrapper', { result: 'not-json' }],
+    ])('treats %s from smembers as an empty session', async (_label, data) => {
+      const liveShape: CallTool = async (name, args) =>
+        name === 'smembers' ? { success: true, data } : fake.callTool(name, args)
+
+      expect(await listDocuments('s4', liveShape)).toEqual([])
+    })
+
+    it('returns [] when the index read itself fails', async () => {
+      const broken: CallTool = async (name, args) =>
+        name === 'smembers'
+          ? { success: false, data: null, error: 'WRONGTYPE' }
+          : fake.callTool(name, args)
+
+      expect(await listDocuments('s1', broken)).toEqual([])
+    })
+  })
+
+  describe('malformed reads', () => {
+    it('treats a non-JSON json_get payload as a missing document', async () => {
+      const broken: CallTool = async (name, args) =>
+        name === 'json_get' ? { success: true, data: 'not-json-at-all' } : fake.callTool(name, args)
+
+      expect(await getDocument('s1', 'doc-1', broken)).toBeNull()
+    })
+
+    it('treats an empty RedisJSON array as a missing document', async () => {
+      const broken: CallTool = async (name, args) =>
+        name === 'json_get' ? { success: true, data: [] } : fake.callTool(name, args)
+
+      expect(await getDocument('s1', 'doc-1', broken)).toBeNull()
+      expect(await getDocumentMeta('s1', 'doc-1', broken)).toBeNull()
+    })
+  })
+
+  describe('write failures surface as errors', () => {
+    it('throws when the session index cannot be updated', async () => {
+      const broken: CallTool = async (name, args) =>
+        name === 'sadd' ? { success: false, data: null, error: 'OOM' } : fake.callTool(name, args)
+
+      await expect(
+        storeDocument(
+          { sessionId: 's1', filename: 'a.txt', mimeType: 'text/plain', content: 'x' },
+          broken,
+        ),
+      ).rejects.toThrow(/Failed to index document/)
+    })
+
+    it('throws when a flag edit cannot be written back', async () => {
+      const doc = await storeDocument(
+        { sessionId: 's1', filename: 'a.txt', mimeType: 'text/plain', content: 'x' },
+        fake.callTool,
+      )
+      let stored = false
+      const brokenOnUpdate: CallTool = async (name, args) => {
+        if (name === 'json_set' && stored) return { success: false, data: null, error: 'OOM' }
+        if (name === 'json_set') stored = true
+        return fake.callTool(name, args)
+      }
+      stored = true
+
+      await expect(
+        setDocumentFlags('s1', doc.id, { hidden: true }, brokenOnUpdate),
+      ).rejects.toThrow(/Failed to update document/)
+    })
   })
 
   describe('setDocumentFlags', () => {
@@ -348,7 +485,12 @@ describe('document-store (Issue #6)', () => {
       const hidden = await setDocumentFlags('s1', doc.id, { hidden: true }, fake.callTool)
       expect(hidden!.hidden).toBe(true)
 
-      const archived = await setDocumentFlags('s1', doc.id, { archived: true, hidden: false }, fake.callTool)
+      const archived = await setDocumentFlags(
+        's1',
+        doc.id,
+        { archived: true, hidden: false },
+        fake.callTool,
+      )
       expect(archived!.archived).toBe(true)
       expect(archived!.hidden).toBe(false)
 
@@ -435,7 +577,13 @@ describe('document-store (Issue #6)', () => {
       const bytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0x00]) // 6 raw bytes
       const b64 = bytes.toString('base64')
       const doc = await storeDocument(
-        { sessionId: 's1', filename: 'sheet.xlsx', mimeType: 'application/vnd.x', content: b64, encoding: 'base64' },
+        {
+          sessionId: 's1',
+          filename: 'sheet.xlsx',
+          mimeType: 'application/vnd.x',
+          content: b64,
+          encoding: 'base64',
+        },
         fake.callTool,
       )
       expect(doc.encoding).toBe('base64')
@@ -449,7 +597,13 @@ describe('document-store (Issue #6)', () => {
       const bytes = Buffer.from([1, 2, 3, 250, 251, 252])
       const b64 = bytes.toString('base64')
       const stored = await storeDocument(
-        { sessionId: 's1', filename: 'x.bin', mimeType: 'application/octet-stream', content: b64, encoding: 'base64' },
+        {
+          sessionId: 's1',
+          filename: 'x.bin',
+          mimeType: 'application/octet-stream',
+          content: b64,
+          encoding: 'base64',
+        },
         fake.callTool,
       )
       const got = await getDocument('s1', stored.id, fake.callTool)
@@ -460,8 +614,14 @@ describe('document-store (Issue #6)', () => {
     it('toPriorResult uses a metadata preview for binary (never slices base64)', () => {
       const b64 = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64')
       const pr = toPriorResult({
-        id: 'doc-9', sessionId: 's1', filename: 'chart.png', mimeType: 'image/png',
-        size: 4, uploadedAt: Date.now(), encoding: 'base64', content: b64,
+        id: 'doc-9',
+        sessionId: 's1',
+        filename: 'chart.png',
+        mimeType: 'image/png',
+        size: 4,
+        uploadedAt: Date.now(),
+        encoding: 'base64',
+        content: b64,
       })
       expect(pr.summary).toContain('chart.png')
       expect(pr.summary).toContain('image/png')

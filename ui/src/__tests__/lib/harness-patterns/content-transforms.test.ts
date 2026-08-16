@@ -7,7 +7,16 @@
  * result, so these semantics only ever narrow what the loop LLM reads.
  */
 import { describe, it, expect } from 'vitest'
-import { omitResultFields } from '../../../lib/harness-patterns/content-transforms'
+import {
+  omitResultFields,
+  stripThinkBlocks,
+  truncateToolResults,
+} from '../../../lib/harness-patterns/content-transforms'
+import type { ContextEvent } from '../../../lib/harness-patterns/types'
+
+function event(type: ContextEvent['type'], data: unknown): ContextEvent {
+  return { id: 'e1', type, timestamp: 1, patternId: 'p', data } as unknown as ContextEvent
+}
 
 describe('omitResultFields', () => {
   const hit = (name: string) => ({
@@ -52,7 +61,74 @@ describe('omitResultFields', () => {
   })
 
   it('omits multiple keys in one pass', () => {
-    const out = omitResultFields({ a: 1, b: 2, c: { a: 3, d: 4 } }, ['a', 'b']) as Record<string, unknown>
+    const out = omitResultFields({ a: 1, b: 2, c: { a: 3, d: 4 } }, ['a', 'b']) as Record<
+      string,
+      unknown
+    >
     expect(out).toEqual({ c: { d: 4 } })
+  })
+})
+
+describe('stripThinkBlocks', () => {
+  it('removes reasoning blocks from an assistant message', () => {
+    const out = stripThinkBlocks(
+      event('assistant_message', { content: '<think>ramble\nmore</think>\nAnswer: 42' }),
+    )
+
+    expect((out.data as { content: string }).content).toBe('Answer: 42')
+  })
+
+  it('removes every block, not just the first', () => {
+    const out = stripThinkBlocks(
+      event('assistant_message', { content: '<think>a</think>one<think>b</think>two' }),
+    )
+
+    expect((out.data as { content: string }).content).toBe('onetwo')
+  })
+
+  it('returns the original event when there is nothing to strip', () => {
+    const ev = event('assistant_message', { content: 'plain answer' })
+
+    expect(stripThinkBlocks(ev)).toBe(ev)
+  })
+
+  it('leaves non-assistant events alone', () => {
+    const ev = event('tool_result', { result: '<think>not reasoning</think>' })
+
+    expect(truncateToolResults(1000)(stripThinkBlocks(ev))).toBe(ev)
+  })
+
+  it('never mutates the source event', () => {
+    const ev = event('assistant_message', { content: '<think>x</think>y' })
+
+    stripThinkBlocks(ev)
+
+    expect((ev.data as { content: string }).content).toBe('<think>x</think>y')
+  })
+})
+
+describe('truncateToolResults', () => {
+  it('truncates an over-long string result and marks it', () => {
+    const out = truncateToolResults(10)(event('tool_result', { result: 'x'.repeat(50) }))
+
+    expect((out.data as { result: string }).result).toBe(`${'x'.repeat(10)}...[truncated]`)
+  })
+
+  it('serializes a structured result before measuring it', () => {
+    const out = truncateToolResults(5)(event('tool_result', { result: { a: 'long value here' } }))
+
+    expect((out.data as { result: string }).result).toBe('{"a":...[truncated]')
+  })
+
+  it('returns the original event when the result already fits', () => {
+    const ev = event('tool_result', { result: 'short' })
+
+    expect(truncateToolResults(100)(ev)).toBe(ev)
+  })
+
+  it('leaves non-tool_result events alone', () => {
+    const ev = event('assistant_message', { content: 'x'.repeat(50) })
+
+    expect(truncateToolResults(5)(ev)).toBe(ev)
   })
 })

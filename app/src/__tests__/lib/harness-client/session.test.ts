@@ -128,6 +128,31 @@ describe('pattern cache', () => {
     expect(createPatterns).toHaveBeenCalledTimes(1)
   })
 
+  it('still honours doNotCachePatterns when a concurrent build finishes first', async () => {
+    // getOrBuildPatterns has no in-flight dedupe, so two entry points can build
+    // the same session at once. The fast build must not clear the "am I inside
+    // a build" marker out from under the slow one — that would silently drop
+    // the slow build's degraded flag and freeze it into the session.
+    let release: () => void = () => {}
+    const blocked = new Promise<void>((r) => (release = r))
+    createPatterns
+      .mockImplementationOnce(async (sessionId: string) => {
+        doNotCachePatterns(sessionId)
+        await blocked
+        return [{ id: `slow-${sessionId}` }]
+      })
+      .mockImplementationOnce(async (sessionId: string) => [{ id: `fast-${sessionId}` }])
+
+    const slow = getOrBuildPatterns('cache-9', 'known')
+    await getOrBuildPatterns('cache-9', 'known') // fast build settles first
+    release()
+    await slow
+
+    // The slow build was degraded, so nothing may be served from the cache.
+    await getOrBuildPatterns('cache-9', 'known')
+    expect(createPatterns).toHaveBeenCalledTimes(3)
+  })
+
   it('drops the flag when the build itself throws', async () => {
     createPatterns.mockImplementationOnce(async (sessionId: string) => {
       doNotCachePatterns(sessionId)

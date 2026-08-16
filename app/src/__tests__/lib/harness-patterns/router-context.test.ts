@@ -172,7 +172,7 @@ describe('router — cross-turn intent (#53)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Prompt-content guards. process.cwd() is the `ui/` dir; baml_src is resolved
+// Prompt-content guards. process.cwd() is the `app/` dir; baml_src is resolved
 // from both sides so the check survives a repo-root layout change.
 // ---------------------------------------------------------------------------
 

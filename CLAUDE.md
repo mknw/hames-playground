@@ -89,6 +89,12 @@ descriptions; the only one you have to ask for by name is `/grill-me`.
   only true of this repo.
 - A `kg-*` skill may call a generic skill. A generic skill must never call a
   `kg-*` skill — that invariant is what keeps the generic set portable.
+- Sub-agents live beside them in `.claude/agents/` (`code-reviewer`,
+  `silent-failure-hunter`), tracked the same way and dispatched via the Agent
+  tool's `subagent_type`.
+- Issue-tracker workflow — how a skill fetches the spec for a change:
+  [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md). The issue body
+  is the spec; the project board is scheduling, read-only context.
 - Provenance and upstream pins for vendored files: `.claude/skills/PROVENANCE.md`;
   licences: `.claude/skills/NOTICE.md`. Adoption programme:
   [`docs/plan/skills-adoption.md`](docs/plan/skills-adoption.md).
@@ -96,6 +102,10 @@ descriptions; the only one you have to ask for by name is `/grill-me`.
 It names paths and invariants, never contents: every model-invoked skill's
 description is already permanently loaded, so listing them here would restate it
 at full context cost.
+
+`/kg-code-review` (conventions + spec fidelity, two unmerged axes) complements
+the built-in `/code-review` (correctness bugs + cleanups). Run the built-in
+first — it can fix what it finds.
 
 ---
 

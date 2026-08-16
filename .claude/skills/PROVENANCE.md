@@ -129,6 +129,131 @@ LICENSE file at `2c60614`, so all-rights-reserved by default and not vendorable.
 
 ---
 
+## Wave 4 — the review pipeline
+
+`chore(skills): review pipeline`
+
+All vendored rows: upstream `affaan-m/ECC` @ `50743ce`, bundle `generic`. Every
+ECC file is model-invoked upstream (none carries `disable-model-invocation`), and
+that is preserved.
+
+| Our path                             | Upstream path                              | Invocation   | Adapted           |
+| ------------------------------------ | ------------------------------------------ | ------------ | ----------------- |
+| `../agents/code-reviewer.md`         | `agents/code-reviewer.md`                  | **subagent** | **yes** — D, E, F |
+| `../agents/silent-failure-hunter.md` | `agents/silent-failure-hunter.md`          | **subagent** | **yes** — E, F    |
+| `agent-architecture-audit/SKILL.md`  | `skills/agent-architecture-audit/SKILL.md` | model        | **yes** — G, H, I |
+| `living-docs-governance/SKILL.md`    | `skills/living-docs-governance/SKILL.md`   | model        | **yes** — G, J, K |
+
+`agent-architecture-audit`'s own upstream origin is **`oh-my-agent-check`**, not
+ECC — its frontmatter carried `metadata: origin: oh-my-agent-check`. ECC is the
+repo we took it from and the licence that covers our copy; the earlier origin is
+recorded here and in the file's attribution comment, and is the thing to check
+first if that skill ever needs a refresh.
+
+This wave also ships two files that are **not** vendored copies:
+
+| Our path                             | Bundle    | Origin                                                                                                                                                                                                                                                                              |
+| ------------------------------------ | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kg-code-review/SKILL.md`            | `project` | **Derivative work** — see below                                                                                                                                                                                                                                                     |
+| `../../docs/agents/issue-tracker.md` | —         | **Hand-written.** Seeded from the _shape_ of `mattpocock/skills` @ `068b6e0` `skills/engineering/setup-matt-pocock-skills/issue-tracker-github.md`, rewritten for this repo. The upstream setup skill is **never run** — it auto-edits `CLAUDE.md`, which this project does by hand |
+
+### `kg-code-review` — derivative work, two sources
+
+Written from scratch, but it carries MIT material from both upstreams, so its
+attribution header names both (plan §8):
+
+| Element                                                                                                                                        | Origin                                                                                 |
+| ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Two-axis shape, fixed-point discipline, aggregation rule, Fowler smell baseline                                                                | `mattpocock/skills` @ `068b6e0`, `skills/engineering/code-review/SKILL.md`             |
+| Review discipline — Pre-Report Gate, HIGH/CRITICAL-require-proof, "a clean review is a valid review", the 12-entry Common False Positives list | `affaan-m/ECC` @ `50743ce`, `agents/code-reviewer.md` — **by delegation, not by copy** |
+| Repo standards, the `/code-review` boundary, the spec/scheduling split                                                                         | this project                                                                           |
+
+The ECC material is adopted **exactly once**: the Standards axis dispatches the
+vendored `code-reviewer` sub-agent (`subagent_type: code-reviewer`) rather than
+inlining a reviewer prompt, so the false-positive list lives in one file. That is
+also why `kg-code-review` names a sub-agent, not a skill — the one-direction
+composition rule (a `kg-*` skill may call a generic skill, never the reverse) is
+untouched, and its only Skill-tool call is to `codebase-design`, which is
+model-invoked and therefore reachable.
+
+`mattpocock/skills`' own `code-review` skill is **not** vendored; this supersedes
+it. Recorded in Wave 1's declined list.
+
+### Adaptations
+
+**D — `code-reviewer`: React/Next.js block deleted.** The `### React/Next.js
+Patterns (HIGH)` section (upstream lines 181–213, its two `tsx` examples
+included) is gone. This is a SolidJS repo: `useEffect` dependency arrays, stale
+closures, and Server-Component boundaries do not exist here, so the section is
+guidance that can only produce false positives. The Node.js/Backend section is
+kept — SolidStart server actions and the `.server.ts` layer are real backend
+surface. The `v1.8 AI-Generated Code Review Addendum` is also deleted: it is
+vendor-flavoured and its cost-tier advice contradicts this repo's standing
+"subagents run on Opus" preference.
+
+**E — "Prompt Defense Baseline" preamble deleted** (both agents, 7 lines each).
+It fails `writing-for-agents`' no-op test — the model already does all of it —
+and it was costing that load on every dispatch.
+
+**F — `model: sonnet` → `model: opus`** (both agents). Standing preference for
+sub-agents in this repo. The plan states it for `silent-failure-hunter`; applied
+to `code-reviewer` for the same reason, and because `kg-code-review` dispatches
+it as its Standards axis.
+
+**G — `metadata: origin:` dropped** from the frontmatter (both skills).
+Provenance lives here, in one place.
+
+**H — `agent-architecture-audit`: evidence collection retargeted.** The Phase 2
+`rg` recipes pointed at `--type py` and a Chinese-language prompt pattern; both
+are dead here. They now scope to `ui/src/lib/harness-patterns/` and
+`ui/baml_src/`, with the source-code bullet naming the actual boundary files
+(`baml-adapters.server.ts`, `tools.server.ts`, `context.server.ts`). Every
+recipe was run against this tree and returns hits.
+
+**I — `agent-architecture-audit`: dangling references replaced.** The "Related
+Skills" section (five ECC skills, none adopted) is replaced by a **12-layer →
+this repo** ownership table, which is the lookup that section was standing in
+for. The "Do not use for" list now names real alternatives (`diagnosing-bugs`,
+the built-in `/code-review` and `/security-review`, the `code-reviewer`
+sub-agent) — deliberately **not** `kg-code-review`, which would break the
+generic set's portability.
+
+**J — `living-docs-governance`: Chinese trigger list stripped** from
+`description:`. Eight bilingual trigger strings under permanent context load for
+a single-locale user.
+
+**K — `living-docs-governance`: four roles mapped onto this repo.** The
+"Lightweight Adoption Template" generic example table is **replaced** (not
+supplemented — that would be the duplication the skill itself warns about) by
+the filled map: constitution = `CLAUDE.md`, map = `docs/INDEX.md`, status = the
+GitHub project board, history = `docs/adr/` + `docs/plan/` + PR bodies. Two
+consequences are spelled out — status is a live board and never a committed file,
+and history is tiered by durability — plus a graceful-degradation line for
+`docs/adr/`, which Wave 2 creates. The `codebase-onboarding` reference (ECC,
+not adopted) is replaced with the instruction it stood for. The two illustrative
+tables now use this repo's real examples: the delete-zone row is
+`ui/src/lib/baml-agent/` → `harness-patterns/`, which is a live "do not recreate
+this" rule in `CLAUDE.md`.
+
+> These are **data hooks** by the plan's §1 rule — a generic skill naming stable
+> project-supplied paths (`CLAUDE.md`, `docs/INDEX.md`, `docs/adr/`,
+> `ui/src/lib/harness-patterns/`) and degrading gracefully — not dependencies on
+> a project skill, so both skills survive the open-source split. H, I and K are
+> the lines to re-check at split time; none names a framework or a vendor.
+
+### Not vendored
+
+- ECC's `agents/openai.yaml`-equivalents and plugin manifest — Claude Code does
+  not read them.
+- The ECC plugin install itself (~21 k tokens of skill descriptions per
+  session), `plankton-code-quality` (ships a hook that blocks `pnpm`),
+  `continuous-learning-v2` / `unified-memory` / `plan-canvas` (require a global
+  npm install or a background daemon — both excluded by the no-daemons
+  constraint, and they would be a second memory system beside our notes and
+  h9s), and the ~280 remaining skills.
+
+---
+
 <!-- Later waves append their own `## Wave N` section here. Do not edit the
      sections above; a wave that needs to change an earlier row bumps that row
      in place and says why in its own section. -->

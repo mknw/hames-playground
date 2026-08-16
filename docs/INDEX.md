@@ -58,6 +58,12 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 | [DATA_STASH.md](DATA_STASH.md) | Document upload → chunk → embed → search pipeline (#6/#9/#8): modules, API routes, Redis storage model (incl. base64 binary, #89), embedding-space rule, redis-stack + local-embedder requirements |
 | [data-flow.md](data-flow.md) | **Visual data-flow diagrams** (Mermaid) — Data Stash pipeline, sandbox attachment lifecycle (#79/#97), `/work` ⇄ Data Stash sync (#89), and sandbox tool dispatch / runtime topology. Spans Data Stash + sandbox |
 
+### Agent Workflow (`docs/agents/`)
+
+| Document | Description |
+|----------|-------------|
+| [agents/issue-tracker.md](agents/issue-tracker.md) | **How a skill fetches a spec**: the `gh` commands for issues/PRs, resolving a bare `#42`, the label set, and the spec/scheduling split — the issue body is the spec, the [project board](https://github.com/users/mknw/projects/5) (Status/Priority/MSCW) is read-only context. Named by `/kg-code-review`'s Spec axis |
+
 ### Agent Trigger Endpoint
 
 | Document | Description |
@@ -143,6 +149,8 @@ kg-agent/
 │   ├── plan/                    # Forward-looking design docs
 │   │   ├── ROADMAP.md           # Multi-user architecture + phased MoSCoW roadmap
 │   │   └── sandbox.md           # Sandbox design (core shipped; Swarm/Firecracker = plan)
+│   ├── agents/
+│   │   └── issue-tracker.md     # gh commands + the issue-body-is-the-spec rule
 │   ├── deploy/
 │   │   ├── azure-vm.md          # Single-VM deployment runbook
 │   │   └── entra-setup.md       # Entra tenant provisioning + consent (#119)

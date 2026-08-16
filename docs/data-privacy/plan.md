@@ -85,7 +85,7 @@ personal data than the stash does.
 
 **Evidence:** of 22 `auth_sessions` rows, **21 are already past `expires_at` and
 still present**. `deleteExpiredSessions()` exists in
-`ui/src/lib/auth/session-store.server.ts` and is called from nowhere; expiry is
+`app/src/lib/auth/session-store.server.ts` and is called from nowhere; expiry is
 enforced lazily per-id on access only.
 
 ### 3. Erasure is incomplete (Art. 17)

@@ -23,7 +23,7 @@ app needs at runtime, so it works on a plain VPS or an Azure VM identically —
         ┌───────────────────▼───────────────────┐
         │  UI (SolidStart)  — systemd, on host   │  `pnpm start` (vinxi start)
         │  • shells `docker run` for sandboxes    │  needs docker CLI + node-pty
-        │  • node-pty for the Shell terminal      │  cwd = ui/  (resolves ../configs)
+        │  • node-pty for the Shell terminal      │  cwd = app/  (resolves ../configs)
         └───┬───────────┬──────────┬─────────┬────┘
    localhost│           │          │         │ /var/run/docker.sock
       5432  │      7687 │     8811 │    8090 │ (sandbox + gateway spawn containers)
@@ -84,9 +84,9 @@ sudo apt-get install -y caddy
 sudo git clone <repo> /opt/kg-agent && cd /opt/kg-agent
 ```
 
-Keep the repo layout intact — **`ui/` and `configs/` must stay siblings**: the
+Keep the repo layout intact — **`app/` and `configs/` must stay siblings**: the
 server resolves the MCP catalog via `path.resolve(process.cwd(), '..', 'configs', …)`
-with cwd = `ui/` (`server-catalog.server.ts:42`).
+with cwd = `app/` (`server-catalog.server.ts:42`).
 
 Create the git-ignored config files with **real** values:
 - **`configs/mcp-config.yaml`** — the enabled-servers list + secrets (GitHub PAT,
@@ -94,7 +94,7 @@ Create the git-ignored config files with **real** values:
   pre-provision statically; there is no runtime secret-setting on a Linux host.
 - **`docker-config.json`** — Docker registry auth so the gateway can pull MCP
   server images (mounted read-only into the gateway).
-- **`ui/.env`** — see the env table in step 9.
+- **`app/.env`** — see the env table in step 9.
 
 ## 4. Harden the compose stack for a public host ⚠️
 
@@ -136,7 +136,7 @@ docker build -t kg-sandbox:base rootfs/     # matches SANDBOX_IMAGE default
 ## 6. Build + run the UI (systemd)
 
 ```bash
-cd /opt/kg-agent/ui
+cd /opt/kg-agent/app
 pnpm install --frozen-lockfile      # builds node-pty natively for node 22
 pnpm baml-generate                  # generate baml_client/ (also run by build)
 pnpm build                          # vinxi build → .output/
@@ -153,8 +153,8 @@ Requires=docker.service
 [Service]
 Type=simple
 User=kgagent                        # a user in the `docker` group
-WorkingDirectory=/opt/kg-agent/ui   # cwd must be ui/ so ../configs resolves
-EnvironmentFile=/opt/kg-agent/ui/.env
+WorkingDirectory=/opt/kg-agent/app   # cwd must be app/ so ../configs resolves
+EnvironmentFile=/opt/kg-agent/app/.env
 Environment=PORT=3000
 Environment=HOST=127.0.0.1
 ExecStart=/usr/bin/pnpm start       # vinxi start — serves .output/
@@ -194,7 +194,7 @@ your.domain.com {
 sudo systemctl reload caddy    # auto-provisions a Let's Encrypt cert
 ```
 
-## 9. Environment reference (`ui/.env`)
+## 9. Environment reference (`app/.env`)
 
 Every var the server reads (`grep process.env src/`), with its localhost default:
 
@@ -221,7 +221,7 @@ Every var the server reads (`grep process.env src/`), with its localhost default
 **Update / redeploy:**
 ```bash
 cd /opt/kg-agent && git pull
-cd ui && pnpm install --frozen-lockfile && pnpm build
+cd app && pnpm install --frozen-lockfile && pnpm build
 sudo systemctl restart kg-agent
 docker compose pull && docker compose up -d   # only if the gateway image moved
 ```
@@ -244,7 +244,7 @@ dump` + Redis RDB). These hold all conversations, the graph, and the Data Stash.
   durable-run worker) and #78 (remote sandbox).
 - **Secrets are file-based.** Upgrade path: Azure Key Vault → an
   `EnvironmentFile` populated at boot (VM managed identity), instead of a
-  plaintext `ui/.env` + `configs/mcp-config.yaml`.
+  plaintext `app/.env` + `configs/mcp-config.yaml`.
 - **Auth.** Confirm a real Stack Auth project (or the email allow-list) is wired
   and `DEV_BYPASS_AUTH` is off.
 - **No UI Dockerfile.** If you later want everything under compose, add one

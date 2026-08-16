@@ -33,7 +33,7 @@ How agents are briefed and what they are held to. Procedures themselves live in 
 
 | Document | Description |
 |----------|-------------|
-| [agents/AGENT-BRIEF.md](agents/AGENT-BRIEF.md) | **The dispatch spec template** — the body of an Orca worker dispatch or of an agent-ready GitHub issue. Behavioural contracts and complete acceptance criteria, never file paths or line numbers (a brief outlives the tree it was written against), plus explicit out-of-scope. Carries this repo's **standing acceptance criteria**: CI gate, coverage floors (once #165 lands), prettier on changed files, conventional commits, no attribution trailers, `pnpm`-only from `ui/` |
+| [agents/AGENT-BRIEF.md](agents/AGENT-BRIEF.md) | **The dispatch spec template** — the body of an Orca worker dispatch or of an agent-ready GitHub issue. Behavioural contracts and complete acceptance criteria, never file paths or line numbers (a brief outlives the tree it was written against), plus explicit out-of-scope. Carries this repo's **standing acceptance criteria**: CI gate, coverage floors (once #165 lands), prettier on changed files, conventional commits, no attribution trailers, `pnpm`-only from `app/` |
 ## Decision Records (`docs/adr/`)
 
 Irreversible one-liners with a why — too small for a `docs/plan/` doc, too durable for a PR body. The `docs/plan/` ⇄ PR-body ⇄ `CLAUDE.md` ⇄ `docs/adr/` division of labour is stated in the README below.
@@ -61,8 +61,8 @@ Records: [0001](adr/0001-anthropic-only-default-chains.md) Anthropic-only defaul
 | [harness-patterns/withReferences-tutorial.md](harness-patterns/withReferences-tutorial.md) | Hands-on walkthrough — search the web, attach refs at ingress, write to Neo4j |
 
 Authoritative source-level docs (closer to the code):
-- [`ui/src/lib/harness-patterns/README.md`](../ui/src/lib/harness-patterns/README.md) — full framework API
-- [`ui/src/lib/harness-client/examples/README.md`](../ui/src/lib/harness-client/examples/README.md) — example implementations
+- [`app/src/lib/harness-patterns/README.md`](../app/src/lib/harness-patterns/README.md) — full framework API
+- [`app/src/lib/harness-client/examples/README.md`](../app/src/lib/harness-client/examples/README.md) — example implementations
 
 ### UI Frontend
 
@@ -70,7 +70,7 @@ Authoritative source-level docs (closer to the code):
 |----------|-------------|
 | [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md) | Component structure, data flow, Chat-Graph linking, theme |
 
-Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
+Source-level index: see [app/README.md](../app/README.md#documentation-index).
 
 ### Data Stash
 
@@ -148,7 +148,7 @@ Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/rese
 | `AUTH_SESSION_SECRET` | HMAC key signing the auth cookies (`openssl rand -base64 32`) |
 | `AUTH_REDIRECT_URI` / `AUTH_POST_LOGOUT_REDIRECT_URI` | Optional OIDC redirect / post-logout overrides (default dev port 3444) |
 | `VITE_ALLOWED_EMAILS` | Comma-separated allow-list; supports `*@domain.com` wildcards |
-| `VITE_DEV_BYPASS_AUTH` | `'true'` to skip auth in dev (gated on `import.meta.env.DEV`; ignored in prod builds). See `ui/.env.example` and `lib/auth/dev-bypass.ts` |
+| `VITE_DEV_BYPASS_AUTH` | `'true'` to skip auth in dev (gated on `import.meta.env.DEV`; ignored in prod builds). See `app/.env.example` and `lib/auth/dev-bypass.ts` |
 
 ---
 
@@ -196,7 +196,7 @@ kg-agent/
 │       ├── prompt-caching.md    # Cache-breakpoint budget and placement (#122)
 │       ├── with-references.md   # withReferences meta-pattern design (#30)
 │       └── withReferences-tutorial.md  # withReferences walkthrough
-├── ui/
+├── app/
 │   ├── README.md                # UI quick start + index
 │   └── src/lib/
 │       ├── harness-patterns/    # Pattern framework (source + README.md)

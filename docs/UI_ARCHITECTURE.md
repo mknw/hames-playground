@@ -1,6 +1,6 @@
 # UI Architecture Reference
 
-> **Scope:** This document covers the `ui/` directory - the SolidJS frontend application.
+> **Scope:** This document covers the `app/` directory - the SolidJS frontend application.
 
 Quick reference for the SolidJS frontend structure, configuration, and patterns.
 
@@ -25,7 +25,7 @@ Quick reference for the SolidJS frontend structure, configuration, and patterns.
 ```
 
 ### ESLint Configuration
-**File:** `ui/eslint.config.ts`
+**File:** `app/eslint.config.ts`
 
 Key rules:
 ```typescript
@@ -47,8 +47,8 @@ Key rules:
 ## 2. UnoCSS Configuration
 
 ### Setup Files
-- **Config:** `ui/uno.config.ts`
-- **TypeScript Shim:** `ui/src/shims.d.ts`
+- **Config:** `app/uno.config.ts`
+- **TypeScript Shim:** `app/src/shims.d.ts`
 
 ### Configuration
 ```typescript
@@ -91,7 +91,7 @@ Enables attribute-based styling instead of `class`:
 ```
 
 ### TypeScript Shim
-**File:** `ui/src/shims.d.ts`
+**File:** `app/src/shims.d.ts`
 
 ```typescript
 import type { AttributifyAttributes } from '@unocss/preset-attributify'
@@ -120,7 +120,7 @@ OpenID Connect **auth-code flow** — the code→token exchange runs server-side
 `getSessionUser()` server action.
 **Server-side:** `getCurrentUser()` reads the `kg_session` cookie → a Postgres
 `auth_sessions` row.
-**Email allowlist:** still gates access (`ui/src/lib/auth/allowList.ts`).
+**Email allowlist:** still gates access (`app/src/lib/auth/allowList.ts`).
 
 ### Sign-in flow (server-side OIDC)
 | Route | Does |
@@ -129,17 +129,17 @@ OpenID Connect **auth-code flow** — the code→token exchange runs server-side
 | `GET /api/auth/callback` | validate `state` vs the handshake cookie, redeem the code, enforce the allowlist, upsert `users`, create an `auth_sessions` row, set the `kg_session` cookie → `/` |
 | `GET /api/auth/logout` | delete the session row (server-side revocation), clear the cookie, 302 to Entra sign-out |
 
-Config lives in `ui/src/lib/auth/entra-config.server.ts` (env: `AZURE_TENANT_ID`,
+Config lives in `app/src/lib/auth/entra-config.server.ts` (env: `AZURE_TENANT_ID`,
 `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AUTH_SESSION_SECRET`; see
 [`docs/deploy/entra-setup.md`](deploy/entra-setup.md)). `isEntraConfigured()`
 lets `/api/auth/login` fail soft (503) when the tenant config is absent, so
 dev-bypass stays a zero-config path.
 
 ### Session store
-**File:** `ui/src/lib/auth/session-store.server.ts` — Postgres `auth_sessions`
+**File:** `app/src/lib/auth/session-store.server.ts` — Postgres `auth_sessions`
 (opaque cookie id → row: `user_id` = Entra `oid`, email, display name,
 `home_account_id`, 8h expiry). Every sign-in also upserts `users`
-(`ui/src/lib/auth/users.server.ts`: oid, email, display name, tenant, first/last
+(`app/src/lib/auth/users.server.ts`: oid, email, display name, tenant, first/last
 login) — the app's own activity record.
 
 The user's **MSAL token cache is not stored on the session**: it lives encrypted
@@ -147,7 +147,7 @@ and per-user in `user_tokens` so runs without a live session can still act for
 the user. See [MICROSOFT_GRAPH.md](MICROSOFT_GRAPH.md).
 
 ### Server Validation
-**File:** `ui/src/lib/auth/server.ts`
+**File:** `app/src/lib/auth/server.ts`
 
 ```typescript
 // Use in server functions:
@@ -160,7 +160,7 @@ const maybeUser = await getSessionUser();   // → AuthUser | null
 ```
 
 ### AuthProvider Component
-**File:** `ui/src/components/AuthProvider.tsx`
+**File:** `app/src/components/AuthProvider.tsx`
 
 Provides app-wide auth context:
 
@@ -179,14 +179,14 @@ emails to `/auth/access-denied` and mints no session).
 
 ### Sign-in page
 
-**File:** `ui/src/routes/auth/signin.tsx` — a single **"Sign in with Microsoft"**
+**File:** `app/src/routes/auth/signin.tsx` — a single **"Sign in with Microsoft"**
 link to `/api/auth/login`, which starts the OIDC flow. The link carries
 `rel="external"` so `@solidjs/router` doesn't intercept it as a client route
 (without that, the click is swallowed and the server route never runs).
 
 ### Dev Bypass (#42)
 
-**File:** `ui/src/lib/auth/dev-bypass.ts` — single source of truth.
+**File:** `app/src/lib/auth/dev-bypass.ts` — single source of truth.
 
 ```typescript
 isBypassEnabled(): boolean   // import.meta.env.DEV  &&  VITE_DEV_BYPASS_AUTH === 'true'
@@ -207,9 +207,9 @@ misconfiguration is visible — but the bypass still does not activate.
 did not match the `user_id` Postgres rows were written under.
 
 **To enable real auth locally** (e.g. to test the Entra sign-in), set
-`VITE_DEV_BYPASS_AUTH='false'` in `ui/.env`, fill in the `AZURE_*` +
+`VITE_DEV_BYPASS_AUTH='false'` in `app/.env`, fill in the `AZURE_*` +
 `AUTH_SESSION_SECRET` values, and sign in with an email in
-`VITE_ALLOWED_EMAILS`. See `ui/.env.example` and
+`VITE_ALLOWED_EMAILS`. See `app/.env.example` and
 [`docs/deploy/entra-setup.md`](deploy/entra-setup.md).
 
 **Known footgun (out of scope for #42):** because `BYPASS_USER.id` is a
@@ -222,7 +222,7 @@ remains tracked on #42.
 ## 4. User Avatar & Actions
 
 ### UserMenu Component
-**File:** `ui/src/components/ark-ui/UserMenu.tsx`
+**File:** `app/src/components/ark-ui/UserMenu.tsx`
 
 Integration via `useAuth()`:
 
@@ -248,7 +248,7 @@ await signOut()  // → full navigation to /api/auth/logout (revokes session)
 
 **Usage in Nav:**
 ```tsx
-// ui/src/components/Nav.tsx
+// app/src/components/Nav.tsx
 import { UserMenu } from "~/components/ark-ui/UserMenu"
 
 <nav class="bg-sky-800">
@@ -289,7 +289,7 @@ Collapsible      60% default       40% default
 ```
 
 ### Main Page Component
-**File:** `ui/src/routes/index.tsx`
+**File:** `app/src/routes/index.tsx`
 
 ```tsx
 <Splitter.Root orientation="horizontal" defaultSize={[60, 40]}>
@@ -317,7 +317,7 @@ Collapsible      60% default       40% default
 
 ### Chat Interface Components
 
-**Location:** All in `ui/src/components/ark-ui/`
+**Location:** All in `app/src/components/ark-ui/`
 
 #### 1. ChatInterface.tsx
 Chat area for the selected conversation (the sidebar is a **sibling**, owned by
@@ -398,7 +398,7 @@ Tabbed right panel. **Context manager is the default tab.** Uses `lazyMount` + `
 
 **Touched-node highlight (Neo4j tab only):** When an agent runs a Neo4j query, the `enrichNeo4jResult` hook (`onToolResult` on `simpleLoop`) attaches a 1-hop neighborhood plus a `_touched` list to the tool result. The extractor tags nodes whose name is in that list with `data.touched = true`, and the Neo4j tab passes a static `TOUCHED_NODE_STYLES` block (`node[touched]` selector → magenta fill/border + glow) as `extraStyles` to `GraphVisualization`. The result: nodes the agent's query *actually targeted* render in magenta, while neighborhood-context nodes render in the default cyan. The Memory tab does not receive this stylesheet.
 
-**Touched-flag refresh across turns** (`ui/src/lib/graph-merge.ts`): `index.tsx` accumulates elements via `mergeGraphElements(prev, fresh)` rather than ad-hoc dedup. When a fresh batch carries any element with `touched: true`, the merger first strips the flag from all prior elements, then re-applies it to elements in the new batch — so the magenta highlight tracks the most recent enriched query and doesn't linger on nodes from earlier topics. When the fresh batch carries no `touched` flags (e.g., a non-enriched tool, or a count-only query), prior `touched` flags are preserved.
+**Touched-flag refresh across turns** (`app/src/lib/graph-merge.ts`): `index.tsx` accumulates elements via `mergeGraphElements(prev, fresh)` rather than ad-hoc dedup. When a fresh batch carries any element with `touched: true`, the merger first strips the flag from all prior elements, then re-applies it to elements in the new batch — so the magenta highlight tracks the most recent enriched query and doesn't linger on nodes from earlier topics. When the fresh batch carries no `touched` flags (e.g., a non-enriched tool, or a count-only query), prior `touched` flags are preserved.
 
 **All Tab — Turn Explorer (AllGraphTab.tsx):**
 The All tab does not use the accumulated `graphElements` signal. Instead, it derives graph elements on-demand from `contextEvents`:
@@ -450,7 +450,7 @@ Displays the full agent event timeline:
 
 ### Theme System
 
-**File:** `ui/src/components/ark-ui/ThemeSwitcher.tsx`
+**File:** `app/src/components/ark-ui/ThemeSwitcher.tsx`
 
 ```tsx
 // Toggle between light/dark modes
@@ -756,7 +756,7 @@ Once the first user turn completes, a minimal harness agent generates a 3–5 wo
 The `harness-patterns/` library is the testbed for an eventual standalone npm package. Its current example catalog (`harness-client/examples/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, `guardrail`, and a full ontology-builder pipeline — but had no *minimum-rung* example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
 
 ```ts
-// ui/src/lib/harness-client/examples/title-generator.server.ts
+// app/src/lib/harness-client/examples/title-generator.server.ts
 export const titleAgent = harness<TitleAgentData>(
   synthesizer<TitleAgentData>({
     patternId: 'title-gen',
@@ -770,7 +770,7 @@ One pattern (`synthesizer`), one BAML call, no tools, no router. `mode: 'message
 
 ### The BAML function
 
-`ui/baml_src/title.baml` — `GenerateConversationTitle(user_message: string) -> string`, wired to `DescribeFallback` (`[GroqFast, OpenRouterGemma4, OpenAIGPT5, AnthropicHaiku45]`). Reuses the same lightweight client chain the background tool-result summarizer uses; both are "tiny async post-process" jobs.
+`app/baml_src/title.baml` — `GenerateConversationTitle(user_message: string) -> string`, wired to `DescribeFallback` (`[GroqFast, OpenRouterGemma4, OpenAIGPT5, AnthropicHaiku45]`). Reuses the same lightweight client chain the background tool-result summarizer uses; both are "tiny async post-process" jobs.
 
 ### When it runs
 
@@ -831,7 +831,7 @@ Restoring a conversation no longer surfaces residual router status messages ("Le
 
 ## 6c. Typed SSE Parser
 
-`ui/src/lib/sse-client.ts` exposes a single function:
+`app/src/lib/sse-client.ts` exposes a single function:
 
 ```ts
 parseChatStream(response: Response): AsyncGenerator<ChatStreamEvent>
@@ -898,7 +898,7 @@ pnpm test:run     # Run vitest unit tests
 ## File Locations Cheatsheet
 
 ```
-ui/
+app/
 ├── eslint.config.ts              # ESLint rules
 ├── uno.config.ts                 # UnoCSS config + theme
 ├── baml_src/                     # BAML function definitions

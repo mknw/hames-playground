@@ -65,7 +65,7 @@ it. Grant all of them before the first user signs in.
 
 ## App environment
 
-Set these where the app runs (see `ui/.env.example`). None are `VITE_`-prefixed
+Set these where the app runs (see `app/.env.example`). None are `VITE_`-prefixed
 — all server-side, never shipped to the browser.
 
 ```

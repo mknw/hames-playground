@@ -3,9 +3,9 @@
 **Date**: 2026-01-18 — the date the decision was taken
 **Status**: accepted
 
-Two agent frameworks existed side by side: the original `ui/src/lib/baml-agent/`
+Two agent frameworks existed side by side: the original `app/src/lib/baml-agent/`
 module with its `orchestrator.server.ts` / `patterns.server.ts` /
-`planners.server.ts` trio, and `ui/src/lib/harness-patterns/`, which had grown a
+`planners.server.ts` trio, and `app/src/lib/harness-patterns/`, which had grown a
 `UnifiedContext` architecture — one serialisable event stream as the source of
 truth, per-pattern isolated scopes that commit on completion, and `EventView` for
 querying it. `baml-agent/` was deleted rather than kept as a deprecated path,
@@ -30,7 +30,7 @@ for it re-splits the session state that `UnifiedContext` exists to unify.
 ## Consequences
 
 - All agentic work goes through harness-patterns. New agents are an
-  `AgentConfig` in `ui/src/lib/harness-client/examples/` registered in
+  `AgentConfig` in `app/src/lib/harness-client/examples/` registered in
   `registry.server.ts` — there is one place to add one.
 - The deletion took `/api/agent/[sessionId]`, `docs/baml_agent/` and
   `EventDetailOverlay` with it; anything reaching for those in old branches or
@@ -50,4 +50,4 @@ UnifiedContext architecture"; and commit `49df929` (same day,
 which is what made the replacement viable. The standing disposition — including
 the explicit "Do not recreate it." — is the "Agent framework" bullet under
 **Design Decisions** in `CLAUDE.md`; the current architecture is documented in
-`ui/src/lib/harness-patterns/README.md`.
+`app/src/lib/harness-patterns/README.md`.

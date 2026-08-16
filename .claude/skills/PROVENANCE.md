@@ -95,11 +95,11 @@ stable project-supplied path — so they survive the open-source split intact.
 
 **B — `diagnosing-bugs` Phase 1 loop menu.** Added one line naming this repo's
 tightest feedback loops (`pnpm vitest run <file>`; `pnpm exec tsc --noEmit
---project tsconfig.json`, both from `ui/`). A cache of a non-obvious lookup —
-the `ui/` cwd requirement — so it earns its load.
+--project tsconfig.json`, both from `app/`). A cache of a non-obvious lookup —
+the `app/` cwd requirement — so it earns its load.
 
 **C — `resolving-merge-conflicts` step 4.** Sharpened "discover the project's
-automated checks" into the named commands, in order, with the `ui/` cwd stated.
+automated checks" into the named commands, in order, with the `app/` cwd stated.
 Same rationale as B.
 
 > B and C are the only stack-specific lines in the Wave 1 set. They name a
@@ -248,7 +248,7 @@ though both targets now exist.
 
 **F — the multi-context branch is dropped.** Upstream infers a `CONTEXT-MAP.md`
 at the repo root and, if it finds one, resolves per-context glossaries and
-per-context `docs/adr/` directories. This repo is one `ui/` app with one root
+per-context `docs/adr/` directories. This repo is one `app/` app with one root
 glossary, so that branch can never fire — it is pure context load by
 `writing-for-agents`' own no-op test. Removed from `SKILL.md`'s file-structure
 section and from `GLOSSARY-FORMAT.md`'s "Single vs multi-context repos" section.
@@ -413,8 +413,8 @@ Provenance lives here, in one place.
 
 **H — `agent-architecture-audit`: evidence collection retargeted.** The Phase 2
 `rg` recipes pointed at `--type py` and a Chinese-language prompt pattern; both
-are dead here. They now scope to `ui/src/lib/harness-patterns/` and
-`ui/baml_src/`, with the source-code bullet naming the actual boundary files
+are dead here. They now scope to `app/src/lib/harness-patterns/` and
+`app/baml_src/`, with the source-code bullet naming the actual boundary files
 (`baml-adapters.server.ts`, `tools.server.ts`, `context.server.ts`). Every
 recipe was run against this tree and returns hits.
 
@@ -440,12 +440,12 @@ and history is tiered by durability — plus a graceful-degradation line for
 `docs/adr/`, which Wave 2 creates. The `codebase-onboarding` reference (ECC,
 not adopted) is replaced with the instruction it stood for. The two illustrative
 tables now use this repo's real examples: the delete-zone row is
-`ui/src/lib/baml-agent/` → `harness-patterns/`, which is a live "do not recreate
+`app/src/lib/baml-agent/` → `harness-patterns/`, which is a live "do not recreate
 this" rule in `CLAUDE.md`.
 
 > These are **data hooks** by the plan's §1 rule — a generic skill naming stable
 > project-supplied paths (`CLAUDE.md`, `docs/INDEX.md`, `docs/adr/`,
-> `ui/src/lib/harness-patterns/`) and degrading gracefully — not dependencies on
+> `app/src/lib/harness-patterns/`) and degrading gracefully — not dependencies on
 > a project skill, so both skills survive the open-source split. H, I and K are
 > the lines to re-check at split time; none names a framework or a vendor.
 
@@ -489,9 +489,9 @@ good criterion, and rewriting them would have been a change for its own sake.
 **E — the standing acceptance-criteria block.** New, ours, not upstream: the
 house rules a dispatch would otherwise restate every time (CI gate, coverage
 floors, prettier on changed files, conventional commits, no attribution
-trailers, `pnpm`-only from `ui/`, `baml-generate` after `baml_src/` edits), plus
+trailers, `pnpm`-only from `app/`, `baml-generate` after `baml_src/` edits), plus
 the two caveats that make them honest — the floors are not on `main` until PR
-#165 merges, and the CI format check globs `ui/**` only, so a docs-only PR can
+#165 merges, and the CI format check globs `app/**` only, so a docs-only PR can
 be prettier-dirty and still go green.
 
 **F — ponytail → `CLAUDE.md` prose.** Not vendored: **rewritten in our own
@@ -520,7 +520,7 @@ skill itself was declined in Wave 1.
 `chore(skills): kg-dtalk-ui styleguide`
 
 `kg-dtalk-ui` is **ours** — a project styleguide of recipes and rules derived by
-reading `ui/uno.config.ts` and measuring the real duplication in `ui/src`.
+reading `app/uno.config.ts` and measuring the real duplication in `app/src`.
 Bundle `project` (the `kg-` prefix; it never ships with the open-source split).
 Invocation: **model**. Two pieces inside it are vendored, which makes the skill a
 **derivative work**, and every file carries an attribution comment naming the
@@ -574,13 +574,13 @@ Recorded so it is not re-litigated (plan §2.3):
   `package.json` would get C#/XAML guidance.
 - **The `--design-system` generator.** It always generates a _fresh_ palette from
   its 192-product database, with no flag to validate against an existing token
-  set — it would fight `ui/uno.config.ts` rather than serve it.
+  set — it would fight `app/uno.config.ts` rather than serve it.
 - The remaining eight `quick-reference.md` categories and the other 15+
   `charts.csv` rows: no consumer here today.
 
 ### Not a token cache
 
-Per OQ‑6 (user decision): the skill **points at `ui/uno.config.ts`** for the
+Per OQ‑6 (user decision): the skill **points at `app/uno.config.ts`** for the
 token list and never restates it. What it carries instead is the part that is
 _not_ derivable from the config — the attributify rules and their exceptions,
 the four house recipes, and a **proposed** role→token mapping measured from

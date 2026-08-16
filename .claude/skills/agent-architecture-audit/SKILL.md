@@ -123,28 +123,28 @@ Define what you're auditing:
 Gather evidence from the codebase:
 
 - **Source code** — agent loop, tool router, memory admission, prompt assembly.
-  In this repo that is `ui/src/lib/harness-patterns/` (the loops live under
+  In this repo that is `app/src/lib/harness-patterns/` (the loops live under
   `patterns/`; `baml-adapters.server.ts` is the LLM boundary,
   `tools.server.ts` the tool boundary, `context.server.ts` the event/context
-  store) and the per-agent wiring in `ui/src/lib/harness-client/examples/`.
+  store) and the per-agent wiring in `app/src/lib/harness-client/examples/`.
 - **Logs** — historical session traces, tool call records (`.harness-logs/`)
-- **Config** — prompt templates (`ui/baml_src/`), tool schemas, provider settings
+- **Config** — prompt templates (`app/baml_src/`), tool schemas, provider settings
 - **Memory files** — SOPs, knowledge bases, session archives
 
 Use `rg` to search for anti-patterns — scoped to the harness first, then widened
 if nothing turns up:
 
 ```bash
-H=ui/src/lib/harness-patterns
+H=app/src/lib/harness-patterns
 
 # Tool requirements expressed only in prompt text (not code)
-rg -i "must|always|required|never" ui/baml_src -g '*.baml'
+rg -i "must|always|required|never" app/baml_src -g '*.baml'
 
 # Tool execution without validation
 rg "tool_call|toolCall|tool_use" "$H"
 
 # Hidden LLM calls outside the main agent loop
-rg "\.bind\(b\)|b\.[A-Z]\w+\(" ui/src --glob '!**/baml_client/**'
+rg "\.bind\(b\)|b\.[A-Z]\w+\(" app/src --glob '!**/baml_client/**'
 
 # Memory admission without user-correction priority
 rg "trackEvent|contextEvents|serialize\(\)|EventView" "$H"
@@ -266,9 +266,9 @@ A map so Phase 1 does not have to rediscover it. Layers with no owner here are
 genuinely absent — that is a finding shape ("layer 4 is unimplemented"), not a
 gap in this table.
 
-| Layer | Owner in `ui/src/lib/` |
+| Layer | Owner in `app/src/lib/` |
 |---|---|
-| 1 System prompt | `ui/baml_src/*.baml` prompt bodies (`prompt-sections.baml` is the shared block) |
+| 1 System prompt | `app/baml_src/*.baml` prompt bodies (`prompt-sections.baml` is the shared block) |
 | 2 Session history | `harness-patterns/context.server.ts`, `ContextEvent[]` |
 | 3 Long-term memory | none in the harness — the `memory` / `redis` MCP namespaces, per agent |
 | 4 Distillation | `harness-patterns/summarize.server.ts`, `patterns/compactIntent.server.ts` |
@@ -277,7 +277,7 @@ gap in this table.
 | 7 Tool execution | `harness-patterns/mcp-client.server.ts`, `parallel-tools.server.ts` |
 | 8 Tool interpretation | the loop controllers under `harness-patterns/patterns/` |
 | 9 Answer shaping | `harness-patterns/patterns/synthesizer.server.ts`, `content-transforms.ts` |
-| 10 Platform rendering | `ui/src/components/` + the SSE path (`lib/sse-client.ts`) |
+| 10 Platform rendering | `app/src/components/` + the SSE path (`lib/sse-client.ts`) |
 | 11 Hidden repair loops | `harness-patterns/baml-adapters.server.ts` (fallback chains, cap-hit retry), `json-repair.ts` |
 | 12 Persistence | `harness-patterns/harness.server.ts` serialization, `lib/db/` |
 

@@ -15,7 +15,7 @@
  *
  * OFF by default (skipped) so `pnpm test:run` stays offline. Run with:
  *
- *   cd ui && CACHE_BENCH=1 pnpm vitest run src/__tests__/bench/prompt-cache-bench.test.ts
+ *   cd app && CACHE_BENCH=1 pnpm vitest run src/__tests__/bench/prompt-cache-bench.test.ts
  *
  * Report: printed to stdout AND written to .harness-logs/cache-bench-latest.md
  * (plus a timestamped copy). ~8 calls total, prompts ~4k tokens, max_tokens
@@ -64,9 +64,9 @@ type Body = { system?: Block[]; messages: Array<{ role: string; content: Block[]
 
 function apiKey(): string {
   if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY
-  // vitest cwd is ui/ — fall back to ui/.env
+  // vitest cwd is app/ — fall back to app/.env
   const line = readFileSync('.env', 'utf8').split('\n').find((l) => l.startsWith('ANTHROPIC_API_KEY='))
-  if (!line) throw new Error('ANTHROPIC_API_KEY not in env or ui/.env')
+  if (!line) throw new Error('ANTHROPIC_API_KEY not in env or app/.env')
   return line.slice('ANTHROPIC_API_KEY='.length).trim().replace(/^["']|["']$/g, '')
 }
 
@@ -253,7 +253,7 @@ describe('prompt-cache live bench: V1 vs V2', () => {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     writeFileSync(`.harness-logs/cache-bench-${stamp}.md`, report)
     writeFileSync('.harness-logs/cache-bench-latest.md', report)
-    process.stdout.write('\n' + report + '\n\nReport → ui/.harness-logs/cache-bench-latest.md\n')
+    process.stdout.write('\n' + report + '\n\nReport → app/.harness-logs/cache-bench-latest.md\n')
 
     expect(report).toContain('Totals:')
   }, 180_000)

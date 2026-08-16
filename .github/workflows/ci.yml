@@ -15,7 +15,7 @@ concurrency:
 
 defaults:
   run:
-    working-directory: ui
+    working-directory: app
 
 jobs:
   check:
@@ -37,7 +37,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: ui/pnpm-lock.yaml
+          cache-dependency-path: app/pnpm-lock.yaml
 
       # Both steps are load-bearing, in this order. A node_modules that predates
       # the lockfile makes `baml-generate` fail on a @boundaryml/baml version
@@ -64,25 +64,29 @@ jobs:
       # so a global --check would fail on ~320 untouched files; the codebase
       # converges as files are edited (see the pre-commit hook). New and edited
       # code still has to be formatted.
+      #
+      # Renames (R) are excluded, and the paths are filtered with grep rather
+      # than a pathspec: a pathspec hides the deleted side of a rename, so git
+      # scores every moved file as an Add and a directory move (#192, ui/ → app/)
+      # would drag the whole legacy tree into the check.
       - name: Format check (changed files)
         if: github.event_name == 'pull_request'
         working-directory: .
         run: |
-          files=$(git diff --name-only --diff-filter=ACMR \
+          files=$(git diff --name-only --diff-filter=ACM \
                     "${{ github.event.pull_request.base.sha }}" HEAD \
-                    -- 'ui/**/*.ts' 'ui/**/*.tsx' 'ui/**/*.js' 'ui/**/*.jsx' \
-                       'ui/**/*.json' 'ui/**/*.css' 'ui/**/*.md')
+                    | grep -E '^app/.*\.(ts|tsx|js|jsx|json|css|md)$' || true)
           if [ -z "$files" ]; then
             echo "No formattable files changed."
             exit 0
           fi
           echo "$files"
           # shellcheck disable=SC2086
-          ./ui/node_modules/.bin/prettier --check $files
+          ./app/node_modules/.bin/prettier --check $files
 
       # Coverage is measured on the same vitest invocation (v8 instrumentation
       # is near-free here — under a second of extra wall clock locally). The
-      # thresholds live in ui/vitest.config.ts and are backstop floors: the job
+      # thresholds live in app/vitest.config.ts and are backstop floors: the job
       # goes red if coverage regresses below the recorded baseline.
       - name: Test (with coverage floor)
         run: pnpm test:run --coverage

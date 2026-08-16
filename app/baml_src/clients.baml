@@ -136,7 +136,7 @@ client<llm> AnthropicOpus4 {
 // so the output cap is deliberately generous. 4096 was proven inadequate for
 // sandbox actors (a report-generation script truncated mid-tool_args →
 // BamlValidationError; see baml-adapters truncation handling). Keep these caps
-// in sync with CLIENT_MAX_OUTPUT_TOKENS in ui/src/lib/settings.ts.
+// in sync with CLIENT_MAX_OUTPUT_TOKENS in app/src/lib/settings.ts.
 client<llm> AnthropicSonnet5 {
   provider anthropic
   options {

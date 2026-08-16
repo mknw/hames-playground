@@ -109,11 +109,11 @@ so a dispatch never has to restate them:
 - [ ] CI green: typecheck · lint · test · build (`.github/workflows/ci.yml`)
 - [ ] Coverage floors not regressed — statements 93 / branches 82 /
       functions 92 / lines 94
-- [ ] Prettier clean on changed files (`ui/.prettierrc.json`; the CI gate covers
-      changed files under `ui/` only — see the caveat below)
+- [ ] Prettier clean on changed files (`app/.prettierrc.json`; the CI gate covers
+      changed files under `app/` only — see the caveat below)
 - [ ] Conventional-commit subject line
 - [ ] **No** `Co-Authored-By` / "Generated with" attribution trailers
-- [ ] `pnpm` only, run from `ui/` (never npm/npx)
+- [ ] `pnpm` only, run from `app/` (never npm/npx)
 - [ ] `pnpm baml-generate` re-run if anything under `baml_src/` changed;
       `baml_client/` never hand-edited
 ```
@@ -121,7 +121,7 @@ so a dispatch never has to restate them:
 One caveat that is easy to get wrong, and is the reason the block is worded the
 way it is:
 
-- **The CI format check only globs `ui/**`.** It does not cover `docs/**` or
+- **The CI format check only globs `app/**`.** It does not cover `docs/**` or
   `.claude/**`, so a docs-only PR can be prettier-dirty and still go green. The
   `.githooks/pre-commit` → lint-staged path does format staged `*.md` anywhere
   in the tree, and it repairs rather than rejects — but it needs `pnpm` on
@@ -280,8 +280,8 @@ function around line 210 is the problem.
 
 **Files to change:**
 
-- ui/src/lib/data-stash/search.server.ts (line 210)
-- ui/src/lib/settings.ts (line 42)
+- app/src/lib/data-stash/search.server.ts (line 210)
+- app/src/lib/settings.ts (line 42)
 ```
 
 This is bad because:

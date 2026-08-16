@@ -96,7 +96,7 @@ The extractor processes both `rows` and `_neighborhood.rows` through the same MC
 
 1. Skips non-enrichable tools (only `read_neo4j_cypher` / `write_neo4j_cypher`) and result payloads with no `name` strings.
 2. Walks the result for node names (capped at 50).
-3. Runs `MATCH (n) WHERE n.name IN $names OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m LIMIT 100` directly on the `neo4j-driver` singleton (`ui/src/lib/neo4j/client.ts`).
+3. Runs `MATCH (n) WHERE n.name IN $names OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m LIMIT 100` directly on the `neo4j-driver` singleton (`app/src/lib/neo4j/client.ts`).
 4. Serialises records to the MCP cypher tuple shape (`[startProps, "TYPE", endProps]`) — **always in the relationship's actual direction** (`rel.start → rel.end`), not the query-binding order. This keeps edge IDs stable across queries that touch the same rel from either endpoint, so dedup collapses what would otherwise be duplicate edges.
 5. Returns the enriched payload above.
 

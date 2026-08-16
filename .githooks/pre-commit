@@ -3,7 +3,7 @@
 # rejects: agents commit often, and a hook that blocks mid-run costs more than
 # it saves. CI is the real gate.
 #
-# Enabled by `git config core.hooksPath .githooks`, which ui/'s `prepare`
+# Enabled by `git config core.hooksPath .githooks`, which app/'s `prepare`
 # script runs on every install.
 
 command -v pnpm >/dev/null 2>&1 || {
@@ -11,7 +11,7 @@ command -v pnpm >/dev/null 2>&1 || {
   exit 0
 }
 
-cd "$(git rev-parse --show-toplevel)/ui" 2>/dev/null || exit 0
+cd "$(git rev-parse --show-toplevel)/app" 2>/dev/null || exit 0
 [ -d node_modules ] || { echo "pre-commit: no node_modules — skipping"; exit 0; }
 
 exec pnpm exec lint-staged

@@ -23,7 +23,7 @@ Closes #131.
 ## The trigger registry
 
 Triggers are a discriminated union declared **once**, in
-[`ui/src/lib/routines/triggers.ts`](../ui/src/lib/routines/triggers.ts).
+[`app/src/lib/routines/triggers.ts`](../app/src/lib/routines/triggers.ts).
 Nothing downstream switches on the kind — the store, the scheduler, the hooks
 and the API routes all dispatch through the registry. Adding `webhook` or
 `threshold` is one entry there plus whatever fires it.
@@ -62,7 +62,7 @@ is **skipped and logged** on read, never fatal.
 
 **Interval** — `lib/routines/scheduler.server.ts`. One process-wide `setInterval`
 (30s), `unref()`'d so it never keeps the process alive, armed from
-`ui/src/middleware.ts` — SolidStart imports that module once when the server
+`app/src/middleware.ts` — SolidStart imports that module once when the server
 handler graph loads, i.e. at boot, before the first request. Arming is
 idempotent and the handle is parked on a `globalThis` symbol, so a Vite HMR
 re-evaluation can't stack a second timer (a module-scoped `let` would be lost

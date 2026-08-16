@@ -107,7 +107,7 @@ root files for them**; the map below is the answer.
 | Role | Canonical source here | Its one job |
 |---|---|---|
 | **Constitution** | `CLAUDE.md` | Standing dispositions an agent must hold every turn. Short, links out, never live status |
-| **Map** | `docs/INDEX.md` | What exists and where. Source-level indexes (`ui/README.md`, `ui/src/lib/harness-patterns/README.md`) hang off it |
+| **Map** | `docs/INDEX.md` | What exists and where. Source-level indexes (`app/README.md`, `app/src/lib/harness-patterns/README.md`) hang off it |
 | **Status** | the [GitHub project board](https://github.com/users/mknw/projects/5) (`Status` / `Priority` / `MSCW` per issue) | Current health, priority, what is blocked. It is the live surface — no file mirrors it |
 | **History** | `docs/adr/` (durable one-line decisions), `docs/plan/` (converged shapes), PR bodies (the narrative of one change) | Why a decision was made, and what was intentionally removed |
 
@@ -132,14 +132,14 @@ Useful sections to add only when missing:
 
 | Need | Go to | Verify with |
 |---|---|---|
-| Change authentication | `ui/src/lib/auth/` and `docs/deploy/entra-setup.md` | Auth tests and the current routes |
+| Change authentication | `app/src/lib/auth/` and `docs/deploy/entra-setup.md` | Auth tests and the current routes |
 | Understand data ownership | `docs/data-flow.md` | Schema, migrations, and the live store |
 
 **Status delete-zone**
 
 | Path or concept | Why removed | Replacement | Revisit condition |
 |---|---|---|---|
-| `ui/src/lib/baml-agent/` | Superseded agent framework | `ui/src/lib/harness-patterns/` | Do not recreate; a replacement needs a new approved ADR |
+| `app/src/lib/baml-agent/` | Superseded agent framework | `app/src/lib/harness-patterns/` | Do not recreate; a replacement needs a new approved ADR |
 
 **History entry**
 

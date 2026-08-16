@@ -11,10 +11,10 @@ placeholder occurrences and mangled none of them** — no case changes, no
 Markdown-escaped underscores, no inflected or invented ids. The lenient reverse
 pass this bench was built to size turned out to have nothing to recover.
 
-Code: `ui/src/lib/privacy/pseudonym-metrics.ts` (pure, 27 offline unit tests),
-`ui/src/__tests__/bench/pseudonym-fidelity-bench.test.ts` (env-gated live run).
+Code: `app/src/lib/privacy/pseudonym-metrics.ts` (pure, 27 offline unit tests),
+`app/src/__tests__/bench/pseudonym-fidelity-bench.test.ts` (env-gated live run).
 The run writes its raw report and all 96 answers to
-`ui/.harness-logs/` (gitignored, so the numbers below are the committed record).
+`app/.harness-logs/` (gitignored, so the numbers below are the committed record).
 **Nothing in `baml_src/` was changed** — see [Method](#method).
 
 ---
@@ -42,7 +42,7 @@ themselves**, whom the model addressed as "you" / "vous" / "jij".
 
 ## Method
 
-**Corpus.** The 11 Graph fixtures in `ui/src/__tests__/lib/privacy/fixtures.ts`
+**Corpus.** The 11 Graph fixtures in `app/src/__tests__/lib/privacy/fixtures.ts`
 recombined into 8 multi-turn transcripts (mail + calendar + files + chat mixes;
 raw Graph resources and the app's compact projections both). Each transcript
 gets **one roster and one table across all its turns** — the conversation-scoped
@@ -52,7 +52,7 @@ placeholders per transcript.
 
 **Pipeline per transcript.** `extractRoster` over the whole payload set →
 `buildTable` → `apply` to each payload → wrap as `LoopTurn[]` → `b.request.Synthesize`
-→ raw POST to the Anthropic API (key from `ui/.env`, `usage` read from the
+→ raw POST to the Anthropic API (key from `app/.env`, `usage` read from the
 response rather than through a Collector). This is the plumbing of
 `prompt-cache-bench.test.ts`, reused deliberately.
 
@@ -311,10 +311,10 @@ Stated plainly, because the result is clean enough to be over-read.
 ## Reproducing
 
 ```bash
-cd ui && PSEUDO_BENCH=1 pnpm vitest run src/__tests__/bench/pseudonym-fidelity-bench.test.ts
+cd app && PSEUDO_BENCH=1 pnpm vitest run src/__tests__/bench/pseudonym-fidelity-bench.test.ts
 ```
 
-Requires `ANTHROPIC_API_KEY` in the environment or `ui/.env`. The run is guarded
+Requires `ANTHROPIC_API_KEY` in the environment or `app/.env`. The run is guarded
 two ways, and they are not equally hard: the **120-call ceiling is pre-flight** —
 the plan is counted and the test throws before any request goes out — while the
 **$4 cap is cumulative and checked before each dispatch**, so a run can overshoot
@@ -325,10 +325,10 @@ Every table in this document is emitted by the reporter — including the by-kin
 drop split and the length/density table, which earlier existed only as
 hand-derived analysis — so a re-run reproduces the whole document rather than
 part of it. Output goes to stdout and to
-`ui/.harness-logs/pseudonym-bench-latest.md`, with every answer saved alongside in
+`app/.harness-logs/pseudonym-bench-latest.md`, with every answer saved alongside in
 `.samples.json` so a surprising number can be audited, or rescored against a newer
 metric, without paying for a re-run. The metrics module has its own offline suite
-(`ui/src/__tests__/lib/privacy/pseudonym-metrics.test.ts`) that runs in
+(`app/src/__tests__/lib/privacy/pseudonym-metrics.test.ts`) that runs in
 `pnpm test:run` with no network.
 
 ## Related

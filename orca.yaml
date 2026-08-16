@@ -13,7 +13,7 @@ scripts:
     set -euo pipefail
 
     # 1. gitignored config a worktree cannot inherit from git
-    cp "$ORCA_ROOT_PATH/ui/.env"                 "$ORCA_WORKTREE_PATH/ui/.env"
+    cp "$ORCA_ROOT_PATH/app/.env"                "$ORCA_WORKTREE_PATH/app/.env"
     cp "$ORCA_ROOT_PATH/configs/mcp-config.yaml" "$ORCA_WORKTREE_PATH/configs/mcp-config.yaml"
     [ -f "$ORCA_ROOT_PATH/docker-compose.override.yml" ] && \
       cp "$ORCA_ROOT_PATH/docker-compose.override.yml" "$ORCA_WORKTREE_PATH/" || true
@@ -39,7 +39,7 @@ scripts:
 
     # 4. deps + the generated BAML client (both gitignored, both required).
     #    Without baml-generate ~270 tests fail on a missing baml_client/inlinedbaml.
-    cd "$ORCA_WORKTREE_PATH/ui"
+    cd "$ORCA_WORKTREE_PATH/app"
     run pnpm install --frozen-lockfile
     run pnpm baml-generate
 
@@ -72,14 +72,14 @@ issueCommand: |
   conclude you must edit a file outside your declared scope, stop and surface the
   decision rather than widening it.
 
-  Record a baseline before changing anything (from ui/: `pnpm test:run` and
+  Record a baseline before changing anything (from app/: `pnpm test:run` and
   `pnpm exec tsc --noEmit --project tsconfig.json`) and make sure neither is worse when
   you finish. A non-zero tsc count is pre-existing backlog — do not chase it.
 
   Commit coherent units on the current branch. Do not push and do not open PRs.
   Omit Claude/Anthropic attribution trailers and footers from commit messages.
 
-# Deliberately NOT setting worktree.sharedDirectories for ui/node_modules:
+# Deliberately NOT setting worktree.sharedDirectories for app/node_modules:
 # pnpm hardlinks from its content-addressable store, so a cold `pnpm install
 # --frozen-lockfile` here is ~7s and costs little real disk. Sharing would help
 # marginally on macOS (APFS clone-copy) but falls back to symlinks elsewhere —

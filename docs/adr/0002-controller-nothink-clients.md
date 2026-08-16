@@ -37,7 +37,7 @@ instead of 15. The controller stops re-querying when it already holds the answer
   structured output is what the controller emits, and demoting a tier on the
   retry trades one failure mode for another.
 - The new client names had to be registered in all three client-keyed maps in
-  `ui/src/lib/settings.ts`. A missing `CLIENT_MAX_OUTPUT_TOKENS` entry would make
+  `app/src/lib/settings.ts`. A missing `CLIENT_MAX_OUTPUT_TOKENS` entry would make
   `llmCallHitOutputCap()` blind and silently disable the truncation retry; a
   missing pricing entry reports cost as unknown. Both are asserted by test rather
   than left to review.

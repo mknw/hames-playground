@@ -7,8 +7,8 @@ plan](../data-privacy/plan.md#plan) ("encrypt or exclude Graph-derived
 of it is switched on. Those questions are deliberately left open — see
 [Open questions](#open-questions).
 
-Code: `ui/src/lib/privacy/graph-roster.ts`, `ui/src/lib/privacy/pseudonymise.ts`.
-Tests: `ui/src/__tests__/lib/privacy/` (59 cases). No production module imports
+Code: `app/src/lib/privacy/graph-roster.ts`, `app/src/lib/privacy/pseudonymise.ts`.
+Tests: `app/src/__tests__/lib/privacy/` (59 cases). No production module imports
 either file, and no dependency was added.
 
 ---
@@ -220,5 +220,5 @@ likely to be felt in the product.
   results are the material here.
 - [`docs/graph-api-notes.md`](../graph-api-notes.md) — what Graph actually
   returns, which is where the identity-field shapes came from.
-- `ui/src/lib/app-tools/graph.server.ts` — the projections the controller sees,
+- `app/src/lib/app-tools/graph.server.ts` — the projections the controller sees,
   and the source of limitation 3.

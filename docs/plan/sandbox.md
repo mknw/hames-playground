@@ -1,6 +1,6 @@
 # Sandbox Compute Infrastructure (Plan)
 
-> **Status: core shipped; forward-looking sections remain the plan.** `withSandbox` + DockerBackend shipped in PR #81 (#79); durable `/work` ⇄ DataStash workspaces in PR #95 (#89); lifecycle hardening (startup reaper, health-check on reuse, Shell-hydrate) in PRs #103/#104 (#97); rootfs flavours (`image-processing`/`data`/`office`) + the router-over-flavours recipe in PR #117 (#78). The durable API lives in [`ui/src/lib/harness-patterns/README.md`](../../ui/src/lib/harness-patterns/README.md); operational debugging in [`../sandbox/README.md`](../sandbox/README.md); flavours in [`../sandbox-flavours.md`](../sandbox-flavours.md). Still plan-only: **Swarm** (parallel strategies), **Firecracker substrate** (#78), **ephemeral one-shot mode**, timer-driven sweep + LRU cap (#82), and the "Deferred / v1+" section.
+> **Status: core shipped; forward-looking sections remain the plan.** `withSandbox` + DockerBackend shipped in PR #81 (#79); durable `/work` ⇄ DataStash workspaces in PR #95 (#89); lifecycle hardening (startup reaper, health-check on reuse, Shell-hydrate) in PRs #103/#104 (#97); rootfs flavours (`image-processing`/`data`/`office`) + the router-over-flavours recipe in PR #117 (#78). The durable API lives in [`app/src/lib/harness-patterns/README.md`](../../app/src/lib/harness-patterns/README.md); operational debugging in [`../sandbox/README.md`](../sandbox/README.md); flavours in [`../sandbox-flavours.md`](../sandbox-flavours.md). Still plan-only: **Swarm** (parallel strategies), **Firecracker substrate** (#78), **ephemeral one-shot mode**, timer-driven sweep + LRU cap (#82), and the "Deferred / v1+" section.
 
 Reference design for `withSandbox` — a harness wrapper that attaches a stateful, isolated microVM to a controller pattern, exposing filesystem / shell / Python tools to the actor via MCP servers running *inside* the VM. See [#79](https://github.com/mknw/harness-playground/issues/79) for the implementation story and [#78](https://github.com/mknw/harness-playground/issues/78) for the capability vision (Polars over user-uploaded files, document extraction, NER pipelines, …).
 
@@ -71,7 +71,7 @@ HOST  (Linux + KVM in production; macOS via Docker fallback)
 │
 ├── harness app  (SolidStart Node process)
 │     ├── pattern: withSandbox
-│     ├── sandbox manager  (ui/src/lib/sandbox/)
+│     ├── sandbox manager  (app/src/lib/sandbox/)
 │     │     ├── ComputeBackend  (Docker | Firecracker)
 │     │     ├── attachment table  (id → handle)
 │     │     ├── warm pool
@@ -160,7 +160,7 @@ Notably *not* in this interface (vs. an earlier sketch): explicit `exec()`, `mou
 | `DockerBackend` | container + bind mount | 1–3s | fresh container | v0 dev + initial prod. Works on macOS dev hosts. |
 | `FirecrackerBackend` | microVM + virtio-fs | ~125ms | snapshot/restore | Production swap once the abstraction proves out. Linux + KVM only. |
 
-The harness drives the backend directly from `ui/src/lib/sandbox/`. There is no separate pool-manager process.
+The harness drives the backend directly from `app/src/lib/sandbox/`. There is no separate pool-manager process.
 
 ---
 
@@ -278,7 +278,7 @@ A container is disposable; the workspace shouldn't be. The 5-minute-class idle w
 | `/work/out` | Files the agent wants kept. **Promoted to the DataStash on every turn exit.** | Durable (DataStash). |
 | `/work` (elsewhere) | Scratch. | Ephemeral — gone when the container recycles. |
 
-**Mechanism** (`ui/src/lib/sandbox/work-artifacts.server.ts` + `work-sync.server.ts`):
+**Mechanism** (`app/src/lib/sandbox/work-artifacts.server.ts` + `work-sync.server.ts`):
 
 - **Hydrate** — on first boot only (tracked by `Attachment.isFirstBoot`), `listDocuments(sessionId)` → write each into `/work/in`. Reused live attachments skip this, so a multi-turn session doesn't re-hydrate every turn.
 - **Promote** — snapshot `/work/out` (in-VM `sha256sum`) at turn entry, diff at exit, and `storeDocument` each new/changed file. Runs in a `finally`, so deliverables are saved even if the turn throws. Deletions are ignored (promotion never removes stored docs).
@@ -418,7 +418,7 @@ All overridable per-call via the `withSandbox` config object; defaults come from
 Each step de-risks the next.
 
 1. `rootfs/` Dockerfile that bundles `rust-mcp-filesystem` + JS shell-MCP + Python on `debian-slim`. Build manually; verify both MCP servers come up on stdio.
-2. `ui/src/lib/sandbox/` — `ComputeBackend` interface + `DockerBackend` implementation. `boot` / `destroy` / `connectMcp` only; no warm pool yet, no reset.
+2. `app/src/lib/sandbox/` — `ComputeBackend` interface + `DockerBackend` implementation. `boot` / `destroy` / `connectMcp` only; no warm pool yet, no reset.
 3. `withSandbox` wrapper **+ transport-aware dispatch**: run the wrapped pattern inside an ALS sandbox scope; change `simpleLoop` + `actorCritic` (allowlist guard), `mcp-client.callTool` (dispatch), and `baml-adapters.server.ts` (prompt-side tool descriptions) **once** so sandbox-owned tool names route to the in-VM transport, pass the allowlist guard, and appear in the actor's first-turn prompt — all from the ALS scope, with no per-pattern wiring. Auto-attachment only (no ID, no `fresh`) for the first cut. This step is what makes multi-controller chains share one sandbox for free (see [How tools reach the controller](#how-tools-reach-the-controller)).
 4. End-to-end integration test: `actorCritic` wrapped in `withSandbox`, agent receives "write a Python script in /work that counts words in this string and run it," reports the count back. Single Docker container, no warm pool.
 5. Warm pool (small `warmCaps`), idle eviction, scheduler caps.
@@ -483,4 +483,4 @@ Open problems `backgroundSession` surfaces (all genuinely v2):
 - [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) — where this fits in the broader plan
 - [#79](https://github.com/mknw/harness-playground/issues/79) — implementation story
 - [#78](https://github.com/mknw/harness-playground/issues/78) — capability vision + rootfs flavor catalog
-- [`ui/src/lib/harness-patterns/README.md`](../../ui/src/lib/harness-patterns/README.md) — pattern framework overview (`withReferences` is the analogous wrapper)
+- [`app/src/lib/harness-patterns/README.md`](../../app/src/lib/harness-patterns/README.md) — pattern framework overview (`withReferences` is the analogous wrapper)

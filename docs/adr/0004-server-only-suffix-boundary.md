@@ -35,7 +35,7 @@ its own assertion at module scope.
   out of the server module rather than imported from it, which is a real design
   constraint on the framework's shape.
 - The rule generalises beyond harness-patterns and is now applied across
-  `ui/src/lib/`; `action-runner.server.ts`, for instance, is deliberately **not**
+  `app/src/lib/`; `action-runner.server.ts`, for instance, is deliberately **not**
   `"use server"` because it takes a `userId` and exposing it as a client RPC
   would let a caller run as any user.
 
@@ -47,5 +47,5 @@ whose Design Principles §1 "Server-Only Execution" states the suffix rule, the
 `assertServer` sketch and the explicit "no `"use server"` directives (standalone
 module)" choice; and commit `34b7b01` (same day), which landed
 `assert.server.ts`. The implementation is unchanged today at
-`ui/src/lib/harness-patterns/assert.server.ts`. The standing disposition is the
+`app/src/lib/harness-patterns/assert.server.ts`. The standing disposition is the
 "Server/client boundary" bullet in `CLAUDE.md`.

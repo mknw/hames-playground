@@ -2,7 +2,7 @@
 
 Complete API documentation for the harness-patterns framework.
 
-> **Source:** See [`ui/src/lib/harness-patterns/`](../../ui/src/lib/harness-patterns/) for implementation details.
+> **Source:** See [`app/src/lib/harness-patterns/`](../../app/src/lib/harness-patterns/) for implementation details.
 
 ---
 
@@ -163,7 +163,7 @@ type OnToolResult = (
 ) => Promise<{ data?: unknown } | void> | { data?: unknown } | void
 ```
 
-See [`ui/src/lib/harness-patterns/README.md` § Hooks](../../ui/src/lib/harness-patterns/README.md#simpleloopcontroller-tools-config) for the full hook contract and the `enrichNeo4jResult` recipe.
+See [`app/src/lib/harness-patterns/README.md` § Hooks](../../app/src/lib/harness-patterns/README.md#simpleloopcontroller-tools-config) for the full hook contract and the `enrichNeo4jResult` recipe.
 
 ### actorCritic
 

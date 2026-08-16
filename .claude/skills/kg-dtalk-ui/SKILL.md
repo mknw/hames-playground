@@ -1,6 +1,6 @@
 ---
 name: kg-dtalk-ui
-description: House styleguide for this repo's SolidStart + Ark UI + UnoCSS-attributify interface. Use before writing or reviewing any .tsx under ui/src — carries the attributify-only rule and its exceptions, the four house recipes, the role-to-colour mapping, the icon set, and pointers to the accessibility and network-graph checklists.
+description: House styleguide for this repo's SolidStart + Ark UI + UnoCSS-attributify interface. Use before writing or reviewing any .tsx under app/src — carries the attributify-only rule and its exceptions, the four house recipes, the role-to-colour mapping, the icon set, and pointers to the accessibility and network-graph checklists.
 ---
 
 <!-- Derivative work. Mostly ours; the accessibility checklist and the
@@ -10,12 +10,12 @@ description: House styleguide for this repo's SolidStart + Ark UI + UnoCSS-attri
 
 # kg-dtalk-ui — house styleguide
 
-The UI is `ui/` — SolidStart routes and components, Ark UI headless primitives,
+The UI is `app/` — SolidStart routes and components, Ark UI headless primitives,
 UnoCSS with attributify mode, Cytoscape.js for graphs.
 
 **This skill is recipes and rules. It is not a token cache.** The token list —
 every `dark-bg-*`, `dark-text-*`, `dark-border-*`, `neon-*`, `cyber-*` value —
-lives in [`ui/uno.config.ts`](../../../ui/uno.config.ts) under `theme.colors`, and
+lives in [`app/uno.config.ts`](../../../app/uno.config.ts) under `theme.colors`, and
 that file is the only place it is written down. Read it when you need a value.
 Restating it here would be a cache of a one-file lookup, and it would go stale.
 
@@ -134,8 +134,8 @@ icon that is the button's only content means the **button** needs an
 ## 4. Colour: token before hex
 
 **If a value has a token, use the token.** These hexes are hand-written in
-`ui/src` where a token already exists. Counts are literal occurrences measured
-across `ui/src` on this branch (`grep -rhoE '#[0-9a-fA-F]{6}' src`), tests and
+`app/src` where a token already exists. Counts are literal occurrences measured
+across `app/src` on this branch (`grep -rhoE '#[0-9a-fA-F]{6}' src`), tests and
 comments included — re-run it rather than trusting the number:
 
 | Hex       | Uses | Token it should have been |
@@ -162,7 +162,7 @@ per-entity; do not invent a second one.
 
 > ⚠️ **This table is a proposal awaiting one-time confirmation from the repo
 > owner.** It was derived by measuring which hex is spent on which role across
-> `ui/src`; it is not derivable from `uno.config.ts`, because **none of these
+> `app/src`; it is not derivable from `uno.config.ts`, because **none of these
 > semantic roles has a token today**. Until it is confirmed, treat it as
 > documentation of current practice, not as a rule to enforce — and do not add
 > tokens to `uno.config.ts` on its authority.
@@ -196,7 +196,7 @@ something real:
 
 ## 5. The four house recipes
 
-Derived from the actual duplication in `ui/src`. Each is what the codebase
+Derived from the actual duplication in `app/src`. Each is what the codebase
 already converged on; the job of writing them down is to stop the next
 component re-deriving it slightly differently.
 
@@ -325,13 +325,13 @@ chat HTML.
 
 ## 6. What this skill does not do
 
-- It does not restate tokens. `ui/uno.config.ts` owns them.
+- It does not restate tokens. `app/uno.config.ts` owns them.
 - It does not migrate existing code. The `i-mdi-*` references, the hex-instead-
   of-token sites, and the `class=` violations named above are all recorded as
   _evidence for the rules_, not as a work list this skill executes.
 - It does not add tokens. The role table in §4 is a proposal; adding
   `theme.colors` entries needs the confirmation first.
-- It does not cover light mode, native mobile, or any surface outside `ui/src`.
+- It does not cover light mode, native mobile, or any surface outside `app/src`.
 
 Related repo documentation: [`docs/UI_ARCHITECTURE.md`](../../../docs/UI_ARCHITECTURE.md)
 for component structure and data flow.

@@ -4,7 +4,7 @@ Project-level guidance for Claude Code in this repository.
 
 ## Commands
 
-**Every `pnpm` command runs from `ui/`** — never npm/npx, never from the repo root. The script list itself is a one-file lookup in `ui/package.json`; what is not in that file:
+**Every `pnpm` command runs from `app/`** — never npm/npx, never from the repo root. The script list itself is a one-file lookup in `app/package.json`; what is not in that file:
 
 - **`pnpm baml-generate` after any edit under `baml_src/`.** `baml_client/` is generated and gitignored; a stale or missing one surfaces as ~270 phantom test failures, not as a BAML error. Never hand-edit it.
 - **Two llama-servers, two ports, and mixing them up is the trap.** `pnpm dev:llama` starts the local _chat_ model (GLM-4.7-Flash) on **8080**. The Data Stash _embedding_ server is a different model on **8090**, started by hand:
@@ -25,7 +25,7 @@ To use the **mixed-provider production chains** (RouterFallback / ControllerFall
 USE_MIXED_CHAINS=1 pnpm dev:exposed
 ```
 
-This unsets the override and lets each BAML function fall back to its declared chain. Production deployments and occasional mixed-chain testing both use this. See `ui/src/lib/harness-patterns/clients.server.ts` for the toggle.
+This unsets the override and lets each BAML function fall back to its declared chain. Production deployments and occasional mixed-chain testing both use this. See `app/src/lib/harness-patterns/clients.server.ts` for the toggle.
 
 Docker services (Neo4j, MCP Gateway, Redis) come up with `docker compose up -d` from the repo root.
 
@@ -110,11 +110,11 @@ first — it can fix what it finds.
 
 ## Harness Patterns — Quick Reference
 
-Framework in `ui/src/lib/harness-patterns/`. Full API: [`ui/src/lib/harness-patterns/README.md`](ui/src/lib/harness-patterns/README.md).
+Framework in `app/src/lib/harness-patterns/`. Full API: [`app/src/lib/harness-patterns/README.md`](app/src/lib/harness-patterns/README.md).
 
 <!-- The `prettier-ignore` markers below are load-bearing: the repo root has no
      .prettierrc, so prettier's defaults would rewrite these samples to double
-     quotes + semicolons, against ui/.prettierrc.json. -->
+     quotes + semicolons, against app/.prettierrc.json. -->
 
 **BAML functions must use `.bind(b)`:**
 
@@ -152,8 +152,8 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 
 ### Adding a New Agent
 
-1. Create `ui/src/lib/harness-client/examples/<name>.server.ts` — export `AgentConfig` with `id`, `name`, `description`, `icon`, `servers[]`, `createPatterns`
-2. Register in `ui/src/lib/harness-client/registry.server.ts`
+1. Create `app/src/lib/harness-client/examples/<name>.server.ts` — export `AgentConfig` with `id`, `name`, `description`, `icon`, `servers[]`, `createPatterns`
+2. Register in `app/src/lib/harness-client/registry.server.ts`
 
 ---
 
@@ -181,9 +181,9 @@ controller is better WITHOUT it (72/72 valid actions vs 70/72; median output 438
 synthesizer keep thinking — unmeasured, and the corpus had no actor prompts. A
 thinking-only response with no text is retried once by the adapters.
 
-**Output caps + truncation recovery:** Anthropic client `max_tokens` are 32768 (Sonnet 5) / 16384 (Sonnet 4.6, Haiku 4.5) — mirrored in `CLIENT_MAX_OUTPUT_TOKENS` (`ui/src/lib/settings.ts`); keep the two in sync. A controller response that hits its cap truncates mid-JSON (historically: `BamlValidationError: missing status/is_final` when a sandbox actor inlined a huge script into `tool_args`). The adapters detect cap-hits and do ONE corrective retry with truncation guidance appended to the per-call `context`; the loops emit truncation-specific feedback instead of generic "invalid JSON" when `tool_args` were cut off (`llmCallHitOutputCap`). Multi-call turns (`additional_calls`, see below) raise cap-hit risk — the prompts cap batches at 4 calls/turn for this reason.
+**Output caps + truncation recovery:** Anthropic client `max_tokens` are 32768 (Sonnet 5) / 16384 (Sonnet 4.6, Haiku 4.5) — mirrored in `CLIENT_MAX_OUTPUT_TOKENS` (`app/src/lib/settings.ts`); keep the two in sync. A controller response that hits its cap truncates mid-JSON (historically: `BamlValidationError: missing status/is_final` when a sandbox actor inlined a huge script into `tool_args`). The adapters detect cap-hits and do ONE corrective retry with truncation guidance appended to the per-call `context`; the loops emit truncation-specific feedback instead of generic "invalid JSON" when `tool_args` were cut off (`llmCallHitOutputCap`). Multi-call turns (`additional_calls`, see below) raise cap-hit risk — the prompts cap batches at 4 calls/turn for this reason.
 
-**Multi-call turns:** both loop patterns accept `multiToolCalls: 'parallel' | 'sequential' | 'off'` (default `'parallel'`) — the controller batches several tool calls into one turn via `ControllerAction.additional_calls`, saving one controller round-trip per batched call. `'sequential'` runs in order with stop-on-failure (sandbox agents); `'off'` suppresses the prompt affordance but still executes un-advertised batches serially (code-mode). Full semantics: `ui/src/lib/harness-patterns/README.md`.
+**Multi-call turns:** both loop patterns accept `multiToolCalls: 'parallel' | 'sequential' | 'off'` (default `'parallel'`) — the controller batches several tool calls into one turn via `ControllerAction.additional_calls`, saving one controller round-trip per batched call. `'sequential'` runs in order with stop-on-failure (sandbox agents); `'off'` suppresses the prompt affordance but still executes un-advertised batches serially (code-mode). Full semantics: `app/src/lib/harness-patterns/README.md`.
 
 **Mixed-provider chains** (gated by `USE_MIXED_CHAINS=1`, see top of file) — `RouterFallback` / `ControllerFallback` / `CriticFallback` / `SynthesizerFallback` / `DescribeFallback`, each spreading its role across OpenRouter, Groq and OpenAI with an Anthropic backstop last. There is no `ActorFallback`. Declared in `baml_src/clients.baml`.
 
@@ -227,11 +227,11 @@ UnoCSS attributify mode — always use attribute syntax:
 
 Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secondary,tertiary}`, `dark-border-{primary,secondary}`, `neon-{cyan,magenta,purple}`, `cyber-{600,700,800}`.
 
-**Icons** — `material-symbols` (+ `material-symbols-light`) is **the** icon set; they are the only two collections registered in `presetIcons` (`ui/uno.config.ts`):
+**Icons** — `material-symbols` (+ `material-symbols-light`) is **the** icon set; they are the only two collections registered in `presetIcons` (`app/uno.config.ts`):
 - Use via `class="i-material-symbols-<icon-name>"` — icon classes are the one sanctioned `class=` exception, since `presetIcons` has no attributify form
 - Example: `<span class="i-material-symbols-database-outline" w="5" h="5" text="neon-cyan" aria-hidden="true" />`
 - Browse icons at [https://icones.js.org](https://icones.js.org) — filter by `material-symbols`
-- ⚠️ `@iconify-json/mdi` is still in `package.json` and `i-mdi-*` classes survive in `ui/src`, but **mdi is not registered**, so those classes emit no CSS. Treat every `i-mdi-*` as a bug; do not add more
+- ⚠️ `@iconify-json/mdi` is still in `package.json` and `i-mdi-*` classes survive in `app/src`, but **mdi is not registered**, so those classes emit no CSS. Treat every `i-mdi-*` as a bug; do not add more
 - Full styleguide (attributify rules, house recipes, role→colour mapping, a11y + graph checklists): the `kg-dtalk-ui` skill
 
 ---

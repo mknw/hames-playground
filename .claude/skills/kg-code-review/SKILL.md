@@ -78,7 +78,7 @@ Three sources, in this order of authority:
 
 **(a) This repo's documented conventions** — the ones below plus anything the
 diff's own area documents (`CLAUDE.md`, `docs/INDEX.md` and what it points at,
-`ui/src/lib/harness-patterns/README.md`). These are **hard** — a breach is a
+`app/src/lib/harness-patterns/README.md`). These are **hard** — a breach is a
 violation, not a judgement call:
 
 - **UnoCSS attributify only.** `flex="~ col"`, `text="sm gray-600"` — never
@@ -90,11 +90,11 @@ violation, not a judgement call:
   suffix and call `assertServerOnImport()`. A server-only import reaching a
   client module is a violation even if it type-checks.
 - **BAML functions are always `.bind(b)`** at the call site.
-- **`ui/baml_client/` is generated — never hand-edited.** Any `baml_src/` change
+- **`app/baml_client/` is generated — never hand-edited.** Any `baml_src/` change
   must be followed by `pnpm baml-generate`, and the regenerated client committed.
-- **`CLIENT_MAX_OUTPUT_TOKENS`** (`ui/src/lib/settings.ts`) stays in sync with the
+- **`CLIENT_MAX_OUTPUT_TOKENS`** (`app/src/lib/settings.ts`) stays in sync with the
   BAML clients' `max_tokens`. A diff touching one and not the other is a finding.
-- **`pnpm` only, run from `ui/`.** Never npm/npx. A script or doc line that says
+- **`pnpm` only, run from `app/`.** Never npm/npx. A script or doc line that says
   otherwise is a violation.
 - **Conventional-commit subject lines**, and **no attribution trailers** — no
   `Co-Authored-By`, no "Generated with" footer. Check the commit list from

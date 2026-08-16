@@ -1,7 +1,7 @@
 # Sandbox smoke scripts
 
 Live-container smoke checks for `withSandbox(actorCritic(...))`. Complement
-the hermetic vitest tests under `ui/src/__tests__/lib/sandbox/` — those mock
+the hermetic vitest tests under `app/src/__tests__/lib/sandbox/` — those mock
 `node:child_process.spawn` and the MCP SDK at the lowest seam to stay
 CI-friendly. These scripts spin up **real Docker containers** and prove the
 chain works for real.
@@ -35,7 +35,7 @@ that the SDK mocks gloss over.
 | `smoke-scripted.ts` | hand-scripted actor + critic, **runs twice to prove pool hit** | none | ~1.5s (1 cold boot + 1 pool hit + 1 reset) |
 | `smoke-llm.ts` | real Anthropic via BAML adapters | a few cents | ~4–5s (2× Anthropic calls) |
 
-Run from `ui/`:
+Run from `app/`:
 
 ```sh
 pnpm dlx tsx src/lib/sandbox/scripts/smoke-scripted.ts

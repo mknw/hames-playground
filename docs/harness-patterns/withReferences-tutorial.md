@@ -34,7 +34,7 @@ router → routes({
 }) → synthesizer
 ```
 
-See [`ui/src/lib/harness-client/examples/default.server.ts`](../../ui/src/lib/harness-client/examples/default.server.ts) for the source.
+See [`app/src/lib/harness-client/examples/default.server.ts`](../../app/src/lib/harness-client/examples/default.server.ts) for the source.
 
 ---
 
@@ -155,9 +155,9 @@ You can then filter the timeline by event type (use the eye icon in the panel he
 
 ## Where to go next
 
-- **API reference:** [`ui/src/lib/harness-patterns/README.md#withreferencespattern-config`](../../ui/src/lib/harness-patterns/README.md#withreferencespattern-config)
+- **API reference:** [`app/src/lib/harness-patterns/README.md#withreferencespattern-config`](../../app/src/lib/harness-patterns/README.md#withreferencespattern-config)
 - **Design doc:** [`with-references.md`](with-references.md) — full taxonomy (ingress vs. mid-loop), alternatives considered, open questions
-- **Eval suite:** [`ui/src/__tests__/lib/harness-patterns/with-references-eval.test.ts`](../../ui/src/__tests__/lib/harness-patterns/with-references-eval.test.ts) — canonical selection cases (postgres-18, conversational-unrelated, multiple-relevant, scope=self, stale-on-topic) with deterministic fixture selectors
+- **Eval suite:** [`app/src/__tests__/lib/harness-patterns/with-references-eval.test.ts`](../../app/src/__tests__/lib/harness-patterns/with-references-eval.test.ts) — canonical selection cases (postgres-18, conversational-unrelated, multiple-relevant, scope=self, stale-on-topic) with deterministic fixture selectors
 - **Custom selectors:** pass `selector: SelectorFn` in the wrapper config to swap in deterministic, vector-similarity, or rule-based selection — useful for tests, evals, or fast-paths
 
 ---

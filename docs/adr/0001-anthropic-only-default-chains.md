@@ -8,7 +8,7 @@ OpenRouter and OpenAI, and their combined rate limits made dev iteration too
 noisy to debug against: a failure was as likely to be someone else's quota as our
 own bug. Every BAML function now routes through an Anthropic-only chain
 (`baml_src/anthropic-only.baml`) by default, applied through a single role-based
-override surface in `ui/src/lib/harness-patterns/clients.server.ts`, and
+override surface in `app/src/lib/harness-patterns/clients.server.ts`, and
 `USE_MIXED_CHAINS=1` unsets the override so each function falls back to its
 declared production chain in `baml_src/clients.baml`.
 

@@ -61,7 +61,7 @@ docker compose ps
 ./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher
 
 # 4. Start the UI
-cd ui
+cd app
 pnpm install
 pnpm dev
 ```
@@ -97,9 +97,9 @@ The harness is the main deliverable. It's a composable pattern framework built o
 
 ### Tool namespaces (via MCP Gateway)
 
-`neo4j`, `web`, `context7`, `filesystem`, `github`, `memory`, `redis`, `database`, `code` — plus any custom servers added to `configs/custom-catalog.yaml`. Tool grouping happens in `ui/src/lib/harness-patterns/tools.server.ts` (`inferServer()` + `KNOWN_TOOL_SERVERS` lookup).
+`neo4j`, `web`, `context7`, `filesystem`, `github`, `memory`, `redis`, `database`, `code` — plus any custom servers added to `configs/custom-catalog.yaml`. Tool grouping happens in `app/src/lib/harness-patterns/tools.server.ts` (`inferServer()` + `KNOWN_TOOL_SERVERS` lookup).
 
-Full API: [`ui/src/lib/harness-patterns/README.md`](ui/src/lib/harness-patterns/README.md) · Examples: [`ui/src/lib/harness-client/examples/README.md`](ui/src/lib/harness-client/examples/README.md) · Cross-pattern data flow walkthrough: [`docs/harness-patterns/withReferences-tutorial.md`](docs/harness-patterns/withReferences-tutorial.md).
+Full API: [`app/src/lib/harness-patterns/README.md`](app/src/lib/harness-patterns/README.md) · Examples: [`app/src/lib/harness-client/examples/README.md`](app/src/lib/harness-client/examples/README.md) · Cross-pattern data flow walkthrough: [`docs/harness-patterns/withReferences-tutorial.md`](docs/harness-patterns/withReferences-tutorial.md).
 
 ## Conversation Persistence
 
@@ -109,7 +109,7 @@ Conversations are persisted to Postgres in a single `conversations(id, user_id, 
 - Sticky titles: first 60 chars of the first user message becomes the title, locked in via `COALESCE` on update
 - Sidebar lists threads via `listConversations()`; selecting one calls `loadConversation()` and replays events into the graph + observability panel
 
-Implementation: `ui/src/lib/db/{client,conversations}.server.ts` and `ui/src/lib/harness-client/session.server.ts`.
+Implementation: `app/src/lib/db/{client,conversations}.server.ts` and `app/src/lib/harness-client/session.server.ts`.
 
 ## MCP Servers
 
@@ -172,7 +172,7 @@ docker compose up -d
 | `mcp-config.yaml` | MCP server connection parameters | Neo4j URI, credentials |
 | `custom-catalog.yaml` | Custom MCP catalog with tool definitions | Server images, env mappings |
 | `.mcp.json` | Claude Code MCP integration | Gateway endpoint |
-| `ui/baml_src/*.baml` | BAML function definitions | Agent prompts, types |
+| `app/baml_src/*.baml` | BAML function definitions | Agent prompts, types |
 
 ## Project Structure
 
@@ -185,7 +185,7 @@ kg-agent/
 ├── .mcp.json                 # Claude Code MCP config
 ├── neo4j_dumps/              # Cypher exports for data versioning
 ├── scripts/                  # export-neo4j.sh, import-neo4j.sh, reset-neo4j.sh
-├── ui/                       # SolidStart frontend
+├── app/                       # SolidStart frontend
 │   ├── baml_src/             # BAML function definitions (regenerate via `pnpm baml-generate`)
 │   ├── src/
 │   │   ├── routes/           # SolidStart routes + /api/events SSE endpoint
@@ -253,7 +253,7 @@ kg-agent/
 | [docs/MCP_GATEWAY.md](docs/MCP_GATEWAY.md) | MCP Gateway reference |
 | [GitHub Project](https://github.com/users/mknw/projects/5) | Development roadmap / planning board (replaced docs/ROADMAP.md) |
 | [docs/harness-patterns/README.md](docs/harness-patterns/README.md) | Harness patterns overview + tutorials |
-| [ui/src/lib/harness-patterns/README.md](ui/src/lib/harness-patterns/README.md) | Harness patterns API reference |
+| [app/src/lib/harness-patterns/README.md](app/src/lib/harness-patterns/README.md) | Harness patterns API reference |
 | [neo4j_dumps/README.md](neo4j_dumps/README.md) | Neo4j data versioning workflow |
 
 ## Troubleshooting
@@ -275,7 +275,7 @@ Look for image pull errors or configuration issues.
 ### UI build errors
 
 ```bash
-cd ui
+cd app
 pnpm baml-generate  # Regenerate BAML client
 pnpm build
 ```
@@ -292,16 +292,16 @@ docker compose logs -f mcp-gateway  # Gateway only
 
 ```bash
 # Start UI in development mode
-cd ui && pnpm dev
+cd app && pnpm dev
 
 # Generate BAML TypeScript client
-cd ui && pnpm baml-generate
+cd app && pnpm baml-generate
 
 # Run BAML tests
-cd ui && pnpm baml-test
+cd app && pnpm baml-test
 
 # Lint code
-cd ui && pnpm eslint
+cd app && pnpm eslint
 ```
 
 ## License

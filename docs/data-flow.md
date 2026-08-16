@@ -9,7 +9,7 @@ covering the two subsystems and the bridge between them.
 The diagrams reflect the code as of the durable-workspace (#89), retriever +
 direct-Redis (#102 / #111) and attachment-lifecycle (#97) merges. When they
 drift from the source, the source wins — every box maps to a named function in
-`ui/src/lib/`.
+`app/src/lib/`.
 
 **Reading the diagrams**
 

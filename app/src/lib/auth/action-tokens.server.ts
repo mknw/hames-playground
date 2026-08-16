@@ -57,7 +57,7 @@ export function parseActionTokens(yamlText: string): Map<string, string> {
   return out;
 }
 
-/** `process.cwd()` is the `ui/` dir, so repo-root `configs/` is one level up.
+/** `process.cwd()` is the `app/` dir, so repo-root `configs/` is one level up.
  *  Mirror `server-catalog.server.ts`'s candidate resolution. */
 function resolveConfigPath(file: string): string | null {
   const candidates = [

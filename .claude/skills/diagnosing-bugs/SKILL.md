@@ -37,7 +37,7 @@ Spend disproportionate effort here. **Be aggressive. Be creative. Refuse to give
 9. **Differential loop.** Run the same input through old-version vs new-version (or two configs) and diff outputs.
 10. **HITL bash script.** Last resort. If a human must click, drive _them_ with `scripts/hitl-loop.template.sh` so the loop is still structured. Captured output feeds back to you.
 
-This repo's tightest loops, both run from `ui/`: `pnpm vitest run <file>` for option 1, and `pnpm exec tsc --noEmit --project tsconfig.json` when the symptom is a type-level one.
+This repo's tightest loops, both run from `app/`: `pnpm vitest run <file>` for option 1, and `pnpm exec tsc --noEmit --project tsconfig.json` when the symptom is a type-level one.
 
 Build the right feedback loop, and the bug is 90% fixed.
 

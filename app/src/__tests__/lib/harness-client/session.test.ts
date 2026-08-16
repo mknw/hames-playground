@@ -114,6 +114,31 @@ describe('pattern cache', () => {
     await getOrBuildPatterns('cache-6', 'known')
     expect(createPatterns).toHaveBeenCalledTimes(3)
   })
+
+  it('ignores doNotCachePatterns from outside a getOrBuildPatterns build', async () => {
+    // The registry capability probes (agentUsesCodeMode &c.) call
+    // createPatterns directly and discard the result. A degraded probe build
+    // must not leave a flag that costs the next REAL build its cache entry.
+    doNotCachePatterns('cache-7')
+
+    const first = await getOrBuildPatterns('cache-7', 'known')
+    const second = await getOrBuildPatterns('cache-7', 'known')
+
+    expect(second).toBe(first)
+    expect(createPatterns).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops the flag when the build itself throws', async () => {
+    createPatterns.mockImplementationOnce(async (sessionId: string) => {
+      doNotCachePatterns(sessionId)
+      throw new Error('build blew up')
+    })
+    await expect(getOrBuildPatterns('cache-8', 'known')).rejects.toThrow('build blew up')
+
+    const first = await getOrBuildPatterns('cache-8', 'known')
+    const second = await getOrBuildPatterns('cache-8', 'known')
+    expect(second).toBe(first)
+  })
 })
 
 describe('loadSession', () => {
@@ -201,6 +226,31 @@ describe('deleteSession', () => {
     expect(deleteConversation).toHaveBeenCalledWith('del-1', 'u1')
     const rebuilt = await getOrBuildPatterns('del-1', 'known')
     expect(rebuilt).not.toBe(built)
+  })
+
+  it('clears a pending uncacheable flag for the deleted session', async () => {
+    // The flag lives between "set inside createPatterns" and "consumed by
+    // getOrBuildPatterns". A delete inside that window used to leave it behind
+    // for the life of the process, so the id's next build skipped its cache
+    // write. Reproduce the window with a build that blocks after flagging.
+    let release: () => void = () => {}
+    const flagged = new Promise<void>((r) => (release = r))
+    createPatterns.mockImplementationOnce(async (sessionId: string) => {
+      doNotCachePatterns(sessionId)
+      await flagged
+      return [{ id: `degraded-${sessionId}` }]
+    })
+
+    const inFlight = getOrBuildPatterns('del-2', 'known')
+    await deleteSession('del-2', 'u1')
+    release()
+    const built = await inFlight
+
+    // The id starts clean after the delete: the very next lookup is served
+    // from the cache. With the flag left pending, `inFlight` would have
+    // consumed it, dropped its own cache entry, and forced a second build.
+    expect(await getOrBuildPatterns('del-2', 'known')).toBe(built)
+    expect(createPatterns).toHaveBeenCalledTimes(1)
   })
 })
 

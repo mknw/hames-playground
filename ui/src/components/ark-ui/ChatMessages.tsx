@@ -1,4 +1,3 @@
-
 import { Collapsible } from '@ark-ui/solid/collapsible'
 import { ScrollArea } from '@ark-ui/solid/scroll-area'
 import { For, Show, Switch, Match, createEffect, createSignal, type JSX } from 'solid-js'
@@ -8,11 +7,13 @@ import { ToolCallDisplay } from './ToolCallDisplay'
 import { marked } from 'marked'
 import type { RetrievalReference } from '~/lib/harness-patterns'
 import type { OpenReferenceTarget } from '~/lib/harness-client/reference-extractor'
+import { escapeHtmlAttribute, sanitizeMarkdownHtml } from '~/lib/sanitize-html'
 
-// Configure marked for safe HTML output
+// Rendering options only — marked passes raw HTML in the source through
+// untouched, so its output is sanitized downstream (see ~/lib/sanitize-html).
 marked.setOptions({
   breaks: true, // Convert \n to <br>
-  gfm: true     // GitHub Flavored Markdown
+  gfm: true, // GitHub Flavored Markdown
 })
 
 export interface Message {
@@ -20,7 +21,7 @@ export interface Message {
   role: 'user' | 'assistant' | 'system' | 'error' | 'warning'
   content: string
   timestamp: Date
-  toolCall?: ToolCallInfo  // Single tool call (not array)
+  toolCall?: ToolCallInfo // Single tool call (not array)
   graphData?: ElementDefinition[]
   /** User-facing hint for error/warning messages */
   hint?: string
@@ -60,20 +61,17 @@ const toggledEntities = new Set<string>()
  * in interactive spans. Matches are case-insensitive, whole-word.
  * Avoids matching inside HTML tags or code blocks.
  */
-function annotateEntities(
-  html: string,
-  entityNames: Map<string, string[]>
-): string {
+function annotateEntities(html: string, entityNames: Map<string, string[]>): string {
   if (!entityNames || entityNames.size === 0) return html
 
   // Sort names by length (longest first) to avoid partial matches
   const names = [...entityNames.keys()].sort((a, b) => b.length - a.length)
   // Only match names with 2+ chars to avoid noise
-  const filteredNames = names.filter(n => n.length >= 2)
+  const filteredNames = names.filter((n) => n.length >= 2)
   if (filteredNames.length === 0) return html
 
   // Build regex that matches any entity name as a whole word
-  const escaped = filteredNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const escaped = filteredNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
   const pattern = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi')
 
   // Split HTML into tag vs text segments to avoid matching inside tags
@@ -85,7 +83,10 @@ function annotateEntities(
 
     // Track code block boundaries
     if (seg.startsWith('<code') || seg.startsWith('<pre')) inCode = true
-    if (seg === '</code>' || seg === '</pre>') { inCode = false; continue }
+    if (seg === '</code>' || seg === '</pre>') {
+      inCode = false
+      continue
+    }
 
     // Skip HTML tags and code content
     if (seg.startsWith('<') || inCode) continue
@@ -93,12 +94,15 @@ function annotateEntities(
     // Replace entity names in text segments
     segments[i] = seg.replace(pattern, (match) => {
       // Find the canonical name (case-insensitive lookup)
-      const key = [...entityNames.keys()].find(k => k.toLowerCase() === match.toLowerCase())
+      const key = [...entityNames.keys()].find((k) => k.toLowerCase() === match.toLowerCase())
       if (!key) return match
       const ids = entityNames.get(key)!
-      const idsAttr = ids.join(',')
+      // Entity names and ids come from tool results — escape them so a quote
+      // in a name cannot terminate the attribute it is interpolated into.
+      const idsAttr = escapeHtmlAttribute(ids.join(','))
+      const nameAttr = escapeHtmlAttribute(key)
       const isToggled = toggledEntities.has(key)
-      return `<span class="graph-entity${isToggled ? ' toggled' : ''}" data-entity-name="${key}" data-entity-ids="${idsAttr}" title="Click to pin highlight">${match}</span>`
+      return `<span class="graph-entity${isToggled ? ' toggled' : ''}" data-entity-name="${nameAttr}" data-entity-ids="${idsAttr}" title="Click to pin highlight">${match}</span>`
     })
   }
 
@@ -115,10 +119,10 @@ function annotateReferences(html: string, references: RetrievalReference[]): str
   // filename → docId (first reference for that file)
   const byName = new Map<string, string>()
   for (const r of references) if (r.source && !byName.has(r.source)) byName.set(r.source, r.docId)
-  const names = [...byName.keys()].filter(n => n.length >= 3).sort((a, b) => b.length - a.length)
+  const names = [...byName.keys()].filter((n) => n.length >= 3).sort((a, b) => b.length - a.length)
   if (names.length === 0) return html
 
-  const escaped = names.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const escaped = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
   const pattern = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi')
 
   const segments = html.split(/(<[^>]+>)/g)
@@ -126,14 +130,19 @@ function annotateReferences(html: string, references: RetrievalReference[]): str
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i]
     if (seg.startsWith('<code') || seg.startsWith('<pre')) inCode = true
-    if (seg === '</code>' || seg === '</pre>') { inCode = false; continue }
+    if (seg === '</code>' || seg === '</pre>') {
+      inCode = false
+      continue
+    }
     if (seg.startsWith('<') || inCode) continue
 
     segments[i] = seg.replace(pattern, (match) => {
-      const key = [...byName.keys()].find(k => k.toLowerCase() === match.toLowerCase())
+      const key = [...byName.keys()].find((k) => k.toLowerCase() === match.toLowerCase())
       if (!key) return match
-      const docId = byName.get(key)!
-      return `<span class="doc-ref" data-doc-id="${docId}" title="Open ${key} in viewer">${match}<sup class="doc-ref-mark">↗</sup></span>`
+      // Filenames and document ids are user/tool supplied — escape them so a
+      // quote in a filename cannot terminate the attribute it lands in.
+      const docId = escapeHtmlAttribute(byName.get(key)!)
+      return `<span class="doc-ref" data-doc-id="${docId}" title="Open ${escapeHtmlAttribute(key)} in viewer">${match}<sup class="doc-ref-mark">↗</sup></span>`
     })
   }
 
@@ -142,7 +151,26 @@ function annotateReferences(html: string, references: RetrievalReference[]): str
 
 /** Unique references by document (one footer chip per cited file). */
 function dedupeReferencesByDoc(references: RetrievalReference[]): RetrievalReference[] {
-  return [...new Map(references.map(r => [r.docId, r])).values()]
+  return [...new Map(references.map((r) => [r.docId, r])).values()]
+}
+
+/**
+ * Render an assistant message to the HTML handed to `innerHTML`.
+ *
+ * Order matters: marked's output is sanitized FIRST, then annotated. The
+ * annotators emit their own `.graph-entity` / `.doc-ref` spans, so running
+ * them after sanitization keeps that code-generated markup intact; the values
+ * they interpolate are individually escaped instead (see the annotators
+ * above). Sanitizing last would have to allow those spans back in anyway,
+ * and would re-parse markup we just produced.
+ */
+export function renderAssistantMarkdown(
+  content: string,
+  entityNames: Map<string, string[]>,
+  references: RetrievalReference[],
+): string {
+  const html = sanitizeMarkdownHtml(marked.parse(content ?? '') as string)
+  return annotateReferences(annotateEntities(html, entityNames), references)
 }
 
 // ============================================================================
@@ -155,7 +183,7 @@ function extractThinking(content: string): { thinking: string | null; body: stri
   if (!match) return { thinking: null, body: content }
   return {
     thinking: match[1].trim(),
-    body: content.slice(match[0].length)
+    body: content.slice(match[0].length),
   }
 }
 
@@ -220,9 +248,11 @@ export const ChatMessages = (props: ChatMessagesProps) => {
     }
 
     // Also update all other spans with the same entity name
-    messagesContainerRef?.querySelectorAll(`.graph-entity[data-entity-name="${name}"]`).forEach(el => {
-      el.classList.toggle('toggled', toggledEntities.has(name))
-    })
+    messagesContainerRef
+      ?.querySelectorAll(`.graph-entity[data-entity-name="${name}"]`)
+      .forEach((el) => {
+        el.classList.toggle('toggled', toggledEntities.has(name))
+      })
 
     // Update highlights
     if (props.onHighlightEntities) {
@@ -238,10 +268,8 @@ export const ChatMessages = (props: ChatMessagesProps) => {
   }
 
   /** Render assistant message with entity + reference annotation */
-  const renderAssistantContent = (content: string, references: RetrievalReference[]) => {
-    const html = marked.parse(content ?? '') as string
-    return annotateReferences(annotateEntities(html, props.graphEntityNames ?? new Map()), references)
-  }
+  const renderAssistantContent = (content: string, references: RetrievalReference[]) =>
+    renderAssistantMarkdown(content, props.graphEntityNames ?? new Map(), references)
 
   return (
     <ScrollArea.Root style={{ flex: 1, overflow: 'hidden', 'min-height': 0 }}>
@@ -274,18 +302,33 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                     justify="center"
                     text="white xs"
                     font="medium"
-                    bg={message.role === 'user' ? 'cyber-700'
-                      : message.role === 'error' ? 'red-900/50'
-                      : message.role === 'warning' ? 'amber-900/50'
-                      : 'dark-bg-tertiary'}
-                    border={message.role === 'user' ? '1 cyber-500'
-                      : message.role === 'error' ? '1 red-500/50'
-                      : message.role === 'warning' ? '1 amber-500/50'
-                      : '1 neon-cyan/50'}
-                    shadow={message.role === 'user' ? '[0_0_10px_rgba(79,70,229,0.3)]'
-                      : message.role === 'error' ? '[0_0_10px_rgba(239,68,68,0.2)]'
-                      : message.role === 'warning' ? '[0_0_10px_rgba(245,158,11,0.2)]'
-                      : '[0_0_10px_rgba(0,255,255,0.2)]'}
+                    bg={
+                      message.role === 'user'
+                        ? 'cyber-700'
+                        : message.role === 'error'
+                          ? 'red-900/50'
+                          : message.role === 'warning'
+                            ? 'amber-900/50'
+                            : 'dark-bg-tertiary'
+                    }
+                    border={
+                      message.role === 'user'
+                        ? '1 cyber-500'
+                        : message.role === 'error'
+                          ? '1 red-500/50'
+                          : message.role === 'warning'
+                            ? '1 amber-500/50'
+                            : '1 neon-cyan/50'
+                    }
+                    shadow={
+                      message.role === 'user'
+                        ? '[0_0_10px_rgba(79,70,229,0.3)]'
+                        : message.role === 'error'
+                          ? '[0_0_10px_rgba(239,68,68,0.2)]'
+                          : message.role === 'warning'
+                            ? '[0_0_10px_rgba(245,158,11,0.2)]'
+                            : '[0_0_10px_rgba(0,255,255,0.2)]'
+                    }
                   >
                     {getInitials(message.role)}
                   </div>
@@ -295,22 +338,34 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                     max-w="2xl"
                     p="3"
                     rounded="lg"
-                    bg={message.role === 'user' ? 'cyber-800/50'
-                      : message.role === 'error' ? 'red-900/20'
-                      : message.role === 'warning' ? 'amber-900/20'
-                      : 'dark-bg-tertiary'}
+                    bg={
+                      message.role === 'user'
+                        ? 'cyber-800/50'
+                        : message.role === 'error'
+                          ? 'red-900/20'
+                          : message.role === 'warning'
+                            ? 'amber-900/20'
+                            : 'dark-bg-tertiary'
+                    }
                     text="dark-text-primary"
-                    border={message.role === 'user' ? '1 cyber-700/50'
-                      : message.role === 'error' ? '1 red-500/30'
-                      : message.role === 'warning' ? '1 amber-500/30'
-                      : '1 dark-border-secondary'}
+                    border={
+                      message.role === 'user'
+                        ? '1 cyber-700/50'
+                        : message.role === 'error'
+                          ? '1 red-500/30'
+                          : message.role === 'warning'
+                            ? '1 amber-500/30'
+                            : '1 dark-border-secondary'
+                    }
                     backdrop-blur="sm"
                   >
-                    <Switch fallback={
-                      <div text="sm" white-space="pre-wrap" break-words>
-                        {message.content}
-                      </div>
-                    }>
+                    <Switch
+                      fallback={
+                        <div text="sm" white-space="pre-wrap" break-words>
+                          {message.content}
+                        </div>
+                      }
+                    >
                       <Match when={message.role === 'assistant'}>
                         {(() => {
                           const { thinking, body } = extractThinking(message.content)
@@ -319,12 +374,20 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                               <Show when={thinking}>
                                 <Collapsible.Root class="think-root">
                                   <Collapsible.Trigger class="think-trigger">
-                                    <span class="i-mdi-brain" style={{ width: '14px', height: '14px', 'flex-shrink': 0 }} />
+                                    <span
+                                      class="i-mdi-brain"
+                                      style={{ width: '14px', height: '14px', 'flex-shrink': 0 }}
+                                    />
                                     <span class="think-preview">{thinking!.slice(0, 140)}</span>
                                   </Collapsible.Trigger>
                                   <Collapsible.Content class="think-content">
-                                    {/* eslint-disable-next-line solid/no-innerhtml */}
-                                    <div class="think-body prose-chat" innerHTML={marked.parse(thinking!) as string} />
+                                    <div
+                                      class="think-body prose-chat"
+                                      // eslint-disable-next-line solid/no-innerhtml
+                                      innerHTML={sanitizeMarkdownHtml(
+                                        marked.parse(thinking!) as string,
+                                      )}
+                                    />
                                   </Collapsible.Content>
                                 </Collapsible.Root>
                               </Show>
@@ -349,7 +412,10 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                                           props.onOpenReference?.({ docId: r.docId })
                                         }}
                                       >
-                                        <span class="i-mdi-file-document-outline" style={{ width: '11px', height: '11px' }} />
+                                        <span
+                                          class="i-mdi-file-document-outline"
+                                          style={{ width: '11px', height: '11px' }}
+                                        />
                                         {r.source}
                                       </button>
                                     )}
@@ -364,12 +430,14 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                         <div flex="~ col" gap="1">
                           <div flex="~ items-center" gap="1.5">
                             <span
-                              class={message.role === 'error' ? 'i-mdi-alert-circle' : 'i-mdi-alert'}
+                              class={
+                                message.role === 'error' ? 'i-mdi-alert-circle' : 'i-mdi-alert'
+                              }
                               style={{
                                 width: '16px',
                                 height: '16px',
                                 'flex-shrink': '0',
-                                color: message.role === 'error' ? '#ef4444' : '#f59e0b'
+                                color: message.role === 'error' ? '#ef4444' : '#f59e0b',
                               }}
                             />
                             <span
@@ -398,7 +466,12 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                             >
                               <span
                                 class="i-mdi-lightbulb-outline"
-                                style={{ width: '14px', height: '14px', 'flex-shrink': '0', color: '#a3a3a3' }}
+                                style={{
+                                  width: '14px',
+                                  height: '14px',
+                                  'flex-shrink': '0',
+                                  color: '#a3a3a3',
+                                }}
                               />
                               <span text="dark-text-secondary">{message.hint}</span>
                             </div>
@@ -410,7 +483,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                     <div text="xs dark-text-tertiary" m="t-1">
                       {message.timestamp.toLocaleTimeString([], {
                         hour: '2-digit',
-                        minute: '2-digit'
+                        minute: '2-digit',
                       })}
                     </div>
                   </div>
@@ -432,14 +505,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
 
           {/* Empty State */}
           <Show when={props.messages.length === 0}>
-            <div
-              flex="~"
-              items="center"
-              justify="center"
-              h="full"
-              min-h="64"
-              text="center"
-            >
+            <div flex="~" items="center" justify="center" h="full" min-h="64" text="center">
               <div>
                 <div text="2xl neon-cyan/50" m="b-2">
                   <svg
@@ -470,9 +536,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
 
           {/* Trailing slot — e.g. the live progress bar, rendered where the
               next assistant bubble would appear. */}
-          <Show when={props.trailing}>
-            {(slot) => slot()()}
-          </Show>
+          <Show when={props.trailing}>{(slot) => slot()()}</Show>
 
           {/* Sentinel element for auto-scroll */}
           <div ref={bottomRef} />

@@ -7,7 +7,7 @@
  * Gets the list of allowed email addresses from environment variable
  * @returns Array of allowed email addresses (lowercase)
  */
-export function getAllowedEmails(): string[] {
+export function getAllowedEmails(
   // `process.env` first, `import.meta.env` second. Vite inlines VITE_-prefixed
   // vars at BUILD time, which is fine on the host (the build reads app/.env)
   // but wrong for the container image (#197): the list would be frozen into
@@ -17,9 +17,16 @@ export function getAllowedEmails(): string[] {
   // api/auth/callback.ts), so process.env is available and is the right source
   // of truth at runtime; the build-time value stays as the fallback so
   // `pnpm dev` and the host build behave exactly as before.
-  const allowedEmailsEnv =
-    (typeof process !== 'undefined' ? process.env.VITE_ALLOWED_EMAILS : undefined) ||
-    import.meta.env.VITE_ALLOWED_EMAILS
+  //
+  // The two values are default params (not read directly in the body) purely
+  // to give tests an injectable seam — under Vitest, import.meta.env proxies
+  // process.env, so the two branches are otherwise indistinguishable.
+  runtimeValue: string | undefined = typeof process !== 'undefined'
+    ? process.env.VITE_ALLOWED_EMAILS
+    : undefined,
+  inlinedValue: string | undefined = import.meta.env.VITE_ALLOWED_EMAILS,
+): string[] {
+  const allowedEmailsEnv = runtimeValue || inlinedValue
 
   if (!allowedEmailsEnv) {
     console.warn('[allowList] VITE_ALLOWED_EMAILS not configured. All emails will be rejected.')

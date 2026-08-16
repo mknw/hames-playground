@@ -47,7 +47,7 @@ All services communicate via a shared bridge network (`app-network`).
 ### Redis
 
 - **Container**: redis-seederis
-- **Image**: redis:7-alpine
+- **Image**: redis/redis-stack:7.4.0-v8 (bundles RedisJSON + RediSearch, required by the Data Stash pipeline; plain redis:7-alpine has no modules)
 - **Ports**: 6379:6379
 - **Authentication**: None (alpine default)
 - **Data**: Persisted in `redis_data` named volume
@@ -111,7 +111,10 @@ production build (the `localhost` form is its `import.meta.env.DEV` branch).
 dev bypass in the image, so the container always runs real Entra sign-in —
 `AZURE_*`, `AUTH_SESSION_SECRET` and `VITE_ALLOWED_EMAILS` must be in
 `app/.env`. The allow-list is read from `process.env` at runtime (falling back
-to the build-time inlined value), so one image serves any tenant. Port 3444 is
+to the build-time inlined value), so one image serves any tenant. `VITE_DEV_BYPASS_AUTH`
+must stay `import.meta.env`-only (inlined, dead in a production build) — porting
+it to the same `process.env`-first pattern as the allow-list would let a
+runtime env var re-enable the bypass inside the container. Port 3444 is
 published unchanged, so the registered redirect URI still matches.
 
 **Healthcheck**: `/api/health` is a liveness probe — it reports that the process

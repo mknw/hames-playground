@@ -31,10 +31,17 @@ describe('getAllowedEmails', () => {
   it('prefers the runtime process.env value over the build-time inlined one', () => {
     // The container is built without app/.env, so the inlined value is absent
     // or stale; compose supplies the real list as a plain env var (#197).
-    vi.stubEnv('VITE_ALLOWED_EMAILS', 'baked-in@corp.com')
-    process.env.VITE_ALLOWED_EMAILS = 'runtime@corp.com'
+    // Under Vitest, import.meta.env proxies process.env, so the two sources
+    // are indistinguishable via vi.stubEnv/process.env alone — inject both
+    // values directly through the function's seam to pin precedence for real.
+    expect(getAllowedEmails('runtime@corp.com', 'baked-in@corp.com')).toEqual(['runtime@corp.com'])
+  })
 
-    expect(getAllowedEmails()).toEqual(['runtime@corp.com'])
+  it('falls back to the inlined value when the runtime one is absent', () => {
+    // '' rather than `undefined` — an explicit `undefined` argument would
+    // trigger the parameter's own default-value expression instead of
+    // testing the fallback branch.
+    expect(getAllowedEmails('', 'baked-in@corp.com')).toEqual(['baked-in@corp.com'])
   })
 
   it('returns an empty list and warns when the var is unset', () => {

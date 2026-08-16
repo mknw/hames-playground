@@ -141,14 +141,20 @@ jobs:
       - name: Boot it and hit /api/health
         run: |
           docker run -d --name app-smoke -p 3444:3444 kg-agent-app:ci
+          served=""
           for i in $(seq 1 30); do
-            if curl -fsS localhost:3444/api/health; then
+            if [ -z "$served" ] && curl -fsS localhost:3444/api/health; then
               echo && echo "healthy after ${i}s"
+              served=1
+            fi
+            health_status=$(docker inspect -f '{{.State.Health.Status}}' app-smoke)
+            echo "HEALTHCHECK status: ${health_status}"
+            if [ -n "$served" ] && [ "$health_status" = "healthy" ]; then
               exit 0
             fi
             sleep 1
           done
-          echo "::error::container did not serve /api/health within 30s"
+          echo "::error::container did not serve /api/health and report HEALTHCHECK=healthy within 30s"
           docker logs app-smoke
           exit 1
 

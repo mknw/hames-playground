@@ -164,6 +164,10 @@ services:
       # is root-equivalent on the host: drop it, and only the sandbox agents
       # stop working.
       - /var/run/docker.sock:/var/run/docker.sock
+      # process.cwd() is /app at runtime, so server-catalog.server.ts and
+      # action-tokens.server.ts's `../configs` candidate resolves to /configs —
+      # without this mount the catalog/action-token lookups silently miss.
+      - ./configs:/configs:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -174,6 +178,10 @@ services:
       mcp-gateway:
         # No healthcheck on the gateway image, and the app reconnects per call
         # anyway (mcp-client.server.ts pools + retries), so started is enough.
+        condition: service_started
+      doc-convert:
+        # No healthcheck on the doc-convert image; STASH_CONVERT_DOCS defaults
+        # off so a slow/unready sidecar isn't on the critical path.
         condition: service_started
     networks:
       - app-network

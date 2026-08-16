@@ -49,6 +49,12 @@ platform. Everything else in this guide (§4 `.env`, §6 secrets, §8 Caddy) app
 either way; the difference is that steps 6–7's `pnpm build` + `systemd` unit become
 `docker compose build app && docker compose up -d app`, with Caddy proxying to the
 same `127.0.0.1:3444`. See [`docs/DOCKER_COMPOSE.md`](../DOCKER_COMPOSE.md#app-the-solidstart-app-197).
+Note the gap with the rest of this VM's shape: the compose `app` service
+publishes `3444:3444`, which Docker binds to `0.0.0.0` and — because Docker
+writes its own iptables rules — reaches the host regardless of `ufw`, unlike
+every other port pinned to `127.0.0.1` in the diagram above; the container
+route should rewrite that mapping to `127.0.0.1:3444:3444` or otherwise rely
+on the NSG to keep 3444 off the public interface.
 
 ---
 

@@ -82,7 +82,8 @@ docker compose ps
 
 Procedures live in `.claude/skills/` (tracked in git, so worktrees inherit them —
 no copy step). Model-invoked skills announce themselves through their own
-descriptions; the only one you have to ask for by name is `/grill-me`.
+descriptions; the ones you have to ask for by name are `/grill-me` and
+`/improve-codebase-architecture`.
 
 - Bare names (`grilling`, `codebase-design`, …) are stack-agnostic and are the
   candidate set for the open-source split. `kg-`-prefixed ones encode something
@@ -95,6 +96,9 @@ descriptions; the only one you have to ask for by name is `/grill-me`.
 - Issue-tracker workflow — how a skill fetches the spec for a change:
   [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md). The issue body
   is the spec; the project board is scheduling, read-only context.
+- Data the skills read: house vocabulary in [`GLOSSARY.md`](GLOSSARY.md),
+  decision records in [`docs/adr/`](docs/adr/README.md) (which also states when
+  one gets written, and that they are not to be re-litigated).
 - Provenance and upstream pins for vendored files: `.claude/skills/PROVENANCE.md`;
   licences: `.claude/skills/NOTICE.md`. Adoption programme:
   [`docs/plan/skills-adoption.md`](docs/plan/skills-adoption.md).

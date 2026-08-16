@@ -9,6 +9,7 @@ import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
 import { repairJson } from '../json-repair'
+import { normalizeControllerAction } from '../controller-action'
 import type { LoopTurn, PriorResult, ExpandedRef } from '../../../../baml_client/types'
 import type {
   ControllerAction,
@@ -251,7 +252,12 @@ export function simpleLoop<T extends SimpleLoopData>(
             config?.fewShots,
             multiMode === 'off' ? undefined : multiMode,
           )
-          action = controllerResult.action
+          // Apply the contract's documented defaults ONCE, here, before the
+          // action is recorded or read: `is_final` is optional (#159) and
+          // absent means false. Every controller funnels through this point —
+          // adapters, `b.LoopController` bound directly, custom ones — so
+          // nothing downstream has to re-handle an absent value.
+          action = normalizeControllerAction(controllerResult.action)
           controllerLlmCall = controllerResult.llmCall
 
           // Track controller action event with LLM call data.

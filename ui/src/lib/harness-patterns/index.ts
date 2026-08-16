@@ -80,7 +80,7 @@ export type {
   // Infrastructure types
   MCPToolDescription,
   ToolCallResult,
-  ToolSet
+  ToolSet,
 } from './types'
 
 export {
@@ -88,7 +88,7 @@ export {
   MAX_RETRIES,
   DEFAULT_TRACK_HISTORY,
   DEFAULT_COMMIT_STRATEGY,
-  DEFAULT_ERROR_SEVERITY
+  DEFAULT_ERROR_SEVERITY,
 } from './types'
 
 // ============================================================================
@@ -127,7 +127,7 @@ export {
   resumeHarness,
   continueSession,
   type HarnessData,
-  type HarnessResultScoped
+  type HarnessResultScoped,
 } from './harness.server'
 
 // ============================================================================
@@ -170,7 +170,7 @@ export {
   type GuardrailConfig,
   type CircuitBreakerConfig,
   type HookConfig,
-  type HookTrigger
+  type HookTrigger,
 } from './patterns'
 
 // EventView
@@ -198,7 +198,7 @@ export {
   resolveConfig,
   getDefaultTrackHistory,
   getDefaultCommitStrategy,
-  enrichToolResult
+  enrichToolResult,
 } from './context.server'
 
 // ============================================================================
@@ -211,6 +211,7 @@ export { routeMessageOp } from './routing.server'
 export { scheduleSummarization } from './summarize.server'
 export { getErrorHint } from './error-hints'
 export { stripThinkBlocks, truncateToolResults, omitResultFields } from './content-transforms'
+export { normalizeControllerAction } from './controller-action'
 
 // BAML Adapters
 export {
@@ -227,5 +228,5 @@ export {
   createDatabaseController,
   createCodeModeController,
   invalidateToolDescriptions,
-  type ActorAdapterOptions
+  type ActorAdapterOptions,
 } from './baml-adapters.server'

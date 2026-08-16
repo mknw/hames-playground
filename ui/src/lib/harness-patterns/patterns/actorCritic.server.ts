@@ -10,6 +10,7 @@ import { assertServerOnImport } from '../assert.server'
 import { callTool, listTools as mcpListTools } from '../mcp-client.server'
 import { invalidateToolDescriptions } from '../baml-adapters.server'
 import { repairJson } from '../json-repair'
+import { normalizeControllerAction } from '../controller-action'
 import type {
   ControllerAction,
   ActorCriticConfig,
@@ -191,7 +192,7 @@ export function actorCritic<T extends ActorCriticData>(
         // maxRetries so the actor's prompt can surface "Attempt N of M" and
         // nudge the model toward `Return` when the budget is nearly exhausted.
         const actorCollector = new Collector('actor')
-        const { action, llmCall: actorLlmCall } = await actor(
+        const { action: rawAction, llmCall: actorLlmCall } = await actor(
           userContent,
           intent,
           availableTools,
@@ -201,6 +202,15 @@ export function actorCritic<T extends ActorCriticData>(
           maxRetries,
           multiMode === 'off' ? undefined : multiMode,
         )
+
+        // Apply the contract's documented defaults ONCE, here, before the
+        // action is recorded or read: `is_final` is optional (#159) and absent
+        // means false. The actor is affected exactly as the loop controller is
+        // — same `ControllerAction` class, same undemonstrated field — so the
+        // normalisation is symmetric. Here it keeps an omission from being read
+        // as "not asking for the critic" in one place and rendered as `null`
+        // back into the actor's own attempt history in another.
+        const action = normalizeControllerAction(rawAction)
 
         // Track controller action with LLM call data. `turn` and `maxTurns`
         // (mapped from attempt / maxRetries) are exposed so live progress

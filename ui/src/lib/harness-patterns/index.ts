@@ -211,6 +211,7 @@ export { routeMessageOp } from './routing.server'
 export { scheduleSummarization } from './summarize.server'
 export { getErrorHint } from './error-hints'
 export { stripThinkBlocks, truncateToolResults, omitResultFields } from './content-transforms'
+export { normalizeControllerAction } from './controller-action'
 
 // BAML Adapters
 export {

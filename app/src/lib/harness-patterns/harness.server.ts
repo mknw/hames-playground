@@ -15,14 +15,14 @@ import type {
   ConfiguredPattern,
   AssistantMessageEventData,
   UserMessageEventData,
-  TurnEstimateSettings
+  TurnEstimateSettings,
 } from './types'
 import {
   createContext,
   serializeContext,
   deserializeContext,
   setError as setCtxError,
-  generateId
+  generateId,
 } from './context.server'
 import { runWithLiveListener } from './live-event-context.server'
 import { getRequestSettings } from '../settings-context.server'
@@ -36,12 +36,9 @@ assertServerOnImport()
  */
 function estimateChainTurns<T>(
   patterns: ConfiguredPattern<T>[],
-  settings: TurnEstimateSettings
+  settings: TurnEstimateSettings,
 ): number {
-  return patterns.reduce(
-    (sum, p) => sum + (p.estimateTurns?.(settings) ?? 1),
-    0
-  )
+  return patterns.reduce((sum, p) => sum + (p.estimateTurns?.(settings) ?? 1), 0)
 }
 
 function turnEstimateSettings(): TurnEstimateSettings {
@@ -50,10 +47,7 @@ function turnEstimateSettings(): TurnEstimateSettings {
 }
 
 /** Stamp `chainTurnEstimate` on the most recent user_message event in-place. */
-function stampChainEstimate<T>(
-  ctx: UnifiedContext<T>,
-  patterns: ConfiguredPattern<T>[]
-): void {
+function stampChainEstimate<T>(ctx: UnifiedContext<T>, patterns: ConfiguredPattern<T>[]): void {
   let userMsg: ContextEvent | undefined
   for (let i = ctx.events.length - 1; i >= 0; i--) {
     if (ctx.events[i].type === 'user_message') {
@@ -96,7 +90,12 @@ export interface HarnessResultScoped<T> extends HarnessResult<T> {
  */
 export function harness<T extends HarnessData & Record<string, unknown>>(
   ...patterns: ConfiguredPattern<T>[]
-): (input: string, sessionId?: string, initialData?: Partial<T>, onEvent?: (event: ContextEvent) => void) => Promise<HarnessResultScoped<T>> {
+): (
+  input: string,
+  sessionId?: string,
+  initialData?: Partial<T>,
+  onEvent?: (event: ContextEvent) => void,
+) => Promise<HarnessResultScoped<T>> {
   return async (input, sessionId, initialData, onEvent) => {
     const startTime = Date.now()
 
@@ -128,7 +127,7 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
           type: 'assistant_message',
           ts: Date.now(),
           patternId: 'harness',
-          data: { content: response } as AssistantMessageEventData
+          data: { content: response } as AssistantMessageEventData,
         })
       }
 
@@ -138,7 +137,7 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
         status: ctx.status,
         duration_ms: Date.now() - startTime,
         context: ctx,
-        serialized: serializeContext(ctx)
+        serialized: serializeContext(ctx),
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
@@ -150,7 +149,7 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
         status: 'error' as CtxStatus,
         duration_ms: Date.now() - startTime,
         context: ctx,
-        serialized: serializeContext(ctx)
+        serialized: serializeContext(ctx),
       }
     }
   }
@@ -164,11 +163,13 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
  * @param approved - Whether the action was approved
  * @returns The resumed result with updated context
  */
-export async function resumeHarness<T extends HarnessData & Record<string, unknown> & { approved?: boolean }>(
+export async function resumeHarness<
+  T extends HarnessData & Record<string, unknown> & { approved?: boolean },
+>(
   serializedContext: string,
   patterns: ConfiguredPattern<T>[],
   approved: boolean,
-  onEvent?: (event: ContextEvent) => void
+  onEvent?: (event: ContextEvent) => void,
 ): Promise<HarnessResultScoped<T>> {
   // Restore context from serialized state
   const ctx = deserializeContext<T>(serializedContext)
@@ -189,7 +190,7 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
     type: 'approval_response',
     ts: Date.now(),
     patternId: 'harness',
-    data: { approved }
+    data: { approved },
   })
 
   try {
@@ -205,7 +206,7 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
         type: 'assistant_message',
         ts: Date.now(),
         patternId: 'harness',
-        data: { content: response } as AssistantMessageEventData
+        data: { content: response } as AssistantMessageEventData,
       })
     }
 
@@ -215,7 +216,7 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
       status: finalStatus,
       duration_ms: Date.now() - startTime,
       context: ctx,
-      serialized: serializeContext(ctx)
+      serialized: serializeContext(ctx),
     }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)
@@ -227,7 +228,7 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
       status: 'error' as CtxStatus,
       duration_ms: Date.now() - startTime,
       context: ctx,
-      serialized: serializeContext(ctx)
+      serialized: serializeContext(ctx),
     }
   }
 }
@@ -244,7 +245,7 @@ export async function continueSession<T extends HarnessData & Record<string, unk
   serializedContext: string,
   patterns: ConfiguredPattern<T>[],
   newInput: string,
-  onEvent?: (event: ContextEvent) => void
+  onEvent?: (event: ContextEvent) => void,
 ): Promise<HarnessResultScoped<T>> {
   // Restore context from serialized state
   const ctx = deserializeContext<T>(serializedContext)
@@ -271,7 +272,7 @@ export async function continueSession<T extends HarnessData & Record<string, unk
     type: 'user_message',
     ts: Date.now(),
     patternId: 'harness',
-    data: { content: newInput }
+    data: { content: newInput },
   })
 
   // Re-project chain turns for this turn — settings or pattern selection may
@@ -294,7 +295,7 @@ export async function continueSession<T extends HarnessData & Record<string, unk
         type: 'assistant_message',
         ts: Date.now(),
         patternId: 'harness',
-        data: { content: response } as AssistantMessageEventData
+        data: { content: response } as AssistantMessageEventData,
       })
     }
 
@@ -304,7 +305,7 @@ export async function continueSession<T extends HarnessData & Record<string, unk
       status: finalStatus,
       duration_ms: Date.now() - startTime,
       context: ctx,
-      serialized: serializeContext(ctx)
+      serialized: serializeContext(ctx),
     }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)
@@ -316,7 +317,7 @@ export async function continueSession<T extends HarnessData & Record<string, unk
       status: 'error' as CtxStatus,
       duration_ms: Date.now() - startTime,
       context: ctx,
-      serialized: serializeContext(ctx)
+      serialized: serializeContext(ctx),
     }
   }
 }

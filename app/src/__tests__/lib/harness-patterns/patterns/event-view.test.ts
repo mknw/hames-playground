@@ -1300,7 +1300,12 @@ describe('EventViewImpl', () => {
           patternId: 'web-search',
           data: { tool: 'search', result: 'found', success: true },
         },
-        { type: 'pattern_enter', ts: 6, patternId: 'synth-1', data: { pattern: 'compactExecution' } },
+        {
+          type: 'pattern_enter',
+          ts: 6,
+          patternId: 'synth-1',
+          data: { pattern: 'compactExecution' },
+        },
       ]
 
       const ctx = createMockContext(events)

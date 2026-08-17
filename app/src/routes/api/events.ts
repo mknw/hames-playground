@@ -4,55 +4,55 @@
  * Streams ContextEvents in real-time as they are committed during harness execution.
  * Enables reactive UI updates (e.g., graph visualization) without waiting for full completion.
  */
-import type { APIEvent } from "@solidjs/start/server";
-import { processMessageStreaming } from "../../lib/harness-client/actions.server";
-import { saveSession } from "../../lib/harness-client/session.server";
-import { compactBulkData, serializeContext } from "../../lib/harness-patterns";
-import { runFirstTurnTitleGen } from "../../lib/harness-client/examples/title-generator.server";
-import { getAuthenticatedUser } from "../../lib/auth/server";
-import { BYPASS_USER, isBypassEnabled } from "../../lib/auth/dev-bypass";
-import type { HarnessSettings } from "../../lib/settings";
+import type { APIEvent } from '@solidjs/start/server'
+import { processMessageStreaming } from '../../lib/harness-client/actions.server'
+import { saveSession } from '../../lib/harness-client/session.server'
+import { compactBulkData, serializeContext } from '../../lib/harness-patterns'
+import { runFirstTurnTitleGen } from '../../lib/harness-client/examples/title-generator.server'
+import { getAuthenticatedUser } from '../../lib/auth/server'
+import { BYPASS_USER, isBypassEnabled } from '../../lib/auth/dev-bypass'
+import type { HarnessSettings } from '../../lib/settings'
 
 /** Hard cap on how long the SSE stream stays open after `done` waiting for
  *  the title agent to resolve. If the LLM exceeds this, we close the stream
  *  without a `title_updated` event — the heuristic title persists. */
-const TITLE_GEN_TIMEOUT_MS = 3000;
+const TITLE_GEN_TIMEOUT_MS = 3000
 
 async function requireUserId(): Promise<string> {
-  if (isBypassEnabled()) return BYPASS_USER.id;
-  return (await getAuthenticatedUser()).id;
+  if (isBypassEnabled()) return BYPASS_USER.id
+  return (await getAuthenticatedUser()).id
 }
 
 export async function POST(event: APIEvent) {
-  const body = await event.request.json();
+  const body = await event.request.json()
   const { sessionId, message, agentId, settings } = body as {
-    sessionId: string;
-    message: string;
-    agentId?: string;
-    settings?: HarnessSettings;
-  };
+    sessionId: string
+    message: string
+    agentId?: string
+    settings?: HarnessSettings
+  }
 
   if (!sessionId || !message) {
-    return new Response(JSON.stringify({ error: "sessionId and message are required" }), {
+    return new Response(JSON.stringify({ error: 'sessionId and message are required' }), {
       status: 400,
-      headers: { "Content-Type": "application/json" },
-    });
+      headers: { 'Content-Type': 'application/json' },
+    })
   }
 
   // Auth here so we have a userId for the post-response background save —
   // the wrapped server action below also authenticates (defense in depth).
-  let userId: string;
+  let userId: string
   try {
-    userId = await requireUserId();
+    userId = await requireUserId()
   } catch (err) {
     return new Response(
-      JSON.stringify({ error: err instanceof Error ? err.message : "Unauthorized" }),
-      { status: 401, headers: { "Content-Type": "application/json" } },
-    );
+      JSON.stringify({ error: err instanceof Error ? err.message : 'Unauthorized' }),
+      { status: 401, headers: { 'Content-Type': 'application/json' } },
+    )
   }
-  const resolvedAgentId = agentId ?? "default";
+  const resolvedAgentId = agentId ?? 'default'
 
-  const encoder = new TextEncoder();
+  const encoder = new TextEncoder()
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -66,11 +66,11 @@ export async function POST(event: APIEvent) {
             // event to the right per-session progress controller (#47). Events
             // themselves don't carry sessionId in their typed shape — it's an
             // envelope-only field.
-            const data = JSON.stringify({ ...evt, sessionId });
-            controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+            const data = JSON.stringify({ ...evt, sessionId })
+            controller.enqueue(encoder.encode(`data: ${data}\n\n`))
           },
           settings,
-        );
+        )
 
         // Send final result as a named event
         const doneData = JSON.stringify({
@@ -81,8 +81,8 @@ export async function POST(event: APIEvent) {
           duration_ms: result.duration_ms,
           context: result.context,
           serialized: result.serialized,
-        });
-        controller.enqueue(encoder.encode(`event: done\ndata: ${doneData}\n\n`));
+        })
+        controller.enqueue(encoder.encode(`event: done\ndata: ${doneData}\n\n`))
 
         // First-turn title generation — synchronous w.r.t. the stream so the
         // result can ride out as a `title_updated` event before close. Hard
@@ -91,44 +91,37 @@ export async function POST(event: APIEvent) {
         // path fails or times out — the next `listConversations()` returns it.
         await Promise.race([
           runFirstTurnTitleGen(result.context, sessionId, userId).then((title) => {
-            if (!title) return;
-            const payload = JSON.stringify({ sessionId, title });
-            controller.enqueue(encoder.encode(`event: title_updated\ndata: ${payload}\n\n`));
+            if (!title) return
+            const payload = JSON.stringify({ sessionId, title })
+            controller.enqueue(encoder.encode(`event: title_updated\ndata: ${payload}\n\n`))
           }),
           new Promise<void>((resolve) => setTimeout(resolve, TITLE_GEN_TIMEOUT_MS)),
-        ]).catch((err) => console.error("[title-gen] failed:", err));
+        ]).catch((err) => console.error('[title-gen] failed:', err))
 
-        controller.close();
+        controller.close()
 
         // Fire-and-forget: summarize this turn's tool results in the background.
         // Runs after the SSE stream is closed — user already has the response.
         // Summaries are stored on tool_result events and persisted to session,
         // so they appear as compact pointers on subsequent turns.
         compactBulkData(result.context, async () => {
-          await saveSession(
-            sessionId,
-            userId,
-            resolvedAgentId,
-            serializeContext(result.context),
-          );
-        }).catch((err) =>
-          console.error("[summarize] background summarization failed:", err),
-        );
+          await saveSession(sessionId, userId, resolvedAgentId, serializeContext(result.context))
+        }).catch((err) => console.error('[summarize] background summarization failed:', err))
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = error instanceof Error ? error.message : String(error)
         controller.enqueue(
           encoder.encode(`event: error\ndata: ${JSON.stringify({ sessionId, error: msg })}\n\n`),
-        );
-        controller.close();
+        )
+        controller.close()
       }
     },
-  });
+  })
 
   return new Response(stream, {
     headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
     },
-  });
+  })
 }

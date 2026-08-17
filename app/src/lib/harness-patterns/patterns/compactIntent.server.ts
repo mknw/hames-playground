@@ -62,7 +62,7 @@ export interface CompactIntentData {
  * @returns ConfiguredPattern ready for chain
  */
 export function compactIntent<T extends CompactIntentData>(
-  config?: CompactIntentConfig
+  config?: CompactIntentConfig,
 ): ConfiguredPattern<T> {
   // Default: cross-turn message history of the last 5 turns, messages only —
   // mirrors the router's default view. Caller can override entirely.
@@ -77,10 +77,7 @@ export function compactIntent<T extends CompactIntentData>(
     ...config,
   })
 
-  const fn = async (
-    scope: PatternScope<T>,
-    view: EventView
-  ): Promise<PatternScope<T>> => {
+  const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
     let collector: Collector | undefined
     let startTime: number | undefined
     let variables: Record<string, unknown> | undefined
@@ -89,18 +86,16 @@ export function compactIntent<T extends CompactIntentData>(
       const allMessages = view.get()
 
       // Latest message = the last user_message in the window.
-      const currentMsg = [...allMessages].reverse().find(e => e.type === 'user_message')
-      const latest = currentMsg
-        ? (currentMsg.data as UserMessageEventData).content
-        : ''
+      const currentMsg = [...allMessages].reverse().find((e) => e.type === 'user_message')
+      const latest = currentMsg ? (currentMsg.data as UserMessageEventData).content : ''
 
       // Nothing to rewrite — leave intent unset, actor falls back to raw input.
       if (!latest) return scope
 
       // History = every message except the current one, mapped to {role, content}.
       const rawHistory = allMessages
-        .filter(e => e !== currentMsg)
-        .map(e => ({
+        .filter((e) => e !== currentMsg)
+        .map((e) => ({
           role: e.type === 'user_message' ? 'user' : 'assistant',
           content: (e.data as UserMessageEventData | AssistantMessageEventData).content,
         }))
@@ -112,8 +107,13 @@ export function compactIntent<T extends CompactIntentData>(
         trackEvent(
           scope,
           'intent_compacted',
-          { intent: latest, latest, historyLength: 0, skipped: 'no-history' } as IntentCompactedEventData,
-          resolved.trackHistory
+          {
+            intent: latest,
+            latest,
+            historyLength: 0,
+            skipped: 'no-history',
+          } as IntentCompactedEventData,
+          resolved.trackHistory,
         )
         return scope
       }
@@ -121,7 +121,7 @@ export function compactIntent<T extends CompactIntentData>(
       // Trim oldest history if it would overflow the describe-tier model
       // (the client this call will actually use, not the hardcoded Fallback).
       const contextWindow = getContextWindow(resolveClientForRole('describe'))
-      const history = trimToFit(rawHistory, h => JSON.stringify(h), 300, contextWindow)
+      const history = trimToFit(rawHistory, (h) => JSON.stringify(h), 300, contextWindow)
 
       const { b } = await import('../../../../baml_client')
       collector = new Collector('compactIntent')
@@ -139,7 +139,7 @@ export function compactIntent<T extends CompactIntentData>(
         'CompactIntent',
         variables,
         startTime,
-        intent
+        intent,
       )
 
       scope.data = { ...scope.data, intent }
@@ -148,7 +148,7 @@ export function compactIntent<T extends CompactIntentData>(
         'intent_compacted',
         { intent, latest, historyLength: history.length } as IntentCompactedEventData,
         resolved.trackHistory,
-        llmCall
+        llmCall,
       )
 
       return scope
@@ -160,12 +160,18 @@ export function compactIntent<T extends CompactIntentData>(
         collector !== undefined && variables !== undefined && startTime !== undefined
           ? extractFailureLLMCallData(collector, 'CompactIntent', variables, startTime)
           : undefined
-      trackEvent(scope, 'error', {
-        error: msg,
-        severity: resolved.errorSeverity,
-        hint: getErrorHint(msg),
-        ...(failedLlmCall ? { kind: 'llm_call' as const } : {}),
-      } as ErrorEventData, true, failedLlmCall)
+      trackEvent(
+        scope,
+        'error',
+        {
+          error: msg,
+          severity: resolved.errorSeverity,
+          hint: getErrorHint(msg),
+          ...(failedLlmCall ? { kind: 'llm_call' as const } : {}),
+        } as ErrorEventData,
+        true,
+        failedLlmCall,
+      )
       return scope
     }
   }

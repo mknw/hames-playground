@@ -982,12 +982,12 @@ attach a summary to the wrong tool result.
 Partial failure is graded, and every rung costs at most one extra call per
 affected item:
 
-| what happened | what compactBulkData does |
-| --- | --- |
-| the batch call threw | logs a warning, falls back to a per-item `ResultDescribe` for each item |
-| the model dropped an id | per-item call for that item only |
-| the model answered blank for an id | per-item call for that item only |
-| only one item needed a summary | skips the batch prompt entirely — single-item path |
+| what happened                      | what compactBulkData does                                               |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| the batch call threw               | logs a warning, falls back to a per-item `ResultDescribe` for each item |
+| the model dropped an id            | per-item call for that item only                                        |
+| the model answered blank for an id | per-item call for that item only                                        |
+| only one item needed a summary     | skips the batch prompt entirely — single-item path                      |
 
 **Measured (live, `RUN_EVALS=1`, see `src/__tests__/bench/describe-batch-bench.test.ts`):**
 the reliable win is request count; the token win scales inversely with payload
@@ -995,10 +995,10 @@ size, and wall clock regresses because the per-item arm already ran concurrently
 while a batch generates N summaries inside one response. This is post-response
 background work, so requests and tokens are what matter.
 
-| shape | calls | input tokens | total tokens | wall clock |
-| --- | --- | --- | --- | --- |
-| 6 large results (payload-dominated) | 6 → 1 | −2.1% | +0.5% | 2.4s → 5.2s |
-| 8 small results (overhead-dominated) | 8 → 1 | −16.9% | −9.7% | 1.4s → 2.6s |
+| shape                                | calls | input tokens | total tokens | wall clock  |
+| ------------------------------------ | ----- | ------------ | ------------ | ----------- |
+| 6 large results (payload-dominated)  | 6 → 1 | −2.1%        | +0.5%        | 2.4s → 5.2s |
+| 8 small results (overhead-dominated) | 8 → 1 | −16.9%       | −9.7%        | 1.4s → 2.6s |
 
 ## Configuration System
 
@@ -1102,7 +1102,7 @@ transformed into prompt-friendly types. The table below shows which harness
 | `pattern_exit`       | `PatternExitEventData`                                                                                                   | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
 | `approval_request`   | `ApprovalRequestEventData`                                                                                               | _(not sent to BAML)_                                    | (reserved — no active emitter)                                |
 | `approval_response`  | `ApprovalResponseEventData`                                                                                              | _(not sent to BAML)_                                    | (reserved — no active emitter)                                |
-| `error`              | `ErrorEventData`                                                                                                         | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling           |
+| `error`              | `ErrorEventData`                                                                                                         | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling      |
 | `reference_attached` | `ReferenceAttachedEventData`                                                                                             | _(not sent to BAML)_                                    | withReferences only (observability)                           |
 | `intent_compacted`   | `IntentCompactedEventData`                                                                                               | _(not sent to BAML)_                                    | compactIntent only (observability)                            |
 | `plan_created`       | `PlanCreatedEventData`                                                                                                   | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event     |

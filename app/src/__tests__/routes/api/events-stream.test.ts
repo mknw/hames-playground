@@ -44,8 +44,7 @@ const compactBulkData = vi.fn(async (_ctx: unknown, persist: () => Promise<void>
   await persist()
 })
 vi.mock('../../../lib/harness-patterns', () => ({
-  compactBulkData: (...a: unknown[]) =>
-    compactBulkData(...(a as [unknown, () => Promise<void>])),
+  compactBulkData: (...a: unknown[]) => compactBulkData(...(a as [unknown, () => Promise<void>])),
   serializeContext: (ctx: unknown) => ({ serialized: ctx }),
 }))
 

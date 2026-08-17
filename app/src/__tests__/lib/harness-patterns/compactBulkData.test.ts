@@ -12,7 +12,7 @@ import type { UnifiedContext, ContextEvent } from '../../../lib/harness-patterns
 
 // Mock server-only imports
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
-  assertServerOnImport: vi.fn()
+  assertServerOnImport: vi.fn(),
 }))
 
 // Mock both describe ops — the single-item call and its batched twin
@@ -30,7 +30,7 @@ function createTestContext(events: ContextEvent[]): UnifiedContext {
     input: 'test input',
     status: 'done',
     events,
-    data: {}
+    data: {},
   }
 }
 
@@ -62,9 +62,33 @@ describe('compactBulkData', () => {
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
-      { type: 'controller_action', ts: 2, patternId: 'p1', data: { action: { reasoning: 'Need to search', tool_name: 'search', tool_args: '{}', status: 'success', is_final: false } } },
-      { type: 'tool_call', ts: 3, patternId: 'p1', data: { callId: 'tc-1', tool: 'search', args: { q: 'test' } } },
-      { type: 'tool_result', ts: 4, patternId: 'p1', id: 'ev-r1', data: { callId: 'tc-1', tool: 'search', result: 'Found 5 results', success: true } },
+      {
+        type: 'controller_action',
+        ts: 2,
+        patternId: 'p1',
+        data: {
+          action: {
+            reasoning: 'Need to search',
+            tool_name: 'search',
+            tool_args: '{}',
+            status: 'success',
+            is_final: false,
+          },
+        },
+      },
+      {
+        type: 'tool_call',
+        ts: 3,
+        patternId: 'p1',
+        data: { callId: 'tc-1', tool: 'search', args: { q: 'test' } },
+      },
+      {
+        type: 'tool_result',
+        ts: 4,
+        patternId: 'p1',
+        id: 'ev-r1',
+        data: { callId: 'tc-1', tool: 'search', result: 'Found 5 results', success: true },
+      },
     ]
 
     const ctx = createTestContext(events)
@@ -77,7 +101,7 @@ describe('compactBulkData', () => {
       'search',
       JSON.stringify({ q: 'test' }),
       'Need to search',
-      'Found 5 results'
+      'Found 5 results',
     )
 
     // Should have enriched the event
@@ -93,7 +117,13 @@ describe('compactBulkData', () => {
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
-      { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-r1', data: { tool: 'search', result: 'data', success: true, hidden: true } },
+      {
+        type: 'tool_result',
+        ts: 2,
+        patternId: 'p1',
+        id: 'ev-r1',
+        data: { tool: 'search', result: 'data', success: true, hidden: true },
+      },
     ]
 
     const ctx = createTestContext(events)
@@ -110,7 +140,13 @@ describe('compactBulkData', () => {
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
-      { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-r1', data: { tool: 'search', result: 'data', success: true, archived: true } },
+      {
+        type: 'tool_result',
+        ts: 2,
+        patternId: 'p1',
+        id: 'ev-r1',
+        data: { tool: 'search', result: 'data', success: true, archived: true },
+      },
     ]
 
     const ctx = createTestContext(events)
@@ -126,7 +162,13 @@ describe('compactBulkData', () => {
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
-      { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-r1', data: { tool: 'search', result: 'data', success: true, summary: 'Already summarized' } },
+      {
+        type: 'tool_result',
+        ts: 2,
+        patternId: 'p1',
+        id: 'ev-r1',
+        data: { tool: 'search', result: 'data', success: true, summary: 'Already summarized' },
+      },
     ]
 
     const ctx = createTestContext(events)
@@ -142,7 +184,13 @@ describe('compactBulkData', () => {
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
-      { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-r1', data: { tool: 'search', result: null, success: false, error: 'Connection failed' } },
+      {
+        type: 'tool_result',
+        ts: 2,
+        patternId: 'p1',
+        id: 'ev-r1',
+        data: { tool: 'search', result: null, success: false, error: 'Connection failed' },
+      },
     ]
 
     const ctx = createTestContext(events)
@@ -158,7 +206,12 @@ describe('compactBulkData', () => {
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
-      { type: 'tool_result', ts: 2, patternId: 'p1', data: { tool: 'search', result: 'data', success: true } },
+      {
+        type: 'tool_result',
+        ts: 2,
+        patternId: 'p1',
+        data: { tool: 'search', result: 'data', success: true },
+      },
     ]
 
     const ctx = createTestContext(events)
@@ -178,8 +231,20 @@ describe('compactBulkData', () => {
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
-      { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-r1', data: { callId: 'tc-1', tool: 'search', result: 'search data', success: true } },
-      { type: 'tool_result', ts: 3, patternId: 'p1', id: 'ev-r2', data: { callId: 'tc-2', tool: 'fetch', result: 'fetched page', success: true } },
+      {
+        type: 'tool_result',
+        ts: 2,
+        patternId: 'p1',
+        id: 'ev-r1',
+        data: { callId: 'tc-1', tool: 'search', result: 'search data', success: true },
+      },
+      {
+        type: 'tool_result',
+        ts: 3,
+        patternId: 'p1',
+        id: 'ev-r2',
+        data: { callId: 'tc-2', tool: 'fetch', result: 'fetched page', success: true },
+      },
     ]
 
     const ctx = createTestContext(events)
@@ -293,9 +358,8 @@ describe('compactBulkData', () => {
   })
 
   it('should split more than MAX_BATCH_ITEMS results across several batches', async () => {
-    const { compactBulkData, MAX_BATCH_ITEMS } = await import(
-      '../../../lib/harness-patterns/compactBulkData.server'
-    )
+    const { compactBulkData, MAX_BATCH_ITEMS } =
+      await import('../../../lib/harness-patterns/compactBulkData.server')
 
     const total = MAX_BATCH_ITEMS + 2
     const events: ContextEvent[] = [
@@ -304,8 +368,8 @@ describe('compactBulkData', () => {
     ]
 
     // Answer every id in whichever batch it arrives in
-    mockDescribeBatch.mockImplementation(async (items: Array<{ id: string }>) =>
-      new Map(items.map((i) => [i.id, `summary ${i.id}`])),
+    mockDescribeBatch.mockImplementation(
+      async (items: Array<{ id: string }>) => new Map(items.map((i) => [i.id, `summary ${i.id}`])),
     )
 
     const ctx = createTestContext(events)
@@ -365,7 +429,13 @@ describe('compactBulkData', () => {
     const longResult = 'x'.repeat(5000)
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
-      { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-r1', data: { tool: 'search', result: longResult, success: true } },
+      {
+        type: 'tool_result',
+        ts: 2,
+        patternId: 'p1',
+        id: 'ev-r1',
+        data: { tool: 'search', result: longResult, success: true },
+      },
     ]
 
     const ctx = createTestContext(events)
@@ -387,7 +457,13 @@ describe('compactBulkData', () => {
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
-      { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-r1', data: { tool: 'search', result: 'data', success: true } },
+      {
+        type: 'tool_result',
+        ts: 2,
+        patternId: 'p1',
+        id: 'ev-r1',
+        data: { tool: 'search', result: 'data', success: true },
+      },
     ]
 
     const ctx = createTestContext(events)
@@ -407,7 +483,13 @@ describe('compactBulkData', () => {
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
-      { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-r1', data: { tool: 'search', result: 'data', success: true } },
+      {
+        type: 'tool_result',
+        ts: 2,
+        patternId: 'p1',
+        id: 'ev-r1',
+        data: { tool: 'search', result: 'data', success: true },
+      },
     ]
 
     const ctx = createTestContext(events)
@@ -446,10 +528,22 @@ describe('compactBulkData', () => {
     const events: ContextEvent[] = [
       // Turn 1
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'first query' } },
-      { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-old', data: { tool: 'search', result: 'old data', success: true, summary: 'Already done' } },
+      {
+        type: 'tool_result',
+        ts: 2,
+        patternId: 'p1',
+        id: 'ev-old',
+        data: { tool: 'search', result: 'old data', success: true, summary: 'Already done' },
+      },
       // Turn 2 (current)
       { type: 'user_message', ts: 3, patternId: 'harness', data: { content: 'second query' } },
-      { type: 'tool_result', ts: 4, patternId: 'p1', id: 'ev-new', data: { tool: 'fetch', result: 'new data', success: true } },
+      {
+        type: 'tool_result',
+        ts: 4,
+        patternId: 'p1',
+        id: 'ev-new',
+        data: { tool: 'fetch', result: 'new data', success: true },
+      },
     ]
 
     const ctx = createTestContext(events)
@@ -467,9 +561,42 @@ describe('compactBulkData', () => {
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
-      { type: 'controller_action', ts: 2, patternId: 'p1', data: { action: { reasoning: 'I need to query the graph for person nodes', tool_name: 'read_neo4j_cypher', tool_args: '{}', status: 'success', is_final: false } } },
-      { type: 'tool_call', ts: 3, patternId: 'p1', data: { callId: 'tc-1', tool: 'read_neo4j_cypher', args: { query: 'MATCH (n:Person) RETURN n' } } },
-      { type: 'tool_result', ts: 4, patternId: 'p1', id: 'ev-r1', data: { callId: 'tc-1', tool: 'read_neo4j_cypher', result: [{ name: 'Alice' }], success: true } },
+      {
+        type: 'controller_action',
+        ts: 2,
+        patternId: 'p1',
+        data: {
+          action: {
+            reasoning: 'I need to query the graph for person nodes',
+            tool_name: 'read_neo4j_cypher',
+            tool_args: '{}',
+            status: 'success',
+            is_final: false,
+          },
+        },
+      },
+      {
+        type: 'tool_call',
+        ts: 3,
+        patternId: 'p1',
+        data: {
+          callId: 'tc-1',
+          tool: 'read_neo4j_cypher',
+          args: { query: 'MATCH (n:Person) RETURN n' },
+        },
+      },
+      {
+        type: 'tool_result',
+        ts: 4,
+        patternId: 'p1',
+        id: 'ev-r1',
+        data: {
+          callId: 'tc-1',
+          tool: 'read_neo4j_cypher',
+          result: [{ name: 'Alice' }],
+          success: true,
+        },
+      },
     ]
 
     const ctx = createTestContext(events)

@@ -122,10 +122,7 @@ export interface RetrieverResult {
 export interface RetrieverBackend {
   name: string
   type: 'vector' | 'keyword' | 'graph' | 'web'
-  search(
-    query: { text: string; intent?: string },
-    opts: { k: number },
-  ): Promise<RetrievalHit[]>
+  search(query: { text: string; intent?: string }, opts: { k: number }): Promise<RetrievalHit[]>
 }
 
 export interface RetrieverConfig extends PatternConfig {
@@ -166,9 +163,7 @@ export interface RetrieverConfigMarker extends PatternConfig {
 // Pattern
 // ============================================================================
 
-export function retriever<T extends RetrieverData>(
-  config: RetrieverConfig,
-): ConfiguredPattern<T> {
+export function retriever<T extends RetrieverData>(config: RetrieverConfig): ConfiguredPattern<T> {
   const { backends = [], k = 5, turnWindow, generateQuery = false, ...patternConfig } = config
   const backendKinds = backends.map((b) => b.name)
 
@@ -303,9 +298,7 @@ function emitMatches<T>(
   trackHistory: Parameters<typeof trackEvent>[3],
   llmCall?: LLMCallData,
 ): void {
-  const references = matches
-    .map(toReference)
-    .filter((r): r is RetrievalReference => r !== null)
+  const references = matches.map(toReference).filter((r): r is RetrievalReference => r !== null)
   const result: RetrieverResult = { query, backends: backendKinds, matches, references }
   trackEvent(
     scope,
@@ -344,7 +337,10 @@ async function rewriteQuery<T>(
     const opts = { collector, ...clientOverrideFor('describe') }
     const raw = await b.RetrieveQuery(trimmed, latest, opts)
     const text = raw.trim() || latest
-    return { text, llmCall: extractLLMCallData(collector, 'RetrieveQuery', variables, startTime, text) }
+    return {
+      text,
+      llmCall: extractLLMCallData(collector, 'RetrieveQuery', variables, startTime, text),
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     trackEvent(

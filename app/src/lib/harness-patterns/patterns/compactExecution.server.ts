@@ -104,7 +104,10 @@ async function defaultSynthesize(
   // Call with or without collector, including error context.
   // Anthropic override applied when `USE_ANTHROPIC_ONLY=1` — routes through
   // `SynthesizerAnthropic` (Sonnet 4.6 → Haiku 4.5).
-  const synthOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('compactExecution') }
+  const synthOpts = {
+    ...(collector ? { collector } : {}),
+    ...clientOverrideFor('compactExecution'),
+  }
   const hasSynthOpts = Object.keys(synthOpts).length > 0
   const content = hasSynthOpts
     ? await b.Synthesize(

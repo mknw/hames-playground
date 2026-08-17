@@ -21,21 +21,21 @@ compositions across all available MCP servers.
 
 ### Existing Patterns
 
-| Pattern          | Signature                         | Purpose                                                                                                                                                           |
-| ---------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `simpleLoop`     | `(controller, tools, config?)`    | ReAct decide-execute loop; turns may batch calls (`multiToolCalls`, default `'parallel'`)                                                                         |
-| `actorCritic`    | `(actor, critic, tools, config?)` | Generate-evaluate with retry; attempts may batch calls too                                                                                                        |
-| `withReferences` | `(pattern, config?)`              | LLM-curated prior-result attachment at pattern ingress (cross-pattern data flow, [#30](../../../../docs/harness-patterns/with-references.md))                     |
-| `compactExecution`    | `(config)`                        | Transform tool results into natural language                                                                                                                      |
-| `compactIntent`  | `(config?)`                       | Rewrite the latest message into a self-contained `data.intent` for a router-less actor ([#83](https://github.com/mknw/harness-playground/issues/83))              |
-| `planner`        | `(tools, config?)`                | Upfront strategic decomposition → sets `data.plan`, injected into downstream controllers' `context` ([#27](https://github.com/mknw/harness-playground/issues/27)) |
-| `router`         | `(routeDescriptions, config?)`    | Intent classification → sets `data.route`                                                                                                                         |
-| `routes`         | `(patternMap, config?)`           | Dispatch to matched sub-pattern; pass-through on `'user'` route                                                                                                   |
-| `chain`          | `(ctx, patterns)`                 | Sequential composition                                                                                                                                            |
-| `harness`        | `(...patterns)`                   | Top-level agent entry point                                                                                                                                       |
-| `parallel`       | `(...patterns)`                   | Execute multiple patterns concurrently, merge events with enter/exit markers                                                                                      |
-| `guardrail`      | `(pattern, config)`               | Multi-layered validation: input rails, execution rails, output rails, circuit breakers                                                                            |
-| `hook`           | `(pattern, config)`               | Side-effect pattern triggered by lifecycle events; supports background fire-and-forget                                                                            |
+| Pattern            | Signature                         | Purpose                                                                                                                                                           |
+| ------------------ | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `simpleLoop`       | `(controller, tools, config?)`    | ReAct decide-execute loop; turns may batch calls (`multiToolCalls`, default `'parallel'`)                                                                         |
+| `actorCritic`      | `(actor, critic, tools, config?)` | Generate-evaluate with retry; attempts may batch calls too                                                                                                        |
+| `withReferences`   | `(pattern, config?)`              | LLM-curated prior-result attachment at pattern ingress (cross-pattern data flow, [#30](../../../../docs/harness-patterns/with-references.md))                     |
+| `compactExecution` | `(config)`                        | Transform tool results into natural language                                                                                                                      |
+| `compactIntent`    | `(config?)`                       | Rewrite the latest message into a self-contained `data.intent` for a router-less actor ([#83](https://github.com/mknw/harness-playground/issues/83))              |
+| `planner`          | `(tools, config?)`                | Upfront strategic decomposition → sets `data.plan`, injected into downstream controllers' `context` ([#27](https://github.com/mknw/harness-playground/issues/27)) |
+| `router`           | `(routeDescriptions, config?)`    | Intent classification → sets `data.route`                                                                                                                         |
+| `routes`           | `(patternMap, config?)`           | Dispatch to matched sub-pattern; pass-through on `'user'` route                                                                                                   |
+| `chain`            | `(ctx, patterns)`                 | Sequential composition                                                                                                                                            |
+| `harness`          | `(...patterns)`                   | Top-level agent entry point                                                                                                                                       |
+| `parallel`         | `(...patterns)`                   | Execute multiple patterns concurrently, merge events with enter/exit markers                                                                                      |
+| `guardrail`        | `(pattern, config)`               | Multi-layered validation: input rails, execution rails, output rails, circuit breakers                                                                            |
+| `hook`             | `(pattern, config)`               | Side-effect pattern triggered by lifecycle events; supports background fire-and-forget                                                                            |
 
 > **Synthetic tool:** simpleLoop's `LoopController` prompt also exposes `expandPreviousResult` when prior results are present — a virtual tool that loads the full data behind a `ref:<id>` and records it as a normal turn. See [`with-references.md`](../../../../docs/harness-patterns/with-references.md) for the ingress/expansion taxonomy.
 
@@ -223,7 +223,11 @@ const researchPattern = parallel(
 
 const evaluator = judge(b.JudgeController.bind(b), { patternId: 'quality-judge' })
 
-return [researchPattern, evaluator, compactExecution({ mode: 'response', patternId: 'research-synth' })]
+return [
+  researchPattern,
+  evaluator,
+  compactExecution({ mode: 'response', patternId: 'research-synth' }),
+]
 ```
 
 ---

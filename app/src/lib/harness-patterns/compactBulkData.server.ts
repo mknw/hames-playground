@@ -27,7 +27,7 @@ import type {
   UnifiedContext,
   ToolResultEventData,
   ToolCallEventData,
-  ControllerActionEventData
+  ControllerActionEventData,
 } from './types'
 import { getRequestSettings } from '../settings-context.server'
 import { estimateTokens, getContextWindow } from './token-budget.server'
@@ -92,7 +92,7 @@ function batchTargets(targets: CompactionTarget[], budgetTokens: number): Compac
  */
 export async function compactBulkData(
   ctx: UnifiedContext,
-  onPersist: () => Promise<void>
+  onPersist: () => Promise<void>,
 ): Promise<void> {
   const events = ctx.events
 
@@ -108,7 +108,7 @@ export async function compactBulkData(
 
   // Collect tool_result events that need summarization
   const toolResults = turnEvents.filter(
-    e => e.type === 'tool_result' && e.id && (e.data as ToolResultEventData).success
+    (e) => e.type === 'tool_result' && e.id && (e.data as ToolResultEventData).success,
   )
   if (toolResults.length === 0) return
 
@@ -125,28 +125,27 @@ export async function compactBulkData(
     // Find paired tool_call by callId for argument context
     const callEvent = d.callId
       ? turnEvents.find(
-          e => e.type === 'tool_call' && (e.data as ToolCallEventData).callId === d.callId
+          (e) => e.type === 'tool_call' && (e.data as ToolCallEventData).callId === d.callId,
         )
       : undefined
-    const toolArgs = callEvent
-      ? JSON.stringify((callEvent.data as ToolCallEventData).args)
-      : '{}'
+    const toolArgs = callEvent ? JSON.stringify((callEvent.data as ToolCallEventData).args) : '{}'
 
     // Find the controller_action that preceded this result for reasoning context
     const resultIdx = turnEvents.indexOf(resultEvent)
     const actionEvent = turnEvents
       .slice(0, resultIdx)
       .reverse()
-      .find(e => e.type === 'controller_action')
+      .find((e) => e.type === 'controller_action')
     const reasoning = actionEvent
       ? (actionEvent.data as ControllerActionEventData).action.reasoning
       : ''
 
     // Truncate raw result to avoid overwhelming the summarizer
     const rawResult = typeof d.result === 'string' ? d.result : JSON.stringify(d.result)
-    const resultStr = rawResult.length > maxSummaryChars
-      ? rawResult.slice(0, maxSummaryChars) + '...[truncated]'
-      : rawResult
+    const resultStr =
+      rawResult.length > maxSummaryChars
+        ? rawResult.slice(0, maxSummaryChars) + '...[truncated]'
+        : rawResult
 
     targets.push({
       id: String(targets.length + 1),

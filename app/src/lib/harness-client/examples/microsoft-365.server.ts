@@ -13,7 +13,7 @@
  * It composes an explicit subset of `tools.graph` rather than the whole
  * namespace: see {@link MICROSOFT_365_TOOLS} for which tools, and why.
  */
-"use server";
+'use server'
 
 // @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
 import {
@@ -22,9 +22,9 @@ import {
   Tools,
   createLoopControllerAdapter,
   type ConfiguredPattern,
-} from "../../harness-patterns";
-import type { SessionData } from "../session.server";
-import type { AgentConfig } from "../registry.server";
+} from '../../harness-patterns'
+import type { SessionData } from '../session.server'
+import type { AgentConfig } from '../registry.server'
 
 /**
  * The graph tools this agent composes, in the order it should reach for them.
@@ -45,29 +45,29 @@ import type { AgentConfig } from "../registry.server";
  * agent's loop is handed.
  */
 export const MICROSOFT_365_TOOLS = [
-  "graph_me",
-  "graph_calendar_today",
-  "graph_mail_recent",
-  "graph_mail_attachments",
-  "graph_files_search",
-  "graph_files_list",
-  "graph_files_recent",
-  "graph_files_shared",
-] as const;
+  'graph_me',
+  'graph_calendar_today',
+  'graph_mail_recent',
+  'graph_mail_attachments',
+  'graph_files_search',
+  'graph_files_list',
+  'graph_files_recent',
+  'graph_files_shared',
+] as const
 
 async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
-  const tools = await Tools();
-  const available = new Set(tools.graph ?? []);
+  const tools = await Tools()
+  const available = new Set(tools.graph ?? [])
   // Filtering the allowlist (rather than the namespace) keeps a tool that isn't
   // registered — a typo, a module not imported — out of the loop's tool list
   // instead of into it. Same shape as code-mode's meta-tool subset.
-  const graphTools = MICROSOFT_365_TOOLS.filter((t) => available.has(t));
+  const graphTools = MICROSOFT_365_TOOLS.filter((t) => available.has(t))
 
   const graphPattern = simpleLoop<SessionData>(
     createLoopControllerAdapter(graphTools),
     graphTools,
     {
-      patternId: "microsoft-365",
+      patternId: 'microsoft-365',
       liveEvents: true,
       rememberPriorTurns: false,
       // A "what's on today?" briefing needs several calls in one turn
@@ -80,32 +80,31 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
       // not this projection). `graph_mail_recent` is deliberately unprojected:
       // its webLink is short and its results are already capped previews.
       resultOmit: {
-        graph_files_search: ["webUrl"],
-        graph_files_list: ["webUrl"],
-        graph_files_recent: ["webUrl"],
-        graph_files_shared: ["webUrl"],
+        graph_files_search: ['webUrl'],
+        graph_files_list: ['webUrl'],
+        graph_files_recent: ['webUrl'],
+        graph_files_shared: ['webUrl'],
       },
     },
-  );
+  )
 
   const responseSynth = compactExecution<SessionData>({
-    mode: "thread",
-    patternId: "response-synth",
+    mode: 'thread',
+    patternId: 'response-synth',
     liveEvents: true,
-  });
+  })
 
-  return [graphPattern, responseSynth];
+  return [graphPattern, responseSynth]
 }
 
 export const microsoft365Agent: AgentConfig = {
-  id: "microsoft-365",
-  name: "Microsoft 365",
-  description:
-    "Answers from your own Microsoft 365 account (delegated, per-user via Entra)",
-  icon: "i-material-symbols-window-sharp",
-  accent: "blue",
+  id: 'microsoft-365',
+  name: 'Microsoft 365',
+  description: 'Answers from your own Microsoft 365 account (delegated, per-user via Entra)',
+  icon: 'i-material-symbols-window-sharp',
+  accent: 'blue',
   // Not an MCP gateway server: these tools run in-process so the per-user
   // token stays server-side (#107). Listed for UI display only.
-  servers: ["graph (app-side, per-user)"],
+  servers: ['graph (app-side, per-user)'],
   createPatterns,
-};
+}

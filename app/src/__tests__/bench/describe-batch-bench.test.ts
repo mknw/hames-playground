@@ -72,9 +72,7 @@ const FIXTURES: Fixture[] = [
     reasoning: 'Check the labels available before writing a second query.',
     result: JSON.stringify({
       labels: ['Person', 'Project', 'Document', 'Chunk', 'Tool', 'Session'],
-      relationships: [
-        'WORKS_ON', 'AUTHORED', 'MENTIONS', 'PART_OF', 'DERIVED_FROM', 'INVOKED',
-      ],
+      relationships: ['WORKS_ON', 'AUTHORED', 'MENTIONS', 'PART_OF', 'DERIVED_FROM', 'INVOKED'],
       properties: {
         Person: ['name', 'email', 'role'],
         Project: ['name', 'status', 'started'],
@@ -116,10 +114,26 @@ const FIXTURES: Fixture[] = [
     toolArgs: '{"query":"retention policy","k":5}',
     reasoning: 'Find what the stash already holds about retention before answering.',
     result: JSON.stringify([
-      { source: 'policies/retention.md', score: 0.81, text: 'Session transcripts are kept 90 days, then compacted to summaries only.' },
-      { source: 'policies/retention.md', score: 0.77, text: 'Uploaded documents persist until the owning user deletes them.' },
-      { source: 'adr/0007-storage.md', score: 0.64, text: 'Redis holds the hot path; cold copies move to object storage nightly.' },
-      { source: 'runbook/cleanup.md', score: 0.58, text: 'The reaper runs hourly and never touches keys with an active lease.' },
+      {
+        source: 'policies/retention.md',
+        score: 0.81,
+        text: 'Session transcripts are kept 90 days, then compacted to summaries only.',
+      },
+      {
+        source: 'policies/retention.md',
+        score: 0.77,
+        text: 'Uploaded documents persist until the owning user deletes them.',
+      },
+      {
+        source: 'adr/0007-storage.md',
+        score: 0.64,
+        text: 'Redis holds the hot path; cold copies move to object storage nightly.',
+      },
+      {
+        source: 'runbook/cleanup.md',
+        score: 0.58,
+        text: 'The reaper runs hourly and never touches keys with an active lease.',
+      },
     ]),
   },
   {
@@ -145,18 +159,55 @@ const FIXTURES: Fixture[] = [
  *  (`multiToolCalls` batches up to 4 per turn, over several turns) where the
  *  per-call prompt overhead, not the payload, is what dominates the input. */
 const SMALL_FIXTURES: Fixture[] = [
-  { tool: 'get', toolArgs: '{"key":"session:active"}', reasoning: 'Check the active session.', result: '"sess_8812"' },
-  { tool: 'llen', toolArgs: '{"name":"queue:ingest"}', reasoning: 'How deep is the queue?', result: '17' },
-  { tool: 'smembers', toolArgs: '{"name":"flags:enabled"}', reasoning: 'Which flags are on?', result: '["retriever","code-mode","stash-viewer"]' },
+  {
+    tool: 'get',
+    toolArgs: '{"key":"session:active"}',
+    reasoning: 'Check the active session.',
+    result: '"sess_8812"',
+  },
+  {
+    tool: 'llen',
+    toolArgs: '{"name":"queue:ingest"}',
+    reasoning: 'How deep is the queue?',
+    result: '17',
+  },
+  {
+    tool: 'smembers',
+    toolArgs: '{"name":"flags:enabled"}',
+    reasoning: 'Which flags are on?',
+    result: '["retriever","code-mode","stash-viewer"]',
+  },
   { tool: 'dbsize', toolArgs: '{}', reasoning: 'Rough size of the store.', result: '4128' },
-  { tool: 'get_file_info', toolArgs: '{"path":"/work/out.csv"}', reasoning: 'Did the export land?', result: '{"size":20481,"modified":"2026-08-17T08:11:02Z"}' },
-  { tool: 'type', toolArgs: '{"key":"doc:handbook"}', reasoning: 'Is it a hash or JSON?', result: '"ReJSON-RL"' },
-  { tool: 'hget', toolArgs: '{"name":"doc:handbook","key":"pages"}', reasoning: 'How long is it?', result: '"318"' },
-  { tool: 'get_indexes', toolArgs: '{}', reasoning: 'Which vector indexes exist?', result: '["idx:chunks","idx:titles"]' },
+  {
+    tool: 'get_file_info',
+    toolArgs: '{"path":"/work/out.csv"}',
+    reasoning: 'Did the export land?',
+    result: '{"size":20481,"modified":"2026-08-17T08:11:02Z"}',
+  },
+  {
+    tool: 'type',
+    toolArgs: '{"key":"doc:handbook"}',
+    reasoning: 'Is it a hash or JSON?',
+    result: '"ReJSON-RL"',
+  },
+  {
+    tool: 'hget',
+    toolArgs: '{"name":"doc:handbook","key":"pages"}',
+    reasoning: 'How long is it?',
+    result: '"318"',
+  },
+  {
+    tool: 'get_indexes',
+    toolArgs: '{}',
+    reasoning: 'Which vector indexes exist?',
+    result: '["idx:chunks","idx:titles"]',
+  },
 ]
 
 /** Sum of a Collector's usage across every call it recorded. */
-function usageOf(collector: { usage: { inputTokens: number | null; outputTokens: number | null } }) {
+function usageOf(collector: {
+  usage: { inputTokens: number | null; outputTokens: number | null }
+}) {
   return {
     input: collector.usage.inputTokens ?? 0,
     output: collector.usage.outputTokens ?? 0,

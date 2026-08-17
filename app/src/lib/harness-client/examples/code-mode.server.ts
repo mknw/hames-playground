@@ -34,7 +34,7 @@ import {
   router,
   routes,
   actorCritic,
-  synthesizer,
+  compactExecution,
   chain,
   Tools,
   createActorControllerAdapter,
@@ -345,19 +345,19 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     multiToolCalls: "off",
   });
 
-  // Synthesizer that reads actor-side events from the loop plus any error
+  // compactExecution that reads actor-side events from the loop plus any error
   // event the loop emitted (e.g. "Max retries (8) exceeded"). `thread` mode
   // naturally consumes only `controller_action` + `tool_call` + `tool_result`
   // via `view.tools()` / `view.actions()`, but `viewConfig.eventTypes` pins
   // the filter explicitly so `critic_result` stays out of the prompt. We
   // include 'error' so `view.hasErrors()` / `view.lastError()` surface a
   // loop-exhaustion signal to the BAML Synthesize template — without it the
-  // synthesizer would happily fabricate a confident answer over an incomplete
+  // compactExecution would happily fabricate a confident answer over an incomplete
   // trace (see hallucination-code-mode.json: Max retries fired, synth invented
   // node names and fake web search results). The error scoping is naturally
-  // bounded by this synthesizer's own view window — see harness-patterns
+  // bounded by this compactExecution's own view window — see harness-patterns
   // README "Error scoping" note.
-  const synth = synthesizer<SessionData>({
+  const synth = compactExecution<SessionData>({
     mode: "thread",
     patternId: "code-mode-synth",
     liveEvents: true,
@@ -381,7 +381,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     { liveEvents: true },
   );
 
-  // No top-level synthesizer: the inner chain handles the code_mode branch's
+  // No top-level compactExecution: the inner chain handles the code_mode branch's
   // response; the direct-response branch sets `scope.data.response` inside
   // `routeMessageOp` and `routes()` passes through.
   return [routerPattern, routesPattern];

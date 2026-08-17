@@ -1,5 +1,5 @@
 /**
- * synthesizer Pattern Tests
+ * compactExecution Pattern Tests
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -29,62 +29,62 @@ vi.mock('@boundaryml/baml', () => {
   return { Collector: MockCollector }
 })
 
-describe('synthesizer', () => {
+describe('compactExecution', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('should export synthesizer function', async () => {
-    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
-    expect(synthesizer).toBeDefined()
-    expect(typeof synthesizer).toBe('function')
+  it('should export compactExecution function', async () => {
+    const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
+    expect(compactExecution).toBeDefined()
+    expect(typeof compactExecution).toBe('function')
   })
 
   it('should create a ConfiguredPattern with name and config', async () => {
-    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
 
-    const pattern = synthesizer({
+    const pattern = compactExecution({
       mode: 'message',
-      patternId: 'test-synthesizer'
+      patternId: 'test-compactExecution'
     })
 
-    expect(pattern.name).toBe('synthesizer')
-    expect(pattern.config.patternId).toBe('test-synthesizer')
+    expect(pattern.name).toBe('compactExecution')
+    expect(pattern.config.patternId).toBe('test-compactExecution')
     expect(pattern.fn).toBeDefined()
   })
 
   describe('modes', () => {
     it('should support message mode', async () => {
-      const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+      const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
 
-      const pattern = synthesizer({ mode: 'message' })
-      expect(pattern.name).toBe('synthesizer')
+      const pattern = compactExecution({ mode: 'message' })
+      expect(pattern.name).toBe('compactExecution')
     })
 
     it('should support response mode', async () => {
-      const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+      const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
 
-      const pattern = synthesizer({ mode: 'response' })
-      expect(pattern.name).toBe('synthesizer')
+      const pattern = compactExecution({ mode: 'response' })
+      expect(pattern.name).toBe('compactExecution')
     })
 
     it('should support thread mode', async () => {
-      const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+      const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
 
-      const pattern = synthesizer({ mode: 'thread' })
-      expect(pattern.name).toBe('synthesizer')
+      const pattern = compactExecution({ mode: 'thread' })
+      expect(pattern.name).toBe('compactExecution')
     })
   })
 
   describe('custom synthesis function', () => {
     it('should use custom synthesis function when provided', async () => {
-      const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+      const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
       const { createScope } = await import('../../../../lib/harness-patterns/context.server')
       const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
       const customSynthesize = vi.fn(async () => 'Custom synthesized response')
 
-      const pattern = synthesizer({
+      const pattern = compactExecution({
         mode: 'message',
         synthesize: customSynthesize
       })
@@ -111,13 +111,13 @@ describe('synthesizer', () => {
 
   describe('skipIfHasResponse', () => {
     it('should skip synthesis if response exists and skipIfHasResponse is true', async () => {
-      const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+      const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
       const { createScope } = await import('../../../../lib/harness-patterns/context.server')
       const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
       const customSynthesize = vi.fn(async () => 'New response')
 
-      const pattern = synthesizer({
+      const pattern = compactExecution({
         mode: 'message',
         synthesize: customSynthesize,
         skipIfHasResponse: true
@@ -142,17 +142,17 @@ describe('synthesizer', () => {
   })
 })
 
-describe('synthesizer execution', () => {
+describe('compactExecution execution', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
   it('should track assistant_message event', async () => {
-    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
-    const pattern = synthesizer({
+    const pattern = compactExecution({
       mode: 'message',
       trackHistory: 'assistant_message',
       synthesize: async () => 'Test response'
@@ -179,12 +179,12 @@ describe('synthesizer execution', () => {
   })
 
   it('should call default synthesis with BAML when no custom function provided', async () => {
-    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
     // No custom synthesize function — should use defaultSynthesize → b.Synthesize mock
-    const pattern = synthesizer({
+    const pattern = compactExecution({
       mode: 'message',
       trackHistory: true
     })
@@ -210,11 +210,11 @@ describe('synthesizer execution', () => {
   })
 
   it('should handle response mode', async () => {
-    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
-    const pattern = synthesizer({
+    const pattern = compactExecution({
       mode: 'response',
       synthesize: async (input) => `Response mode: ${input.response}`
     })
@@ -238,17 +238,17 @@ describe('synthesizer execution', () => {
   })
 
   it('should handle thread mode with loop history from events', async () => {
-    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
-    const pattern = synthesizer({
+    const pattern = compactExecution({
       mode: 'thread',
       synthesize: async (input) => `Thread mode with ${input.loopHistory?.iterations.length ?? 0} iterations`
     })
 
     const scope = createScope('test', {})
-    // Put controller_action and tool_result events into context so synthesizer
+    // Put controller_action and tool_result events into context so compactExecution
     // can reconstruct loop history from the event stream (not data.loopHistory)
     const now = Date.now()
     const mockContext = {
@@ -277,11 +277,11 @@ describe('synthesizer execution', () => {
   })
 
   it('should handle thread mode falling back to response mode when no history', async () => {
-    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
-    const pattern = synthesizer({
+    const pattern = compactExecution({
       mode: 'thread',
       synthesize: async (input) => `Mode: ${input.mode}, Response: ${input.response}`
     })
@@ -306,11 +306,11 @@ describe('synthesizer execution', () => {
   })
 
   it('should handle errors gracefully', async () => {
-    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
-    const pattern = synthesizer({
+    const pattern = compactExecution({
       mode: 'message',
       synthesize: async () => {
         throw new Error('Synthesis failed')
@@ -342,13 +342,13 @@ describe('synthesizer execution', () => {
     // controller_action. The old reconstruction only attached a tool_result to
     // an existing iteration (created by a controller_action), so the result was
     // dropped → loopHistory had 0 iterations → Synthesize got nothing → the
-    // synthesizer answered from nothing ("after the retriever, nothing happens").
-    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    // compactExecution answered from nothing ("after the retriever, nothing happens").
+    const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
-    let captured: import('../../../../lib/harness-patterns/types').SynthesizerInput | undefined
-    const pattern = synthesizer({
+    let captured: import('../../../../lib/harness-patterns/types').CompactExecutionInput | undefined
+    const pattern = compactExecution({
       mode: 'thread',
       synthesize: async (input) => {
         captured = input
@@ -391,12 +391,12 @@ describe('synthesizer execution', () => {
     // A batch action owns 1 + additional_calls.length results. Before the
     // counter-based pairing, results 2..N fell into the "no preceding action"
     // branch and fabricated zero-reasoning synthetic iterations.
-    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
-    let captured: import('../../../../lib/harness-patterns/types').SynthesizerInput | undefined
-    const pattern = synthesizer({
+    let captured: import('../../../../lib/harness-patterns/types').CompactExecutionInput | undefined
+    const pattern = compactExecution({
       mode: 'thread',
       synthesize: async (input) => {
         captured = input
@@ -449,11 +449,11 @@ describe('synthesizer execution', () => {
   })
 
   it('should build input from events for thread mode', async () => {
-    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
-    const pattern = synthesizer({
+    const pattern = compactExecution({
       mode: 'thread',
       synthesize: async (input) => `Iterations: ${input.loopHistory?.iterations.length ?? 0}`
     })
@@ -483,7 +483,7 @@ describe('synthesizer execution', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Regression: large tool results must survive into the synthesizer's turns.
+// Regression: large tool results must survive into the compactExecution's turns.
 //
 // .harness-logs/neo4j-no-results.json — two read_neo4j_cypher turns returned
 // ~58KB/~65KB of rows, then the loop's `Return`. The synth trimmed against
@@ -491,17 +491,17 @@ describe('synthesizer execution', () => {
 // MODEL_CONTEXT_WINDOWS → 16K default → budget ~12K tokens, so trimToFit
 // dropped BOTH data turns and kept only the `Return` (result: null). The synth
 // then truthfully reported "returned null". Fix: trim against the client the
-// call actually uses (resolveClientForRole('synth') → SynthesizerAnthropic =
+// call actually uses (resolveClientForRole('compactExecution') → SynthesizerAnthropic =
 // 200K by default), so the data reaches the synth. b.Synthesize is mocked — no
 // real LLM call / tokens.
 // ---------------------------------------------------------------------------
-describe('synthesizer — context-window trimming regression', () => {
+describe('compactExecution — context-window trimming regression', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
   it('keeps large multi-turn tool results in the turns passed to Synthesize', async () => {
-    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { compactExecution } = await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
     const { b } = await import('../../../../../baml_client')
@@ -530,7 +530,7 @@ describe('synthesizer — context-window trimming regression', () => {
     }
 
     // Default synthesis (no custom fn) → defaultSynthesize → b.Synthesize + trimToFit.
-    const pattern = synthesizer({ mode: 'thread', patternId: 'response-synth' })
+    const pattern = compactExecution({ mode: 'thread', patternId: 'response-synth' })
     const scope = createScope('test', {})
     const view = createEventView(mockContext)
 
@@ -556,14 +556,14 @@ describe('synthesizer — context-window trimming regression', () => {
     expect(getContextWindow('SynthesizerFallback')).toBe(32_768)
 
     // Default (Anthropic-only) → declared client; not the Fallback label.
-    expect(resolveClientForRole('synth')).toBe('SynthesizerAnthropic')
+    expect(resolveClientForRole('compactExecution')).toBe('SynthesizerAnthropic')
     expect(resolveClientForRole('controller')).toBe('ControllerAnthropic')
 
     // Under mixed chains → the Fallback client.
     const prev = process.env.USE_MIXED_CHAINS
     process.env.USE_MIXED_CHAINS = '1'
     try {
-      expect(resolveClientForRole('synth')).toBe('SynthesizerFallback')
+      expect(resolveClientForRole('compactExecution')).toBe('SynthesizerFallback')
     } finally {
       if (prev === undefined) delete process.env.USE_MIXED_CHAINS
       else process.env.USE_MIXED_CHAINS = prev

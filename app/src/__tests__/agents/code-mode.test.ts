@@ -167,7 +167,7 @@ describe('code-mode agent — router → routes(chain(actorCritic, synth))', () 
     expect(codeModeCalls.length).toBe(1)
     expect((codeModeCalls[0][1] as { name?: string }).name).toBe('graph-search')
 
-    // Synthesizer's view was filtered: when Synthesize was called, the turns
+    // compactExecution's view was filtered: when Synthesize was called, the turns
     // it received describe only actor-side tool events, no critic verdicts.
     // (`viewConfig.eventTypes` excludes 'critic_result'.)
     //

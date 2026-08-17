@@ -146,7 +146,7 @@ export async function runChain<T extends Record<string, unknown>>(
  * const routedAgent = chain(
  *   router({ neo4j: 'DB queries', web: 'Web lookups' }),
  *   routes({ neo4j: neo4jPattern, web: webPattern }),
- *   synthesizer({ mode: 'thread' })
+ *   compactExecution({ mode: 'thread' })
  * )
  *
  * // Use in harness alongside other patterns

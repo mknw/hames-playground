@@ -18,7 +18,7 @@
 // @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
 import {
   simpleLoop,
-  synthesizer,
+  compactExecution,
   Tools,
   createLoopControllerAdapter,
   type ConfiguredPattern,
@@ -75,7 +75,7 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
       // failed call, so this is deliberately higher than a single-shot loop.
       maxTurns: 8,
       // The controller never needs a URL to decide the next action, and a Loop
-      // hit's webUrl is ~519 chars of base64 — half the hit. The synthesizer
+      // hit's webUrl is ~519 chars of base64 — half the hit. The compactExecution
       // still gets every webUrl for citation links (it reads the full events,
       // not this projection). `graph_mail_recent` is deliberately unprojected:
       // its webLink is short and its results are already capped previews.
@@ -88,7 +88,7 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
     },
   );
 
-  const responseSynth = synthesizer<SessionData>({
+  const responseSynth = compactExecution<SessionData>({
     mode: "thread",
     patternId: "response-synth",
     liveEvents: true,

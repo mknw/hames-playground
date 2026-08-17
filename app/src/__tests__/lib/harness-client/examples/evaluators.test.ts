@@ -129,7 +129,7 @@ describe('Multi-Source Research judgeEvaluator', () => {
     expect(judgePattern).toBeDefined()
   })
 
-  it('should have synthesizer for final response', async () => {
+  it('should have compactExecution for final response', async () => {
     const { multiSourceResearchAgent } =
       await import('../../../../lib/harness-client/examples/multi-source-research.server')
     const patterns = await multiSourceResearchAgent.createPatterns('test-session')
@@ -138,6 +138,6 @@ describe('Multi-Source Research judgeEvaluator', () => {
       (p) => (p as { config: { patternId?: string } }).config.patternId === 'research-synth',
     )
     expect(synthPattern).toBeDefined()
-    expect((synthPattern as { name: string }).name).toBe('synthesizer')
+    expect((synthPattern as { name: string }).name).toBe('compactExecution')
   })
 })

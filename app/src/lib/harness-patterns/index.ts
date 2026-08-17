@@ -46,11 +46,11 @@ export type {
   // Pattern Config Types
   SimpleLoopConfig,
   ActorCriticConfig,
-  SynthesizerConfig,
-  SynthesizerMode,
-  SynthesizerInput,
+  CompactExecutionConfig,
+  CompactExecutionMode,
+  CompactExecutionInput,
   SynthesisFn,
-  SynthesizerData,
+  CompactExecutionData,
 
   // Loop History Types
   LoopHistory,
@@ -142,7 +142,7 @@ export {
   withReferences,
   chain,
   runChain,
-  synthesizer,
+  compactExecution,
   compactIntent,
   planner,
   formatPlanContext,

@@ -16,7 +16,7 @@ Cross-pattern data flow is currently implicit, ad-hoc, and underspecified.
 | 3 | "search the web for postgres 18 release info" | web-search | (full web results) |
 | 4 | "add this info to the graph" | neo4j-query | `priorResults: []`, `intent: "Add this info to the graph"` |
 
-Turn 4's `neo4j-query` controller had no access to the postgres-18 data from turn 3. It received only "Add this info" as a user message — with no actual content. It spent 5 turns probing the schema and looking for related nodes, never attempted a write, hit `maxTurns` (silently — separate fix), and the synthesizer ended up summarizing turn 3's web results instead of describing the (non-existent) graph mutations.
+Turn 4's `neo4j-query` controller had no access to the postgres-18 data from turn 3. It received only "Add this info" as a user message — with no actual content. It spent 5 turns probing the schema and looking for related nodes, never attempted a write, hit `maxTurns` (silently — separate fix), and the compactExecution ended up summarizing turn 3's web results instead of describing the (non-existent) graph mutations.
 
 **Root cause:** there is no mechanism to recognize that data produced by an earlier pattern is relevant to the current one.
 
@@ -286,7 +286,7 @@ Rejected: pollutes every pattern with a new field. UnifiedContext already has ev
 
 ### D. Mutate the user_message text inline (rejected)
 
-Inject `[REF: ev-abc summary: ...]` directly into the user message string. Rejected: corrupts the actual user message, makes synthesizer's `view.fromAll().ofType('user_message')` queries return mutated text, complicates downstream display.
+Inject `[REF: ev-abc summary: ...]` directly into the user message string. Rejected: corrupts the actual user message, makes compactExecution's `view.fromAll().ofType('user_message')` queries return mutated text, complicates downstream display.
 
 ## 13. Out of scope
 

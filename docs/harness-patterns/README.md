@@ -33,7 +33,7 @@ MCP Tools ───────┘
 | `simpleLoop` | ReAct decide-execute loop (turns may batch multiple tool calls — `multiToolCalls`) | Neo4j queries, web search |
 | `actorCritic` | Generate-evaluate with retry (attempts may batch calls too) | Code generation, file editing |
 | `router` | Intent-based dispatch | Multi-capability agents |
-| `synthesizer` | Response generation | Human-readable output |
+| `compactExecution` | Response generation | Human-readable output |
 | `compactIntent` | Rewrite latest message → self-contained `data.intent` | Router-less multi-turn agents ([#83](https://github.com/mknw/harness-playground/issues/83)) |
 | `withReferences` | LLM-curated prior-result attachment at pattern ingress | Cross-pattern data flow ([#30](with-references.md)) |
 | `parallel` | Concurrent execution | Multi-source search |
@@ -51,7 +51,7 @@ MCP Tools ───────┘
 ## Minimal Example
 
 ```typescript
-import { harness, simpleLoop, synthesizer, Tools } from '~/lib/harness-patterns'
+import { harness, simpleLoop, compactExecution, Tools } from '~/lib/harness-patterns'
 import { b } from '~/baml_client'
 
 const tools = await Tools()
@@ -60,7 +60,7 @@ const agent = harness(
   simpleLoop(b.Neo4jController.bind(b), tools.neo4j ?? [], {
     patternId: 'neo4j-query'
   }),
-  synthesizer({ mode: 'thread', patternId: 'response-synth' })
+  compactExecution({ mode: 'thread', patternId: 'response-synth' })
 )
 
 const result = await agent('Show me all Person nodes', 'session-123')

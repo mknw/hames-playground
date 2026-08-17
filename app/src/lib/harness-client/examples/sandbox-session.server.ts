@@ -16,7 +16,7 @@
 // @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
 import {
   actorCritic,
-  synthesizer,
+  compactExecution,
   compactIntent,
   createActorControllerAdapter,
   createCriticAdapter,
@@ -118,7 +118,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     syncWorkspace: true,
   })(loop);
 
-  const synth = synthesizer<SessionData>({
+  const synth = compactExecution<SessionData>({
     mode: "thread",
     patternId: "sandbox-session-synth",
     liveEvents: true,

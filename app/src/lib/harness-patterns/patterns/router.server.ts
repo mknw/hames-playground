@@ -74,7 +74,7 @@ export interface RouterData {
  * return [
  *   router({ neo4j: 'Database queries', web_search: 'Web lookups' }),
  *   routes({ neo4j: neo4jPattern, web_search: webPattern }),
- *   synthesizer({ mode: 'thread' })
+ *   compactExecution({ mode: 'thread' })
  * ]
  */
 export function router<T extends RouterData>(
@@ -139,7 +139,7 @@ export function router<T extends RouterData>(
 
         // Track assistant message with LLM call data. `final: true` because
         // on the conversational route the router IS the final responder —
-        // the downstream synthesizer skips BAML in this case.
+        // the downstream compactExecution skips BAML in this case.
         trackEvent(
           scope,
           'assistant_message',
@@ -165,7 +165,7 @@ export function router<T extends RouterData>(
 
       // Track the routing decision as an assistant message with LLM data.
       // No `final` flag — this is an intermediate "Looking into that…"
-      // status that the synthesizer will later supersede with the real
+      // status that the compactExecution will later supersede with the real
       // response. Chat-history replay filters these out.
       const statusText = result.response_text || ''
       if (statusText) {
@@ -219,7 +219,7 @@ export function router<T extends RouterData>(
  * return [
  *   router({ neo4j: 'Database queries', web_search: 'Web lookups' }),
  *   routes({ neo4j: neo4jPattern, web_search: webPattern }),
- *   synthesizer({ mode: 'thread' })
+ *   compactExecution({ mode: 'thread' })
  * ]
  */
 export function routes<T extends RouterData & Record<string, unknown>>(

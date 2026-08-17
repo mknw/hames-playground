@@ -216,10 +216,10 @@ describe('Agent Harnesses', () => {
         await import('../../../../lib/harness-client/examples/default.server')
       const patterns = await validatePatterns(defaultAgent)
 
-      // Should have router and synthesizer
+      // Should have router and compactExecution
       const patternNames = patterns.map((p) => p.name)
       expect(patternNames).toContain('router')
-      expect(patternNames).toContain('synthesizer')
+      expect(patternNames).toContain('compactExecution')
     })
 
     it('should have unique pattern IDs', async () => {
@@ -241,12 +241,12 @@ describe('Agent Harnesses', () => {
       expect(generalAgent.servers).toContain('neo4j-cypher')
     })
 
-    it('should create a planner → simpleLoop → synthesizer chain', async () => {
+    it('should create a planner → simpleLoop → compactExecution chain', async () => {
       const { generalAgent } =
         await import('../../../../lib/harness-client/examples/general.server')
       const patterns = await validatePatterns(generalAgent)
 
-      expect(patterns.map((p) => p.name)).toEqual(['planner', 'simpleLoop', 'synthesizer'])
+      expect(patterns.map((p) => p.name)).toEqual(['planner', 'simpleLoop', 'compactExecution'])
     })
   })
 
@@ -280,7 +280,7 @@ describe('Agent Harnesses', () => {
       expect(sandboxSessionAgent.id).toBe('sandbox-session')
     })
 
-    it('should create patterns: compactIntent → withSandbox(actorCritic) → synthesizer', async () => {
+    it('should create patterns: compactIntent → withSandbox(actorCritic) → compactExecution', async () => {
       const { sandboxSessionAgent } =
         await import('../../../../lib/harness-client/examples/sandbox-session.server')
       const patterns = await validatePatterns(sandboxSessionAgent)
@@ -293,7 +293,7 @@ describe('Agent Harnesses', () => {
       expect(patterns[0].config.patternId).toBe('sandbox-session-intent')
       expect(names[1]).toContain('withSandbox')
       expect(names[1]).toContain('actorCritic')
-      expect(names[2]).toBe('synthesizer')
+      expect(names[2]).toBe('compactExecution')
     })
   })
 
@@ -305,7 +305,7 @@ describe('Agent Harnesses', () => {
       expect(flavouredSandboxAgent.id).toBe('flavoured-sandbox')
     })
 
-    it('should create patterns: router + routes(flavoured sandboxes) + synthesizer', async () => {
+    it('should create patterns: router + routes(flavoured sandboxes) + compactExecution', async () => {
       const { flavouredSandboxAgent } =
         await import('../../../../lib/harness-client/examples/flavoured-sandbox.server')
       const patterns = await validatePatterns(flavouredSandboxAgent)
@@ -319,7 +319,7 @@ describe('Agent Harnesses', () => {
           (n) => n.includes('routes') && n.includes('image_processing') && n.includes('office'),
         ),
       ).toBe(true)
-      expect(names[2]).toBe('synthesizer')
+      expect(names[2]).toBe('compactExecution')
     })
 
     it('exposes the durable-workspace capability (persistent flavours use syncWorkspace)', async () => {
@@ -346,7 +346,7 @@ describe('Agent Harnesses', () => {
         await import('../../../../lib/harness-client/examples/multi-source-research.server')
       const patterns = await validatePatterns(multiSourceResearchAgent)
 
-      // Should have parallel, judge, synthesizer
+      // Should have parallel, judge, compactExecution
       expect(patterns.length).toBe(3)
     })
   })
@@ -412,7 +412,7 @@ describe('Agent Consistency', () => {
     expect(uniqueIds.size).toBe(ids.length)
   })
 
-  it('all agents should contain synthesizer pattern', async () => {
+  it('all agents should contain compactExecution pattern', async () => {
     const { defaultAgent } = await import('../../../../lib/harness-client/examples/default.server')
     const { multiSourceResearchAgent } =
       await import('../../../../lib/harness-client/examples/multi-source-research.server')
@@ -421,9 +421,9 @@ describe('Agent Consistency', () => {
 
     for (const config of agents) {
       const patterns = (await config.createPatterns('test-session')) as Pattern[]
-      // All agents should contain a synthesizer pattern somewhere in the chain
-      const hasSynthesizer = patterns.some((p) => p.name === 'synthesizer')
-      expect(hasSynthesizer).toBe(true)
+      // All agents should contain a compactExecution pattern somewhere in the chain
+      const hasCompactExecution = patterns.some((p) => p.name === 'compactExecution')
+      expect(hasCompactExecution).toBe(true)
     }
   })
 })

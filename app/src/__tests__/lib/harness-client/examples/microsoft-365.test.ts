@@ -52,8 +52,8 @@ const simpleLoop = vi.fn((controller: unknown, tools: string[], config: unknown)
 
 vi.mock("../../../../lib/harness-patterns", () => ({
   simpleLoop: (c: unknown, t: string[], cfg: unknown) => simpleLoop(c, t, cfg),
-  synthesizer: (config: unknown) => ({
-    name: "synthesizer",
+  compactExecution: (config: unknown) => ({
+    name: "compactExecution",
     fn: async () => undefined,
     config,
   }),
@@ -158,7 +158,7 @@ describe("createPatterns", () => {
     await microsoft365Agent.createPatterns("test-session");
     const cfg = lastLoopCall()[2] as { resultOmit: Record<string, string[]> };
     // Every file tool the agent composes must drop webUrl (Loop hits carry a
-    // ~519-char URL only the synthesizer needs) — and drop ONLY webUrl, so the
+    // ~519-char URL only the compactExecution needs) — and drop ONLY webUrl, so the
     // handoff ids and the search `hint` reach the controller.
     for (const tool of [
       "graph_files_search",

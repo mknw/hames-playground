@@ -9,7 +9,7 @@
  *
  * Key rule (issue: residual "Let me look into that…" on hydration):
  * router emits `assistant_message` events for intermediate routing status
- * AND the synthesizer (or direct-response router) emits one for the
+ * AND the compactExecution (or direct-response router) emits one for the
  * user-facing final response. We discriminate via
  * `AssistantMessageEventData.final === true` — only `final` emits become
  * chat bubbles on replay.
@@ -87,7 +87,7 @@ export function replayMessages(serializedContext: string): ReplayedMessage[] {
     } else if (ev.type === 'assistant_message') {
       const data = ev.data as AssistantMessageEventData
       // Skip intermediate router status messages ("Let me look into that…").
-      // Only the synthesizer's (or direct-response router's) final emit
+      // Only the compactExecution's (or direct-response router's) final emit
       // carries `final: true` and should surface as a chat bubble on replay.
       // The live UI handles this implicitly by only painting `finalResult.response`.
       if (!data.final) continue

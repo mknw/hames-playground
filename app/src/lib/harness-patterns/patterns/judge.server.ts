@@ -92,7 +92,7 @@ export function judge<T extends JudgeData>(
           selected: evaluation.best
         }, resolved.trackHistory)
 
-        // Forward best result as the response for synthesizer
+        // Forward best result as the response for compactExecution
         scope.data = {
           ...scope.data,
           response: evaluation.best?.content,

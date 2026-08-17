@@ -175,7 +175,7 @@ client<llm> AnthropicSonnet46 {
 // answer. Full data and the per-prompt output comparison: #139.
 //
 // Used ONLY by ControllerAnthropic (the simpleLoop tool loop). Everything else
-// keeps thinking, deliberately: the actor, router, critic and synthesizer are
+// keeps thinking, deliberately: the actor, router, critic and compactExecution are
 // unmeasured, and the actor in particular is the deepest loop we run.
 //
 // Identical to their twins otherwise — keep the options in sync, including

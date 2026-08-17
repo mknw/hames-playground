@@ -40,12 +40,12 @@ parallelStream(patterns, onChunk)
 
 ```typescript
 parallel(
-  { searcher, critic, synthesizer },
+  { searcher, critic, compactExecution },
   {
     on: {
       'searcher:RESULT': (d) => emit('critic:EVALUATE', d),
-      'critic:APPROVED': (d) => emit('synthesizer:PRIME', d),
-      'synthesizer:SUFFICIENT': () => controller.abort()
+      'critic:APPROVED': (d) => emit('compactExecution:PRIME', d),
+      'compactExecution:SUFFICIENT': () => controller.abort()
     }
   }
 )
@@ -68,7 +68,7 @@ const sources = parallel([
 
 const evaluator = judge(qualityEvaluator, { patternId: 'judge' })
 
-return [sources, evaluator, synthesizer({ mode: 'response' })]
+return [sources, evaluator, compactExecution({ mode: 'response' })]
 ```
 
 See [examples.md](./examples.md) for full implementations.

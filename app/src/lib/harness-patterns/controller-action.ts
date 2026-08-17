@@ -26,7 +26,7 @@ import type { ControllerAction } from '../../../baml_client/types'
  *
  * Normalising here rather than leaving `undefined` to fall through keeps the
  * runtime shape of an action complete for everything downstream of the loop —
- * the `controller_action` event and its UI readers, the synthesizer's iteration
+ * the `controller_action` event and its UI readers, the compactExecution's iteration
  * log, and `ActorAttemptLog`, which renders the recorded action back into the
  * actor's own prompt history (where a `null` would demonstrate a third value
  * for a boolean field).

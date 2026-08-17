@@ -185,9 +185,9 @@ it — and the trace is never exposed (empty string + signature), so it cannot f
 controller is better WITHOUT it (72/72 valid actions vs 70/72; median output 438 →
 249 tokens; it stops re-querying when it already holds the answer), so
 `ControllerAnthropic` uses the `*NoThink` clients. The actor, planner, router,
-critic and
-synthesizer keep thinking — unmeasured, and the corpus had no actor prompts. A
-thinking-only response with no text is retried once by the adapters.
+critic and compactExecution keep thinking — unmeasured, and the corpus had no
+actor prompts. A thinking-only response with no text is retried once by the
+adapters.
 
 **Output caps + truncation recovery:** Anthropic client `max_tokens` are 32768 (Sonnet 5) / 16384 (Sonnet 4.6, Haiku 4.5) — mirrored in `CLIENT_MAX_OUTPUT_TOKENS` (`app/src/lib/settings.ts`); keep the two in sync. A controller response that hits its cap truncates mid-JSON (historically: `BamlValidationError: missing status/is_final` when a sandbox actor inlined a huge script into `tool_args`). The adapters detect cap-hits and do ONE corrective retry with truncation guidance appended to the per-call `context`; the loops emit truncation-specific feedback instead of generic "invalid JSON" when `tool_args` were cut off (`llmCallHitOutputCap`). Multi-call turns (`additional_calls`, see below) raise cap-hit risk — the prompts cap batches at 4 calls/turn for this reason.
 
@@ -199,7 +199,7 @@ Local inference (`LocalGLM` — GLM 4.7 Flash on localhost:8080) is defined in `
 
 Required env vars: `ANTHROPIC_API_KEY` (always). With `USE_MIXED_CHAINS=1` also: `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`.
 
-**Known limitation (mixed-chains only):** Groq `gpt-oss-120b` fails structured output (`BamlValidationError`) on turn 2+ with larger context. `baml-adapters.server.ts` catches this manually and retries with `GroqGPT120B` then `GroqFast`. Anthropic-only runs propagate the validation error instead. Errors are tracked as events; synthesizer reads them via `view.hasErrors()` (scoped by ViewConfig, so they expire naturally across turns).
+**Known limitation (mixed-chains only):** Groq `gpt-oss-120b` fails structured output (`BamlValidationError`) on turn 2+ with larger context. `baml-adapters.server.ts` catches this manually and retries with `GroqGPT120B` then `GroqFast`. Anthropic-only runs propagate the validation error instead. Errors are tracked as events; compactExecution reads them via `view.hasErrors()` (scoped by ViewConfig, so they expire naturally across turns).
 
 ---
 

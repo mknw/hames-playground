@@ -161,7 +161,7 @@ inside this PR would lock in a default the reader would have redirected.
   Narrowest change, and it is precisely the store plan item 3 names. But the
   model has already seen the clear text by then, so it protects the database and
   not the transfer — which is the larger of the two exposures.
-- *The prompt/synthesizer boundary*, pseudonymising on the way into the LLM and
+- *The prompt/compactExecution boundary*, pseudonymising on the way into the LLM and
   reversing on the way out. Protects the transfer, but every pattern that reads
   `view.serialize()` has to be in on it, and any tool argument the model composes
   from a placeholder (a search `author`, a filter `person`) has to be reversed

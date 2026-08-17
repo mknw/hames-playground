@@ -1,7 +1,7 @@
 /**
  * Title Generator — minimal one-pattern harness example.
  *
- * The smallest legal harness-patterns composition: a single `synthesizer`
+ * The smallest legal harness-patterns composition: a single `compactExecution`
  * pattern wired through `harness()`, with a custom `synthesize` fn that
  * calls a single BAML function (`GenerateConversationTitle`).
  *
@@ -12,8 +12,8 @@
  * extraction (this file is what consumers see when looking for the
  * "absolute minimum viable agent").
  *
- * Why `synthesizer({ mode: 'message' })`?
- *   In `mode: 'message'`, the synthesizer's input carries the latest user
+ * Why `compactExecution({ mode: 'message' })`?
+ *   In `mode: 'message'`, the compactExecution's input carries the latest user
  *   message and expects a string back from the optional `synthesize` fn.
  *   That's exactly the shape of "give the LLM the user's first message,
  *   get a title string." No loops, no tools, no router.
@@ -24,7 +24,7 @@
  */
 "use server";
 
-import { harness, synthesizer } from "../../harness-patterns";
+import { harness, compactExecution } from "../../harness-patterns";
 import type {
   HarnessData,
   UnifiedContext,
@@ -36,7 +36,7 @@ import { updateConversationTitle } from "../../db/conversations.server";
 /**
  * Data shape carried through the title agent's harness context. Has to
  * satisfy both `harness()`'s `HarnessData & Record<string, unknown>` and
- * `synthesizer()`'s `SynthesizerData` (which expects optional `response`,
+ * `compactExecution()`'s `CompactExecutionData` (which expects optional `response`,
  * `synthesizedResponse`, `intent`, `loopHistory`). The empty index
  * signature wires up the structural subtype.
  */
@@ -74,12 +74,12 @@ export function sanitizeTitle(raw: string): string | null {
 // ============================================================================
 
 /**
- * The whole agent is one pattern. `mode: 'message'` makes the synthesizer
+ * The whole agent is one pattern. `mode: 'message'` makes the compactExecution
  * a thin shell around our custom `synthesize` fn — no default BAML call,
  * no event tracking beyond `assistant_message`.
  */
 export const titleAgent = harness<TitleAgentData>(
-  synthesizer<TitleAgentData>({
+  compactExecution<TitleAgentData>({
     patternId: "title-gen",
     mode: "message",
     synthesize: async ({ userMessage }) => {

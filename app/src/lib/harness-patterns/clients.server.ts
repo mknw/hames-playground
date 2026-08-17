@@ -27,7 +27,7 @@ export type BamlRole =
   | 'controller' // ActorController + LoopController
   | 'planner' // Planner
   | 'critic' // Critic
-  | 'synth' // Synthesize
+  | 'compactExecution' // Synthesize
   | 'router' // Router
   | 'describe' // ResultDescribe + GenerateConversationTitle + ReferenceSelector
 
@@ -49,7 +49,7 @@ const MIXED_CLIENT_BY_ROLE: Record<BamlRole, string> = {
   // of a mixed-provider budget is one call per conversation turn anyway.
   planner: 'PlannerAnthropic',
   critic: 'CriticFallback',
-  synth: 'SynthesizerFallback',
+  compactExecution: 'SynthesizerFallback',
   router: 'RouterFallback',
   describe: 'DescribeFallback',
 }
@@ -62,7 +62,7 @@ const DECLARED_CLIENT_BY_ROLE: Record<BamlRole, string> = {
   controller: 'ControllerAnthropic',
   planner: 'PlannerAnthropic',
   critic: 'CriticAnthropic',
-  synth: 'SynthesizerAnthropic',
+  compactExecution: 'SynthesizerAnthropic',
   router: 'RouterAnthropic',
   describe: 'DescribeAnthropic',
 }

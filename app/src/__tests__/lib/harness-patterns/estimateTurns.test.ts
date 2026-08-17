@@ -54,13 +54,13 @@ describe('estimateTurns', () => {
     expect(fromConfig.estimateTurns?.(settings)).toBe(7)
   })
 
-  it('router and synthesizer contribute 1', async () => {
+  it('router and compactExecution contribute 1', async () => {
     const { router } = await import('../../../lib/harness-patterns/patterns/router.server')
-    const { synthesizer } =
-      await import('../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { compactExecution } =
+      await import('../../../lib/harness-patterns/patterns/compactExecution.server')
 
     const r = router({ neo4j: 'db' })
-    const s = synthesizer({ mode: 'thread' })
+    const s = compactExecution({ mode: 'thread' })
     expect(r.estimateTurns?.(settings)).toBe(1)
     expect(s.estimateTurns?.(settings)).toBe(1)
   })
@@ -105,8 +105,8 @@ describe('estimateTurns', () => {
   it('chain: sums children', async () => {
     const { chain } = await import('../../../lib/harness-patterns/patterns/chain.server')
     const { router, routes } = await import('../../../lib/harness-patterns/patterns/router.server')
-    const { synthesizer } =
-      await import('../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { compactExecution } =
+      await import('../../../lib/harness-patterns/patterns/compactExecution.server')
     const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
 
     const loop = asAny(simpleLoop(vi.fn(), [], { patternId: 'loop', maxTurns: 5 }))
@@ -114,7 +114,7 @@ describe('estimateTurns', () => {
     const agent = chain(
       asAny(router({ x: '' })),
       asAny(routes({ x: loop })),
-      asAny(synthesizer({ mode: 'thread' })),
+      asAny(compactExecution({ mode: 'thread' })),
     )
     expect(agent.estimateTurns?.(settings)).toBe(7)
   })

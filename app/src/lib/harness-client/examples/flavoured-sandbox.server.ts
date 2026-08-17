@@ -32,7 +32,7 @@
 import {
   router,
   routes,
-  synthesizer,
+  compactExecution,
   actorCritic,
   createActorControllerAdapter,
   createCriticAdapter,
@@ -189,7 +189,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     { liveEvents: true },
   );
 
-  const synth = synthesizer<SessionData>({
+  const synth = compactExecution<SessionData>({
     mode: "thread",
     patternId: "flavoured-sandbox-synth",
     liveEvents: true,

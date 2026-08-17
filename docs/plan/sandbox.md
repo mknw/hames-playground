@@ -33,7 +33,7 @@ The wrapped pattern's controller (e.g., `actorCritic`, `simpleLoop`) gains the s
 
 **Canonical use case:** in-chat data analysis. Agent is asked to operate on a spreadsheet or document, runs Python inside the sandbox, answers in chat. Same shape for format conversion, extraction, profiling — the conversation changes, the wrapper doesn't.
 
-The wrapper composes orthogonally with everything already in the harness — `chain(withSandbox(actorCritic), synthesizer)`, `withSandbox(chain(simpleLoop, synthesizer, actorCritic))`, `router → routes({…: withSandbox(coder)})`, `withReferences(withSandbox(actorCritic))`. Wrapper patterns (`chain`, `router`, `routes`, `withReferences`) and individual agents need **no** changes — the sandbox handle propagates to nested tool-calling controllers automatically (see [How tools reach the controller](#how-tools-reach-the-controller)). The only code that becomes sandbox-aware is the two controllers that actually dispatch tools.
+The wrapper composes orthogonally with everything already in the harness — `chain(withSandbox(actorCritic), compactExecution)`, `withSandbox(chain(simpleLoop, compactExecution, actorCritic))`, `router → routes({…: withSandbox(coder)})`, `withReferences(withSandbox(actorCritic))`. Wrapper patterns (`chain`, `router`, `routes`, `withReferences`) and individual agents need **no** changes — the sandbox handle propagates to nested tool-calling controllers automatically (see [How tools reach the controller](#how-tools-reach-the-controller)). The only code that becomes sandbox-aware is the two controllers that actually dispatch tools.
 
 It composes with `parallel` / `parallelMap` too, with semantics that depend on **which side** of the parallel the wrapper sits:
 
@@ -130,8 +130,8 @@ The two controllers, the `callTool` dispatch layer, and the BAML adapters are ch
 **What this buys composition:**
 
 - `chain`, `router`, `routes`, `withReferences` are **unchanged** — they don't dispatch tools, and ALS propagates through their `await`s.
-- `withSandbox(chain(simpleLoop, synthesizer, actorCritic))` shares **one** sandbox across all of the chain's children for free: `simpleLoop` and `actorCritic` both read the same handle from ALS (a file one writes to `/work` is visible to the other); `synthesizer` simply never touches the scope. No `sandbox` parameter is threaded through `chain`.
-- **Placement is the design lever.** Wrapping the whole chain → shared workspace across children. Wrapping a single child (`chain(withSandbox(actorCritic), synthesizer)`) → only that child sees the sandbox, and it's torn down before the synthesizer runs.
+- `withSandbox(chain(simpleLoop, compactExecution, actorCritic))` shares **one** sandbox across all of the chain's children for free: `simpleLoop` and `actorCritic` both read the same handle from ALS (a file one writes to `/work` is visible to the other); `compactExecution` simply never touches the scope. No `sandbox` parameter is threaded through `chain`.
+- **Placement is the design lever.** Wrapping the whole chain → shared workspace across children. Wrapping a single child (`chain(withSandbox(actorCritic), compactExecution)`) → only that child sees the sandbox, and it's torn down before the compactExecution runs.
 
 **Caveat (ALS).** Propagation holds across normal `async`/`await`. It breaks if execution detours through an unbound callback (`setImmediate`, an event emitter without ALS binding). The harness sequences pattern children with `await`, so this holds today — but any future scheduler that hops async contexts must re-bind the scope.
 
@@ -254,7 +254,7 @@ Tools the agent does **not** see in v0:
    stdout → winning region + growth %.
    Critic: done.
 
-7. Synthesizer: composes the chat answer.
+7. compactExecution: composes the chat answer.
 
 8. withSandbox exits → backend.reset() → VM returns to the warm pool
    (or stays attached if id was explicit and session is alive).
@@ -296,7 +296,7 @@ A composition the wrapper enables, but which depends on primitives that don't ex
 superviseGate(                             // user picks the winner — #123, NOT BUILT
   parallelMap(strategies, (strategy) =>    // N branches, one sandbox each — DOESN'T EXIST YET
     withSandbox(
-      chain(actorCritic, synthesizer)      // a full agentic loop per strategy
+      chain(actorCritic, compactExecution)      // a full agentic loop per strategy
     )
   )
 )
@@ -382,7 +382,7 @@ Same two-axis model — whose problem × is the VM recoverable. Simpler than an 
 | Crash before MCP servers came up | Host (rootfs broken) | No — destroy + alert | `sandbox_boot_failed` |
 | MCP transport unreachable mid-execution | Host (transport broken) | No — destroy | `sandbox_unreachable` |
 
-All surface to pattern code as standard `tool_result` events. Downstream patterns (critic, synthesizer) decide how to react.
+All surface to pattern code as standard `tool_result` events. Downstream patterns (critic, compactExecution) decide how to react.
 
 ---
 

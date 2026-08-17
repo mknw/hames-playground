@@ -5,7 +5,7 @@
  * the Neo4j and Web Search loops of the default agent. The retriever does ONE
  * embedding + KNN over the session's ingested Data Stash uploads — seconds, not
  * the 30s+ a Neo4j `simpleLoop` can take — and hands matches-with-references to
- * the synthesizer.
+ * the compactExecution.
  *
  * Harness-aware Data Stash: because this agent composes a `retriever` wired to
  * the **redis** (local-vector) backend, uploads to its sessions auto-ingest into
@@ -20,7 +20,7 @@
  *         neo4j:      simpleLoop(neo4j),
  *         web_search: simpleLoop(web),
  *       })
- *     → synthesizer('thread')
+ *     → compactExecution('thread')
  *
  * The retriever searches with the user's **raw message** by default — the user's
  * own words embed better than a paraphrase. `generateQuery: true` rewrites the
@@ -38,7 +38,7 @@ import {
   routes,
   simpleLoop,
   retriever,
-  synthesizer,
+  compactExecution,
   withReferences,
   Tools,
   callTool,
@@ -115,7 +115,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     { liveEvents: true },
   );
 
-  const responseSynth = synthesizer<SessionData>({
+  const responseSynth = compactExecution<SessionData>({
     mode: "thread",
     patternId: "response-synth",
     liveEvents: true,

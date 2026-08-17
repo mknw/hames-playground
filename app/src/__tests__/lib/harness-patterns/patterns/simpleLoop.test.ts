@@ -1722,7 +1722,7 @@ describe('simpleLoop execution', () => {
       // arrive escaped.
       expect(previousResults).toContain('total\\":14')
 
-      // The event — what the synthesizer and citation extractors read — is complete.
+      // The event — what the compactExecution and citation extractors read — is complete.
       const event = result.events.find(e => e.type === 'tool_result')!
       expect((event.data as { result: typeof searchResult }).result.results[0].webUrl).toBe(BIG_URL)
     })

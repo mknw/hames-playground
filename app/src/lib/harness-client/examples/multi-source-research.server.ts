@@ -1,7 +1,7 @@
 /**
  * Multi-Source Research Agent
  *
- * Pattern: parallel → judge → synthesizer
+ * Pattern: parallel → judge → compactExecution
  * Use case: Search multiple sources concurrently, cache in redis, rank results.
  */
 "use server";
@@ -11,7 +11,7 @@ import {
   simpleLoop,
   parallel,
   judge,
-  synthesizer,
+  compactExecution,
   Tools,
   createWebSearchController,
   createGitHubController,
@@ -104,7 +104,7 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
   });
 
   // Synthesize final response
-  const responseSynth = synthesizer<SessionData>({
+  const responseSynth = compactExecution<SessionData>({
     mode: "response",
     patternId: "research-synth",
   });

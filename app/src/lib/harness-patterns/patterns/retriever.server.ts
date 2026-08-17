@@ -5,7 +5,7 @@
  * loop deciding which DB tool to call (often >30s for a Neo4j loop), the
  * retriever forms ONE search query from context and fans it out to one or more
  * injected DB **backends**, returning normalized matches-with-references (or
- * none) for a downstream `synthesizer`.
+ * none) for a downstream `compactExecution`.
  *
  * Typical composition (the query is pre-compacted by `compactIntent`):
  *
@@ -16,7 +16,7 @@
  *       neo4j: simpleLoop(neo4jController, tools.neo4j),
  *       web:   simpleLoop(webController, tools.web),
  *     }),
- *     synthesizer(),
+ *     compactExecution(),
  *   )
  *
  * Framework-pure: the concrete backends (redis vector, Supabase, …) are app-side
@@ -27,7 +27,7 @@
  * Query source: the previous pattern's compacted `scope.data.intent` if present,
  * else the last user message; optionally widened with the last-N user turns.
  * The matches are written to `scope.data.matches` AND emitted as a `tool_result`
- * event so the synthesizer consumes them via `view.fromLastPattern()`.
+ * event so the compactExecution consumes them via `view.fromLastPattern()`.
  */
 
 import { assertServerOnImport } from '../assert.server'
@@ -103,8 +103,8 @@ export interface RetrievalReference {
 
 /**
  * The `result` payload of the retriever's `tool_result` event — the typed
- * envelope consumers narrow to (synthesizer prompt, reference chips, viewer).
- * `matches` carry the full text (for the synthesizer); `references` are the
+ * envelope consumers narrow to (compactExecution prompt, reference chips, viewer).
+ * `matches` carry the full text (for the compactExecution); `references` are the
  * locatable subset for the UI.
  */
 export interface RetrieverResult {
@@ -291,7 +291,7 @@ function toReference(h: RetrievalHit): RetrievalReference | null {
   }
 }
 
-/** Emit the retrieval as a `tool_result` so the synthesizer reads it via
+/** Emit the retrieval as a `tool_result` so the compactExecution reads it via
  *  `view.fromLastPattern()` (same channel a simpleLoop tool call uses). The
  *  result is a typed {@link RetrieverResult}. The optional `llmCall` carries
  *  `RetrieveQuery` observability when the query was rewritten. */

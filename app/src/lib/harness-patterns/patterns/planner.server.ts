@@ -7,7 +7,7 @@
  *   chain(
  *     planner(tools.all),
  *     simpleLoop(controller, tools.all, { patternId: 'execute' }),
- *     synthesizer({ mode: 'thread' }),
+ *     compactExecution({ mode: 'thread' }),
  *   )
  *
  * Why: a `simpleLoop` controller re-derives its high-level approach on EVERY

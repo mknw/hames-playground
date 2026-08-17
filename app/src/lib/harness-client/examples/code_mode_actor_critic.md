@@ -1,6 +1,6 @@
 # Code Mode Agent — actorCritic engineering
 
-> **File:** `code-mode.server.ts` · **Pattern:** `router → routes(chain(actorCritic, synthesizer))`
+> **File:** `code-mode.server.ts` · **Pattern:** `router → routes(chain(actorCritic, compactExecution))`
 > **Issue:** [#12](https://github.com/mknw/harness-playground/issues/12)
 
 The code-mode agent orchestrates multi-step MCP tool work by writing
@@ -11,7 +11,7 @@ dance has many ways to go wrong on the first try and `simpleLoop` would
 break on the first allowlist failure.
 
 This doc covers the actor-side engineering: the prompt prelude, the
-few-shots, the budget signal, and the synthesizer's error visibility.
+few-shots, the budget signal, and the compactExecution's error visibility.
 
 ---
 
@@ -63,7 +63,7 @@ Three additions to the generic `ActorController` BAML function
 | 2 | Scope to ENABLED SERVERS — don't re-`mcp-add` an already-enabled server | `mcp-add` can fail a missing-secret check even when the server already works; the up-front catalog (Theme 1) names the servers to scope directly. |
 | 3 | Pick the right store (neo4j-cypher vs memory) and never substitute the other | The original failure (`context-neo4j-vs-memory.json`) queried the near-empty `memory` graph when the user asked for "the neo4j db". |
 | 4 | Write ONE script that batches multiple operations server-side | The failure case (`hallucination-code-mode.json`) was the actor calling `code-mode-<name>` with `return read_graph({})` — a one-liner that dumped data instead of doing the full pipeline. |
-| 5 | Tool output shapes & script hygiene: Cypher/graph reads return JSON; **search/fetch return TEXT — never `JSON.parse` them**; prefer string ops over regex; wrap `fetch_content` in try/catch and keep the URL on failure | The recurring turn-burners (`context-verywell.json` turns 2–3, `context-neo4j-nosecrets.json` turn 7): `JSON.parse` of non-JSON search text, and `^`/`\s` regex escaping breaking inside the JSON-encoded script string. Keeping the URL on a failed fetch also feeds the synthesizer the real link. |
+| 5 | Tool output shapes & script hygiene: Cypher/graph reads return JSON; **search/fetch return TEXT — never `JSON.parse` them**; prefer string ops over regex; wrap `fetch_content` in try/catch and keep the URL on failure | The recurring turn-burners (`context-verywell.json` turns 2–3, `context-neo4j-nosecrets.json` turn 7): `JSON.parse` of non-JSON search text, and `^`/`\s` regex escaping breaking inside the JSON-encoded script string. Keeping the URL on a failed fetch also feeds the compactExecution the real link. |
 | 6 | Record provenance: return `{ _source: { server, tool }, result }` | Lets the critic verify the answer came from the store the user asked for (Theme 2) and gives downstream patterns a checkable origin. |
 | 7 | Let the critic decide completion; a truthful empty result is a complete answer | Post-P0 there is no `Return` tool — the critic owns the exit. Inventing data to "look done" is the failure this guards against. |
 
@@ -112,12 +112,12 @@ always route through an MCP server.
 
 ---
 
-## Synthesizer error visibility
+## compactExecution error visibility
 
-`synthesizer.server.ts` already calls `view.hasErrors()` /
+`compactExecution.server.ts` already calls `view.hasErrors()` /
 `view.lastError()` and passes both to the BAML `Synthesize` template. The
 template's behavior changes when `hasError` is true (it should report the
-limitation honestly rather than fabricate). The code-mode synthesizer
+limitation honestly rather than fabricate). The code-mode compactExecution
 explicitly opts into seeing error events through its `ViewConfig`:
 
 ```ts
@@ -129,17 +129,17 @@ viewConfig: {
 `critic_result` is deliberately excluded so the critic's reasoning doesn't
 leak into the user-facing response — but `error` is in, so
 `view.hasErrors()` surfaces a loop-exhaustion signal. Without this, a
-`Max retries exceeded` event was silently filtered and the synthesizer
+`Max retries exceeded` event was silently filtered and the compactExecution
 invented confident-but-fake content over incomplete tool results (see
 `.harness-logs/hallucination-code-mode.json`).
 
-Error scoping is naturally bounded by the synthesizer's own view window —
+Error scoping is naturally bounded by the compactExecution's own view window —
 see the "Error scoping" note in
 [`app/src/lib/harness-patterns/README.md`](../../harness-patterns/README.md).
 
-### Synthesizer fidelity (no invented links)
+### compactExecution fidelity (no invented links)
 
-The `Synthesize` prompt (`baml_src/synthesizer.baml`) carries a **FIDELITY**
+The `Synthesize` prompt (`baml_src/compact-execution.baml`) carries a **FIDELITY**
 block: cite only URLs that appear verbatim in the tool results, and on a fetch
 failure keep the original URL with a "couldn't fetch" note rather than dropping
 it or substituting a "related" link. This addresses `context-verywell.json`,
@@ -148,7 +148,7 @@ where a page returned `403 Forbidden`, the synth dropped the real
 from the results. The block lives on the shared `Synthesize` function (it's a
 universally good anti-hallucination guardrail); the script-side half is item 5
 of `CODE_MODE_ACTOR_GUIDANCE` (keep the URL in the output on a failed fetch), so
-the link is still in the synthesizer's view to cite.
+the link is still in the compactExecution's view to cite.
 
 ## Critic: provenance & truthfulness
 
@@ -204,7 +204,7 @@ path for their domain-specific guidance.
 
 | File | Role |
 |---|---|
-| `code-mode.server.ts` | Agent definition: actor + critic, factory tool wiring, contextPrefix + fewShots, per-conversation allowlist closure, synthesizer with `error` in view. |
+| `code-mode.server.ts` | Agent definition: actor + critic, factory tool wiring, contextPrefix + fewShots, per-conversation allowlist closure, compactExecution with `error` in view. |
 | `baml_src/actorCritic.baml` · `ActorController` | BAML function with `context`, `few_shots`, `attempt_n`, `max_attempts` fields. |
 | `lib/harness-patterns/baml-adapters.server.ts` · `createActorControllerAdapter` | Adapter options: `contextPrefix`, `fewShots`, `toolNamesProvider`. |
 | `lib/harness-patterns/patterns/actorCritic.server.ts` | Threads `attempt + 1` / `maxRetries` into the actor call; consults `dynamicToolAllowlist` per turn. |

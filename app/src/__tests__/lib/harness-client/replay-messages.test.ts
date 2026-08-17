@@ -3,7 +3,7 @@
  *
  * Verifies that on conversation restore (sidebar selection), intermediate
  * router status messages ("Let me look into that…") are excluded and only
- * the synthesizer's (or direct-response router's) final emit surfaces as a
+ * the compactExecution's (or direct-response router's) final emit surfaces as a
  * chat bubble. Discriminator: `AssistantMessageEventData.final === true`.
  */
 import { describe, it, expect } from 'vitest'
@@ -57,7 +57,7 @@ describe('replayMessages', () => {
     expect(out[0]).toMatchObject({ role: 'user', content: 'hi' })
   })
 
-  it('keeps assistant_message events with final: true (synthesizer output)', () => {
+  it('keeps assistant_message events with final: true (compactExecution output)', () => {
     const out = replayMessages(wrap([
       userMsg('hi', 1, 'u1'),
       assistantMsg('Looking…', 2, 'a1', { patternId: 'router' }),                          // intermediate, skipped
@@ -68,7 +68,7 @@ describe('replayMessages', () => {
     expect(out[1]).toMatchObject({ role: 'assistant', content: 'Here is the answer.' })
   })
 
-  it('handles a multi-turn conversation with mixed router + synthesizer emits', () => {
+  it('handles a multi-turn conversation with mixed router + compactExecution emits', () => {
     const out = replayMessages(wrap([
       userMsg('q1', 1, 'u1'),
       assistantMsg('Routing…', 2, 'r1', { patternId: 'router' }),
@@ -87,7 +87,7 @@ describe('replayMessages', () => {
 
   it('keeps the router-as-final emit on a conversational direct-response turn', () => {
     // When the router decides no tool is needed, it emits the final response
-    // itself (final: true) and the synthesizer skips BAML for that route.
+    // itself (final: true) and the compactExecution skips BAML for that route.
     const out = replayMessages(wrap([
       userMsg('what time is it?', 1, 'u1'),
       assistantMsg("I don't have realtime access.", 2, 'r1', { final: true, patternId: 'router' }),

@@ -66,7 +66,7 @@ describe('usesCodeMode', () => {
       pat('routes(neo4j)', {}, [
         pat('chain', {}, [
           pat('simpleLoop', { patternId: 'neo4j-query' }),
-          pat('synthesizer', {}),
+          pat('compactExecution', {}),
         ]),
       ]),
     ]
@@ -79,7 +79,7 @@ describe('usesCodeMode', () => {
       pat('routes(code_mode)', {}, [
         pat('chain', {}, [
           pat('actorCritic', { patternId: 'code-mode-loop', dynamicToolPattern: /^code-mode-/ }),
-          pat('synthesizer', {}),
+          pat('compactExecution', {}),
         ]),
       ]),
     ]
@@ -192,7 +192,7 @@ describe('harnessUsesSyncWorkspace', () => {
       pat('withSandbox(actorCritic)', { patternId: 'sandbox-session-loop', sandboxSyncWorkspace: true }, [
         pat('actorCritic', { patternId: 'sandbox-session-loop' }),
       ]),
-      pat('synthesizer', { patternId: 'sandbox-session-synth' }),
+      pat('compactExecution', { patternId: 'sandbox-session-synth' }),
     ]
     expect(harnessUsesSyncWorkspace(tree)).toBe(true)
   })

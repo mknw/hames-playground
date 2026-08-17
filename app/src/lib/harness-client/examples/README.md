@@ -26,7 +26,7 @@ compositions across all available MCP servers.
 | `simpleLoop`     | `(controller, tools, config?)`    | ReAct decide-execute loop; turns may batch calls (`multiToolCalls`, default `'parallel'`)                                                                         |
 | `actorCritic`    | `(actor, critic, tools, config?)` | Generate-evaluate with retry; attempts may batch calls too                                                                                                        |
 | `withReferences` | `(pattern, config?)`              | LLM-curated prior-result attachment at pattern ingress (cross-pattern data flow, [#30](../../../../docs/harness-patterns/with-references.md))                     |
-| `synthesizer`    | `(config)`                        | Transform tool results into natural language                                                                                                                      |
+| `compactExecution`    | `(config)`                        | Transform tool results into natural language                                                                                                                      |
 | `compactIntent`  | `(config?)`                       | Rewrite the latest message into a self-contained `data.intent` for a router-less actor ([#83](https://github.com/mknw/harness-playground/issues/83))              |
 | `planner`        | `(tools, config?)`                | Upfront strategic decomposition → sets `data.plan`, injected into downstream controllers' `context` ([#27](https://github.com/mknw/harness-playground/issues/27)) |
 | `router`         | `(routeDescriptions, config?)`    | Intent classification → sets `data.route`                                                                                                                         |
@@ -48,7 +48,7 @@ compositions across all available MCP servers.
 ### 0. Title Generator — minimum-rung example
 
 **Servers**: none (no MCP)
-**Patterns**: `synthesizer({ mode: 'message', synthesize })`
+**Patterns**: `compactExecution({ mode: 'message', synthesize })`
 **Use case**: Generate a 3-5 word conversation title from the user's first message.
 
 The smallest legal harness composition — one pattern, one BAML call, ~20 LoC. Demonstrates that the library is appropriate for one-shot LLM jobs, not just multi-pattern agentic workflows. Used in production by `/api/events` post-stream to title new conversations as soon as the first response lands.
@@ -56,7 +56,7 @@ The smallest legal harness composition — one pattern, one BAML call, ~20 LoC. 
 ```typescript
 // app/src/lib/harness-client/examples/title-generator.server.ts
 export const titleAgent = harness<TitleAgentData>(
-  synthesizer<TitleAgentData>({
+  compactExecution<TitleAgentData>({
     patternId: 'title-gen',
     mode: 'message',
     synthesize: async ({ userMessage }) => {
@@ -67,14 +67,14 @@ export const titleAgent = harness<TitleAgentData>(
 )
 ```
 
-`mode: 'message'` makes the synthesizer a thin shell around the custom `synthesize` fn — it pulls the latest `user_message` from the view and hands it to the function as `input.userMessage`. No router, no tools, no loop.
+`mode: 'message'` makes the compactExecution a thin shell around the custom `synthesize` fn — it pulls the latest `user_message` from the view and hands it to the function as `input.userMessage`. No router, no tools, no loop.
 
 ---
 
 ### 0b. General Agent — plan first, then execute (`general.server.ts`)
 
 **Servers**: everything in `tools.all`
-**Patterns**: `planner` → `simpleLoop` → `synthesizer`
+**Patterns**: `planner` → `simpleLoop` → `compactExecution`
 **Use case**: cross-namespace questions the router-based `default` agent cannot
 serve, because a route can only be one namespace.
 
@@ -87,7 +87,7 @@ return [
     schema,
     maxTurns: 8,
   }),
-  synthesizer<SessionData>({ mode: 'thread', patternId: 'response-synth' }),
+  compactExecution<SessionData>({ mode: 'thread', patternId: 'response-synth' }),
 ]
 ```
 
@@ -103,7 +103,7 @@ two can be A/B'd on the same question.
 ### 1. Multi-Source Research (parallel)
 
 **Servers**: web_search, github, context7, redis
-**Patterns**: `parallel` → `judge` → `synthesizer`
+**Patterns**: `parallel` → `judge` → `compactExecution`
 **Use case**: Search three sources concurrently, cache in redis, rank results.
 
 ```
@@ -122,7 +122,7 @@ judge(b.JudgeController):
   → Scores each source on: accuracy, recency, authority
   → Returns ranked list
 
-synthesizer({ mode: 'response' })
+compactExecution({ mode: 'response' })
   → Presents top-ranked answer with source attribution
 ```
 
@@ -223,7 +223,7 @@ const researchPattern = parallel(
 
 const evaluator = judge(b.JudgeController.bind(b), { patternId: 'quality-judge' })
 
-return [researchPattern, evaluator, synthesizer({ mode: 'response', patternId: 'research-synth' })]
+return [researchPattern, evaluator, compactExecution({ mode: 'response', patternId: 'research-synth' })]
 ```
 
 ---

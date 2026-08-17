@@ -59,7 +59,7 @@ response rather than through a Collector). This is the plumbing of
 **Arms.** Language forced from the user message (`Antwoord in het Nederlands.` /
 `Répondez en français.` / `Answer in English.`) × guidance off/on. The guidance
 is injected through `Synthesize`'s `intent` argument, **not** by editing
-`baml_src/synthesizer.baml`: the question is whether guidance is worth wiring,
+`baml_src/compactExecution.baml`: the question is whether guidance is worth wiring,
 and changing the production prompt in order to measure that would beg it.
 Verbatim text of the on-arm:
 
@@ -247,7 +247,7 @@ id. Widening `reverse` would add a heuristic (and the `PERSON_1s` / `PERSON_15`
 ambiguity that comes with it) to solve a problem this model does not have.
 **Keep `pseudonym-metrics.ts` instead**: it is the regression instrument, it
 costs nothing offline, and it is what tells you if a model swap changes this
-answer. Re-run the bench when the synthesizer client changes — that is the
+answer. Re-run the bench when the compactExecution client changes — that is the
 trigger, not a calendar.
 
 **2. Is prompt guidance worth wiring? Yes, but not for the reason it was
@@ -260,15 +260,15 @@ wiring it:
   did not set out to optimise. Whether "the answer names more email placeholders"
   is *good* depends on the product, and it is not obviously good — those are
   reversed to real addresses in front of the user.
-- Guidance only makes sense at the **prompt/synthesizer seam** (option 3 of open
+- Guidance only makes sense at the **prompt/compactExecution seam** (option 3 of open
   question 1). If the hook lands at the app-tools transport or the event store,
-  the synthesizer prompt is the wrong place to put it and this recommendation
+  the compactExecution prompt is the wrong place to put it and this recommendation
   does not apply.
 
 So: wire it *if and when* the prompt seam is chosen, as a one-paragraph addition
-to `synthesizer.baml`. It is not a prerequisite for `reverse` to work.
+to `compactExecution.baml`. It is not a prerequisite for `reverse` to work.
 
-**3. Open question 4 can be closed** for the Anthropic synthesizer chain. It
+**3. Open question 4 can be closed** for the Anthropic compactExecution chain. It
 should not be closed in general — see below.
 
 ## Threats to validity

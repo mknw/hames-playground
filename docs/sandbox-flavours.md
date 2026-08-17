@@ -68,7 +68,7 @@ const data  = withSandbox({ id: `${sessionId}:data`, sessionId,
 return [
   router({ basic: '…', image_processing: '…', data: '…' }),
   routes({ basic, image_processing: image, data }),
-  synthesizer({ mode: 'thread' }),
+  compactExecution({ mode: 'thread' }),
 ]
 ```
 

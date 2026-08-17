@@ -1,7 +1,7 @@
 /**
  * General Agent (#27)
  *
- * Pattern: planner → simpleLoop → synthesizer.
+ * Pattern: planner → simpleLoop → compactExecution.
  *
  * The A/B counterpart to the router-based `default` agent. Where `default`
  * classifies the request into ONE namespace and dispatches there — which
@@ -24,7 +24,7 @@
 import {
   planner,
   simpleLoop,
-  synthesizer,
+  compactExecution,
   Tools,
   callTool,
   createLoopControllerAdapter,
@@ -94,10 +94,10 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   // then again on turn 3, 4, 5…, because events persist across
   // `continueSession`. Scoping to the executor's own events, in this turn,
   // makes the error signal mean "the work failed" again.
-  // `user_message` (patternId 'harness') is listed so the synthesizer still
+  // `user_message` (patternId 'harness') is listed so the compactExecution still
   // sees the question: this chain has no router or compactIntent to set
   // `data.intent`, so an executor-only window would leave it with neither.
-  const responseSynth = synthesizer<SessionData>({
+  const responseSynth = compactExecution<SessionData>({
     mode: 'thread',
     patternId: 'response-synth',
     liveEvents: true,

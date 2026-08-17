@@ -12,7 +12,7 @@
  *     prompt (search/fetch return TEXT, never JSON.parse; keep the URL on a
  *     failed fetch).
  *  2. (Theme 1) the real URLs — including the 403'd one — are present in the
- *     `turns` the synthesizer receives, so the prompt's FIDELITY rule has the
+ *     `turns` the compactExecution receives, so the prompt's FIDELITY rule has the
  *     genuine links to cite instead of inventing substitutes.
  *
  * Plus prompt-content guards that the FIDELITY / PROVENANCE / TRUTHFULNESS
@@ -154,7 +154,7 @@ describe('code-mode agent — synth fidelity + script-hygiene guidance', () => {
     expect(context).toContain('fetch_content')
   })
 
-  it('passes the real URLs (incl. the 403\'d one) into the synthesizer turns (Theme 1)', async () => {
+  it('passes the real URLs (incl. the 403\'d one) into the compactExecution turns (Theme 1)', async () => {
     const { codeModeAgent } = await import('../../lib/harness-client/examples/code-mode.server')
     const { harness } = await import('../../lib/harness-patterns/harness.server')
 
@@ -196,7 +196,7 @@ function readBamlSrc(file: string): string {
 
 describe('code-mode refinement — BAML prompt guardrails', () => {
   it('Synthesize carries the FIDELITY block (cite-only-real-URLs, keep URL on fetch fail)', () => {
-    const src = readBamlSrc('synthesizer.baml')
+    const src = readBamlSrc('compact-execution.baml')
     expect(src).toContain('FIDELITY')
     expect(src).toContain('verbatim')
     // Never invent/substitute links; keep the original URL on a failed fetch.

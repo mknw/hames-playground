@@ -758,7 +758,7 @@ The `harness-patterns/` library is the testbed for an eventual standalone npm pa
 ```ts
 // app/src/lib/harness-client/examples/title-generator.server.ts
 export const titleAgent = harness<TitleAgentData>(
-  synthesizer<TitleAgentData>({
+  compactExecution<TitleAgentData>({
     patternId: 'title-gen',
     mode: 'message',
     synthesize: async ({ userMessage }) => sanitizeTitle(await b.GenerateConversationTitle(userMessage)) ?? '',
@@ -766,7 +766,7 @@ export const titleAgent = harness<TitleAgentData>(
 )
 ```
 
-One pattern (`synthesizer`), one BAML call, no tools, no router. `mode: 'message'` makes the synthesizer a thin shell around the custom `synthesize` fn: it pulls the latest `user_message` from the view and feeds it as the function's input.
+One pattern (`compactExecution`), one BAML call, no tools, no router. `mode: 'message'` makes the compactExecution a thin shell around the custom `synthesize` fn: it pulls the latest `user_message` from the view and feeds it as the function's input.
 
 ### The BAML function
 
@@ -825,7 +825,7 @@ All failures (LLM throws, returns empty, sanitizer rejects, 3s timeout fires) ar
 
 ### Replay correctness — `final?` discriminator
 
-Restoring a conversation no longer surfaces residual router status messages ("Let me look into that…") as if they were assistant responses. `AssistantMessageEventData.final?: boolean` distinguishes the synthesizer's user-facing emit (and the router's direct-response branch) from intermediate routing status. `replayMessages` in `lib/harness-client/replay.ts` filters on it. The live stream is unaffected — the live UI only paints `finalResult.response` anyway.
+Restoring a conversation no longer surfaces residual router status messages ("Let me look into that…") as if they were assistant responses. `AssistantMessageEventData.final?: boolean` distinguishes the compactExecution's user-facing emit (and the router's direct-response branch) from intermediate routing status. `replayMessages` in `lib/harness-client/replay.ts` filters on it. The live stream is unaffected — the live UI only paints `finalResult.response` anyway.
 
 ---
 
@@ -907,7 +907,7 @@ app/
 │   ├── router.baml               # Router (intent classification)
 │   ├── simpleLoop.baml           # Generic LoopController (used by all simpleLoop routes incl. code_mode)
 │   ├── actorCritic.baml          # ActorController + Critic (used by guardrailed/ontology agents)
-│   ├── synthesizer.baml          # Final response synthesis
+│   ├── compactExecution.baml          # Final response synthesis
 │   ├── describe.baml             # Lightweight tool-result summarization
 │   ├── title.baml                # Conversation title generation
 │   ├── with-references.baml      # Reference selector for withReferences
@@ -965,7 +965,7 @@ app/
 │       │       ├── parallel.server.ts     # Concurrent branches + pattern_enter/exit
 │       │       ├── guardrail.server.ts    # Rail validation + pattern_enter/exit
 │       │       ├── hook.server.ts         # Lifecycle hook + pattern_enter/exit
-│       │       ├── synthesizer.server.ts  # Final response synthesis
+│       │       ├── compactExecution.server.ts  # Final response synthesis
 │       │       ├── chain.server.ts        # Sequential composition
 │       │       └── event-view.server.ts   # EventViewImpl (fluent query API)
 │       ├── settings.ts             # HarnessSettings type, defaults, MODEL_CONTEXT_WINDOWS

@@ -12,7 +12,7 @@
  *   chain(
  *     compactIntent({ viewConfig: { fromLastNTurns: 5 } }),
  *     withSandbox({ id })(actorCritic(actor, critic, [], { … })),
- *     synthesizer({ mode: 'thread' }),
+ *     compactExecution({ mode: 'thread' }),
  *   )
  *
  * This is the chain-based counterpart to `router`, which sets `data.intent` as

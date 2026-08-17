@@ -13,7 +13,7 @@ import {
   router,
   routes,
   simpleLoop,
-  synthesizer,
+  compactExecution,
   withReferences,
   Tools,
   callTool,
@@ -77,7 +77,7 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
     { liveEvents: true },
   );
 
-  const responseSynth = synthesizer<SessionData>({
+  const responseSynth = compactExecution<SessionData>({
     mode: "thread",
     patternId: "response-synth",
     liveEvents: true,

@@ -30,7 +30,7 @@ Nine registered `graph` tools. All of them only ever **read** from Microsoft 365
 | `graph_file_ingest` | one own OneDrive/SharePoint file → the Data Stash | `Files.Read.All` |
 
 Enough for "what does my day look like?" — the agent's loop calls several tools
-in one turn and the synthesizer writes the briefing — plus "find last quarter's
+in one turn and the compactExecution writes the briefing — plus "find last quarter's
 budget in Finance", which is [file discovery](#finding-a-file), and "pull that
 spreadsheet in and chart it", which is [the file bridge](#files--the-data-stash).
 

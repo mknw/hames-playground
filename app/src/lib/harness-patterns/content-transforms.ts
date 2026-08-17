@@ -40,7 +40,7 @@ export const truncateToolResults = (maxChars: number): ContentTransform => (even
  * Same charter as every transform in this file: read-time only, never a
  * mutation of stored data. simpleLoop applies it when building the CONTROLLER
  * TURN LOG, after the full result has already been written to the event store —
- * so the synthesizer, citation extractors and session persistence always see
+ * so the compactExecution, citation extractors and session persistence always see
  * the complete result, and only the loop LLM gets the compact view.
  *
  * Semantics:
@@ -52,7 +52,7 @@ export const truncateToolResults = (maxChars: number): ContentTransform => (even
  *    nesting level and recurse into what remains.
  *
  * Why an omit-list and not a fields-to-keep list: the concrete need is "drop
- * the bulky field" (e.g. a 519-char Loop webUrl that only the synthesizer
+ * the bulky field" (e.g. a 519-char Loop webUrl that only the compactExecution
  * uses), and an allowlist would silently hide every field a tool adds later
  * until someone remembered to update each agent config. Bloat that slips
  * through an omit-list is visible in token counts; information an allowlist

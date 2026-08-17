@@ -296,7 +296,7 @@ export interface SimpleLoopConfig extends PatternConfig {
   /** Per-tool omit-list for the CONTROLLER TURN LOG only: fields deleted
    *  (recursively, at every object level including array elements) from the
    *  result shown to the loop LLM. The `tool_result` EVENT keeps the full
-   *  result — the synthesizer, citation extractors and session persistence are
+   *  result — the compactExecution, citation extractors and session persistence are
    *  untouched, so e.g. dropping `webUrl` here still leaves the final answer
    *  its links. Keyed by tool name; tools without an entry pass through
    *  unchanged. See `omitResultFields` in content-transforms.ts. */
@@ -520,15 +520,15 @@ export interface WithLoopHistory {
 }
 
 // ============================================================================
-// Synthesizer Types
+// compactExecution Types
 // ============================================================================
 
-/** Mode for synthesizer pattern */
-export type SynthesizerMode = 'message' | 'response' | 'thread'
+/** Mode for compactExecution pattern */
+export type CompactExecutionMode = 'message' | 'response' | 'thread'
 
-/** Input to synthesizer based on mode */
-export interface SynthesizerInput {
-  mode: SynthesizerMode
+/** Input to compactExecution based on mode */
+export interface CompactExecutionInput {
+  mode: CompactExecutionMode
   userMessage: string
   intent: string
   response?: string
@@ -541,19 +541,19 @@ export interface SynthesizerInput {
 }
 
 /** Custom synthesis function type */
-export type SynthesisFn = (input: SynthesizerInput) => Promise<string>
+export type SynthesisFn = (input: CompactExecutionInput) => Promise<string>
 
-/** Configuration for synthesizer pattern */
-export interface SynthesizerConfig extends PatternConfig {
-  mode: SynthesizerMode
+/** Configuration for compactExecution pattern */
+export interface CompactExecutionConfig extends PatternConfig {
+  mode: CompactExecutionMode
   /** Custom synthesis function (defaults to BAML CreateToolResponse) */
   synthesize?: SynthesisFn
   /** Skip synthesis if response already exists */
   skipIfHasResponse?: boolean
 }
 
-/** Data interface for synthesizer */
-export interface SynthesizerData {
+/** Data interface for compactExecution */
+export interface CompactExecutionData {
   response?: string
   synthesizedResponse?: string
   intent?: string
@@ -576,7 +576,7 @@ export interface UserMessageEventData {
 /** Data payload for assistant_message event */
 export interface AssistantMessageEventData {
   content: string
-  /** Set to true on the synthesizer's user-facing final response. Used by
+  /** Set to true on the compactExecution's user-facing final response. Used by
    *  chat-history replay to filter out intermediate router status messages
    *  (e.g. "Let me look into that…") that share the same event type.
    *  Absent / false on router/intermediate emits. */
@@ -702,7 +702,7 @@ export interface IntentCompactedEventData {
  *  invocation. Mirrors `intent_compacted`: a dedicated observability event for
  *  an LLM step that produces no tool call. Deliberately NOT a
  *  `controller_action` (which #27 originally proposed): that payload is a real
- *  `ControllerAction`, and `synthesizer`'s thread mode turns every
+ *  `ControllerAction`, and `compactExecution`'s thread mode turns every
  *  controller_action in view into a tool iteration — a synthetic one would
  *  render as a tool call that never happened. `llmCall` (on the ContextEvent)
  *  holds the BAML call detail. */
@@ -802,7 +802,7 @@ export const MAX_RETRIES = 3
 export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
   simpleLoop: ['controller_action', 'tool_call', 'tool_result'],
   actorCritic: ['controller_action', 'tool_call', 'tool_result', 'critic_result'],
-  synthesizer: 'assistant_message',
+  compactExecution: 'assistant_message',
   router: true,
   routes: false,
   chain: false,
@@ -811,7 +811,7 @@ export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
   // ctx.events (and the observability panel) even when a later pattern errors.
   planner: 'plan_created',
   // The retriever's matches are surfaced as a tool_result (the channel the
-  // synthesizer reads via view.fromLastPattern()) — same as a simpleLoop tool.
+  // compactExecution reads via view.fromLastPattern()) — same as a simpleLoop tool.
   retriever: ['tool_result'],
 }
 
@@ -819,7 +819,7 @@ export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
 export const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy> = {
   simpleLoop: 'on-success',
   actorCritic: 'on-success',
-  synthesizer: 'always',
+  compactExecution: 'always',
   router: 'always',
   routes: 'always',
   chain: 'always',
@@ -834,7 +834,7 @@ export const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy> = {
 export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverable'> = {
   simpleLoop: 'recoverable',
   actorCritic: 'recoverable',
-  synthesizer: 'irrecoverable',
+  compactExecution: 'irrecoverable',
   router: 'irrecoverable',
   routes: 'irrecoverable',
   chain: 'irrecoverable',
@@ -846,6 +846,6 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   // question's plan) and the downstream loop runs unplanned — never fatal.
   planner: 'recoverable',
   // retriever is best-effort: a backend failure yields empty matches and the
-  // synthesizer answers from whatever else is in context — never fatal.
+  // compactExecution answers from whatever else is in context — never fatal.
   retriever: 'recoverable',
 }

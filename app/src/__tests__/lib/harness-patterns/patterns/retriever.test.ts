@@ -3,7 +3,7 @@
  *
  * The retriever forms ONE query (compacted intent → last message → last-N
  * turns), fans it out to injected backends, merges hits closest-first capped at
- * k, sets `scope.data.matches`, and emits a `tool_result` for the synthesizer.
+ * k, sets `scope.data.matches`, and emits a `tool_result` for the compactExecution.
  * Backends are mocked — this is the framework-pure pattern, no app deps.
  */
 
@@ -257,7 +257,7 @@ describe('retriever', () => {
     expect(matches.map((m) => m.id)).toEqual(['scored', 'noscore'])
   })
 
-  it('emits a tool_result the synthesizer can read, with matches + backends + query', async () => {
+  it('emits a tool_result the compactExecution can read, with matches + backends + query', async () => {
     const backend = mockBackend('redis', [hit('redis', 'a', 0.1)])
     const { result } = await run({}, [userMsg('the query')], {
       backends: [backend],

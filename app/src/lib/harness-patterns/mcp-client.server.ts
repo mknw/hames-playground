@@ -192,8 +192,14 @@ async function withReconnect<T>(op: (c: Client) => Promise<T>): Promise<T> {
  * guard hooked at event-tracking time would neutralize the stored event yet
  * still feed the raw injection to the controller on that same turn.
  *
- * Only successful results are sanitized: a failure carries a gateway error
- * string, not fetched content, and rewriting it would corrupt error handling.
+ * BOTH channels are sanitized. `data` is the obvious one. `error` is not
+ * optional either, because `demoteErrorString` below converts a SUCCESSFUL
+ * result whose text merely starts with `Error:` into `{ success: false, error:
+ * <that text> }` — so for an untrusted tool the error field can hold fetched
+ * page content verbatim, and it reaches an LLM three ways: the controller turn
+ * log's `tool_result.error`, `formatEventData`'s `"<tool> ERROR: …"`, and
+ * `view.lastError()` → `compactExecution`'s prompt. Sanitizing keeps it a
+ * string, so error handling is unaffected.
  */
 export async function callTool(
   name: string,
@@ -202,10 +208,16 @@ export async function callTool(
   const result = await dispatchTool(name, args)
 
   const guard = getActiveInjectionGuard()
-  if (!guard || !result.success || !guard.isUntrusted(name)) return result
+  if (!guard || !guard.isUntrusted(name)) return result
 
-  const { data, report } = await guard.sanitize(name, result.data)
-  return report ? { ...result, data, sanitized: report } : result
+  if (result.success) {
+    const { data, summary } = await guard.sanitize(name, result.data)
+    return summary ? { ...result, data, sanitized: summary } : result
+  }
+
+  if (typeof result.error !== 'string' || result.error.length === 0) return result
+  const { data: cleanedError, summary } = await guard.sanitize(name, result.error)
+  return summary ? { ...result, error: cleanedError as string, sanitized: summary } : result
 }
 
 async function dispatchTool(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {

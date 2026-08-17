@@ -36,9 +36,15 @@
 
 import { assertServerOnImport } from '../assert.server'
 import { createEvent } from '../context.server'
-import { runWithInjectionGuard, type ActiveInjectionGuard } from '../injection-guard-scope.server'
+import { emitLive } from '../live-event-context.server'
+import {
+  getActiveInjectionGuard,
+  runWithInjectionGuard,
+  type ActiveInjectionGuard,
+} from '../injection-guard-scope.server'
 import {
   applyScreenVerdict,
+  redactReport,
   sanitizeUntrusted,
   type InjectionGuardOptions,
   type SanitizeReport,
@@ -90,20 +96,28 @@ export function createInjectionGuard(
   emit: (event: ContextEvent) => void,
   patternId: string,
 ): ActiveInjectionGuard {
+  // UNION with any outer guard, never shadow it. ALS nesting would otherwise
+  // let an inner `withInjectionGuard({ namespaces: ['graph'] })` silently
+  // REMOVE the outer wrapper's `web` protection for its whole subtree — the one
+  // composition mistake a security control must not permit. Widening is always
+  // safe; narrowing is what needs an explicit decision, and there is no way to
+  // ask for it (deliberately).
+  const outer = getActiveInjectionGuard()
   const namespaces = new Set(config.namespaces ?? [])
   const tools = new Set(config.tools ?? [])
 
   const isUntrusted = (tool: string): boolean =>
-    tools.has(tool) || namespaces.has(inferServer(tool))
+    tools.has(tool) || namespaces.has(inferServer(tool)) || (outer?.isUntrusted(tool) ?? false)
 
   return {
     isUntrusted,
 
-    async sanitize(tool, data) {
+    async sanitize(tool, data, overrides) {
       if (!isUntrusted(tool)) return { data }
 
       const namespace = inferServer(tool)
-      let { data: out, report } = sanitizeUntrusted(data, { tool, namespace }, config)
+      const options = overrides ? { ...config, ...overrides } : config
+      let { data: out, report } = sanitizeUntrusted(data, { tool, namespace }, options)
 
       // The optional LLM screen is a SECOND OPINION on content the
       // deterministic layer passed clean — if regexes already fired we have
@@ -134,12 +148,19 @@ export function createInjectionGuard(
       if (!report.neutralized) {
         // Nothing changed. Still surface a screen outage, so a silently
         // degraded second layer is visible rather than invisible.
-        if (report.screenReason) emit(buildEvent(patternId, report))
+        if (report.screenReason) {
+          const event = buildEvent(patternId, report)
+          emit(event)
+          return { data, summary: redactReport(report, event.id) }
+        }
         return { data }
       }
 
-      emit(buildEvent(patternId, report))
-      return { data: out, report }
+      const event = buildEvent(patternId, report)
+      emit(event)
+      // The REDACTED summary goes back to the caller (and onto the tool_result
+      // event); the verbatim spans stay on `event` alone. See `SanitizeSummary`.
+      return { data: out, summary: redactReport(report, event.id) }
     },
   }
 }
@@ -183,7 +204,20 @@ export function withInjectionGuard(config: InjectionGuardConfig) {
       // guardrail firing out of existence. A security event is not optional
       // history — `content_sanitized` is in ALWAYS_COMMIT_TYPES for the same
       // reason `error` is.
-      const guard = createInjectionGuard(config, (event) => scope.events.push(event), patternId)
+      const guard = createInjectionGuard(
+        config,
+        (event) => {
+          scope.events.push(event)
+          // `trackEvent` is what normally calls `emitLive`, and we bypass it —
+          // so call it here, or a guardrail firing would be the ONE event
+          // missing from the live SSE stream, arriving only in `runChain`'s
+          // post-commit sweep after the whole pattern finished. It is also the
+          // only copy that survives if the inner pattern THROWS, since a throw
+          // skips `commitEvents` entirely and discards the scope.
+          emitLive(event)
+        },
+        patternId,
+      )
       return runWithInjectionGuard(guard, () => pattern.fn(scope, view))
     }
 
@@ -194,6 +228,13 @@ export function withInjectionGuard(config: InjectionGuardConfig) {
       // Expose the wrapped pattern so static introspection (pattern-capabilities)
       // still sees patterns nested inside the guard.
       children: [pattern],
+      // Declared trust boundary, readable without running the agent. See
+      // `ConfiguredPattern.injectionGuard` for why this is a sibling field
+      // rather than something on `config`.
+      injectionGuard: {
+        namespaces: [...(config.namespaces ?? [])],
+        tools: [...(config.tools ?? [])],
+      },
     }
   }
 }

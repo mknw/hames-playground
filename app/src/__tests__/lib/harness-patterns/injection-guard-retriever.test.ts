@@ -204,6 +204,38 @@ describe('retriever hits — guarded', () => {
       { namespaces: ['retriever'] },
     )
     expect(matches[0].source).not.toContain(NEUTRALIZED_SPAN)
+    expect(matches[0].source).toContain('neutralized:instruction-override')
+  })
+
+  it('never FENCES a filename — a fenced source breaks citations', async () => {
+    // No attacker required: a stash document called "New instructions for
+    // expenses.docx" matches `instruction-new-directive`. Wrapping it in the
+    // multi-line spotlight fence would put newlines and sentinels into
+    // `RetrievalReference.source`, which is rendered as the citation label AND
+    // compiled into the filename→docId match that drives the inline viewer
+    // (ChatMessages.tsx). So `source` is scanned with the fence switched off.
+    const { matches, result } = await runRetriever(
+      [hit(CLEAN_CHUNK, { source: 'New instructions for expenses.docx' })],
+      { namespaces: ['retriever'] },
+    )
+
+    const source = matches[0].source!
+    expect(source).not.toContain('\n')
+    expect(source).not.toContain('UNTRUSTED CONTENT')
+    // Still recognisably the same file, and still ending in its extension, so
+    // the citation stays usable.
+    expect(source).toContain('for expenses.docx')
+    // The reference projection carries the same single-line label.
+    expect(result?.result.references[0]).toMatchObject({ source })
+  })
+
+  it('leaves the content fence in place even when the source was also flagged', async () => {
+    const { matches } = await runRetriever(
+      [hit(POISONED_CHUNK, { source: 'New instructions.docx' })],
+      { namespaces: ['retriever'] },
+    )
+    expect(matches[0].content).toContain('UNTRUSTED CONTENT')
+    expect(matches[0].source).not.toContain('UNTRUSTED CONTENT')
   })
 
   it('does nothing when the guard does not list the retriever namespace', async () => {

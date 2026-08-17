@@ -47,7 +47,9 @@
  *   3. instruction spans → replaced by a `⟦neutralized:<rule>#n⟧` marker. The
  *      verbatim span survives ONLY in the finding, which is human-visible in
  *      the ObservabilityPanel and never rendered into any LLM-facing
- *      serialization (see `formatEventData`'s `content_sanitized` case).
+ *      serialization: `formatEventData` has an explicit `content_sanitized`
+ *      case, and everything attached to a `tool_result` is the REDACTED
+ *      `SanitizeSummary` (see that type for the `judge` leak it prevents).
  *   4. exfiltration vectors → defanged to inert backticked literals, so an
  *      auto-loading image or a data-bearing URL cannot fire from the user's
  *      browser when the answer is rendered.
@@ -141,6 +143,52 @@ export interface SanitizeReport {
   screenReason?: string
 }
 
+/**
+ * REDACTED projection of a `SanitizeReport` — what rides on the `tool_result`
+ * event, and the only sanitize record any general-purpose event serializer can
+ * reach.
+ *
+ * Why this type exists at all: `ToolResultEventData` is JSON-dumped wholesale
+ * by more than one consumer — `judge` serializes `JSON.stringify(event.data)`
+ * for its evaluator, and its chosen candidate becomes `scope.data.response`,
+ * which `compactExecution` puts straight into the `Synthesize` prompt. Carrying
+ * the full report there would have converted a neutralized mid-loop injection
+ * into a synthesizer-stage injection. So the verbatim spans live ONLY on the
+ * `content_sanitized` event (whose `formatEventData` case renders metadata
+ * alone), and everything attached to a tool result is counts and rule ids.
+ */
+export interface SanitizeSummary {
+  tool: string
+  namespace: string
+  /** How many findings the full report holds. */
+  findingCount: number
+  /** Distinct rule ids that fired, in corpus order. */
+  rules: string[]
+  neutralized: boolean
+  spotlighted: boolean
+  scanned: number
+  screenReason?: string
+  /** Id of the `content_sanitized` event holding the full findings, so a human
+   *  can jump from an annotated result to what was removed. */
+  eventId?: string
+}
+
+/** Project a full report down to the redacted summary. Drops `findings[].match`
+ *  — the whole point of the type. */
+export function redactReport(report: SanitizeReport, eventId?: string): SanitizeSummary {
+  return {
+    tool: report.tool,
+    namespace: report.namespace,
+    findingCount: report.findings.length,
+    rules: [...new Set(report.findings.map((f) => f.rule))],
+    neutralized: report.neutralized,
+    spotlighted: report.spotlighted,
+    scanned: report.scanned,
+    ...(report.screenReason ? { screenReason: report.screenReason } : {}),
+    ...(eventId ? { eventId } : {}),
+  }
+}
+
 /** Verdict returned by the optional LLM screen. */
 export interface ScreenVerdict {
   injection_detected: boolean
@@ -206,12 +254,22 @@ export const INJECTION_RULES: readonly InjectionRule[] = Object.freeze([
     // Escaped, never literal: the characters this rule matches are invisible
     // by definition, so writing them inline would make the corpus unreadable
     // and unreviewable (and trips no-irregular-whitespace).
+    //   00AD       soft hyphen — invisible in every renderer, and the classic
+    //              way to split a keyword past a regex, e.g. "ig<00AD>nore"
+    // NOT the combining grapheme joiner (034F) either, for the same reason:
+    // it is a combining mark, and this class holds FORMAT characters only.
+    //   061C       arabic letter mark
+    //   180E       mongolian vowel separator
+    // NOT variation selectors (FE00-FE0F): they are combining marks, so a
+    // class containing them is a `no-misleading-character-class` error, and
+    // stripping them would mangle ordinary emoji — a real false positive for
+    // no real gain, since they modify a visible glyph rather than hide text.
     //   200B-200F  zero-width space/joiner/non-joiner, LRM, RLM
     //   202A-202E  bidi embedding + override
     //   2060-2064  word joiner, invisible operators
     //   2066-2069  bidi isolates
     //   FEFF       zero-width no-break space (BOM)
-    re: /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g,
+    re: /[\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g,
     action: 'strip' as const,
   },
   {
@@ -226,7 +284,7 @@ export const INJECTION_RULES: readonly InjectionRule[] = Object.freeze([
     description:
       'Attempt to discard the agent\'s own instructions ("ignore previous instructions")',
     layer: 'instruction' as const,
-    re: /\b(?:ignore|disregard|forget|override|discard)\b[^.\n]{0,40}?\b(?:previous|prior|earlier|above|preceding|initial|original|system)\b[^.\n]{0,40}?\b(?:instruction|instructions|prompt|prompts|context|rule|rules|directive|directives|message|messages|guideline|guidelines)\b/gi,
+    re: /\b(?:ignore|disregard|forget|override|discard)\b[^.]{0,40}?\b(?:previous|prior|earlier|above|preceding|initial|original|system)\b[^.]{0,40}?\b(?:instruction|instructions|prompt|prompts|context|rule|rules|directive|directives|message|messages|guideline|guidelines)\b/gi,
     action: 'marker' as const,
   },
   {
@@ -240,7 +298,7 @@ export const INJECTION_RULES: readonly InjectionRule[] = Object.freeze([
     id: 'instruction-role-reassign',
     description: 'Attempt to reassign the model\'s role ("you are now …")',
     layer: 'instruction' as const,
-    re: /\byou\s+are\s+(?:now|actually|instead|really)\b[^.\n]{0,80}/gi,
+    re: /\byou\s+are\s+(?:now|actually|instead|really)\b[^.]{0,80}/gi,
     action: 'marker' as const,
   },
   {
@@ -254,28 +312,28 @@ export const INJECTION_RULES: readonly InjectionRule[] = Object.freeze([
     id: 'instruction-secrecy',
     description: 'Instruction to hide something from the user',
     layer: 'instruction' as const,
-    re: /\b(?:do\s+not|do\s?n't|don't|never)\s+(?:tell|inform|mention|reveal|disclose|show|report|notify)\b[^.\n]{0,60}?\b(?:the\s+)?(?:user|human|operator|person)\b/gi,
+    re: /\b(?:do\s+not|do\s?n't|don't|never)\s+(?:tell|inform|mention|reveal|disclose|show|report|notify)\b[^.]{0,60}?\b(?:the\s+)?(?:user|human|operator|person)\b/gi,
     action: 'marker' as const,
   },
   {
     id: 'instruction-tool-steering',
     description: 'Imperative pushing the agent into a specific tool call',
     layer: 'instruction' as const,
-    re: /\b(?:immediately|instead|first|now|then)\s+(?:call|invoke|run|execute|use)\s+(?:the\s+)?(?:tool|function|command|following)\b[^.\n]{0,80}/gi,
+    re: /\b(?:immediately|instead|first|now|then)\s+(?:call|invoke|run|execute|use)\s+(?:the\s+)?(?:tool|function|command|following)\b[^.]{0,80}/gi,
     action: 'marker' as const,
   },
   {
     id: 'instruction-prompt-extraction',
     description: 'Attempt to make the agent reveal its own prompt or instructions',
     layer: 'instruction' as const,
-    re: /\b(?:repeat|print|output|reveal|show|dump|display)\b[^.\n]{0,40}?\b(?:your|the)\s+(?:system\s+prompt|initial\s+prompt|instructions|prompt|rules)\b/gi,
+    re: /\b(?:repeat|print|output|reveal|show|dump|display)\b[^.]{0,40}?\b(?:your|the)\s+(?:system\s+prompt|initial\s+prompt|instructions|prompt|rules)\b/gi,
     action: 'marker' as const,
   },
   {
     id: 'exfil-instruction',
     description: 'Instruction to transmit conversation data to an attacker-controlled URL',
     layer: 'instruction' as const,
-    re: /\b(?:send|post|upload|exfiltrate|transmit|forward|leak|append|encode)\b[^.\n]{0,60}?\bhttps?:\/\/[^\s)<>"']+/gi,
+    re: /\b(?:send|post|upload|exfiltrate|transmit|forward|leak|append|encode)\b[^.]{0,60}?\bhttps?:\/\/[^\s)<>"']+/gi,
     action: 'marker' as const,
   },
   {
@@ -289,7 +347,12 @@ export const INJECTION_RULES: readonly InjectionRule[] = Object.freeze([
     id: 'exfil-html-tag',
     description: 'HTML tag that fetches or executes a remote resource',
     layer: 'exfil-url' as const,
-    re: /<\s*\/?\s*(?:img|iframe|script|object|embed|svg|link|style|audio|video|source|track|meta)\b[^>\n]{0,2000}>/gi,
+    // `\s{0,4}`, NOT `\s*`: two unbounded whitespace runs either side of
+    // an optional `/` make the engine try every split point, which is
+    // quadratic — `<` followed by 200k spaces measured 15s of SYNCHRONOUS
+    // CPU, hanging the whole Node process. Four is more slack than real
+    // markup uses. Pinned by the regex-safety test.
+    re: /<\s{0,4}\/?\s{0,4}(?:img|iframe|script|object|embed|svg|link|style|audio|video|source|track|meta)\b[^>\n]{0,2000}>/gi,
     action: 'defang' as const,
   },
   {
@@ -372,6 +435,10 @@ export function sanitizeText(
       const existing = lossless ? findings.find((f) => f.rule === rule.id) : undefined
       if (existing) {
         existing.match += match
+        // The aggregated finding covers several occurrences that may have been
+        // rewritten differently (a `⟦`/`⟧` pair escapes to `[` and `]`), so a
+        // single `replacement` would be misleading for all but the first.
+        if (existing.replacement !== replacement) existing.replacement = '(per-occurrence)'
       } else {
         findings.push({
           rule: rule.id,
@@ -473,6 +540,13 @@ export function sanitizeUntrusted(
  *  preserving corpus order (which is load-bearing — see `INJECTION_RULES`). */
 export function resolveRules(options?: InjectionGuardOptions): readonly InjectionRule[] {
   const disabled = new Set(options?.disableRules ?? [])
+  // `sentinel-escape` is NOT disableable. Every marker- and fence-integrity
+  // guarantee in this module rests on it: without it, untrusted content can
+  // write a literal `⟦neutralized:…⟧` or close the spotlight fence early, and
+  // the whole spotlighting layer becomes decorative. A per-agent
+  // false-positive escape hatch must not be able to switch off the integrity
+  // layer, so it is filtered out of `disableRules` rather than honoured.
+  disabled.delete('sentinel-escape')
   const base = INJECTION_RULES.filter((r) => !disabled.has(r.id))
   return options?.rules?.length ? [...base, ...options.rules] : base
 }
@@ -498,10 +572,10 @@ export function applyScreenVerdict(
   ctx: { tool: string; namespace: string },
   base: SanitizeReport,
 ): SanitizeResult {
-  if (!verdict.injection_detected || verdict.spans.length === 0) {
-    // A detection with no spans is still a detection: fence it.
-    if (!verdict.injection_detected) return { data, report: base }
-  }
+  // No detection → nothing to do. A detection with NO spans is still a
+  // detection: it falls through and fences every leaf, which is the honest
+  // degradation (the screen is sure something is wrong but could not quote it).
+  if (!verdict.injection_detected) return { data, report: base }
 
   const spanRules: InjectionRule[] = verdict.spans
     .filter((s) => s.trim().length > 0)

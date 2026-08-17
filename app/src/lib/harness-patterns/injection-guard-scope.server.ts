@@ -29,7 +29,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { assertServerOnImport } from './assert.server'
-import type { SanitizeReport } from './injection-guard'
+import type { SanitizeSummary, SpotlightMode } from './injection-guard'
 
 assertServerOnImport()
 
@@ -39,20 +39,33 @@ export interface ActiveInjectionGuard {
   isUntrusted(tool: string): boolean
   /**
    * Sanitize one untrusted payload. Returns the SAME `data` reference when
-   * nothing was found, and omits `report` in that case — so a caller can treat
-   * "no report" as "byte-identical, nothing to annotate".
+   * nothing was found, and omits `summary` in that case — so a caller can treat
+   * "no summary" as "byte-identical, nothing to annotate".
    *
-   * Emits the `content_sanitized` event as a side effect when it neutralizes,
-   * so the observability trail cannot be forgotten by a caller.
+   * `summary` is deliberately the REDACTED projection, never the full report:
+   * it is attached to `tool_result` events, which several consumers JSON-dump
+   * wholesale (see `SanitizeSummary`). The verbatim spans go only to the
+   * `content_sanitized` event, which this method emits as a side effect — so
+   * the observability trail cannot be forgotten by a caller.
    */
-  sanitize(tool: string, data: unknown): Promise<{ data: unknown; report?: SanitizeReport }>
+  sanitize(
+    tool: string,
+    data: unknown,
+    /** Per-call overrides. `spotlight: 'off'` is for fields where a multi-line
+     *  fence would corrupt a structural value the UI depends on — the
+     *  retriever's `source` filename is the one real case. */
+    overrides?: { spotlight?: SpotlightMode },
+  ): Promise<{ data: unknown; summary?: SanitizeSummary }>
 }
 
 const guardStore = new AsyncLocalStorage<ActiveInjectionGuard>()
 
 /** Run `fn` with `guard` as the active injection guard. Nesting is allowed and
- *  the innermost wrapper wins — an inner `withInjectionGuard` with a narrower
- *  namespace list fully shadows an outer one for its subtree. */
+ *  UNIONS: `createInjectionGuard` reads the enclosing guard at construction and
+ *  ORs its `isUntrusted`, so an inner wrapper can only ever widen coverage.
+ *  Shadowing would let a narrow inner wrapper silently remove an outer one's
+ *  protection for its whole subtree, which is not a thing a security control
+ *  should permit by accident. */
 export function runWithInjectionGuard<T>(
   guard: ActiveInjectionGuard,
   fn: () => Promise<T>,

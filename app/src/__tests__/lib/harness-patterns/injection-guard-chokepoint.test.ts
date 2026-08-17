@@ -133,14 +133,38 @@ describe('callTool + withInjectionGuard', () => {
     await closeMcpClient()
   })
 
-  it('does not touch a FAILED call (the payload is an error string, not content)', async () => {
+  it('leaves a genuine transport error untouched', async () => {
     const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
     mockCallTool.mockRejectedValue(new Error('gateway exploded'))
     const guard = createInjectionGuard({ namespaces: ['web'] }, () => {}, 'p')
     const result = await runWithInjectionGuard(guard, () => callTool('search', { q: 'x' }))
     expect(result.success).toBe(false)
-    expect(result.error).toContain('gateway exploded')
+    expect(result.error).toBe('gateway exploded')
     expect(result.sanitized).toBeUndefined()
+    await closeMcpClient()
+  })
+
+  it('sanitizes the ERROR channel of a demoted result', async () => {
+    // `demoteErrorString` turns a SUCCESSFUL text result beginning with
+    // "Error:" into { success: false, error: <that text> }. For an untrusted
+    // tool that field therefore holds fetched page content, and it reaches an
+    // LLM three ways: the controller turn log's `tool_result.error`,
+    // `formatEventData`'s `"<tool> ERROR: …"`, and `view.lastError()` →
+    // `compactExecution`'s prompt. So the error channel is guarded too.
+    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    gatewayReturns(`Error: ${ATTACK}`)
+    const events: unknown[] = []
+    const guard = createInjectionGuard({ namespaces: ['web'] }, (e) => events.push(e), 'p')
+
+    const result = await runWithInjectionGuard(guard, () => callTool('search', { q: 'x' }))
+
+    // Still a failure — the guard must not launder a failure into a success.
+    expect(result.success).toBe(false)
+    expect(result.error).not.toMatch(/ignore all previous instructions/i)
+    expect(result.error).toContain('neutralized:instruction-override')
+    expect(typeof result.error).toBe('string')
+    expect(result.sanitized?.neutralized).toBe(true)
+    expect(events).toHaveLength(1)
     await closeMcpClient()
   })
 
@@ -162,25 +186,34 @@ describe('callTool + withInjectionGuard', () => {
     await closeMcpClient()
   })
 
-  it('nests: an inner guard shadows an outer one for its subtree', async () => {
+  it("nests by UNION — an inner guard cannot drop an outer one's coverage", async () => {
+    // The composition mistake a security control must not permit: an inner
+    // wrapper listing only 'github' must not silently un-guard 'web' for its
+    // whole subtree. `createInjectionGuard` reads the enclosing guard at
+    // construction and ORs it, so nesting can only ever widen coverage.
     const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
     gatewayReturns(ATTACK)
     const outerEvents: unknown[] = []
     const innerEvents: unknown[] = []
     const outer = createInjectionGuard({ namespaces: ['web'] }, (e) => outerEvents.push(e), 'outer')
-    // The inner guard trusts 'web' — inside it, nothing is sanitized.
-    const inner = createInjectionGuard(
-      { namespaces: ['github'] },
-      (e) => innerEvents.push(e),
-      'inner',
-    )
 
-    const result = await runWithInjectionGuard(outer, () =>
-      runWithInjectionGuard(inner, () => callTool('search', { q: 'x' })),
-    )
-    expect(result.data).toBe(ATTACK)
+    const result = await runWithInjectionGuard(outer, () => {
+      // Built INSIDE the outer scope — which is what the wrapper's `fn` does.
+      const inner = createInjectionGuard(
+        { namespaces: ['github'] },
+        (e) => innerEvents.push(e),
+        'inner',
+      )
+      expect(inner.isUntrusted('search')).toBe(true) // inherited from outer
+      expect(inner.isUntrusted('search_code')).toBe(true) // its own
+      return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
+    })
+
+    expect(result.data).not.toBe(ATTACK)
+    expect(result.sanitized?.neutralized).toBe(true)
+    // The innermost guard reports it — its emit sink is the active one.
+    expect(innerEvents).toHaveLength(1)
     expect(outerEvents).toHaveLength(0)
-    expect(innerEvents).toHaveLength(0)
     await closeMcpClient()
   })
 })

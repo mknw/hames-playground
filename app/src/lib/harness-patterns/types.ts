@@ -450,6 +450,15 @@ export interface ConfiguredPattern<T> {
    *  this — so it's safe and additive. See `pattern-capabilities.ts`
    *  (`usesCodeMode`) for the canonical walk. */
   children?: ConfiguredPattern<T>[]
+  /** Set by `withInjectionGuard`: the untrusted sources it declared. Same
+   *  charter as `children` — purely for static introspection, never read during
+   *  execution (the guard travels by AsyncLocalStorage). It exists so an
+   *  agent's trust boundary is READABLE rather than only observable by running
+   *  the agent: without it, emptying an agent's namespace list would be
+   *  invisible to every test and every tool. Deliberately NOT on `config`, so
+   *  the wrapper stays config-transparent (`pattern.config` remains the inner
+   *  pattern's own object). */
+  injectionGuard?: { namespaces: string[]; tools: string[] }
 }
 
 // ============================================================================
@@ -466,10 +475,11 @@ export interface ToolCallResult {
   success: boolean
   data: unknown
   error?: string
-  /** Set by `withInjectionGuard` (in `callTool`) when this result's content was
-   *  neutralized. `data` is already the sanitized content; loop patterns copy
-   *  this onto the `tool_result` event so the audit trail survives. */
-  sanitized?: import('./injection-guard').SanitizeReport
+  /** Set by `withInjectionGuard` (in `callTool`) when this result's content —
+   *  `data`, or `error` for a demoted failure — was neutralized. Loop patterns
+   *  copy this onto the `tool_result` event. Redacted by construction; the
+   *  verbatim spans live only on the `content_sanitized` event. */
+  sanitized?: import('./injection-guard').SanitizeSummary
 }
 
 export type ToolSet = Record<string, string[]> & { all: string[] }
@@ -616,11 +626,13 @@ export interface ToolResultEventData {
   /** Moved to Archived section (also excluded from LLM context) */
   archived?: boolean
   /** Set by `withInjectionGuard` when this result's content was neutralized.
-   *  `result` above already holds the SANITIZED content — this is the audit
-   *  trail for what was removed, and its `findings[].match` spans are
-   *  human-only (see `ContentSanitizedEventData`). Deliberately not part of the
-   *  `tool_result` LLM projection in `formatEventData`. */
-  sanitized?: import('./injection-guard').SanitizeReport
+   *  `result` above already holds the SANITIZED content; this is the REDACTED
+   *  audit pointer — counts, rule ids and the id of the `content_sanitized`
+   *  event holding the verbatim spans. Deliberately NOT the full report: this
+   *  payload is JSON-dumped wholesale by `judge` (and anything else that
+   *  serializes `event.data`), so a full report here would hand the neutralized
+   *  injection to the next LLM. See `SanitizeSummary`. */
+  sanitized?: import('./injection-guard').SanitizeSummary
 }
 
 /** Data payload for controller_action event */

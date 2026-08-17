@@ -230,6 +230,7 @@ export {
   sanitizeText,
   spotlight,
   applyScreenVerdict,
+  redactReport,
   resolveRules,
   INJECTION_RULES,
   type InjectionRule,
@@ -239,6 +240,7 @@ export {
   type SanitizeLayer,
   type SanitizeReport,
   type SanitizeResult,
+  type SanitizeSummary,
   type ScreenVerdict,
   type SpotlightMode,
 } from './injection-guard'

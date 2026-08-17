@@ -68,17 +68,32 @@ async function expectNoVerbatimLeak(
     await import('../../../lib/harness-patterns/patterns/event-view.server')
   const view = createEventView(ctx, undefined)
 
+  // `judge` is the one that got missed on the first pass: it does
+  // JSON.stringify(event.data) over every tool_result and its winner becomes
+  // `scope.data.response`, which `compactExecution` puts into the Synthesize
+  // prompt. Any whole-payload serializer of a tool_result belongs in this list.
+  const judgeProjection = JSON.stringify(
+    ctx.events
+      .filter((e) => e.type === 'tool_result')
+      .map((e) => ({ source: e.patternId, content: JSON.stringify(e.data) })),
+  )
+
   for (const [label, text] of [
     ['serialize()', view.fromAll().serialize()],
     ['serializeCompact()', view.fromAll().serializeCompact()],
     ['serializeCompact({recentTurns:1})', view.fromAll().serializeCompact({ recentTurns: 1 })],
+    ["judge's candidate projection", judgeProjection],
   ] as const) {
     expect(text, `${needle} leaked into ${label}`).not.toContain(needle)
   }
 
-  // The annotation itself DOES hold it — otherwise there is no audit trail and
-  // this test would pass vacuously.
-  expect(JSON.stringify(ctx.events)).toContain(needle)
+  // The `content_sanitized` event DOES hold it — otherwise there is no audit
+  // trail and this test would pass vacuously — and it holds it EXACTLY ONCE, so
+  // no second copy has crept onto another event.
+  const occurrences = JSON.stringify(ctx.events).split(needle).length - 1
+  expect(occurrences, 'the span must survive in exactly one place').toBe(1)
+  const audit = ctx.events.find((e) => e.type === 'content_sanitized')
+  expect(JSON.stringify(audit?.data)).toContain(needle)
 }
 
 // ============================================================================
@@ -99,7 +114,7 @@ describe('verbatim spans never reach an LLM-facing serialization', () => {
       (event) => ctx.events.push(event),
       'web-search',
     )
-    const { data, report } = await guard.sanitize('search', ATTACK)
+    const { data, summary } = await guard.sanitize('search', ATTACK)
 
     // Mirror what a loop does: the sanitized result becomes the tool_result,
     // annotated with the report.
@@ -108,10 +123,17 @@ describe('verbatim spans never reach an LLM-facing serialization', () => {
       type: 'tool_result',
       ts: Date.now(),
       patternId: 'web-search',
-      data: { tool: 'search', result: data, success: true, sanitized: report },
+      data: { tool: 'search', result: data, success: true, sanitized: summary },
     })
 
     await expectNoVerbatimLeak(ctx, NEUTRALIZED_SPAN)
+
+    // The tool_result's annotation is the REDACTED summary: enough for a human
+    // to see a control fired and jump to the findings, with no span attached.
+    expect(summary?.findingCount).toBe(1)
+    expect(summary?.rules).toEqual(['instruction-override'])
+    expect(summary).not.toHaveProperty('findings')
+    expect(summary?.eventId).toBe(ctx.events.find((e) => e.type === 'content_sanitized')?.id)
   })
 
   it('renders content_sanitized as metadata, not as a JSON dump of its payload', async () => {
@@ -144,7 +166,7 @@ describe('verbatim spans never reach an LLM-facing serialization', () => {
 
     const ctx = createContext('q')
     const guard = createInjectionGuard({ namespaces: ['web'] }, (e) => ctx.events.push(e), 'p')
-    const { data, report } = await guard.sanitize('search', ATTACK)
+    const { data, summary } = await guard.sanitize('search', ATTACK)
 
     // The tool_result belongs to turn 1...
     ctx.events.push({
@@ -152,7 +174,7 @@ describe('verbatim spans never reach an LLM-facing serialization', () => {
       type: 'tool_result',
       ts: Date.now(),
       patternId: 'p',
-      data: { tool: 'search', result: data, success: true, sanitized: report },
+      data: { tool: 'search', result: data, success: true, sanitized: summary },
     })
     // ...and a second user turn pushes it out of the "recent" window, so
     // serializeCompact renders it through the compact-POINTER branch rather

@@ -47,11 +47,19 @@ interface Pattern {
   name: string
   config: { patternId?: string }
   children?: Pattern[]
+  injectionGuard?: { namespaces: string[]; tools: string[] }
 }
 
-/** Find the guard wrapper in a chain, or undefined. */
+/** Find the guard wrapper at the top level of a chain, or undefined. */
 function guardOf(patterns: Pattern[]): Pattern | undefined {
   return patterns.find((p) => p.name.startsWith('withInjectionGuard'))
+}
+
+/** Every guard in a chain, top level or one level down (inside `routes`). */
+function allGuards(patterns: Pattern[]): Pattern[] {
+  return patterns
+    .flatMap((p) => [p, ...(p.children ?? [])])
+    .filter((p) => p.name.startsWith('withInjectionGuard'))
 }
 
 beforeEach(() => vi.clearAllMocks())
@@ -69,11 +77,10 @@ describe('agents that consume untrusted content are guarded', () => {
       'compactExecution',
     ])
 
-    const routes = patterns[1]
-    const routeNames = (routes.children ?? []).map((c) => c.name)
-    expect(routeNames.some((n) => n.startsWith('withInjectionGuard'))).toBe(true)
+    const guards = allGuards(patterns)
     // Exactly one route is guarded: web. Neo4j is our own data.
-    expect(routeNames.filter((n) => n.startsWith('withInjectionGuard'))).toHaveLength(1)
+    expect(guards).toHaveLength(1)
+    expect(guards[0].injectionGuard).toEqual({ namespaces: ['web'], tools: [] })
   })
 
   it('microsoft-365: the graph loop is guarded', async () => {
@@ -83,6 +90,7 @@ describe('agents that consume untrusted content are guarded', () => {
     const guard = guardOf(patterns)
     expect(guard).toBeDefined()
     expect(guard!.children?.[0].config.patternId).toBe('microsoft-365')
+    expect(guard!.injectionGuard).toEqual({ namespaces: ['graph'], tools: [] })
   })
 
   it('multi-source-research: all three search branches are guarded at once', async () => {
@@ -95,6 +103,10 @@ describe('agents that consume untrusted content are guarded', () => {
     // ALS scope reaches every branch.
     expect(guard!.config.patternId).toBe('parallel-research')
     expect(guard!.children?.[0].name).toContain('parallel')
+    expect(guard!.injectionGuard).toEqual({
+      namespaces: ['web', 'github', 'context7'],
+      tools: [],
+    })
   })
 
   it('retriever: routes is guarded, covering both web and the stash', async () => {
@@ -104,6 +116,12 @@ describe('agents that consume untrusted content are guarded', () => {
     const guard = guardOf(patterns)
     expect(guard).toBeDefined()
     expect(guard!.children?.[0].name).toBe('routes(retriever|neo4j|web_search)')
+    // `retriever` MUST be listed: stash chunks bypass callTool, so the
+    // retriever's write-time sanitize only engages when this names it.
+    expect(guard!.injectionGuard).toEqual({
+      namespaces: ['web', 'retriever'],
+      tools: [],
+    })
   })
 })
 

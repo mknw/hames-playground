@@ -38,7 +38,7 @@ export interface SubCall {
     error?: string
     /** Audit trail when `withInjectionGuard` neutralized this sub-call's
      *  content (`result` already holds the sanitized version). */
-    sanitized?: import('./injection-guard').SanitizeReport
+    sanitized?: import('./injection-guard').SanitizeSummary
   }>
   precheckError?: string
 }
@@ -55,7 +55,7 @@ export interface SubCallOutcome {
   /** Audit trail when `withInjectionGuard` neutralized this sub-call's content.
    *  Carried per sub-call so a batched turn keeps the same per-tool fidelity as
    *  a singular one — the batch's `tool_result` events are per sub-call too. */
-  sanitized?: import('./injection-guard').SanitizeReport
+  sanitized?: import('./injection-guard').SanitizeSummary
 }
 
 /** Execute a batch of sub-calls under the given mode. Outcomes come back in

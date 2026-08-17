@@ -301,20 +301,28 @@ async function sanitizeHits(hits: RetrievalHit[]): Promise<RetrievalHit[]> {
   const out: RetrievalHit[] = []
   let changed = false
   for (const hit of hits) {
-    const { data, report } = await guard.sanitize('retriever', {
-      content: hit.content,
-      ...(hit.source !== undefined ? { source: hit.source } : {}),
-    })
-    if (!report) {
+    // `content` gets the full treatment. `source` is a FILENAME, and it is
+    // scanned separately with the fence switched off: a benign document called
+    // "New instructions for expenses.docx" matches `instruction-new-directive`,
+    // and wrapping a filename in a multi-line spotlight fence would break the
+    // citation label AND the filename-to-docId match that drives the inline
+    // viewer (see ChatMessages.tsx). Marker-only keeps it a single line, so a
+    // poisoned filename is still neutralized without collateral damage.
+    const scannedContent = await guard.sanitize('retriever', hit.content)
+    const scannedSource =
+      hit.source === undefined
+        ? undefined
+        : await guard.sanitize('retriever', hit.source, { spotlight: 'off' })
+
+    if (!scannedContent.summary && !scannedSource?.summary) {
       out.push(hit)
       continue
     }
     changed = true
-    const scanned = data as { content: string; source?: string }
     out.push({
       ...hit,
-      content: scanned.content,
-      ...(scanned.source !== undefined ? { source: scanned.source } : {}),
+      content: scannedContent.data as string,
+      ...(scannedSource ? { source: scannedSource.data as string } : {}),
     })
   }
   return changed ? out : hits

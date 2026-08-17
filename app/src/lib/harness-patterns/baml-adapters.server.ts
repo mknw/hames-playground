@@ -1422,7 +1422,19 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
 
   return async ({ tool, namespace, content }) => {
     const truncated = content.length > maxChars
-    const body = truncated ? content.slice(0, maxChars) : content
+    // Neutralize the PROMPT's own fence before interpolating. The guard escapes
+    // its `⟦⟧` sentinels out of content so data cannot forge a marker or close
+    // the spotlight fence; the screen prompt has an ASCII fence
+    // (`---BEGIN/END UNTRUSTED CONTENT UNDER REVIEW---`) with no such
+    // protection, and by construction the screen only ever sees content the
+    // regex corpus passed clean. Without this, a page could close the fence and
+    // address the screening model directly — the exact hole `sentinel-escape`
+    // exists to close, one layer up.
+    const defenced = content.replace(
+      /-{2,}\s*(?:BEGIN|END)\s+UNTRUSTED\s+CONTENT[^\n]{0,40}/gi,
+      '[fence]',
+    )
+    const body = truncated ? defenced.slice(0, maxChars) : defenced
 
     const { b } = await import('../../../baml_client')
     const opts = clientOverrideFor('describe')

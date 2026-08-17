@@ -524,7 +524,7 @@ withInjectionGuard({ namespaces: ['web'] })(
   simpleLoop(webController, tools.web, { patternId: 'web-search' }),
 )
 
-interface InjectionGuardConfig extends PatternConfig {
+interface InjectionGuardConfig extends InjectionGuardOptions {
   namespaces?: string[] // inferServer() names treated as UNTRUSTED
   tools?: string[] // explicit per-tool opt-in, added to namespaces
   spotlight?: 'on-detection' | 'always' | 'off' // default 'on-detection'
@@ -560,8 +560,24 @@ content is produced:
    (`sanitizeHits`), before `scope.data.matches` is set and before the event
    exists. Opt in with `namespaces: ['retriever']`.
 
+Both the `data` and the `error` channel are sanitized at the chokepoint:
+`demoteErrorString` turns a SUCCESSFUL result whose text starts with `Error:`
+into `{ success: false, error: <that text> }`, so for an untrusted tool the error
+field can carry fetched page content — and it reaches an LLM via the controller
+turn log, `formatEventData`'s `"<tool> ERROR: …"` and `view.lastError()`.
+
 Nothing in between (`chain`, `router`, `routes`, `parallel`, `withReferences`)
-needs to be guard-aware. Nesting is allowed; the innermost wrapper wins.
+needs to be guard-aware. Nesting **unions**: an inner wrapper ORs the enclosing
+guard's `isUntrusted`, so it can only widen coverage — shadowing would let a
+narrow inner wrapper silently remove an outer one's protection.
+
+**Event ordering caveat.** The guard emits into the wrapper's own scope, so when
+it wraps a scope-forking pattern (`routes`, `parallel` — 2 of the 4 wired
+agents) a `content_sanitized` event lands in `ctx.events` _before_ the child's
+`pattern_enter` and before the `tool_result` it annotates. Timestamps are
+correct and the ObservabilityPanel sorts by `ts`, so the timeline reads right;
+only a positional reader of `ctx.events` would see the skew, and no LLM-facing
+serializer depends on this event's position.
 
 **Detection + neutralization.** Deterministic first, and **the default path
 contains no LLM call**: a classifier in front of every tool result is itself
@@ -578,8 +594,12 @@ by a unit test. Layers, in order (`injection-guard.ts`):
 
 Detection alone is useless — a flagged-but-forwarded injection still reaches the
 model — so **every finding rewrites the text**. Every quantifier in the corpus is
-bounded, so a hostile multi-megabyte page cannot backtrack the sanitizer into a
-DoS.
+bounded — including the whitespace runs in `exfil-html-tag`, whose original
+`\s*` pair was quadratic (`<` + 200k spaces measured 15s of synchronous CPU) —
+so a hostile multi-megabyte page cannot backtrack the sanitizer into a DoS. The
+hidden-text strip covers soft hyphen and variation selectors as well as the
+zero-width/bidi blocks, and the instruction rules match across line breaks,
+because extracted document text hard-wraps.
 
 **Clean content is byte-identical** — the same reference comes back, and
 `spotlight` defaults to `'on-detection'` for exactly that reason: the
@@ -599,7 +619,13 @@ recorded on the event.
 **On detection: neutralize + annotate + emit, never silently drop.**
 
 - `result.data` / the retrieved chunk carries the neutralized text
-- `ToolResultEventData.sanitized` annotates the affected result
+- `ToolResultEventData.sanitized` annotates the affected result with a
+  **`SanitizeSummary`** — counts, rule ids and the `content_sanitized` event id,
+  never the spans. That split is load-bearing: `judge` does
+  `JSON.stringify(event.data)` over `tool_result` events and its chosen candidate
+  becomes `scope.data.response`, which `compactExecution` puts into the
+  `Synthesize` prompt — a full report there would turn a neutralized mid-loop
+  injection into a synthesizer-stage one
 - a **`content_sanitized`** event lands in the timeline (orange 🛡️ in the
   ObservabilityPanel, with a per-finding detail view), and is in
   `ALWAYS_COMMIT_TYPES` so a later failure cannot discard the proof a control
@@ -609,18 +635,27 @@ recorded on the event.
 event store holds the sanitized text, because the store IS LLM-visible via `ref:`
 expansion, `serializeCompact()` and `compactExecution` — keeping the raw text there
 would leave the hole open. The removed spans survive **only** in
-`findings[].match`, which is human-visible in the panel and rendered into **no**
-LLM-facing serialization: `formatEventData` has an explicit `content_sanitized`
-case emitting metadata only, precisely because its `default:` branch
-JSON-dumps whole payloads and would otherwise hand the injection straight back
-to a model. Pinned by `injection-guard-composition.test.ts`.
+`findings[].match` on the `content_sanitized` event, which is human-visible in
+the panel and rendered into **no** LLM-facing serialization: `formatEventData`
+has an explicit `content_sanitized` case emitting metadata only, precisely
+because its `default:` branch JSON-dumps whole payloads and would otherwise hand
+the injection straight back to a model. Anything attached to a `tool_result` is
+redacted by type (`SanitizeSummary`), which is what keeps `judge` and any future
+whole-payload serializer safe by construction. Pinned by
+`injection-guard-composition.test.ts`, which sweeps `serialize()`, both
+`serializeCompact()` branches, `judge`'s projection and the committed stream, and
+asserts the span occurs exactly once.
 
 **Config transparency.** The wrapper spreads `...pattern`, so the inner
 pattern's `config` (commitStrategy, trackHistory, viewConfig, `estimateTurns`)
 governs everything unchanged and the inner pattern runs in the SAME scope — no
 extra lifecycle events, no change to `view.fromLastPattern()`. On a clean run
 there is no observable difference at all. `children` is exposed, so static
-introspection (`harnessHasRedisRetriever`, `usesCodeMode`) still sees through it.
+introspection (`harnessHasRedisRetriever`, `usesCodeMode`) still sees through it,
+and the declared trust boundary is readable off
+`ConfiguredPattern.injectionGuard` (`{ namespaces, tools }`) — a sibling field,
+NOT part of `config`, so config identity is preserved. That field is what lets a
+test assert an agent's namespace list instead of merely that a wrapper exists.
 
 **Wired agents** (their untrusted namespaces are declared at each agent
 definition, deliberately not in a shared default):

@@ -1337,6 +1337,64 @@ export async function describeToolResultOp(
   }
 }
 
+/** One tool result to summarize as part of a batch. `id` is a caller-assigned
+ *  label, unique within the batch, that the model echoes back on its summary —
+ *  it is how the batch's single response is split back per item. */
+export interface DescribeBatchItem {
+  id: string
+  tool: string
+  toolArgs: string
+  reasoning: string
+  result: string
+}
+
+/**
+ * Summarize several tool results in ONE describe-tier call (#83 Part E).
+ *
+ * Returns a map of item `id` → summary. Non-fatal in three graded ways, all of
+ * which leave the caller free to fall back per item:
+ *  - the whole call failed → empty map (every item missing)
+ *  - the model dropped an item → that `id` is absent
+ *  - the model answered blank for an item → that `id` is absent
+ *
+ * Unknown ids in the response are discarded rather than guessed at, so a
+ * hallucinated label can never attach a summary to the wrong tool result.
+ */
+export async function describeToolResultsBatchOp(
+  items: DescribeBatchItem[],
+): Promise<Map<string, string>> {
+  const byId = new Map<string, string>()
+  if (items.length === 0) return byId
+  const wanted = new Set(items.map((i) => i.id))
+  try {
+    const { b } = await import('../../../baml_client')
+    const describeOpts = clientOverrideFor('describe')
+    const targets = items.map((i) => ({
+      id: i.id,
+      tool: i.tool,
+      tool_args: i.toolArgs,
+      reasoning: i.reasoning,
+      result: i.result,
+    }))
+    const batch = describeOpts
+      ? await b.ResultDescribeBatch(targets, describeOpts)
+      : await b.ResultDescribeBatch(targets)
+    for (const entry of batch?.summaries ?? []) {
+      const summary = entry?.summary?.trim()
+      if (summary && wanted.has(entry.id)) byId.set(entry.id, summary)
+    }
+  } catch (error) {
+    // Visible on purpose: the caller silently retries each item on its own, so
+    // a chronically failing batch would otherwise look like a cost regression
+    // (N+1 calls) with no explanation in the logs.
+    console.warn(
+      `[compactBulkData] batched describe of ${items.length} results failed, ` +
+        `falling back per item: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  return byId
+}
+
 // ============================================================================
 // Domain-Specific Controller Adapters
 // ============================================================================

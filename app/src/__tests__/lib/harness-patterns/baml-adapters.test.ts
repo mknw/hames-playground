@@ -36,6 +36,7 @@ const mockLoopController = vi.fn()
 const mockActorController = vi.fn()
 const mockCritic = vi.fn()
 const mockResultDescribe = vi.fn()
+const mockResultDescribeBatch = vi.fn()
 const mockPlanner = vi.fn()
 
 vi.mock('../../../../baml_client', () => ({
@@ -44,6 +45,7 @@ vi.mock('../../../../baml_client', () => ({
     ActorController: mockActorController,
     Critic: mockCritic,
     ResultDescribe: (...args: unknown[]) => mockResultDescribe(...args),
+    ResultDescribeBatch: (...args: unknown[]) => mockResultDescribeBatch(...args),
     Planner: (...args: unknown[]) => mockPlanner(...args),
   },
 }))
@@ -741,6 +743,94 @@ describe('describeToolResultOp', () => {
     const result = await describeToolResultOp('search', '{}', '', 'data')
 
     expect(result).toBe('')
+  })
+})
+
+describe('describeToolResultsBatchOp', () => {
+  const items = [
+    { id: '1', tool: 'search', toolArgs: '{"q":"a"}', reasoning: 'find a', result: 'A' },
+    { id: '2', tool: 'fetch', toolArgs: '{"url":"b"}', reasoning: '', result: 'B' },
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('maps each echoed id to its summary and renames args for BAML', async () => {
+    const { describeToolResultsBatchOp } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    mockResultDescribeBatch.mockResolvedValue({
+      summaries: [
+        { id: '2', summary: 'Fetched B.' },
+        { id: '1', summary: 'Found A.' },
+      ],
+    })
+
+    const byId = await describeToolResultsBatchOp(items)
+
+    expect(byId.get('1')).toBe('Found A.')
+    expect(byId.get('2')).toBe('Fetched B.')
+    // `toolArgs` is renamed to the BAML class's snake_case `tool_args`
+    expect(mockResultDescribeBatch).toHaveBeenCalledWith(
+      [
+        { id: '1', tool: 'search', tool_args: '{"q":"a"}', reasoning: 'find a', result: 'A' },
+        { id: '2', tool: 'fetch', tool_args: '{"url":"b"}', reasoning: '', result: 'B' },
+      ],
+      // 2nd arg is the client override added under USE_MIXED_CHAINS=1
+      expect.objectContaining({ client: 'DescribeFallback' }),
+    )
+  })
+
+  it('omits ids the model dropped or answered blank', async () => {
+    const { describeToolResultsBatchOp } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    mockResultDescribeBatch.mockResolvedValue({
+      summaries: [{ id: '1', summary: '   ' }],
+    })
+
+    const byId = await describeToolResultsBatchOp(items)
+
+    // Blank trims to nothing → treated as unanswered, same as the missing '2'
+    expect(byId.size).toBe(0)
+  })
+
+  it('discards summaries for ids that were never requested', async () => {
+    const { describeToolResultsBatchOp } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    mockResultDescribeBatch.mockResolvedValue({
+      summaries: [
+        { id: '1', summary: 'Found A.' },
+        { id: '9', summary: 'Summary of a tool that was never in the batch.' },
+      ],
+    })
+
+    const byId = await describeToolResultsBatchOp(items)
+
+    expect([...byId.keys()]).toEqual(['1'])
+  })
+
+  it('returns an empty map on failure so the caller can retry per item', async () => {
+    const { describeToolResultsBatchOp } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    mockResultDescribeBatch.mockRejectedValue(new Error('Model unavailable'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const byId = await describeToolResultsBatchOp(items)
+
+    expect(byId.size).toBe(0)
+    // Logged, not swallowed: an always-failing batch is an N+1 cost regression
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('falling back per item'))
+    warn.mockRestore()
+  })
+
+  it('makes no call at all for an empty batch', async () => {
+    const { describeToolResultsBatchOp } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const byId = await describeToolResultsBatchOp([])
+
+    expect(byId.size).toBe(0)
+    expect(mockResultDescribeBatch).not.toHaveBeenCalled()
   })
 })
 

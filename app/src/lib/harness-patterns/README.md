@@ -425,7 +425,7 @@ they get a per-call error.
 4. Loop until `is_final` or max turns
 5. Prior tool results from earlier turns are passed as `turns_previous_runs: PriorResult[]` — a structured array separate from the current task's `turns`. The LLM can reference them with `ref:<ref_id>` in tool args; `resolveRefs()` auto-expands before MCP execution. Controlled by `rememberPriorTurns` (default: true) and `priorTurnCount` (default: 3).
 6. Controller errors are caught per-iteration — loop exits gracefully with partial results; errors are tracked as events and read by downstream patterns via `view.hasErrors()` / `view.lastError()`, scoped by ViewConfig (so they naturally expire with the view window)
-7. After the response reaches the user, `compactBulkData()` runs in the background: it summarizes each `tool_result` with a lightweight model (`DescribeFallback`) and stores the summary on the event. These summaries appear as `PriorResult.summary` on subsequent turns.
+7. After the response reaches the user, `compactBulkData()` runs in the background: it summarizes the turn's `tool_result` events with the describe-tier client and stores each summary on its event. These summaries appear as `PriorResult.summary` on subsequent turns. See [Batched bulk-data compaction](#batched-bulk-data-compaction) for how N results become one call.
 
 ### `actorCritic(actor, critic, tools, config?)`
 
@@ -964,6 +964,42 @@ Events within the last `recentTurns` user turns are rendered in full. Hidden or 
 
 These are mutated post-commit via `enrichToolResult(ctx, eventId, { summary?, hidden?, archived? })`. The UI manages hide/archive via `POST /api/stash`.
 
+### Batched bulk-data compaction
+
+`compactBulkData()` (in `compactBulkData.server.ts`, called by `/api/events` once
+the SSE response has been sent) folds the turn's results into **one
+`ResultDescribeBatch` call per `MAX_BATCH_ITEMS` (8) results** instead of one
+`ResultDescribe` call each (#83 Part E). Batches also respect an input budget of
+25% of the describe client's context window, so a raised `maxResultForSummary`
+splits them further rather than overflowing.
+
+The split back out is by **echoed id**, never by list position or string
+splitting: each item carries a batch-local label (`"1"`, `"2"`, …), the model
+returns `{ id, summary }` pairs, and `describeToolResultsBatchOp()` maps them
+back — discarding ids that were never requested, so a hallucinated label cannot
+attach a summary to the wrong tool result.
+
+Partial failure is graded, and every rung costs at most one extra call per
+affected item:
+
+| what happened | what compactBulkData does |
+| --- | --- |
+| the batch call threw | logs a warning, falls back to a per-item `ResultDescribe` for each item |
+| the model dropped an id | per-item call for that item only |
+| the model answered blank for an id | per-item call for that item only |
+| only one item needed a summary | skips the batch prompt entirely — single-item path |
+
+**Measured (live, `RUN_EVALS=1`, see `src/__tests__/bench/describe-batch-bench.test.ts`):**
+the reliable win is request count; the token win scales inversely with payload
+size, and wall clock regresses because the per-item arm already ran concurrently
+while a batch generates N summaries inside one response. This is post-response
+background work, so requests and tokens are what matter.
+
+| shape | calls | input tokens | total tokens | wall clock |
+| --- | --- | --- | --- | --- |
+| 6 large results (payload-dominated) | 6 → 1 | −2.1% | +0.5% | 2.4s → 5.2s |
+| 8 small results (overhead-dominated) | 8 → 1 | −16.9% | −9.7% | 1.4s → 2.6s |
+
 ## Configuration System
 
 Two orthogonal configuration axes:
@@ -1367,7 +1403,7 @@ harness-patterns/
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? callback
 ├── routing.server.ts       # BAML router integration (routeMessageOp)
 ├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE tool transports — sandbox (in-VM) → app-side in-process → MCP gateway; leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
-├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, etc.
+├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, etc.
 ├── compactBulkData.server.ts # compactBulkData() — background tool result summarization via the describe-tier client
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
 ├── token-budget.server.ts  # trimToFit(), getContextWindow(), estimateTokens() — rolling context window

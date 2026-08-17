@@ -2,6 +2,9 @@
  * compactBulkData Tests
  *
  * Tests for compactBulkData — background tool result summarization.
+ * A lone result takes the single-item `ResultDescribe` path; two or more are
+ * folded into `ResultDescribeBatch` calls whose response is split back by the
+ * echoed per-item id, with a per-item fallback for whatever the batch misses.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -12,10 +15,12 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn()
 }))
 
-// Mock describeToolResultOp
+// Mock both describe ops — the single-item call and its batched twin
 const mockDescribe = vi.fn()
+const mockDescribeBatch = vi.fn()
 vi.mock('../../../lib/harness-patterns/baml-adapters.server', () => ({
-  describeToolResultOp: (...args: unknown[]) => mockDescribe(...args)
+  describeToolResultOp: (...args: unknown[]) => mockDescribe(...args),
+  describeToolResultsBatchOp: (...args: unknown[]) => mockDescribeBatch(...args),
 }))
 
 function createTestContext(events: ContextEvent[]): UnifiedContext {
@@ -29,10 +34,27 @@ function createTestContext(events: ContextEvent[]): UnifiedContext {
   }
 }
 
+/** A tool_result event, ready to be summarized. */
+function toolResult(n: number, tool = 'search'): ContextEvent {
+  return {
+    type: 'tool_result',
+    ts: n + 1,
+    patternId: 'p1',
+    id: `ev-r${n}`,
+    data: { callId: `tc-${n}`, tool, result: `result ${n}`, success: true },
+  }
+}
+
+/** The batch op's return shape: item id → summary. */
+function summaries(entries: Record<string, string>): Map<string, string> {
+  return new Map(Object.entries(entries))
+}
+
 describe('compactBulkData', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockDescribe.mockResolvedValue('Test summary')
+    mockDescribeBatch.mockResolvedValue(new Map())
   })
 
   it('should summarize tool_result events from the current turn', async () => {
@@ -147,12 +169,12 @@ describe('compactBulkData', () => {
     expect(mockDescribe).not.toHaveBeenCalled()
   })
 
-  it('should summarize multiple tool_results in parallel', async () => {
+  it('should fold multiple tool_results into ONE batched call', async () => {
     const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 
-    mockDescribe
-      .mockResolvedValueOnce('Summary for search')
-      .mockResolvedValueOnce('Summary for fetch')
+    mockDescribeBatch.mockResolvedValue(
+      summaries({ '1': 'Summary for search', '2': 'Summary for fetch' }),
+    )
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -165,9 +187,176 @@ describe('compactBulkData', () => {
 
     await compactBulkData(ctx, onPersist)
 
-    expect(mockDescribe).toHaveBeenCalledTimes(2)
+    // One batched call, no per-item calls at all
+    expect(mockDescribeBatch).toHaveBeenCalledOnce()
+    expect(mockDescribe).not.toHaveBeenCalled()
+
+    const batch = mockDescribeBatch.mock.calls[0][0] as Array<Record<string, string>>
+    expect(batch.map((i) => i.id)).toEqual(['1', '2'])
+    expect(batch.map((i) => i.tool)).toEqual(['search', 'fetch'])
+    expect(batch[0].toolArgs).toBe('{}')
+
+    // Split back by echoed id, not by list position
     expect((events[1].data as { summary?: string }).summary).toBe('Summary for search')
     expect((events[2].data as { summary?: string }).summary).toBe('Summary for fetch')
+  })
+
+  it('should attach batched summaries by id even when the model reorders them', async () => {
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
+
+    // Deliberately reversed relative to the request order
+    mockDescribeBatch.mockResolvedValue(summaries({ '2': 'second', '1': 'first' }))
+
+    const events: ContextEvent[] = [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
+      toolResult(1),
+      toolResult(2, 'fetch'),
+    ]
+
+    const ctx = createTestContext(events)
+    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined))
+
+    expect((events[1].data as { summary?: string }).summary).toBe('first')
+    expect((events[2].data as { summary?: string }).summary).toBe('second')
+  })
+
+  it('should fall back per item for the ids a batch left unanswered', async () => {
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
+
+    // Item 2 is missing from the batch response
+    mockDescribeBatch.mockResolvedValue(summaries({ '1': 'batched one', '3': 'batched three' }))
+    mockDescribe.mockResolvedValue('fallback two')
+
+    const events: ContextEvent[] = [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
+      toolResult(1),
+      toolResult(2, 'fetch'),
+      toolResult(3, 'read'),
+    ]
+
+    const ctx = createTestContext(events)
+    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined))
+
+    // Exactly ONE repair call, for the missing item only
+    expect(mockDescribeBatch).toHaveBeenCalledOnce()
+    expect(mockDescribe).toHaveBeenCalledOnce()
+    expect(mockDescribe.mock.calls[0][0]).toBe('fetch')
+
+    expect((events[1].data as { summary?: string }).summary).toBe('batched one')
+    expect((events[2].data as { summary?: string }).summary).toBe('fallback two')
+    expect((events[3].data as { summary?: string }).summary).toBe('batched three')
+  })
+
+  it('should fall back per item when the whole batch comes back empty', async () => {
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
+
+    // describeToolResultsBatchOp swallows its own failures and returns an empty map
+    mockDescribeBatch.mockResolvedValue(new Map())
+    mockDescribe.mockResolvedValue('per-item summary')
+
+    const events: ContextEvent[] = [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
+      toolResult(1),
+      toolResult(2, 'fetch'),
+    ]
+
+    const ctx = createTestContext(events)
+    const onPersist = vi.fn().mockResolvedValue(undefined)
+    await compactBulkData(ctx, onPersist)
+
+    expect(mockDescribe).toHaveBeenCalledTimes(2)
+    expect((events[1].data as { summary?: string }).summary).toBe('per-item summary')
+    expect((events[2].data as { summary?: string }).summary).toBe('per-item summary')
+    expect(onPersist).toHaveBeenCalledOnce()
+  })
+
+  it('should survive the batch op itself rejecting', async () => {
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
+
+    mockDescribeBatch.mockRejectedValue(new Error('Model unavailable'))
+
+    const events: ContextEvent[] = [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
+      toolResult(1),
+      toolResult(2, 'fetch'),
+    ]
+
+    const ctx = createTestContext(events)
+    const onPersist = vi.fn().mockResolvedValue(undefined)
+
+    // Must not throw, and must still persist whatever was gathered
+    await compactBulkData(ctx, onPersist)
+
+    expect((events[1].data as { summary?: string }).summary).toBeUndefined()
+    expect((events[2].data as { summary?: string }).summary).toBeUndefined()
+    expect(onPersist).toHaveBeenCalledOnce()
+  })
+
+  it('should split more than MAX_BATCH_ITEMS results across several batches', async () => {
+    const { compactBulkData, MAX_BATCH_ITEMS } = await import(
+      '../../../lib/harness-patterns/compactBulkData.server'
+    )
+
+    const total = MAX_BATCH_ITEMS + 2
+    const events: ContextEvent[] = [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
+      ...Array.from({ length: total }, (_, i) => toolResult(i + 1)),
+    ]
+
+    // Answer every id in whichever batch it arrives in
+    mockDescribeBatch.mockImplementation(async (items: Array<{ id: string }>) =>
+      new Map(items.map((i) => [i.id, `summary ${i.id}`])),
+    )
+
+    const ctx = createTestContext(events)
+    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined))
+
+    expect(mockDescribeBatch).toHaveBeenCalledTimes(2)
+    const sizes = mockDescribeBatch.mock.calls.map((c) => (c[0] as unknown[]).length)
+    expect(sizes).toEqual([MAX_BATCH_ITEMS, 2])
+    expect(mockDescribe).not.toHaveBeenCalled()
+
+    // Ids are batch-local labels but unique across the turn, so every event got its own
+    for (let i = 1; i <= total; i++) {
+      expect((events[i].data as { summary?: string }).summary).toBe(`summary ${i}`)
+    }
+  })
+
+  it('should use the single-item path for a lone result, never the batch', async () => {
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
+
+    const events: ContextEvent[] = [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
+      toolResult(1),
+    ]
+
+    const ctx = createTestContext(events)
+    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined))
+
+    expect(mockDescribeBatch).not.toHaveBeenCalled()
+    expect(mockDescribe).toHaveBeenCalledOnce()
+  })
+
+  it('should not batch results that already have a summary', async () => {
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
+
+    const alreadyDone = toolResult(1)
+    ;(alreadyDone.data as { summary?: string }).summary = 'Already summarized'
+
+    const events: ContextEvent[] = [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
+      alreadyDone,
+      toolResult(2, 'fetch'),
+    ]
+
+    const ctx = createTestContext(events)
+    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined))
+
+    // One target left → single-item path, and the done one is untouched
+    expect(mockDescribeBatch).not.toHaveBeenCalled()
+    expect(mockDescribe).toHaveBeenCalledOnce()
+    expect(mockDescribe.mock.calls[0][0]).toBe('fetch')
+    expect((events[1].data as { summary?: string }).summary).toBe('Already summarized')
   })
 
   it('should truncate long results before sending to summarizer', async () => {

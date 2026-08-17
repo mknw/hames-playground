@@ -3,7 +3,7 @@
  *
  * The retriever forms ONE query (compacted intent → last message → last-N
  * turns), fans it out to injected backends, merges hits closest-first capped at
- * k, sets `scope.data.matches`, and emits a `tool_result` for the synthesizer.
+ * k, sets `scope.data.matches`, and emits a `tool_result` for the compactExecution.
  * Backends are mocked — this is the framework-pure pattern, no app deps.
  */
 
@@ -66,9 +66,7 @@ function ctxOf(events: Ev[]): UnifiedContext<Record<string, unknown>> {
 const PATTERN_ID = 'retriever'
 
 async function load() {
-  const { retriever } = await import(
-    '../../../../lib/harness-patterns/patterns/retriever.server'
-  )
+  const { retriever } = await import('../../../../lib/harness-patterns/patterns/retriever.server')
   const { createScope } = await import('../../../../lib/harness-patterns/context.server')
   const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
   const { b } = await import('../../../../../baml_client')
@@ -119,9 +117,7 @@ async function run(
 }
 
 function toolResults(events: ContextEvent[]): ToolResultEventData[] {
-  return events
-    .filter((e) => e.type === 'tool_result')
-    .map((e) => e.data as ToolResultEventData)
+  return events.filter((e) => e.type === 'tool_result').map((e) => e.data as ToolResultEventData)
 }
 
 describe('retriever', () => {
@@ -175,11 +171,10 @@ describe('retriever', () => {
 
   it('widens the query to the last N user turns when turnWindow is set (no LLM)', async () => {
     const backend = mockBackend('redis', [])
-    const { baml } = await run(
-      {},
-      [userMsg('alpha', 1), userMsg('beta', 2), userMsg('gamma', 3)],
-      { backends: [backend], turnWindow: 3 },
-    )
+    const { baml } = await run({}, [userMsg('alpha', 1), userMsg('beta', 2), userMsg('gamma', 3)], {
+      backends: [backend],
+      turnWindow: 3,
+    })
     expect(backend.calls[0].text).toContain('alpha')
     expect(backend.calls[0].text).toContain('gamma')
     expect(baml.RetrieveQuery).not.toHaveBeenCalled()
@@ -257,7 +252,7 @@ describe('retriever', () => {
     expect(matches.map((m) => m.id)).toEqual(['scored', 'noscore'])
   })
 
-  it('emits a tool_result the synthesizer can read, with matches + backends + query', async () => {
+  it('emits a tool_result the compactExecution can read, with matches + backends + query', async () => {
     const backend = mockBackend('redis', [hit('redis', 'a', 0.1)])
     const { result } = await run({}, [userMsg('the query')], {
       backends: [backend],
@@ -295,11 +290,20 @@ describe('retriever', () => {
     const unlocated: RetrievalHit = { backend: 'web', id: 'u1', content: 'x', score: 0.1 }
     const backend = mockBackend('redis', [located, unlocated])
     const { result } = await run({}, [userMsg('q')], { backends: [backend], k: 5 })
-    const refs = (result.events.find((e) => e.type === 'tool_result')!.data as {
-      result: { references: RetrievalHit[] }
-    }).result.references
+    const refs = (
+      result.events.find((e) => e.type === 'tool_result')!.data as {
+        result: { references: RetrievalHit[] }
+      }
+    ).result.references
     expect(refs).toEqual([
-      { source: 'notes.md', docId: 'doc1', chunkIndex: 2, startOffset: 10, endOffset: 42, score: 0.2 },
+      {
+        source: 'notes.md',
+        docId: 'doc1',
+        chunkIndex: 2,
+        startOffset: 10,
+        endOffset: 42,
+        score: 0.2,
+      },
     ])
   })
 

@@ -1,12 +1,12 @@
 /**
- * General Agent — degraded-build and synthesizer-scoping behaviour (#27 review).
+ * General Agent — degraded-build and compactExecution-scoping behaviour (#27 review).
  *
  * `agents.test.ts` covers the config and the pattern shape. This file covers
  * the two things that only show up when something goes wrong:
  *
  *   - a graph-schema fetch that fails must be LOUD and must not be frozen
  *     into the conversation's cached patterns;
- *   - the synthesizer's view must not treat the planner's best-effort error as
+ *   - the compactExecution's view must not treat the planner's best-effort error as
  *     "the work failed", this turn or any turn after it.
  */
 
@@ -57,7 +57,7 @@ describe('general agent — graph schema failure', () => {
     const patterns = await buildPatterns('degraded-session')
 
     // Still usable — the agent runs blind rather than not at all.
-    expect(patterns.map((p) => p.name)).toEqual(['planner', 'simpleLoop', 'synthesizer'])
+    expect(patterns.map((p) => p.name)).toEqual(['planner', 'simpleLoop', 'compactExecution'])
     // …but loud, and rebuilt next turn instead of schema-less for the session.
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('graph schema unavailable'))
     expect(warn.mock.calls[0][0]).toContain('connection refused')
@@ -90,10 +90,10 @@ function ctxOf(events: Ev[]): UnifiedContext<Record<string, unknown>> {
   }
 }
 
-describe('general agent — synthesizer view scope', () => {
+describe('general agent — compactExecution view scope', () => {
   async function synthView(events: Ev[]) {
     const patterns = await buildPatterns()
-    const synth = patterns.find((p) => p.name === 'synthesizer')!
+    const synth = patterns.find((p) => p.name === 'compactExecution')!
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
     return createEventView(ctxOf(events), synth.config.viewConfig as never, synth.config.patternId)
   }
@@ -162,7 +162,7 @@ describe('general agent — synthesizer view scope', () => {
 
     expect(view.hasErrors()).toBe(true)
     // Events persist across continueSession — the window must expire them, or
-    // one bad turn makes the synthesizer apologise for the rest of the thread.
+    // one bad turn makes the compactExecution apologise for the rest of the thread.
     expect(view.lastError()).toBe('max turns exhausted')
     expect(view.errors().count()).toBe(1)
   })

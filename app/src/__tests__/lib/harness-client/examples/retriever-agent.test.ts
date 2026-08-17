@@ -34,7 +34,7 @@ vi.mock('../../../../../baml_client', () => ({
 
 const { retrieverAgent } =
   await import('../../../../lib/harness-client/examples/retriever-agent.server')
-const { harnessHasRedisRetriever, retriever, synthesizer } =
+const { harnessHasRedisRetriever, retriever, compactExecution } =
   await import('../../../../lib/harness-patterns')
 
 interface Pattern {
@@ -56,13 +56,13 @@ describe('retrieverAgent config', () => {
 })
 
 describe('retrieverAgent pattern chain', () => {
-  it('is router → routes → synthesizer, with unique pattern ids', async () => {
+  it('is router → routes → compactExecution, with unique pattern ids', async () => {
     const patterns = (await retrieverAgent.createPatterns('sess-r')) as Pattern[]
 
     expect(patterns.map((p) => p.name.replace(/\(.*/, ''))).toEqual([
       'router',
       'routes',
-      'synthesizer',
+      'compactExecution',
     ])
     const ids = patterns.map((p) => p.config.patternId)
     expect(new Set(ids).size).toBe(ids.length)
@@ -88,7 +88,7 @@ describe('retrieverAgent pattern chain', () => {
     const otherBackend = { name: 'supabase', type: 'vector' as const, search: async () => [] }
     const patterns = [
       retriever({ patternId: 'retriever', backends: [otherBackend] }),
-      synthesizer({ mode: 'thread', patternId: 'response-synth' }),
+      compactExecution({ mode: 'thread', patternId: 'response-synth' }),
     ]
     expect(harnessHasRedisRetriever(patterns)).toBe(false)
   })

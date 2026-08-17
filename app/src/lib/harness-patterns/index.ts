@@ -46,11 +46,11 @@ export type {
   // Pattern Config Types
   SimpleLoopConfig,
   ActorCriticConfig,
-  SynthesizerConfig,
-  SynthesizerMode,
-  SynthesizerInput,
+  CompactExecutionConfig,
+  CompactExecutionMode,
+  CompactExecutionInput,
   SynthesisFn,
-  SynthesizerData,
+  CompactExecutionData,
 
   // Loop History Types
   LoopHistory,
@@ -142,7 +142,7 @@ export {
   withReferences,
   chain,
   runChain,
-  synthesizer,
+  compactExecution,
   compactIntent,
   planner,
   formatPlanContext,
@@ -215,7 +215,7 @@ export {
 export { callTool, listTools, closeMcpClient } from './mcp-client.server'
 export { assertServer, ServerOnlyError } from './assert.server'
 export { routeMessageOp } from './routing.server'
-export { scheduleSummarization } from './summarize.server'
+export { compactBulkData } from './compactBulkData.server'
 export { getErrorHint } from './error-hints'
 export { stripThinkBlocks, truncateToolResults, omitResultFields } from './content-transforms'
 export { normalizeControllerAction } from './controller-action'

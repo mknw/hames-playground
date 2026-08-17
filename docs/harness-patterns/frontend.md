@@ -334,8 +334,8 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
     }
   )
 
-  // Synthesizer generates human-readable response
-  const responseSynth = synthesizer({
+  // compactExecution generates human-readable response
+  const responseSynth = compactExecution({
     mode: 'thread',
     patternId: 'response-synth'
   })
@@ -469,7 +469,7 @@ const handleApprove = async () => {
 3. **Handle loading states** - Disable input during processing
 4. **Null-check responses** - Response may be empty on errors
 5. **Bind BAML methods** - Always use `.bind(b)` when passing to patterns
-6. **Add synthesizer** - Include a synthesizer pattern for readable responses
+6. **Add compactExecution** - Include a compactExecution pattern for readable responses
 
 ---
 

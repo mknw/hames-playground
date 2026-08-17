@@ -6,10 +6,7 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import type {
-  ConfiguredPattern,
-  PatternConfig
-} from '../types'
+import type { ConfiguredPattern, PatternConfig } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
 
 assertServerOnImport()
@@ -32,7 +29,7 @@ export interface JudgeData {
  */
 export type EvaluatorFn = (
   query: string,
-  candidates: Array<{ source: string; content: string }>
+  candidates: Array<{ source: string; content: string }>,
 ) => Promise<{
   reasoning: string
   rankings: Array<{ source: string; score: number; reason: string }>
@@ -54,7 +51,7 @@ export type EvaluatorFn = (
  */
 export function judge<T extends JudgeData>(
   evaluator: EvaluatorFn,
-  config?: JudgeConfig
+  config?: JudgeConfig,
 ): ConfiguredPattern<T> {
   const resolved = resolveConfig('judge', config)
 
@@ -66,9 +63,14 @@ export function judge<T extends JudgeData>(
         const candidates = view.fromAll().ofType('tool_result').get()
 
         if (candidates.length === 0) {
-          trackEvent(scope, 'error', {
-            error: 'No candidates to evaluate'
-          }, true)
+          trackEvent(
+            scope,
+            'error',
+            {
+              error: 'No candidates to evaluate',
+            },
+            true,
+          )
           return scope
         }
 
@@ -79,25 +81,30 @@ export function judge<T extends JudgeData>(
         // Format candidates for evaluator
         const formattedCandidates = limitedCandidates.map((c) => ({
           source: c.patternId,
-          content: JSON.stringify(c.data)
+          content: JSON.stringify(c.data),
         }))
 
         // Call evaluator
-        const input = (scope.data as Record<string, unknown>).input as string ?? ''
+        const input = ((scope.data as Record<string, unknown>).input as string) ?? ''
         const evaluation = await evaluator(input, formattedCandidates)
 
-        trackEvent(scope, 'controller_action', {
-          reasoning: evaluation.reasoning,
-          rankings: evaluation.rankings,
-          selected: evaluation.best
-        }, resolved.trackHistory)
+        trackEvent(
+          scope,
+          'controller_action',
+          {
+            reasoning: evaluation.reasoning,
+            rankings: evaluation.rankings,
+            selected: evaluation.best,
+          },
+          resolved.trackHistory,
+        )
 
-        // Forward best result as the response for synthesizer
+        // Forward best result as the response for compactExecution
         scope.data = {
           ...scope.data,
           response: evaluation.best?.content,
           judgeReasoning: evaluation.reasoning,
-          rankings: evaluation.rankings
+          rankings: evaluation.rankings,
         }
 
         return scope
@@ -108,6 +115,6 @@ export function judge<T extends JudgeData>(
       }
     },
     config: resolved,
-    estimateTurns: () => 1
+    estimateTurns: () => 1,
   }
 }

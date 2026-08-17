@@ -254,7 +254,7 @@ function extractTitleFromContext(serializedContext: string): string | null {
  * column, mapping it to the terminal value a *persisted* turn should carry.
  *
  * Key subtlety: the harness never flips a successful run to 'done' — `runChain`
- * leaves `ctx.status === 'running'` and the synthesizer emits the final
+ * leaves `ctx.status === 'running'` and the compactExecution emits the final
  * assistant_message directly (harness.server.ts's `status === 'done'` push is
  * effectively dead). Since `saveSession` is only ever called *after* the
  * harness returns, a persisted 'running' means "completed, never flipped" → we

@@ -172,7 +172,7 @@ describe('EventViewImpl', () => {
           data: { tool: 'read_neo4j_cypher', result: 'turn4-data', success: true },
         },
         { type: 'pattern_exit', ts: 32, patternId: 'neo4j-query', data: {} },
-        // Synthesizer about to evaluate fromLastPattern()
+        // compactExecution about to evaluate fromLastPattern()
         { type: 'pattern_enter', ts: 33, patternId: 'response-synth', data: {} },
       ]
 
@@ -205,7 +205,7 @@ describe('EventViewImpl', () => {
           data: { tool: 'read_neo4j_cypher', result: 'turn1-data', success: true },
         },
         { type: 'pattern_exit', ts: 4, patternId: 'neo4j-query', data: {} },
-        // Turn 1: synthesizer
+        // Turn 1: compactExecution
         { type: 'pattern_enter', ts: 5, patternId: 'response-synth', data: {} },
         {
           type: 'assistant_message',
@@ -224,7 +224,7 @@ describe('EventViewImpl', () => {
           data: { tool: 'read_neo4j_cypher', result: 'turn2-data', success: true },
         },
         { type: 'pattern_exit', ts: 11, patternId: 'neo4j-query', data: {} },
-        // Turn 2: synthesizer (self — excluded)
+        // Turn 2: compactExecution (self — excluded)
         { type: 'pattern_enter', ts: 12, patternId: 'response-synth', data: {} },
       ]
 
@@ -1300,7 +1300,12 @@ describe('EventViewImpl', () => {
           patternId: 'web-search',
           data: { tool: 'search', result: 'found', success: true },
         },
-        { type: 'pattern_enter', ts: 6, patternId: 'synth-1', data: { pattern: 'synthesizer' } },
+        {
+          type: 'pattern_enter',
+          ts: 6,
+          patternId: 'synth-1',
+          data: { pattern: 'compactExecution' },
+        },
       ]
 
       const ctx = createMockContext(events)

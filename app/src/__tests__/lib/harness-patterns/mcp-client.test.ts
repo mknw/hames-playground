@@ -150,7 +150,7 @@ describe('mcp-client', () => {
     // as a plain text result instead of failing the call, so callTool's text
     // path used to return `{ success: true, data: "Neo4j Error: ..." }` and
     // downstream gating (view.hasErrors, enricher's success check, the
-    // synthesizer) couldn't tell a real failure from a real success.
+    // compactExecution) couldn't tell a real failure from a real success.
     it('demotes "Neo4j Error:" text results to success:false (issue #50)', async () => {
       const neo4jErrorText =
         'Neo4j Error: {neo4j_code: Neo.ClientError.Statement.ParameterMissing} ' +

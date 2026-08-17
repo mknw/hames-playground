@@ -35,7 +35,7 @@ Functional, composable framework for agentic tool execution.
   - [simpleLoop()](#simpleloopcontroller-tools-config)
   - [actorCritic()](#actorcriticactor-critic-tools-config)
   - [withReferences()](#withreferencespattern-config)
-  - [synthesizer()](#synthesizerconfig)
+  - [compactExecution()](#compactexecutionconfig)
   - [compactIntent()](#compactintentconfig)
   - [planner()](#plannertools-config)
   - [retriever()](#retrieverconfig)
@@ -87,7 +87,7 @@ router({ neo4j: 'Description', web: 'Description' }),
 routes({ neo4j: pattern1, web: pattern2 })
 
 // Harness chains patterns and executes them
-harness(router(...), routes(...), synthesizer({ mode: 'thread' }))
+harness(router(...), routes(...), compactExecution({ mode: 'thread' }))
 ```
 
 ## UnifiedContext Architecture
@@ -373,10 +373,10 @@ The same hook is also wired into `actorCritic`.
 **Compact controller view: `resultOmit`.** A per-tool omit-list applied to the
 CONTROLLER TURN LOG only — the named fields are deleted (recursively, at every
 object level including array elements) from the result the loop LLM reads. The
-`tool_result` event keeps the full result, so the synthesizer, citation
+`tool_result` event keeps the full result, so the compactExecution, citation
 extractors and session persistence are untouched. Use it for fields only the
 final answer needs — e.g. the Microsoft 365 agent drops `webUrl` (519 chars per
-Loop hit) from file-tool results while its synthesizer still renders the links:
+Loop hit) from file-tool results while its compactExecution still renders the links:
 
 ```typescript
 simpleLoop(controller, graphTools, {
@@ -411,7 +411,7 @@ calls): the assistant history replays `additional_calls` exactly as emitted,
 and `tool_result.result` is an index-keyed map — `{"1": {tool, result}, "2":
 {tool, __error}, ...}` (the `expandPreviousResult` multi-ref shape). Per
 sub-call, one `tool_call`/`tool_result` event pair is tracked with a shared
-`batchId`, so observability, the synthesizer and graph extraction keep full
+`batchId`, so observability, the compactExecution and graph extraction keep full
 per-tool fidelity. Partial failure → the loop continues (the controller retries
 just the failures); ALL sub-calls failed → the usual recoverable-error break
 path. `Return` and `expandPreviousResult` are singular-only — inside a batch
@@ -425,7 +425,7 @@ they get a per-call error.
 4. Loop until `is_final` or max turns
 5. Prior tool results from earlier turns are passed as `turns_previous_runs: PriorResult[]` — a structured array separate from the current task's `turns`. The LLM can reference them with `ref:<ref_id>` in tool args; `resolveRefs()` auto-expands before MCP execution. Controlled by `rememberPriorTurns` (default: true) and `priorTurnCount` (default: 3).
 6. Controller errors are caught per-iteration — loop exits gracefully with partial results; errors are tracked as events and read by downstream patterns via `view.hasErrors()` / `view.lastError()`, scoped by ViewConfig (so they naturally expire with the view window)
-7. After the response reaches the user, `scheduleSummarization()` runs in the background: it summarizes each `tool_result` with a lightweight model (`DescribeFallback`) and stores the summary on the event. These summaries appear as `PriorResult.summary` on subsequent turns.
+7. After the response reaches the user, `compactBulkData()` runs in the background: it summarizes the turn's `tool_result` events with the describe-tier client and stores each summary on its event. These summaries appear as `PriorResult.summary` on subsequent turns. See [Batched bulk-data compaction](#batched-bulk-data-compaction) for how N results become one call.
 
 ### `actorCritic(actor, critic, tools, config?)`
 
@@ -575,20 +575,20 @@ const routesPattern = routes<SessionData>({
 })
 ```
 
-### `synthesizer(config)`
+### `compactExecution(config)`
 
 Synthesizes final response from previous pattern's output using BAML `CreateToolResponse`.
 
 ```typescript
-synthesizer({ mode: 'thread', patternId: 'response-synth' })
+compactExecution({ mode: 'thread', patternId: 'response-synth' })
 
 // Three modes
-synthesizer({ mode: 'message' }) // Receives only response string
-synthesizer({ mode: 'response' }) // Receives { data, response } object
-synthesizer({ mode: 'thread' }) // Receives full loop history
+compactExecution({ mode: 'message' }) // Receives only response string
+compactExecution({ mode: 'response' }) // Receives { data, response } object
+compactExecution({ mode: 'thread' }) // Receives full loop history
 
 // Custom synthesis function
-synthesizer({
+compactExecution({
   mode: 'response',
   synthesize: async (input) => `Found: ${input.response}`,
 })
@@ -607,7 +607,7 @@ so there is **no controller-prompt change**.
 chain(
   compactIntent({ viewConfig: { fromLastNTurns: 5 } }),
   withSandbox({ id: sessionId })(actorCritic(actor, critic, [], { … })),
-  synthesizer({ mode: 'thread' }),
+  compactExecution({ mode: 'thread' }),
 )
 
 type CompactIntentConfig = PatternConfig
@@ -644,7 +644,7 @@ the next pattern in the chain. The planner does not execute tools — it reasons
 about them.
 
 ```typescript
-chain(planner(tools.all), simpleLoop(controller, tools.all), synthesizer({ mode: 'thread' }))
+chain(planner(tools.all), simpleLoop(controller, tools.all), compactExecution({ mode: 'thread' }))
 
 interface PlannerConfig extends PatternConfig {
   schema?: string // Extra context (e.g. neo4j schema) — mirrors simpleLoop's
@@ -699,7 +699,7 @@ changes:
    `truncated` flag for the observability panel and any downstream consumer
    (`view.ofType('plan_created')`). A dedicated event type, NOT
    `controller_action`: that payload is a real `ControllerAction`, and the
-   synthesizer's thread mode renders every `controller_action` in view as a
+   compactExecution's thread mode renders every `controller_action` in view as a
    tool iteration — a synthetic one would show a tool call that never happened.
 
 **Defaults:** `commitStrategy: 'always'` (the plan survives a downstream error),
@@ -730,14 +730,14 @@ soft hint (steps are not tool calls) — it does not clamp `maxTurns`.
 > execution. `chain(router(...), routes({ x: chain(planner(...), simpleLoop(...)) }))`
 > is valid. The `general` agent
 > (`harness-client/examples/general.server.ts`) demonstrates the flat
-> planner → simpleLoop → synthesizer chain alongside the router-based `default`.
+> planner → simpleLoop → compactExecution chain alongside the router-based `default`.
 
 ### `retriever(config)`
 
 A low-latency alternative to a tool-calling `simpleLoop`: instead of an LLM loop
 deciding which DB tool to call (often >30s for a Neo4j loop), the retriever forms
 ONE query from context and fans it out to one or more injected **backends**,
-returning normalized matches-with-references for a downstream `synthesizer`.
+returning normalized matches-with-references for a downstream `compactExecution`.
 
 ```typescript
 // Raw user message is the query; rewritten only when the turn has history.
@@ -768,7 +768,7 @@ interface RetrieverBackend {
    the retrieval. A failed `RetrieveQuery` falls back to the raw message.
 3. **Merge**: flatten, sort closest-first (`score` ascending; un-scored last),
    cap at `k`. Writes `scope.data.matches` and emits a `tool_result`
-   (`tool: 'retriever'`) — the same channel `synthesizer` reads via
+   (`tool: 'retriever'`) — the same channel `compactExecution` reads via
    `view.fromLastPattern()`.
 
 Framework-pure: concrete backends live app-side (`app/src/lib/retriever/` —
@@ -776,7 +776,7 @@ Framework-pure: concrete backends live app-side (`app/src/lib/retriever/` —
 resolved config carries a `backendKinds: string[]` marker so
 `harnessHasRedisRetriever` (pattern-capabilities) can gate the Data Stash's
 auto-ingest-on-upload. **Best-effort / `recoverable`**: on total failure it
-leaves `matches` empty and the synthesizer answers from the rest of context.
+leaves `matches` empty and the compactExecution answers from the rest of context.
 
 > See [`docs/DATA_STASH.md → Harness-aware ingest`](../../../../docs/DATA_STASH.md)
 > for the upload-side gate and the `redis` / `supabase` backends.
@@ -786,7 +786,7 @@ leaves `matches` empty and the synthesizer answers from the rest of context.
 Classifies intent via BAML and sets `scope.data.route`. The first half of the router/routes pair.
 
 - **Tool needed** → `data.route = <toolName>`, `data.intent`, `data.routerResponse`; tracks optional `assistant_message`
-- **Conversational** → `data.route = 'user'` (the `DIRECT_RESPONSE_ROUTE` sentinel), `data.response = responseText`; tracks `assistant_message` directly; downstream `synthesizer()` skips BAML
+- **Conversational** → `data.route = 'user'` (the `DIRECT_RESPONSE_ROUTE` sentinel), `data.response = responseText`; tracks `assistant_message` directly; downstream `compactExecution()` skips BAML
 
 `data.intent` is a **self-contained** statement of what the user wants, not an
 echo of the latest message: the router sees the last `routerTurnWindow` turns
@@ -818,7 +818,7 @@ interface RouterConfig extends PatternConfig {
 Dispatches to the sub-pattern matching `scope.data.route`. The second half of the router/routes pair.
 
 - `data.route === undefined` → **throws** (programming error — `routes()` must follow `router()`)
-- `data.route === 'user'` → **pass-through** (conversational; synthesizer also skips BAML)
+- `data.route === 'user'` → **pass-through** (conversational; compactExecution also skips BAML)
 - `data.route` found in map → dispatches with `pattern_enter/exit` wrapping
 - `data.route` not in map → tracks `error` event, pass-through
 
@@ -874,7 +874,7 @@ await chain(ctx, patterns, (event) => {
 Compose patterns into a callable agent. Accepts optional `onEvent` callback for real-time event streaming.
 
 ```typescript
-const agent = harness(routerPattern, synthesizerPattern)
+const agent = harness(routerPattern, compactExecutionPattern)
 const result = await agent('Show me all Person nodes', sessionId)
 
 // With SSE streaming
@@ -946,7 +946,7 @@ view.exists() // boolean
 view.count() // number
 ```
 
-**Compact serialization**: `serializeCompact()` renders older `tool_result` events as compact pointers. If an LLM-generated summary exists (via `scheduleSummarization()`), it replaces the raw preview:
+**Compact serialization**: `serializeCompact()` renders older `tool_result` events as compact pointers. If an LLM-generated summary exists (via `compactBulkData()`), it replaces the raw preview:
 
 ```xml
 <tool_result id="ev-abc123" tool="search" compact="true">
@@ -958,11 +958,47 @@ Events within the last `recentTurns` user turns are rendered in full. Hidden or 
 
 **Data Stash**: `ToolResultEventData` supports three visibility fields:
 
-- `summary?: string` — LLM-generated summary (populated async by `scheduleSummarization()`)
+- `summary?: string` — LLM-generated summary (populated async by `compactBulkData()`)
 - `hidden?: boolean` — excluded from LLM context, shown grayed-out in UI
 - `archived?: boolean` — excluded from LLM context, moved to Archived section in UI
 
 These are mutated post-commit via `enrichToolResult(ctx, eventId, { summary?, hidden?, archived? })`. The UI manages hide/archive via `POST /api/stash`.
+
+### Batched bulk-data compaction
+
+`compactBulkData()` (in `compactBulkData.server.ts`, called by `/api/events` once
+the SSE response has been sent) folds the turn's results into **one
+`ResultDescribeBatch` call per `MAX_BATCH_ITEMS` (8) results** instead of one
+`ResultDescribe` call each (#83 Part E). Batches also respect an input budget of
+25% of the describe client's context window, so a raised `maxResultForSummary`
+splits them further rather than overflowing.
+
+The split back out is by **echoed id**, never by list position or string
+splitting: each item carries a batch-local label (`"1"`, `"2"`, …), the model
+returns `{ id, summary }` pairs, and `describeToolResultsBatchOp()` maps them
+back — discarding ids that were never requested, so a hallucinated label cannot
+attach a summary to the wrong tool result.
+
+Partial failure is graded, and every rung costs at most one extra call per
+affected item:
+
+| what happened                      | what compactBulkData does                                               |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| the batch call threw               | logs a warning, falls back to a per-item `ResultDescribe` for each item |
+| the model dropped an id            | per-item call for that item only                                        |
+| the model answered blank for an id | per-item call for that item only                                        |
+| only one item needed a summary     | skips the batch prompt entirely — single-item path                      |
+
+**Measured (live, `RUN_EVALS=1`, see `src/__tests__/bench/describe-batch-bench.test.ts`):**
+the reliable win is request count; the token win scales inversely with payload
+size, and wall clock regresses because the per-item arm already ran concurrently
+while a batch generates N summaries inside one response. This is post-response
+background work, so requests and tokens are what matter.
+
+| shape                                | calls | input tokens | total tokens | wall clock  |
+| ------------------------------------ | ----- | ------------ | ------------ | ----------- |
+| 6 large results (payload-dominated)  | 6 → 1 | −2.1%        | +0.5%        | 2.4s → 5.2s |
+| 8 small results (overhead-dominated) | 8 → 1 | −16.9%       | −9.7%        | 1.4s → 2.6s |
 
 ## Configuration System
 
@@ -1018,8 +1054,8 @@ A "turn" is defined by a `user_message` event. `fromLastNTurns` slices the event
 > **Note:** `since(ts)` is available on the fluent API (`view.since(timestamp)`) but is not a ViewConfig option.
 
 ```typescript
-// Example: synthesizer needs to see tool results from neo4j pattern
-synthesizer({
+// Example: compactExecution needs to see tool results from neo4j pattern
+compactExecution({
   mode: 'thread',
   viewConfig: { fromPatterns: ['neo4j-query'], eventTypes: ['tool_result'] },
 })
@@ -1042,7 +1078,7 @@ router(
 - `router`: `viewConfig: { fromLast: false, fromLastNTurns: 5, eventTypes: ['user_message', 'assistant_message'] }`
 - `simpleLoop`: `trackHistory: 'tool_result'`, `commitStrategy: 'on-success'`
 - `actorCritic`: `trackHistory: 'tool_result'`, `commitStrategy: 'on-success'`
-- `synthesizer`: `trackHistory: 'assistant_message'`, `commitStrategy: 'always'`
+- `compactExecution`: `trackHistory: 'assistant_message'`, `commitStrategy: 'always'`
 - `compactIntent`: `trackHistory: 'intent_compacted'`, `commitStrategy: 'always'`, default `viewConfig` of last 5 message turns
 - `planner`: `trackHistory: 'plan_created'`, `commitStrategy: 'always'`, default `viewConfig` of last 2 message turns
 
@@ -1066,7 +1102,7 @@ transformed into prompt-friendly types. The table below shows which harness
 | `pattern_exit`       | `PatternExitEventData`                                                                                                   | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
 | `approval_request`   | `ApprovalRequestEventData`                                                                                               | _(not sent to BAML)_                                    | (reserved — no active emitter)                                |
 | `approval_response`  | `ApprovalResponseEventData`                                                                                              | _(not sent to BAML)_                                    | (reserved — no active emitter)                                |
-| `error`              | `ErrorEventData`                                                                                                         | _(read via `view.hasErrors()`)_                         | synthesizer (error context), harness error handling           |
+| `error`              | `ErrorEventData`                                                                                                         | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling      |
 | `reference_attached` | `ReferenceAttachedEventData`                                                                                             | _(not sent to BAML)_                                    | withReferences only (observability)                           |
 | `intent_compacted`   | `IntentCompactedEventData`                                                                                               | _(not sent to BAML)_                                    | compactIntent only (observability)                            |
 | `plan_created`       | `PlanCreatedEventData`                                                                                                   | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event     |
@@ -1134,7 +1170,7 @@ BAML Return → CriticResult:
   suggested_approach : string? → forwarded as next Attempt.feedback
 ```
 
-#### synthesizer → `Synthesize`
+#### compactExecution → `Synthesize`
 
 ```
 Events read (ViewConfig: typically fromPatterns or fromLast)
@@ -1146,15 +1182,15 @@ BAML Inputs:
   user_message : string       ← ctx.input
   intent       : string       ← from data or ctx.input
   turns        : LoopTurn[]   ← assembled from preceding pattern events
-  hasError     : boolean      ← view.hasErrors() — scoped by synthesizer's ViewConfig
+  hasError     : boolean      ← view.hasErrors() — scoped by compactExecution's ViewConfig
   errorMessage : string?      ← view.lastError() — naturally expires with view window
 
 BAML Return → string (assistant response text)
   → stored as assistant_message event
 ```
 
-> **Error scoping**: The synthesizer reads error state from EventView, not from the data stash.
-> This means errors are scoped by the synthesizer's `ViewConfig` (e.g. `fromLastNTurns: 1`) and
+> **Error scoping**: The compactExecution reads error state from EventView, not from the data stash.
+> This means errors are scoped by the compactExecution's `ViewConfig` (e.g. `fromLastNTurns: 1`) and
 > naturally expire — they don't persist across turns via serialization.
 
 #### compactIntent → `CompactIntent`
@@ -1221,7 +1257,7 @@ Two code paths:
 Conversational (tool_call_needed = false):
   → assistant_message event tracked with response_text
   → data.route = 'user' (DIRECT_RESPONSE_ROUTE), data.response = response_text
-  → routes() passes through; synthesizer() skips BAML
+  → routes() passes through; compactExecution() skips BAML
 
 Tool needed (tool_call_needed = true):
   → data.route = tool_name, data.intent, data.routerResponse
@@ -1269,7 +1305,7 @@ import {
   routes,
   simpleLoop,
   actorCritic,
-  synthesizer,
+  compactExecution,
   Tools,
   callTool,
   createNeo4jController,
@@ -1318,7 +1354,7 @@ async function createPatterns() {
     code_mode: codePattern,
   })
 
-  const responseSynth = synthesizer({
+  const responseSynth = compactExecution({
     mode: 'thread',
     patternId: 'response-synth',
   })
@@ -1352,7 +1388,7 @@ Span names:
 - `pattern.simpleLoop` - Decide-execute loop
 - `pattern.actorCritic` - Generate-evaluate loop
 - `pattern.chain` - Sequential composition
-- `pattern.synthesizer` - Response synthesis
+- `pattern.compactExecution` - Response synthesis
 - `controller` / `actor` / `critic` - BAML function calls
 - `tool.call` - MCP tool execution
 
@@ -1367,8 +1403,8 @@ harness-patterns/
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? callback
 ├── routing.server.ts       # BAML router integration (routeMessageOp)
 ├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE tool transports — sandbox (in-VM) → app-side in-process → MCP gateway; leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
-├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, etc.
-├── summarize.server.ts     # scheduleSummarization() — background tool result summarization via DescribeFallback
+├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, etc.
+├── compactBulkData.server.ts # compactBulkData() — background tool result summarization via the describe-tier client
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
 ├── token-budget.server.ts  # trimToFit(), getContextWindow(), estimateTokens() — rolling context window
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values)
@@ -1383,7 +1419,7 @@ harness-patterns/
     ├── guardrail.server.ts     # Rail validation; wraps inner events with pattern_enter/exit
     ├── hook.server.ts          # Lifecycle hook; wraps inner events with pattern_enter/exit
     ├── chain.server.ts         # Sequential composition; accepts onEvent? for SSE streaming
-    ├── synthesizer.server.ts   # Final response synthesis; skips BAML for DIRECT_RESPONSE_ROUTE
+    ├── compactExecution.server.ts   # Final response synthesis; skips BAML for DIRECT_RESPONSE_ROUTE
     ├── compactIntent.server.ts # Rewrites latest message → scope.data.intent for router-less actors; emits intent_compacted
     ├── planner.server.ts       # Upfront decomposition → scope.data.plan (+ formatPlanContext, read by both loop patterns); emits plan_created
     └── event-view.server.ts    # EventViewImpl (fluent query API, serializeCompact)

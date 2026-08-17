@@ -97,7 +97,7 @@ on what kind of trigger.
 ### Status lifecycle — a harness quirk
 
 The harness **never flips a successful run to `done`**: `runChain` leaves
-`ctx.status === 'running'` and the synthesizer emits the final `assistant_message`
+`ctx.status === 'running'` and the compactExecution emits the final `assistant_message`
 directly (`harness.server.ts`'s `status === 'done'` push is effectively dead).
 Since `saveSession` only runs _after_ the harness returns, a persisted `running`
 means "completed, never flipped" → `extractStatusFromContext`

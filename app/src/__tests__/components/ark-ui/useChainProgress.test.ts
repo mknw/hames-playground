@@ -99,8 +99,8 @@ describe('createChainProgress', () => {
       p.ingest(ev('pattern_exit', 'neo4j-query'))
       p.ingest(ev('pattern_exit', 'routes'))
 
-      // 3) synthesizer
-      p.ingest(ev('pattern_enter', 'response-synth', { pattern: 'synthesizer' }))
+      // 3) compactExecution
+      p.ingest(ev('pattern_enter', 'response-synth', { pattern: 'compactExecution' }))
       p.ingest(ev('assistant_message', 'response-synth', { content: 'Done.' }))
       expect(p.snapshot().currentTurn).toBe(7)
       expect(p.snapshot().maxProjection).toBe(7)

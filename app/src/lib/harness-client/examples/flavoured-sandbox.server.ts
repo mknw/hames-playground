@@ -26,22 +26,22 @@
  * container (PtyManager keys on sessionId, rootfs 'base'), NOT these flavoured
  * ones — flavour-aware Shell is deferred (#116). See docs/sandbox-flavours.md.
  */
-"use server";
+'use server'
 
 // @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
 import {
   router,
   routes,
-  synthesizer,
+  compactExecution,
   actorCritic,
   createActorControllerAdapter,
   createCriticAdapter,
   type ConfiguredPattern,
-} from "../../harness-patterns";
-import { withSandbox } from "../../sandbox/with-sandbox.server";
-import type { SessionData } from "../session.server";
-import type { AgentConfig } from "../registry.server";
-import type { FewShot } from "../../../../baml_client/types";
+} from '../../harness-patterns'
+import { withSandbox } from '../../sandbox/with-sandbox.server'
+import type { SessionData } from '../session.server'
+import type { AgentConfig } from '../registry.server'
+import type { FewShot } from '../../../../baml_client/types'
 
 const WORKSPACE_NOTE = `
 Files under /work/in are restored inputs; write deliverables the user should keep
@@ -50,19 +50,19 @@ Python notes: for multi-line Python, WRITE a .py file (sandbox_write) and run it
 or use a quoted heredoc (python3 - <<'PY' ... PY) — never nest escaped quotes in
 python3 -c. Python runs with PYTHONSAFEPATH=1 (cwd is not on sys.path); to import
 your own helper modules from /work, run with PYTHONPATH=/work.
-`.trim();
+`.trim()
 
 const BASIC_GUIDANCE = `
 You have an EPHEMERAL Linux sandbox — a fresh box each turn, no state persists.
 Use sandbox_bash / sandbox_write / sandbox_read for quick shell work and small
 scripts (Python 3 is available). Don't rely on files from previous turns.
-`.trim();
+`.trim()
 
 const IMAGE_GUIDANCE = `
 You have a PERSISTENT image-processing sandbox. Available via sandbox_bash:
 Python 3 with numpy, Pillow (PIL) and OpenCV (cv2), plus imagemagick (\`convert\`).
 ${WORKSPACE_NOTE}
-`.trim();
+`.trim()
 
 const DATA_GUIDANCE = `
 You have a PERSISTENT data sandbox. Available via sandbox_bash: Python 3 with
@@ -71,7 +71,7 @@ supported: read xlsx with pandas (openpyxl) or polars (fastexcel/calamine),
 write with xlsxwriter/openpyxl. Also python-docx / python-pptx / reportlab /
 pypdf. Save plots/spreadsheets/reports to /work/out.
 ${WORKSPACE_NOTE}
-`.trim();
+`.trim()
 
 const OFFICE_GUIDANCE = `
 You have a PERSISTENT office sandbox for EDITING documents. Available via
@@ -79,7 +79,7 @@ sandbox_bash: Python 3 with python-docx (Word), openpyxl + xlsxwriter (Excel),
 and PyMuPDF (\`import pymupdf\` or \`import fitz\`) for reading, editing and
 creating PDFs. Edit files from /work/in and save results to /work/out.
 ${WORKSPACE_NOTE}
-`.trim();
+`.trim()
 
 /**
  * Few-shot examples for the actor's `tool_args` formatting (#85 — mirrors
@@ -91,22 +91,23 @@ ${WORKSPACE_NOTE}
  */
 const FLAVOURED_SANDBOX_FEW_SHOTS: FewShot[] = [
   {
-    user: "Write a hello-world Python script to /work/hi.py and run it.",
+    user: 'Write a hello-world Python script to /work/hi.py and run it.',
     reasoning:
-      "Write the file first. Keys and string values are double-quoted; the newline inside the script is the escape sequence \\n, not a raw line break.",
-    tool: "sandbox_write",
-    args: JSON.stringify({ path: "/work/hi.py", content: 'print("hello")\n' }),
+      'Write the file first. Keys and string values are double-quoted; the newline inside the script is the escape sequence \\n, not a raw line break.',
+    tool: 'sandbox_write',
+    args: JSON.stringify({ path: '/work/hi.py', content: 'print("hello")\n' }),
   },
   {
-    user: "How many rows does /work/in/data.csv have?",
+    user: 'How many rows does /work/in/data.csv have?',
     reasoning:
-      "Multi-line Python inline: use a quoted heredoc so no quotes need escaping inside the command. Never wrap a multi-line script in python3 -c \\\"...\\\".",
-    tool: "sandbox_bash",
+      'Multi-line Python inline: use a quoted heredoc so no quotes need escaping inside the command. Never wrap a multi-line script in python3 -c \\"...\\".',
+    tool: 'sandbox_bash',
     args: JSON.stringify({
-      command: "python3 - <<'PY'\nimport csv\nwith open('/work/in/data.csv') as f:\n    print(sum(1 for _ in f) - 1)\nPY",
+      command:
+        "python3 - <<'PY'\nimport csv\nwith open('/work/in/data.csv') as f:\n    print(sum(1 for _ in f) - 1)\nPY",
     }),
   },
-];
+]
 
 /** A sandbox tool-loop; the actor sees the in-VM `sandbox_*` tools via the ALS
  *  scope `withSandbox` sets up, so `availableTools` is left empty. */
@@ -114,8 +115,8 @@ function sandboxLoop(patternId: string, guidance: string) {
   const actor = createActorControllerAdapter({
     contextPrefix: guidance,
     fewShots: FLAVOURED_SANDBOX_FEW_SHOTS,
-  });
-  const critic = createCriticAdapter();
+  })
+  const critic = createCriticAdapter()
   return actorCritic<SessionData>(actor, critic, [], {
     patternId,
     availableTools: [],
@@ -129,55 +130,55 @@ function sandboxLoop(patternId: string, guidance: string) {
     criticCadence: 3,
     // Same rationale as sandbox-session: linear effect-chains on one VM FS —
     // in-order batches save actor round-trips, concurrency would race.
-    multiToolCalls: "sequential",
-  });
+    multiToolCalls: 'sequential',
+  })
 }
 
 async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
   // Ephemeral: no id (anonymous pool) → a reset (fresh-state) VM each turn.
   const basic = withSandbox({
-    rootfs: "base",
-    egress: "mcp-only",
+    rootfs: 'base',
+    egress: 'mcp-only',
     sessionId,
-  })(sandboxLoop("flavour-basic-loop", BASIC_GUIDANCE));
+  })(sandboxLoop('flavour-basic-loop', BASIC_GUIDANCE))
 
   // Persistent + flavour-scoped id → its own container, distinct from `data`.
   // sessionId stays the conversation id, so /work is shared across flavours.
   const image = withSandbox({
     id: `${sessionId}:image-processing`,
     sessionId,
-    rootfs: "image-processing",
-    egress: "mcp-only",
+    rootfs: 'image-processing',
+    egress: 'mcp-only',
     syncWorkspace: true,
-  })(sandboxLoop("flavour-image-loop", IMAGE_GUIDANCE));
+  })(sandboxLoop('flavour-image-loop', IMAGE_GUIDANCE))
 
   const data = withSandbox({
     id: `${sessionId}:data`,
     sessionId,
-    rootfs: "data",
-    egress: "mcp-only",
+    rootfs: 'data',
+    egress: 'mcp-only',
     syncWorkspace: true,
-  })(sandboxLoop("flavour-data-loop", DATA_GUIDANCE));
+  })(sandboxLoop('flavour-data-loop', DATA_GUIDANCE))
 
   const office = withSandbox({
     id: `${sessionId}:office`,
     sessionId,
-    rootfs: "office",
-    egress: "mcp-only",
+    rootfs: 'office',
+    egress: 'mcp-only',
     syncWorkspace: true,
-  })(sandboxLoop("flavour-office-loop", OFFICE_GUIDANCE));
+  })(sandboxLoop('flavour-office-loop', OFFICE_GUIDANCE))
 
   const routerPattern = router<SessionData>(
     {
-      basic: "Quick one-off shell / general Linux work in a throwaway box",
+      basic: 'Quick one-off shell / general Linux work in a throwaway box',
       image_processing:
-        "Image manipulation — Pillow, OpenCV (cv2), imagemagick (resize, convert, analyze images)",
-      data: "Data ANALYSIS — pandas/numpy/polars over datasets (incl. xlsx/csv), matplotlib/seaborn plots, reports",
+        'Image manipulation — Pillow, OpenCV (cv2), imagemagick (resize, convert, analyze images)',
+      data: 'Data ANALYSIS — pandas/numpy/polars over datasets (incl. xlsx/csv), matplotlib/seaborn plots, reports',
       office:
-        "Document EDITING — modify/create Word (docx), Excel (xlsx) or PDF files themselves (not analyze their data)",
+        'Document EDITING — modify/create Word (docx), Excel (xlsx) or PDF files themselves (not analyze their data)',
     },
     { liveEvents: true },
-  );
+  )
 
   const routesPattern = routes<SessionData>(
     {
@@ -187,24 +188,24 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
       office,
     },
     { liveEvents: true },
-  );
+  )
 
-  const synth = synthesizer<SessionData>({
-    mode: "thread",
-    patternId: "flavoured-sandbox-synth",
+  const synth = compactExecution<SessionData>({
+    mode: 'thread',
+    patternId: 'flavoured-sandbox-synth',
     liveEvents: true,
-  });
+  })
 
-  return [routerPattern, routesPattern, synth];
+  return [routerPattern, routesPattern, synth]
 }
 
 export const flavouredSandboxAgent: AgentConfig = {
-  id: "flavoured-sandbox",
-  name: "Sandbox · Flavoured (router)",
+  id: 'flavoured-sandbox',
+  name: 'Sandbox · Flavoured (router)',
   description:
-    "Routes each turn to a purpose-built sandbox flavour — base (ephemeral), image-processing, or data.",
-  icon: "i-material-symbols-stack-star-outline",
-  accent: "orange",
+    'Routes each turn to a purpose-built sandbox flavour — base (ephemeral), image-processing, or data.',
+  icon: 'i-material-symbols-stack-star-outline',
+  accent: 'orange',
   servers: [],
   createPatterns,
-};
+}

@@ -75,7 +75,9 @@ vi.mock('../../lib/harness-patterns/tools.server', () => ({
 // toolNamesProvider closure to avoid a top-level circular import with the
 // agent registry. Tests that exercise the allowlist branch override this
 // mock per-test via vi.mocked(loadSession).mockResolvedValueOnce(...).
-const loadSessionMock = vi.fn(async () => null as null | { serializedContext: string; agentId: string })
+const loadSessionMock = vi.fn(
+  async () => null as null | { serializedContext: string; agentId: string },
+)
 vi.mock('../../lib/harness-client/session.server', () => ({
   loadSession: loadSessionMock,
 }))
@@ -121,7 +123,7 @@ describe('code-mode agent — router → routes(chain(actorCritic, synth))', () 
       .mockResolvedValueOnce(
         mockAction({
           reasoning: 'Invoke the registered tool with a query script.',
-          tool_name: 'code-mode-graph-search',  // matches dynamicToolPattern /^code-mode-/
+          tool_name: 'code-mode-graph-search', // matches dynamicToolPattern /^code-mode-/
           tool_args: '{"script":"return ok;"}',
         }),
       )
@@ -132,8 +134,12 @@ describe('code-mode agent — router → routes(chain(actorCritic, synth))', () 
     // the result (post-P0 Return-from-critic: the loop exits when the critic
     // says `is_sufficient: true`, never when the actor calls "Return").
     critic
-      .mockResolvedValueOnce(mockCriticResult({ is_sufficient: false, explanation: 'Need to create code-mode tool' }))
-      .mockResolvedValueOnce(mockCriticResult({ is_sufficient: false, explanation: 'Need to call generated tool' }))
+      .mockResolvedValueOnce(
+        mockCriticResult({ is_sufficient: false, explanation: 'Need to create code-mode tool' }),
+      )
+      .mockResolvedValueOnce(
+        mockCriticResult({ is_sufficient: false, explanation: 'Need to call generated tool' }),
+      )
       .mockResolvedValue(mockCriticResult({ is_sufficient: true }))
     synthesize.mockResolvedValue('Most connected node is planning-agent.')
   })
@@ -157,17 +163,17 @@ describe('code-mode agent — router → routes(chain(actorCritic, synth))', () 
     expect(router).toHaveBeenCalledTimes(1)
 
     // Pattern lifecycle covers the router and inner chain (loop + synth).
-    const enterEvents = result.context.events.filter(e => e.type === 'pattern_enter')
-    const enteredIds = enterEvents.map(e => e.patternId)
-    expect(enteredIds.some(id => id === 'code-mode-loop')).toBe(true)
-    expect(enteredIds.some(id => id === 'code-mode-synth')).toBe(true)
+    const enterEvents = result.context.events.filter((e) => e.type === 'pattern_enter')
+    const enteredIds = enterEvents.map((e) => e.patternId)
+    expect(enteredIds.some((id) => id === 'code-mode-loop')).toBe(true)
+    expect(enteredIds.some((id) => id === 'code-mode-synth')).toBe(true)
 
     // Factory was invoked.
     const codeModeCalls = callToolMock.mock.calls.filter(([tool]) => tool === 'code-mode')
     expect(codeModeCalls.length).toBe(1)
     expect((codeModeCalls[0][1] as { name?: string }).name).toBe('graph-search')
 
-    // Synthesizer's view was filtered: when Synthesize was called, the turns
+    // compactExecution's view was filtered: when Synthesize was called, the turns
     // it received describe only actor-side tool events, no critic verdicts.
     // (`viewConfig.eventTypes` excludes 'critic_result'.)
     //
@@ -176,16 +182,16 @@ describe('code-mode agent — router → routes(chain(actorCritic, synth))', () 
     const synthCallArgs = synthesize.mock.calls[0]
     const turnsArg = synthCallArgs[2] as unknown[]
     const turnsJson = JSON.stringify(turnsArg)
-    expect(turnsJson.includes('is_sufficient')).toBe(false)  // critic_result never leaked
+    expect(turnsJson.includes('is_sufficient')).toBe(false) // critic_result never leaked
 
     // Regression for the chain() scope-reuse bug (hallucination-codemode-3.json):
     // Events emitted inside the loop must carry the loop's patternId, not the
     // chain's auto-generated id. Without this, the synth's `fromLastPattern`
     // view filter excludes the actor's tool events, and the synth fabricates
     // a response over an empty turns array.
-    const actorActionEvents = result.context.events.filter(e => e.type === 'controller_action')
+    const actorActionEvents = result.context.events.filter((e) => e.type === 'controller_action')
     expect(actorActionEvents.length).toBeGreaterThan(0)
-    expect(actorActionEvents.every(e => e.patternId === 'code-mode-loop')).toBe(true)
+    expect(actorActionEvents.every((e) => e.patternId === 'code-mode-loop')).toBe(true)
     // And the synth's view did surface non-empty turns.
     expect(Array.isArray(turnsArg)).toBe(true)
     expect(turnsArg.length).toBeGreaterThan(0)
@@ -211,7 +217,6 @@ describe('code-mode agent — router → routes(chain(actorCritic, synth))', () 
     expect(callToolMock.mock.calls.filter(([t]) => t === 'code-mode').length).toBe(0)
     expect(result.response).toContain('I orchestrate MCP tools')
   })
-
 })
 
 describe('code-mode agent — retry budget + per-conversation allowlist', () => {
@@ -260,7 +265,9 @@ describe('code-mode agent — retry budget + per-conversation allowlist', () => 
       .mockResolvedValueOnce(mockAction({ tool_name: 'mcp-find', tool_args: '{}' }))
       .mockResolvedValueOnce(mockAction({ tool_name: 'mcp-find', tool_args: '{}' }))
       .mockResolvedValueOnce(mockAction({ tool_name: 'mcp-add', tool_args: '{"name":"memory"}' }))
-      .mockResolvedValueOnce(mockAction({ tool_name: 'mcp-add', tool_args: '{"name":"web_search"}' }))
+      .mockResolvedValueOnce(
+        mockAction({ tool_name: 'mcp-add', tool_args: '{"name":"web_search"}' }),
+      )
       .mockResolvedValue(
         mockAction({
           tool_name: 'code-mode',
@@ -285,7 +292,7 @@ describe('code-mode agent — retry budget + per-conversation allowlist', () => 
 
     // No "Max retries exceeded" — the regression that motivated maxRetries: 8.
     const retryExhausted = result.context.events.filter(
-      e => e.type === 'error' && /Max retries/.test(((e.data as { error?: string }).error ?? '')),
+      (e) => e.type === 'error' && /Max retries/.test((e.data as { error?: string }).error ?? ''),
     )
     expect(retryExhausted).toEqual([])
     expect(actorController.mock.calls.length).toBeGreaterThan(3)
@@ -315,7 +322,9 @@ describe('code-mode agent — retry budget + per-conversation allowlist', () => 
 
     // Post-P0: actor exits via critic, not via Return. Use a real tool action
     // and let the critic say sufficient after one turn.
-    actorController.mockResolvedValue(mockAction({ tool_name: 'code-mode', tool_args: '{"name":"x","servers":["x"]}' }))
+    actorController.mockResolvedValue(
+      mockAction({ tool_name: 'code-mode', tool_args: '{"name":"x","servers":["x"]}' }),
+    )
     critic.mockResolvedValue(mockCriticResult({ is_sufficient: true }))
 
     const { codeModeAgent } = await import('../../lib/harness-client/examples/code-mode.server')
@@ -330,10 +339,16 @@ describe('code-mode agent — retry budget + per-conversation allowlist', () => 
     // (meta-tools ∪ user picks) must be present.
     expect(actorController).toHaveBeenCalledTimes(1)
     const toolsArg = actorController.mock.calls[0][2] as Array<{ name: string }>
-    const toolNames = toolsArg.map(t => t.name)
-    expect(toolNames).toEqual(expect.arrayContaining([
-      'mcp-find', 'mcp-add', 'code-mode', 'mcp-exec',
-      'read_neo4j_cypher', 'search',
-    ]))
+    const toolNames = toolsArg.map((t) => t.name)
+    expect(toolNames).toEqual(
+      expect.arrayContaining([
+        'mcp-find',
+        'mcp-add',
+        'code-mode',
+        'mcp-exec',
+        'read_neo4j_cypher',
+        'search',
+      ]),
+    )
   })
 })

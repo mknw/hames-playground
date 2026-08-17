@@ -28,7 +28,7 @@ instead of 15. The controller stops re-querying when it already holds the answer
   so the result does not transfer. `ActorAnthropic` was split out in the same
   change — it previously shared `ControllerAnthropic` — specifically to stop a
   measurement taken on simpleLoop from silently applying to the actor, which
-  drives the deepest loop we run. Router, critic, synthesizer and describe were
+  drives the deepest loop we run. Router, critic, compactExecution and describe were
   left untouched for the same reason.
 
 ## Consequences
@@ -41,7 +41,7 @@ instead of 15. The controller stops re-querying when it already holds the answer
   `llmCallHitOutputCap()` blind and silently disable the truncation retry; a
   missing pricing entry reports cost as unknown. Both are asserted by test rather
   than left to review.
-- The actor, router, critic and synthesizer keep thinking **unmeasured**. That is
+- The actor, router, critic and compactExecution keep thinking **unmeasured**. That is
   a known gap, not an endorsement.
 
 ## Sources

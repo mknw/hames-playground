@@ -12,7 +12,7 @@
  *     prompt (search/fetch return TEXT, never JSON.parse; keep the URL on a
  *     failed fetch).
  *  2. (Theme 1) the real URLs — including the 403'd one — are present in the
- *     `turns` the synthesizer receives, so the prompt's FIDELITY rule has the
+ *     `turns` the compactExecution receives, so the prompt's FIDELITY rule has the
  *     genuine links to cite instead of inventing substitutes.
  *
  * Plus prompt-content guards that the FIDELITY / PROVENANCE / TRUTHFULNESS
@@ -41,13 +41,15 @@ const VERYWELL_PAYLOAD = {
       url: 'https://redis.io/tutorials/what-is-redis/',
       node: 'Redis',
       degree: 17,
-      summary: 'What is Redis? In-memory data structure store used as a database, cache, and message broker.',
+      summary:
+        'What is Redis? In-memory data structure store used as a database, cache, and message broker.',
     },
     {
       url: 'https://www.verywellmind.com/what-is-a-schema-2795873',
       node: 'Schema',
       degree: 12,
-      summary: "Error: Could not access the webpage (Client error '403 Forbidden' for url 'https://www.verywellmind.com/what-is-a-schema-2795873')",
+      summary:
+        "Error: Could not access the webpage (Client error '403 Forbidden' for url 'https://www.verywellmind.com/what-is-a-schema-2795873')",
     },
     {
       url: null,
@@ -92,7 +94,11 @@ vi.mock('../../../baml_client', () => ({
 
 vi.mock('@boundaryml/baml', () => {
   class MockCollector {
-    last = { rawLlmResponse: 'raw', usage: { inputTokens: 10, outputTokens: 5 }, calls: [{ httpRequest: { body: {} } }] }
+    last = {
+      rawLlmResponse: 'raw',
+      usage: { inputTokens: 10, outputTokens: 5 },
+      calls: [{ httpRequest: { body: {} } }],
+    }
     constructor(_name?: string) {}
   }
   class BamlValidationError extends Error {}
@@ -118,7 +124,12 @@ vi.mock('../../lib/harness-client/request-user.server', () => ({
 describe('code-mode agent — synth fidelity + script-hygiene guidance', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    router.mockResolvedValue({ intent: 'query the neo4j db', needs_tool: true, route: 'code_mode', response: '' })
+    router.mockResolvedValue({
+      intent: 'query the neo4j db',
+      needs_tool: true,
+      route: 'code_mode',
+      response: '',
+    })
     // One actor turn: invoke a code-mode-* tool that returns the payload.
     // Matches dynamicToolPattern /^code-mode-/ so the loop dispatches it.
     actorController.mockResolvedValue(
@@ -154,13 +165,15 @@ describe('code-mode agent — synth fidelity + script-hygiene guidance', () => {
     expect(context).toContain('fetch_content')
   })
 
-  it('passes the real URLs (incl. the 403\'d one) into the synthesizer turns (Theme 1)', async () => {
+  it("passes the real URLs (incl. the 403'd one) into the compactExecution turns (Theme 1)", async () => {
     const { codeModeAgent } = await import('../../lib/harness-client/examples/code-mode.server')
     const { harness } = await import('../../lib/harness-patterns/harness.server')
 
     const patterns = await codeModeAgent.createPatterns('test-session')
     const agent = harness(...patterns)
-    await agent('Fetch the 3 most connected nodes in the neo4j db, summarize each, and link the page.')
+    await agent(
+      'Fetch the 3 most connected nodes in the neo4j db, summarize each, and link the page.',
+    )
 
     // Synthesize(userMessage, intent, turns, hasError, errorMessage) → turns is arg[2].
     expect(synthesize).toHaveBeenCalledTimes(1)
@@ -196,7 +209,7 @@ function readBamlSrc(file: string): string {
 
 describe('code-mode refinement — BAML prompt guardrails', () => {
   it('Synthesize carries the FIDELITY block (cite-only-real-URLs, keep URL on fetch fail)', () => {
-    const src = readBamlSrc('synthesizer.baml')
+    const src = readBamlSrc('compact-execution.baml')
     expect(src).toContain('FIDELITY')
     expect(src).toContain('verbatim')
     // Never invent/substitute links; keep the original URL on a failed fetch.

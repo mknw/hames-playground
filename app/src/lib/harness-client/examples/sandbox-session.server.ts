@@ -11,21 +11,21 @@
  * Contrast with an *ephemeral* sandbox (a fresh, reset VM per turn): pick this
  * agent when follow-ups should build on prior state.
  */
-"use server";
+'use server'
 
 // @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
 import {
   actorCritic,
-  synthesizer,
+  compactExecution,
   compactIntent,
   createActorControllerAdapter,
   createCriticAdapter,
   type ConfiguredPattern,
-} from "../../harness-patterns";
-import { withSandbox } from "../../sandbox/with-sandbox.server";
-import type { SessionData } from "../session.server";
-import type { AgentConfig } from "../registry.server";
-import type { FewShot } from "../../../../baml_client/types";
+} from '../../harness-patterns'
+import { withSandbox } from '../../sandbox/with-sandbox.server'
+import type { SessionData } from '../session.server'
+import type { AgentConfig } from '../registry.server'
+import type { FewShot } from '../../../../baml_client/types'
 
 const SANDBOX_SESSION_GUIDANCE = `
 You have a PERSISTENT Linux sandbox for this conversation, shared with the
@@ -57,7 +57,7 @@ Guidance:
 5. Let the critic decide completion — you don't need a Return tool. Focus on
    producing the right tool call; the critic ends the loop when the result is
    sufficient.
-`.trim();
+`.trim()
 
 /**
  * Few-shot examples for the actor's `tool_args` JSON formatting (#85).
@@ -69,30 +69,30 @@ Guidance:
  */
 const SANDBOX_SESSION_FEW_SHOTS: FewShot[] = [
   {
-    user: "Write a hello-world Python script to /work/hi.py and run it.",
+    user: 'Write a hello-world Python script to /work/hi.py and run it.',
     reasoning:
-      "Write the file first. Keys and string values are double-quoted; the newline inside the script is the escape sequence \\n, not a raw line break.",
-    tool: "sandbox_write",
-    args: JSON.stringify({ path: "/work/hi.py", content: 'print("hello")\n' }),
+      'Write the file first. Keys and string values are double-quoted; the newline inside the script is the escape sequence \\n, not a raw line break.',
+    tool: 'sandbox_write',
+    args: JSON.stringify({ path: '/work/hi.py', content: 'print("hello")\n' }),
   },
   {
-    user: "What Python version is in the sandbox?",
+    user: 'What Python version is in the sandbox?',
     reasoning:
-      "Single bash call. The command string is double-quoted; any inner quotes are escaped.",
-    tool: "sandbox_bash",
-    args: JSON.stringify({ command: "python3 --version" }),
+      'Single bash call. The command string is double-quoted; any inner quotes are escaped.',
+    tool: 'sandbox_bash',
+    args: JSON.stringify({ command: 'python3 --version' }),
   },
-];
+]
 
 async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
   const actor = createActorControllerAdapter({
     contextPrefix: SANDBOX_SESSION_GUIDANCE,
     fewShots: SANDBOX_SESSION_FEW_SHOTS,
-  });
-  const critic = createCriticAdapter();
+  })
+  const critic = createCriticAdapter()
 
   const loop = actorCritic<SessionData>(actor, critic, [], {
-    patternId: "sandbox-session-loop",
+    patternId: 'sandbox-session-loop',
     availableTools: [],
     liveEvents: true,
     maxRetries: 6,
@@ -100,8 +100,8 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     // a batch run strictly IN ORDER, so later calls see earlier calls' effects
     // on the VM filesystem — one actor round-trip instead of N. Not 'parallel':
     // concurrent sandbox_bash on one VM FS races.
-    multiToolCalls: "sequential",
-  });
+    multiToolCalls: 'sequential',
+  })
 
   // id: sessionId → the attachment table keys this VM to the conversation, so
   // it persists across turns AND is the same container the Shell terminal
@@ -110,42 +110,42 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   const sandboxedLoop = withSandbox({
     id: sessionId,
     sessionId,
-    rootfs: "base",
-    egress: "mcp-only",
+    rootfs: 'base',
+    egress: 'mcp-only',
     // Durable workspace (#89): hydrate the conversation's stored documents into
     // /work/in on first boot, promote /work/out deliverables back to the Data
     // Stash each turn — so uploads/outputs survive idle eviction and reconnects.
     syncWorkspace: true,
-  })(loop);
+  })(loop)
 
-  const synth = synthesizer<SessionData>({
-    mode: "thread",
-    patternId: "sandbox-session-synth",
+  const synth = compactExecution<SessionData>({
+    mode: 'thread',
+    patternId: 'sandbox-session-synth',
     liveEvents: true,
     viewConfig: {
-      eventTypes: ["user_message", "controller_action", "tool_call", "tool_result", "error"],
+      eventTypes: ['user_message', 'controller_action', 'tool_call', 'tool_result', 'error'],
     },
-  });
+  })
 
   // Rewrite the latest message into a self-contained brief before the actor
   // runs. This agent is router-less, so without it a follow-up like "I can't
   // find the file" reaches the actor with zero context for which file (#83).
   // On turn 1 (no history) it passes the message through and skips the LLM call.
   const intent = compactIntent<SessionData>({
-    patternId: "sandbox-session-intent",
+    patternId: 'sandbox-session-intent',
     liveEvents: true,
-  });
+  })
 
-  return [intent, sandboxedLoop, synth];
+  return [intent, sandboxedLoop, synth]
 }
 
 export const sandboxSessionAgent: AgentConfig = {
-  id: "sandbox-session",
-  name: "Sandbox · Session",
+  id: 'sandbox-session',
+  name: 'Sandbox · Session',
   description:
-    "Persistent sandbox VM shared across turns and with the interactive Shell — build incrementally, inspect files live.",
-  icon: "i-material-symbols-castle-outline",
-  accent: "orange",
+    'Persistent sandbox VM shared across turns and with the interactive Shell — build incrementally, inspect files live.',
+  icon: 'i-material-symbols-castle-outline',
+  accent: 'orange',
   servers: [],
   createPatterns,
-};
+}

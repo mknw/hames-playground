@@ -48,7 +48,9 @@ describe('isCodeModeLoopConfig', () => {
   })
 
   it('does NOT flag a different dynamic pattern or unrelated patternId', () => {
-    expect(isCodeModeLoopConfig({ dynamicToolPattern: /^sandbox-/ } as unknown as PatternConfig)).toBe(false)
+    expect(
+      isCodeModeLoopConfig({ dynamicToolPattern: /^sandbox-/ } as unknown as PatternConfig),
+    ).toBe(false)
     expect(isCodeModeLoopConfig({ patternId: 'neo4j-query' } as PatternConfig)).toBe(false)
     expect(isCodeModeLoopConfig({} as PatternConfig)).toBe(false)
   })
@@ -66,7 +68,7 @@ describe('usesCodeMode', () => {
       pat('routes(neo4j)', {}, [
         pat('chain', {}, [
           pat('simpleLoop', { patternId: 'neo4j-query' }),
-          pat('synthesizer', {}),
+          pat('compactExecution', {}),
         ]),
       ]),
     ]
@@ -79,7 +81,7 @@ describe('usesCodeMode', () => {
       pat('routes(code_mode)', {}, [
         pat('chain', {}, [
           pat('actorCritic', { patternId: 'code-mode-loop', dynamicToolPattern: /^code-mode-/ }),
-          pat('synthesizer', {}),
+          pat('compactExecution', {}),
         ]),
       ]),
     ]
@@ -113,7 +115,10 @@ describe('harnessHasRetriever', () => {
     expect(harnessHasRetriever(undefined)).toBe(false)
     expect(harnessHasRetriever([])).toBe(false)
     expect(
-      harnessHasRetriever([pat('router', {}), pat('routes', {}, [pat('simpleLoop', { patternId: 'neo4j-query' })])]),
+      harnessHasRetriever([
+        pat('router', {}),
+        pat('routes', {}, [pat('simpleLoop', { patternId: 'neo4j-query' })]),
+      ]),
     ).toBe(false)
   })
 
@@ -143,14 +148,20 @@ describe('harnessHasRedisRetriever', () => {
   ]
 
   it('is true only when a retriever lists the redis backend', () => {
-    expect(harnessHasRedisRetriever(nest({ patternId: 'retriever', backendKinds: ['redis'] }))).toBe(true)
     expect(
-      harnessHasRedisRetriever(nest({ patternId: 'retriever', backendKinds: ['supabase', 'redis'] })),
+      harnessHasRedisRetriever(nest({ patternId: 'retriever', backendKinds: ['redis'] })),
+    ).toBe(true)
+    expect(
+      harnessHasRedisRetriever(
+        nest({ patternId: 'retriever', backendKinds: ['supabase', 'redis'] }),
+      ),
     ).toBe(true)
   })
 
   it('is false for a non-redis (e.g. supabase-only) retriever', () => {
-    expect(harnessHasRedisRetriever(nest({ patternId: 'retriever', backendKinds: ['supabase'] }))).toBe(false)
+    expect(
+      harnessHasRedisRetriever(nest({ patternId: 'retriever', backendKinds: ['supabase'] })),
+    ).toBe(false)
   })
 
   it('is false when backendKinds is absent', () => {
@@ -158,18 +169,27 @@ describe('harnessHasRedisRetriever', () => {
   })
 
   it('is false for a graph with no retriever at all', () => {
-    expect(harnessHasRedisRetriever([pat('router', {}), pat('simpleLoop', { patternId: 'neo4j-query' })])).toBe(false)
+    expect(
+      harnessHasRedisRetriever([
+        pat('router', {}),
+        pat('simpleLoop', { patternId: 'neo4j-query' }),
+      ]),
+    ).toBe(false)
   })
 })
 
 describe('isSyncWorkspaceConfig', () => {
   it('flags the sandbox durable-workspace marker', () => {
-    expect(isSyncWorkspaceConfig({ patternId: 'loop', sandboxSyncWorkspace: true } as PatternConfig)).toBe(true)
+    expect(
+      isSyncWorkspaceConfig({ patternId: 'loop', sandboxSyncWorkspace: true } as PatternConfig),
+    ).toBe(true)
   })
 
   it('does NOT flag configs without the marker (or set false)', () => {
     expect(isSyncWorkspaceConfig({ patternId: 'loop' } as PatternConfig)).toBe(false)
-    expect(isSyncWorkspaceConfig({ sandboxSyncWorkspace: false } as unknown as PatternConfig)).toBe(false)
+    expect(isSyncWorkspaceConfig({ sandboxSyncWorkspace: false } as unknown as PatternConfig)).toBe(
+      false,
+    )
     expect(isSyncWorkspaceConfig({} as PatternConfig)).toBe(false)
   })
 })
@@ -182,24 +202,30 @@ describe('harnessUsesSyncWorkspace', () => {
 
   it('detects a top-level sync-sandbox wrapper', () => {
     expect(
-      harnessUsesSyncWorkspace([pat('withSandbox(loop)', { patternId: 'loop', sandboxSyncWorkspace: true })]),
+      harnessUsesSyncWorkspace([
+        pat('withSandbox(loop)', { patternId: 'loop', sandboxSyncWorkspace: true }),
+      ]),
     ).toBe(true)
   })
 
   it('detects a sync-sandbox wrapper nested via children (the Sandbox·Session shape)', () => {
     const tree = [
       pat('compactIntent', { patternId: 'sandbox-session-intent' }),
-      pat('withSandbox(actorCritic)', { patternId: 'sandbox-session-loop', sandboxSyncWorkspace: true }, [
-        pat('actorCritic', { patternId: 'sandbox-session-loop' }),
-      ]),
-      pat('synthesizer', { patternId: 'sandbox-session-synth' }),
+      pat(
+        'withSandbox(actorCritic)',
+        { patternId: 'sandbox-session-loop', sandboxSyncWorkspace: true },
+        [pat('actorCritic', { patternId: 'sandbox-session-loop' })],
+      ),
+      pat('compactExecution', { patternId: 'sandbox-session-synth' }),
     ]
     expect(harnessUsesSyncWorkspace(tree)).toBe(true)
   })
 
   it('is false for a sandbox wrapper without the marker (no syncWorkspace)', () => {
     const tree = [
-      pat('withSandbox(actorCritic)', { patternId: 'sandbox-loop' }, [pat('actorCritic', { patternId: 'sandbox-loop' })]),
+      pat('withSandbox(actorCritic)', { patternId: 'sandbox-loop' }, [
+        pat('actorCritic', { patternId: 'sandbox-loop' }),
+      ]),
     ]
     expect(harnessUsesSyncWorkspace(tree)).toBe(false)
   })

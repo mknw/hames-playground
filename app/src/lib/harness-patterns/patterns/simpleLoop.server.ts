@@ -455,7 +455,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         // job (parallel-tools.server.ts). One LoopTurn records the whole batch
         // with an index-keyed combined result (expandPreviousResult's
         // multi-ref precedent); per-sub-call tool_call/tool_result events keep
-        // observability and the synthesizer at full fidelity.
+        // observability and the compactExecution at full fidelity.
         if (action.additional_calls && action.additional_calls.length > 0) {
           const batchId = generateId('batch')
           const allCalls = [
@@ -611,7 +611,7 @@ export function simpleLoop<T extends SimpleLoopData>(
 
           // Partial failure → continue (the controller sees per-call __error
           // entries and can retry just those); ALL failed → the existing
-          // break path (recoverable error event, synthesizer degrades).
+          // break path (recoverable error event, compactExecution degrades).
           if (!anySucceeded) {
             hasError = true
             errorMessage = `All ${allCalls.length} calls of the multi-call turn failed: ${errors.join('; ')}`
@@ -646,7 +646,7 @@ export function simpleLoop<T extends SimpleLoopData>(
           hasError = true
           // Truncation-aware message: a response cut off at the client's
           // max_tokens cap is not malformed JSON — name the real cause so the
-          // synthesizer/user sees it (actorCritic carries the retrying variant).
+          // compactExecution/user sees it (actorCritic carries the retrying variant).
           errorMessage = llmCallHitOutputCap(controllerLlmCall)
             ? `tool_args for ${action.tool_name} were CUT OFF at the output-token ` +
               `limit (response truncated mid-generation)`
@@ -721,7 +721,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         // Record completed turn for LoopController history.
         // `resultOmit` projects the CONTROLLER's view only — this sits after the
         // full-fidelity trackEvent above, so the event store (and with it the
-        // synthesizer and citation extractors) keeps the complete result.
+        // compactExecution and citation extractors) keeps the complete result.
         // Truncate result to avoid overflowing reasoning models on subsequent turns.
         const resultStr = JSON.stringify(
           omitResultFields(result.data, config?.resultOmit?.[action.tool_name]),
@@ -780,7 +780,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         )
       } else if (!exitedViaReturn && turns.length > 0) {
         // Loop exhausted maxTurns without controller signaling completion.
-        // Surface as a recoverable error so the synthesizer can warn the user;
+        // Surface as a recoverable error so the compactExecution can warn the user;
         // partial results from completed turns are still preserved on scope.
         trackEvent(
           scope,

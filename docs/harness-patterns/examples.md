@@ -12,12 +12,12 @@ All agents are registered in `registry.server.ts` and available via `getAgentLis
 
 | ID | Name | Patterns | Servers |
 |----|------|----------|---------|
-| `default` | Default Agent | router → synthesizer | neo4j, web_search, fetch |
-| `code-mode` | Code Mode Agent | router → actorCritic → synthesizer | all (via code-mode factory) |
-| `multi-source-research` | Multi-Source Research | parallel → judge → synthesizer | web_search, github, context7 |
-| `sandbox-session` | Sandbox · Session | compactIntent → withSandbox(actorCritic) → synthesizer | none (in-VM sandbox tools) |
-| `retriever` | Retriever Agent | router → { retriever \| neo4j \| web_search } → synthesizer | neo4j, web_search, fetch (+ Data Stash via Redis retriever) |
-| `flavoured-sandbox` | Sandbox · Flavoured (router) | router → withSandbox(actorCritic) per flavour (base / image-processing / data) → synthesizer | none (in-VM sandbox tools per flavour) |
+| `default` | Default Agent | router → compactExecution | neo4j, web_search, fetch |
+| `code-mode` | Code Mode Agent | router → actorCritic → compactExecution | all (via code-mode factory) |
+| `multi-source-research` | Multi-Source Research | parallel → judge → compactExecution | web_search, github, context7 |
+| `sandbox-session` | Sandbox · Session | compactIntent → withSandbox(actorCritic) → compactExecution | none (in-VM sandbox tools) |
+| `retriever` | Retriever Agent | router → { retriever \| neo4j \| web_search } → compactExecution | neo4j, web_search, fetch (+ Data Stash via Redis retriever) |
+| `flavoured-sandbox` | Sandbox · Flavoured (router) | router → withSandbox(actorCritic) per flavour (base / image-processing / data) → compactExecution | none (in-VM sandbox tools per flavour) |
 
 ---
 
@@ -33,7 +33,7 @@ router({ neo4j: '...', web_search: '...' })
     neo4j:      withReferences(neo4jPattern, { scope: 'global' }),
     web_search: withReferences(webPattern,   { scope: 'global' })
   })
-→ synthesizer({ mode: 'thread' })
+→ compactExecution({ mode: 'thread' })
 ```
 
 - Neo4j queries (`read_neo4j_cypher`, `write_neo4j_cypher`, `get_neo4j_schema`)
@@ -53,7 +53,7 @@ Concurrent search with quality ranking.
 ```
 parallel([webSearch, githubSearch, docSearch])
 judge(evaluator)  → score: content, relevance, authority
-synthesizer({ mode: 'response' })
+compactExecution({ mode: 'response' })
 ```
 
 ---
@@ -81,7 +81,7 @@ router({ code_mode: 'Compose JS across multiple MCP tools…' })
           dynamicToolPattern: /^code-mode-/,   // allowlist for factory output
         }
       ),
-      synthesizer({
+      compactExecution({
         mode: 'thread',
         patternId: 'code-mode-synth',
         viewConfig: {
@@ -94,7 +94,7 @@ router({ code_mode: 'Compose JS across multiple MCP tools…' })
   })
 ```
 
-- **Direct-response branch**: when `Router` returns `needs_tool: false`, the router sets `scope.data.response` to the conversational reply and `routes()` passes through — no synthesizer needed at the top level.
+- **Direct-response branch**: when `Router` returns `needs_tool: false`, the router sets `scope.data.response` to the conversational reply and `routes()` passes through — no compactExecution needed at the top level.
 - **Cross-turn tool reuse**: `refreshOnCall: true` on the actor adapter forces a fresh `mcpListTools()` per invocation so `code-mode-<name>` tools created in earlier turns of the same session are still visible to the actor. `invalidateToolDescriptions()` is called from `actorCritic.server.ts` right after a successful `code-mode` execution, so the new tool appears in the next attempt's prompt.
 - **actorCritic over simpleLoop**: the find → add → factory → call-generated-tool sequence has many ways to go wrong on the first try; actorCritic's retry-with-critic-feedback semantics fit better than simpleLoop's exit-on-tool-failure (a failed singular call — or a fully-failed multi-call batch — ends a simpleLoop pass with a recoverable error; partial batch failures continue in both patterns).
 
@@ -113,7 +113,7 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
     { patternId: 'my-pattern' }
   )
 
-  return [myPattern, synthesizer({ mode: 'thread' })]
+  return [myPattern, compactExecution({ mode: 'thread' })]
 }
 
 // 2. Register agent

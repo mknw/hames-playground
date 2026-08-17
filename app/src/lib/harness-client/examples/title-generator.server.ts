@@ -1,7 +1,7 @@
 /**
  * Title Generator — minimal one-pattern harness example.
  *
- * The smallest legal harness-patterns composition: a single `synthesizer`
+ * The smallest legal harness-patterns composition: a single `compactExecution`
  * pattern wired through `harness()`, with a custom `synthesize` fn that
  * calls a single BAML function (`GenerateConversationTitle`).
  *
@@ -12,8 +12,8 @@
  * extraction (this file is what consumers see when looking for the
  * "absolute minimum viable agent").
  *
- * Why `synthesizer({ mode: 'message' })`?
- *   In `mode: 'message'`, the synthesizer's input carries the latest user
+ * Why `compactExecution({ mode: 'message' })`?
+ *   In `mode: 'message'`, the compactExecution's input carries the latest user
  *   message and expects a string back from the optional `synthesize` fn.
  *   That's exactly the shape of "give the LLM the user's first message,
  *   get a title string." No loops, no tools, no router.
@@ -22,35 +22,31 @@
  * `~/baml_client`. No imports from `~/components` or other consumers —
  * keeps the agent extractable as a standalone npm package example.
  */
-"use server";
+'use server'
 
-import { harness, synthesizer } from "../../harness-patterns";
-import type {
-  HarnessData,
-  UnifiedContext,
-  UserMessageEventData,
-} from "../../harness-patterns";
-import { b } from "../../../../baml_client";
-import { updateConversationTitle } from "../../db/conversations.server";
+import { harness, compactExecution } from '../../harness-patterns'
+import type { HarnessData, UnifiedContext, UserMessageEventData } from '../../harness-patterns'
+import { b } from '../../../../baml_client'
+import { updateConversationTitle } from '../../db/conversations.server'
 
 /**
  * Data shape carried through the title agent's harness context. Has to
  * satisfy both `harness()`'s `HarnessData & Record<string, unknown>` and
- * `synthesizer()`'s `SynthesizerData` (which expects optional `response`,
+ * `compactExecution()`'s `CompactExecutionData` (which expects optional `response`,
  * `synthesizedResponse`, `intent`, `loopHistory`). The empty index
  * signature wires up the structural subtype.
  */
 interface TitleAgentData extends HarnessData {
-  response?: string;
-  synthesizedResponse?: string;
-  [key: string]: unknown;
+  response?: string
+  synthesizedResponse?: string
+  [key: string]: unknown
 }
 
 // ============================================================================
 // Validation & sanitization
 // ============================================================================
 
-const MAX_TITLE_CHARS = 50;
+const MAX_TITLE_CHARS = 50
 
 /**
  * Best-effort cleanup of model output. The prompt asks for a bare title,
@@ -61,12 +57,12 @@ const MAX_TITLE_CHARS = 50;
 export function sanitizeTitle(raw: string): string | null {
   const stripped = raw
     .trim()
-    .replace(/^["'`]+|["'`]+$/g, "") // surrounding quotes / backticks
-    .replace(/[.!?]+$/, "")           // trailing punctuation
-    .split("\n")[0]                    // first line only
-    .trim();
-  if (!stripped) return null;
-  return stripped.slice(0, MAX_TITLE_CHARS);
+    .replace(/^["'`]+|["'`]+$/g, '') // surrounding quotes / backticks
+    .replace(/[.!?]+$/, '') // trailing punctuation
+    .split('\n')[0] // first line only
+    .trim()
+  if (!stripped) return null
+  return stripped.slice(0, MAX_TITLE_CHARS)
 }
 
 // ============================================================================
@@ -74,24 +70,24 @@ export function sanitizeTitle(raw: string): string | null {
 // ============================================================================
 
 /**
- * The whole agent is one pattern. `mode: 'message'` makes the synthesizer
+ * The whole agent is one pattern. `mode: 'message'` makes the compactExecution
  * a thin shell around our custom `synthesize` fn — no default BAML call,
  * no event tracking beyond `assistant_message`.
  */
 export const titleAgent = harness<TitleAgentData>(
-  synthesizer<TitleAgentData>({
-    patternId: "title-gen",
-    mode: "message",
+  compactExecution<TitleAgentData>({
+    patternId: 'title-gen',
+    mode: 'message',
     synthesize: async ({ userMessage }) => {
-      const { clientOverrideFor } = await import("../../harness-patterns/clients.server");
-      const titleOpts = clientOverrideFor('describe');
+      const { clientOverrideFor } = await import('../../harness-patterns/clients.server')
+      const titleOpts = clientOverrideFor('describe')
       const raw = titleOpts
         ? await b.GenerateConversationTitle(userMessage, titleOpts)
-        : await b.GenerateConversationTitle(userMessage);
-      return sanitizeTitle(raw) ?? "";
+        : await b.GenerateConversationTitle(userMessage)
+      return sanitizeTitle(raw) ?? ''
     },
   }),
-);
+)
 
 // ============================================================================
 // Production entry points
@@ -102,13 +98,13 @@ export const titleAgent = harness<TitleAgentData>(
  *  (UnifiedContext<unknown>) without first widening it. */
 function userMessages(ctx: UnifiedContext<unknown>): string[] {
   return (ctx.events ?? [])
-    .filter((e) => e.type === "user_message")
-    .map((e) => (e.data as UserMessageEventData).content ?? "");
+    .filter((e) => e.type === 'user_message')
+    .map((e) => (e.data as UserMessageEventData).content ?? '')
 }
 
 /** Returns true iff this turn was the first user_message of the conversation. */
 function isFirstTurn(ctx: UnifiedContext<unknown>): boolean {
-  return userMessages(ctx).length === 1;
+  return userMessages(ctx).length === 1
 }
 
 /**
@@ -125,10 +121,10 @@ export async function runFirstTurnTitleGen(
   sessionId: string,
   userId: string,
 ): Promise<string | null> {
-  if (!isFirstTurn(ctx)) return null;
-  const firstUserMessage = userMessages(ctx)[0];
-  if (!firstUserMessage) return null;
-  return runTitleAgent(firstUserMessage, sessionId, userId);
+  if (!isFirstTurn(ctx)) return null
+  const firstUserMessage = userMessages(ctx)[0]
+  if (!firstUserMessage) return null
+  return runTitleAgent(firstUserMessage, sessionId, userId)
 }
 
 /**
@@ -145,10 +141,10 @@ export async function runRegenerateTitle(
   sessionId: string,
   userId: string,
 ): Promise<string | null> {
-  const messages = userMessages(ctx);
-  const seed = messages[messages.length - 1] ?? messages[0];
-  if (!seed) return null;
-  return runTitleAgent(seed, sessionId, userId);
+  const messages = userMessages(ctx)
+  const seed = messages[messages.length - 1] ?? messages[0]
+  if (!seed) return null
+  return runTitleAgent(seed, sessionId, userId)
 }
 
 /** Shared helper — runs the agent, persists on success, swallows failures. */
@@ -160,14 +156,14 @@ async function runTitleAgent(
   try {
     // The agent generates its own throwaway sessionId for the harness
     // context; we pass a deterministic one for traceability in logs.
-    const result = await titleAgent(userMessage, `title-gen-${sessionId}`);
-    const title = sanitizeTitle(result.response);
-    if (!title) return null;
-    await updateConversationTitle(sessionId, userId, title);
-    return title;
+    const result = await titleAgent(userMessage, `title-gen-${sessionId}`)
+    const title = sanitizeTitle(result.response)
+    if (!title) return null
+    await updateConversationTitle(sessionId, userId, title)
+    return title
   } catch (err) {
     // Silent fallthrough — heuristic title remains in the DB row.
-    console.error("[title-gen] failed:", err);
-    return null;
+    console.error('[title-gen] failed:', err)
+    return null
   }
 }

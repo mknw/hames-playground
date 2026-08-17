@@ -7,7 +7,7 @@ export { router, routes, type Routes, type RoutePatterns, type RouterData } from
 export { simpleLoop, type SimpleLoopData } from './simpleLoop.server'
 export { actorCritic, type ActorCriticData } from './actorCritic.server'
 export { chain, runChain, configurePattern } from './chain.server'
-export { synthesizer } from './synthesizer.server'
+export { compactExecution } from './compactExecution.server'
 export {
   compactIntent,
   type CompactIntentConfig,
@@ -54,11 +54,11 @@ export type {
   RoutesConfig,
   SimpleLoopConfig,
   ActorCriticConfig,
-  SynthesizerConfig,
-  SynthesizerMode,
-  SynthesizerInput,
+  CompactExecutionConfig,
+  CompactExecutionMode,
+  CompactExecutionInput,
   SynthesisFn,
-  SynthesizerData,
+  CompactExecutionData,
   LoopHistory,
   LoopIteration,
   PatternConfig,

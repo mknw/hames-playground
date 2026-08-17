@@ -26,7 +26,7 @@ Cross-pattern data flow with `withReferences` — the agent searches the web in 
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │           Harness Patterns (Server Functions)             │   │
 │  │  Router → simpleLoop / actorCritic / withReferences /     │   │
-│  │  parallel / withApproval / … → Synthesizer                │   │
+│  │  parallel / withApproval / … → compactExecution                │   │
 │  │  + UnifiedContext, EventView, BAML adapters, SSE stream   │   │
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
@@ -144,7 +144,7 @@ The harness is the main deliverable. It's a composable pattern framework built o
 
 1. **Router** classifies the user message and selects a route
 2. **Inner pattern** (typically `simpleLoop` or `actorCritic`) runs the tool loop, optionally wrapped with `withReferences` so prior `tool_result` events from earlier turns are attached to the new pattern's `priorResults` channel via an LLM-driven selector
-3. **Synthesizer** turns the accumulated events into the final assistant response
+3. **compactExecution** turns the accumulated events into the final assistant response
 
 ### Tool namespaces (via MCP Gateway)
 

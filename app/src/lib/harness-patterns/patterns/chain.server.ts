@@ -5,12 +5,7 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import type {
-  UnifiedContext,
-  ContextEvent,
-  ConfiguredPattern,
-  PatternConfig
-} from '../types'
+import type { UnifiedContext, ContextEvent, ConfiguredPattern, PatternConfig } from '../types'
 import {
   createScope,
   commitEvents,
@@ -18,7 +13,7 @@ import {
   exitPattern,
   resolveConfig,
   setError,
-  createEvent
+  createEvent,
 } from '../context.server'
 import { setLivePatternEnabled, wasEmittedLive } from '../live-event-context.server'
 import { createEventView } from './event-view.server'
@@ -48,7 +43,7 @@ assertServerOnImport()
 export async function runChain<T extends Record<string, unknown>>(
   ctx: UnifiedContext<T>,
   patterns: ConfiguredPattern<T>[],
-  onEvent?: (event: ContextEvent) => void
+  onEvent?: (event: ContextEvent) => void,
 ): Promise<UnifiedContext<T>> {
   if (patterns.length === 0) {
     return ctx
@@ -85,7 +80,7 @@ export async function runChain<T extends Record<string, unknown>>(
         ctx,
         patternId,
         pattern.name,
-        cfg.maxTurns !== undefined ? { maxTurns: cfg.maxTurns } : undefined
+        cfg.maxTurns !== undefined ? { maxTurns: cfg.maxTurns } : undefined,
       )
 
       try {
@@ -146,7 +141,7 @@ export async function runChain<T extends Record<string, unknown>>(
  * const routedAgent = chain(
  *   router({ neo4j: 'DB queries', web: 'Web lookups' }),
  *   routes({ neo4j: neo4jPattern, web: webPattern }),
- *   synthesizer({ mode: 'thread' })
+ *   compactExecution({ mode: 'thread' })
  * )
  *
  * // Use in harness alongside other patterns
@@ -157,7 +152,7 @@ export function chain<T extends Record<string, unknown>>(
 ): ConfiguredPattern<T> {
   const resolved = resolveConfig('chain', {})
   return {
-    name: `chain(${patterns.map(p => p.name).join(', ')})`,
+    name: `chain(${patterns.map((p) => p.name).join(', ')})`,
     fn: async (scope, view) => {
       // Run each sub-pattern in a fresh child scope so its events get tagged
       // with its OWN patternId (e.g. 'code-mode-loop'), not the outer
@@ -178,9 +173,7 @@ export function chain<T extends Record<string, unknown>>(
       let currentData = scope.data
       for (const pattern of patterns) {
         const subId = pattern.config.patternId ?? pattern.name
-        scope.events.push(
-          createEvent('pattern_enter', subId, { pattern: pattern.name })
-        )
+        scope.events.push(createEvent('pattern_enter', subId, { pattern: pattern.name }))
         // Synthetic ctx: original events + everything this chain has
         // accumulated so far (including the pattern_enter just pushed).
         // Read-only view — events array is freshly composed each iteration.
@@ -192,18 +185,15 @@ export function chain<T extends Record<string, unknown>>(
         const childScope = createScope<T>(subId, currentData)
         const result = await pattern.fn(childScope, subView)
         scope.events.push(...result.events)
-        scope.events.push(
-          createEvent('pattern_exit', subId, { status: 'completed' })
-        )
+        scope.events.push(createEvent('pattern_exit', subId, { status: 'completed' }))
         currentData = result.data
       }
       scope.data = currentData
       return scope
     },
     config: resolved,
-    estimateTurns: (s) =>
-      patterns.reduce((sum, p) => sum + (p.estimateTurns?.(s) ?? 1), 0),
-    children: patterns
+    estimateTurns: (s) => patterns.reduce((sum, p) => sum + (p.estimateTurns?.(s) ?? 1), 0),
+    children: patterns,
   }
 }
 
@@ -218,12 +208,12 @@ export function chain<T extends Record<string, unknown>>(
 export function configurePattern<T extends Record<string, unknown>>(
   name: string,
   fn: ConfiguredPattern<T>['fn'],
-  config?: PatternConfig
+  config?: PatternConfig,
 ): ConfiguredPattern<T> {
   const resolved = resolveConfig(name, config)
   return {
     name,
     fn,
-    config: resolved
+    config: resolved,
   }
 }

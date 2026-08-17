@@ -1,4 +1,4 @@
-// synthesizer.baml - Default prompt for the synthesizer pattern
+// compact-execution.baml - Default prompt for the compactExecution pattern
 // Turns tool execution results into a user-friendly response.
 // Task-agnostic: event history is injected at runtime.
 

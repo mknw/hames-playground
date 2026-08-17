@@ -31,7 +31,7 @@ router → routes({
   neo4j:      withReferences(neo4jPattern),
   web_search: withReferences(webPattern),
   code_mode:  withReferences(codePattern)
-}) → synthesizer
+}) → compactExecution
 ```
 
 See [`app/src/lib/harness-client/examples/default.server.ts`](../../app/src/lib/harness-client/examples/default.server.ts) for the source.
@@ -44,7 +44,7 @@ Send:
 
 > Search the web for TypeScript 5.7 release info — what are the 5 most important new features?
 
-The router classifies the intent as `web_search`, the `withReferences` wrapper runs (with no eligible candidates yet → `skipped: 'empty'`, no refs attached), and the inner `simpleLoop` calls `search` and then `Return`. The synthesizer renders the 5 features.
+The router classifies the intent as `web_search`, the `withReferences` wrapper runs (with no eligible candidates yet → `skipped: 'empty'`, no refs attached), and the inner `simpleLoop` calls `search` and then `Return`. The compactExecution renders the 5 features.
 
 ![Turn 1 — chat shows the 5 TypeScript 5.7 features; observability shows router → withReferences → web-search → response-synth](screenshots/02-search-response.png)
 
@@ -128,8 +128,8 @@ withReferences (skipped='empty')    withReferences (selector picked 3 refs)
   └─ simpleLoop                       └─ simpleLoop
        └─ search → tool_result            └─ get_neo4j_schema
        └─ Return                          └─ write_neo4j_cypher × N
-synthesizer                              └─ Return
-                                    synthesizer
+compactExecution                              └─ Return
+                                    compactExecution
 ```
 
 The pivotal moment is `withReferences` running on turn 2's neo4j route ingress. Without it, the inner pattern would have received `priorResults: []` and the controller would have written either nothing or hallucinated content. With it, the controller's prompt includes compact summaries of the prior web-search results, and `expandPreviousResult` lets it pull the full data when needed.

@@ -221,14 +221,14 @@ type SelectorFn = (input: {
 
 **Composes with `expandPreviousResult`:** the wrapper attaches *compact* refs (summary only). Inside the loop, the controller can either pass `ref:<ref_id>` as a tool argument (inline-expanded by `resolveRefs` before dispatch) or call the synthetic `expandPreviousResult` tool to load full content into a turn record. Either path records an `expansions[]` entry on the `LoopTurn`; the compact ref's `expanded_in_turn` field is then annotated with the first turn that expanded it, rendered as `(expanded in turn N)`.
 
-### synthesizer
+### compactExecution
 
 Generate human-readable response from pattern output.
 
 ```typescript
-function synthesizer<T>(config: SynthesizerConfig): ConfiguredPattern<T>
+function compactExecution<T>(config: CompactExecutionConfig): ConfiguredPattern<T>
 
-interface SynthesizerConfig extends PatternConfig {
+interface CompactExecutionConfig extends PatternConfig {
   mode: 'message' | 'response' | 'thread'
   synthesize?: SynthesisFn
   skipIfHasResponse?: boolean
@@ -597,7 +597,7 @@ interface ViewConfig {
 |---------|-------------|----------------|
 | simpleLoop | `'tool_result'` | `'on-success'` |
 | actorCritic | `'tool_result'` | `'on-success'` |
-| synthesizer | `'assistant_message'` | `'always'` |
+| compactExecution | `'assistant_message'` | `'always'` |
 | compactIntent | `'intent_compacted'` | `'always'` |
 | router | `false` | `'always'` |
 | chain | `false` | `'always'` |

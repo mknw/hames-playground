@@ -12,7 +12,7 @@
  *
  * `currentTurn` advances on:
  *   - `controller_action` (per-turn for loops)
- *   - `assistant_message` from a non-final pattern (router, synthesizer)
+ *   - `assistant_message` from a non-final pattern (router, compactExecution)
  *   - `plan_created` (the `planner`'s only output — it emits no action)
  *   - leaf `pattern_exit` (no-op leaf advances)
  *

@@ -3,7 +3,7 @@
 // Used by `harness-patterns/patterns/planner.server.ts`, one call per chain
 // invocation, BEFORE any tool runs:
 //
-//   chain(planner(tools.all), simpleLoop(tools.all), synthesizer({ mode: 'thread' }))
+//   chain(planner(tools.all), simpleLoop(tools.all), compactExecution({ mode: 'thread' }))
 //
 // Why it exists: a simpleLoop controller re-derives its high-level approach on
 // EVERY turn, and with a diverse tool surface (neo4j + database + web +

@@ -1,5 +1,5 @@
 /**
- * Synthesizer Pattern
+ * compactExecution Pattern
  *
  * Synthesizes a final response from previous pattern's output.
  * Three modes: 'message', 'response', 'thread'
@@ -7,9 +7,9 @@
 
 import { assertServerOnImport } from '../assert.server'
 import type {
-  SynthesizerConfig,
-  SynthesizerData,
-  SynthesizerInput,
+  CompactExecutionConfig,
+  CompactExecutionData,
+  CompactExecutionInput,
   LoopHistory,
   PatternScope,
   EventView,
@@ -40,7 +40,7 @@ interface SynthesisResult {
  * Tracks LLM call data when collector is provided.
  */
 async function defaultSynthesize(
-  input: SynthesizerInput,
+  input: CompactExecutionInput,
   collector?: Collector,
 ): Promise<SynthesisResult> {
   // Dynamic import to avoid circular dependencies
@@ -85,12 +85,12 @@ async function defaultSynthesize(
     })
   }
 
-  // Trim oldest turns if they would overflow the synthesizer's context window
+  // Trim oldest turns if they would overflow the compactExecution's context window
   // Trim against the window of the client this call will ACTUALLY use
   // (Anthropic 200K by default, the mixed-chain floor under USE_MIXED_CHAINS).
   // Hardcoding 'SynthesizerFallback' here trimmed against a 16K default and
   // dropped real tool results (see .harness-logs/neo4j-no-results.json).
-  const contextWindow = getContextWindow(resolveClientForRole('synth'))
+  const contextWindow = getContextWindow(resolveClientForRole('compactExecution'))
   const trimmedTurns = trimToFit(turns, (t) => JSON.stringify(t), 500, contextWindow)
 
   const variables = {
@@ -104,7 +104,10 @@ async function defaultSynthesize(
   // Call with or without collector, including error context.
   // Anthropic override applied when `USE_ANTHROPIC_ONLY=1` — routes through
   // `SynthesizerAnthropic` (Sonnet 4.6 → Haiku 4.5).
-  const synthOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('synth') }
+  const synthOpts = {
+    ...(collector ? { collector } : {}),
+    ...clientOverrideFor('compactExecution'),
+  }
   const hasSynthOpts = Object.keys(synthOpts).length > 0
   const content = hasSynthOpts
     ? await b.Synthesize(
@@ -207,19 +210,19 @@ async function defaultSynthesize(
  * Build synthesis input from EventView based on mode.
  */
 function buildSynthesisInputFromView(
-  mode: SynthesizerConfig['mode'],
+  mode: CompactExecutionConfig['mode'],
   view: EventView,
-  data: SynthesizerData,
-): SynthesizerInput {
+  data: CompactExecutionData,
+): CompactExecutionInput {
   // Get user message
   const userMessage = view.fromAll().ofType('user_message').last(1).get()[0]
   const userContent = userMessage ? (userMessage.data as { content: string }).content : ''
 
-  const input: SynthesizerInput = {
+  const input: CompactExecutionInput = {
     mode,
     userMessage: userContent,
     intent: data.intent ?? userContent,
-    // Read error state from view (scoped by synthesizer's ViewConfig)
+    // Read error state from view (scoped by compactExecution's ViewConfig)
     // rather than from data stash, so errors naturally expire with the view window
     hasError: view.hasErrors(),
     errorMessage: view.lastError(),
@@ -287,7 +290,7 @@ function buildSynthesisInputFromView(
               // pattern, which does one search and emits a result without an LLM
               // tool-call loop. Synthesize a minimal iteration so the result
               // still reaches Synthesize (otherwise thread mode drops it and the
-              // synthesizer answers from nothing).
+              // compactExecution answers from nothing).
               iterations.push({
                 turn: turn++,
                 action: {
@@ -320,34 +323,34 @@ function buildSynthesisInputFromView(
 }
 
 /**
- * Create a synthesizer pattern.
+ * Create a compactExecution pattern.
  *
  * Takes output from previous pattern and synthesizes a final response.
  *
- * @param config - Synthesizer configuration
+ * @param config - compactExecution configuration
  * @returns ConfiguredPattern ready for chain
  *
  * @example
  * // Message mode - just the response string
- * const s1 = synthesizer({ mode: 'message' })
+ * const s1 = compactExecution({ mode: 'message' })
  *
  * // Response mode - object with data and response
- * const s2 = synthesizer({ mode: 'response' })
+ * const s2 = compactExecution({ mode: 'response' })
  *
  * // Thread mode - full iteration history
- * const s3 = synthesizer({ mode: 'thread' })
+ * const s3 = compactExecution({ mode: 'thread' })
  *
  * // Custom synthesis function
- * const s4 = synthesizer({
+ * const s4 = compactExecution({
  *   mode: 'response',
  *   synthesize: async (input) => `Processed: ${input.response}`
  * })
  */
-export function synthesizer<T extends SynthesizerData>(
-  config: SynthesizerConfig,
+export function compactExecution<T extends CompactExecutionData>(
+  config: CompactExecutionConfig,
 ): ConfiguredPattern<T> {
   const { mode, synthesize, skipIfHasResponse = false } = config
-  const resolved = resolveConfig('synthesizer', config)
+  const resolved = resolveConfig('compactExecution', config)
 
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
     // Collector + start time hoisted so the outer catch can recover LLM call
@@ -383,7 +386,7 @@ export function synthesizer<T extends SynthesizerData>(
         synthesizedResponse = await synthesize(input)
       } else {
         // Use default with collector for LLM observability
-        collector = new Collector('synthesizer')
+        collector = new Collector('compactExecution')
         startTime = Date.now()
         synthesizeVariables = {
           userMessage: input.userMessage,
@@ -397,7 +400,7 @@ export function synthesizer<T extends SynthesizerData>(
       }
 
       // Track assistant message event with LLM call data. `final: true`
-      // distinguishes the synthesizer's user-facing response from router
+      // distinguishes the compactExecution's user-facing response from router
       // status messages that share the same event type — chat-history
       // replay reads this flag to skip intermediate emits.
       trackEvent(
@@ -441,7 +444,7 @@ export function synthesizer<T extends SynthesizerData>(
   }
 
   return {
-    name: 'synthesizer',
+    name: 'compactExecution',
     fn,
     config: resolved,
     estimateTurns: () => 1,

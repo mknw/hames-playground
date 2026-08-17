@@ -89,10 +89,17 @@ with a C toolchain because node-pty compiles from source) → `build`
 (`baml-generate` **then** `vinxi build`, sequentially: `pnpm build`'s `&`
 backgrounds the generate step, and `baml_client/` is gitignored so it is never
 already on disk here) → `runtime` (`node:22-bookworm-slim` + `.output`).
-Nitro's node-server output is self-contained — it carries its own
-`node_modules`, including the per-arch node-pty and BAML binaries — so the
-runtime stage installs nothing. `app/node_modules` is `.dockerignore`d for the
-same reason: a host-built tree is the wrong platform.
+Nitro's node-server output carries its own `node_modules`, so the runtime stage
+installs nothing — but its tracer only follows the `require`/`import` graph it
+can statically see, and it silently drops the two packages that matter most:
+node-pty's `build/Release/` (addon + spawn-helper, loaded by path) and
+`@boundaryml/baml`'s entry `index.js`. Both are therefore staged complete in
+the `build` stage (dereferencing pnpm's symlinks into `.pnpm/`) and overlaid
+onto `.output/server/node_modules` in `runtime`, so what the image guarantees
+is that `require('node-pty')` and `require('@boundaryml/baml')` both work —
+asserted by CI, because `/api/health` touches neither and a broken image boots
+happily. `app/node_modules` is `.dockerignore`d because a host-built tree would
+be the wrong platform; the staged copies come from the in-image install.
 
 **Endpoint rewrites** (`environment:` beats `env_file:`):
 

@@ -50,10 +50,44 @@ COPY . .
 RUN pnpm baml-generate \
  && pnpm exec vinxi build
 
+# Nitro traces the `require`/`import` graph it can statically see, which is not
+# enough for two packages — and it fails silently, leaving an image that boots
+# and serves /api/health while the first use of either throws:
+#
+#   * node-pty         — lib/index.js loads build/Release/pty.node by path, so
+#                        only lib/ + package.json are traced and
+#                        `require('node-pty')` throws.
+#   * @boundaryml/baml — the per-arch baml-<platform> package lands but the
+#                        entry index.js does not, so the first BAML call dies
+#                        with "Cannot find module .../baml/index.js".
+#
+# So stage both packages COMPLETE for the runtime stage to overlay. pnpm's
+# node_modules/<pkg> are symlinks into .pnpm/<pkg>@<ver>/node_modules/<pkg>, so
+# resolve them first and dereference while copying (`cp -RL`) — copying the
+# link itself would leave a dangling one. The baml-<platform> package is a
+# sibling of baml inside .pnpm, so the whole scope directory is staged to keep
+# that resolution working. Nothing here names an architecture: the packages
+# come from this image's own install, and the runtime stage is the same arch.
+#
+# node-pty's tarball also carries ~58MB of darwin/win32 prebuilds that no linux
+# runtime can reach (lib/utils.js looks in build/Release, build/Debug, then
+# prebuilds/linux-<arch> only), so they are dropped rather than shipped. The
+# rest of the package stays whole at ~4.5MB (mostly third_party/ and deps/) —
+# an allow-list would be one more thing to keep in step with upstream.
+RUN set -eux; \
+    mkdir -p /staging/@boundaryml; \
+    cp -RL "$(readlink -f node_modules/node-pty)" /staging/node-pty; \
+    cp -RL "$(dirname "$(readlink -f node_modules/@boundaryml/baml)")"/. /staging/@boundaryml/; \
+    rm -rf /staging/node-pty/prebuilds/darwin-* /staging/node-pty/prebuilds/win32-*; \
+    test -f /staging/node-pty/build/Release/pty.node; \
+    test -f /staging/@boundaryml/baml/index.js; \
+    test -f /staging/@boundaryml/baml/browser.js; \
+    ls /staging/@boundaryml | grep -q '^baml-'
+
 # ---------------------------------------------------------------------------
-# runtime — nitro's node-server output is self-contained: `.output/server`
-# ships its own package.json and node_modules (traced, including the native
-# node-pty and BAML binaries), so nothing is installed here.
+# runtime — nitro's node-server output carries its own package.json and
+# node_modules, so nothing is installed here; the natives its tracer missed are
+# overlaid from the build stage's staging dir (see above).
 # ---------------------------------------------------------------------------
 FROM node:${NODE_VERSION} AS runtime
 
@@ -77,6 +111,7 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 COPY --from=build /app/.output ./.output
+COPY --from=build /staging/ ./.output/server/node_modules/
 
 EXPOSE 3444
 

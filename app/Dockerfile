@@ -68,12 +68,20 @@ RUN pnpm baml-generate \
 # sibling of baml inside .pnpm, so the whole scope directory is staged to keep
 # that resolution working. Nothing here names an architecture: the packages
 # come from this image's own install, and the runtime stage is the same arch.
+#
+# node-pty's tarball also carries ~58MB of darwin/win32 prebuilds that no linux
+# runtime can reach (lib/utils.js looks in build/Release, build/Debug, then
+# prebuilds/linux-<arch> only), so they are dropped rather than shipped. The
+# rest of the package stays whole: it is ~1MB, and an allow-list would be one
+# more thing to keep in step with upstream.
 RUN set -eux; \
     mkdir -p /staging/@boundaryml; \
     cp -RL "$(readlink -f node_modules/node-pty)" /staging/node-pty; \
     cp -RL "$(dirname "$(readlink -f node_modules/@boundaryml/baml)")"/. /staging/@boundaryml/; \
+    rm -rf /staging/node-pty/prebuilds/darwin-* /staging/node-pty/prebuilds/win32-*; \
     test -f /staging/node-pty/build/Release/pty.node; \
     test -f /staging/@boundaryml/baml/index.js; \
+    test -f /staging/@boundaryml/baml/browser.js; \
     ls /staging/@boundaryml | grep -q '^baml-'
 
 # ---------------------------------------------------------------------------

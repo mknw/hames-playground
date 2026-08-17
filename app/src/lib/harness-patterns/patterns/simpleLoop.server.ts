@@ -179,9 +179,10 @@ export function simpleLoop<T extends SimpleLoopData>(
     // model can emit the field.
     const multiMode: MultiCallMode = config?.multiToolCalls ?? 'parallel'
     // What the terminal `Return` action should carry (#149). 'summary' by
-    // default: the loop's prose reaches no user — `Synthesize` renders only
-    // `tool_result` blocks and the Return iteration has none — so a downstream
-    // `compactExecution` composes the answer from the FULL results. Passed on
+    // default: the loop's prose reaches no user — `Synthesize` renders
+    // `tool_result.tool` / `.result` only, never the `tool_call.args` the prose
+    // lands in — so a downstream `compactExecution` composes the answer from
+    // the FULL results (see LoopReturnStyle in simpleLoop.baml). Passed on
     // every controller call because it renders in the STATIC prompt head
     // (system block + tier 1), which must be byte-identical turn over turn.
     const returnStyle: ReturnStyle = config?.returnStyle ?? 'summary'

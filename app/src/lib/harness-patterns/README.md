@@ -421,12 +421,16 @@ path. `Return` and `expandPreviousResult` are singular-only — inside a batch
 they get a per-call error.
 
 **Who writes the final answer: `returnStyle`** (#149). The loop's terminal
-`Return` action never reaches the user. `Synthesize` gates its per-turn block on
-`turn.tool_result`, and the Return iteration has no result — the prose arrives
-as `tool_call.args` and renders nowhere — so the downstream `compactExecution`
-composes the user-facing answer from the tool results either way. Measured on a
-5-turn web-search run, composing it in the loop as well cost **2,134 output
-tokens and ~22s** (the run's most expensive turn) for a text nothing read.
+`Return` prose never reaches the user. It does travel to `Synthesize` —
+`compactExecution` maps the terminal iteration to `tool_call.args` and
+fabricates a `tool_result` for it (result `null`), so that turn renders as
+`Tool: Return / Result: null` — but the template renders `tool_result.tool` /
+`.result` only and **never `tool_call.args`**, which is the single guard to
+preserve if the template ever grows a call-args section (issue #149 §2). So the
+downstream `compactExecution` composes the user-facing answer from the tool
+results either way. Measured on a 5-turn web-search run, composing it in the
+loop as well cost **2,134 output tokens and ~22s** (the run's most expensive
+turn) for a text nothing read.
 
 - `'summary'` (default) — the prompt asks for a one-or-two-sentence completion
   summary: the cheapest text that still terminates the loop.

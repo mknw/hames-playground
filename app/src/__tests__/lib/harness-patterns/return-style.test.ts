@@ -10,8 +10,11 @@
  * wording only under `returnStyle: 'answer'`; and (b) an AUTHOR guard — for a
  * representative `simpleLoop → compactExecution` chain, the assistant-visible
  * response must still come from `Synthesize`, and the loop's Return prose must
- * still reach its prompt nowhere (`synthesizer.baml` gates on `tool_result`;
- * the Return iteration has none — that is what makes the summary default safe).
+ * still reach its prompt nowhere. Note WHY it doesn't: the terminal iteration
+ * IS handed to `Synthesize` (compactExecution fabricates a `tool_result` for
+ * it, result `null`), and `compact-execution.baml` renders
+ * `tool_result.tool` / `.result` only — never the `tool_call.args` the prose
+ * lands in. That single omission is what makes the summary default safe.
  *
  * If someone re-widens the Return guidance, or starts rendering the Return
  * prose into the compactExecution prompt, one of these fails.
@@ -105,7 +108,9 @@ describe('LoopController prompt — terminal-action guidance (#149)', () => {
     expect(systemText(await render('summary'))).toBe(systemText(await render()))
   })
 
-  it("'answer' restores the pre-#149 wording verbatim, and only that", async () => {
+  // "verbatim" of the SYSTEM block only: the tier-1 catalog line tightened from
+  // "final answer or summary" to "final answer" under this style.
+  it("'answer' restores the pre-#149 guidance, and only that", async () => {
     const body = await render('answer')
     expect(systemText(body)).toContain(ANSWER_SENTENCE)
     expect(wholePrompt(body)).not.toContain(SUMMARY_SENTENCE)
@@ -195,18 +200,22 @@ async function loadHarness() {
   return { simpleLoop, compactExecution, harness, createLoopControllerAdapter }
 }
 
-/** A representative agent: one loop, one compactExecution — the shape every
- *  registered simpleLoop agent has (microsoft-365 is exactly this). */
-async function runAgent(returnStyle?: 'summary' | 'answer') {
-  const h = await loadHarness()
-  const loop = h.simpleLoop<TestData>(
+type Harness = Awaited<ReturnType<typeof loadHarness>>
+
+function makeLoop(h: Harness, returnStyle?: 'summary' | 'answer') {
+  return h.simpleLoop<TestData>(
     h.createLoopControllerAdapter(['read_neo4j_cypher'], 'GRAPH SCHEMA: (Person)'),
     ['read_neo4j_cypher'],
     { patternId: 'return-style-loop', maxTurns: 4, ...(returnStyle ? { returnStyle } : {}) },
   )
+}
+
+/** A representative agent: one loop, one compactExecution — the shape every
+ *  registered simpleLoop agent has (microsoft-365 is exactly this). */
+async function runAgent(returnStyle?: 'summary' | 'answer') {
+  const h = await loadHarness()
   const synth = h.compactExecution<TestData>({ mode: 'thread', patternId: 'response-synth' })
-  const result = await h.harness(loop, synth)('list the people')
-  return result
+  return h.harness(makeLoop(h, returnStyle), synth)('list the people')
 }
 
 beforeEach(() => {
@@ -250,10 +259,13 @@ describe('compactExecution stays the sole author (#149)', () => {
 
   it('the Return prose reaches the Synthesize prompt nowhere', async () => {
     await runAgent()
-    // The terminal action IS handed to compactExecution (as `tool_call.args` on
-    // the last iteration) — synthesizer.baml gates its per-turn block on
-    // `turn.tool_result`, so it renders nothing. Rendering args would revive
-    // the double-composition this issue removed.
+    // The terminal action IS handed to compactExecution, and its turn DOES pass
+    // the `{% if turn.tool_result %}` gate — compactExecution fabricates a
+    // result (`null`) for it, so it renders as `Tool: Return / Result: null`.
+    // The prose survives nowhere purely because compact-execution.baml never
+    // renders `tool_call.args`. Rendering them (#149 §2) would revive the
+    // double-composition this issue removed, and this is the assertion that
+    // would catch it.
     const synthBodies = captured.filter((b) => systemText(b).includes('user-friendly response'))
     expect(synthBodies).toHaveLength(1)
     expect(wholePrompt(synthBodies[0])).not.toContain('LOOP-PROSE-SENTINEL')
@@ -261,15 +273,25 @@ describe('compactExecution stays the sole author (#149)', () => {
     expect(wholePrompt(synthBodies[0])).toContain('read_neo4j_cypher')
   })
 
-  it('the loop leaves data.response for the compactExecution to set', async () => {
-    const result = await runAgent()
-    // No passthrough (#149 Option B is not built): the only writer of
-    // `data.response` in this chain is the compactExecution.
-    expect((result.context.data as { synthesizedResponse?: string }).synthesizedResponse).toBe(
-      SYNTH_ANSWER,
-    )
+  it('the loop ALONE writes no data.response — passthrough is not built (Option B)', async () => {
+    // Asserted on a chain with NO compactExecution, deliberately: run the two
+    // together and the synth overwrites `response`/`synthesizedResponse`
+    // whatever the loop put there, so a passthrough wired into the loop would
+    // pass unnoticed. Here the loop is the only writer there is.
+    const h = await loadHarness()
+    const result = await h.harness(makeLoop(h))('list the people')
+    expect((result.context.data as { response?: string }).response).toBeUndefined()
+    expect(result.response).toBe('')
+    // ...and the terminal action was still committed, so nothing was lost.
     expect(
       (result.context.data as { lastAction?: { tool_args?: string } }).lastAction?.tool_args,
     ).toBe(RETURN_PROSE)
+  })
+
+  it('the compactExecution is the writer of data.response', async () => {
+    const result = await runAgent()
+    const data = result.context.data as { response?: string; synthesizedResponse?: string }
+    expect(data.response).toBe(SYNTH_ANSWER)
+    expect(data.synthesizedResponse).toBe(SYNTH_ANSWER)
   })
 })

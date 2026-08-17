@@ -28,11 +28,11 @@ export type MultiCallMode = 'parallel' | 'sequential' | 'off'
 /** What a simpleLoop asks its controller to put in the terminal `Return`
  *  action's `tool_args` (#149).
  *  - 'summary' (default) — a one-or-two-sentence completion summary. The loop's
- *    prose reaches no user: `Synthesize` renders only `tool_result` blocks and
- *    the Return iteration has none, so a downstream `compactExecution` composes
- *    the user-facing answer from the FULL tool results. Composing it twice cost
- *    ~2.1k output tokens and ~22s on a measured 5-turn run, for a text nothing
- *    read.
+ *    prose reaches no user: `Synthesize` renders `tool_result.tool` / `.result`
+ *    only and never `tool_call.args`, which is where the terminal action's
+ *    prose lands, so a downstream `compactExecution` composes the user-facing
+ *    answer from the FULL tool results. Composing it twice cost ~2.1k output
+ *    tokens and ~22s on a measured 5-turn run, for a text nothing read.
  *  - 'answer' — the pre-#149 wording: compose the complete answer in
  *    `tool_args`. Prompt-only: the loop still sets no `data.response`, so a
  *    downstream `compactExecution` remains the author (passthrough is #149

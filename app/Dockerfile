@@ -72,8 +72,8 @@ RUN pnpm baml-generate \
 # node-pty's tarball also carries ~58MB of darwin/win32 prebuilds that no linux
 # runtime can reach (lib/utils.js looks in build/Release, build/Debug, then
 # prebuilds/linux-<arch> only), so they are dropped rather than shipped. The
-# rest of the package stays whole: it is ~1MB, and an allow-list would be one
-# more thing to keep in step with upstream.
+# rest of the package stays whole at ~4.5MB (mostly third_party/ and deps/) —
+# an allow-list would be one more thing to keep in step with upstream.
 RUN set -eux; \
     mkdir -p /staging/@boundaryml; \
     cp -RL "$(readlink -f node_modules/node-pty)" /staging/node-pty; \

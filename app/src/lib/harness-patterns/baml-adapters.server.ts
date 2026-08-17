@@ -1422,6 +1422,12 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
 
   return async ({ tool, namespace, content }) => {
     const truncated = content.length > maxChars
+    // TRUNCATE FIRST, then de-fence. The de-fencing regex must never run over
+    // the full payload: only `maxChars` of it are ever interpolated into the
+    // prompt, so scanning the other 2 MB buys no protection and hands an
+    // attacker a free CPU multiplier on a value that is otherwise discarded.
+    const head = truncated ? content.slice(0, maxChars) : content
+
     // Neutralize the PROMPT's own fence before interpolating. The guard escapes
     // its `⟦⟧` sentinels out of content so data cannot forge a marker or close
     // the spotlight fence; the screen prompt has an ASCII fence
@@ -1430,11 +1436,15 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     // regex corpus passed clean. Without this, a page could close the fence and
     // address the screening model directly — the exact hole `sentinel-escape`
     // exists to close, one layer up.
-    const defenced = content.replace(
-      /-{2,}\s*(?:BEGIN|END)\s+UNTRUSTED\s+CONTENT[^\n]{0,40}/gi,
-      '[fence]',
-    )
-    const body = truncated ? defenced.slice(0, maxChars) : defenced
+    //
+    // Anchored on the KEYWORD, not on a leading `-{2,}` run. The original
+    // `-{2,}\s*(?:BEGIN|END)…` put two variable-length runs back to back, which
+    // is quadratic: 100k hyphens measured 10s of synchronous CPU (and, run
+    // pre-truncation, on content that was about to be thrown away). Dropping the
+    // hyphen run is also strictly STRONGER — the old pattern required at least
+    // two hyphens, so `BEGIN UNTRUSTED CONTENT` with no decoration at all
+    // evaded it while still reading as a fence to the screening model.
+    const body = head.replace(/(?:BEGIN|END)\s{1,4}UNTRUSTED\s{1,4}CONTENT[^\n]{0,40}/gi, '[fence]')
 
     const { b } = await import('../../../baml_client')
     const opts = clientOverrideFor('describe')

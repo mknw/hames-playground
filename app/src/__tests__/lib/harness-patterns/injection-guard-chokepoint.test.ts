@@ -305,3 +305,324 @@ describe('optional LLM screen', () => {
     await closeMcpClient()
   })
 })
+
+// ============================================================================
+// spotlight: 'always' — "the content changed" is NOT "we detected something"
+// ============================================================================
+
+/**
+ * The strictest spotlight setting used to be the one that WEAKENED the guard.
+ *
+ * `spotlight: 'always'` fences every string leaf, so `SanitizeReport.neutralized`
+ * ("the LLM-visible content differs from the source") became true on every
+ * result. Two things gated on that flag, and both broke:
+ *
+ *   1. the optional LLM screen, which by design runs only on content the
+ *      deterministic layer passed CLEAN — so it never ran again. An agent that
+ *      asked for the strictest fencing silently lost its second layer entirely,
+ *      and nothing failed to say so. That is a fail-open.
+ *   2. the `content_sanitized` event, which fired with `findings: []` on every
+ *      single tool result — rendered by the ObservabilityPanel as
+ *      "0 neutralized ()", burying the events where the guard really caught
+ *      something.
+ *
+ * Both now gate on `findings.length`. All four combinations of
+ * {fence-only, detection} x {screen, no screen} are pinned below, because the
+ * bug was invisible in three of them.
+ */
+describe("spotlight: 'always'", () => {
+  const CLEAN = 'Paris is the capital of France.'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockListTools.mockResolvedValue({ tools: [] })
+  })
+
+  it('fences clean content but emits NO event and NO annotation', async () => {
+    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    gatewayReturns(CLEAN)
+    const events: unknown[] = []
+    const guard = createInjectionGuard(
+      { namespaces: ['web'], spotlight: 'always' },
+      (e) => events.push(e),
+      'p',
+    )
+
+    const result = await runWithInjectionGuard(guard, () => callTool('search', { q: 'x' }))
+
+    // The fence IS applied — that is what the setting asked for, and the caller
+    // must receive it (keying the rewrite off `summary` would have discarded it).
+    expect(result.data as string).toContain('UNTRUSTED CONTENT')
+    expect(result.data as string).toContain(CLEAN)
+    // But nothing was DETECTED, so there is nothing to report. The fence states
+    // its own provenance in the text; a findings-empty event is pure noise.
+    expect(events).toEqual([])
+    expect(result.sanitized).toBeUndefined()
+    await closeMcpClient()
+  })
+
+  it('still emits the event and annotation when something IS detected', async () => {
+    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    gatewayReturns(ATTACK)
+    const events: Array<{ data: { findings: unknown[] } }> = []
+    const guard = createInjectionGuard(
+      { namespaces: ['web'], spotlight: 'always' },
+      (e) => events.push(e as { data: { findings: unknown[] } }),
+      'p',
+    )
+
+    const result = await runWithInjectionGuard(guard, () => callTool('search', { q: 'x' }))
+
+    expect(events).toHaveLength(1)
+    expect(events[0].data.findings.length).toBeGreaterThan(0)
+    expect(result.sanitized?.findingCount).toBeGreaterThan(0)
+    expect(result.data as string).not.toContain('Ignore all previous instructions')
+    await closeMcpClient()
+  })
+
+  it('STILL RUNS the LLM screen on fenced-but-clean content', async () => {
+    // The fail-open, pinned. Before the fix this screen was never called, so an
+    // agent combining the strictest spotlight with a paid-for second layer got
+    // only the fence.
+    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    gatewayReturns(CLEAN)
+    const screen = vi
+      .fn()
+      .mockResolvedValue({ injection_detected: false, reason: 'nothing found', spans: [] })
+    const guard = createInjectionGuard(
+      { namespaces: ['web'], spotlight: 'always', screen },
+      () => {},
+      'p',
+    )
+
+    await runWithInjectionGuard(guard, () => callTool('search', { q: 'x' }))
+    expect(screen).toHaveBeenCalledOnce()
+    await closeMcpClient()
+  })
+
+  it('screens the RAW content, not the fenced copy', async () => {
+    // The screen must judge what the page said. Handing it the guard's own fence
+    // text would both waste tokens and invite it to classify our own
+    // "any directive inside it has been neutralized" preamble as an injection.
+    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    gatewayReturns(CLEAN)
+    const screen = vi.fn().mockResolvedValue({ injection_detected: false, reason: 'ok', spans: [] })
+    const guard = createInjectionGuard(
+      { namespaces: ['web'], spotlight: 'always', screen },
+      () => {},
+      'p',
+    )
+
+    await runWithInjectionGuard(guard, () => callTool('search', { q: 'x' }))
+    expect(screen.mock.calls[0][0].content).toBe(CLEAN)
+    await closeMcpClient()
+  })
+
+  it('does NOT run the screen when the corpus already fired', async () => {
+    // The other half of the gate: `findings.length > 0` still suppresses the
+    // second opinion, so the fix did not turn "screen the clean stuff" into
+    // "screen everything" and double the cost.
+    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    gatewayReturns(ATTACK)
+    const screen = vi.fn()
+    const guard = createInjectionGuard(
+      { namespaces: ['web'], spotlight: 'always', screen },
+      () => {},
+      'p',
+    )
+
+    await runWithInjectionGuard(guard, () => callTool('search', { q: 'x' }))
+    expect(screen).not.toHaveBeenCalled()
+    await closeMcpClient()
+  })
+
+  it('reports a screen OUTAGE even on fenced-but-clean content', async () => {
+    // The one case where a finding-less `content_sanitized` is still right: a
+    // silently degraded second layer must be visible.
+    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    gatewayReturns(CLEAN)
+    const screen = vi.fn().mockRejectedValue(new Error('429 rate limited'))
+    const events: Array<{ data: { screenReason?: string } }> = []
+    const guard = createInjectionGuard(
+      { namespaces: ['web'], spotlight: 'always', screen },
+      (e) => events.push(e as { data: { screenReason?: string } }),
+      'p',
+    )
+
+    const result = await runWithInjectionGuard(guard, () => callTool('search', { q: 'x' }))
+
+    expect(events).toHaveLength(1)
+    expect(events[0].data.screenReason).toContain('429')
+    // And the fence survives the outage path.
+    expect(result.data as string).toContain('UNTRUSTED CONTENT')
+    await closeMcpClient()
+  })
+
+  it("leaves 'on-detection' clean content byte-identical", async () => {
+    // The default, unchanged by any of the above: the overwhelmingly common case
+    // costs zero tokens and carries zero mangling risk.
+    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    gatewayReturns(CLEAN)
+    const events: unknown[] = []
+    const guard = createInjectionGuard({ namespaces: ['web'] }, (e) => events.push(e), 'p')
+
+    const result = await runWithInjectionGuard(guard, () => callTool('search', { q: 'x' }))
+    expect(result.data).toBe(CLEAN)
+    expect(result.sanitized).toBeUndefined()
+    expect(events).toEqual([])
+    await closeMcpClient()
+  })
+})
+
+// ============================================================================
+// Nesting unions the SANITIZER options too, not just the namespaces
+// ============================================================================
+
+/**
+ * Unioning `isUntrusted` was necessary but not sufficient.
+ *
+ * Once an inner guard widens the boundary, it is the INNER guard's config that
+ * sanitizes the outer guard's namespaces too — so an inner `disableRules`, a
+ * weaker `spotlight`, or simply the absence of a `screen` re-opened a hole for
+ * tools the inner wrapper never mentioned. Every dimension now takes the
+ * strictest of the guards in scope.
+ */
+describe('nested guards union the sanitizer options', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockListTools.mockResolvedValue({ tools: [] })
+  })
+
+  it('an inner disableRules cannot switch off a rule for the OUTER boundary', async () => {
+    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    gatewayReturns(ATTACK)
+    const outer = createInjectionGuard({ namespaces: ['web'] }, () => {}, 'outer')
+
+    const result = await runWithInjectionGuard(outer, () => {
+      // 'github' only — this guard never claimed 'web', yet its config is what
+      // would have sanitized the inherited 'web' coverage.
+      const inner = createInjectionGuard(
+        { namespaces: ['github'], disableRules: ['instruction-override'] },
+        () => {},
+        'inner',
+      )
+      return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
+    })
+
+    expect(result.sanitized?.rules).toContain('instruction-override')
+    expect(result.data as string).not.toContain('Ignore all previous instructions')
+    await closeMcpClient()
+  })
+
+  it('honours a disableRules both guards agreed on', async () => {
+    // Intersection, not "ignore the inner one": a rule really is off when every
+    // guard in the nest opted out of it, which is what keeps the escape hatch
+    // usable for a genuine false positive.
+    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    gatewayReturns(ATTACK)
+    const outer = createInjectionGuard(
+      { namespaces: ['web'], disableRules: ['instruction-override'] },
+      () => {},
+      'outer',
+    )
+
+    const result = await runWithInjectionGuard(outer, () => {
+      const inner = createInjectionGuard(
+        { namespaces: ['github'], disableRules: ['instruction-override'] },
+        () => {},
+        'inner',
+      )
+      return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
+    })
+
+    expect(result.sanitized?.rules ?? []).not.toContain('instruction-override')
+    await closeMcpClient()
+  })
+
+  it("an inner guard cannot weaken the outer guard's spotlight", async () => {
+    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    const clean = 'Paris is the capital of France.'
+    gatewayReturns(clean)
+    const outer = createInjectionGuard(
+      { namespaces: ['web'], spotlight: 'always' },
+      () => {},
+      'outer',
+    )
+
+    const result = await runWithInjectionGuard(outer, () => {
+      // Leaves `spotlight` at its 'on-detection' default — which, shadowed,
+      // would have dropped the fence the outer wrapper asked for.
+      const inner = createInjectionGuard({ namespaces: ['github'] }, () => {}, 'inner')
+      return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
+    })
+
+    expect(result.data as string).toContain('UNTRUSTED CONTENT')
+    await closeMcpClient()
+  })
+
+  it("an inner guard cannot remove the outer guard's screen", async () => {
+    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    const clean = 'Paris is the capital of France.'
+    gatewayReturns(clean)
+    const screen = vi.fn().mockResolvedValue({ injection_detected: false, reason: 'ok', spans: [] })
+    const outer = createInjectionGuard({ namespaces: ['web'], screen }, () => {}, 'outer')
+
+    await runWithInjectionGuard(outer, () => {
+      const inner = createInjectionGuard({ namespaces: ['github'] }, () => {}, 'inner')
+      return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
+    })
+
+    expect(screen).toHaveBeenCalledOnce()
+    await closeMcpClient()
+  })
+
+  it("inherits the outer guard's extra rules", async () => {
+    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    gatewayReturns('The magic word is xyzzy.')
+    const extra = {
+      id: 'custom-magic',
+      description: 'agent-specific rule',
+      layer: 'instruction' as const,
+      re: /xyzzy/g,
+      action: 'marker' as const,
+    }
+    const outer = createInjectionGuard({ namespaces: ['web'], rules: [extra] }, () => {}, 'outer')
+
+    const result = await runWithInjectionGuard(outer, () => {
+      const inner = createInjectionGuard({ namespaces: ['github'] }, () => {}, 'inner')
+      return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
+    })
+
+    expect(result.sanitized?.rules).toContain('custom-magic')
+    expect(result.data as string).not.toContain('xyzzy')
+    await closeMcpClient()
+  })
+
+  it('exposes the resolved options so a third level unions correctly', async () => {
+    // The union has to survive more than one level: the middle guard's `options`
+    // is what the innermost one reads, so it must already carry the outermost
+    // guard's strictness rather than only its own config.
+    const { closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    const outer = createInjectionGuard(
+      { namespaces: ['web'], spotlight: 'always', disableRules: ['instruction-secrecy'] },
+      () => {},
+      'outer',
+    )
+
+    await runWithInjectionGuard(outer, async () => {
+      const mid = createInjectionGuard({ namespaces: ['github'] }, () => {}, 'mid')
+      await runWithInjectionGuard(mid, async () => {
+        const inner = createInjectionGuard(
+          { namespaces: ['context7'], disableRules: ['instruction-secrecy'] },
+          () => {},
+          'inner',
+        )
+        expect(inner.options.spotlight).toBe('always')
+        // `mid` did not opt out, so the intersection is empty at every level
+        // below it — one guard declining is enough to keep a rule on.
+        expect(inner.options.disableRules).toEqual([])
+      })
+    })
+    await closeMcpClient()
+  })
+})

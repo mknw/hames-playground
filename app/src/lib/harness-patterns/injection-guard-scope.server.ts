@@ -29,7 +29,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { assertServerOnImport } from './assert.server'
-import type { SanitizeSummary, SpotlightMode } from './injection-guard'
+import type { InjectionGuardOptions, SanitizeSummary, SpotlightMode } from './injection-guard'
 
 assertServerOnImport()
 
@@ -38,9 +38,22 @@ export interface ActiveInjectionGuard {
   /** True when this tool's namespace (or explicit tool list) is untrusted. */
   isUntrusted(tool: string): boolean
   /**
-   * Sanitize one untrusted payload. Returns the SAME `data` reference when
-   * nothing was found, and omits `summary` in that case — so a caller can treat
-   * "no summary" as "byte-identical, nothing to annotate".
+   * The sanitizer options this guard resolved — already unioned with any
+   * enclosing guard's. Exposed for exactly that reason: a NESTED
+   * `createInjectionGuard` reads it so it can take the STRICTEST of the two
+   * rather than shadowing the outer boundary's rules, spotlight and screen. See
+   * `unionOptions` in `patterns/withInjectionGuard.server.ts`.
+   */
+  options: InjectionGuardOptions
+  /**
+   * Sanitize one untrusted payload.
+   *
+   * `data` comes back by REFERENCE when the content did not change, so
+   * `result.data === input` is the caller's "nothing happened" test — and it is
+   * the test to use, because `spotlight: 'always'` rewrites (fences) content on
+   * which nothing was detected. `summary` is present only when something WAS
+   * detected (or when the optional screen was unavailable), so it answers "is
+   * there anything to annotate?", NOT "did the content change?".
    *
    * `summary` is deliberately the REDACTED projection, never the full report:
    * it is attached to `tool_result` events, which several consumers JSON-dump
@@ -65,7 +78,9 @@ const guardStore = new AsyncLocalStorage<ActiveInjectionGuard>()
  *  ORs its `isUntrusted`, so an inner wrapper can only ever widen coverage.
  *  Shadowing would let a narrow inner wrapper silently remove an outer one's
  *  protection for its whole subtree, which is not a thing a security control
- *  should permit by accident. */
+ *  should permit by accident. The same union covers the SANITIZER options
+ *  (`options` above) — widening the boundary while narrowing the rules applied
+ *  to it would have been a hole of exactly the shape this prevents. */
 export function runWithInjectionGuard<T>(
   guard: ActiveInjectionGuard,
   fn: () => Promise<T>,

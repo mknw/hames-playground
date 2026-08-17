@@ -541,7 +541,7 @@ function formatEventData(event: ContextEvent): string {
       // (which JSON-stringifies the whole payload) would hand the neutralized
       // instruction straight back to an LLM through the serialized event
       // stream — reintroducing the exact hole `withInjectionGuard` closes.
-      // Pinned by injection-guard-serialization.test.ts.
+      // Pinned by injection-guard-composition.test.ts.
       const data = event.data as ContentSanitizedEventData
       const rules = [...new Set(data.findings.map((f) => f.rule))].join(', ')
       const head = `${data.namespace}/${data.tool}: ${data.findings.length} finding(s) neutralized`

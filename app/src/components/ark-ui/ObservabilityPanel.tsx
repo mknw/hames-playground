@@ -145,7 +145,10 @@ function getEventPreview(type: EventType, data: unknown): string {
     }
     case 'content_sanitized': {
       const d = data as ContentSanitizedEventData
-      if (!d.neutralized) return `${d.tool}: screen unavailable`
+      // Keyed on FINDINGS, not on `neutralized`: with `spotlight: 'always'` the
+      // content is "neutralized" (fenced) even when nothing was detected, so the
+      // only reason this event exists with no findings is a screen outage.
+      if (d.findings.length === 0) return `${d.tool}: screen unavailable`
       const rules = [...new Set(d.findings.map((f) => f.rule))]
       const head = `${d.tool}: ${d.findings.length} neutralized (${rules.join(', ')})`
       return head.length > 50 ? head.slice(0, 50) + '...' : head

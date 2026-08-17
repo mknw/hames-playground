@@ -73,7 +73,10 @@ function hit(content: string, over: Partial<Hit> = {}): Hit {
 }
 
 /** Run `retriever` (optionally guarded) over one user turn. */
-async function runRetriever(hits: Hit[], guardConfig?: { namespaces?: string[] }) {
+async function runRetriever(
+  hits: Hit[],
+  guardConfig?: { namespaces?: string[]; spotlight?: 'on-detection' | 'always' | 'off' },
+) {
   const { retriever } = await import('../../../lib/harness-patterns/patterns/retriever.server')
   const { runChain } = await import('../../../lib/harness-patterns/patterns/chain.server')
   const { createContext } = await import('../../../lib/harness-patterns/context.server')
@@ -248,5 +251,34 @@ describe('retriever hits — guarded', () => {
     const { matches, ctx } = await runRetriever([], { namespaces: ['retriever'] })
     expect(matches).toEqual([])
     expect(ctx.events.some((e) => e.type === 'content_sanitized')).toBe(false)
+  })
+
+  it("keeps a spotlight:'always' fence on a clean chunk, with no event", async () => {
+    // The retriever decides "did this hit change?" per hit, and `spotlight:
+    // 'always'` fences a chunk on which nothing was detected — a change with no
+    // finding. Keying that decision off the guard's `summary` (present only when
+    // something WAS detected) silently dropped the fence and put the raw chunk
+    // into `scope.data.matches`. So the test is: fence present, event absent.
+    const { matches, ctx } = await runRetriever([hit(CLEAN_CHUNK)], {
+      namespaces: ['retriever'],
+      spotlight: 'always',
+    })
+    expect(matches[0].content).toContain('UNTRUSTED CONTENT')
+    expect(matches[0].content).toContain(CLEAN_CHUNK)
+    // Structural fields must survive untouched — the inline viewer opens on them.
+    expect(matches[0].startOffset).toBe(100)
+    expect(matches[0].docId).toBe('doc-7')
+    expect(ctx.events.some((e) => e.type === 'content_sanitized')).toBe(false)
+  })
+
+  it("keeps the filename unfenced under spotlight:'always'", async () => {
+    // The per-CALL `spotlight: 'off'` override on `source` must still win over an
+    // agent-level `'always'`: a multi-line fence in a filename breaks the
+    // citation label and the filename-to-docId match behind the inline viewer.
+    const { matches } = await runRetriever([hit(CLEAN_CHUNK)], {
+      namespaces: ['retriever'],
+      spotlight: 'always',
+    })
+    expect(matches[0].source).toBe('board-pack.docx')
   })
 })

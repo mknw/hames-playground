@@ -314,7 +314,10 @@ async function sanitizeHits(hits: RetrievalHit[]): Promise<RetrievalHit[]> {
         ? undefined
         : await guard.sanitize('retriever', hit.source, { spotlight: 'off' })
 
-    if (!scannedContent.summary && !scannedSource?.summary) {
+    // Compare by REFERENCE, not by `summary` presence: `spotlight: 'always'`
+    // fences a chunk on which nothing was detected, and that fence must reach
+    // `scope.data.matches` even though there is no finding to annotate.
+    if (scannedContent.data === hit.content && scannedSource?.data === hit.source) {
       out.push(hit)
       continue
     }

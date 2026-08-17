@@ -759,7 +759,11 @@ export interface ContentSanitizedEventData {
   /** `inferServer(tool)` — the untrusted namespace the content came from. */
   namespace: string
   findings: import('./injection-guard').SanitizeFinding[]
-  /** False only when the event exists solely to report a screen outage. */
+  /** True when the LLM-visible content differs from the source — which includes
+   *  a bare `spotlight: 'always'` fence, so this is NOT a synonym for "something
+   *  was detected". Read `findings.length` for that: an event with no findings
+   *  exists solely to report a screen outage, whatever `neutralized` says. See
+   *  `SanitizeReport.neutralized`. */
   neutralized: boolean
   spotlighted: boolean
   /** Characters of untrusted text scanned. */

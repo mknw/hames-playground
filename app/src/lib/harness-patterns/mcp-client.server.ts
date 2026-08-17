@@ -210,14 +210,21 @@ export async function callTool(
   const guard = getActiveInjectionGuard()
   if (!guard || !guard.isUntrusted(name)) return result
 
+  // `summary` answers "is there anything to annotate?" and the REFERENCE answers
+  // "did the content change?" — they are not the same question. `spotlight:
+  // 'always'` fences content on which nothing was detected, so keying the
+  // rewrite off `summary` would have thrown that fence away and forwarded the
+  // raw payload.
   if (result.success) {
     const { data, summary } = await guard.sanitize(name, result.data)
-    return summary ? { ...result, data, sanitized: summary } : result
+    if (data === result.data && !summary) return result
+    return { ...result, data, ...(summary ? { sanitized: summary } : {}) }
   }
 
   if (typeof result.error !== 'string' || result.error.length === 0) return result
   const { data: cleanedError, summary } = await guard.sanitize(name, result.error)
-  return summary ? { ...result, error: cleanedError as string, sanitized: summary } : result
+  if (cleanedError === result.error && !summary) return result
+  return { ...result, error: cleanedError as string, ...(summary ? { sanitized: summary } : {}) }
 }
 
 async function dispatchTool(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {

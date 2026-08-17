@@ -133,9 +133,22 @@ export interface SanitizeReport {
   /** `inferServer(tool)` — the untrusted namespace the content came from. */
   namespace: string
   findings: SanitizeFinding[]
-  /** True when the LLM-visible content differs from the source. */
+  /**
+   * True when the LLM-visible content differs from the source — for ANY reason,
+   * including a bare `spotlight: 'always'` fence on content where nothing was
+   * found. It is therefore NOT a synonym for "something was detected": read
+   * `findings.length` for that.
+   *
+   * The distinction is load-bearing and was a live bug. `spotlight: 'always'`
+   * makes every result "changed", so a caller gating on `neutralized` (a) never
+   * ran the optional LLM screen, because the screen only runs on content the
+   * deterministic layer passed clean, and (b) emitted a `content_sanitized`
+   * event with `findings: []` on every single tool result. See
+   * `createInjectionGuard`, which gates on `findings.length` for both.
+   */
   neutralized: boolean
-  /** True when the spotlight fence was applied to at least one string. */
+  /** True when the spotlight fence was applied to at least one string. Note
+   *  that `findings.length === 0 && spotlighted` is the fence-only case. */
   spotlighted: boolean
   /** Characters of untrusted text scanned (summed over string leaves). */
   scanned: number
@@ -211,6 +224,31 @@ export type InjectionScreen = (input: {
 /** When to apply the spotlight fence. */
 export type SpotlightMode = 'on-detection' | 'always' | 'off'
 
+/** Spotlight modes, weakest → strictest. */
+const SPOTLIGHT_STRICTNESS: Readonly<Record<SpotlightMode, number>> = Object.freeze({
+  off: 0,
+  'on-detection': 1,
+  always: 2,
+})
+
+/**
+ * The strictest of the given modes, or `undefined` when none was specified.
+ *
+ * Used when injection guards NEST: a nested guard's `spotlight` must only ever
+ * be able to tighten the enclosing boundary, never loosen it — same charter as
+ * the `isUntrusted` union in `createInjectionGuard`. Without this, wrapping a
+ * `spotlight: 'always'` subtree in an inner guard that left `spotlight` at its
+ * `'on-detection'` default would silently drop the fence the outer wrapper
+ * asked for.
+ */
+export function strictestSpotlight(
+  ...modes: (SpotlightMode | undefined)[]
+): SpotlightMode | undefined {
+  const present = modes.filter((m): m is SpotlightMode => m !== undefined)
+  if (present.length === 0) return undefined
+  return present.reduce((a, b) => (SPOTLIGHT_STRICTNESS[b] > SPOTLIGHT_STRICTNESS[a] ? b : a))
+}
+
 /** Tuning for the sanitizer itself (the subset of the pattern config that this
  *  pure module needs — see `InjectionGuardConfig` for the pattern-level shape). */
 export interface InjectionGuardOptions {
@@ -230,14 +268,37 @@ export interface InjectionGuardOptions {
 // ============================================================================
 
 /**
- * The built-in corpus. Every quantifier is BOUNDED (`{0,80}`, never `*` across
- * a `.`) so no rule can backtrack catastrophically on a hostile multi-megabyte
- * page — a sanitizer that can be DoSed by its own input is not a control.
+ * The built-in corpus. Rules run in array order, and the order is load-bearing:
+ * `sentinel-escape` must run before anything that inserts a marker, and the
+ * hidden-text strips must run before the instruction rules so that instructions
+ * split by zero-width characters ("ig​nore previous instructions") are
+ * matchable.
  *
- * Rules run in array order, and the order is load-bearing: `sentinel-escape`
- * must run before anything that inserts a marker, and the hidden-text strips
- * must run before the instruction rules so that instructions split by
- * zero-width characters ("ig​nore previous instructions") are matchable.
+ * ## Backtracking discipline (a sanitizer that its own input can DoS is not a control)
+ *
+ * The catastrophic shape here is **two variable-length runs separated only by an
+ * OPTIONAL token**: the engine then has to try every way of splitting the input
+ * between the two runs, which is quadratic. `instruction-turn-spoof` shipped
+ * with exactly that (`^[ \t]*#{0,3}[ \t]*`) and took **30s of synchronous CPU on
+ * 200k spaces** — reachable from any fetched page, i.e. a one-request hang of
+ * the whole Node process. `exfil-html-tag` shipped with the same shape
+ * (`\s*\/?\s*`).
+ *
+ * So: **every variable-length run that has anything after it in the pattern is
+ * bounded** — whitespace runs to `{0,8}`/`{1,8}` (more slack than real prose or
+ * markup uses), free-text spans to `{0,40}`–`{0,2000}`.
+ *
+ * Two quantifiers are deliberately left unbounded, and both are provably safe
+ * because they are **terminal** — nothing follows them in the pattern, so a
+ * greedy run has nothing to backtrack FOR: `exfil-instruction`'s trailing
+ * `[^\s)<>"']+` and `exfil-data-url`'s trailing `[A-Za-z0-9+/=_-]{64,}`, both
+ * consuming a URL to its end. Bounding those would only truncate the match and
+ * leave a live URL tail outside the marker, which is worse than the (nil) risk.
+ *
+ * Both claims — the bounds and the terminal-run exemption — are held by
+ * `__tests__/lib/harness-patterns/injection-guard-redos.test.ts`, which runs
+ * EVERY rule against every adversarial shape under a hard total time budget. A
+ * new rule with an unbounded interior run fails that test rather than shipping.
  */
 export const INJECTION_RULES: readonly InjectionRule[] = Object.freeze([
   {
@@ -291,48 +352,57 @@ export const INJECTION_RULES: readonly InjectionRule[] = Object.freeze([
     id: 'instruction-new-directive',
     description: 'Text framing itself as a fresh, higher-authority instruction set',
     layer: 'instruction' as const,
-    re: /\b(?:new|updated|revised|additional|important|urgent|real|actual)\s+(?:instruction|instructions|directive|directives|task|tasks|system\s+prompt|rule|rules)\b\s*:?/gi,
+    re: /\b(?:new|updated|revised|additional|important|urgent|real|actual)\s{1,8}(?:instruction|instructions|directive|directives|task|tasks|system\s{1,8}prompt|rule|rules)\b\s{0,8}:?/gi,
     action: 'marker' as const,
   },
   {
     id: 'instruction-role-reassign',
     description: 'Attempt to reassign the model\'s role ("you are now …")',
     layer: 'instruction' as const,
-    re: /\byou\s+are\s+(?:now|actually|instead|really)\b[^.]{0,80}/gi,
+    re: /\byou\s{1,8}are\s{1,8}(?:now|actually|instead|really)\b[^.]{0,80}/gi,
     action: 'marker' as const,
   },
   {
     id: 'instruction-turn-spoof',
     description: 'Forged conversation turn or chat-template token impersonating the system',
     layer: 'instruction' as const,
-    re: /(?:<\|?\/?(?:im_start|im_end|endoftext|system|assistant|user)\|?>)|(?:^[ \t]*#{0,3}[ \t]*\[?(?:system|assistant|developer)\]?[ \t]*(?::|>))/gim,
+    // `[ \t]{0,8}`, NOT `[ \t]*`: the two runs around the optional `#{0,3}`
+    // markdown heading made the engine try every way of splitting the leading
+    // whitespace between them, which is quadratic — a line of 200k spaces
+    // inside a fetched page measured 30s of SYNCHRONOUS CPU, hanging the whole
+    // Node process on one request. Eight is far more indentation than a real
+    // "## System:" heading carries. Pinned by the ReDoS test.
+    re: /(?:<\|?\/?(?:im_start|im_end|endoftext|system|assistant|user)\|?>)|(?:^[ \t]{0,8}#{0,3}[ \t]{0,8}\[?(?:system|assistant|developer)\]?[ \t]{0,8}(?::|>))/gim,
     action: 'marker' as const,
   },
   {
     id: 'instruction-secrecy',
     description: 'Instruction to hide something from the user',
     layer: 'instruction' as const,
-    re: /\b(?:do\s+not|do\s?n't|don't|never)\s+(?:tell|inform|mention|reveal|disclose|show|report|notify)\b[^.]{0,60}?\b(?:the\s+)?(?:user|human|operator|person)\b/gi,
+    re: /\b(?:do\s{1,8}not|do\s?n't|don't|never)\s{1,8}(?:tell|inform|mention|reveal|disclose|show|report|notify)\b[^.]{0,60}?\b(?:the\s{1,8})?(?:user|human|operator|person)\b/gi,
     action: 'marker' as const,
   },
   {
     id: 'instruction-tool-steering',
     description: 'Imperative pushing the agent into a specific tool call',
     layer: 'instruction' as const,
-    re: /\b(?:immediately|instead|first|now|then)\s+(?:call|invoke|run|execute|use)\s+(?:the\s+)?(?:tool|function|command|following)\b[^.]{0,80}/gi,
+    re: /\b(?:immediately|instead|first|now|then)\s{1,8}(?:call|invoke|run|execute|use)\s{1,8}(?:the\s{1,8})?(?:tool|function|command|following)\b[^.]{0,80}/gi,
     action: 'marker' as const,
   },
   {
     id: 'instruction-prompt-extraction',
     description: 'Attempt to make the agent reveal its own prompt or instructions',
     layer: 'instruction' as const,
-    re: /\b(?:repeat|print|output|reveal|show|dump|display)\b[^.]{0,40}?\b(?:your|the)\s+(?:system\s+prompt|initial\s+prompt|instructions|prompt|rules)\b/gi,
+    re: /\b(?:repeat|print|output|reveal|show|dump|display)\b[^.]{0,40}?\b(?:your|the)\s{1,8}(?:system\s{1,8}prompt|initial\s{1,8}prompt|instructions|prompt|rules)\b/gi,
     action: 'marker' as const,
   },
   {
     id: 'exfil-instruction',
     description: 'Instruction to transmit conversation data to an attacker-controlled URL',
     layer: 'instruction' as const,
+    // TERMINAL unbounded run — see the corpus header. Nothing follows it, so the
+    // greedy `+` has nothing to backtrack for and it is linear; bounding it
+    // would truncate the marker and leave a live URL tail behind it.
     re: /\b(?:send|post|upload|exfiltrate|transmit|forward|leak|append|encode)\b[^.]{0,60}?\bhttps?:\/\/[^\s)<>"']+/gi,
     action: 'marker' as const,
   },
@@ -359,6 +429,9 @@ export const INJECTION_RULES: readonly InjectionRule[] = Object.freeze([
     id: 'exfil-data-url',
     description: 'URL whose path or query embeds a long encoded blob (data-carrying channel)',
     layer: 'exfil-url' as const,
+    // TERMINAL unbounded run, same exemption as `exfil-instruction`: `{64,}` is
+    // the last thing in the pattern, so it cannot backtrack, and capping it
+    // would defang only the head of a long blob.
     re: /https?:\/\/[^\s)<>"']{0,200}?[?&/][A-Za-z0-9+/=_-]{64,}/g,
     action: 'defang' as const,
   },

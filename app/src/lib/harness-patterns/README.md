@@ -593,28 +593,90 @@ by a unit test. Layers, in order (`injection-guard.ts`):
 | spotlight         | Fences the result and labels its provenance ("data, never instructions")                                           | no        |
 
 Detection alone is useless — a flagged-but-forwarded injection still reaches the
-model — so **every finding rewrites the text**. Every quantifier in the corpus is
-bounded — including the whitespace runs in `exfil-html-tag`, whose original
-`\s*` pair was quadratic (`<` + 200k spaces measured 15s of synchronous CPU) —
-so a hostile multi-megabyte page cannot backtrack the sanitizer into a DoS. The
-hidden-text strip covers soft hyphen and variation selectors as well as the
-zero-width/bidi blocks, and the instruction rules match across line breaks,
-because extracted document text hard-wraps.
+model — so **every finding rewrites the text**. The hidden-text strip covers the
+zero-width, bidi and U+E0000 blocks plus the soft hyphen; it deliberately does
+**not** strip variation selectors (`FE00`–`FE0F`) — they are combining marks, so
+a character class holding them is a `no-misleading-character-class` error, and
+removing them would mangle ordinary emoji for no gain, since they modify a
+visible glyph rather than hide text. The instruction rules match across line
+breaks, because extracted document text hard-wraps.
+
+#### Backtracking discipline (measured, not asserted)
+
+A sanitizer its own input can DoS is not a control. The catastrophic shape is
+**two variable-length runs separated only by an optional token** — the engine
+then tries every way of splitting the input between them, which is quadratic.
+Two rules shipped with it: `exfil-html-tag`'s `\s*\/?\s*`, and
+`instruction-turn-spoof`'s `^[ \t]*#{0,3}[ \t]*`, which took **30s of
+synchronous CPU on a 200k-space line** — one fetched page, one hung Node
+process. So **every variable-length run with anything after it in the pattern is
+bounded**: whitespace to `{0,8}`/`{1,8}`, free text to `{0,40}`–`{0,2000}`.
+
+Exactly two quantifiers are left unbounded, both **terminal** — nothing follows
+them, so a greedy run has nothing to backtrack _for_ and it is provably linear:
+`exfil-instruction`'s trailing `[^\s)<>"']+` and `exfil-data-url`'s trailing
+`[A-Za-z0-9+/=_-]{64,}`, each consuming a URL to its end. Bounding those would
+only truncate the match and leave a live URL tail outside the marker.
+
+Worst case per rule over `{200k spaces, 200k tabs, 200k of the rule's own
+trigger, trigger + 200k spaces, trigger + 200k tabs, a bare-whitespace line
+inside a page}`, `test()` + `replace()`, Node 22 / M-series:
+
+| Rule                                                                                                 | Before   | After   |
+| ---------------------------------------------------------------------------------------------------- | -------- | ------- |
+| `instruction-turn-spoof`                                                                             | 30,332   | **0.5** |
+| `exfil-auto-image`                                                                                   | 71.3     | 71.3    |
+| `exfil-data-url`                                                                                     | 41.8     | 41.8    |
+| `instruction-override`                                                                               | 6.2      | 6.2     |
+| `sentinel-escape`                                                                                    | 4.5      | 4.5     |
+| `instruction-prompt-extraction`                                                                      | 2.9      | 2.9     |
+| `hidden-invisible`                                                                                   | 1.7      | 1.7     |
+| `hidden-tag-chars`                                                                                   | 1.2      | 1.2     |
+| `exfil-html-tag`                                                                                     | 1.0      | 1.0     |
+| `instruction-new-directive` · `-role-reassign` · `-secrecy` · `-tool-steering` · `exfil-instruction` | ≤0.5     | ≤0.5    |
+| **whole corpus, worst shape per rule**                                                               | >120,000 | **133** |
+
+`exfil-auto-image` and `exfil-data-url` are the slowest survivors at ~70ms and
+~42ms, and both are strictly **linear** (doubling the input doubles the time:
+9.4 → 18.4 → 37.8 → 73.6ms across 50k → 400k) — many cheap bounded matches, not
+backtracking. `injection-guard-redos.test.ts` re-runs this whole grid on every
+rule under a hard **2s total budget**, so the corpus is bounded by test rather
+than by claim: a new rule with an unbounded interior run fails CI. The same test
+covers `createInjectionScreen`'s prompt de-fencing regex, whose `-{2,}\s*` pair
+was the same shape (100k hyphens → 10.1s) and which additionally ran on the
+**full** payload before `maxChars` truncation; it now truncates first and anchors
+on the keyword rather than the hyphen run, which also closes an evasion (the old
+pattern required ≥2 hyphens, so an undecorated `BEGIN UNTRUSTED CONTENT` slipped
+through while still reading as a fence to the screening model).
 
 **Clean content is byte-identical** — the same reference comes back, and
 `spotlight` defaults to `'on-detection'` for exactly that reason: the
 overwhelmingly common case must cost zero tokens and carry zero mangling risk.
 `spotlight: 'always'` fences unconditionally for agents that want it.
 
+> **`neutralized` is not a synonym for "detected".** `spotlight: 'always'` makes
+> the LLM-visible content differ from the source on _every_ result — it was
+> fenced — so `SanitizeReport.neutralized` is true even when the corpus found
+> nothing. Read **`findings.length`** for "did we detect something?". Conflating
+> the two was a live fail-open: the guard gated the LLM screen on `neutralized`,
+> which silently switched the screen off entirely for the agents that asked for
+> the strictest spotlight, and emitted a `findings: []` `content_sanitized` event
+> on every single tool result. A fence-only result now returns its fenced content
+> with **no** event and **no** `sanitized` annotation (the fence states its own
+> provenance in the text; a finding-less event only buries the real ones), and
+> callers test `data === input` — not `summary` presence — for "did it change?".
+
 **Optional LLM screen (off by default).** `screen` takes an `InjectionScreen`;
 `createInjectionScreen()` (baml-adapters) is the BAML-backed one, on the cheap
 `DescribeAnthropic` client. The guard calls it **only for content the
-deterministic layer passed clean**, so the two layers divide labour: regexes
-catch known phrasings, the screen catches novel ones. A verbatim span it quotes
-is neutralized like a regex match; a span it paraphrased (matching nothing)
-still forces the fence, so a verdict never degrades to silence. A screen that
-throws is non-fatal — the deterministic verdict stands and the outage is
-recorded on the event.
+deterministic layer passed clean** — i.e. gated on `findings.length === 0`, see
+the note above — so the two layers divide labour: regexes catch known phrasings,
+the screen catches novel ones. A verbatim span it quotes is neutralized like a
+regex match; a span it paraphrased (matching nothing) still forces the fence, so
+a verdict never degrades to silence. A screen that throws is non-fatal — the
+deterministic verdict stands and the outage is recorded on the event (the one
+case where a finding-less `content_sanitized` is still emitted, because a
+silently degraded second layer must be visible).
 
 **On detection: neutralize + annotate + emit, never silently drop.**
 
@@ -656,6 +718,27 @@ and the declared trust boundary is readable off
 `ConfiguredPattern.injectionGuard` (`{ namespaces, tools }`) — a sibling field,
 NOT part of `config`, so config identity is preserved. That field is what lets a
 test assert an agent's namespace list instead of merely that a wrapper exists.
+
+**Nesting only ever tightens.** Guards nest through AsyncLocalStorage, and
+`createInjectionGuard` reads the enclosing guard at construction to take the
+**strictest** of every dimension — never to shadow it. Unioning the namespaces
+alone was not enough: once an inner guard widens the boundary, it is the inner
+guard's config that sanitizes the outer guard's namespaces too, so an inner
+`disableRules` re-opened a hole for tools the inner wrapper never mentioned.
+
+| Dimension            | Nesting rule                                  | Why                                                                                      |
+| -------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `namespaces`/`tools` | union (OR of `isUntrusted`)                   | a narrow inner wrapper must not drop the outer one's coverage for its whole subtree      |
+| `disableRules`       | **intersection** — off only if _both_ agreed  | it is one agent's false-positive escape hatch, not a licence over the enclosing boundary |
+| `rules`              | union, deduped by id                          | extra detection is always safe to inherit                                                |
+| `spotlight`          | strictest (`always` > `on-detection` > `off`) | an inner default must not remove a fence the outer wrapper asked for                     |
+| `screen`             | kept if _either_ has one (inner wins if both) | a nested guard cannot remove a paid-for second layer                                     |
+
+Per-**call** `overrides` still win, because they are a local decision by a known
+call site (the retriever passes `spotlight: 'off'` for a filename, where a
+multi-line fence would break the citation label and the docId match) rather than
+an agent-level config that could silently weaken a boundary it does not own.
+There is deliberately no way to ask for narrowing.
 
 **Wired agents** (their untrusted namespaces are declared at each agent
 definition, deliberately not in a shared default):

@@ -46,7 +46,9 @@ import {
   applyScreenVerdict,
   redactReport,
   sanitizeUntrusted,
+  strictestSpotlight,
   type InjectionGuardOptions,
+  type InjectionRule,
   type SanitizeReport,
 } from '../injection-guard'
 import { inferServer } from '../tools.server'
@@ -109,15 +111,26 @@ export function createInjectionGuard(
   const isUntrusted = (tool: string): boolean =>
     tools.has(tool) || namespaces.has(inferServer(tool)) || (outer?.isUntrusted(tool) ?? false)
 
+  // The SANITIZER options are unioned on exactly the same charter as
+  // `isUntrusted` above — and unioning the namespaces alone was not enough.
+  // Once an inner guard widens the boundary, its `config` is what sanitizes the
+  // OUTER guard's namespaces too, so an inner `disableRules` or a weaker
+  // `spotlight` re-opened a hole for tools the inner wrapper never mentioned.
+  const options = unionOptions(config, outer?.options)
+
   return {
     isUntrusted,
+    options,
 
     async sanitize(tool, data, overrides) {
       if (!isUntrusted(tool)) return { data }
 
       const namespace = inferServer(tool)
-      const options = overrides ? { ...config, ...overrides } : config
-      let { data: out, report } = sanitizeUntrusted(data, { tool, namespace }, options)
+      // Per-CALL overrides still win: they are a deliberate, local decision by a
+      // known call site (the retriever's `spotlight: 'off'` on a filename), not
+      // an agent-level config that could silently weaken a nested boundary.
+      const effective = overrides ? { ...options, ...overrides } : options
+      let { data: out, report } = sanitizeUntrusted(data, { tool, namespace }, effective)
 
       // The optional LLM screen is a SECOND OPINION on content the
       // deterministic layer passed clean — if regexes already fired we have
@@ -125,9 +138,14 @@ export function createInjectionGuard(
       // nothing. Its failure is non-fatal: a screen that throws (rate limit,
       // timeout) must not turn a working tool call into an error, so the
       // deterministic verdict stands and the reason is recorded.
-      if (config.screen && !report.neutralized) {
+      //
+      // Gated on FINDINGS, not on `report.neutralized`: with
+      // `spotlight: 'always'` every result comes back "neutralized" (it was
+      // fenced), which silently switched the screen off entirely for the agents
+      // that asked for the STRICTEST setting — a fail-open the tests now pin.
+      if (options.screen && report.findings.length === 0) {
         try {
-          const verdict = await config.screen({
+          const verdict = await options.screen({
             tool,
             namespace,
             content: typeof data === 'string' ? data : JSON.stringify(data),
@@ -145,15 +163,24 @@ export function createInjectionGuard(
         }
       }
 
-      if (!report.neutralized) {
-        // Nothing changed. Still surface a screen outage, so a silently
-        // degraded second layer is visible rather than invisible.
+      if (report.findings.length === 0) {
+        // Nothing was DETECTED. `out` may still differ from `data` — a bare
+        // `spotlight: 'always'` fence — and that rewritten content is returned
+        // either way, so the caller never loses the fence.
+        //
+        // What it does NOT get is a finding-less `content_sanitized` event: with
+        // `spotlight: 'always'` that fired on every single tool result, and the
+        // ObservabilityPanel renders it as "0 neutralized ()" — pure noise that
+        // buries the events where the guard actually caught something. The fence
+        // needs no annotation anyway; it states its own provenance in the text.
         if (report.screenReason) {
+          // A screen OUTAGE is the exception: a silently degraded second layer
+          // must be visible rather than invisible.
           const event = buildEvent(patternId, report)
           emit(event)
-          return { data, summary: redactReport(report, event.id) }
+          return { data: out, summary: redactReport(report, event.id) }
         }
-        return { data }
+        return { data: out }
       }
 
       const event = buildEvent(patternId, report)
@@ -162,6 +189,42 @@ export function createInjectionGuard(
       // event); the verbatim spans stay on `event` alone. See `SanitizeSummary`.
       return { data: out, summary: redactReport(report, event.id) }
     },
+  }
+}
+
+/**
+ * Merge a guard's own sanitizer options with the enclosing guard's, taking the
+ * STRICTEST of each. Every arm exists because the loose version was a way for a
+ * nested guard to weaken a boundary it did not own:
+ *
+ *   - `disableRules` INTERSECTS. A rule is only switched off if every guard in
+ *     the nest agreed to switch it off. `disableRules` is a false-positive
+ *     escape hatch for one agent's corpus; inheriting it outward would let that
+ *     agent's exemption apply to the outer wrapper's namespaces.
+ *   - `rules` UNION (deduped by id) — extra detection is always safe to inherit.
+ *   - `spotlight` takes the strictest mode (`always` > `on-detection` > `off`).
+ *   - `screen` is kept if EITHER guard has one; a nested guard cannot remove the
+ *     outer wrapper's paid-for second layer. The inner one wins when both are
+ *     set, since it is the more specific declaration.
+ */
+function unionOptions(
+  own: InjectionGuardOptions,
+  outer: InjectionGuardOptions | undefined,
+): InjectionGuardOptions {
+  if (!outer) return own
+
+  const outerDisabled = new Set(outer.disableRules ?? [])
+  const disableRules = (own.disableRules ?? []).filter((id) => outerDisabled.has(id))
+
+  const byId = new Map<string, InjectionRule>()
+  for (const r of [...(outer.rules ?? []), ...(own.rules ?? [])]) byId.set(r.id, r)
+
+  return {
+    ...own,
+    disableRules,
+    ...(byId.size > 0 ? { rules: [...byId.values()] } : {}),
+    spotlight: strictestSpotlight(own.spotlight, outer.spotlight),
+    screen: own.screen ?? outer.screen,
   }
 }
 

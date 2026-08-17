@@ -24,6 +24,7 @@ import type {
   ScriptExecutionEvent,
   LLMCallData,
   EventMetrics,
+  ReturnStyle,
 } from './types'
 import type {
   ToolDescription,
@@ -94,6 +95,9 @@ export type ControllerFnWithLLMData = (
   fewShots?: FewShot[],
   multiCallMode?: 'parallel' | 'sequential',
   planContext?: string,
+  /** Terminal-action style (#149), from `SimpleLoopConfig.returnStyle`.
+   *  Trailing + optional for the positional-args reason spelled out below. */
+  returnStyle?: ReturnStyle,
 ) => Promise<ControllerCallResult>
 
 /** Critic function that returns result + observability data */
@@ -665,6 +669,10 @@ export function createLoopControllerAdapter(
     // reads it off `scope.data.plan` and formats it — same shape as
     // `withReferences` → `scope.data.attachedRefs` → `priorResults`.
     planContext?: string,
+    // Terminal-action style (#149). Forwarded verbatim: the prompt treats an
+    // absent value as 'summary', so a controller called without it (a bare
+    // `b.LoopController.bind(b)`, an older caller) still gets the default.
+    returnStyle?: ReturnStyle,
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
@@ -703,6 +711,7 @@ export function createLoopControllerAdapter(
       few_shots: fewShots,
       multi_call_mode: multiCallMode,
       plan_context: planContext,
+      return_style: returnStyle,
     }
 
     // Call with or without collector.
@@ -734,6 +743,7 @@ export function createLoopControllerAdapter(
             fewShots,
             multiCallMode,
             planContext,
+            returnStyle,
             baseOpts,
           )
         : await b.LoopController(
@@ -746,6 +756,7 @@ export function createLoopControllerAdapter(
             fewShots,
             multiCallMode,
             planContext,
+            returnStyle,
           )
     } catch (e) {
       // Recoverable parse failures (any chain, incl. Anthropic-only): the parse
@@ -770,6 +781,7 @@ export function createLoopControllerAdapter(
                 fewShots,
                 multiCallMode,
                 planContext,
+                returnStyle,
                 baseOpts,
               )
             : await b.LoopController(
@@ -782,6 +794,7 @@ export function createLoopControllerAdapter(
                 fewShots,
                 multiCallMode,
                 planContext,
+                returnStyle,
               )
           const llmCall = collector
             ? extractLLMCallData(collector, 'LoopController', variables, startTime, action)
@@ -805,6 +818,7 @@ export function createLoopControllerAdapter(
           fewShots,
           multiCallMode,
           planContext,
+          returnStyle,
           collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' },
         )
       } catch (e2) {
@@ -822,6 +836,7 @@ export function createLoopControllerAdapter(
             fewShots,
             multiCallMode,
             planContext,
+            returnStyle,
             collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' },
           )
         } catch (e3) {

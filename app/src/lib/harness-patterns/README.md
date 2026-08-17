@@ -322,6 +322,7 @@ interface SimpleLoopConfig extends PatternConfig {
   onToolResult?: OnToolResult // Enrich/transform tool results before they're committed (see "Hooks" below)
   resultOmit?: Record<string, string[]> // Per-tool fields hidden from the controller turn log (see below)
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Multi-call turns (default: 'parallel'; see below)
+  returnStyle?: 'summary' | 'answer' // What the terminal `Return` carries (default: 'summary'; see below)
 }
 
 interface FewShot {
@@ -418,6 +419,31 @@ per-tool fidelity. Partial failure → the loop continues (the controller retrie
 just the failures); ALL sub-calls failed → the usual recoverable-error break
 path. `Return` and `expandPreviousResult` are singular-only — inside a batch
 they get a per-call error.
+
+**Who writes the final answer: `returnStyle`** (#149). The loop's terminal
+`Return` action never reaches the user. `Synthesize` gates its per-turn block on
+`turn.tool_result`, and the Return iteration has no result — the prose arrives
+as `tool_call.args` and renders nowhere — so the downstream `compactExecution`
+composes the user-facing answer from the tool results either way. Measured on a
+5-turn web-search run, composing it in the loop as well cost **2,134 output
+tokens and ~22s** (the run's most expensive turn) for a text nothing read.
+
+- `'summary'` (default) — the prompt asks for a one-or-two-sentence completion
+  summary: the cheapest text that still terminates the loop.
+- `'answer'` — the pre-#149 wording ("put the complete answer in tool_args").
+  **Prompt-only**: the loop still sets no `data.response`, so a downstream
+  `compactExecution` remains the author. For a loop whose Return prose is itself
+  the deliverable — e.g. a custom `synthesize` that reads
+  `loopHistory.iterations[].action`. Making the loop's answer _suppress_
+  synthesis is #149 Option B and is deliberately not built.
+
+The default is safe because `compactExecution` is the better-informed author in
+every shipped chain: it reads results at full fidelity (no `maxResultChars`
+clip, no `resultOmit` projection — `microsoft-365` hides `webUrl` from its
+controller _because_ the compactExecution renders the links), across patterns,
+with `view.hasErrors()` for honest error reporting and the FIDELITY /
+no-fabricated-URL rules. The style is agent-static, so it renders inside the
+cached prompt head (system block + tier 1) at no per-turn cost.
 
 **How it works:**
 
@@ -1386,6 +1412,9 @@ BAML Inputs:
   turns_previous_runs   : PriorResult[]?   ← prior turns (from viewConfig, default: last 3 turns)
   multi_call_mode       : string?          ← "parallel" | "sequential" | null, from config.multiToolCalls
                                              ('off' → null: no affordance rendered)
+  plan_context          : string?          ← formatted plan from an upstream `planner` (#27)
+  return_style          : string?          ← "summary" | "answer", from config.returnStyle
+                                             (null renders as "summary": brief terminal Return)
 
 BAML Return → ControllerAction:
   reasoning        : string             → stored as controller_action event

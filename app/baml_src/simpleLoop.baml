@@ -11,6 +11,9 @@
 //   multi_call_mode     — "parallel" | "sequential" | null; agent-static (from
 //                         pattern config). Gates the LoopMultiCalls tier-1
 //                         section advertising ControllerAction.additional_calls
+//   return_style        — "answer" | "summary" | null; agent-static (from
+//                         pattern config). Picks the terminal-action guidance:
+//                         null defaults to "summary" (#149)
 //
 // Prompt-caching layout (#122) — two stable tiers, then a chronological
 // conversation:
@@ -111,6 +114,47 @@ template_string LoopMultiCalls(multi_call_mode: string?) #"
   {% endif %}
 "#
 
+// --- Section: terminal-action guidance (static; system role) -----------------
+// WHO WRITES THE USER-FACING ANSWER (#149). Measured on a real 5-turn run: the
+// terminal Return turn composed a 3,757-char answer into tool_args — 2,134
+// output tokens, ~22s, the most expensive turn of the run — and NOTHING read
+// it. `Synthesize` (compact-execution.baml) gates its per-turn block on
+// `turn.tool_result`, and the Return iteration has no result, so the prose
+// arrives as `tool_call.args` and renders nowhere; the compactExecution then
+// re-derived the whole answer from the full-fidelity tool results.
+//
+// So "summary" (the default) asks the loop for the cheapest text that still
+// terminates it, and leaves composition to the single better-informed author:
+// the compactExecution sees results at full fidelity (no `maxResultChars` clip,
+// no `resultOmit` projection — microsoft-365 hides `webUrl` from the controller
+// precisely because the compactExecution renders the links), across patterns,
+// with `view.hasErrors()` for honest error reporting.
+//
+// "answer" restores the pre-#149 wording verbatim, for a loop whose Return
+// prose IS the deliverable. It is prompt-only: the loop still writes no
+// `data.response`, so a downstream compactExecution remains the author — the
+// passthrough half is #149 Option B, deliberately not built.
+//
+// Agent-static (pattern config, resolved once per adapter call chain), so this
+// section is cache-safe in the system block and in tier 1: it cannot vary
+// within a run.
+template_string LoopReturnStyle(return_style: string?) #"
+  {% if return_style == "answer" %}
+
+  To finish, set tool_name to "Return", put the complete answer in tool_args as
+  plain prose (not JSON), and set is_final to true. That turn makes no tool
+  call, so there is no progress to report and `status` may be omitted.
+  {% else %}
+
+  To finish, set tool_name to "Return" and set is_final to true, and put a
+  BRIEF completion summary in tool_args as plain prose (not JSON) — one or two
+  sentences on what you found or did, NOT the user-facing answer: a later step
+  composes that from the full tool results, so re-stating them here is wasted
+  work. That turn makes no tool call, so there is no progress to report and
+  `status` may be omitted.
+  {% endif %}
+"#
+
 // --- Section: prior-run results (cached tier-2) ------------------------------
 // Frozen summaries + the expandPreviousResult affordance. STABILITY RULE:
 // renders plain summaries only — never per-turn annotations, which would
@@ -203,23 +247,25 @@ function LoopController(
   // vary per run, turning every cache read on the tool catalog into a cache
   // write, issue #122. It renders in tier 2 instead, beside the intent it
   // belongs with.
-  plan_context: string?
+  plan_context: string?,
+  // Terminal-action style, #149 — see LoopReturnStyle. Trailing + optional:
+  // the generated client takes its arguments POSITIONALLY, so a new parameter
+  // goes at the END (inserting one mid-signature silently shifts every later
+  // argument and drops the trailing options object).
+  return_style: string?
 ) -> ControllerAction {
   client ControllerAnthropic
   prompt #"
     {# The terminal action is described HERE because the turn log can never show
        one: the loop breaks before pushing a final action, so `is_final` renders
        as a literal false and every demonstration the model gets is a non-final
-       turn paired with a tool call. That left the one shape that ENDS the loop —
-       and carries the answer — undemonstrated. Static text, so it costs nothing
-       per turn and stays inside the cached prefix. #}
+       turn paired with a tool call. That left the one shape that ENDS the loop
+       undemonstrated. Static text (per style), so it costs nothing per turn and
+       stays inside the cached prefix. #}
     {{ _.role("system") }}
     You are an AI agent that accomplishes tasks by calling tools.
     Select one tool per turn. Use "Return" when you have enough information.
-
-    To finish, set tool_name to "Return", put the complete answer in tool_args as
-    plain prose (not JSON), and set is_final to true. That turn makes no tool
-    call, so there is no progress to report and `status` may be omitted.
+    {{ LoopReturnStyle(return_style) }}
 
     {# ────────── CACHED TIER 1 · agent-static: context · tools · examples ────────── #}
     {{ _.role("user", cache_control={"type": "ephemeral"}) }}
@@ -231,7 +277,7 @@ function LoopController(
     {% endif %}
     AVAILABLE TOOLS:
     {{ ToolCatalog(tools) }}
-    - Return: Signal task completion (tool_args = final answer or summary)
+    - Return: Signal task completion (tool_args = {% if return_style == "answer" %}final answer{% else %}brief completion summary{% endif %})
     {{ LoopMultiCalls(multi_call_mode) }}
     {{ LoopFewShots(few_shots) }}
 

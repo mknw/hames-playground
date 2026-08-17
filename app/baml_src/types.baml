@@ -125,7 +125,7 @@ class Message {
 class ControllerAction {
   reasoning string @description("Step-by-step thought process")
   tool_name string @description("Tool to call, or 'Return' to exit loop")
-  tool_args string @description("Valid JSON object string with the tool's arguments, e.g. {\"query\": \"search term\"}. Keys and string values MUST be double-quoted. For Return, use the final answer as a plain string.")
+  tool_args string @description("Valid JSON object string with the tool's arguments, e.g. {\"query\": \"search term\"}. Keys and string values MUST be double-quoted. For Return, use plain prose (not JSON), as your instructions describe.")
   // OPTIONAL and self-gating: one ControllerAction class serves every agent,
   // so this field is visible in ctx.output_format even for agents whose
   // instructions never mention multiple calls. The description tells the model

@@ -144,6 +144,19 @@ jobs:
       - name: Build the image
         run: docker build --tag kg-agent-app:ci .
 
+      # Booting proves less than it looks: /api/health touches neither native
+      # package, so an image whose traced node_modules lost node-pty's .node
+      # addon or BAML's entry file still passes the smoke test below and only
+      # fails on the first Shell tab or the first BAML call. Require them here.
+      # `-w /app/.output/server` is where the server bundle itself resolves from
+      # (its node_modules sits beside index.mjs), not the /app the CMD runs in.
+      - name: Assert the natives are self-contained
+        run: |
+          docker run --rm -w /app/.output/server --entrypoint node kg-agent-app:ci \
+            -e "require('node-pty'); require('@boundaryml/baml'); console.log('native OK')"
+          docker run --rm --entrypoint ls kg-agent-app:ci \
+            -l /app/.output/server/node_modules/node-pty/build/Release
+
       # A container that builds but does not boot is not a passing gate. This
       # runs the image with NO dependencies attached: /api/health is a liveness
       # probe that touches none of them, and the routine scheduler's tick

@@ -70,16 +70,26 @@ jobs:
       # rather than a pathspec: a pathspec hides the deleted side of a rename,
       # so git scores every moved file as an Add and a directory move (#192,
       # ui/ → app/) would drag the whole legacy tree into the check. Guard
-      # bulk moves by count, not by dropping the rename class outright.
+      # bulk moves by count, not by dropping the rename class outright: past
+      # BULK_MOVE_LIMIT changed files the PR is a directory move, the list is
+      # dominated by untouched legacy code, and the check is skipped with a
+      # loud ::warning:: rather than failing on files nobody wrote.
       - name: Format check (changed files)
         if: github.event_name == 'pull_request'
         working-directory: .
+        env:
+          BULK_MOVE_LIMIT: 100
         run: |
           files=$(git diff --name-only --diff-filter=ACMR \
                     "${{ github.event.pull_request.base.sha }}" HEAD \
                     | grep -E '^app/.*\.(ts|tsx|js|jsx|json|css|md)$' || true)
           if [ -z "$files" ]; then
             echo "No formattable files changed."
+            exit 0
+          fi
+          count=$(printf '%s\n' "$files" | wc -l | tr -d ' ')
+          if [ "$count" -gt "$BULK_MOVE_LIMIT" ]; then
+            echo "::warning title=Prettier check skipped::$count formattable files changed (> $BULK_MOVE_LIMIT) — this looks like a bulk move/rename, so the changed-file format check was SKIPPED. Format any hand-edited files locally (pnpm exec prettier --write <paths>)."
             exit 0
           fi
           echo "$files"

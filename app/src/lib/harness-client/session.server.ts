@@ -65,6 +65,29 @@ const patternCache = new Map<string, PatternCacheEntry>()
  *  `createPatterns`, consumed by `getOrBuildPatterns` right after. */
 const uncacheable = new Set<string>()
 
+/** How many `getOrBuildPatterns` builds are in flight per session — the only
+ *  builds whose result the cache will actually keep, so the only ones a
+ *  `doNotCachePatterns` call can meaningfully speak about.
+ *
+ *  Ref-counted, not a membership Set: `getOrBuildPatterns` has no in-flight
+ *  dedupe, so two overlapping calls for the same session (two entry points in
+ *  actions.server.ts, a double-submit, an SSE retry) both build. With a Set,
+ *  the first to settle would clear the marker out from under the second, and
+ *  that second build's `doNotCachePatterns` would be dropped SILENTLY — caching
+ *  a degraded pattern set for the life of the session, the exact failure this
+ *  flag exists to prevent. */
+const building = new Map<string, number>()
+
+function enterBuild(sessionId: string): void {
+  building.set(sessionId, (building.get(sessionId) ?? 0) + 1)
+}
+
+function exitBuild(sessionId: string): void {
+  const depth = (building.get(sessionId) ?? 1) - 1
+  if (depth > 0) building.set(sessionId, depth)
+  else building.delete(sessionId)
+}
+
 /**
  * Ask the cache to discard this session's patterns once they are built, so the
  * next turn builds them again.
@@ -77,9 +100,16 @@ const uncacheable = new Set<string>()
  *
  * Deliberately not `evictPatterns`: the cache is written AFTER `createPatterns`
  * resolves, so an eviction from inside the build would be overwritten.
+ *
+ * Scoped to `getOrBuildPatterns` builds. The registry's capability probes
+ * (`agentUsesCodeMode` / `agentUsesRedisRetriever` / `agentUsesSyncWorkspace`)
+ * call `createPatterns` directly to inspect the pattern SHAPE and throw the
+ * result away; nothing there consumes the flag, so a degraded probe build used
+ * to leave one behind and cost the next real build its cache entry. Outside a
+ * tracked build this is a no-op — there is no cache write to suppress.
  */
 export function doNotCachePatterns(sessionId: string): void {
-  uncacheable.add(sessionId)
+  if (building.has(sessionId)) uncacheable.add(sessionId)
 }
 
 export async function getOrBuildPatterns(
@@ -91,8 +121,28 @@ export async function getOrBuildPatterns(
 
   const agent = getAgent(agentId)
   if (!agent) throw new Error(`Unknown agent: ${agentId}`)
-  const patterns = await agent.createPatterns(sessionId)
-  if (uncacheable.delete(sessionId)) {
+  enterBuild(sessionId)
+  let patterns: ConfiguredPattern<SessionData>[]
+  try {
+    patterns = await agent.createPatterns(sessionId)
+  } catch (err) {
+    exitBuild(sessionId)
+    // A build that threw produced nothing to cache, so its flag has no
+    // consumer — drop it rather than let it suppress the NEXT build's write.
+    // Only once this was the LAST build in flight: a concurrent one may have
+    // raised the flag for a degraded result it is still about to return.
+    if (!building.has(sessionId)) uncacheable.delete(sessionId)
+    throw err
+  }
+  exitBuild(sessionId)
+  // The flag names the SESSION, not one build, so it cannot be attributed to
+  // whichever build settles first: while any build for this session is still
+  // in flight, every result stays uncached and the flag survives for it. It is
+  // dropped only when the session has drained — conservative in the safe
+  // direction (an extra rebuild, never a frozen degraded harness).
+  const flagged = uncacheable.has(sessionId)
+  if (!building.has(sessionId)) uncacheable.delete(sessionId)
+  if (flagged) {
     // Degraded build: usable now, rebuilt next turn. Drop any stale entry too,
     // so a previously cached (also degraded) build can't be served instead.
     patternCache.delete(sessionId)
@@ -164,6 +214,9 @@ export async function saveSession(
 
 export async function deleteSession(sessionId: string, userId: string): Promise<void> {
   evictPatterns(sessionId)
+  // The session is gone — nothing will ever consume a pending flag for it, so
+  // leaving one would leak an entry for the life of the process.
+  uncacheable.delete(sessionId)
   await deleteConversation(sessionId, userId)
 }
 

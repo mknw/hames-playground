@@ -1054,22 +1054,22 @@ transformed into prompt-friendly types. The table below shows which harness
 
 ### Harness EventType → BAML Input Type
 
-| Harness `EventType`  | Event Payload (TS)                                                                                                       | BAML Type                              | Consumed By                                                   |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- | ------------------------------------------------------------- |
-| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                              | `ToolCall`                             | `LoopTurn.tool_call`, `Attempt.action`                        |
-| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`) | `ToolResult`                           | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
-| `controller_action`  | `ControllerActionEventData`                                                                                              | _(embedded in `LoopTurn.reasoning`)_   | simpleLoop, actorCritic                                       |
-| `critic_result`      | `CriticResultEventData`                                                                                                  | _(embedded in `Attempt.feedback`)_     | actorCritic                                                   |
-| `user_message`       | `UserMessageEventData`                                                                                                   | `Message { role, content }`            | router (history)                                              |
-| `assistant_message`  | `AssistantMessageEventData`                                                                                              | `Message { role, content }`            | router (history)                                              |
-| `pattern_enter`      | `PatternEnterEventData`                                                                                                  | _(not sent to BAML)_                   | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
-| `pattern_exit`       | `PatternExitEventData`                                                                                                   | _(not sent to BAML)_                   | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
-| `approval_request`   | `ApprovalRequestEventData`                                                                                               | _(not sent to BAML)_                   | (reserved — no active emitter)                                |
-| `approval_response`  | `ApprovalResponseEventData`                                                                                              | _(not sent to BAML)_                   | (reserved — no active emitter)                                |
-| `error`              | `ErrorEventData`                                                                                                         | _(read via `view.hasErrors()`)_        | synthesizer (error context), harness error handling           |
-| `reference_attached` | `ReferenceAttachedEventData`                                                                                             | _(not sent to BAML)_                   | withReferences only (observability)                           |
-| `intent_compacted`   | `IntentCompactedEventData`                                                                                               | _(not sent to BAML)_                   | compactIntent only (observability)                            |
-| `plan_created`       | `PlanCreatedEventData`                                                                                                   | _(the plan reaches BAML as `context`)_ | planner only; loops read `scope.data.plan`, not the event     |
+| Harness `EventType`  | Event Payload (TS)                                                                                                       | BAML Type                                               | Consumed By                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------- |
+| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                              | `ToolCall`                                              | `LoopTurn.tool_call`, `Attempt.action`                        |
+| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`) | `ToolResult`                                            | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
+| `controller_action`  | `ControllerActionEventData`                                                                                              | _(embedded in `LoopTurn.reasoning`)_                    | simpleLoop, actorCritic                                       |
+| `critic_result`      | `CriticResultEventData`                                                                                                  | _(embedded in `Attempt.feedback`)_                      | actorCritic                                                   |
+| `user_message`       | `UserMessageEventData`                                                                                                   | `Message { role, content }`                             | router (history)                                              |
+| `assistant_message`  | `AssistantMessageEventData`                                                                                              | `Message { role, content }`                             | router (history)                                              |
+| `pattern_enter`      | `PatternEnterEventData`                                                                                                  | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
+| `pattern_exit`       | `PatternExitEventData`                                                                                                   | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
+| `approval_request`   | `ApprovalRequestEventData`                                                                                               | _(not sent to BAML)_                                    | (reserved — no active emitter)                                |
+| `approval_response`  | `ApprovalResponseEventData`                                                                                              | _(not sent to BAML)_                                    | (reserved — no active emitter)                                |
+| `error`              | `ErrorEventData`                                                                                                         | _(read via `view.hasErrors()`)_                         | synthesizer (error context), harness error handling           |
+| `reference_attached` | `ReferenceAttachedEventData`                                                                                             | _(not sent to BAML)_                                    | withReferences only (observability)                           |
+| `intent_compacted`   | `IntentCompactedEventData`                                                                                               | _(not sent to BAML)_                                    | compactIntent only (observability)                            |
+| `plan_created`       | `PlanCreatedEventData`                                                                                                   | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event     |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
 
@@ -1196,7 +1196,7 @@ BAML Return → PlanResult:
   → written to scope.data.plan
   → stored as a plan_created event (with the LLM call + the RESOLVED tool count)
   → downstream: formatPlanContext(plan) → controller `planContext`
-                → simpleLoop: BAML `plan_context` (tier 2, uncached prefix)
+                → simpleLoop: BAML `plan_context` (tier 2, run-static prefix)
                 → actorCritic: merged into BAML `context`
 ```
 

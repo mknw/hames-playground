@@ -98,7 +98,9 @@ have to ask for by name are `/grill-me` and `/improve-codebase-architecture`.
   decision records in [`docs/adr/`](docs/adr/README.md) (which also states when
   one gets written, and that they are not to be re-litigated).
 - Provenance and upstream pins for the vendored files still in-repo
-  (`kg-*` skills, the two sub-agents): `.claude/skills/PROVENANCE.md`;
+  (`kg-*` skills, the two sub-agents, the Code minimalism section below, plus
+  the vendored docs outside `.claude/` — `docs/adr/README.md` and
+  `docs/agents/AGENT-BRIEF.md`): `.claude/skills/PROVENANCE.md`;
   licences: `.claude/skills/NOTICE.md`. Adoption programme (historical):
   [`docs/plan/skills-adoption.md`](docs/plan/skills-adoption.md).
 

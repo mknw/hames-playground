@@ -10,8 +10,10 @@
  * strategy ONCE up front:
  *
  *   - `planner` reads every tool description and emits a numbered plan.
- *   - `simpleLoop` executes it; the plan arrives prepended to its controller's
- *     `context`, so the controller stops re-deriving the approach each turn.
+ *   - `simpleLoop` executes it; the plan arrives as the controller's own
+ *     `plan_context` parameter (tier 2, beside the intent — never inside the
+ *     agent-static `context` prefix), so the controller stops re-deriving the
+ *     approach each turn.
  *
  * Kept alongside `default` deliberately: same session shape, different
  * strategy, so the two can be compared on the same questions.

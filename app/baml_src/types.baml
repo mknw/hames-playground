@@ -194,8 +194,10 @@ class CriticResult {
 
 /// Strategic plan produced by the `planner` pattern BEFORE any tool runs.
 /// The planner never executes a tool — it only describes the approach, which
-/// downstream loop patterns receive prepended to their `context` argument
+/// downstream loop patterns receive as their trailing `planContext` argument
 /// (harness-patterns/patterns/planner.server.ts → `formatPlanContext`).
+/// `LoopController` takes it as its own `plan_context` parameter (tier 2);
+/// `ActorController` merges it into `context`, which is cache-safe there.
 class PlanResult {
   /// Field name deliberately matches ControllerAction.reasoning — one
   /// vocabulary for "why this course of action", wherever it is produced.

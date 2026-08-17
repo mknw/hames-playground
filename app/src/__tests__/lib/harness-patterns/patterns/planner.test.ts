@@ -243,6 +243,13 @@ describe('planner', () => {
     const errors = result.events.filter((e) => e.type === 'error')
     expect(errors).toHaveLength(1)
     expect(JSON.stringify(errors[0].data)).toContain('empty plan')
+    // Thrown as an LLMCallError carrying the call that produced the empty
+    // plan: this is the failure whose prompt you most need to read, so the
+    // panel must keep its drill-down rather than get a bare Error.
+    expect((errors[0].data as { kind?: string }).kind).toBe('llm_call')
+    expect((errors[0] as { llmCall?: { clientName?: string } }).llmCall?.clientName).toBe(
+      'PlannerAnthropic',
+    )
   })
 
   it('is best-effort: a BAML failure leaves the plan unset and tracks an error', async () => {

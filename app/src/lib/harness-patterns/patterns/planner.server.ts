@@ -176,8 +176,15 @@ export function planner<T extends PlannerData>(
       // `""` satisfies it) but injects NOTHING downstream — `formatPlanContext`
       // returns undefined. Reporting that as a success would show "0 steps" in
       // the panel over a run that is really unplanned, so it is an error.
+      // Thrown as an LLMCallError carrying the call that succeeded at the HTTP
+      // level but produced nothing usable: this is exactly the failure whose
+      // prompt you need to read, so a bare Error here would strip the panel's
+      // drill-down on the one path that most needs it. (`llmCall` is optional
+      // — no collector was passed, or it captured nothing — and without one
+      // there is nothing to attach, so a plain Error is the honest throw.)
       if (!raw.plan?.trim()) {
-        throw new Error('Planner returned an empty plan')
+        const message = 'Planner returned an empty plan'
+        throw llmCall ? new LLMCallError(message, llmCall) : new Error(message)
       }
 
       // Cap the plan text: the executor re-reads it every turn.

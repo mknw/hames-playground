@@ -1,8 +1,10 @@
 /**
- * Background Tool Result Summarization - Server Only
+ * compactBulkData — Background Tool Result Compaction - Server Only
  *
- * Fires after the SSE response is sent to the user. Summarizes tool_result
- * events from the current turn using a lightweight model (DescribeFallback).
+ * The third member of the compaction family (`compactIntent` upstream of a
+ * chain, `compactExecution` at its end, `compactBulkData` after the turn):
+ * fires once the SSE response has been sent to the user, and summarizes the
+ * turn's `tool_result` events with the lightweight describe-tier client.
  * Summaries are stored on the event data and persisted to session storage,
  * so they're available as compact pointers on subsequent turns.
  */
@@ -27,7 +29,7 @@ assertServerOnImport()
  * @param ctx - The live UnifiedContext object (mutated in-place)
  * @param onPersist - Callback to re-serialize the context to session storage
  */
-export async function scheduleSummarization(
+export async function compactBulkData(
   ctx: UnifiedContext,
   onPersist: () => Promise<void>
 ): Promise<void> {

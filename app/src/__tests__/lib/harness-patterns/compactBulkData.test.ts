@@ -1,7 +1,7 @@
 /**
- * Summarize Server Tests
+ * compactBulkData Tests
  *
- * Tests for scheduleSummarization — background tool result summarization.
+ * Tests for compactBulkData — background tool result summarization.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -29,14 +29,14 @@ function createTestContext(events: ContextEvent[]): UnifiedContext {
   }
 }
 
-describe('scheduleSummarization', () => {
+describe('compactBulkData', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockDescribe.mockResolvedValue('Test summary')
   })
 
   it('should summarize tool_result events from the current turn', async () => {
-    const { scheduleSummarization } = await import('../../../lib/harness-patterns/summarize.server')
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -48,7 +48,7 @@ describe('scheduleSummarization', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await scheduleSummarization(ctx, onPersist)
+    await compactBulkData(ctx, onPersist)
 
     expect(mockDescribe).toHaveBeenCalledOnce()
     expect(mockDescribe).toHaveBeenCalledWith(
@@ -67,7 +67,7 @@ describe('scheduleSummarization', () => {
   })
 
   it('should skip hidden tool_result events', async () => {
-    const { scheduleSummarization } = await import('../../../lib/harness-patterns/summarize.server')
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -77,14 +77,14 @@ describe('scheduleSummarization', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await scheduleSummarization(ctx, onPersist)
+    await compactBulkData(ctx, onPersist)
 
     expect(mockDescribe).not.toHaveBeenCalled()
     expect(onPersist).toHaveBeenCalledOnce()
   })
 
   it('should skip archived tool_result events', async () => {
-    const { scheduleSummarization } = await import('../../../lib/harness-patterns/summarize.server')
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -94,13 +94,13 @@ describe('scheduleSummarization', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await scheduleSummarization(ctx, onPersist)
+    await compactBulkData(ctx, onPersist)
 
     expect(mockDescribe).not.toHaveBeenCalled()
   })
 
   it('should skip events that already have a summary', async () => {
-    const { scheduleSummarization } = await import('../../../lib/harness-patterns/summarize.server')
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -110,13 +110,13 @@ describe('scheduleSummarization', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await scheduleSummarization(ctx, onPersist)
+    await compactBulkData(ctx, onPersist)
 
     expect(mockDescribe).not.toHaveBeenCalled()
   })
 
   it('should skip failed (success: false) tool_result events', async () => {
-    const { scheduleSummarization } = await import('../../../lib/harness-patterns/summarize.server')
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -126,13 +126,13 @@ describe('scheduleSummarization', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await scheduleSummarization(ctx, onPersist)
+    await compactBulkData(ctx, onPersist)
 
     expect(mockDescribe).not.toHaveBeenCalled()
   })
 
   it('should skip tool_result events without an id', async () => {
-    const { scheduleSummarization } = await import('../../../lib/harness-patterns/summarize.server')
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -142,13 +142,13 @@ describe('scheduleSummarization', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await scheduleSummarization(ctx, onPersist)
+    await compactBulkData(ctx, onPersist)
 
     expect(mockDescribe).not.toHaveBeenCalled()
   })
 
   it('should summarize multiple tool_results in parallel', async () => {
-    const { scheduleSummarization } = await import('../../../lib/harness-patterns/summarize.server')
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 
     mockDescribe
       .mockResolvedValueOnce('Summary for search')
@@ -163,7 +163,7 @@ describe('scheduleSummarization', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await scheduleSummarization(ctx, onPersist)
+    await compactBulkData(ctx, onPersist)
 
     expect(mockDescribe).toHaveBeenCalledTimes(2)
     expect((events[1].data as { summary?: string }).summary).toBe('Summary for search')
@@ -171,7 +171,7 @@ describe('scheduleSummarization', () => {
   })
 
   it('should truncate long results before sending to summarizer', async () => {
-    const { scheduleSummarization } = await import('../../../lib/harness-patterns/summarize.server')
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 
     const longResult = 'x'.repeat(5000)
     const events: ContextEvent[] = [
@@ -182,7 +182,7 @@ describe('scheduleSummarization', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await scheduleSummarization(ctx, onPersist)
+    await compactBulkData(ctx, onPersist)
 
     expect(mockDescribe).toHaveBeenCalledOnce()
     // The 4th arg (result) should be truncated
@@ -192,7 +192,7 @@ describe('scheduleSummarization', () => {
   })
 
   it('should handle describeToolResultOp returning empty string gracefully', async () => {
-    const { scheduleSummarization } = await import('../../../lib/harness-patterns/summarize.server')
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 
     mockDescribe.mockResolvedValue('')
 
@@ -204,7 +204,7 @@ describe('scheduleSummarization', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await scheduleSummarization(ctx, onPersist)
+    await compactBulkData(ctx, onPersist)
 
     // Empty string should not be stored as summary
     expect((events[1].data as { summary?: string }).summary).toBeUndefined()
@@ -212,7 +212,7 @@ describe('scheduleSummarization', () => {
   })
 
   it('should handle describeToolResultOp rejection gracefully', async () => {
-    const { scheduleSummarization } = await import('../../../lib/harness-patterns/summarize.server')
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 
     mockDescribe.mockRejectedValue(new Error('Model unavailable'))
 
@@ -225,7 +225,7 @@ describe('scheduleSummarization', () => {
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
     // Should not throw — Promise.allSettled handles rejections
-    await scheduleSummarization(ctx, onPersist)
+    await compactBulkData(ctx, onPersist)
 
     // Summary should not be set
     expect((events[1].data as { summary?: string }).summary).toBeUndefined()
@@ -234,7 +234,7 @@ describe('scheduleSummarization', () => {
   })
 
   it('should do nothing when there are no tool_results in current turn', async () => {
-    const { scheduleSummarization } = await import('../../../lib/harness-patterns/summarize.server')
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'just a chat' } },
@@ -244,7 +244,7 @@ describe('scheduleSummarization', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await scheduleSummarization(ctx, onPersist)
+    await compactBulkData(ctx, onPersist)
 
     expect(mockDescribe).not.toHaveBeenCalled()
     // onPersist should NOT be called when there's nothing to summarize
@@ -252,7 +252,7 @@ describe('scheduleSummarization', () => {
   })
 
   it('should only summarize current turn results, not prior turn results', async () => {
-    const { scheduleSummarization } = await import('../../../lib/harness-patterns/summarize.server')
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       // Turn 1
@@ -266,7 +266,7 @@ describe('scheduleSummarization', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await scheduleSummarization(ctx, onPersist)
+    await compactBulkData(ctx, onPersist)
 
     // Should only be called for ev-new (current turn)
     expect(mockDescribe).toHaveBeenCalledOnce()
@@ -274,7 +274,7 @@ describe('scheduleSummarization', () => {
   })
 
   it('should find controller_action reasoning for context', async () => {
-    const { scheduleSummarization } = await import('../../../lib/harness-patterns/summarize.server')
+    const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -286,7 +286,7 @@ describe('scheduleSummarization', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await scheduleSummarization(ctx, onPersist)
+    await compactBulkData(ctx, onPersist)
 
     // Reasoning should be passed as 3rd argument
     expect(mockDescribe.mock.calls[0][2]).toBe('I need to query the graph for person nodes')

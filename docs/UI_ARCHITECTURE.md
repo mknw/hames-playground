@@ -958,7 +958,7 @@ app/
 │       │   ├── mcp-client.server.ts # callTool(), listTools()
 │       │   ├── assert.server.ts   # Server-only import guards
 │       │   ├── token-budget.server.ts # trimToFit(), getContextWindow(), estimateTokens()
-│       │   ├── summarize.server.ts    # scheduleSummarization() — background result summarization
+│       │   ├── compactBulkData.server.ts    # compactBulkData() — background result summarization
 │       │   └── patterns/
 │       │       ├── simpleLoop.server.ts   # ReAct loop + callId (+ batchId on multi-call turns) on tool events
 │       │       ├── actorCritic.server.ts  # Generate-evaluate + callId (+ batchId)

@@ -40,12 +40,12 @@ vi.mock('../../../lib/harness-client/session.server', () => ({
     saveSession(sessionId, userId, agentId, serialized),
 }))
 
-const scheduleSummarization = vi.fn(async (_ctx: unknown, persist: () => Promise<void>) => {
+const compactBulkData = vi.fn(async (_ctx: unknown, persist: () => Promise<void>) => {
   await persist()
 })
 vi.mock('../../../lib/harness-patterns', () => ({
-  scheduleSummarization: (...a: unknown[]) =>
-    scheduleSummarization(...(a as [unknown, () => Promise<void>])),
+  compactBulkData: (...a: unknown[]) =>
+    compactBulkData(...(a as [unknown, () => Promise<void>])),
   serializeContext: (ctx: unknown) => ({ serialized: ctx }),
 }))
 
@@ -186,8 +186,8 @@ describe('POST /api/events', () => {
   it('persists the summarized turn after the stream closes', async () => {
     await POST(evt({ sessionId: 's1', message: 'hi', agentId: 'neo4j' })).then((r) => r.text())
 
-    expect(scheduleSummarization).toHaveBeenCalledTimes(1)
-    expect(scheduleSummarization.mock.calls[0][0]).toEqual(RESULT.context)
+    expect(compactBulkData).toHaveBeenCalledTimes(1)
+    expect(compactBulkData.mock.calls[0][0]).toEqual(RESULT.context)
     expect(saveSession).toHaveBeenCalledWith('s1', 'user-1', 'neo4j', {
       serialized: RESULT.context,
     })

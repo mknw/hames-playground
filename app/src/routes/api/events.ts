@@ -7,7 +7,7 @@
 import type { APIEvent } from "@solidjs/start/server";
 import { processMessageStreaming } from "../../lib/harness-client/actions.server";
 import { saveSession } from "../../lib/harness-client/session.server";
-import { scheduleSummarization, serializeContext } from "../../lib/harness-patterns";
+import { compactBulkData, serializeContext } from "../../lib/harness-patterns";
 import { runFirstTurnTitleGen } from "../../lib/harness-client/examples/title-generator.server";
 import { getAuthenticatedUser } from "../../lib/auth/server";
 import { BYPASS_USER, isBypassEnabled } from "../../lib/auth/dev-bypass";
@@ -104,7 +104,7 @@ export async function POST(event: APIEvent) {
         // Runs after the SSE stream is closed — user already has the response.
         // Summaries are stored on tool_result events and persisted to session,
         // so they appear as compact pointers on subsequent turns.
-        scheduleSummarization(result.context, async () => {
+        compactBulkData(result.context, async () => {
           await saveSession(
             sessionId,
             userId,

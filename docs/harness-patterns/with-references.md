@@ -36,14 +36,14 @@ These are three *policies* for the same underlying question: **which prior data 
 - Replace #26 and #29 with one declarative wrapper.
 - Keep #19 as the inner-loop counterpart (controller can opt to expand any compact ref mid-loop).
 - Zero changes to existing controller BAML signatures.
-- Operate at *pattern ingress*; egress is already covered by event tracking + `scheduleSummarization`.
+- Operate at *pattern ingress*; egress is already covered by event tracking + `compactBulkData`.
 - Observable: every selection decision should leave a trace in `ctx.events`.
 
 ### Non-goals
 - Producer-side declaration of refs (no `publishRefs` on patterns; everything in `ctx.events` is implicitly available).
 - Mid-loop relevance recomputation (selection happens once per pattern entry; refresh happens at the next pattern's entry).
 - Egress filtering or summarization (already in place).
-- Determining *which* model writes summaries (handled by existing `scheduleSummarization` / `DescribeFallback`).
+- Determining *which* model writes summaries (handled by existing `compactBulkData` / `DescribeFallback`).
 
 ## 3. Reference taxonomy
 

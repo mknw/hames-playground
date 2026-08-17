@@ -425,7 +425,7 @@ they get a per-call error.
 4. Loop until `is_final` or max turns
 5. Prior tool results from earlier turns are passed as `turns_previous_runs: PriorResult[]` — a structured array separate from the current task's `turns`. The LLM can reference them with `ref:<ref_id>` in tool args; `resolveRefs()` auto-expands before MCP execution. Controlled by `rememberPriorTurns` (default: true) and `priorTurnCount` (default: 3).
 6. Controller errors are caught per-iteration — loop exits gracefully with partial results; errors are tracked as events and read by downstream patterns via `view.hasErrors()` / `view.lastError()`, scoped by ViewConfig (so they naturally expire with the view window)
-7. After the response reaches the user, `scheduleSummarization()` runs in the background: it summarizes each `tool_result` with a lightweight model (`DescribeFallback`) and stores the summary on the event. These summaries appear as `PriorResult.summary` on subsequent turns.
+7. After the response reaches the user, `compactBulkData()` runs in the background: it summarizes each `tool_result` with a lightweight model (`DescribeFallback`) and stores the summary on the event. These summaries appear as `PriorResult.summary` on subsequent turns.
 
 ### `actorCritic(actor, critic, tools, config?)`
 
@@ -946,7 +946,7 @@ view.exists() // boolean
 view.count() // number
 ```
 
-**Compact serialization**: `serializeCompact()` renders older `tool_result` events as compact pointers. If an LLM-generated summary exists (via `scheduleSummarization()`), it replaces the raw preview:
+**Compact serialization**: `serializeCompact()` renders older `tool_result` events as compact pointers. If an LLM-generated summary exists (via `compactBulkData()`), it replaces the raw preview:
 
 ```xml
 <tool_result id="ev-abc123" tool="search" compact="true">
@@ -958,7 +958,7 @@ Events within the last `recentTurns` user turns are rendered in full. Hidden or 
 
 **Data Stash**: `ToolResultEventData` supports three visibility fields:
 
-- `summary?: string` — LLM-generated summary (populated async by `scheduleSummarization()`)
+- `summary?: string` — LLM-generated summary (populated async by `compactBulkData()`)
 - `hidden?: boolean` — excluded from LLM context, shown grayed-out in UI
 - `archived?: boolean` — excluded from LLM context, moved to Archived section in UI
 
@@ -1368,7 +1368,7 @@ harness-patterns/
 ├── routing.server.ts       # BAML router integration (routeMessageOp)
 ├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE tool transports — sandbox (in-VM) → app-side in-process → MCP gateway; leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, etc.
-├── summarize.server.ts     # scheduleSummarization() — background tool result summarization via DescribeFallback
+├── compactBulkData.server.ts # compactBulkData() — background tool result summarization via the describe-tier client
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
 ├── token-budget.server.ts  # trimToFit(), getContextWindow(), estimateTokens() — rolling context window
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values)

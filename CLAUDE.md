@@ -85,6 +85,18 @@ but was authored there directly — it was never extracted from this one. Model-
 invoked skills announce themselves through their own descriptions; the ones you
 have to ask for by name are `/grill-me` and `/improve-codebase-architecture`.
 
+To obtain the generic set on a machine that does not have it yet — the repo is
+[github.com/mknw/muster-skills](https://github.com/mknw/muster-skills) (private;
+ask for access), and the symlinks are what make it global rather than per-project:
+
+```bash
+gh repo clone mknw/muster-skills ~/Code/muster-skills && mkdir -p ~/.claude/skills \
+  && for d in ~/Code/muster-skills/*/; do ln -sfn "${d%/}" ~/.claude/skills/; done
+```
+
+Each skill is a top-level directory in that repo, so the loop links the skills
+and skips its `README.md` / `LICENSE` / `NOTICE.md`.
+
 - A `kg-*` skill may call a generic skill (global scope is visible in every
   project). A generic skill must never call a `kg-*` skill — that invariant is
   what keeps the generic set portable.
@@ -177,7 +189,7 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 | `PlannerAnthropic`     | planner (#27) upfront decomposition — one call per chain, thinking left ON (the reasoning IS the deliverable)                    |
 | `CriticAnthropic`      | Evaluation/critique                                                                                                             |
 | `SynthesizerAnthropic` | Response synthesis                                                                                                              |
-| `DescribeAnthropic`    | Lightweight tool result summarization, titles, intent compaction (`compactIntent`)                                              |
+| `DescribeAnthropic`    | Lightweight tool result summarization (one batched call per ≤8 results, `compactBulkData`), titles, intent compaction (`compactIntent`) |
 
 **Extended thinking (#139):** these models think by default — no request asks for
 it — and the trace is never exposed (empty string + signature), so it cannot feed

@@ -7,6 +7,7 @@
 
 import { assertServerOnImport } from './assert.server'
 import { getActiveSandbox } from '../sandbox/scope.server'
+import { getActiveInjectionGuard } from './injection-guard-scope.server'
 import { hasAppTool, runAppTool, appToolDescriptions } from '../app-tools/index.server'
 import type { ToolCallResult, MCPToolDescription } from './types'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -179,10 +180,54 @@ async function withReconnect<T>(op: (c: Client) => Promise<T>): Promise<T> {
 // Tool Operations
 // ============================================================================
 
+/**
+ * Execute a tool and — when a `withInjectionGuard` wrapper is active and the
+ * tool's namespace is configured untrusted — sanitize its content before the
+ * caller ever sees it.
+ *
+ * This is the guard's PRIMARY chokepoint, and it is deliberately the outermost
+ * layer: it sits above all three transports (sandbox, app-side, gateway), so no
+ * dispatch path can bypass it, and above the loop patterns, which build the
+ * controller TURN LOG from `result.data` rather than from the event stream — a
+ * guard hooked at event-tracking time would neutralize the stored event yet
+ * still feed the raw injection to the controller on that same turn.
+ *
+ * BOTH channels are sanitized. `data` is the obvious one. `error` is not
+ * optional either, because `demoteErrorString` below converts a SUCCESSFUL
+ * result whose text merely starts with `Error:` into `{ success: false, error:
+ * <that text> }` — so for an untrusted tool the error field can hold fetched
+ * page content verbatim, and it reaches an LLM three ways: the controller turn
+ * log's `tool_result.error`, `formatEventData`'s `"<tool> ERROR: …"`, and
+ * `view.lastError()` → `compactExecution`'s prompt. Sanitizing keeps it a
+ * string, so error handling is unaffected.
+ */
 export async function callTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<ToolCallResult> {
+  const result = await dispatchTool(name, args)
+
+  const guard = getActiveInjectionGuard()
+  if (!guard || !guard.isUntrusted(name)) return result
+
+  // `summary` answers "is there anything to annotate?" and the REFERENCE answers
+  // "did the content change?" — they are not the same question. `spotlight:
+  // 'always'` fences content on which nothing was detected, so keying the
+  // rewrite off `summary` would have thrown that fence away and forwarded the
+  // raw payload.
+  if (result.success) {
+    const { data, summary } = await guard.sanitize(name, result.data)
+    if (data === result.data && !summary) return result
+    return { ...result, data, ...(summary ? { sanitized: summary } : {}) }
+  }
+
+  if (typeof result.error !== 'string' || result.error.length === 0) return result
+  const { data: cleanedError, summary } = await guard.sanitize(name, result.error)
+  if (cleanedError === result.error && !summary) return result
+  return { ...result, error: cleanedError as string, ...(summary ? { sanitized: summary } : {}) }
+}
+
+async function dispatchTool(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
   // Sandbox dispatch (see docs/plan/sandbox.md → "How tools reach the
   // controller"). When a `withSandbox` wrapper is active and the tool name
   // is owned by its in-VM transport, route there instead of the host

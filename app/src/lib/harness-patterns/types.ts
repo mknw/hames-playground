@@ -77,6 +77,7 @@ export type EventType =
   | 'reference_attached'
   | 'intent_compacted'
   | 'plan_created'
+  | 'content_sanitized'
 
 /** Accounting record for one harness step (#122): token and cost totals
  *  summed across EVERY physical API call the step made — including truncation
@@ -449,6 +450,15 @@ export interface ConfiguredPattern<T> {
    *  this — so it's safe and additive. See `pattern-capabilities.ts`
    *  (`usesCodeMode`) for the canonical walk. */
   children?: ConfiguredPattern<T>[]
+  /** Set by `withInjectionGuard`: the untrusted sources it declared. Same
+   *  charter as `children` — purely for static introspection, never read during
+   *  execution (the guard travels by AsyncLocalStorage). It exists so an
+   *  agent's trust boundary is READABLE rather than only observable by running
+   *  the agent: without it, emptying an agent's namespace list would be
+   *  invisible to every test and every tool. Deliberately NOT on `config`, so
+   *  the wrapper stays config-transparent (`pattern.config` remains the inner
+   *  pattern's own object). */
+  injectionGuard?: { namespaces: string[]; tools: string[] }
 }
 
 // ============================================================================
@@ -465,6 +475,11 @@ export interface ToolCallResult {
   success: boolean
   data: unknown
   error?: string
+  /** Set by `withInjectionGuard` (in `callTool`) when this result's content —
+   *  `data`, or `error` for a demoted failure — was neutralized. Loop patterns
+   *  copy this onto the `tool_result` event. Redacted by construction; the
+   *  verbatim spans live only on the `content_sanitized` event. */
+  sanitized?: import('./injection-guard').SanitizeSummary
 }
 
 export type ToolSet = Record<string, string[]> & { all: string[] }
@@ -610,6 +625,14 @@ export interface ToolResultEventData {
   hidden?: boolean
   /** Moved to Archived section (also excluded from LLM context) */
   archived?: boolean
+  /** Set by `withInjectionGuard` when this result's content was neutralized.
+   *  `result` above already holds the SANITIZED content; this is the REDACTED
+   *  audit pointer — counts, rule ids and the id of the `content_sanitized`
+   *  event holding the verbatim spans. Deliberately NOT the full report: this
+   *  payload is JSON-dumped wholesale by `judge` (and anything else that
+   *  serializes `event.data`), so a full report here would hand the neutralized
+   *  injection to the next LLM. See `SanitizeSummary`. */
+  sanitized?: import('./injection-guard').SanitizeSummary
 }
 
 /** Data payload for controller_action event */
@@ -719,6 +742,34 @@ export interface PlanCreatedEventData {
    *  for, so the chain runs unplanned. Mirrors
    *  `IntentCompactedEventData.skipped`. */
   skipped?: 'no-message'
+}
+
+/** Data payload for `content_sanitized` — emitted by `withInjectionGuard`
+ *  whenever it neutralizes untrusted tool-result content (or when its optional
+ *  LLM screen was unavailable). One event per affected tool result.
+ *
+ *  ⚠ `findings[].match` holds the injection VERBATIM. That is the one place the
+ *  original text survives, and it is human-only: `formatEventData` renders this
+ *  event type from metadata alone, precisely so a neutralized instruction can
+ *  never be handed back to an LLM through a serialized event stream. Anything
+ *  new that serializes events for a prompt must keep that property — see
+ *  `__tests__/lib/harness-patterns/injection-guard-composition.test.ts`. */
+export interface ContentSanitizedEventData {
+  tool: string
+  /** `inferServer(tool)` — the untrusted namespace the content came from. */
+  namespace: string
+  findings: import('./injection-guard').SanitizeFinding[]
+  /** True when the LLM-visible content differs from the source — which includes
+   *  a bare `spotlight: 'always'` fence, so this is NOT a synonym for "something
+   *  was detected". Read `findings.length` for that: an event with no findings
+   *  exists solely to report a screen outage, whatever `neutralized` says. See
+   *  `SanitizeReport.neutralized`. */
+  neutralized: boolean
+  spotlighted: boolean
+  /** Characters of untrusted text scanned. */
+  scanned: number
+  /** The LLM screen's reason, or why the screen could not run. */
+  screenReason?: string
 }
 
 // ============================================================================

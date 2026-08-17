@@ -22,6 +22,7 @@ import type {
   ErrorEventData,
   IntentCompactedEventData,
   PlanCreatedEventData,
+  ContentSanitizedEventData,
   LLMCallData,
   UnifiedContext,
 } from '~/lib/harness-patterns'
@@ -71,6 +72,7 @@ const eventIcons: Record<EventType, string> = {
   reference_attached: '🔗',
   intent_compacted: '🎯',
   plan_created: '🗺️',
+  content_sanitized: '🛡️',
 }
 
 const eventColors: Record<EventType, string> = {
@@ -88,6 +90,9 @@ const eventColors: Record<EventType, string> = {
   reference_attached: '#c084fc', // purple-400
   intent_compacted: '#fbbf24', // amber-400 (an LLM reasoning step, like controller_action)
   plan_created: '#fbbf24', // amber-400 (same family: an LLM reasoning step, no tool call)
+  content_sanitized: '#fb923c', // orange-400 — a control firing on hostile input,
+  // deliberately distinct from `error` red (nothing failed) and from the cyan
+  // tool_result it annotates (this is not a result)
 }
 
 // ============================================================================
@@ -136,6 +141,16 @@ function getEventPreview(type: EventType, data: unknown): string {
       const steps = d.plan?.n_steps ?? 0
       const first = (d.plan?.plan ?? '').split('\n')[0] ?? ''
       const head = `${steps} step${steps === 1 ? '' : 's'}: ${first}`
+      return head.length > 50 ? head.slice(0, 50) + '...' : head
+    }
+    case 'content_sanitized': {
+      const d = data as ContentSanitizedEventData
+      // Keyed on FINDINGS, not on `neutralized`: with `spotlight: 'always'` the
+      // content is "neutralized" (fenced) even when nothing was detected, so the
+      // only reason this event exists with no findings is a screen outage.
+      if (d.findings.length === 0) return `${d.tool}: screen unavailable`
+      const rules = [...new Set(d.findings.map((f) => f.rule))]
+      const head = `${d.tool}: ${d.findings.length} neutralized (${rules.join(', ')})`
       return head.length > 50 ? head.slice(0, 50) + '...' : head
     }
     case 'pattern_enter':
@@ -1047,6 +1062,86 @@ const MessageDetail = (props: { data: { content: string }; role: 'user' | 'assis
   </div>
 )
 
+/**
+ * Detail view for a `content_sanitized` event — the human end of the injection
+ * guard's audit trail.
+ *
+ * This is the ONLY surface that shows `finding.match`, the neutralized text
+ * verbatim. That is deliberate: a reviewer has to be able to read exactly what
+ * was removed to judge whether the guard was right, while no LLM-facing
+ * serialization ever renders it (see `formatEventData`'s `content_sanitized`
+ * case). Marked up as plain text, never as HTML.
+ */
+const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
+  <div flex="~ col" gap="3">
+    <div flex="~" gap="6">
+      <div>
+        <div text="xs dark-text-tertiary" m="b-1">
+          Source
+        </div>
+        <div text="sm orange-400" font="mono">
+          {props.data.namespace}/{props.data.tool}
+        </div>
+      </div>
+      <div>
+        <div text="xs dark-text-tertiary" m="b-1">
+          Scanned
+        </div>
+        <div text="sm dark-text-primary" font="mono">
+          {props.data.scanned.toLocaleString()} chars
+        </div>
+      </div>
+      <div>
+        <div text="xs dark-text-tertiary" m="b-1">
+          Spotlighted
+        </div>
+        <div text="sm dark-text-primary">{props.data.spotlighted ? 'yes' : 'no'}</div>
+      </div>
+    </div>
+
+    <Show when={props.data.screenReason}>
+      <div>
+        <div text="xs dark-text-tertiary" m="b-1">
+          LLM screen
+        </div>
+        <div text="sm dark-text-primary">{props.data.screenReason}</div>
+      </div>
+    </Show>
+
+    <div>
+      <div text="xs dark-text-tertiary" m="b-2">
+        {props.data.findings.length} finding(s) — original text shown verbatim, never sent to a
+        model
+      </div>
+      <div flex="~ col" gap="2">
+        <For each={props.data.findings}>
+          {(f) => (
+            <div bg="dark-bg-tertiary" p="3" rounded="md" flex="~ col" gap="1">
+              <div flex="~" items="center" gap="2">
+                <span text="xs orange-400" font="mono">
+                  {f.rule}
+                </span>
+                <span text="xs dark-text-tertiary">{f.layer}</span>
+              </div>
+              <div text="xs dark-text-secondary">{f.description}</div>
+              <div
+                text="xs red-300"
+                font="mono"
+                style={{ 'white-space': 'pre-wrap', 'word-break': 'break-all' }}
+              >
+                {f.match}
+              </div>
+              <div text="xs neon-green" font="mono">
+                → {f.replacement || '(removed)'}
+              </div>
+            </div>
+          )}
+        </For>
+      </div>
+    </div>
+  </div>
+)
+
 const GenericDetail = (props: { data: unknown }) => (
   <div>
     <div text="xs dark-text-tertiary" m="b-2">
@@ -1592,6 +1687,9 @@ const EventDetailPanel = (props: { event: ContextEvent; onClose: () => void }) =
             </Match>
             <Match when={type === 'error'}>
               <ErrorDetail data={data as ErrorEventData} />
+            </Match>
+            <Match when={type === 'content_sanitized'}>
+              <ContentSanitizedDetail data={data as ContentSanitizedEventData} />
             </Match>
           </Switch>
         </Show>

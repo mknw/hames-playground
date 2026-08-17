@@ -17,6 +17,7 @@ import type {
   AssistantMessageEventData,
   ToolCallEventData,
   ToolResultEventData,
+  ContentSanitizedEventData,
 } from '../types'
 
 assertServerOnImport()
@@ -533,6 +534,18 @@ function formatEventData(event: ContextEvent): string {
       }
       const base = `${data.tool}: ${JSON.stringify(data.result)}`
       return data.summary ? `${base}\n[Summary: ${data.summary}]` : base
+    }
+    case 'content_sanitized': {
+      // METADATA ONLY — never `event.data`. `findings[].match` holds the
+      // injection verbatim, so falling through to the default branch below
+      // (which JSON-stringifies the whole payload) would hand the neutralized
+      // instruction straight back to an LLM through the serialized event
+      // stream — reintroducing the exact hole `withInjectionGuard` closes.
+      // Pinned by injection-guard-composition.test.ts.
+      const data = event.data as ContentSanitizedEventData
+      const rules = [...new Set(data.findings.map((f) => f.rule))].join(', ')
+      const head = `${data.namespace}/${data.tool}: ${data.findings.length} finding(s) neutralized`
+      return rules ? `${head} [${rules}]` : head
     }
     default:
       return typeof event.data === 'object' ? JSON.stringify(event.data) : String(event.data)

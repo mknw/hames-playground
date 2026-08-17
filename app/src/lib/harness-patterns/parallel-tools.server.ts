@@ -32,7 +32,14 @@ assertServerOnImport()
  *  records the failure without dispatching anything. */
 export interface SubCall {
   tool: string
-  run?: () => Promise<{ success: boolean; result?: unknown; error?: string }>
+  run?: () => Promise<{
+    success: boolean
+    result?: unknown
+    error?: string
+    /** Audit trail when `withInjectionGuard` neutralized this sub-call's
+     *  content (`result` already holds the sanitized version). */
+    sanitized?: import('./injection-guard').SanitizeSummary
+  }>
   precheckError?: string
 }
 
@@ -45,23 +52,36 @@ export interface SubCallOutcome {
   error?: string
   /** true when a serial batch stopped before reaching this call */
   skipped?: boolean
+  /** Audit trail when `withInjectionGuard` neutralized this sub-call's content.
+   *  Carried per sub-call so a batched turn keeps the same per-tool fidelity as
+   *  a singular one — the batch's `tool_result` events are per sub-call too. */
+  sanitized?: import('./injection-guard').SanitizeSummary
 }
 
 /** Execute a batch of sub-calls under the given mode. Outcomes come back in
  *  batch order regardless of completion order. */
-export async function runBatch(
-  calls: SubCall[],
-  mode: MultiCallMode
-): Promise<SubCallOutcome[]> {
+export async function runBatch(calls: SubCall[], mode: MultiCallMode): Promise<SubCallOutcome[]> {
   const outcomes: SubCallOutcome[] = new Array(calls.length)
 
   const runOne = async (call: SubCall, i: number): Promise<SubCallOutcome> => {
     if (!call.run || call.precheckError) {
-      return { index: i + 1, tool: call.tool, success: false, error: call.precheckError ?? 'not executable' }
+      return {
+        index: i + 1,
+        tool: call.tool,
+        success: false,
+        error: call.precheckError ?? 'not executable',
+      }
     }
     try {
       const r = await call.run()
-      return { index: i + 1, tool: call.tool, success: r.success, result: r.result, error: r.error }
+      return {
+        index: i + 1,
+        tool: call.tool,
+        success: r.success,
+        result: r.result,
+        error: r.error,
+        ...(r.sanitized ? { sanitized: r.sanitized } : {}),
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return { index: i + 1, tool: call.tool, success: false, error: msg }
@@ -79,7 +99,7 @@ export async function runBatch(
           const i = cursor++
           outcomes[i] = await runOne(calls[i], i)
         }
-      }
+      },
     )
     await Promise.all(workers)
     return outcomes
@@ -110,7 +130,7 @@ export async function runBatch(
  *  `{tool, __skipped}` — mirroring expandPreviousResult's multi-ref map. */
 export function combineOutcomes(
   outcomes: SubCallOutcome[],
-  projectResult: (o: SubCallOutcome) => unknown = (o) => o.result
+  projectResult: (o: SubCallOutcome) => unknown = (o) => o.result,
 ): { combined: Record<string, unknown>; anySucceeded: boolean; errors: string[] } {
   const combined: Record<string, unknown> = {}
   const errors: string[] = []

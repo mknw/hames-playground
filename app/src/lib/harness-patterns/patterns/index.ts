@@ -43,6 +43,11 @@ export {
   type CircuitBreakerConfig,
 } from './guardrail.server'
 export { hook, type HookConfig, type HookTrigger } from './hook.server'
+export {
+  withInjectionGuard,
+  createInjectionGuard,
+  type InjectionGuardConfig,
+} from './withInjectionGuard.server'
 export { withReferences, __clearReferenceCache } from './with-references.server'
 
 // EventView

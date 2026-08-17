@@ -33,6 +33,7 @@ import type {
   FewShot,
   PlanResult,
 } from '../../../baml_client/types'
+import type { InjectionScreen } from './injection-guard'
 import { listTools as mcpListTools } from './mcp-client.server'
 import { getActiveSandbox } from '../sandbox/scope.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
@@ -1393,6 +1394,73 @@ export async function describeToolResultsBatchOp(
     )
   }
   return byId
+}
+
+// ============================================================================
+// Injection screen (optional second layer of withInjectionGuard)
+// ============================================================================
+
+/**
+ * BAML-backed `InjectionScreen` — the OPT-IN second layer of
+ * `withInjectionGuard`. Pass it as the guard's `screen`:
+ *
+ *   withInjectionGuard({ namespaces: ['web'], screen: createInjectionScreen() })
+ *
+ * The guard invokes it only for content its deterministic corpus passed clean,
+ * so this costs one cheap `DescribeAnthropic` call per otherwise-clean untrusted
+ * result — never one per tool call, and never on the default path (no agent gets
+ * a screen it did not ask for).
+ *
+ * `maxChars` bounds what is sent: a 2 MB page would blow the context window and
+ * cost more than the protection is worth. The head of a document is where
+ * injections are placed to be read first, so the head is what gets screened —
+ * and the deterministic corpus, which has no such bound, still covers the whole
+ * thing. The truncation is reported in the verdict reason rather than hidden.
+ */
+export function createInjectionScreen(options?: { maxChars?: number }): InjectionScreen {
+  const maxChars = options?.maxChars ?? 20_000
+
+  return async ({ tool, namespace, content }) => {
+    const truncated = content.length > maxChars
+    // TRUNCATE FIRST, then de-fence. The de-fencing regex must never run over
+    // the full payload: only `maxChars` of it are ever interpolated into the
+    // prompt, so scanning the other 2 MB buys no protection and hands an
+    // attacker a free CPU multiplier on a value that is otherwise discarded.
+    const head = truncated ? content.slice(0, maxChars) : content
+
+    // Neutralize the PROMPT's own fence before interpolating. The guard escapes
+    // its `⟦⟧` sentinels out of content so data cannot forge a marker or close
+    // the spotlight fence; the screen prompt has an ASCII fence
+    // (`---BEGIN/END UNTRUSTED CONTENT UNDER REVIEW---`) with no such
+    // protection, and by construction the screen only ever sees content the
+    // regex corpus passed clean. Without this, a page could close the fence and
+    // address the screening model directly — the exact hole `sentinel-escape`
+    // exists to close, one layer up.
+    //
+    // Anchored on the KEYWORD, not on a leading `-{2,}` run. The original
+    // `-{2,}\s*(?:BEGIN|END)…` put two variable-length runs back to back, which
+    // is quadratic: 100k hyphens measured 10s of synchronous CPU (and, run
+    // pre-truncation, on content that was about to be thrown away). Dropping the
+    // hyphen run is also strictly STRONGER — the old pattern required at least
+    // two hyphens, so `BEGIN UNTRUSTED CONTENT` with no decoration at all
+    // evaded it while still reading as a fence to the screening model.
+    const body = head.replace(/(?:BEGIN|END)\s{1,4}UNTRUSTED\s{1,4}CONTENT[^\n]{0,40}/gi, '[fence]')
+
+    const { b } = await import('../../../baml_client')
+    const opts = clientOverrideFor('describe')
+    const source = `${namespace}/${tool}`
+    const verdict = opts
+      ? await b.ScreenUntrustedContent(source, body, opts)
+      : await b.ScreenUntrustedContent(source, body)
+
+    return {
+      injection_detected: verdict.injection_detected,
+      reason: truncated
+        ? `${verdict.reason} (screened first ${maxChars} of ${content.length} chars)`
+        : verdict.reason,
+      spans: verdict.spans ?? [],
+    }
+  }
 }
 
 // ============================================================================

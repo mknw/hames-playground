@@ -44,6 +44,7 @@ import type {
   LLMCallData,
 } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
+import { getActiveInjectionGuard } from '../injection-guard-scope.server'
 import { getErrorHint } from '../error-hints'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { extractLLMCallData, extractFailureLLMCallData } from '../baml-adapters.server'
@@ -242,10 +243,22 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
       )
 
       // Merge, closest-first (hits without a score sort last), capped at k.
-      const matches = perBackend
+      const merged = perBackend
         .flat()
         .sort((a, b) => (a.score ?? Infinity) - (b.score ?? Infinity))
         .slice(0, k)
+
+      // Injection guard, second coverage path. Retrieved chunks NEVER pass
+      // through `callTool` — the backends are injected app-side objects called
+      // directly above — so the primary chokepoint cannot see them. Yet stash
+      // content is ingested from documents (SharePoint included), which is
+      // exactly the untrusted class this guard exists for. Sanitizing here, at
+      // write-time, is what puts it under the same control: it happens before
+      // `scope.data.matches` is set and before the `tool_result` event exists,
+      // so no LLM-visible surface (synthesizer prompt, ref: expansion, UI) ever
+      // holds the raw text. A read-time `contentTransform` would have covered
+      // only the views that opt into it, and not `scope.data`.
+      const matches = await sanitizeHits(merged)
 
       scope.data = { ...scope.data, matches }
       emitMatches(scope, matches, backendKinds, text, resolved.trackHistory, llmCall)
@@ -263,6 +276,59 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
   }
 
   return { name: 'retriever', fn, config: resolved, estimateTurns: () => 0 }
+}
+
+/**
+ * Sanitize the untrusted text of each hit through the active
+ * `withInjectionGuard`, if any. Outside a guard wrapper this is an identity
+ * function and the hits are returned by reference.
+ *
+ * Only `content` and `source` are scanned: those are the free-text fields an
+ * ingested document controls. Ids, offsets and scores are structural — a
+ * retriever hit's `docId` and offsets must stay byte-exact or the inline file
+ * viewer would open at the wrong place.
+ *
+ * The guard is keyed on the tool name `'retriever'` (so an agent opts in with
+ * `namespaces: ['retriever']`), and each hit is sanitized separately so a
+ * single poisoned chunk is neutralized and reported without touching the rest.
+ * Emitting the `content_sanitized` event is the guard's own contract, so there
+ * is nothing to track here.
+ */
+async function sanitizeHits(hits: RetrievalHit[]): Promise<RetrievalHit[]> {
+  const guard = getActiveInjectionGuard()
+  if (!guard || hits.length === 0 || !guard.isUntrusted('retriever')) return hits
+
+  const out: RetrievalHit[] = []
+  let changed = false
+  for (const hit of hits) {
+    // `content` gets the full treatment. `source` is a FILENAME, and it is
+    // scanned separately with the fence switched off: a benign document called
+    // "New instructions for expenses.docx" matches `instruction-new-directive`,
+    // and wrapping a filename in a multi-line spotlight fence would break the
+    // citation label AND the filename-to-docId match that drives the inline
+    // viewer (see ChatMessages.tsx). Marker-only keeps it a single line, so a
+    // poisoned filename is still neutralized without collateral damage.
+    const scannedContent = await guard.sanitize('retriever', hit.content)
+    const scannedSource =
+      hit.source === undefined
+        ? undefined
+        : await guard.sanitize('retriever', hit.source, { spotlight: 'off' })
+
+    // Compare by REFERENCE, not by `summary` presence: `spotlight: 'always'`
+    // fences a chunk on which nothing was detected, and that fence must reach
+    // `scope.data.matches` even though there is no finding to annotate.
+    if (scannedContent.data === hit.content && scannedSource?.data === hit.source) {
+      out.push(hit)
+      continue
+    }
+    changed = true
+    out.push({
+      ...hit,
+      content: scannedContent.data as string,
+      ...(scannedSource ? { source: scannedSource.data as string } : {}),
+    })
+  }
+  return changed ? out : hits
 }
 
 /** Project a hit to a locatable reference, or null when it has no source

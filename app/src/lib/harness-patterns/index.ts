@@ -71,6 +71,7 @@ export type {
   ErrorEventData,
   IntentCompactedEventData,
   PlanCreatedEventData,
+  ContentSanitizedEventData,
 
   // LLM Observability
   LLMCallData,
@@ -156,6 +157,9 @@ export {
   pathAllowlistRail,
   driftDetectorRail,
   hook,
+  withInjectionGuard,
+  createInjectionGuard,
+  type InjectionGuardConfig,
   type SimpleLoopData,
   type ActorCriticData,
   type CompactIntentConfig,
@@ -218,6 +222,34 @@ export { routeMessageOp } from './routing.server'
 export { compactBulkData } from './compactBulkData.server'
 export { getErrorHint } from './error-hints'
 export { stripThinkBlocks, truncateToolResults, omitResultFields } from './content-transforms'
+
+// Injection guard — the deterministic sanitizer + its ALS scope. The pattern
+// primitive (`withInjectionGuard`) is exported with the other patterns above.
+export {
+  sanitizeUntrusted,
+  sanitizeText,
+  spotlight,
+  applyScreenVerdict,
+  redactReport,
+  resolveRules,
+  strictestSpotlight,
+  INJECTION_RULES,
+  type InjectionRule,
+  type InjectionGuardOptions,
+  type InjectionScreen,
+  type SanitizeFinding,
+  type SanitizeLayer,
+  type SanitizeReport,
+  type SanitizeResult,
+  type SanitizeSummary,
+  type ScreenVerdict,
+  type SpotlightMode,
+} from './injection-guard'
+export {
+  getActiveInjectionGuard,
+  runWithInjectionGuard,
+  type ActiveInjectionGuard,
+} from './injection-guard-scope.server'
 export { normalizeControllerAction } from './controller-action'
 
 // BAML Adapters
@@ -235,6 +267,7 @@ export {
   createRedisController,
   createDatabaseController,
   createCodeModeController,
+  createInjectionScreen,
   invalidateToolDescriptions,
   type ActorAdapterOptions,
 } from './baml-adapters.server'

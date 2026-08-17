@@ -40,6 +40,7 @@ import {
   retriever,
   compactExecution,
   withReferences,
+  withInjectionGuard,
   Tools,
   callTool,
   createNeo4jController,
@@ -103,16 +104,25 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     { liveEvents: true },
   )
 
-  const routesPattern = routes<SessionData>(
-    {
-      // The retriever does its own context-scoped search, so it isn't wrapped
-      // in `withReferences` (which injects prior tool_results) — unlike the
-      // neo4j / web loops, which benefit from cross-turn reference curation.
-      retriever: retrieverPattern,
-      neo4j: withReferences<SessionData>(neo4jPattern, { scope: 'global', liveEvents: true }),
-      web_search: withReferences<SessionData>(webPattern, { scope: 'global', liveEvents: true }),
-    },
-    { liveEvents: true },
+  // Two untrusted routes, guarded together. `web` is the obvious one; `retriever`
+  // is the one that is easy to miss — Data Stash chunks come from INGESTED
+  // DOCUMENTS (uploads, and ms-graph files via `graph_file_ingest`), so a
+  // poisoned .docx reaches the response as a retrieved chunk. Retriever hits
+  // never pass through `callTool`, so the retriever pattern sanitizes its own
+  // hits at write-time through this same guard (see `sanitizeHits` in
+  // retriever.server.ts). `neo4j` stays unguarded — our own graph.
+  const routesPattern = withInjectionGuard({ namespaces: ['web', 'retriever'] })(
+    routes<SessionData>(
+      {
+        // The retriever does its own context-scoped search, so it isn't wrapped
+        // in `withReferences` (which injects prior tool_results) — unlike the
+        // neo4j / web loops, which benefit from cross-turn reference curation.
+        retriever: retrieverPattern,
+        neo4j: withReferences<SessionData>(neo4jPattern, { scope: 'global', liveEvents: true }),
+        web_search: withReferences<SessionData>(webPattern, { scope: 'global', liveEvents: true }),
+      },
+      { liveEvents: true },
+    ),
   )
 
   const responseSynth = compactExecution<SessionData>({

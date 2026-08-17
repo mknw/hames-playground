@@ -59,9 +59,12 @@ describe('retrieverAgent pattern chain', () => {
   it('is router → routes → compactExecution, with unique pattern ids', async () => {
     const patterns = (await retrieverAgent.createPatterns('sess-r')) as Pattern[]
 
+    // `routes` is wrapped in `withInjectionGuard` — a config-transparent
+    // wrapper, so the chain is still three steps and the routes' own
+    // patternId/commitStrategy are untouched (only the display name changes).
     expect(patterns.map((p) => p.name.replace(/\(.*/, ''))).toEqual([
       'router',
-      'routes',
+      'withInjectionGuard',
       'compactExecution',
     ])
     const ids = patterns.map((p) => p.config.patternId)
@@ -71,12 +74,27 @@ describe('retrieverAgent pattern chain', () => {
 
   it('offers the retriever alongside the neo4j and web routes', async () => {
     const patterns = (await retrieverAgent.createPatterns('sess-r')) as Pattern[]
-    const routes = patterns.find((p) => p.name.startsWith('routes'))!
+    const guarded = patterns.find((p) => p.name.startsWith('withInjectionGuard'))!
+    const routes = guarded.children![0]
 
     expect(routes.name).toBe('routes(retriever|neo4j|web_search)')
     // The retriever route is the fast path — it must reach the retriever
-    // pattern itself, not a loop wrapped around one.
+    // pattern itself, not a loop wrapped around one. Introspection still sees
+    // through the guard, because the wrapper exposes `children`.
     expect(harnessHasRedisRetriever([routes as never])).toBe(true)
+    expect(harnessHasRedisRetriever([guarded as never])).toBe(true)
+  })
+
+  it('guards the two untrusted routes via a transparent wrapper', async () => {
+    // `retriever` is the easy one to miss: Data Stash chunks come from ingested
+    // documents and NEVER pass through callTool, so the retriever pattern has to
+    // be named in the guard config for its write-time sanitize to engage.
+    // `neo4j` is our own graph and stays trusted.
+    const patterns = (await retrieverAgent.createPatterns('sess-r')) as Pattern[]
+    const guarded = patterns.find((p) => p.name.startsWith('withInjectionGuard'))!
+
+    // Config transparency: the wrapper kept the routes' resolved config.
+    expect(guarded.config).toBe(guarded.children![0].config)
   })
 
   it('advertises a redis-backed retriever, which is what gates upload auto-ingest', async () => {

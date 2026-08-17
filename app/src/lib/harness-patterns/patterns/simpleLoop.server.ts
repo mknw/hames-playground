@@ -544,7 +544,12 @@ export function simpleLoop<T extends SimpleLoopData>(
                     )
                   }
                 }
-                return { success: result.success, result: result.data, error: result.error }
+                return {
+                  success: result.success,
+                  result: result.data,
+                  error: result.error,
+                  ...(result.sanitized ? { sanitized: result.sanitized } : {}),
+                }
               },
             })
           }
@@ -578,6 +583,7 @@ export function simpleLoop<T extends SimpleLoopData>(
                 result: o.result ?? null,
                 success: o.success,
                 error: o.error,
+                ...(o.sanitized ? { sanitized: o.sanitized } : {}),
               } as ToolResultEventData,
               resolved.trackHistory,
             ),
@@ -704,7 +710,9 @@ export function simpleLoop<T extends SimpleLoopData>(
           }
         }
 
-        // Track tool result event
+        // Track tool result event. `result.data` is already the sanitized
+        // content when a `withInjectionGuard` wrapper neutralized it in
+        // callTool; `sanitized` carries the audit trail alongside it.
         trackEvent(
           scope,
           'tool_result',
@@ -714,6 +722,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             result: result.data,
             success: result.success,
             error: result.error,
+            ...(result.sanitized ? { sanitized: result.sanitized } : {}),
           } as ToolResultEventData,
           resolved.trackHistory,
         )

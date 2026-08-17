@@ -11,6 +11,7 @@ import {
   simpleLoop,
   parallel,
   judge,
+  withInjectionGuard,
   compactExecution,
   Tools,
   createWebSearchController,
@@ -92,10 +93,20 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
     { patternId: 'doc-lookup', maxTurns: 3 },
   )
 
-  // Parallel execution of all three searches
-  const researchPattern = parallel<SessionData>([webSearch, githubSearch, docSearch], {
-    patternId: 'parallel-research',
-  })
+  // Parallel execution of all three searches.
+  //
+  // Every one of this agent's three sources is attacker-controlled prose: web
+  // pages, arbitrary GitHub repositories (READMEs, issue bodies, code comments)
+  // and third-party library documentation. So the guard wraps the whole
+  // `parallel` rather than each branch — the ALS scope reaches into every
+  // branch, and listing the namespaces in one place makes this agent's trust
+  // boundary readable at a glance. Behaviour is unchanged unless a detection
+  // fires.
+  const researchPattern = withInjectionGuard({ namespaces: ['web', 'github', 'context7'] })(
+    parallel<SessionData>([webSearch, githubSearch, docSearch], {
+      patternId: 'parallel-research',
+    }),
+  )
 
   // Judge pattern to rank and select best result
   const evaluator = judge<SessionData>(judgeEvaluator, {

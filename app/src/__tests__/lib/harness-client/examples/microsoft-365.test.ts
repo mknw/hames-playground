@@ -54,6 +54,14 @@ const simpleLoop = vi.fn((controller: unknown, tools: string[], config: unknown)
   controller,
 }))
 
+/** Records the `withInjectionGuard(config)` the agent declared, and stays
+ *  config-transparent like the real wrapper (spread of the inner pattern). */
+const injectionGuard = vi.fn((config: unknown) => <T extends object>(pattern: T) => ({
+  ...pattern,
+  name: `withInjectionGuard(${(pattern as { name: string }).name})`,
+  guardConfig: config,
+}))
+
 vi.mock('../../../../lib/harness-patterns', () => ({
   simpleLoop: (c: unknown, t: string[], cfg: unknown) => simpleLoop(c, t, cfg),
   compactExecution: (config: unknown) => ({
@@ -61,6 +69,7 @@ vi.mock('../../../../lib/harness-patterns', () => ({
     fn: async () => undefined,
     config,
   }),
+  withInjectionGuard: (config: unknown) => injectionGuard(config),
   Tools: async () => ({ graph: graphNamespace, all: graphNamespace }),
   createLoopControllerAdapter: (tools: string[]) => ({ adapterTools: tools }),
 }))
@@ -181,5 +190,27 @@ describe('createPatterns', () => {
       rememberPriorTurns: false,
       maxTurns: 8,
     })
+  })
+
+  it('guards the graph namespace against prompt injection', async () => {
+    // A per-user Graph token authenticates who FETCHED a document, not who
+    // WROTE it: mail comes from outside the tenant and SharePoint files are
+    // routinely authored or shared by other people. So the loop's results are
+    // untrusted content on a trusted transport, and the agent must declare it.
+    const patterns = await microsoft365Agent.createPatterns('test-session')
+
+    expect(injectionGuard).toHaveBeenCalledWith({ namespaces: ['graph'] })
+    // The guard wraps the LOOP (so it is active for every tool call), and the
+    // chain shape is otherwise unchanged.
+    expect(patterns).toHaveLength(2)
+    expect((patterns[0] as { name: string }).name).toBe('withInjectionGuard(simpleLoop)')
+    expect((patterns[1] as { name: string }).name).toBe('compactExecution')
+  })
+
+  it('leaves the loop config untouched when guarded (transparent wrapper)', async () => {
+    const patterns = await microsoft365Agent.createPatterns('test-session')
+    // Same config object the agent handed simpleLoop — the wrapper must not
+    // reshape it, or resultOmit / maxTurns / liveEvents would silently change.
+    expect((patterns[0] as { config: unknown }).config).toBe(lastLoopCall()[2])
   })
 })

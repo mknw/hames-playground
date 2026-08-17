@@ -7,6 +7,7 @@
 
 import { assertServerOnImport } from './assert.server'
 import { getActiveSandbox } from '../sandbox/scope.server'
+import { getActiveInjectionGuard } from './injection-guard-scope.server'
 import { hasAppTool, runAppTool, appToolDescriptions } from '../app-tools/index.server'
 import type { ToolCallResult, MCPToolDescription } from './types'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -179,10 +180,35 @@ async function withReconnect<T>(op: (c: Client) => Promise<T>): Promise<T> {
 // Tool Operations
 // ============================================================================
 
+/**
+ * Execute a tool and — when a `withInjectionGuard` wrapper is active and the
+ * tool's namespace is configured untrusted — sanitize its content before the
+ * caller ever sees it.
+ *
+ * This is the guard's PRIMARY chokepoint, and it is deliberately the outermost
+ * layer: it sits above all three transports (sandbox, app-side, gateway), so no
+ * dispatch path can bypass it, and above the loop patterns, which build the
+ * controller TURN LOG from `result.data` rather than from the event stream — a
+ * guard hooked at event-tracking time would neutralize the stored event yet
+ * still feed the raw injection to the controller on that same turn.
+ *
+ * Only successful results are sanitized: a failure carries a gateway error
+ * string, not fetched content, and rewriting it would corrupt error handling.
+ */
 export async function callTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<ToolCallResult> {
+  const result = await dispatchTool(name, args)
+
+  const guard = getActiveInjectionGuard()
+  if (!guard || !result.success || !guard.isUntrusted(name)) return result
+
+  const { data, report } = await guard.sanitize(name, result.data)
+  return report ? { ...result, data, sanitized: report } : result
+}
+
+async function dispatchTool(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
   // Sandbox dispatch (see docs/plan/sandbox.md → "How tools reach the
   // controller"). When a `withSandbox` wrapper is active and the tool name
   // is owned by its in-VM transport, route there instead of the host

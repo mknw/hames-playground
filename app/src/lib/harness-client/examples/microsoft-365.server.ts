@@ -19,6 +19,7 @@
 import {
   simpleLoop,
   compactExecution,
+  withInjectionGuard,
   Tools,
   createLoopControllerAdapter,
   type ConfiguredPattern,
@@ -94,7 +95,17 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
     liveEvents: true,
   })
 
-  return [graphPattern, responseSynth]
+  // Untrusted content, despite the trusted transport. The per-user Graph token
+  // authenticates WHO fetched a document, not WHO WROTE it: mail arrives from
+  // outside the tenant, and SharePoint/OneDrive files are routinely authored or
+  // edited by people who are not this user — including, via sharing, people
+  // outside the org (`graph_files_shared`). A mail body or a .docx is therefore
+  // exactly the "instructions hidden in a document" case, and hidden text in an
+  // Office document is the classic delivery vehicle. Behaviour is unchanged
+  // unless a detection fires.
+  const guarded = withInjectionGuard({ namespaces: ['graph'] })(graphPattern)
+
+  return [guarded, responseSynth]
 }
 
 export const microsoft365Agent: AgentConfig = {

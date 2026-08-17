@@ -15,6 +15,7 @@ import {
   simpleLoop,
   compactExecution,
   withReferences,
+  withInjectionGuard,
   Tools,
   callTool,
   createNeo4jController,
@@ -65,10 +66,19 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
   // Each route is wrapped in `withReferences` so the inner pattern receives
   // an LLM-curated set of relevant prior tool_results from any earlier turn,
   // attached to its `priorResults` channel. See docs/harness-patterns/with-references.md.
+  //
+  // The WEB route is additionally wrapped in `withInjectionGuard`: search
+  // results and fetched pages are attacker-controlled text, so anything the
+  // `web` namespace returns is sanitized before it can reach the controller.
+  // The `neo4j` route is NOT guarded — that graph is our own data, written by
+  // this app, and is trusted by the same reasoning that makes user input
+  // trusted. Behaviour is unchanged unless a detection fires.
   const routesPattern = routes<SessionData>(
     {
       neo4j: withReferences<SessionData>(neo4jPattern, { scope: 'global', liveEvents: true }),
-      web_search: withReferences<SessionData>(webPattern, { scope: 'global', liveEvents: true }),
+      web_search: withInjectionGuard({ namespaces: ['web'] })(
+        withReferences<SessionData>(webPattern, { scope: 'global', liveEvents: true }),
+      ),
     },
     { liveEvents: true },
   )

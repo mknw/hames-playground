@@ -335,7 +335,12 @@ export function actorCritic<T extends ActorCriticData>(
                     )
                   }
                 }
-                return { success: result.success, result: result.data, error: result.error }
+                return {
+                  success: result.success,
+                  result: result.data,
+                  error: result.error,
+                  ...(result.sanitized ? { sanitized: result.sanitized } : {}),
+                }
               },
             })
           }
@@ -367,6 +372,7 @@ export function actorCritic<T extends ActorCriticData>(
                 result: o.result ?? null,
                 success: o.success,
                 error: o.error,
+                ...(o.sanitized ? { sanitized: o.sanitized } : {}),
               } as ToolResultEventData,
               resolved.trackHistory,
             ),
@@ -569,6 +575,7 @@ export function actorCritic<T extends ActorCriticData>(
             result: result.data,
             success: result.success,
             error: result.error,
+            ...(result.sanitized ? { sanitized: result.sanitized } : {}),
           } as ToolResultEventData,
           resolved.trackHistory,
         )

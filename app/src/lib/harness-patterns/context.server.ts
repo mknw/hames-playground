@@ -148,8 +148,18 @@ export function trackEvent(
 
 /** Event types that are always committed regardless of strategy.
  *  Includes 'error' because errors are informational (not partial results)
- *  and must be visible to downstream patterns via EventView. */
-const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set(['pattern_enter', 'pattern_exit', 'error'])
+ *  and must be visible to downstream patterns via EventView.
+ *  Includes 'content_sanitized' for the same reason, sharpened: it is the audit
+ *  record of a security control firing. A loop that neutralizes an injection
+ *  and THEN fails would, under 'on-success', discard the one event proving the
+ *  guardrail did anything — the failure would look unexplained and the attack
+ *  invisible. */
+const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set([
+  'pattern_enter',
+  'pattern_exit',
+  'error',
+  'content_sanitized',
+])
 
 /** Commit scope events to context based on strategy.
  *  Preserves original event order — lifecycle events (pattern_enter/exit) are

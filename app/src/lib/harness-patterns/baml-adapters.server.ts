@@ -33,6 +33,7 @@ import type {
   FewShot,
   PlanResult,
 } from '../../../baml_client/types'
+import type { InjectionScreen } from './injection-guard'
 import { listTools as mcpListTools } from './mcp-client.server'
 import { getActiveSandbox } from '../sandbox/scope.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
@@ -1393,6 +1394,51 @@ export async function describeToolResultsBatchOp(
     )
   }
   return byId
+}
+
+// ============================================================================
+// Injection screen (optional second layer of withInjectionGuard)
+// ============================================================================
+
+/**
+ * BAML-backed `InjectionScreen` — the OPT-IN second layer of
+ * `withInjectionGuard`. Pass it as the guard's `screen`:
+ *
+ *   withInjectionGuard({ namespaces: ['web'], screen: createInjectionScreen() })
+ *
+ * The guard invokes it only for content its deterministic corpus passed clean,
+ * so this costs one cheap `DescribeAnthropic` call per otherwise-clean untrusted
+ * result — never one per tool call, and never on the default path (no agent gets
+ * a screen it did not ask for).
+ *
+ * `maxChars` bounds what is sent: a 2 MB page would blow the context window and
+ * cost more than the protection is worth. The head of a document is where
+ * injections are placed to be read first, so the head is what gets screened —
+ * and the deterministic corpus, which has no such bound, still covers the whole
+ * thing. The truncation is reported in the verdict reason rather than hidden.
+ */
+export function createInjectionScreen(options?: { maxChars?: number }): InjectionScreen {
+  const maxChars = options?.maxChars ?? 20_000
+
+  return async ({ tool, namespace, content }) => {
+    const truncated = content.length > maxChars
+    const body = truncated ? content.slice(0, maxChars) : content
+
+    const { b } = await import('../../../baml_client')
+    const opts = clientOverrideFor('describe')
+    const source = `${namespace}/${tool}`
+    const verdict = opts
+      ? await b.ScreenUntrustedContent(source, body, opts)
+      : await b.ScreenUntrustedContent(source, body)
+
+    return {
+      injection_detected: verdict.injection_detected,
+      reason: truncated
+        ? `${verdict.reason} (screened first ${maxChars} of ${content.length} chars)`
+        : verdict.reason,
+      spans: verdict.spans ?? [],
+    }
+  }
 }
 
 // ============================================================================

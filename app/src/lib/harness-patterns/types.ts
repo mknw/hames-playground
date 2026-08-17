@@ -77,6 +77,7 @@ export type EventType =
   | 'reference_attached'
   | 'intent_compacted'
   | 'plan_created'
+  | 'content_sanitized'
 
 /** Accounting record for one harness step (#122): token and cost totals
  *  summed across EVERY physical API call the step made — including truncation
@@ -465,6 +466,10 @@ export interface ToolCallResult {
   success: boolean
   data: unknown
   error?: string
+  /** Set by `withInjectionGuard` (in `callTool`) when this result's content was
+   *  neutralized. `data` is already the sanitized content; loop patterns copy
+   *  this onto the `tool_result` event so the audit trail survives. */
+  sanitized?: import('./injection-guard').SanitizeReport
 }
 
 export type ToolSet = Record<string, string[]> & { all: string[] }
@@ -610,6 +615,12 @@ export interface ToolResultEventData {
   hidden?: boolean
   /** Moved to Archived section (also excluded from LLM context) */
   archived?: boolean
+  /** Set by `withInjectionGuard` when this result's content was neutralized.
+   *  `result` above already holds the SANITIZED content — this is the audit
+   *  trail for what was removed, and its `findings[].match` spans are
+   *  human-only (see `ContentSanitizedEventData`). Deliberately not part of the
+   *  `tool_result` LLM projection in `formatEventData`. */
+  sanitized?: import('./injection-guard').SanitizeReport
 }
 
 /** Data payload for controller_action event */
@@ -719,6 +730,30 @@ export interface PlanCreatedEventData {
    *  for, so the chain runs unplanned. Mirrors
    *  `IntentCompactedEventData.skipped`. */
   skipped?: 'no-message'
+}
+
+/** Data payload for `content_sanitized` — emitted by `withInjectionGuard`
+ *  whenever it neutralizes untrusted tool-result content (or when its optional
+ *  LLM screen was unavailable). One event per affected tool result.
+ *
+ *  ⚠ `findings[].match` holds the injection VERBATIM. That is the one place the
+ *  original text survives, and it is human-only: `formatEventData` renders this
+ *  event type from metadata alone, precisely so a neutralized instruction can
+ *  never be handed back to an LLM through a serialized event stream. Anything
+ *  new that serializes events for a prompt must keep that property — see
+ *  `__tests__/lib/harness-patterns/injection-guard-composition.test.ts`. */
+export interface ContentSanitizedEventData {
+  tool: string
+  /** `inferServer(tool)` — the untrusted namespace the content came from. */
+  namespace: string
+  findings: import('./injection-guard').SanitizeFinding[]
+  /** False only when the event exists solely to report a screen outage. */
+  neutralized: boolean
+  spotlighted: boolean
+  /** Characters of untrusted text scanned. */
+  scanned: number
+  /** The LLM screen's reason, or why the screen could not run. */
+  screenReason?: string
 }
 
 // ============================================================================

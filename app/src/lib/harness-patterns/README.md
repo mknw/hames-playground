@@ -39,6 +39,7 @@ Functional, composable framework for agentic tool execution.
   - [compactIntent()](#compactintentconfig)
   - [planner()](#plannertools-config)
   - [retriever()](#retrieverconfig)
+  - [withInjectionGuard()](#withinjectionguardconfigpattern)
   - [router()](#routerroutedescriptions-config)
   - [routes()](#routespatternmap-config)
   - [chain()](#chainctx-patterns)
@@ -150,6 +151,7 @@ type EventType =
   | 'reference_attached' // withReferences — selector decision (observability)
   | 'intent_compacted' // compactIntent — rewritten brief (observability)
   | 'plan_created' // planner — upfront plan (observability; the plan itself travels on scope.data)
+  | 'content_sanitized' // withInjectionGuard — untrusted content neutralized (observability + audit)
 
 // Isolated workspace for each pattern
 interface PatternScope<T> {
@@ -505,6 +507,136 @@ interface GuardrailConfig extends PatternConfig {
 3. Output rails run after — can warn, retry, or block on bad results
 4. Circuit breaker (redis-backed) trips after N failures in a rolling time window
 
+**Two caveats before you reach for it** (they are why `withInjectionGuard` is a
+separate primitive rather than a rail): rails declared `phase: 'execution'` are
+never dispatched — only `'input'` and `'output'` are filtered and run, so the
+shipped `pathAllowlistRail` is dead code — and input rails read
+`scope.data.input`, which nothing in the framework populates, so `piiScanRail`
+always scans `''`.
+
+### `withInjectionGuard(config)(pattern)`
+
+Neutralize prompt injection carried in **untrusted tool-result content** before
+it reaches any LLM-visible surface. Defensive, opt-in per agent.
+
+```typescript
+withInjectionGuard({ namespaces: ['web'] })(
+  simpleLoop(webController, tools.web, { patternId: 'web-search' }),
+)
+
+interface InjectionGuardConfig extends PatternConfig {
+  namespaces?: string[] // inferServer() names treated as UNTRUSTED
+  tools?: string[] // explicit per-tool opt-in, added to namespaces
+  spotlight?: 'on-detection' | 'always' | 'off' // default 'on-detection'
+  screen?: InjectionScreen // optional LLM second opinion; OFF by default
+  rules?: InjectionRule[] // extra rules appended to the corpus
+  disableRules?: string[] // corpus rule ids to switch off
+}
+```
+
+**Threat model.** `tool_result` content from an untrusted source (web search, a
+fetched page, a SharePoint/ms-graph document, a retrieved Data Stash chunk) that
+carries text addressed to the model: "ignore previous instructions", a forged
+`system:` turn, tool-call steering, "do not tell the user", hidden text in a
+document, or a crafted URL that exfiltrates data when the answer is rendered.
+**Out of scope:** user-typed input (the user is the principal, so it is trusted),
+auth, and sandbox network egress (#116).
+
+**Where it hooks — two paths, one guard.** It is an AsyncLocalStorage wrapper in
+the shape of [`withSandbox`](../../../../docs/plan/sandbox.md), not a chain step:
+a chain step runs before or after the loop, so it could only ever see content the
+controller has already read. Enforcement therefore happens where untrusted
+content is produced:
+
+1. **`callTool` (primary)** — the outermost layer of `mcp-client.callTool`, so it
+   covers all three transports (gateway, app-side, sandbox in-VM) and every
+   pattern. Critically it also covers the **controller turn log**, which
+   `simpleLoop` / `actorCritic` build from `result.data` and NOT from the event
+   stream — a guard hooked at `trackEvent` time would sanitize the stored event
+   and still feed the raw injection to the controller on that same turn.
+2. **`retriever` (second path)** — a retriever calls its injected backends
+   directly and emits its own `tool_result`, so retrieved chunks never reach
+   `callTool`. It sanitizes its hits at write-time through the same guard
+   (`sanitizeHits`), before `scope.data.matches` is set and before the event
+   exists. Opt in with `namespaces: ['retriever']`.
+
+Nothing in between (`chain`, `router`, `routes`, `parallel`, `withReferences`)
+needs to be guard-aware. Nesting is allowed; the innermost wrapper wins.
+
+**Detection + neutralization.** Deterministic first, and **the default path
+contains no LLM call**: a classifier in front of every tool result is itself
+injectable, costs a call and seconds of latency per result, and cannot be pinned
+by a unit test. Layers, in order (`injection-guard.ts`):
+
+| Layer             | Action                                                                                                             | Lossless? |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------ | --------- |
+| `sentinel-escape` | Strips the guard's own fence chars from content — so data can never forge a marker or close the fence. Runs FIRST. | yes       |
+| hidden-text       | Removes zero-width, bidi-override and U+E0000 tag characters                                                       | yes       |
+| instruction       | Replaces each matched span with `⟦neutralized:<rule>#n⟧`                                                           | no        |
+| exfil-url         | Defangs auto-loading images / remote-resource tags / data-bearing URLs to inert backticked literals                | no        |
+| spotlight         | Fences the result and labels its provenance ("data, never instructions")                                           | no        |
+
+Detection alone is useless — a flagged-but-forwarded injection still reaches the
+model — so **every finding rewrites the text**. Every quantifier in the corpus is
+bounded, so a hostile multi-megabyte page cannot backtrack the sanitizer into a
+DoS.
+
+**Clean content is byte-identical** — the same reference comes back, and
+`spotlight` defaults to `'on-detection'` for exactly that reason: the
+overwhelmingly common case must cost zero tokens and carry zero mangling risk.
+`spotlight: 'always'` fences unconditionally for agents that want it.
+
+**Optional LLM screen (off by default).** `screen` takes an `InjectionScreen`;
+`createInjectionScreen()` (baml-adapters) is the BAML-backed one, on the cheap
+`DescribeAnthropic` client. The guard calls it **only for content the
+deterministic layer passed clean**, so the two layers divide labour: regexes
+catch known phrasings, the screen catches novel ones. A verbatim span it quotes
+is neutralized like a regex match; a span it paraphrased (matching nothing)
+still forces the fence, so a verdict never degrades to silence. A screen that
+throws is non-fatal — the deterministic verdict stands and the outage is
+recorded on the event.
+
+**On detection: neutralize + annotate + emit, never silently drop.**
+
+- `result.data` / the retrieved chunk carries the neutralized text
+- `ToolResultEventData.sanitized` annotates the affected result
+- a **`content_sanitized`** event lands in the timeline (orange 🛡️ in the
+  ObservabilityPanel, with a per-finding detail view), and is in
+  `ALWAYS_COMMIT_TYPES` so a later failure cannot discard the proof a control
+  fired
+
+**The verbatim-span invariant.** Neutralization is destructive at source: the
+event store holds the sanitized text, because the store IS LLM-visible via `ref:`
+expansion, `serializeCompact()` and `compactExecution` — keeping the raw text there
+would leave the hole open. The removed spans survive **only** in
+`findings[].match`, which is human-visible in the panel and rendered into **no**
+LLM-facing serialization: `formatEventData` has an explicit `content_sanitized`
+case emitting metadata only, precisely because its `default:` branch
+JSON-dumps whole payloads and would otherwise hand the injection straight back
+to a model. Pinned by `injection-guard-composition.test.ts`.
+
+**Config transparency.** The wrapper spreads `...pattern`, so the inner
+pattern's `config` (commitStrategy, trackHistory, viewConfig, `estimateTurns`)
+governs everything unchanged and the inner pattern runs in the SAME scope — no
+extra lifecycle events, no change to `view.fromLastPattern()`. On a clean run
+there is no observable difference at all. `children` is exposed, so static
+introspection (`harnessHasRedisRetriever`, `usesCodeMode`) still sees through it.
+
+**Wired agents** (their untrusted namespaces are declared at each agent
+definition, deliberately not in a shared default):
+
+| Agent                   | Untrusted namespaces        | Not guarded             |
+| ----------------------- | --------------------------- | ----------------------- |
+| `default`               | `web` (that route only)     | `neo4j` — our own graph |
+| `microsoft-365`         | `graph`                     | —                       |
+| `multi-source-research` | `web`, `github`, `context7` | —                       |
+| `retriever`             | `web`, `retriever`          | `neo4j`                 |
+
+> Compare [`guardrail()`](#guardrailpattern-config): that pattern's output rails
+> run only AFTER the inner pattern completes, and a `RailResult` can block, warn
+> or retry but never REWRITE content — so it cannot stop injection mid-loop.
+> The two compose; they solve different problems.
+
 ### `hook(pattern, config)`
 
 Wrap a pattern as a lifecycle hook. Optionally runs in the background without blocking the main chain.
@@ -777,6 +909,15 @@ resolved config carries a `backendKinds: string[]` marker so
 `harnessHasRedisRetriever` (pattern-capabilities) can gate the Data Stash's
 auto-ingest-on-upload. **Best-effort / `recoverable`**: on total failure it
 leaves `matches` empty and the compactExecution answers from the rest of context.
+
+**Untrusted by default in practice.** Stash chunks come from INGESTED DOCUMENTS
+(uploads, and ms-graph files via `graph_file_ingest`), so a poisoned document
+reaches the final response as a retrieved chunk. Retriever hits never pass through
+`callTool`, so the pattern sanitizes its own hits at write-time via the active
+[`withInjectionGuard`](#withinjectionguardconfigpattern) — opt in with
+`namespaces: ['retriever']`. Only `content` and `source` are scanned; `docId`,
+`chunkIndex` and the offsets stay byte-exact so the inline file viewer still
+opens at the right place.
 
 > See [`docs/DATA_STASH.md → Harness-aware ingest`](../../../../docs/DATA_STASH.md)
 > for the upload-side gate and the `redis` / `supabase` backends.
@@ -1090,22 +1231,23 @@ transformed into prompt-friendly types. The table below shows which harness
 
 ### Harness EventType → BAML Input Type
 
-| Harness `EventType`  | Event Payload (TS)                                                                                                       | BAML Type                                               | Consumed By                                                   |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------- |
-| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                              | `ToolCall`                                              | `LoopTurn.tool_call`, `Attempt.action`                        |
-| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`) | `ToolResult`                                            | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
-| `controller_action`  | `ControllerActionEventData`                                                                                              | _(embedded in `LoopTurn.reasoning`)_                    | simpleLoop, actorCritic                                       |
-| `critic_result`      | `CriticResultEventData`                                                                                                  | _(embedded in `Attempt.feedback`)_                      | actorCritic                                                   |
-| `user_message`       | `UserMessageEventData`                                                                                                   | `Message { role, content }`                             | router (history)                                              |
-| `assistant_message`  | `AssistantMessageEventData`                                                                                              | `Message { role, content }`                             | router (history)                                              |
-| `pattern_enter`      | `PatternEnterEventData`                                                                                                  | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
-| `pattern_exit`       | `PatternExitEventData`                                                                                                   | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
-| `approval_request`   | `ApprovalRequestEventData`                                                                                               | _(not sent to BAML)_                                    | (reserved — no active emitter)                                |
-| `approval_response`  | `ApprovalResponseEventData`                                                                                              | _(not sent to BAML)_                                    | (reserved — no active emitter)                                |
-| `error`              | `ErrorEventData`                                                                                                         | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling      |
-| `reference_attached` | `ReferenceAttachedEventData`                                                                                             | _(not sent to BAML)_                                    | withReferences only (observability)                           |
-| `intent_compacted`   | `IntentCompactedEventData`                                                                                               | _(not sent to BAML)_                                    | compactIntent only (observability)                            |
-| `plan_created`       | `PlanCreatedEventData`                                                                                                   | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event     |
+| Harness `EventType`  | Event Payload (TS)                                                                                                                     | BAML Type                                               | Consumed By                                                   |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------- |
+| `tool_call`          | `ToolCallEventData` (`callId?`, `batchId?`, `tool`, `args`)                                                                            | `ToolCall`                                              | `LoopTurn.tool_call`, `Attempt.action`                        |
+| `tool_result`        | `ToolResultEventData` (`callId?`, `batchId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`, `sanitized?`) | `ToolResult`                                            | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
+| `controller_action`  | `ControllerActionEventData`                                                                                                            | _(embedded in `LoopTurn.reasoning`)_                    | simpleLoop, actorCritic                                       |
+| `critic_result`      | `CriticResultEventData`                                                                                                                | _(embedded in `Attempt.feedback`)_                      | actorCritic                                                   |
+| `user_message`       | `UserMessageEventData`                                                                                                                 | `Message { role, content }`                             | router (history)                                              |
+| `assistant_message`  | `AssistantMessageEventData`                                                                                                            | `Message { role, content }`                             | router (history)                                              |
+| `pattern_enter`      | `PatternEnterEventData`                                                                                                                | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
+| `pattern_exit`       | `PatternExitEventData`                                                                                                                 | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
+| `approval_request`   | `ApprovalRequestEventData`                                                                                                             | _(not sent to BAML)_                                    | (reserved — no active emitter)                                |
+| `approval_response`  | `ApprovalResponseEventData`                                                                                                            | _(not sent to BAML)_                                    | (reserved — no active emitter)                                |
+| `error`              | `ErrorEventData`                                                                                                                       | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling      |
+| `reference_attached` | `ReferenceAttachedEventData`                                                                                                           | _(not sent to BAML)_                                    | withReferences only (observability)                           |
+| `intent_compacted`   | `IntentCompactedEventData`                                                                                                             | _(not sent to BAML)_                                    | compactIntent only (observability)                            |
+| `plan_created`       | `PlanCreatedEventData`                                                                                                                 | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event     |
+| `content_sanitized`  | `ContentSanitizedEventData`                                                                                                            | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)         |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
 
@@ -1407,6 +1549,8 @@ harness-patterns/
 ├── compactBulkData.server.ts # compactBulkData() — background tool result summarization via the describe-tier client
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
 ├── token-budget.server.ts  # trimToFit(), getContextWindow(), estimateTokens() — rolling context window
+├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding
+├── injection-guard-scope.server.ts # ALS scope carrying the active guard (mirrors sandbox/scope.server.ts); read by callTool + retriever
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values)
 ├── assert.server.ts        # Server-only guards
 └── patterns/
@@ -1416,7 +1560,8 @@ harness-patterns/
     ├── actorCritic.server.ts   # Generate-evaluate loop; emits callId (+ batchId) on tool pairs
     ├── judge.server.ts         # Evaluation pattern for quality gates
     ├── parallel.server.ts      # Concurrent branches; wraps each branch with pattern_enter/exit
-    ├── guardrail.server.ts     # Rail validation; wraps inner events with pattern_enter/exit
+    ├── guardrail.server.ts     # Rail validation; wraps inner events with pattern_enter/exit (NB: phase:'execution' rails are never dispatched)
+    ├── withInjectionGuard.server.ts # ALS wrapper attaching the injection guard; emits content_sanitized
     ├── hook.server.ts          # Lifecycle hook; wraps inner events with pattern_enter/exit
     ├── chain.server.ts         # Sequential composition; accepts onEvent? for SSE streaming
     ├── compactExecution.server.ts   # Final response synthesis; skips BAML for DIRECT_RESPONSE_ROUTE

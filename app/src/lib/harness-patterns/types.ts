@@ -25,6 +25,21 @@ export type {
  *  from emitting a batch — it only stops the prompt from inviting one. */
 export type MultiCallMode = 'parallel' | 'sequential' | 'off'
 
+/** What a simpleLoop asks its controller to put in the terminal `Return`
+ *  action's `tool_args` (#149).
+ *  - 'summary' (default) — a one-or-two-sentence completion summary. The loop's
+ *    prose reaches no user: `Synthesize` renders `tool_result.tool` / `.result`
+ *    only and never `tool_call.args`, which is where the terminal action's
+ *    prose lands, so a downstream `compactExecution` composes the user-facing
+ *    answer from the FULL tool results. Composing it twice cost ~2.1k output
+ *    tokens and ~22s on a measured 5-turn run, for a text nothing read.
+ *  - 'answer' — the pre-#149 wording: compose the complete answer in
+ *    `tool_args`. Prompt-only: the loop still sets no `data.response`, so a
+ *    downstream `compactExecution` remains the author (passthrough is #149
+ *    Option B, not built). For a loop whose Return prose is itself the
+ *    deliverable — e.g. under a custom `synthesize` that reads the action. */
+export type ReturnStyle = 'summary' | 'answer'
+
 /** Max concurrently in-flight sub-calls of a 'parallel' multi-call turn. Also
  *  the batch-size guidance rendered into the controller prompts (keep in sync
  *  with LoopMultiCalls / ActorMultiCalls in baml_src). */
@@ -310,6 +325,12 @@ export interface SimpleLoopConfig extends PatternConfig {
   /** Multi-call turns: 'parallel' (default) | 'sequential' | 'off'.
    *  See `MultiCallMode`. */
   multiToolCalls?: MultiCallMode
+  /** Terminal `Return` style: 'summary' (default) | 'answer'. See
+   *  `ReturnStyle`. Every registered agent's loop is followed by a
+   *  `compactExecution`, which is the better-informed author (full-fidelity
+   *  results, across patterns, including the fields `resultOmit` hides from the
+   *  controller), so the default asks the loop for a summary only. */
+  returnStyle?: ReturnStyle
 }
 
 /** Configuration for actorCritic pattern */

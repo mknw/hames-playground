@@ -857,11 +857,14 @@ describe('LoopController BamlValidationError fallback', () => {
     expect(result.action).toBeDefined()
     expect(result.action.is_final).toBe(true)
     expect(mockLoopController).toHaveBeenCalledTimes(2)
-    // Second call should use GroqGPT120B client override. Options ride after
-    // the 9 data params (plan_context is 9th since #27's cache split).
-    const secondCallOptions =
-      mockLoopController.mock.calls[1][9] ?? mockLoopController.mock.calls[1][8]
-    expect(secondCallOptions).toEqual(expect.objectContaining({ client: 'GroqGPT120B' }))
+    // Second call should use GroqGPT120B client override. The options object
+    // rides LAST, after the data params — read it off the END rather than a
+    // fixed slot, so appending a trailing param (return_style, #149) doesn't
+    // silently shift this assertion onto a data argument.
+    const secondCall = mockLoopController.mock.calls[1]
+    expect(secondCall[secondCall.length - 1]).toEqual(
+      expect.objectContaining({ client: 'GroqGPT120B' }),
+    )
   })
 
   it('should fall back to GroqFast when both primary and GroqGPT120B fail', async () => {
@@ -881,10 +884,9 @@ describe('LoopController BamlValidationError fallback', () => {
     expect(result.action).toBeDefined()
     expect(result.action.is_final).toBe(true)
     expect(mockLoopController).toHaveBeenCalledTimes(3)
-    // Third call should use GroqFast client override. Same slot shift as above.
-    const thirdCallOptions =
-      mockLoopController.mock.calls[2][9] ?? mockLoopController.mock.calls[2][8]
-    expect(thirdCallOptions).toEqual(expect.objectContaining({ client: 'GroqFast' }))
+    // Third call should use GroqFast client override. Same last-argument read.
+    const thirdCall = mockLoopController.mock.calls[2]
+    expect(thirdCall[thirdCall.length - 1]).toEqual(expect.objectContaining({ client: 'GroqFast' }))
   })
 
   it('should propagate non-BamlValidationError errors', async () => {

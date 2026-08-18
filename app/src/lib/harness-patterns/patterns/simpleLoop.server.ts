@@ -23,7 +23,7 @@ import type {
 } from '../types'
 import { EXPAND_TOOL_NAME } from '../types'
 
-import type { ErrorEventData, MultiCallMode } from '../types'
+import type { ErrorEventData, MultiCallMode, ReturnStyle } from '../types'
 import { runBatch, combineOutcomes } from '../parallel-tools.server'
 import type { SubCall } from '../parallel-tools.server'
 import { getErrorHint } from '../error-hints'
@@ -133,6 +133,14 @@ function resolveRefsAndCapture(
 export interface SimpleLoopData {
   turn?: number
   intent?: string
+  /** The last action the controller emitted — the terminal `Return` when the
+   *  loop exited normally. Nothing in the repo READS it (the Observability
+   *  drill-down reads the `controller_action` EVENT instead), and #149 weighed
+   *  retiring it: kept because `actorCritic` writes the identically-shaped
+   *  field and `docs/harness-patterns/frontend.md` documents both, so dropping
+   *  only this one would leave the pair half-implemented for no gain. Under
+   *  `returnStyle: 'summary'` what lands here is a short summary, not a full
+   *  answer — do not treat it as user-facing text. */
   lastAction?: ControllerAction
   response?: string
 }
@@ -170,6 +178,14 @@ export function simpleLoop<T extends SimpleLoopData>(
     // from inviting one, because the shared output schema means any agent's
     // model can emit the field.
     const multiMode: MultiCallMode = config?.multiToolCalls ?? 'parallel'
+    // What the terminal `Return` action should carry (#149). 'summary' by
+    // default: the loop's prose reaches no user — `Synthesize` renders
+    // `tool_result.tool` / `.result` only, never the `tool_call.args` the prose
+    // lands in — so a downstream `compactExecution` composes the answer from
+    // the FULL results (see LoopReturnStyle in simpleLoop.baml). Passed on
+    // every controller call because it renders in the STATIC prompt head
+    // (system block + tier 1), which must be byte-identical turn over turn.
+    const returnStyle: ReturnStyle = config?.returnStyle ?? 'summary'
     const data = scope.data
     const turns: LoopTurn[] = []
     let hasError = false
@@ -263,6 +279,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             config?.fewShots,
             multiMode === 'off' ? undefined : multiMode,
             planContext,
+            returnStyle,
           )
           // Apply the contract's documented defaults ONCE, here, before the
           // action is recorded or read: `is_final` is optional (#159) and

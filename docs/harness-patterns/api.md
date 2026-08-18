@@ -154,6 +154,12 @@ interface SimpleLoopConfig extends PatternConfig {
                                   // concurrently, per-call errors, loop continues unless ALL fail.
                                   // 'sequential': in order, stop-on-failure (effect-chains).
                                   // 'off': no prompt affordance; tolerated batches run serially.
+  returnStyle?: 'summary' | 'answer'
+                                  // What the terminal `Return` carries (#149). Default 'summary':
+                                  // a brief completion summary, because the downstream
+                                  // compactExecution composes the user-facing answer from the full
+                                  // results. 'answer' restores the pre-#149 full-prose Return
+                                  // (prompt-only — it sets no data.response).
 }
 
 type OnToolResult = (

@@ -220,12 +220,29 @@ describe('runManualCypher', () => {
     expect((await runManualCypher('create (n)')).success).toBe(false)
   })
 
-  it('rejects a read query whose identifier merely contains a write keyword', async () => {
-    // The guard is a plain substring match, so `createdAt` trips the CREATE
-    // rule. Documented here because the UI surfaces the refusal verbatim.
+  // ⚠️ BUG PIN — issue #190. This is NOT the behaviour we want; it records the
+  // behaviour we currently ship, so the false-refusal cannot change unnoticed.
+  //
+  //   Bug: `runManualCypher`'s write guard is a plain case-insensitive
+  //   substring match over the query text, so any identifier that merely
+  //   *contains* a write keyword is refused — `n.createdAt` contains 'create',
+  //   and a read-only query is rejected with a message naming CREATE.
+  //   Also mis-fires on e.g. `n.deleted`, `n.mergedBy`, `n.settings`.
+  //
+  //   Fix (per #190): match on word boundaries instead of substrings. Applying
+  //   that fix makes exactly this test go red — that is the pin working, not a
+  //   regression. Whoever lands #190 must DELETE this test and replace it with
+  //   the positive: `MATCH (n) RETURN n.createdAt` succeeds while
+  //   `CREATE (n)` still refuses. Do not "repair" it by relaxing the assertion.
+  it('BUG(#190): rejects a read query whose identifier merely contains a write keyword', async () => {
     const res = await runManualCypher('MATCH (n) RETURN n.createdAt')
+
+    // Refused — and the message names a keyword the query never used, which is
+    // what the UI shows the user verbatim.
     expect(res.success).toBe(false)
     expect(res.error).toContain('CREATE')
+    // No session is opened, so the false refusal is total, not a partial run.
+    expect(session).not.toHaveBeenCalled()
   })
 
   it('returns the query error as data and closes the session', async () => {

@@ -24,6 +24,10 @@ interface Handler {
 
 const added: unknown[] = []
 const layoutsRun: string[] = []
+/** Every `layout(opts)` the component runs, with the options object it handed
+ *  over — `fit` lives in there, not on `cy.fit`, so the re-framing behaviour of
+ *  an incremental add is only visible here. */
+const layoutRuns: { scope: 'core' | 'elements'; opts: Record<string, unknown> }[] = []
 const styleUpdates: Record<string, unknown>[] = []
 const destroyed = vi.fn()
 const fit = vi.fn()
@@ -50,7 +54,10 @@ const collection = (ids: string[]) => ({
     if (cls === 'highlighted') highlighted.push(...ids)
   },
   layout: (opts: { name: string }) => ({
-    run: () => layoutsRun.push(opts.name),
+    run: () => {
+      layoutsRun.push(opts.name)
+      layoutRuns.push({ scope: 'elements', opts: opts as Record<string, unknown> })
+    },
   }),
   position: vi.fn(),
 })
@@ -91,7 +98,12 @@ class FakeCore {
     }
   }
   layout(opts: { name: string }) {
-    return { run: () => layoutsRun.push(opts.name) }
+    return {
+      run: () => {
+        layoutsRun.push(opts.name)
+        layoutRuns.push({ scope: 'core', opts: opts as Record<string, unknown> })
+      },
+    }
   }
   style(sheet?: unknown) {
     if (sheet !== undefined) return undefined
@@ -170,6 +182,7 @@ const nodes = (ids: string[]): ElementDefinition[] =>
 beforeEach(() => {
   added.length = 0
   layoutsRun.length = 0
+  layoutRuns.length = 0
   styleUpdates.length = 0
   dataWrites.length = 0
   handlers = []
@@ -226,6 +239,10 @@ describe('GraphVisualization — mounting and elements', () => {
     expect(container.textContent).not.toContain('No Graph Data')
     expect(layoutsRun).toContain('cose')
     expect(fit).toHaveBeenCalled()
+    // First load frames the whole graph: the layout is run over the core and
+    // is not opted out of fitting.
+    expect(layoutRuns).toEqual([{ scope: 'core', opts: expect.objectContaining({ name: 'cose' }) }])
+    expect(layoutRuns[0].opts.fit).not.toBe(false)
   })
 
   it('adds only the new elements on an incremental update', async () => {
@@ -233,6 +250,7 @@ describe('GraphVisualization — mounting and elements', () => {
     render(() => <GraphVisualization elements={elements()} />)
     await becomeVisible()
     added.length = 0
+    layoutRuns.length = 0
     fit.mockClear()
 
     setElements(nodes(['a', 'b', 'c']))
@@ -240,6 +258,12 @@ describe('GraphVisualization — mounting and elements', () => {
 
     expect(added.map((e) => (e as ElementDefinition).data.id)).toEqual(['b', 'c'])
     expect(fit, 'an incremental add must not re-frame the whole graph').not.toHaveBeenCalled()
+    // `cy.fit` is only half of it: the re-framing an incremental add has to
+    // avoid comes from the layout's own `fit` option, which Cytoscape defaults
+    // to true. Assert the option the component actually hands over.
+    expect(layoutRuns).toEqual([
+      { scope: 'elements', opts: expect.objectContaining({ name: 'cose', fit: false }) },
+    ])
   })
 
   it('clears the canvas when the elements go away', async () => {

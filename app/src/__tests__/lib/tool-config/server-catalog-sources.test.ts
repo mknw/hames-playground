@@ -124,6 +124,33 @@ describe('getServerCatalog — config sources', () => {
     }
   })
 
+  it('drops a meta-tool that a catalog server declares as its own', async () => {
+    // The case above cannot see the skip at all: `assign()` sends the
+    // meta-tools to inferred buckets ('code', 'mcp-find', …) that are not
+    // catalog keys, so they fall out of the result whether the skip runs or
+    // not. A *declared* meta-tool takes the highest-priority assignment path
+    // straight into an enabled server, which is the only fixture in which the
+    // skip is load-bearing.
+    const { getServerCatalog } = await loadCatalogModule({
+      'custom-catalog.yaml': `
+registry:
+  memory:
+    title: Memory
+    tools:
+      - name: create_entities
+      - name: code-mode
+      - name: mcp-find
+      - name: mcp-add
+      - name: mcp-exec
+`,
+      'mcp-config.yaml': 'memory:\n  enabled: true\n',
+    })
+
+    const [memory] = await getServerCatalog()
+
+    expect(memory.tools.map((t) => t.name)).toEqual(['create_entities'])
+  })
+
   it('falls back to a server’s declared tools when the gateway is unreachable', async () => {
     listTools.mockRejectedValue(new Error('gateway down'))
     const { getServerCatalog } = await loadCatalogModule({

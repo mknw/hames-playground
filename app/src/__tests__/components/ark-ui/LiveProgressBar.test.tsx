@@ -47,6 +47,11 @@ describe('LiveProgressBar — mount delay', () => {
 
     // A direct router reply: done in ~150ms, well before the bar would appear.
     await wait(150)
+    // Asserted *while the chain is still running*: after the exit fade the bar
+    // is absent whether or not it ever flashed, so only this checkpoint
+    // distinguishes "never appeared" from "appeared and left again".
+    expect(bar(container), 'no flash while a sub-350ms chain is in flight').toBeNull()
+
     setVisible(false)
     await pastDelay()
 

@@ -129,6 +129,30 @@ describe('ObservabilityPanel — summary bar', () => {
     expect(container.textContent).toContain('+3.0k⚡')
   })
 
+  it('counts cache writes into the input denominator, diluting the cached share', () => {
+    // 1k fresh + 3k read + 1k written = 5k of input, of which 3k came from
+    // cache → 60%. Leaving the write bucket out of the denominator would read
+    // 75% (3k/4k) — a write is billed input, so it must dilute the share.
+    const events = [
+      ev(
+        'controller_action',
+        { action: { tool_name: 'x' } },
+        {
+          metrics: metrics({
+            inputUncachedTokens: 1000,
+            inputCacheReadTokens: 3000,
+            inputCacheWriteTokens: 1000,
+          }),
+        },
+      ),
+    ]
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+
+    expect(container.textContent).toContain('+1.0k✎')
+    expect(container.textContent).toContain('60%')
+    expect(container.textContent).not.toContain('75%')
+  })
+
   it('shows cost and the caching saving when the events are priced', () => {
     const events = [
       ev(

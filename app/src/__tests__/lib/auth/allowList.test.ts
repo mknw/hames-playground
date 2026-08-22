@@ -73,6 +73,17 @@ describe('isEmailAllowed', () => {
     expect(isEmailAllowed('anyone@other.com')).toBe(false)
   })
 
+  it('rejects an impostor domain that merely contains the wildcard domain', () => {
+    // The wildcard match must be a *suffix* test. A containment test would
+    // admit `attacker@corp.com.evil.net`, whose registrable domain is
+    // evil.net — this is the app's only authorization boundary, so the
+    // negative is pinned explicitly rather than left to the positive above.
+    vi.stubEnv('VITE_ALLOWED_EMAILS', '*@corp.com')
+
+    expect(isEmailAllowed('attacker@corp.com.evil.net')).toBe(false)
+    expect(isEmailAllowed('attacker@corp.com.co')).toBe(false)
+  })
+
   it('rejects a missing address', () => {
     vi.stubEnv('VITE_ALLOWED_EMAILS', '*@corp.com')
 

@@ -45,23 +45,14 @@ produce false positives). The "Prompt Defense Baseline" preamble is deleted from
 both (no-op under `writing-for-agents`' test). `model: sonnet` → `model: opus`
 in both (standing repo preference).
 
-## `kg-code-review` — derivative work, two sources
+## `kg-code-review` — extracted (2026-08-22)
 
-Written here, carrying MIT material from both upstreams (named in its
-attribution header):
-
-| Element                                                                          | Origin                                                                     |
-| --------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Two-axis shape, fixed-point discipline, aggregation rule, Fowler smell baseline | `mattpocock/skills` @ `068b6e0`, `skills/engineering/code-review/SKILL.md` |
-| Review discipline (Pre-Report Gate, proof requirements, false-positive list)    | `affaan-m/ECC` @ `50743ce`, `agents/code-reviewer.md` — by delegation      |
-| Repo standards, the `/code-review` boundary, the spec/scheduling split          | this project                                                               |
-
-The ECC material is adopted exactly once: the Standards axis dispatches the
-vendored `code-reviewer` sub-agent rather than inlining a reviewer prompt.
-`kg-code-review`'s only Skill-tool call is to `codebase-design`, which is now a
-globally-installed generic skill — the one-direction composition rule (a `kg-*`
-skill may call a generic skill, never the reverse) is unchanged by the
-extraction.
+Generalized into `reviewing-changes` in
+[muster-skills](https://github.com/mknw/muster-skills), whose `NOTICE.md`
+carries its upstream notices (`mattpocock/skills` two-axis structure;
+`affaan-m/ECC` reviewer discipline by delegation). The repo-specific facts the
+skill's body used to hardcode now live as pointers in
+[`docs/reviewing.md`](../../docs/reviewing.md).
 
 ## `kg-dtalk-ui` — derivative work
 

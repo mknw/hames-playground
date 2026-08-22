@@ -25,6 +25,10 @@
  *
  * Writes go through {@link claimSessionOwnership} (record-or-verify); reads go
  * through {@link userOwnsSession} (verify only).
+ *
+ * Not stash-only: the sandbox PTY routes gate on the same two functions (via
+ * `http.server.ts`), since an interactive shell into a session's container is
+ * scoped by the same sessionId as the session's documents.
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'

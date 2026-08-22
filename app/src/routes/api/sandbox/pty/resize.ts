@@ -5,30 +5,32 @@
  *
  * Forwarded to the PTY so the in-container shell wraps lines to the browser
  * terminal's dimensions. No-op if no PTY exists for the session.
+ *
+ * Ownership: same read gate as input — see `input.ts`.
  */
 import type { APIEvent } from '@solidjs/start/server'
 import { ptyManager } from '../../../../lib/sandbox/pty-manager.server'
-import { getAuthenticatedUser } from '../../../../lib/auth/server'
-import { isBypassEnabled } from '../../../../lib/auth/dev-bypass'
-
-async function requireAuth(): Promise<void> {
-  if (isBypassEnabled()) return
-  await getAuthenticatedUser()
-}
+import { requireUserId, requireSessionOwner } from '../../../../lib/stash/http.server'
 
 export async function POST(event: APIEvent) {
+  let userId: string
   try {
-    await requireAuth()
+    userId = await requireUserId()
   } catch (err) {
     return new Response(err instanceof Error ? err.message : 'Unauthorized', { status: 401 })
   }
 
-  const body = (await event.request.json().catch(() => null)) as
-    | { sessionId?: string; cols?: number; rows?: number }
-    | null
+  const body = (await event.request.json().catch(() => null)) as {
+    sessionId?: string
+    cols?: number
+    rows?: number
+  } | null
   if (!body || !body.sessionId || typeof body.cols !== 'number' || typeof body.rows !== 'number') {
     return new Response('sessionId, cols, rows are required', { status: 400 })
   }
+
+  const denied = await requireSessionOwner(body.sessionId, userId)
+  if (denied) return denied
 
   ptyManager.resize(body.sessionId, body.cols, body.rows)
   return new Response(null, { status: 204 })

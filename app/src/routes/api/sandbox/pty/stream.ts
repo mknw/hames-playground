@@ -10,17 +10,17 @@
  * the client `JSON.parse`s and writes straight into xterm.
  *
  * Keystrokes go the other way via POST /api/sandbox/pty/input.
+ *
+ * Ownership: opening the stream is the PTY's first touch, so it goes through
+ * the write gate (`claimSession`) — the caller claims an unclaimed session id
+ * and is verified against an already-owned one, exactly like a stash upload.
+ * A foreign session gets the same 404 an absent one would, so the two are
+ * indistinguishable from outside.
  */
 import type { APIEvent } from '@solidjs/start/server'
 import { ptyManager } from '../../../../lib/sandbox/pty-manager.server'
 import { agentUsesSyncWorkspace } from '../../../../lib/harness-client/registry.server'
-import { getAuthenticatedUser } from '../../../../lib/auth/server'
-import { isBypassEnabled } from '../../../../lib/auth/dev-bypass'
-
-async function requireAuth(): Promise<void> {
-  if (isBypassEnabled()) return
-  await getAuthenticatedUser() // throws if unauthenticated
-}
+import { requireUserId, claimSession } from '../../../../lib/stash/http.server'
 
 export async function GET(event: APIEvent) {
   const url = new URL(event.request.url)
@@ -30,11 +30,15 @@ export async function GET(event: APIEvent) {
     return new Response('sessionId is required', { status: 400 })
   }
 
+  let userId: string
   try {
-    await requireAuth()
+    userId = await requireUserId()
   } catch (err) {
     return new Response(err instanceof Error ? err.message : 'Unauthorized', { status: 401 })
   }
+
+  const denied = await claimSession(sessionId, userId)
+  if (denied) return denied
 
   try {
     // If the session's agent uses durable workspaces, the PtyManager hydrates

@@ -76,8 +76,8 @@ Ark UI is the chosen primitive layer; never replace Ark components with native e
 ## Agent skills
 
 Project skills live in `.claude/skills/` (tracked in git, so worktrees inherit
-them — no copy step); all carry the `kg-` prefix and encode something only true
-of this repo. The **generic set** (bare names: `grilling`, `codebase-design`, …)
+them — no copy step); each carries the `kg-` prefix and encodes something only
+true of this repo. The **generic set** (bare names: `grilling`, `codebase-design`, …)
 was extracted to `~/Code/muster-skills` and is installed globally via
 `~/.claude/skills` symlinks, so it is available here and in every other project
 without copies. `dispatching-work` lives in the same `~/Code/muster-skills` repo
@@ -99,7 +99,10 @@ and skips its `README.md` / `LICENSE` / `NOTICE.md`.
 
 - A `kg-*` skill may call a generic skill (global scope is visible in every
   project). A generic skill must never call a `kg-*` skill — that invariant is
-  what keeps the generic set portable.
+  what keeps the generic set portable. A repo-local map (e.g.
+  [`docs/reviewing.md`](docs/reviewing.md)) pointing a generic skill at a
+  `kg-*` one is config, not the generic skill's body doing the calling, so it
+  does not breach this.
 - Sub-agents live beside them in `.claude/agents/` (`code-reviewer`,
   `silent-failure-hunter`), tracked the same way and dispatched via the Agent
   tool's `subagent_type`.

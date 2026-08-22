@@ -15,12 +15,24 @@ else**, so this file stays cheap to maintain and safe to read in parallel.
   _Harness Patterns_ (`.bind(b)`, prefer the adapter factories), _BAML Clients_
   (`CLIENT_MAX_OUTPUT_TOKENS` ↔ client `max_tokens` sync, the positional-args
   trap), and _Styling_ (UnoCSS attributify only; `i-material-symbols-*` icons).
+- **The diff's own area** — a change is also held to the docs local to the
+  code it touches, not just the five sections above:
+  [`docs/INDEX.md`](INDEX.md) and what it points at, and for any
+  `harness-patterns` change,
+  [`app/src/lib/harness-patterns/README.md`](../app/src/lib/harness-patterns/README.md)
+  (its `multiToolCalls: 'off'` still-serial semantics, `EventView`/
+  `ViewConfig` scoping). This is the map naming where area docs live, so the
+  generic skill's area-README fallback still applies even with this map
+  present — it adds sources, it does not get switched off by one.
 - **Commit discipline** — conventional subject lines, **no attribution
   trailers**: the acceptance-criteria block in
   [`docs/agents/AGENT-BRIEF.md`](agents/AGENT-BRIEF.md). Check the commit list,
   not just the diff.
 - **`.tsx` under `app/src`** — the `kg-dtalk-ui` skill (attributify rules,
-  house recipes, role→colour mapping, a11y + graph checklists).
+  house recipes, role→colour mapping, a11y + graph checklists). This map
+  pointing a generic skill at a `kg-*` one is repo-local config, not the
+  generic skill itself calling it — that indirection is what keeps the
+  generic set portable (see `CLAUDE.md`'s Agent skills section).
 - **House vocabulary** — [`GLOSSARY.md`](../GLOSSARY.md); decisions not to
   re-litigate — [`docs/adr/`](adr/README.md).
 - **Module boundaries** — the `codebase-design` skill's vocabulary (depth,
@@ -29,8 +41,9 @@ else**, so this file stays cheap to maintain and safe to read in parallel.
 ## Spec resolution (the Spec axis)
 
 [`docs/agents/issue-tracker.md`](agents/issue-tracker.md) is authoritative:
-the resolution order (commit refs → PR body → branch name → `docs/plan/` doc),
-the note that this repo's PR bodies are a **first-class** spec source, and the
+the resolution order (commit refs → PR body → branch name — the fourth step,
+a `docs/plan/` doc, is the generic skill's own default, not this file's), the
+note that this repo's PR bodies are a **first-class** spec source, and the
 split that the issue body is the spec while the project board
 (Status/Priority/MSCW) is scheduling — read-only context, never a finding.
 

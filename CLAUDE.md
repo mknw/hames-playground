@@ -110,7 +110,7 @@ and skips its `README.md` / `LICENSE` / `NOTICE.md`.
   decision records in [`docs/adr/`](docs/adr/README.md) (which also states when
   one gets written, and that they are not to be re-litigated).
 - Provenance and upstream pins for the vendored files still in-repo
-  (`kg-*` skills, the two sub-agents, the Code minimalism section below, plus
+  (`kg-dtalk-ui`, the two sub-agents, the Code minimalism section below, plus
   the vendored docs outside `.claude/` — `docs/adr/README.md` and
   `docs/agents/AGENT-BRIEF.md`): `.claude/skills/PROVENANCE.md`;
   licences: `.claude/skills/NOTICE.md`. Adoption programme (historical):
@@ -120,9 +120,11 @@ It names paths and invariants, never contents: every model-invoked skill's
 description is already permanently loaded, so listing them here would restate it
 at full context cost.
 
-`/kg-code-review` (conventions + spec fidelity, two unmerged axes) complements
-the built-in `/code-review` (correctness bugs + cleanups). Run the built-in
-first — it can fix what it finds.
+`/reviewing-changes` (conventions + spec fidelity, two unmerged axes — a
+generic muster-skills skill; in this repo it reads
+[`docs/reviewing.md`](docs/reviewing.md) as its map) complements the built-in
+`/code-review` (correctness bugs + cleanups). Run the built-in first — it can
+fix what it finds.
 
 ---
 

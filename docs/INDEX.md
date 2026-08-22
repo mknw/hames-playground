@@ -10,6 +10,7 @@
 | [GLOSSARY.md](../GLOSSARY.md) | **The house vocabulary** — *pattern*, *controller*, *actor*, *critic*, *harness*, *EventView*, *ContextEvent*, *tool namespace*, *Data Stash*, *stash session*, *sandbox flavour*, *action*, *routine*. Terms only, never implementation; each entry points at the doc that owns the mechanism |
 | [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Live planning board (Status / Priority / MSCW per issue) |
 | [plan/ROADMAP.md](plan/ROADMAP.md) | The roadmap *shape*: target multi-user architecture, phases 0–4 with MoSCoW ratings + dependency spine (Entra SSO #119 as the gate) |
+| [reviewing.md](reviewing.md) | **Review map** for the global `/reviewing-changes` skill: pointers to where conventions, spec resolution, gates and the review protocol live — facts stated here directly only when stated nowhere else |
 
 ---
 
@@ -84,7 +85,7 @@ Source-level index: see [app/README.md](../app/README.md#documentation-index).
 
 | Document | Description |
 |----------|-------------|
-| [agents/issue-tracker.md](agents/issue-tracker.md) | **How a skill fetches a spec**: the `gh` commands for issues/PRs, resolving a bare `#42`, the label set, and the spec/scheduling split — the issue body is the spec, the [project board](https://github.com/users/mknw/projects/5) (Status/Priority/MSCW) is read-only context. Named by `/kg-code-review`'s Spec axis |
+| [agents/issue-tracker.md](agents/issue-tracker.md) | **How a skill fetches a spec**: the `gh` commands for issues/PRs, resolving a bare `#42`, the label set, and the spec/scheduling split — the issue body is the spec, the [project board](https://github.com/users/mknw/projects/5) (Status/Priority/MSCW) is read-only context. Named by `/reviewing-changes`' Spec axis |
 
 ### Agent Trigger Endpoint
 

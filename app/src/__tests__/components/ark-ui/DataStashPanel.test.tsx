@@ -620,6 +620,71 @@ describe('DataStashPanel — chat citations', () => {
     expect(container.textContent).toContain('2/2')
   })
 
+  /** One reference spanning bravo→delta: chars 6–25 of `content`. */
+  const spanningEvent = (): ContextEvent => ({
+    id: 'ev-retr-span',
+    type: 'tool_result',
+    ts: ++evSeq,
+    patternId: 'retriever',
+    data: {
+      tool: 'retriever',
+      success: true,
+      result: {
+        references: [
+          { docId: 'doc-1', filename: 'notes.md', startOffset: 6, endOffset: 25, chunkIndex: 0 },
+        ],
+      },
+    },
+  })
+
+  it('reports the exact line span of a multi-line chunk, not just its start', async () => {
+    // 'alpha\nbravo\ncharlie\ndelta\necho' — chars 6–25 start on line 2 and
+    // end on line 4. The end of the range is derived arithmetic of its own, so
+    // it is asserted exactly: an off-by-one would read L2–5 and still contain
+    // 'L2'.
+    stubFetch({ documents: [doc()], documentBody: { document: { content } } })
+    const [ref, setRef] = createSignal<OpenReferenceTarget | null>(null)
+    const { container } = render(() => (
+      <DataStashPanel
+        events={[userMessage(), spanningEvent()]}
+        sessionId="sess-span"
+        onStashAction={noopAction}
+        pendingReference={ref()}
+      />
+    ))
+    await settle()
+
+    setRef({ docId: 'doc-1', startOffset: 6, endOffset: 25 })
+    await settle()
+
+    expect(container.textContent).toContain('L2\u20134')
+    expect(container.textContent).not.toContain('L2\u20135')
+  })
+
+  it('falls back to the first reference when a citation matches none of them', async () => {
+    // `findIndex` returns -1 for an unmatched offset pair; the viewer must open
+    // on reference 1 of 2 rather than on an out-of-range slot (which would read
+    // '0/2' with no line marker at all).
+    stubFetch({ documents: [doc()], documentBody: { document: { content } } })
+    const [ref, setRef] = createSignal<OpenReferenceTarget | null>(null)
+    const { container } = render(() => (
+      <DataStashPanel
+        events={[userMessage(), retrieverEvent()]}
+        sessionId="sess-cite-oob"
+        onStashAction={noopAction}
+        pendingReference={ref()}
+      />
+    ))
+    await settle()
+
+    setRef({ docId: 'doc-1', startOffset: 999, endOffset: 1000 })
+    await settle()
+
+    expect(container.textContent).toContain('1/2')
+    expect(container.textContent).toContain('L1')
+    expect(container.textContent).not.toContain('0/2')
+  })
+
   it('ignores a citation for a document this session never uploaded', async () => {
     stubFetch({ documents: [doc()] })
     const [ref, setRef] = createSignal<OpenReferenceTarget | null>(null)

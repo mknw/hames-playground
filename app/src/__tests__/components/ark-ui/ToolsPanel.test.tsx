@@ -244,6 +244,27 @@ describe('ToolsPanel — persisting edits', () => {
     expect(hoisted.setCodeModeAllowedTools).toHaveBeenLastCalledWith('s1', DEFAULTS)
   })
 
+  it('leaves the switch off for a strict superset of the preset', async () => {
+    // `sel.size === preset.length` is what makes this "no more, no fewer".
+    // Without it a superset would read as ON, and flipping it off would
+    // silently discard the extra tool the user picked.
+    hoisted.getCodeModeAllowedTools.mockResolvedValue(
+      state({
+        allowed: [
+          ...DEFAULTS,
+          'read_neo4j_cypher',
+          'write_neo4j_cypher',
+          'read_graph',
+          'create_issue',
+        ],
+      }),
+    )
+    const { container } = await renderPanel()
+
+    const toggle = container.querySelector('[data-scope="switch"][data-part="control"]')!
+    expect(toggle.getAttribute('data-state')).toBe('unchecked')
+  })
+
   it('refuses to unpick a meta-tool', async () => {
     hoisted.getServerCatalog.mockResolvedValue([
       { key: 'meta', tools: [{ name: 'code-mode' }] } as CatalogServer,

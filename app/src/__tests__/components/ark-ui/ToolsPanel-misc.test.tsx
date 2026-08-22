@@ -195,6 +195,19 @@ describe('ToolsPanel', () => {
     expect(persisted()).toEqual(DEFAULTS)
   })
 
+  it('stays OFF for a strict superset of the preset', async () => {
+    // "only when exactly" needs the size half of the comparison: without it a
+    // superset reads as ON, and flipping it off silently discards the extra
+    // tool (`create_issue` here) the user had picked.
+    const preset = ['read_neo4j_cypher', 'write_neo4j_cypher', 'search', 'fetch_content']
+    getCodeModeAllowedTools.mockResolvedValue(state([...DEFAULTS, ...preset, 'create_issue']))
+    const { container } = render(() => <ToolsPanel sessionId="s1" />)
+    await tick()
+
+    const sw = container.querySelector<HTMLElement>('[data-scope="switch"][data-part="root"]')!
+    expect(sw.getAttribute('data-state')).toBe('unchecked')
+  })
+
   it('toggles a whole server from its row checkbox', async () => {
     const { container } = render(() => <ToolsPanel sessionId="s1" />)
     await tick()

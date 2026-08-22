@@ -51,10 +51,15 @@ describe('LiveProgressBar', () => {
     ))
 
     vi.advanceTimersByTime(MOUNT_DELAY_MS - 50)
+    // Checked before the chain ends: past the exit fade the bar is gone either
+    // way, so the post-teardown assertion below cannot tell a bar that never
+    // mounted from one that flashed and left.
+    expect(bar(container), 'a sub-350ms chain never flashes the bar').toBeNull()
+
     setVisible(false)
     vi.advanceTimersByTime(1000)
 
-    expect(bar(container), 'a sub-350ms chain never flashes the bar').toBeNull()
+    expect(bar(container), 'and it is still absent once the chain ends').toBeNull()
   })
 
   it('appears once the chain outlives the mount delay', () => {

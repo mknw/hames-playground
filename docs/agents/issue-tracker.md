@@ -6,7 +6,7 @@ Issues and specs for this repo live as GitHub issues on
 inside a clone or a worktree, so no `--repo` flag is needed.
 
 This file is the one place a skill looks up "how do I fetch a ticket here". It is
-a **data hook**: generic skills (`kg-code-review`'s Spec axis, anything that says
+a **data hook**: generic skills (`/reviewing-changes`' Spec axis, anything that says
 "fetch the relevant ticket") name this path and degrade gracefully when it is
 absent. Keep it a set of commands and conventions, not a workflow.
 

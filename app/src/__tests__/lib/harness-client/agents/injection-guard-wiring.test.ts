@@ -131,13 +131,4 @@ describe('agents deliberately NOT guarded (yet)', () => {
     const patterns = (await generalAgent.createPatterns('s')) as Pattern[]
     expect(guardOf(patterns)).toBeUndefined()
   })
-
-  it('code-mode: an actorCritic over scripts, out of scope for this change', async () => {
-    // Not a claim that code-mode is safe — a claim that this PR did not touch
-    // it. Its threat model (a script the actor wrote, run against every tool)
-    // is a different piece of work.
-    const { codeModeAgent } = await import('../../../../lib/harness-client/agents/code-mode.server')
-    const patterns = (await codeModeAgent.createPatterns('s')) as Pattern[]
-    expect(guardOf(patterns)).toBeUndefined()
-  })
 })

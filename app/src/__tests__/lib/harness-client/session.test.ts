@@ -116,7 +116,7 @@ describe('pattern cache', () => {
   })
 
   it('ignores doNotCachePatterns from outside a getOrBuildPatterns build', async () => {
-    // The registry capability probes (agentUsesCodeMode &c.) call
+    // The registry capability probes (agentUsesRedisRetriever &c.) call
     // createPatterns directly and discard the result. A degraded probe build
     // must not leave a flag that costs the next REAL build its cache entry.
     doNotCachePatterns('cache-7')

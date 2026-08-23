@@ -2,7 +2,7 @@
 
 A playground for building agent applications out of composable **harness patterns** — primitives like `simpleLoop`, `actorCritic`, `parallel`, `router`, `withReferences`, `withApproval` that you chain into agents fit for any task. BAML provides typed LLM reasoning at each pattern's leaf; an MCP gateway provides the tools.
 
-The repo ships several example agents that exercise the framework (default Neo4j + web research, code-mode, and several more in the registry). The point of the project is the framework — the agents are showcases of what becomes easy when the primitives are right.
+The repo ships several agents that exercise the framework (default Neo4j + web research, multi-source research, sandbox and retriever agents, and more in the registry). The point of the project is the framework — the agents are showcases of what becomes easy when the primitives are right.
 
 ## Feature showcase
 

@@ -79,7 +79,7 @@ export interface ChatInterfaceProps {
    *  the new agent gets its own conversation row rather than overwriting an existing one. */
   onAgentChangeRequestsNewSession?: () => void
   /** Reports the conversation's selected agent (initial, on load, and on change)
-   *  so the parent can drive agent-aware UI (e.g. the Tools panel's code-mode gate). */
+   *  so the parent can drive agent-aware UI. */
   onSelectedAgentChange?: (agentId: string) => void
   /** Map of entity/relation names → graph element IDs for interactive highlighting */
   graphEntityNames?: Map<string, string[]>

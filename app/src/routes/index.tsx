@@ -148,7 +148,7 @@ export default function Home() {
     if (embedPollTimer) clearTimeout(embedPollTimer)
   })
   // The conversation's selected agent, reported up from ChatInterface, so the
-  // Tools panel's code-mode gate tracks the live selection (default until set).
+  // agent-aware support panels track the live selection (default until set).
   const [currentAgentId, setCurrentAgentId] = createSignal<string>('default')
 
   // Sidebar threads — refetched after each turn completes (see onContextUpdate).

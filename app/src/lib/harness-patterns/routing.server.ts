@@ -29,7 +29,6 @@ async function getBAML() {
 const DEFAULT_ROUTES = [
   { name: 'neo4j', description: 'Database queries and graph operations' },
   { name: 'web_search', description: 'Web lookups and information retrieval' },
-  { name: 'code_mode', description: 'Multi-tool script composition' }
 ]
 
 export interface RouteMessageResult {
@@ -44,7 +43,7 @@ export async function routeMessageOp(
   message: string,
   history: Array<{ role: string; content: string }>,
   routes: Array<{ name: string; description: string }> = DEFAULT_ROUTES,
-  collector?: Collector
+  collector?: Collector,
 ): Promise<RouteMessageResult> {
   const b = await getBAML()
   const startTime = Date.now()
@@ -62,22 +61,14 @@ export async function routeMessageOp(
 
   // Extract LLM call data if collector present
   const llmCall = collector
-    ? extractLLMCallData(
-        collector,
-        'Router',
-        { message, routes, history },
-        startTime,
-        result
-      )
+    ? extractLLMCallData(collector, 'Router', { message, routes, history }, startTime, result)
     : undefined
 
   return {
     intent: result.intent,
     tool_call_needed: result.needs_tool,
-    tool_name: result.route && validRoutes.has(result.route)
-      ? result.route
-      : null,
+    tool_name: result.route && validRoutes.has(result.route) ? result.route : null,
     response_text: result.response ?? '',
-    llmCall
+    llmCall,
   }
 }

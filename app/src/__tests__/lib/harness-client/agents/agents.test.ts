@@ -245,28 +245,6 @@ describe('Agent Harnesses', () => {
     })
   })
 
-  describe('codeModeAgent', () => {
-    it('should have valid config', async () => {
-      const { codeModeAgent } =
-        await import('../../../../lib/harness-client/agents/code-mode.server')
-      validateAgentConfig(codeModeAgent)
-      expect(codeModeAgent.id).toBe('code-mode')
-    })
-
-    it('should create patterns: router + routes(chain(loop, synth))', async () => {
-      const { codeModeAgent } =
-        await import('../../../../lib/harness-client/agents/code-mode.server')
-      const patterns = await validatePatterns(codeModeAgent)
-
-      const names = patterns.map((p) => p.name)
-      // Two top-level patterns: router + routes.
-      expect(patterns.length).toBe(2)
-      expect(names).toContain('router')
-      // The routes name embeds the route key.
-      expect(names.some((n) => n.includes('code_mode'))).toBe(true)
-    })
-  })
-
   describe('sandboxSessionAgent', () => {
     it('should have valid config', async () => {
       const { sandboxSessionAgent } =
@@ -389,18 +367,12 @@ describe('Agent Consistency', () => {
   it('all agents should have unique IDs', async () => {
     // Import all agents statically
     const { defaultAgent } = await import('../../../../lib/harness-client/agents/default.server')
-    const { codeModeAgent } = await import('../../../../lib/harness-client/agents/code-mode.server')
     const { sandboxSessionAgent } =
       await import('../../../../lib/harness-client/agents/sandbox-session.server')
     const { multiSourceResearchAgent } =
       await import('../../../../lib/harness-client/agents/multi-source-research.server')
 
-    const ids = [
-      defaultAgent.id,
-      codeModeAgent.id,
-      sandboxSessionAgent.id,
-      multiSourceResearchAgent.id,
-    ]
+    const ids = [defaultAgent.id, sandboxSessionAgent.id, multiSourceResearchAgent.id]
 
     const uniqueIds = new Set(ids)
     expect(uniqueIds.size).toBe(ids.length)
@@ -449,13 +421,10 @@ describe('compactExecution view scope — the user message must survive', () => 
     return undefined
   }
 
-  async function synthOf(agentId: 'sandbox-session' | 'code-mode'): Promise<Node> {
-    // Static imports: a template-literal specifier defeats Vite's analysis.
-    const agent =
-      agentId === 'sandbox-session'
-        ? (await import('../../../../lib/harness-client/agents/sandbox-session.server'))
-            .sandboxSessionAgent
-        : (await import('../../../../lib/harness-client/agents/code-mode.server')).codeModeAgent
+  async function synthOf(agentId: 'sandbox-session'): Promise<Node> {
+    // Static import: a template-literal specifier defeats Vite's analysis.
+    const agent = (await import('../../../../lib/harness-client/agents/sandbox-session.server'))
+      .sandboxSessionAgent
     const patterns = (await agent.createPatterns('test-session')) as unknown as Node[]
     const synth = findSynth(patterns)
     expect(synth, `no compactExecution found in ${agentId}`).toBeDefined()
@@ -483,12 +452,10 @@ describe('compactExecution view scope — the user message must survive', () => 
     }
   }
 
-  it.each([
-    ['sandbox-session', 'sandbox-session-loop'],
-    ['code-mode', 'code-mode-loop'],
-  ] as const)('%s: the synth still sees the question', async (agentId, loopId) => {
+  it('sandbox-session: the synth still sees the question', async () => {
+    const loopId = 'sandbox-session-loop'
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
-    const synth = await synthOf(agentId)
+    const synth = await synthOf('sandbox-session')
 
     // Mirrors compactExecution's own read: `view.fromAll().ofType('user_message')`.
     const view = createEventView(ctxWith(loopId), synth.config.viewConfig, synth.config.patternId)

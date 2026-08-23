@@ -39,9 +39,9 @@ compositions across all available MCP servers.
 
 > **Synthetic tool:** simpleLoop's `LoopController` prompt also exposes `expandPreviousResult` when prior results are present — a virtual tool that loads the full data behind a `ref:<id>` and records it as a normal turn. See [`with-references.md`](../../../../docs/harness-patterns/with-references.md) for the ingress/expansion taxonomy.
 
-> **Who writes the final answer ([#149](https://github.com/mknw/harness-playground/issues/149)):** every `simpleLoop` here inherits `returnStyle: 'summary'` — its terminal `Return` carries a one-line completion summary, and the chain's `compactExecution` composes the user-facing answer from the full tool results. No agent overrides it: every registered chain ends in a `compactExecution` (in `code-mode` it sits inside the inner `chain`), and `'answer'` would only restore a second composition nothing renders. Affected loops: `default` (both tool routes), `general`, `microsoft-365`, `retriever-agent` (both loop routes), `multi-source-research` (×3).
+> **Who writes the final answer ([#149](https://github.com/mknw/harness-playground/issues/149)):** every `simpleLoop` here inherits `returnStyle: 'summary'` — its terminal `Return` carries a one-line completion summary, and the chain's `compactExecution` composes the user-facing answer from the full tool results. No agent overrides it: every registered chain ends in a `compactExecution`, and `'answer'` would only restore a second composition nothing renders. Affected loops: `default` (both tool routes), `general`, `microsoft-365`, `retriever-agent` (both loop routes), `multi-source-research` (×3).
 
-> **Multi-call modes across agents:** every agent inherits `multiToolCalls: 'parallel'` except the three that override it — `code-mode` → `'off'` (one script already replaces N round-trips), `sandbox-session` and `flavoured-sandbox` → `'sequential'` (linear effect-chains on one VM filesystem; in-order batches still save actor round-trips).
+> **Multi-call modes across agents:** every agent inherits `multiToolCalls: 'parallel'` except the two that override it — `sandbox-session` and `flavoured-sandbox` → `'sequential'` (linear effect-chains on one VM filesystem; in-order batches still save actor round-trips).
 
 ---
 
@@ -491,4 +491,3 @@ See `sandbox-session.server.ts`. Debugging modalities for live sandboxes:
 | `EmbedQuery`                                            | custom (cache)         | (embedding, no tools)         |
 | `Neo4jController`                                       | simpleLoop             | neo4j-cypher (existing)       |
 | `WebSearchController`                                   | simpleLoop             | web_search (existing)         |
-| `CodeModeController` / `CodeModeCritic`                 | actorCritic (existing) | all                           |

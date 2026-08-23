@@ -47,12 +47,12 @@ export const MAX_PARALLEL_TOOL_CALLS = 4
 
 /**
  * Script execution event for actor-critic pattern.
- * Internal type used by actorCritic to track code mode executions.
+ * Internal type used by actorCritic to track the actor's tool executions.
  *
  * `toolName` records the actor's actual `action.tool_name` so the BAML
  * adapter can render each rejected/executed attempt with the right tool
- * name (not a placeholder). Defaults to `'code-mode'` in the adapter when
- * absent, preserving back-compat for legacy callers.
+ * name (not a placeholder). `actorCritic` always sets it; the adapter falls
+ * back to `'unknown'` for a caller that builds these events itself.
  */
 export interface ScriptExecutionEvent {
   toolName?: string
@@ -262,17 +262,6 @@ export type CriticFn = (
   previous_attempts: ScriptExecutionEvent[],
 ) => Promise<import('../../../baml_client/types').CriticResult>
 
-/**
- * Code mode controller function type.
- * Different signature - takes available_tools instead of schema.
- */
-export type CodeModeControllerFn = (
-  user_message: string,
-  intent: string,
-  available_tools: string[],
-  previous_attempts: ScriptExecutionEvent[],
-) => Promise<import('../../../baml_client/types').ControllerAction>
-
 // ============================================================================
 // Pattern Configuration
 // ============================================================================
@@ -325,7 +314,7 @@ export interface SimpleLoopConfig extends PatternConfig {
   resultOmit?: Record<string, string[]>
   /** Regex matched against `action.tool_name` after the strict allowlist
    *  fails. Lets agents accept dynamically-created tools (e.g. the kg-agent
-   *  gateway's `code-mode-<name>` factory output) without enumerating every
+   *  a backend that registers tools at runtime) without enumerating every
    *  possible name upfront. */
   dynamicToolPattern?: RegExp
   /** Multi-call turns: 'parallel' (default) | 'sequential' | 'off'.
@@ -341,7 +330,7 @@ export interface SimpleLoopConfig extends PatternConfig {
 
 /** Configuration for actorCritic pattern */
 export interface ActorCriticConfig extends PatternConfig {
-  /** Available tools for code mode */
+  /** Available tools for the actor */
   availableTools?: string[]
   /** Max retries before giving up (default: 3) */
   maxRetries?: number
@@ -350,7 +339,7 @@ export interface ActorCriticConfig extends PatternConfig {
   onToolResult?: OnToolResult
   /** Regex matched against `action.tool_name` after the strict allowlist
    *  fails. Lets agents accept dynamically-created tools (e.g. the kg-agent
-   *  gateway's `code-mode-<name>` factory output) without enumerating every
+   *  a backend that registers tools at runtime) without enumerating every
    *  possible name upfront. */
   dynamicToolPattern?: RegExp
   /** Async closure resolved per actor invocation. Returns the live allowlist
@@ -475,7 +464,7 @@ export interface ConfiguredPattern<T> {
    *  `withReferences`). Leaf patterns omit it. Purely for static
    *  introspection of the pattern graph — execution runs through `fn`, never
    *  this — so it's safe and additive. See `pattern-capabilities.ts`
-   *  (`usesCodeMode`) for the canonical walk. */
+   *  (`harnessHasRetriever`) for the canonical walk. */
   children?: ConfiguredPattern<T>[]
   /** Set by `withInjectionGuard`: the untrusted sources it declared. Same
    *  charter as `children` — purely for static introspection, never read during

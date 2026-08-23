@@ -60,7 +60,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     },
   )
 
-  // Scoped view, as `code-mode` and `sandbox-session` do. Without one,
+  // Scoped view, as `sandbox-session` does. Without one,
   // `createEventView` installs no filters at all and `view.hasErrors()` sees
   // EVERY error the conversation ever recorded — including the planner's,
   // which is best-effort by design. One planner 429 on turn 2 would otherwise

@@ -7,7 +7,7 @@
  * Used by ToolCallDisplay and ChatMessages components
  */
 export interface ToolCallInfo {
-  type: 'neo4j' | 'web_search' | 'fetch' | 'code_mode'
+  type: 'neo4j' | 'web_search' | 'fetch'
   status: 'pending' | 'executed' | 'error'
   tool: string
   cypher?: string

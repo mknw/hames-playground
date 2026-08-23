@@ -1,11 +1,11 @@
 /**
  * Agent registry (`lib/harness-client/registry.server.ts`) — registration,
- * client-safe metadata, and the three structural capability probes
- * (code-mode / redis-retriever / durable sandbox workspace).
+ * client-safe metadata, and the two structural capability probes
+ * (redis-retriever / durable sandbox workspace).
  *
  * The structural detectors from harness-patterns are mocked so the probes can
- * be driven independently of any real pattern graph; the example agents that
- * the module registers on import are exercised through the public listing.
+ * be driven independently of any real pattern graph; the agents that the
+ * module registers on import are exercised through the public listing.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -16,17 +16,15 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServer: vi.fn(),
 }))
 
-const usesCodeMode = vi.fn(() => false)
 const harnessHasRedisRetriever = vi.fn(() => false)
 const harnessUsesSyncWorkspace = vi.fn(() => false)
 vi.mock('../../../lib/harness-patterns', () => ({
-  usesCodeMode,
   harnessHasRedisRetriever,
   harnessUsesSyncWorkspace,
 }))
 
-// The module registers the eight example agents on import; each example pulls
-// in the whole pattern/tool graph, so stub them down to bare configs.
+// The module registers the seven agents on import; each one pulls in the whole
+// pattern/tool graph, so stub them down to bare configs.
 function stubAgent(id: string): AgentConfig {
   return {
     id,
@@ -43,9 +41,6 @@ vi.mock('../../../lib/harness-client/agents/default.server', () => ({
 }))
 vi.mock('../../../lib/harness-client/agents/general.server', () => ({
   generalAgent: stubAgent('general'),
-}))
-vi.mock('../../../lib/harness-client/agents/code-mode.server', () => ({
-  codeModeAgent: stubAgent('code-mode'),
 }))
 vi.mock('../../../lib/harness-client/agents/multi-source-research.server', () => ({
   multiSourceResearchAgent: stubAgent('multi-source-research'),
@@ -68,7 +63,6 @@ const {
   getAgent,
   getAllAgents,
   getAgentMetadata,
-  agentUsesCodeMode,
   agentUsesRedisRetriever,
   agentUsesSyncWorkspace,
 } = await import('../../../lib/harness-client/registry.server')
@@ -95,18 +89,16 @@ function freshAgent(overrides: Partial<{ createPatterns: PatternFactory }> = {})
 }
 
 beforeEach(() => {
-  usesCodeMode.mockReturnValue(false)
   harnessHasRedisRetriever.mockReturnValue(false)
   harnessUsesSyncWorkspace.mockReturnValue(false)
 })
 
 describe('registration + lookup', () => {
-  it('registers the example agents on import', () => {
+  it('registers the bundled agents on import', () => {
     expect(getAllAgents().map((a) => a.id)).toEqual(
       expect.arrayContaining([
         'default',
         'general',
-        'code-mode',
         'multi-source-research',
         'sandbox-session',
         'flavoured-sandbox',
@@ -143,7 +135,6 @@ describe('registration + lookup', () => {
 })
 
 describe.each([
-  ['agentUsesCodeMode', agentUsesCodeMode, usesCodeMode],
   ['agentUsesRedisRetriever', agentUsesRedisRetriever, harnessHasRedisRetriever],
   ['agentUsesSyncWorkspace', agentUsesSyncWorkspace, harnessUsesSyncWorkspace],
 ] as const)('%s — structural capability probe', (_name, probe, detector) => {
@@ -188,28 +179,12 @@ describe.each([
   })
 })
 
-describe('agentUsesCodeMode — failure fallback', () => {
-  it('assumes code-mode only for the agent literally named code-mode', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const boom = async () => {
-      throw new Error('gateway down')
-    }
-    registerAgent({ ...stubAgent('code-mode'), createPatterns: boom })
-    const { id } = freshAgent({ createPatterns: boom })
-
-    await expect(agentUsesCodeMode('code-mode', 's')).resolves.toBe(true)
-    await expect(agentUsesCodeMode(id, 's')).resolves.toBe(false)
-    warn.mockRestore()
-  })
-})
-
-// sf-M7. All three probes turn a `createPatterns` failure into a plain
+// sf-M7. Both probes turn a `createPatterns` failure into a plain
 // false/fallback. The degraded answer is correct — nothing better is knowable —
 // but it used to be indistinguishable from a real `false`, so the consequence
 // (no auto-ingest, an unhydrated Shell) never reached anyone.
 describe('capability probes report a degraded answer (sf-M7)', () => {
   it.each([
-    ['agentUsesCodeMode', agentUsesCodeMode],
     ['agentUsesRedisRetriever', agentUsesRedisRetriever],
     ['agentUsesSyncWorkspace', agentUsesSyncWorkspace],
   ])('%s warns, names the probe, and says the answer is not cached', async (name, probe) => {

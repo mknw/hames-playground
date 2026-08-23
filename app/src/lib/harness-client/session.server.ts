@@ -37,11 +37,6 @@ assertServerOnImport()
 export interface SessionData
   extends HarnessData, RouterData, SimpleLoopData, RetrieverData, WithApproval {
   response?: string
-  /** User-curated allowlist for the code-mode actor's tool selection.
-   *  Undefined → fall back to the agent's hardcoded CODE_MODE_TOOLS. Set
-   *  from the Tools tab via `setCodeModeAllowedTools(sessionId, tools)`
-   *  and read live per-actor-call by code-mode.server.ts's toolNamesProvider. */
-  codeModeAllowedTools?: string[]
   [key: string]: unknown
 }
 
@@ -102,7 +97,7 @@ function exitBuild(sessionId: string): void {
  * resolves, so an eviction from inside the build would be overwritten.
  *
  * Scoped to `getOrBuildPatterns` builds. The registry's capability probes
- * (`agentUsesCodeMode` / `agentUsesRedisRetriever` / `agentUsesSyncWorkspace`)
+ * (`agentUsesRedisRetriever` / `agentUsesSyncWorkspace`)
  * call `createPatterns` directly to inspect the pattern SHAPE and throw the
  * result away; nothing there consumes the flag, so a degraded probe build used
  * to leave one behind and cost the next real build its cache entry. Outside a

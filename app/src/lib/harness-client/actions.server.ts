@@ -112,7 +112,7 @@ async function runTurn(
   onEvent?: (event: ContextEvent) => void,
 ): Promise<HarnessResultScoped<SessionData>> {
   // Establish the request scope so pattern closures and app-side tools that
-  // need per-conversation context at runtime (code-mode's tool-allowlist
+  // need per-conversation context at runtime (a per-conversation allowlist
   // reader, `graph_file_ingest`'s Data Stash target) resolve the right user and
   // conversation without an explicit parameter.
   return runWithRequestContext({ userId, sessionId }, async () => {

@@ -243,15 +243,15 @@ describe('processMessage / runTurn', () => {
       status: 'done',
     })
 
-    const result = await actions.processMessageWithAgent('sess-3', 'hi', 'code-mode')
+    const result = await actions.processMessageWithAgent('sess-3', 'hi', 'general')
 
     expect(continueSession).not.toHaveBeenCalled()
-    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-3', 'code-mode')
+    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-3', 'general')
     expect(result.response).toBe('fresh:hi')
     expect(saveSession).toHaveBeenCalledWith(
       'sess-3',
       'bypass-user',
-      'code-mode',
+      'general',
       'serialized:sess-3',
     )
   })
@@ -294,25 +294,25 @@ describe('approval gate', () => {
   it('resumes the stored context as approved', async () => {
     loadSession.mockResolvedValue({
       serializedContext: 'ctx-p',
-      agentId: 'code-mode',
+      agentId: 'general',
       kind: 'conversation',
       status: 'paused',
     })
     const result = await actions.approveAction('sess-7')
-    expect(resumeHarness).toHaveBeenCalledWith('ctx-p', ['patterns:code-mode'], true)
+    expect(resumeHarness).toHaveBeenCalledWith('ctx-p', ['patterns:general'], true)
     expect(result.response).toBe('approved')
-    expect(saveSession).toHaveBeenCalledWith('sess-7', 'bypass-user', 'code-mode', 'resumed:true')
+    expect(saveSession).toHaveBeenCalledWith('sess-7', 'bypass-user', 'general', 'resumed:true')
   })
 
   it('resumes as rejected, ignoring the (unused) reason', async () => {
     loadSession.mockResolvedValue({
       serializedContext: 'ctx-p',
-      agentId: 'code-mode',
+      agentId: 'general',
       kind: 'conversation',
       status: 'paused',
     })
     const result = await actions.rejectAction('sess-8', 'too risky')
-    expect(resumeHarness).toHaveBeenCalledWith('ctx-p', ['patterns:code-mode'], false)
+    expect(resumeHarness).toHaveBeenCalledWith('ctx-p', ['patterns:general'], false)
     expect(result.response).toBe('rejected')
   })
 

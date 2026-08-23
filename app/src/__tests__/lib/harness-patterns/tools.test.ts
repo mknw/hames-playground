@@ -8,12 +8,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock server-only imports
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
-  assertServerOnImport: vi.fn()
+  assertServerOnImport: vi.fn(),
 }))
 
 // Mock MCP client
 vi.mock('../../../lib/harness-patterns/mcp-client.server', () => ({
-  listTools: vi.fn().mockResolvedValue([])
+  listTools: vi.fn().mockResolvedValue([]),
 }))
 
 describe('tools', () => {
@@ -161,14 +161,14 @@ describe('tools', () => {
         expect(tools.redis).toContain('vector_search_hash')
       })
 
-      it('should group code-mode under code namespace', async () => {
+      it('groups an unknown hyphenated tool under its first segment', async () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
         const tools = ToolsFrom([
-          { name: 'code-mode', description: 'JS executor', inputSchema: {} },
+          { name: 'mcp-exec', description: 'gateway meta-tool', inputSchema: {} },
         ])
 
-        expect(tools.code).toEqual(['code-mode'])
+        expect(tools.mcp).toEqual(['mcp-exec'])
       })
 
       it('should group filesystem tools under filesystem namespace', async () => {
@@ -192,7 +192,7 @@ describe('tools', () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
         const tools = ToolsFrom([
-          { name: 'mcp__kg-agent-mcp-gateway__search', description: 'Search', inputSchema: {} }
+          { name: 'mcp__kg-agent-mcp-gateway__search', description: 'Search', inputSchema: {} },
         ])
 
         expect(tools.web).toContain('mcp__kg-agent-mcp-gateway__search')
@@ -202,7 +202,11 @@ describe('tools', () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
         const tools = ToolsFrom([
-          { name: 'mcp__kg-agent-mcp-gateway__create_entities', description: 'Create entities', inputSchema: {} }
+          {
+            name: 'mcp__kg-agent-mcp-gateway__create_entities',
+            description: 'Create entities',
+            inputSchema: {},
+          },
         ])
 
         expect(tools.memory).toContain('mcp__kg-agent-mcp-gateway__create_entities')
@@ -212,7 +216,11 @@ describe('tools', () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
         const tools = ToolsFrom([
-          { name: 'mcp__kg-agent-mcp-gateway__read_neo4j_cypher', description: 'Read Neo4j', inputSchema: {} }
+          {
+            name: 'mcp__kg-agent-mcp-gateway__read_neo4j_cypher',
+            description: 'Read Neo4j',
+            inputSchema: {},
+          },
         ])
 
         expect(tools.neo4j).toContain('mcp__kg-agent-mcp-gateway__read_neo4j_cypher')
@@ -222,7 +230,7 @@ describe('tools', () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
         const tools = ToolsFrom([
-          { name: 'mcp__kg-agent-mcp-gateway__mcp-find', description: 'Find MCP', inputSchema: {} }
+          { name: 'mcp__kg-agent-mcp-gateway__mcp-find', description: 'Find MCP', inputSchema: {} },
         ])
 
         expect(tools.mcp).toContain('mcp__kg-agent-mcp-gateway__mcp-find')
@@ -234,7 +242,7 @@ describe('tools', () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
         const tools = ToolsFrom([
-          { name: 'read_neo4j_cypher', description: 'Read', inputSchema: {} }
+          { name: 'read_neo4j_cypher', description: 'Read', inputSchema: {} },
         ])
 
         expect(tools.neo4j).toContain('read_neo4j_cypher')
@@ -243,9 +251,7 @@ describe('tools', () => {
       it('should handle web_search → web namespace', async () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
-        const tools = ToolsFrom([
-          { name: 'web_search', description: 'Search', inputSchema: {} }
-        ])
+        const tools = ToolsFrom([{ name: 'web_search', description: 'Search', inputSchema: {} }])
 
         expect(tools.web).toContain('web_search')
       })
@@ -254,7 +260,7 @@ describe('tools', () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
         const tools = ToolsFrom([
-          { name: 'analyze_data_points', description: 'Analyze', inputSchema: {} }
+          { name: 'analyze_data_points', description: 'Analyze', inputSchema: {} },
         ])
 
         // 'analyze' not in verbs list, so first part is used
@@ -266,9 +272,7 @@ describe('tools', () => {
       it('should handle mcp-find → mcp namespace', async () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
-        const tools = ToolsFrom([
-          { name: 'mcp-find', description: 'Find', inputSchema: {} }
-        ])
+        const tools = ToolsFrom([{ name: 'mcp-find', description: 'Find', inputSchema: {} }])
 
         expect(tools.mcp).toContain('mcp-find')
       })
@@ -281,12 +285,36 @@ describe('tools', () => {
         const tools = ToolsFrom([
           { name: 'mcp__kg-agent-mcp-gateway__search', description: 'Search', inputSchema: {} },
           { name: 'mcp__kg-agent-mcp-gateway__fetch', description: 'Fetch', inputSchema: {} },
-          { name: 'mcp__kg-agent-mcp-gateway__fetch_content', description: 'Fetch content', inputSchema: {} },
-          { name: 'mcp__kg-agent-mcp-gateway__read_neo4j_cypher', description: 'Read Neo4j', inputSchema: {} },
-          { name: 'mcp__kg-agent-mcp-gateway__write_neo4j_cypher', description: 'Write Neo4j', inputSchema: {} },
-          { name: 'mcp__kg-agent-mcp-gateway__get_neo4j_schema', description: 'Schema', inputSchema: {} },
-          { name: 'mcp__kg-agent-mcp-gateway__create_entities', description: 'Create entities', inputSchema: {} },
-          { name: 'mcp__kg-agent-mcp-gateway__search_nodes', description: 'Search nodes', inputSchema: {} },
+          {
+            name: 'mcp__kg-agent-mcp-gateway__fetch_content',
+            description: 'Fetch content',
+            inputSchema: {},
+          },
+          {
+            name: 'mcp__kg-agent-mcp-gateway__read_neo4j_cypher',
+            description: 'Read Neo4j',
+            inputSchema: {},
+          },
+          {
+            name: 'mcp__kg-agent-mcp-gateway__write_neo4j_cypher',
+            description: 'Write Neo4j',
+            inputSchema: {},
+          },
+          {
+            name: 'mcp__kg-agent-mcp-gateway__get_neo4j_schema',
+            description: 'Schema',
+            inputSchema: {},
+          },
+          {
+            name: 'mcp__kg-agent-mcp-gateway__create_entities',
+            description: 'Create entities',
+            inputSchema: {},
+          },
+          {
+            name: 'mcp__kg-agent-mcp-gateway__search_nodes',
+            description: 'Search nodes',
+            inputSchema: {},
+          },
         ])
 
         // Web tools grouped under 'web'

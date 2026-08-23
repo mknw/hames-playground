@@ -76,11 +76,11 @@ simpleLoop(controller, tools.neo4j ?? [], { patternId: 'neo4j-query', schema })
 
 const actor = createActorControllerAdapter(tools.all)
 const critic = createCriticAdapter()
-actorCritic(actor, critic, tools.all, { patternId: 'code-mode' })
+actorCritic(actor, critic, tools.all, { patternId: 'actor-loop' })
 
 // Alternative: pass BAML functions directly (bind to preserve 'this' context)
 simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema })
-actorCritic(b.CodeModeController.bind(b), b.CodeModeCritic.bind(b), tools.all)
+actorCritic(b.ActorController.bind(b), b.Critic.bind(b), tools.all)
 
 // Router is two composable patterns: classify → dispatch
 router({ neo4j: 'Description', web: 'Description' }),
@@ -460,11 +460,12 @@ cached prompt head (system block + tier 1) at no per-turn cost.
 
 ### `actorCritic(actor, critic, tools, config?)`
 
-Generate-evaluate loop with retry. For code mode workflows.
+Generate-evaluate loop with retry: the actor proposes a tool call, the loop
+executes it, and the critic decides whether to stop or feed the result back.
 
 ```typescript
-actorCritic(b.CodeModeController.bind(b), b.CodeModeCritic.bind(b), tools.all, {
-  patternId: 'code-mode',
+actorCritic(b.ActorController.bind(b), b.Critic.bind(b), tools.all, {
+  patternId: 'actor-loop',
   maxRetries: 3,
 })
 
@@ -474,7 +475,7 @@ interface ActorCriticConfig extends PatternConfig {
   criticCadence?: number // Default: 1 (critic every turn). See below.
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Same semantics as simpleLoop's (see above);
   // a batch records as ONE Attempt whose result is the combined map
-  // the critic evaluates. Sandbox agents use 'sequential', code-mode 'off'.
+  // the critic evaluates. Sandbox agents use 'sequential'.
 }
 ```
 
@@ -745,7 +746,7 @@ pattern's `config` (commitStrategy, trackHistory, viewConfig, `estimateTurns`)
 governs everything unchanged and the inner pattern runs in the SAME scope — no
 extra lifecycle events, no change to `view.fromLastPattern()`. On a clean run
 there is no observable difference at all. `children` is exposed, so static
-introspection (`harnessHasRedisRetriever`, `usesCodeMode`) still sees through it,
+introspection (`harnessHasRedisRetriever`, `harnessUsesSyncWorkspace`) still sees through it,
 and the declared trust boundary is readable off
 `ConfiguredPattern.injectionGuard` (`{ namespaces, tools }`) — a sibling field,
 NOT part of `config`, so config identity is preserved. That field is what lets a
@@ -853,7 +854,6 @@ Either path records an `expansions[]` entry on the `LoopTurn`; the compact ref e
 const routesPattern = routes<SessionData>({
   neo4j: withReferences(neo4jPattern, { scope: 'global' }),
   web_search: withReferences(webPattern, { scope: 'global' }),
-  code_mode: withReferences(codePattern, { scope: 'global' }),
 })
 ```
 
@@ -1624,8 +1624,6 @@ async function createPatterns() {
   // Use adapter factories (preferred over b.bind())
   const neo4jController = createNeo4jController(tools.neo4j ?? [])
   const webController = createWebSearchController(tools.web ?? [])
-  const actor = createActorControllerAdapter(tools.all)
-  const critic = createCriticAdapter()
 
   const neo4jPattern = simpleLoop(neo4jController, tools.neo4j ?? [], {
     patternId: 'neo4j-query',
@@ -1636,20 +1634,14 @@ async function createPatterns() {
     patternId: 'web-search',
   })
 
-  const codePattern = actorCritic(actor, critic, tools.all, {
-    patternId: 'code-mode',
-  })
-
   const routerPattern = router({
     neo4j: 'Database queries and graph operations',
     web_search: 'Web lookups and information retrieval',
-    code_mode: 'Multi-tool script composition',
   })
 
   const routesPattern = routes({
     neo4j: neo4jPattern,
     web_search: webPattern,
-    code_mode: codePattern,
   })
 
   const responseSynth = compactExecution({

@@ -155,7 +155,7 @@ export interface RetrieverData {
 
 /** Marker the resolved config carries so `pattern-capabilities` can answer
  *  "does this harness contain a retriever wired to backend X" without running
- *  it (mirrors the code-mode `dynamicToolPattern` probe). */
+ *  it (mirrors the `dynamicToolPattern` probe). */
 export interface RetrieverConfigMarker extends PatternConfig {
   backendKinds?: string[]
 }

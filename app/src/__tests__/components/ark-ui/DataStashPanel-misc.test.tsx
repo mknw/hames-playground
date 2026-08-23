@@ -298,7 +298,7 @@ describe('DataStashPanel — uploads', () => {
       <DataStashPanel
         events={[]}
         sessionId="sess-upload"
-        agentId="code-mode"
+        agentId="retriever"
         onStashAction={vi.fn(async () => {})}
         onUploaded={onUploaded}
       />
@@ -314,7 +314,7 @@ describe('DataStashPanel — uploads', () => {
     const post = calls.find((c) => c.method === 'POST')!
     const form = post.body as FormData
     expect(form.get('sessionId')).toBe('sess-upload')
-    expect(form.get('agentId')).toBe('code-mode')
+    expect(form.get('agentId')).toBe('retriever')
     expect((form.get('file') as File).name).toBe('uploaded.txt')
 
     expect(container.textContent).toContain('uploaded.txt')

@@ -29,7 +29,6 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
 const ROUTES = [
   { name: 'web_search', description: 'Web lookups and information retrieval' },
   { name: 'neo4j', description: 'Database queries and graph operations' },
-  { name: 'code_mode', description: 'Multi-tool script composition' },
 ]
 
 interface Case {
@@ -135,13 +134,6 @@ const ROUTE_CASES: RouteCase[] = [
     name: 'a current-events question routes to web_search',
     message: 'what did SolidStart ship in its most recent release?',
     route: 'web_search',
-    needsTool: true,
-  },
-  {
-    name: 'a multi-tool composition routes to code_mode',
-    message:
-      'write and run a script that pulls every Concept from the graph and looks each one up on the web',
-    route: 'code_mode',
     needsTool: true,
   },
 ]

@@ -378,7 +378,7 @@ thread.
 
 #### 5. AgentSelector.tsx
 **Props:** `selectedAgent: string`, `onAgentChange: (id: string) => void`, `disabled: boolean`
-- Dropdown listing registered agents (default, code-mode, multi-source-research, sandbox-session, flavoured-sandbox, retriever, microsoft-365)
+- Dropdown listing registered agents (default, general, multi-source-research, sandbox-session, flavoured-sandbox, retriever, microsoft-365)
 - Agent icons are **iconify classes** on `AgentConfig.icon` (material-symbols set), rendered as `<span class={icon}>` with inline sizing — see the icon-scanning gotcha in §6a
 - Clearing the session on agent switch
 
@@ -392,7 +392,6 @@ Tabbed right panel. **Context manager is the default tab.** Uses `lazyMount` + `
 | All (Turn Explorer) | Turn-based graph explorer — select specific turns, color-coded |
 | **Context manager** *(default)* | Event timeline + LLM call detail |
 | Data | Data Stash — two collapsible groups: **Your Uploads** (drag-drop/picker + document chips) and **Agent Findings** (tool-result icons by turn), each with hide/archive/delete. See [DATA_STASH.md](DATA_STASH.md) for the upload→chunk→embed→search pipeline. |
-| Tools | MCP tool configuration via `ToolsPanel` |
 
 **Conversation Sync toggle:** The Neo4j and Memory graph tabs have a ⏸/▶ "Sync" button (cyan when live, amber when paused). Implemented in `GraphTabContent` via a `syncEnabled` signal. When paused, the current element list is snapshotted into `frozenElements` and passed to `GraphVisualization` instead of live `props.elements`. Resuming restores the live feed.
 
@@ -553,7 +552,6 @@ index.tsx (top-level state)
             ├─> ObservabilityPanel (events, context, onClear)
             │       ├─ buildTimelineItems() — merges tool pairs by callId
             │       └─ Save button → showSaveFilePicker() / <a download>
-            └─> ToolsPanel
 ```
 
 ### Message Type
@@ -719,8 +717,7 @@ mid-run cancellation is #105 PR 3, unbuilt.
    detaches for the query duration (blank flash, composer focus + scroll
    lost). Rule: resources that refetch during interaction are read via
    **`resource.latest`** (raw value once resolved, no Suspense; first load
-   still suspends). Applied to `threads`; `ToolsPanel` learned it
-   independently (local Suspense + optimistic updates).
+   still suspends). Applied to `threads`.
 3. **Icon classes in `.ts` files:** UnoCSS's default pipeline never scans
    plain `.ts` — so `AgentConfig.icon` literals in
    `harness-client/agents/*.server.ts` need BOTH (verified against
@@ -742,9 +739,7 @@ mid-run cancellation is #105 PR 3, unbuilt.
    item that starved the sidebar's `flex:1` thread list to zero height
    (found via computed styles in a live browser; the built CSS was fine).
    Rule: give `Dialog.Root` `lazyMount unmountOnExit`, and position
-   Backdrop/Positioner with inline `style`. `EnvVarManager.tsx` still
-   carries the original idiom and mounts a hidden-but-rendered ghost into
-   ToolsPanel while closed — latent, flagged for follow-up.
+   Backdrop/Positioner with inline `style`.
 ---
 
 ## 6b. LLM-Generated Conversation Titles
@@ -905,7 +900,7 @@ app/
 │   ├── clients.baml              # LLM client config + fallback chains
 │   ├── local-client.baml         # Local GLM-4.7 client (manual wiring)
 │   ├── router.baml               # Router (intent classification)
-│   ├── simpleLoop.baml           # Generic LoopController (used by all simpleLoop routes incl. code_mode)
+│   ├── simpleLoop.baml           # Generic LoopController (used by every simpleLoop route)
 │   ├── actorCritic.baml          # ActorController + Critic (used by guardrailed/ontology agents)
 │   ├── compactExecution.baml          # Final response synthesis
 │   ├── describe.baml             # Lightweight tool-result summarization
@@ -934,7 +929,6 @@ app/
 │   │       ├── SettingsPanel.tsx      # Harness settings FloatingPanel (sliders, number inputs)
 │   │       ├── ObservabilityPanel.tsx # Event timeline + tool-pair merging + Save button
 │   │       ├── EventDetailOverlay.tsx # Event detail modal
-│   │       ├── ToolsPanel.tsx         # MCP tool configuration UI
 │   │       ├── ToolCallDisplay.tsx    # Tool call status display (approval gate)
 │   │       ├── AgentSelector.tsx      # Agent selection dropdown
 │   │       └── EnvVarManager.tsx      # Environment variable config

@@ -19,7 +19,7 @@
  *      the dispatched pattern's scope.
  *
  * Plus prompt-content guards that the rules stay on the committed templates
- * (same shape as the code-mode fidelity guards). Live multi-turn behaviour of
+ * (a prompt-fidelity guard). Live multi-turn behaviour of
  * the model is checked by `router-intent-eval.test.ts` under `RUN_EVALS=1`.
  */
 

@@ -61,7 +61,7 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
   const available = new Set(tools.graph ?? [])
   // Filtering the allowlist (rather than the namespace) keeps a tool that isn't
   // registered — a typo, a module not imported — out of the loop's tool list
-  // instead of into it. Same shape as code-mode's meta-tool subset.
+  // instead of into it.
   const graphTools = MICROSOFT_365_TOOLS.filter((t) => available.has(t))
 
   const graphPattern = simpleLoop<SessionData>(

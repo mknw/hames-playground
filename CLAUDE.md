@@ -208,7 +208,7 @@ adapters.
 
 **Output caps + truncation recovery:** Anthropic client `max_tokens` are 32768 (Sonnet 5) / 16384 (Sonnet 4.6, Haiku 4.5); the mixed-chain Groq/OpenRouter leaves cap at 2048–4096. EVERY leaf declaring `max_tokens` in `baml_src/*.baml` must be mirrored in `CLIENT_MAX_OUTPUT_TOKENS` (`app/src/lib/settings.ts`) — a missing entry silently blinds truncation detection for that client (SA-C2); `client-output-caps.test.ts` enforces the mirror. A controller response that hits its cap truncates mid-JSON (historically: `BamlValidationError: missing status/is_final` when a sandbox actor inlined a huge script into `tool_args`). The adapters detect cap-hits and do ONE corrective retry with truncation guidance appended to the per-call `context`; the loops emit truncation-specific feedback instead of generic "invalid JSON" when `tool_args` were cut off (`llmCallHitOutputCap`). Multi-call turns (`additional_calls`, see below) raise cap-hit risk — the prompts cap batches at 4 calls/turn for this reason.
 
-**Multi-call turns:** both loop patterns accept `multiToolCalls: 'parallel' | 'sequential' | 'off'` (default `'parallel'`) — the controller batches several tool calls into one turn via `ControllerAction.additional_calls`, saving one controller round-trip per batched call. `'sequential'` runs in order with stop-on-failure (sandbox agents); `'off'` suppresses the prompt affordance but still executes un-advertised batches serially (code-mode). Full semantics: `app/src/lib/harness-patterns/README.md`.
+**Multi-call turns:** both loop patterns accept `multiToolCalls: 'parallel' | 'sequential' | 'off'` (default `'parallel'`) — the controller batches several tool calls into one turn via `ControllerAction.additional_calls`, saving one controller round-trip per batched call. `'sequential'` runs in order with stop-on-failure (sandbox agents); `'off'` suppresses the prompt affordance but still executes un-advertised batches serially (no agent uses it today). Full semantics: `app/src/lib/harness-patterns/README.md`.
 
 **Mixed-provider chains** (gated by `USE_MIXED_CHAINS=1`, see top of file) — `RouterFallback` / `ControllerFallback` / `CriticFallback` / `SynthesizerFallback` / `DescribeFallback`, each spreading its role across OpenRouter, Groq and OpenAI with an Anthropic backstop last. There is no `ActorFallback` and no `PlannerFallback`. **The planner opts out of mixed chains entirely** — `MIXED_CLIENT_BY_ROLE.planner` pins `PlannerAnthropic` in both modes. It used to borrow `ControllerFallback` as the same reason-over-a-tool-catalog workload, but that chain's Groq `gpt-oss-120b` is the client documented below to fail structured output on larger context, which is why both controllers carry a manual `GroqGPT120B` → `GroqFast` escalation. The planner has no such ladder, runs once per chain over the largest catalog in the repo (`tools.all`), and a throw there means the chain silently runs unplanned. Declared in `baml_src/clients.baml`.
 
@@ -229,7 +229,7 @@ Docker-based gateway on port 8811.
 - `configs/custom-catalog.yaml` — available MCP servers (Docker image-based)
 - `configs/mcp-config.yaml` — enable/disable and connection params per server
 
-Tool namespaces in `tools.server.ts`: `neo4j`, `web`, `context7`, `filesystem`, `github`, `memory`, `redis`, `database`, `code` (and `all`).
+Tool namespaces in `tools.server.ts`: `neo4j`, `web`, `context7`, `filesystem`, `github`, `memory`, `redis`, `database` (and `all`).
 
 `KNOWN_TOOL_SERVERS` maps tool names to namespaces when auto-detection would fail.
 

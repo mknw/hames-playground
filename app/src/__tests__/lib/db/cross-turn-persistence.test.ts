@@ -33,10 +33,7 @@ import {
   createEventView,
 } from '../../../lib/harness-patterns'
 import type { ContextEvent } from '../../../lib/harness-patterns'
-import {
-  saveSession,
-  loadSession,
-} from '../../../lib/harness-client/session.server'
+import { saveSession, loadSession } from '../../../lib/harness-client/session.server'
 import { closePool, query } from '../../../lib/db/client.server'
 
 const TEST_USER = `xtest-${Math.random().toString(36).slice(2, 10)}`
@@ -102,8 +99,16 @@ function makeConvoWithWebSearch(sessionId: string) {
         tool: 'search',
         result: {
           rows: [
-            { title: 'Kubernetes Documentation', url: 'https://kubernetes.io/docs', snippet: 'K8s is an open source container orchestrator…' },
-            { title: 'CNCF Kubernetes', url: 'https://www.cncf.io/projects/kubernetes', snippet: 'Graduated CNCF project…' },
+            {
+              title: 'Kubernetes Documentation',
+              url: 'https://kubernetes.io/docs',
+              snippet: 'K8s is an open source container orchestrator…',
+            },
+            {
+              title: 'CNCF Kubernetes',
+              url: 'https://www.cncf.io/projects/kubernetes',
+              snippet: 'Graduated CNCF project…',
+            },
           ],
         },
         success: true,
@@ -208,7 +213,7 @@ describe('cross-turn persistence after conversation switch', () => {
 
   it('agent mismatch on resume falls through to a fresh start (no cross-agent leak)', async () => {
     if (!dbAvailable) return
-    // Stored as default; if a request comes in claiming agentId="code-mode",
+    // Stored as default; if a request comes in claiming agentId="retriever",
     // runTurn ignores the loaded context. We assert the persistence layer
     // surfaces the stored agentId so the dispatch decision is unambiguous.
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
@@ -263,13 +268,19 @@ describe('status lifting on save (agent-trigger status column)', () => {
 
   it("lifts a completed run's 'running' status to 'done'", async () => {
     if (!dbAvailable) return
-    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'running')).toBe('done')
+    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'running')).toBe(
+      'done',
+    )
   })
 
   it("preserves 'paused' (awaiting approval) and 'error'", async () => {
     if (!dbAvailable) return
-    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'paused')).toBe('paused')
-    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'error')).toBe('error')
+    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'paused')).toBe(
+      'paused',
+    )
+    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'error')).toBe(
+      'error',
+    )
   })
 
   it("maps an explicit 'done' through unchanged", async () => {

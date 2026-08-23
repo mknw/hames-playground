@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock server-only imports
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
-  assertServerOnImport: vi.fn()
+  assertServerOnImport: vi.fn(),
 }))
 
 // Mock BAML Router
@@ -14,8 +14,8 @@ const mockRouter = vi.fn()
 
 vi.mock('../../../../baml_client', () => ({
   b: {
-    Router: mockRouter
-  }
+    Router: mockRouter,
+  },
 }))
 
 describe('routeMessageOp', () => {
@@ -25,7 +25,7 @@ describe('routeMessageOp', () => {
       intent: 'Test intent',
       needs_tool: true,
       route: 'neo4j',
-      response: ''
+      response: '',
     })
   })
 
@@ -60,7 +60,7 @@ describe('routeMessageOp', () => {
       intent: 'Database query',
       needs_tool: true,
       route: 'neo4j',
-      response: ''
+      response: '',
     })
 
     const { routeMessageOp } = await import('../../../lib/harness-patterns/routing.server')
@@ -74,7 +74,7 @@ describe('routeMessageOp', () => {
       intent: 'Web search',
       needs_tool: true,
       route: 'web_search',
-      response: ''
+      response: '',
     })
 
     const { routeMessageOp } = await import('../../../lib/harness-patterns/routing.server')
@@ -83,26 +83,12 @@ describe('routeMessageOp', () => {
     expect(result.tool_name).toBe('web_search')
   })
 
-  it('should handle code_mode route', async () => {
-    mockRouter.mockResolvedValue({
-      intent: 'Code execution',
-      needs_tool: true,
-      route: 'code_mode',
-      response: ''
-    })
-
-    const { routeMessageOp } = await import('../../../lib/harness-patterns/routing.server')
-    const result = await routeMessageOp('run script', [])
-
-    expect(result.tool_name).toBe('code_mode')
-  })
-
   it('should handle null route when no tool needed', async () => {
     mockRouter.mockResolvedValue({
       intent: 'Simple greeting',
       needs_tool: false,
       route: null,
-      response: 'Hello!'
+      response: 'Hello!',
     })
 
     const { routeMessageOp } = await import('../../../lib/harness-patterns/routing.server')
@@ -118,7 +104,7 @@ describe('routeMessageOp', () => {
 
     const history = [
       { role: 'user', content: 'previous message' },
-      { role: 'assistant', content: 'previous response' }
+      { role: 'assistant', content: 'previous response' },
     ]
 
     await routeMessageOp('new message', history)
@@ -133,10 +119,9 @@ describe('routeMessageOp', () => {
     await routeMessageOp('test', [])
 
     const [, routes] = mockRouter.mock.calls[0]
-    expect(routes).toHaveLength(3)
+    expect(routes).toHaveLength(2)
     expect(routes.map((r: { name: string }) => r.name)).toContain('neo4j')
     expect(routes.map((r: { name: string }) => r.name)).toContain('web_search')
-    expect(routes.map((r: { name: string }) => r.name)).toContain('code_mode')
   })
 
   it('should accept custom routes', async () => {
@@ -144,7 +129,7 @@ describe('routeMessageOp', () => {
 
     const customRoutes = [
       { name: 'custom1', description: 'Custom route 1' },
-      { name: 'custom2', description: 'Custom route 2' }
+      { name: 'custom2', description: 'Custom route 2' },
     ]
 
     await routeMessageOp('test', [], customRoutes)

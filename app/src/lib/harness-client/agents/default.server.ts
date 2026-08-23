@@ -2,9 +2,6 @@
  * Default Agent
  *
  * Router-based agent with Neo4j and Web Search routes.
- * Code-mode lives in a dedicated agent (`code-mode.server.ts`) because the
- * kg-agent gateway's `code-mode` tool is a factory that creates `code-mode-<name>`
- * tools — that workflow needs an actorCritic loop rather than a simpleLoop.
  */
 'use server'
 

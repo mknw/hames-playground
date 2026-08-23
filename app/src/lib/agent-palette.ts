@@ -28,7 +28,7 @@ export type AgentAccent = keyof typeof AGENT_ACCENTS
 export const AGENT_ACCENTS = {
   /** general-purpose — the house indigo */
   indigo: '#818cf8',
-  /** code execution / code-mode */
+  /** code execution */
   amber: '#fbbf24',
   /** sandboxed compute, any flavour */
   orange: '#fb923c',

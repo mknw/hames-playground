@@ -1,14 +1,14 @@
 /**
  * Actor-Critic Pattern
  *
- * Generate-evaluate loop with retry on failure.
- * Designed for code mode: generates scripts, executes them, evaluates results.
+ * Generate-evaluate loop with retry on failure: the actor proposes a tool
+ * call, the loop executes it, and the critic decides whether to stop or
+ * feed the result back for another attempt.
  */
 
 import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '../assert.server'
-import { callTool, listTools as mcpListTools } from '../mcp-client.server'
-import { invalidateToolDescriptions } from '../baml-adapters.server'
+import { callTool } from '../mcp-client.server'
 import { repairJson } from '../json-repair'
 import { normalizeControllerAction } from '../controller-action'
 import type {
@@ -30,7 +30,7 @@ import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
 import { getActiveSandbox } from '../../sandbox/scope.server'
-import type { CodeModeControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
+import type { ActorControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
 import { LLMCallError, llmCallHitOutputCap } from '../baml-adapters.server'
 import { formatPlanContext, type PlannerData } from './planner.server'
 
@@ -50,23 +50,23 @@ export interface ActorCriticData {
 /**
  * Create an actor-critic pattern.
  *
- * Calls BAML controller and critic functions directly for code mode workflows.
+ * Calls BAML actor and critic functions directly.
  *
- * @param actor - BAML controller function (e.g., b.CodeModeController)
- * @param critic - BAML critic function (e.g., b.CodeModeCritic)
+ * @param actor - BAML actor controller function (e.g., b.ActorController)
+ * @param critic - BAML critic function (e.g., b.Critic)
  * @param tools - Allowed tool names
  * @param config - Configuration (availableTools, maxRetries, patternId, etc.)
  * @returns ConfiguredPattern ready for chain
  *
  * @example
- * const loop = actorCritic(b.CodeModeController, b.CodeModeCritic, tools.all, {
- *   patternId: 'code-mode',
+ * const loop = actorCritic(b.ActorController.bind(b), b.Critic.bind(b), tools.all, {
+ *   patternId: 'sandbox-loop',
  *   availableTools,
  *   maxRetries: 3
  * })
  */
 export function actorCritic<T extends ActorCriticData>(
-  actor: CodeModeControllerFnWithLLMData,
+  actor: ActorControllerFnWithLLMData,
   critic: CriticFnWithLLMData,
   tools: string[],
   config?: ActorCriticConfig,
@@ -250,7 +250,7 @@ export function actorCritic<T extends ActorCriticData>(
         // P0 (Return-from-critic redesign): the actor cannot EXIT the loop on
         // its own — sufficiency-to-exit is the critic's job by definition, and
         // the dual responsibility once let the actor self-terminate with
-        // fabricated data (see `.harness-logs/one-turn-codemode.json`). That
+        // fabricated data. That
         // invariant still holds: the critic is the SOLE exit authority below.
         //
         // `is_final` is now an advisory *critic trigger*, not an exit: when the
@@ -317,16 +317,6 @@ export function actorCritic<T extends ActorCriticData>(
               tool: c.tool_name,
               run: async () => {
                 const result = await callTool(c.tool_name, callArgs)
-                // Factory tools register new tools on success — same cache
-                // invalidation as the singular path, per sub-call.
-                if (result.success && c.tool_name === 'code-mode') {
-                  invalidateToolDescriptions()
-                  try {
-                    await mcpListTools()
-                  } catch {
-                    // Non-fatal — the actor can still invoke the new tool by name.
-                  }
-                }
                 if (config?.onToolResult) {
                   try {
                     const hookResult = await config.onToolResult(c.tool_name, result, {
@@ -420,11 +410,10 @@ export function actorCritic<T extends ActorCriticData>(
 
         // Validate tool. The strict allowlist is augmented by an optional
         // `dynamicToolPattern` regex so agents whose backends create tools at
-        // runtime (e.g. the kg-agent gateway's `code-mode-<name>` factory)
-        // can accept those names without enumerating them upfront. A second
-        // augmentation, `dynamicToolAllowlist`, is a per-turn callback for
-        // user-curated selections (e.g. the code-mode agent's per-conversation
-        // tool picker) — kept in sync with the adapter's `toolNamesProvider`.
+        // runtime can accept those names without enumerating them upfront. A
+        // second augmentation, `dynamicToolAllowlist`, is a per-turn callback
+        // for user-curated selections — kept in sync with the adapter's
+        // `toolNamesProvider`.
         const dynamicAllowlist = config?.dynamicToolAllowlist
           ? await config.dynamicToolAllowlist()
           : []
@@ -534,21 +523,6 @@ export function actorCritic<T extends ActorCriticData>(
 
         // Execute tool
         const result = await callTool(action.tool_name, args)
-
-        // The kg-agent `code-mode` tool is a factory: a successful call
-        // registers a new tool (`code-mode-<args.name>`). Invalidate the
-        // adapter's tool-description cache so the next actor invocation
-        // re-fetches a fresh listing and includes the newly-created tool in
-        // the LLM's prompt. The gateway persists these tools across turns, so
-        // this also makes them visible to future user turns in the same session.
-        if (result.success && action.tool_name === 'code-mode') {
-          invalidateToolDescriptions()
-          try {
-            await mcpListTools() // warm the gateway's own cache; non-fatal
-          } catch {
-            // Non-fatal — the actor can still try to invoke the new tool by name.
-          }
-        }
 
         // onToolResult hook: enrich/transform result before commit. See SimpleLoop for full doc.
         if (config?.onToolResult) {

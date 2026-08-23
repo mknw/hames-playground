@@ -30,7 +30,6 @@ The right panel's **Observability** tab will fill with events as the agent runs.
 router → routes({
   neo4j:      withReferences(neo4jPattern),
   web_search: withReferences(webPattern),
-  code_mode:  withReferences(codePattern)
 }) → compactExecution
 ```
 

@@ -25,7 +25,7 @@ the shared `ConfiguredPattern → ConfiguredPattern` shape every combinator
 (`chain` / `parallel` / `routes` / `guardrail` / `hook` / `withReferences` /
 `withInjectionGuard` / `withSandbox`) has in common. Source: the "what is
 already right" section of the #225 review, and the in-tree
-`harness-patterns/README.md`.
+`harness-patterns/SPEC.md`.
 
 ## 2. Writing a pattern
 

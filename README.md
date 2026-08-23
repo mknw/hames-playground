@@ -119,9 +119,11 @@ tools. Neither is baked in — the library is being pulled towards a BAML-free c
 behind injected call interfaces
 ([`docs/plan/harness-npm-lib.md`](docs/plan/harness-npm-lib.md)).
 
-📖 **[Read the hames README →](app/src/lib/harness-patterns/README.md)** — full
-API, `UnifiedContext` architecture, the `EventView` query API, and the
-event→BAML type mapping.
+📖 **[Read the hames front page →](app/src/lib/harness-patterns/README.md)** —
+what the primitives are and why they are shaped that way. The
+[spec](app/src/lib/harness-patterns/SPEC.md) beside it carries the full API,
+the `UnifiedContext` architecture, the `EventView` query API and the event→BAML
+type mapping.
 
 One primitive worth a closer look: **`withReferences`** carries data across turns
 without re-fetching. The agent searches the web on one turn and writes the
@@ -207,7 +209,7 @@ The ones reached most often:
 
 |                                                                                                   |                                                                                |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| [`app/src/lib/harness-patterns/README.md`](app/src/lib/harness-patterns/README.md)                | The hames API reference                                                        |
+| [`app/src/lib/harness-patterns/SPEC.md`](app/src/lib/harness-patterns/SPEC.md)                    | The hames API reference and design spec                                        |
 | [`GLOSSARY.md`](GLOSSARY.md)                                                                      | House vocabulary — pattern, controller, critic, harness, EventView, Data Stash |
 | [`docs/plan/ROADMAP.md`](docs/plan/ROADMAP.md)                                                    | Roadmap shape: multi-user target architecture, phased MoSCoW plan              |
 | [`docs/plan/harness-npm-lib.md`](docs/plan/harness-npm-lib.md)                                    | Extracting `hames` to npm — package layout, dev vs. production loading         |

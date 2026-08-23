@@ -169,7 +169,7 @@ type OnToolResult = (
 ) => Promise<{ data?: unknown } | void> | { data?: unknown } | void
 ```
 
-See [`app/src/lib/harness-patterns/README.md` § Hooks](../../app/src/lib/harness-patterns/README.md#simpleloopcontroller-tools-config) for the full hook contract and the `enrichNeo4jResult` recipe.
+See [`app/src/lib/harness-patterns/SPEC.md` § Hooks](../../app/src/lib/harness-patterns/SPEC.md#simpleloopcontroller-tools-config) for the full hook contract and the `enrichNeo4jResult` recipe.
 
 ### actorCritic
 

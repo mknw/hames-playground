@@ -50,4 +50,4 @@ UnifiedContext architecture"; and commit `49df929` (same day,
 which is what made the replacement viable. The standing disposition — including
 the explicit "Do not recreate it." — is the "Agent framework" bullet under
 **Design Decisions** in `CLAUDE.md`; the current architecture is documented in
-`app/src/lib/harness-patterns/README.md`.
+`app/src/lib/harness-patterns/SPEC.md`.

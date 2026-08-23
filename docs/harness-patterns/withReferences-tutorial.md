@@ -154,7 +154,7 @@ You can then filter the timeline by event type (use the eye icon in the panel he
 
 ## Where to go next
 
-- **API reference:** [`app/src/lib/harness-patterns/README.md#withreferencespattern-config`](../../app/src/lib/harness-patterns/README.md#withreferencespattern-config)
+- **API reference:** [`app/src/lib/harness-patterns/SPEC.md#withreferencespattern-config`](../../app/src/lib/harness-patterns/SPEC.md#withreferencespattern-config)
 - **Design doc:** [`with-references.md`](with-references.md) — full taxonomy (ingress vs. mid-loop), alternatives considered, open questions
 - **Eval suite:** [`app/src/__tests__/lib/harness-patterns/with-references-eval.test.ts`](../../app/src/__tests__/lib/harness-patterns/with-references-eval.test.ts) — canonical selection cases (postgres-18, conversational-unrelated, multiple-relevant, scope=self, stale-on-topic) with deterministic fixture selectors
 - **Custom selectors:** pass `selector: SelectorFn` in the wrapper config to swap in deterministic, vector-similarity, or rule-based selection — useful for tests, evals, or fast-paths

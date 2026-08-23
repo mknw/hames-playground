@@ -3,7 +3,7 @@
 > **Status:** Implemented. Shipped in [PR #34](https://github.com/mknw/harness-playground/pull/34) ([issue #30](https://github.com/mknw/harness-playground/issues/30)).
 > **Supersedes:** #26, #29 (both marked `[SUPERSEDED by #30]`).
 > **Companion:** #19's `expandPreviousResult` synthetic tool also landed in PR #34 — see [§4 Mechanism](#4-mechanism) for how the two compose.
-> **API reference:** [`app/src/lib/harness-patterns/README.md#withreferencespattern-config`](../../app/src/lib/harness-patterns/README.md#withreferencespattern-config).
+> **API reference:** [`app/src/lib/harness-patterns/SPEC.md#withreferencespattern-config`](../../app/src/lib/harness-patterns/SPEC.md#withreferencespattern-config).
 
 ## 1. Problem
 
@@ -246,7 +246,7 @@ Each case stubs the LLM (or runs against the real fallback model with a recorded
 4. **Adapter merge** — extend `baml-adapters.server.ts` to read `scope.data.attachedRefs` and merge into `priorResults`.
 5. **Cache** — small in-memory `Map<sessionId, Map<hash, decision>>` cleared on session end.
 6. **Tests** — unit tests for skip optimizations + eval suite.
-7. **Docs** — update `harness-patterns/README.md` API reference + add an example.
+7. **Docs** — update `harness-patterns/SPEC.md` API reference + add an example.
 8. **Migration** — close #26 / #29; update the `default` agent (now `search`) to wrap routes with `withReferences`.
 
 ## 11. Open questions

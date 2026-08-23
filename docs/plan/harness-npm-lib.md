@@ -12,7 +12,7 @@ search collisions); `whiffletree` is reserved for a future subcomponent. The
 in-tree module keeps its current `harness-patterns` name until the rename
 actually lands.
 
-The `harness-patterns/README.md` banner has said since it was written that the
+The `harness-patterns/SPEC.md` banner has said since it was written that the
 directory is "the testbed" for a library "intended to be extracted as a
 standalone npm package once the core API has been validated" (four boundary
 rules already enforced: no imports from `harness-client/`/`components/`, no
@@ -118,7 +118,7 @@ this branch: `harness-client/agents/*` imports both `harness-patterns` and
 **sandbox already depends on stash at runtime**, which is exactly why the
 owner's review settled stash's status as a dependency of both sandbox and
 retriever rather than a standalone companion (§1.5) — the edge already exists
-in the code, this plan is only naming it correctly. `harness-patterns/README.md`'s
+in the code, this plan is only naming it correctly. `harness-patterns/SPEC.md`'s
 existing rule 1 ("must not import from `harness-client/` or any other
 consumer") is exactly the no-back-edges constraint this graph needs to keep
 holding once each box is a separately versioned package.
@@ -593,7 +593,7 @@ Still open, ordered by how much they'd change the plan:
 
 ## 8. Relationships
 
-- `app/src/lib/harness-patterns/README.md` — states the extraction intent and
+- `app/src/lib/harness-patterns/SPEC.md` — states the extraction intent and
   the four boundary rules this plan's §1.2 dependency graph is built to
   preserve.
 - [#225](https://github.com/mknw/harness-playground/issues/225) — the

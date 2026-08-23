@@ -9,31 +9,31 @@
  * These operations bypass the agent layer for performance and simplicity.
  */
 
-"use server";
+'use server'
 
-import { getNeo4jDriver, resetDriver, verifyConnection } from './client';
-import { transformNeo4jToCytoscape, parseNeo4jResults } from '../graph/transform';
+import { getNeo4jDriver, resetDriver, verifyConnection } from './client'
+import { transformNeo4jToCytoscape, parseNeo4jResults } from '../graph/transform'
 
 // ============================================================================
 // Types
 // ============================================================================
 
 export interface SchemaResult {
-  success: boolean;
-  schema?: string;
-  error?: string;
+  success: boolean
+  schema?: string
+  error?: string
 }
 
 export interface CypherResult {
-  success: boolean;
-  graphUpdate?: ReturnType<typeof transformNeo4jToCytoscape>;
-  raw?: unknown[];
-  error?: string;
+  success: boolean
+  graphUpdate?: ReturnType<typeof transformNeo4jToCytoscape>
+  raw?: unknown[]
+  error?: string
 }
 
 export interface ConnectionResult {
-  success: boolean;
-  error?: string;
+  success: boolean
+  error?: string
 }
 
 // ============================================================================
@@ -45,23 +45,23 @@ export interface ConnectionResult {
  * Used by agent for context about available node types and relationships
  */
 export async function getSchema(): Promise<SchemaResult> {
-  "use server";
+  'use server'
 
-  const session = getNeo4jDriver().session();
+  const session = getNeo4jDriver().session()
   try {
-    const result = await session.run('CALL db.schema.visualization()');
+    const result = await session.run('CALL db.schema.visualization()')
     return {
       success: true,
-      schema: JSON.stringify(result.records, null, 2)
-    };
+      schema: JSON.stringify(result.records, null, 2),
+    }
   } catch (error) {
-    console.error('Failed to fetch schema:', error);
+    console.error('Failed to fetch schema:', error)
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error)
-    };
+      error: error instanceof Error ? error.message : String(error),
+    }
   } finally {
-    await session.close();
+    await session.close()
   }
 }
 
@@ -72,9 +72,9 @@ export async function getSchema(): Promise<SchemaResult> {
  * - Relationship patterns (start)-[TYPE]->(end)
  */
 export async function getSchemaForAgent(): Promise<SchemaResult> {
-  "use server";
+  'use server'
 
-  const session = getNeo4jDriver().session();
+  const session = getNeo4jDriver().session()
   try {
     // Get labels with their actual properties (sample 1 node per label)
     const labelsQuery = `
@@ -85,8 +85,8 @@ export async function getSchemaForAgent(): Promise<SchemaResult> {
         RETURN keys(n) as props LIMIT 1
       }
       RETURN label, props
-    `;
-    const labelsResult = await session.run(labelsQuery);
+    `
+    const labelsResult = await session.run(labelsQuery)
 
     // Get relationship patterns by querying actual data
     // (db.schema.visualization returns virtual nodes that don't support startNode/endNode)
@@ -98,35 +98,35 @@ export async function getSchemaForAgent(): Promise<SchemaResult> {
         [lbl IN labels(b) WHERE lbl <> 'UNIQUE IMPORT LABEL'][0] as endLabel
       WHERE startLabel IS NOT NULL AND endLabel IS NOT NULL
       RETURN DISTINCT startLabel, relType, endLabel
-    `;
-    const relsResult = await session.run(relsQuery);
+    `
+    const relsResult = await session.run(relsQuery)
 
     // Format as readable text
-    let schema = "Node Labels:\n";
+    let schema = 'Node Labels:\n'
     for (const record of labelsResult.records) {
-      const label = record.get('label');
-      if (label === 'UNIQUE IMPORT LABEL') continue; // Skip APOC import label
-      const props = record.get('props') || [];
-      schema += `- ${label} (properties: ${props.join(', ')})\n`;
+      const label = record.get('label')
+      if (label === 'UNIQUE IMPORT LABEL') continue // Skip APOC import label
+      const props = record.get('props') || []
+      schema += `- ${label} (properties: ${props.join(', ')})\n`
     }
 
-    schema += "\nRelationships:\n";
+    schema += '\nRelationships:\n'
     for (const record of relsResult.records) {
-      const start = record.get('startLabel');
-      const rel = record.get('relType');
-      const end = record.get('endLabel');
+      const start = record.get('startLabel')
+      const rel = record.get('relType')
+      const end = record.get('endLabel')
       if (start && rel && end) {
-        schema += `- (${start})-[${rel}]->(${end})\n`;
+        schema += `- (${start})-[${rel}]->(${end})\n`
       }
     }
 
-    return { success: true, schema };
+    return { success: true, schema }
   } catch (error) {
-    console.error('Failed to fetch agent schema:', error);
+    console.error('Failed to fetch agent schema:', error)
     // Fallback to simplified schema
-    return getSimplifiedSchema();
+    return getSimplifiedSchema()
   } finally {
-    await session.close();
+    await session.close()
   }
 }
 
@@ -135,40 +135,40 @@ export async function getSchemaForAgent(): Promise<SchemaResult> {
  * Useful for smaller context windows
  */
 export async function getSimplifiedSchema(): Promise<SchemaResult> {
-  "use server";
+  'use server'
 
-  const session = getNeo4jDriver().session();
+  const session = getNeo4jDriver().session()
   try {
     // Get node labels
-    const labelsResult = await session.run('CALL db.labels()');
-    const labels = labelsResult.records.map(r => r.get(0));
+    const labelsResult = await session.run('CALL db.labels()')
+    const labels = labelsResult.records.map((r) => r.get(0))
 
     // Get relationship types
-    const relTypesResult = await session.run('CALL db.relationshipTypes()');
-    const relTypes = relTypesResult.records.map(r => r.get(0));
+    const relTypesResult = await session.run('CALL db.relationshipTypes()')
+    const relTypes = relTypesResult.records.map((r) => r.get(0))
 
     // Get property keys
-    const propsResult = await session.run('CALL db.propertyKeys()');
-    const propKeys = propsResult.records.map(r => r.get(0));
+    const propsResult = await session.run('CALL db.propertyKeys()')
+    const propKeys = propsResult.records.map((r) => r.get(0))
 
     const schema = {
       nodeLabels: labels,
       relationshipTypes: relTypes,
-      propertyKeys: propKeys
-    };
+      propertyKeys: propKeys,
+    }
 
     return {
       success: true,
-      schema: JSON.stringify(schema, null, 2)
-    };
+      schema: JSON.stringify(schema, null, 2),
+    }
   } catch (error) {
-    console.error('Failed to fetch simplified schema:', error);
+    console.error('Failed to fetch simplified schema:', error)
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error)
-    };
+      error: error instanceof Error ? error.message : String(error),
+    }
   } finally {
-    await session.close();
+    await session.close()
   }
 }
 
@@ -177,10 +177,10 @@ export async function getSimplifiedSchema(): Promise<SchemaResult> {
 // ============================================================================
 
 export interface NodePropertiesResult {
-  success: boolean;
-  properties?: Record<string, unknown>;
-  labels?: string[];
-  error?: string;
+  success: boolean
+  properties?: Record<string, unknown>
+  labels?: string[]
+  error?: string
 }
 
 /**
@@ -189,36 +189,34 @@ export interface NodePropertiesResult {
  *
  * @param elementId - Neo4j 5.x element ID (e.g., "4:xxx:123")
  */
-export async function getNodeProperties(
-  elementId: string
-): Promise<NodePropertiesResult> {
-  "use server";
+export async function getNodeProperties(elementId: string): Promise<NodePropertiesResult> {
+  'use server'
 
-  const session = getNeo4jDriver().session();
+  const session = getNeo4jDriver().session()
   try {
     const result = await session.run(
       'MATCH (n) WHERE elementId(n) = $elementId RETURN properties(n) as props, labels(n) as labels',
-      { elementId }
-    );
+      { elementId },
+    )
 
     if (result.records.length === 0) {
-      return { success: false, error: 'Node not found' };
+      return { success: false, error: 'Node not found' }
     }
 
-    const record = result.records[0];
+    const record = result.records[0]
     return {
       success: true,
       properties: record.get('props') as Record<string, unknown>,
-      labels: record.get('labels') as string[]
-    };
+      labels: record.get('labels') as string[],
+    }
   } catch (error) {
-    console.error('Failed to fetch node properties:', error);
+    console.error('Failed to fetch node properties:', error)
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error)
-    };
+      error: error instanceof Error ? error.message : String(error),
+    }
   } finally {
-    await session.close();
+    await session.close()
   }
 }
 
@@ -231,90 +229,53 @@ export async function getNodeProperties(
  *
  * @param cypher - The Cypher query to execute
  */
-export async function runManualCypher(
-  cypher: string
-): Promise<CypherResult> {
-  "use server";
+export async function runManualCypher(cypher: string): Promise<CypherResult> {
+  'use server'
 
   // Basic safety check - reject write operations
-  const normalizedQuery = cypher.trim().toUpperCase();
-  const writeKeywords = ['CREATE', 'MERGE', 'SET', 'DELETE', 'REMOVE', 'DETACH'];
+  const normalizedQuery = cypher.trim().toUpperCase()
+  const writeKeywords = ['CREATE', 'MERGE', 'SET', 'DELETE', 'REMOVE', 'DETACH']
 
   for (const keyword of writeKeywords) {
     if (normalizedQuery.includes(keyword)) {
       return {
         success: false,
-        error: `Manual queries cannot use write operations (${keyword}). Use the chat interface for modifications.`
-      };
+        error: `Manual queries cannot use write operations (${keyword}). Use the chat interface for modifications.`,
+      }
     }
   }
 
-  const session = getNeo4jDriver().session();
+  const session = getNeo4jDriver().session()
   try {
-    const result = await session.run(cypher);
+    const result = await session.run(cypher)
 
     // Parse and transform results for Cytoscape
-    const parsed = parseNeo4jResults({ records: result.records });
-    const graphData = transformNeo4jToCytoscape(
-      parsed.nodes || [],
-      parsed.relationships || []
-    );
+    const parsed = parseNeo4jResults({ records: result.records })
+    const graphData = transformNeo4jToCytoscape(parsed.nodes || [], parsed.relationships || [])
 
     return {
       success: true,
       graphUpdate: graphData,
-      raw: result.records.map(r => r.toObject())
-    };
+      raw: result.records.map((r) => r.toObject()),
+    }
   } catch (error) {
-    console.error('Manual Cypher query failed:', error);
+    console.error('Manual Cypher query failed:', error)
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error)
-    };
+      error: error instanceof Error ? error.message : String(error),
+    }
   } finally {
-    await session.close();
+    await session.close()
   }
 }
 
-/**
- * Execute a write Cypher query (internal use, requires approval flow)
- * This is called by the agentic layer after user approval
- *
- * @param cypher - The Cypher query to execute
- */
-export async function executeWriteCypher(
-  cypher: string
-): Promise<CypherResult> {
-  "use server";
-
-  const session = getNeo4jDriver().session();
-  try {
-    const result = await session.run(cypher);
-
-    // Parse and transform results for Cytoscape
-    const parsed = parseNeo4jResults({ records: result.records });
-    const graphData = transformNeo4jToCytoscape(
-      parsed.nodes || [],
-      parsed.relationships || []
-    );
-
-    console.log(`✅ Write query executed: ${cypher.substring(0, 50)}...`);
-
-    return {
-      success: true,
-      graphUpdate: graphData,
-      raw: result.records.map(r => r.toObject())
-    };
-  } catch (error) {
-    console.error('Write Cypher query failed:', error);
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    };
-  } finally {
-    await session.close();
-  }
-}
+// There is deliberately no write counterpart to `runManualCypher` (#228).
+// `executeWriteCypher(cypher)` used to live here: a `'use server'` RPC — so
+// browser-reachable — that ran any string the caller sent, with no auth and
+// no approval flow behind it despite what its comment claimed. It had no
+// callers. Graph writes go through the intent-shaped, authenticated ops in
+// `graph-edit.server.ts` (#226 C2), which own their Cypher; nothing new
+// belongs here that takes query text from the client.
 
 // ============================================================================
 // Connection Management
@@ -325,16 +286,16 @@ export async function executeWriteCypher(
  * Forces the driver singleton to reconnect on the next query
  */
 export async function resetNeo4jConnection(): Promise<ConnectionResult> {
-  "use server";
+  'use server'
 
   try {
-    await resetDriver();
-    return { success: true };
+    await resetDriver()
+    return { success: true }
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error)
-    };
+      error: error instanceof Error ? error.message : String(error),
+    }
   }
 }
 
@@ -342,18 +303,18 @@ export async function resetNeo4jConnection(): Promise<ConnectionResult> {
  * Test the Neo4j connection
  */
 export async function testNeo4jConnection(): Promise<ConnectionResult> {
-  "use server";
+  'use server'
 
   try {
-    const connected = await verifyConnection();
+    const connected = await verifyConnection()
     return {
       success: connected,
-      error: connected ? undefined : 'Connection verification failed'
-    };
+      error: connected ? undefined : 'Connection verification failed',
+    }
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error)
-    };
+      error: error instanceof Error ? error.message : String(error),
+    }
   }
 }

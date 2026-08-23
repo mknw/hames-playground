@@ -143,12 +143,14 @@ describe('hydrateWorkspace', () => {
     })
 
     const { transport, fs } = makeFsTransport()
-    const n = await hydrateWorkspace(transport, 's', (async () => ({
+    const { written, skipped } = await hydrateWorkspace(transport, 's', (async () => ({
       success: true,
       data: null,
     })) as never)
 
-    expect(n).toBe(2) // d3 skipped (hidden)
+    expect(written).toBe(2) // d3 skipped (hidden)
+    // Hidden/archived is a deliberate exclusion, not a failure.
+    expect(skipped).toEqual([])
     expect(fs.get('/work/in/data.csv')).toBe('a,b')
     expect(fs.get('/work/in/sheet.xlsx')).toBe(xlsxBytes.toString('latin1'))
     expect(fs.has('/work/in/old.txt')).toBe(false)
@@ -156,7 +158,7 @@ describe('hydrateWorkspace', () => {
     expect(vi.mocked(getDocument)).not.toHaveBeenCalledWith('s', 'd3', expect.anything())
   })
 
-  it('skips a doc whose body has gone missing between list and fetch', async () => {
+  it('reports a doc whose body has gone missing between list and fetch (sf-L8)', async () => {
     vi.mocked(listDocuments).mockResolvedValue([
       {
         id: 'd1',
@@ -190,14 +192,19 @@ describe('hydrateWorkspace', () => {
     )
 
     const { transport, fs } = makeFsTransport()
-    const n = await hydrateWorkspace(transport, 's', (async () => ({
+    const { written, skipped } = await hydrateWorkspace(transport, 's', (async () => ({
       success: true,
       data: null,
     })) as never)
 
-    expect(n).toBe(1)
+    expect(written).toBe(1)
     expect(fs.has('/work/in/gone.csv')).toBe(false)
     expect(fs.get('/work/in/here.csv')).toBe('a,b')
+    // The missing one is NAMED rather than silently dropped: the agent has been
+    // told the file exists and will not find it in /work/in.
+    expect(skipped).toEqual([
+      { filename: 'gone.csv', error: 'document not found in store' },
+    ])
   })
 })
 
@@ -230,12 +237,13 @@ describe('promoteOutputs', () => {
       .digest('hex')
     const baseline = new Map([['notes.md', notesHash]])
 
-    const promoted = await promoteOutputs(transport, 's', baseline, (async () => ({
+    const { promoted, skipped } = await promoteOutputs(transport, 's', baseline, (async () => ({
       success: true,
       data: null,
     })) as never)
 
     expect(promoted.sort()).toEqual(['chart.png', 'report.csv'])
+    expect(skipped).toEqual([])
     const calls = vi.mocked(storeDocument).mock.calls.map((c) => c[0])
     const csv = calls.find((c) => c.filename === 'report.csv')!
     const png = calls.find((c) => c.filename === 'chart.png')!
@@ -247,5 +255,59 @@ describe('promoteOutputs', () => {
     expect(Buffer.from(png.content, 'base64').equals(pngBytes)).toBe(true)
     // notes.md (unchanged) was not promoted.
     expect(calls.find((c) => c.filename === 'notes.md')).toBeUndefined()
+  })
+
+  // sf-L8: a deliverable that cannot be stored used to disappear into a bare
+  // `catch {}` — the return value looked exactly like "the turn produced
+  // nothing", so neither the caller nor the log could tell them apart.
+  it('names a file it could not store instead of dropping it silently (sf-L8)', async () => {
+    const { transport, fs } = makeFsTransport()
+    fs.set('/work/out/small.csv', 'a,b')
+    fs.set('/work/out/huge.csv', 'x'.repeat(20))
+
+    vi.mocked(storeDocument).mockImplementation(async (input) => {
+      if (input.filename === 'huge.csv') throw new Error('content too large')
+      return {} as never
+    })
+
+    const { promoted, skipped } = await promoteOutputs(
+      transport,
+      's',
+      new Map(),
+      (async () => ({ success: true, data: null })) as never,
+    )
+
+    // One bad file still does not cost the others...
+    expect(promoted).toEqual(['small.csv'])
+    // ...and it is reported by name, with the reason.
+    expect(skipped).toEqual([{ filename: 'huge.csv', error: 'content too large' }])
+  })
+
+  it('reports a file it could not read out of the container (sf-L8)', async () => {
+    const { transport, fs } = makeFsTransport()
+    // Listed by the find/hash sweep but unreadable by `sandbox_read`.
+    fs.set('/work/out/vanished.txt', 'gone by the time we read it')
+    const original = transport.callTool
+    transport.callTool = async (name, args) => {
+      if (name === 'sandbox_bash' && /base64 -w 0/.test(String(args.command))) {
+        return { success: false, data: null, error: 'no such file' }
+      }
+      if (name === 'sandbox_read' && String(args.path).endsWith('vanished.txt')) {
+        return { success: false, data: null, error: 'no such file' }
+      }
+      return original(name, args)
+    }
+
+    const { promoted, skipped } = await promoteOutputs(
+      transport,
+      's',
+      new Map(),
+      (async () => ({ success: true, data: null })) as never,
+    )
+
+    expect(promoted).toEqual([])
+    expect(skipped).toHaveLength(1)
+    expect(skipped[0].filename).toBe('vanished.txt')
+    expect(vi.mocked(storeDocument)).not.toHaveBeenCalled()
   })
 })

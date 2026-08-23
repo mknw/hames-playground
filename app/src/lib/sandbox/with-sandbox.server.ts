@@ -17,6 +17,7 @@
  * and release the slot in the outer finally regardless of branch.
  */
 import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { trackEvent } from '../harness-patterns/context.server'
 import { DEFAULT_SETTINGS } from '../settings'
 import { getRequestSettings } from '../settings-context.server'
 import { AttachmentTable } from './attachment-table.server'
@@ -28,6 +29,7 @@ import { hydrateWorkspace, snapshotOutputs, promoteOutputs } from './work-artifa
 import type { ComputeBackend, RootfsId, RuntimeConfig } from './types'
 import type {
   ConfiguredPattern,
+  ErrorEventData,
   PatternConfig,
   PatternScope,
   EventView,
@@ -329,6 +331,48 @@ async function runWithFreshVm<T>(
   }
 }
 
+const WORKSPACE_FAILURE_MESSAGE: Record<'hydrate' | 'snapshot' | 'promote', string> = {
+  hydrate:
+    'Stored documents were not restored into /work/in — this turn ran without prior files.',
+  snapshot:
+    'The pre-turn /work/out snapshot failed, so promotion was skipped to avoid re-storing ' +
+    'the whole directory as duplicates. Files stay in the container until a later turn.',
+  promote:
+    'Files under /work/out were NOT saved to the Data Stash and will be lost when the ' +
+    'container is reaped. Re-run the file operation or copy the file out of the sandbox.',
+}
+
+/**
+ * Report a durable-workspace (#89) step that failed, on BOTH channels.
+ *
+ * `trackEvent` puts it in the observability timeline (and streams it live);
+ * `console.error` is the copy that survives a pattern throw, which skips
+ * `commitEvents` and discards the scope's events entirely. Every one of these
+ * was a bare `.catch(() => {})` before — and `promote` is the one that loses a
+ * deliverable the agent has already claimed to have written, seconds before
+ * the container is reaped.
+ */
+function reportWorkspaceFailure<T>(
+  scope: PatternScope<T>,
+  step: 'hydrate' | 'snapshot' | 'promote',
+  sessionId: string,
+  err: unknown,
+): void {
+  const detail = err instanceof Error ? err.message : String(err)
+  const message = WORKSPACE_FAILURE_MESSAGE[step]
+  console.error(`[sandbox] ${step} failed for session ${sessionId}: ${detail}`)
+  trackEvent(
+    scope,
+    'error',
+    {
+      error: `sandbox workspace ${step} failed: ${detail}`,
+      severity: 'recoverable',
+      hint: message,
+    } as ErrorEventData,
+    true,
+  )
+}
+
 async function runWithIdAttachment<T>(
   attachments: AttachmentTable,
   id: string,
@@ -356,19 +400,69 @@ async function runWithIdAttachment<T>(
       // First boot of a fresh container → restore the session's stored
       // documents into /work/in. Reused live attachments skip this (#89).
       if (att.isFirstBoot) {
-        await hydrateWorkspace(att.transport, sessionId).catch(() => {})
+        try {
+          const { skipped } = await hydrateWorkspace(att.transport, sessionId)
+          if (skipped.length > 0) {
+            reportWorkspaceFailure(
+              scope,
+              'hydrate',
+              sessionId,
+              new Error(
+                `${skipped.length} file(s) not restored: ` +
+                  skipped.map((f) => `${f.filename} (${f.error})`).join(', '),
+              ),
+            )
+          }
+        } catch (err) {
+          // Non-fatal: the turn still runs, but the agent cannot see prior
+          // uploads or earlier deliverables, so say which turn was blind.
+          reportWorkspaceFailure(scope, 'hydrate', sessionId, err)
+        }
         att.isFirstBoot = false
       }
       // Promote only what THIS turn produces: snapshot /work/out before the
       // turn, diff after. In `finally` so deliverables are saved even if the
       // pattern throws.
-      const baseline = await snapshotOutputs(att.transport).catch(
-        () => new Map<string, string>(),
-      )
+      //
+      // A FAILED snapshot is not an empty one. `diffWorkFiles` compares against
+      // the baseline, so substituting an empty Map would mark every pre-existing
+      // file as produced-this-turn and re-store the whole directory as duplicate
+      // stash documents. `null` means "no baseline" and skips promotion for this
+      // turn instead — the files stay in the container and the next turn (which
+      // snapshots successfully) promotes whatever changed.
+      let baseline: Map<string, string> | null = null
+      try {
+        baseline = await snapshotOutputs(att.transport)
+      } catch (err) {
+        reportWorkspaceFailure(scope, 'snapshot', sessionId, err)
+      }
       try {
         return await pattern.fn(scope, view)
       } finally {
-        await promoteOutputs(att.transport, sessionId, baseline).catch(() => {})
+        if (baseline) {
+          try {
+            const { skipped } = await promoteOutputs(att.transport, sessionId, baseline)
+            if (skipped.length > 0) {
+              // Per-file failures: the turn survived, individual deliverables
+              // did not. Name them, since the agent has already reported
+              // writing them (sf-L8).
+              reportWorkspaceFailure(
+                scope,
+                'promote',
+                sessionId,
+                new Error(
+                  `${skipped.length} file(s) not stored: ` +
+                    skipped.map((f) => `${f.filename} (${f.error})`).join(', '),
+                ),
+              )
+            }
+          } catch (err) {
+            // The deliverable the agent just told the user about is about to
+            // be reaped with the container. This was a bare `.catch(() => {})`
+            // and is the one failure in this file that silently loses data.
+            reportWorkspaceFailure(scope, 'promote', sessionId, err)
+          }
+        }
       }
     })
   } finally {

@@ -16,9 +16,14 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
 // mocked so the sync tests assert *when* they run, not what they store (that
 // is work-artifacts.test.ts's job).
 const artifacts = vi.hoisted(() => ({
-  hydrateWorkspace: vi.fn(async () => 0),
+  hydrateWorkspace: vi.fn(
+    async () => ({ written: 0, skipped: [] as Array<{ filename: string; error: string }> }),
+  ),
   snapshotOutputs: vi.fn(async () => new Map<string, string>()),
-  promoteOutputs: vi.fn(async () => [] as string[]),
+  promoteOutputs: vi.fn(async () => ({
+    promoted: [] as string[],
+    skipped: [] as Array<{ filename: string; error: string }>,
+  })),
 }))
 vi.mock('../../../lib/sandbox/work-artifacts.server', () => artifacts)
 
@@ -563,9 +568,9 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
   }
 
   beforeEach(() => {
-    artifacts.hydrateWorkspace.mockClear().mockResolvedValue(0)
+    artifacts.hydrateWorkspace.mockClear().mockResolvedValue({ written: 0, skipped: [] })
     artifacts.snapshotOutputs.mockClear().mockResolvedValue(new Map())
-    artifacts.promoteOutputs.mockClear().mockResolvedValue([])
+    artifacts.promoteOutputs.mockClear().mockResolvedValue({ promoted: [], skipped: [] })
   })
 
   it('hydrates /work/in on the first boot only, and promotes outputs every turn', async () => {
@@ -598,8 +603,9 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
     expect(artifacts.promoteOutputs).toHaveBeenCalledWith(expect.anything(), 'sess-1', baseline)
   })
 
-  it('still runs the turn when hydrate fails (store/gateway down)', async () => {
+  it('still runs the turn when hydrate fails (store/gateway down), and says so', async () => {
     const kit = buildKit()
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     artifacts.hydrateWorkspace.mockRejectedValue(new Error('gateway down'))
     const inner = vi.fn(async (scope: PatternScope<Record<string, unknown>>) => scope)
     const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
@@ -608,17 +614,76 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
 
     await expect(wrap.fn(fakeScope({}), fakeView)).resolves.toBeDefined()
     expect(inner).toHaveBeenCalledTimes(1)
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('hydrate failed'))
+    err.mockRestore()
   })
 
-  it('treats an unreadable /work/out as an empty baseline rather than failing the turn', async () => {
+  // sf-C3. A failed snapshot is not an empty one: `diffWorkFiles` compares
+  // against the baseline, so an empty Map marks every pre-existing file as
+  // produced-this-turn and re-stores the whole directory as duplicate stash
+  // documents.
+  it('SKIPS promotion when the pre-turn snapshot fails, instead of promoting against an empty baseline', async () => {
     const kit = buildKit()
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     artifacts.snapshotOutputs.mockRejectedValue(new Error('no such directory'))
+    const scope = fakeScope({})
     const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
-      fakePattern(async (scope) => scope),
+      fakePattern(async (s) => s),
     )
 
-    await expect(wrap.fn(fakeScope({}), fakeView)).resolves.toBeDefined()
-    expect(artifacts.promoteOutputs).toHaveBeenCalledWith(expect.anything(), 'sess-1', new Map())
+    // The turn still runs and still returns…
+    await expect(wrap.fn(scope, fakeView)).resolves.toBeDefined()
+    // …but nothing is promoted against a baseline we do not have.
+    expect(artifacts.promoteOutputs).not.toHaveBeenCalled()
+    // And the skip is recorded, on both channels.
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('snapshot failed'))
+    expect(scope.events.filter((e) => e.type === 'error')).toHaveLength(1)
+    err.mockRestore()
+  })
+
+  // sf-C2. This was a bare `.catch(() => {})`: the agent has already told the
+  // user "I wrote report.xlsx", the container is about to be reaped, and the
+  // file is gone with no event and no log line.
+  it('records an error event when promotion throws, instead of losing the deliverable silently', async () => {
+    const kit = buildKit()
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    artifacts.promoteOutputs.mockRejectedValue(new Error('store write failed'))
+    const scope = fakeScope({})
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async (s) => s),
+    )
+
+    await expect(wrap.fn(scope, fakeView)).resolves.toBeDefined()
+
+    const errors = scope.events.filter((e) => e.type === 'error')
+    expect(errors).toHaveLength(1)
+    expect((errors[0].data as { error: string }).error).toContain('store write failed')
+    // The hint names the consequence, because "promotion failed" is not
+    // actionable and "your file is gone" is.
+    expect((errors[0].data as { hint?: string }).hint).toContain('will be lost')
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('promote failed'))
+    err.mockRestore()
+  })
+
+  // Per-file failures don't throw — promoteOutputs returns them (sf-L8).
+  it('reports per-file promotion failures by name', async () => {
+    const kit = buildKit()
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    artifacts.promoteOutputs.mockResolvedValue({
+      promoted: ['ok.csv'],
+      skipped: [{ filename: 'report.xlsx', error: 'content too large' }],
+    })
+    const scope = fakeScope({})
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async (s) => s),
+    )
+
+    await wrap.fn(scope, fakeView)
+
+    const errors = scope.events.filter((e) => e.type === 'error')
+    expect(errors).toHaveLength(1)
+    expect((errors[0].data as { error: string }).error).toContain('report.xlsx')
+    err.mockRestore()
   })
 
   it('promotes deliverables even when the pattern throws mid-turn', async () => {
@@ -635,12 +700,14 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
 
   it('surfaces the pattern result even when promotion fails', async () => {
     const kit = buildKit()
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     artifacts.promoteOutputs.mockRejectedValue(new Error('store write failed'))
     const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
       fakePattern(async (scope) => scope),
     )
 
     await expect(wrap.fn(fakeScope({}), fakeView)).resolves.toBeDefined()
+    err.mockRestore()
   })
 
   it('skips the whole persistence path when syncWorkspace is off', async () => {

@@ -4,6 +4,11 @@
  * The driver module is mocked, so these exercise the contract the UI relies on:
  * every function resolves to a `{ success }` envelope instead of throwing, and
  * the session is always closed.
+ *
+ * Since #230 they also pin the two security properties of this module: every
+ * `'use server'` export refuses an unauthenticated caller before the driver is
+ * touched, and every session is a READ-mode one, so the driver — not a keyword
+ * blacklist — is what makes the caller-supplied query read-only.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -12,7 +17,14 @@ import path from 'node:path'
 
 const run = vi.fn()
 const close = vi.fn().mockResolvedValue(undefined)
-const session = vi.fn(() => ({ run, close }))
+// `runManualCypher` goes through a managed read transaction; every other read
+// is an auto-commit `session.run`. Both land on the same `run` mock.
+const executeRead = vi.fn((work: (tx: { run: typeof run }) => unknown) => work({ run }))
+const session = vi.fn((_config?: { defaultAccessMode?: string }) => ({
+  run,
+  close,
+  executeRead,
+}))
 const resetDriver = vi.fn().mockResolvedValue(undefined)
 const verifyConnection = vi.fn().mockResolvedValue(true)
 
@@ -20,6 +32,19 @@ vi.mock('../../../lib/neo4j/client', () => ({
   getNeo4jDriver: () => ({ session }),
   resetDriver: () => resetDriver(),
   verifyConnection: () => verifyConnection(),
+}))
+
+const getAuthenticatedUser = vi.fn(async () => ({ id: 'user-a', email: 'a@example.com' }))
+vi.mock('../../../lib/auth/server', () => ({
+  getAuthenticatedUser: () => getAuthenticatedUser(),
+}))
+
+// Pinned off by default: the local `.env` may enable the dev bypass, and these
+// tests are about the real gate. One test below turns it on deliberately.
+const isBypassEnabled = vi.fn(() => false)
+vi.mock('../../../lib/auth/dev-bypass', () => ({
+  isBypassEnabled: () => isBypassEnabled(),
+  BYPASS_USER: { id: 'dev-bypass-user', email: 'dev@local' },
 }))
 
 import * as queries from '../../../lib/neo4j/queries'
@@ -44,14 +69,126 @@ const record = (fields: Record<string, unknown>) => {
 
 const results = (records: unknown[]) => ({ records })
 
+const queriesSource = () =>
+  readFileSync(path.resolve(process.cwd(), 'src/lib/neo4j/queries.ts'), 'utf8')
+
 beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
   run.mockReset()
   close.mockClear()
   session.mockClear()
+  executeRead.mockClear()
   resetDriver.mockClear().mockResolvedValue(undefined)
   verifyConnection.mockClear().mockResolvedValue(true)
+  getAuthenticatedUser.mockClear().mockResolvedValue({ id: 'user-a', email: 'a@example.com' })
+  isBypassEnabled.mockClear().mockReturnValue(false)
+})
+
+// The RPC surface of this module, as the browser sees it: name → a call with
+// valid arguments. Used by the auth-gate suite so a new export cannot be added
+// without deciding how it is gated.
+const RPCS: Array<[string, () => Promise<{ success: boolean; error?: string }>]> = [
+  ['getSchema', () => getSchema()],
+  ['getSchemaForAgent', () => getSchemaForAgent()],
+  ['getSimplifiedSchema', () => getSimplifiedSchema()],
+  ['getNodeProperties', () => getNodeProperties('4:abc:1')],
+  ['runManualCypher', () => runManualCypher('MATCH (n) RETURN n')],
+  ['resetNeo4jConnection', () => resetNeo4jConnection()],
+  ['testNeo4jConnection', () => testNeo4jConnection()],
+]
+
+describe('auth gate (#230)', () => {
+  it.each(RPCS)('%s refuses an unauthenticated caller before touching Neo4j', async (_n, call) => {
+    getAuthenticatedUser.mockRejectedValue(
+      new Error('Authentication required: No user found in session.'),
+    )
+
+    const res = await call()
+
+    // Envelope, not a throw — the UI shows `error` verbatim.
+    expect(res).toEqual({
+      success: false,
+      error: 'Authentication required: No user found in session.',
+    })
+    expect(session).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+    expect(resetDriver).not.toHaveBeenCalled()
+    expect(verifyConnection).not.toHaveBeenCalled()
+  })
+
+  it.each(RPCS)('%s refuses a caller outside the email allow-list', async (_n, call) => {
+    getAuthenticatedUser.mockRejectedValue(new Error('Email not allowed: intruder@evil.test'))
+
+    expect(await call()).toEqual({ success: false, error: 'Email not allowed: intruder@evil.test' })
+    expect(session).not.toHaveBeenCalled()
+  })
+
+  it('stringifies a non-Error auth rejection rather than leaking `undefined`', async () => {
+    getAuthenticatedUser.mockRejectedValue('session store unreachable')
+
+    expect(await runManualCypher('MATCH (n) RETURN n')).toEqual({
+      success: false,
+      error: 'session store unreachable',
+    })
+    expect(session).not.toHaveBeenCalled()
+  })
+
+  it('consults the authenticated user on every call, and runs when it resolves', async () => {
+    run.mockResolvedValue(results([]))
+    await getSchema()
+    expect(getAuthenticatedUser).toHaveBeenCalledTimes(1)
+    expect(session).toHaveBeenCalledTimes(1)
+  })
+
+  it('honours the DEV-gated dev bypass without consulting the session', async () => {
+    isBypassEnabled.mockReturnValue(true)
+    getAuthenticatedUser.mockRejectedValue(new Error('Authentication required'))
+    run.mockResolvedValue(results([]))
+
+    expect((await getSchema()).success).toBe(true)
+    expect(getAuthenticatedUser).not.toHaveBeenCalled()
+  })
+})
+
+describe('read-only at the driver (#230)', () => {
+  it('opens every session in READ access mode', async () => {
+    run.mockResolvedValue(results([]))
+
+    await getSchema()
+    await getSchemaForAgent()
+    await getSimplifiedSchema()
+    await getNodeProperties('4:abc:1')
+    await runManualCypher('MATCH (n) RETURN n')
+
+    expect(session).toHaveBeenCalledTimes(5)
+    for (const call of session.mock.calls) {
+      expect(call[0]).toEqual({ defaultAccessMode: 'READ' })
+    }
+  })
+
+  it('runs the caller-supplied query inside a managed read transaction', async () => {
+    run.mockResolvedValue(results([]))
+    await runManualCypher('MATCH (n) RETURN n')
+
+    expect(executeRead).toHaveBeenCalledTimes(1)
+    expect(run).toHaveBeenCalledWith('MATCH (n) RETURN n')
+  })
+
+  it('surfaces the driver refusing a write that got past the keyword pre-check', async () => {
+    // A write smuggled past WRITE_CLAUSE — no boundary-delimited keyword in
+    // sight. The READ transaction is what stops it, and the server says so.
+    run.mockRejectedValue(
+      new Error('Neo.ClientError.Statement.AccessMode: Writing in read access mode not allowed'),
+    )
+
+    const res = await runManualCypher('CALL apoc.cypher.doIt("CR" + "EATE (n)", {})')
+
+    expect(res.success).toBe(false)
+    expect(res.error).toContain('read-only')
+    expect(res.error).toContain('Writing in read access mode not allowed')
+    expect(close).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('getSchema', () => {
@@ -222,29 +359,23 @@ describe('runManualCypher', () => {
     expect((await runManualCypher('create (n)')).success).toBe(false)
   })
 
-  // ⚠️ BUG PIN — issue #190. This is NOT the behaviour we want; it records the
-  // behaviour we currently ship, so the false-refusal cannot change unnoticed.
-  //
-  //   Bug: `runManualCypher`'s write guard is a plain case-insensitive
-  //   substring match over the query text, so any identifier that merely
-  //   *contains* a write keyword is refused — `n.createdAt` contains 'create',
-  //   and a read-only query is rejected with a message naming CREATE.
-  //   Also mis-fires on e.g. `n.deleted`, `n.mergedBy`, `n.settings`.
-  //
-  //   Fix (per #190): match on word boundaries instead of substrings. Applying
-  //   that fix makes exactly this test go red — that is the pin working, not a
-  //   regression. Whoever lands #190 must DELETE this test and replace it with
-  //   the positive: `MATCH (n) RETURN n.createdAt` succeeds while
-  //   `CREATE (n)` still refuses. Do not "repair" it by relaxing the assertion.
-  it('BUG(#190): rejects a read query whose identifier merely contains a write keyword', async () => {
-    const res = await runManualCypher('MATCH (n) RETURN n.createdAt')
+  // Replaces the BUG(#190) pin that used to live here: the guard was a plain
+  // substring match, so any identifier merely *containing* a write keyword was
+  // refused with a message naming a clause the query never used. It matches on
+  // word boundaries now (and it is no longer the actual write barrier — the
+  // READ-mode transaction is), so these are reads and they run.
+  it.each([
+    'MATCH (n) RETURN n.createdAt',
+    'MATCH (n) WHERE n.deleted IS NULL RETURN n',
+    'MATCH (n:Dataset) RETURN n',
+    'MATCH (n) RETURN n.mergedBy',
+  ])('runs the read query %s, whose identifiers contain write keywords', async (query) => {
+    run.mockResolvedValue(results([]))
 
-    // Refused — and the message names a keyword the query never used, which is
-    // what the UI shows the user verbatim.
-    expect(res.success).toBe(false)
-    expect(res.error).toContain('CREATE')
-    // No session is opened, so the false refusal is total, not a partial run.
-    expect(session).not.toHaveBeenCalled()
+    const res = await runManualCypher(query)
+
+    expect(res.success).toBe(true)
+    expect(run).toHaveBeenCalledWith(query)
   })
 
   it('returns the query error as data and closes the session', async () => {
@@ -268,12 +399,34 @@ describe('no arbitrary-Cypher write RPC (#228)', () => {
   })
 
   it('runManualCypher is the only export that hands caller-supplied text to the driver', () => {
-    const source = readFileSync(path.resolve(process.cwd(), 'src/lib/neo4j/queries.ts'), 'utf8')
+    const source = queriesSource()
     // Every other query in this file is a literal the module owns; only the
-    // read-only manual-query path takes its text from the caller.
-    expect(source.match(/session\.run\(cypher\b/g)).toHaveLength(1)
+    // manual-query path takes its text from the caller, and it reaches the
+    // driver through a managed READ transaction.
+    expect(source.match(/\.run\(cypher\b/g)).toHaveLength(1)
     const afterManual = source.slice(source.indexOf('export async function runManualCypher'))
-    expect(afterManual).toContain('session.run(cypher)')
+    expect(afterManual).toContain('session.executeRead((tx) => tx.run(cypher))')
+  })
+})
+
+// Class pins for #230, held on the source rather than on one symbol: adding an
+// export that skips the auth gate, or one that opens a write-capable session,
+// fails here even if it never appears in a behavioural test.
+describe('every RPC in this module is gated and read-only (#230)', () => {
+  it('has exactly one driver.session() call site, and it pins READ access mode', () => {
+    const source = queriesSource()
+    expect(source.match(/\.session\(/g)).toHaveLength(1)
+    expect(source).toContain('defaultAccessMode: neo4j.session.READ')
+    expect(source).toContain('function readSession()')
+  })
+
+  it('gates every exported server function on denyUnauthenticated()', () => {
+    const source = queriesSource()
+    const exported = source.match(/^export async function /gm) ?? []
+    const gated = source.match(/^ {2}const denied = await denyUnauthenticated\(\)$/gm) ?? []
+
+    expect(exported.length).toBeGreaterThan(0)
+    expect(gated).toHaveLength(exported.length)
   })
 })
 

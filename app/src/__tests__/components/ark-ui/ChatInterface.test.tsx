@@ -42,7 +42,7 @@ const rejectAction = vi.fn()
 const promoteAction = vi.fn()
 const AGENTS = [
   {
-    id: 'default',
+    id: 'search',
     name: 'Default',
     description: 'The generalist',
     icon: 'i-x',
@@ -235,7 +235,7 @@ describe('ChatInterface — hydration', () => {
   // bubble's hint/patternId/turnInfo must survive a reload.
   it('keeps the hint and attribution on a replayed error bubble', async () => {
     loadConversation.mockResolvedValue({
-      agentId: 'default',
+      agentId: 'search',
       kind: 'conversation',
       serialized: '{}',
       messages: [
@@ -260,7 +260,7 @@ describe('ChatInterface — hydration', () => {
 
   it('survives a thread whose serialized context is unparseable', async () => {
     loadConversation.mockResolvedValue({
-      agentId: 'default',
+      agentId: 'search',
       kind: 'conversation',
       serialized: 'not json',
       messages: [{ id: 'm1', role: 'user', content: 'hi', timestamp: '2026-05-10T09:00:00Z' }],
@@ -277,7 +277,7 @@ describe('ChatInterface — hydration', () => {
 
   it('reloads and resets the panels when the route swaps in another session', async () => {
     loadConversation.mockImplementation(async (sid: string) => ({
-      agentId: 'default',
+      agentId: 'search',
       kind: 'conversation',
       serialized: '{}',
       messages: [
@@ -332,7 +332,7 @@ describe('ChatInterface — sending a message', () => {
     expect(JSON.parse(init.body)).toMatchObject({
       sessionId: 's1',
       message: 'what nodes exist?',
-      agentId: 'default',
+      agentId: 'search',
     })
     expect(transcript(container)).toContain('what nodes exist?')
     expect(transcript(container)).toContain('Here is your answer.')
@@ -610,7 +610,7 @@ describe('ChatInterface — composer gates', () => {
 describe('ChatInterface — action promotion gate', () => {
   const asAction = () =>
     loadConversation.mockResolvedValue({
-      agentId: 'default',
+      agentId: 'search',
       kind: 'action',
       serialized: '{}',
       messages: [

@@ -155,7 +155,7 @@ export function chain<T extends Record<string, unknown>>(
     name: `chain(${patterns.map((p) => p.name).join(', ')})`,
     fn: async (scope, view) => {
       // Run each sub-pattern in a fresh child scope so its events get tagged
-      // with its OWN patternId (e.g. 'code-mode-loop'), not the outer
+      // with its OWN patternId (e.g. 'sandbox-loop'), not the outer
       // composition's auto-generated id. Without this, `view.fromLastPattern()`
       // and `ViewConfig.fromLast: true` silently exclude the sub-pattern's
       // events because they filter on `e.patternId === lastPatternId`.

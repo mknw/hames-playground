@@ -14,15 +14,10 @@ src/lib/
 │   ├── patterns/
 │   └── ...
 │
-├── harness-client/         # Frontend integration layer
-│   ├── actions.server.ts   # Server actions
-│   ├── session.server.ts   # Session management
-│   └── index.ts
-│
-└── otel/                   # OpenTelemetry instrumentation
-    ├── sdk.server.ts       # OTel SDK with CompactSpanExporter
-    ├── ui-processor.server.ts
-    └── ...
+└── harness-client/         # Frontend integration layer
+    ├── actions.server.ts   # Server actions
+    ├── session.server.ts   # Session management
+    └── index.ts
 ```
 
 ---
@@ -46,7 +41,7 @@ export async function processMessage(
 export async function processMessageWithAgent(
   sessionId: string,
   message: string,
-  agentId: string = "default"
+  agentId: string = "search"
 ): Promise<HarnessResultScoped<SessionData>>
 
 // Get list of available agents
@@ -344,79 +339,6 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
 }
 ```
 
-JS-orchestration workflows (the kg-agent gateway's `code-mode` factory + generated tools) live in a separate agent — see [`code-mode.server.ts`](../../app/src/lib/harness-client/examples/code-mode.server.ts) and [`examples.md` § 11. Code Mode Agent](examples.md#11-code-mode-agent).
-
----
-
-## OpenTelemetry Integration
-
-### Server Setup
-
-OTel is initialized in `entry-server.tsx`:
-
-```typescript
-import './lib/otel/sdk.server'
-```
-
-The `CompactSpanExporter` provides clean console output:
-
-```
-[router] → neo4j (intent: "Query graph data")
-[simpleLoop] neo4j-query ✓ (1234ms)
-  [tool] read_neo4j_cypher ✓ (456ms)
-[harness] Session cl-3 completed in 1500ms
-```
-
-### Telemetry Streaming
-
-Spans can be streamed to the UI via SSE:
-
-```typescript
-// routes/api/telemetry/stream.ts
-import { uiSpanProcessor } from '~/lib/otel/ui-processor.server'
-
-export function GET() {
-  const stream = new ReadableStream({
-    start(controller) {
-      const unsubscribe = uiSpanProcessor.subscribe((span) => {
-        controller.enqueue(`data: ${JSON.stringify(span)}\n\n`)
-      })
-
-      return () => unsubscribe()
-    }
-  })
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache'
-    }
-  })
-}
-```
-
-### Client Subscription
-
-```typescript
-// hooks/useTelemetryStream.ts
-import { createSignal, onCleanup } from 'solid-js'
-
-export function useTelemetryStream() {
-  const [spans, setSpans] = createSignal<Span[]>([])
-
-  const eventSource = new EventSource('/api/telemetry/stream')
-
-  eventSource.onmessage = (event) => {
-    const span = JSON.parse(event.data)
-    setSpans(prev => [...prev, span])
-  }
-
-  onCleanup(() => eventSource.close())
-
-  return spans
-}
-```
-
 ---
 
 ## Error Handling
@@ -479,7 +401,6 @@ const handleApprove = async () => {
 - Server actions are automatically serialized by SolidStart
 - Client only sees `HarnessResultScoped` (serializable data)
 - Full session state is kept server-side
-- OTel tracing is built into all patterns
 
 ---
 
@@ -521,7 +442,7 @@ import { getAgentList, processMessageWithAgent } from '~/lib/harness-client'
 
 const AgentSelector = () => {
   const [agents] = createResource(getAgentList)
-  const [selectedAgent, setSelectedAgent] = createSignal('default')
+  const [selectedAgent, setSelectedAgent] = createSignal('search')
 
   const handleSend = async (message: string) => {
     const result = await processMessageWithAgent(

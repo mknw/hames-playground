@@ -10,11 +10,7 @@
 'use server'
 
 import type { ConfiguredPattern } from '../harness-patterns'
-import {
-  usesCodeMode,
-  harnessHasRedisRetriever,
-  harnessUsesSyncWorkspace,
-} from '../harness-patterns'
+import { harnessHasRedisRetriever, harnessUsesSyncWorkspace } from '../harness-patterns'
 import type { SessionData } from './session.server'
 import type { AgentAccent } from '../agent-palette'
 
@@ -40,9 +36,8 @@ export interface AgentConfig {
   /** Server namespaces this agent uses */
   servers: string[]
   /** Factory function that creates the pattern chain. Receives the
-   *  sessionId so per-conversation context (e.g. code-mode's user-curated
-   *  tool allowlist) can be loaded inside the pattern closures. Most
-   *  agents accept and ignore the parameter. */
+   *  sessionId so per-conversation context can be loaded inside the pattern
+   *  closures. Most agents accept and ignore the parameter. */
   createPatterns: (sessionId: string) => Promise<ConfiguredPattern<SessionData>[]>
 }
 
@@ -60,10 +55,32 @@ export function registerAgent(config: AgentConfig): void {
 }
 
 /**
- * Get an agent by ID.
+ * Ids that agents used to be registered under, mapped to their current id.
+ *
+ * `conversations.agent_id` stores whatever id the turn ran under, so a rename
+ * strands every row written before it: `getOrBuildPatterns` would throw
+ * `Unknown agent: default` and the thread would simply fail to open. Rather
+ * than a SQL migration, the id is mapped forward on read — `getAgent` for
+ * display lookups off raw rows, and `loadSession` for the resume path, which
+ * also means the row rewrites itself to the current id on its next save.
+ *
+ * Only ever add here; an entry is cheap and removing one re-strands old rows.
+ */
+const RENAMED_AGENT_IDS: Record<string, string> = {
+  // PR #234 — 'default' named its position in the list, not what it does.
+  default: 'search',
+}
+
+/** Current id for a possibly-legacy agent id. Unknown ids pass through. */
+export function canonicalAgentId(id: string): string {
+  return RENAMED_AGENT_IDS[id] ?? id
+}
+
+/**
+ * Get an agent by ID. Accepts an id the agent was previously registered under.
  */
 export function getAgent(id: string): AgentConfig | undefined {
-  return agentRegistry.get(id)
+  return agentRegistry.get(id) ?? agentRegistry.get(canonicalAgentId(id))
 }
 
 /**
@@ -101,7 +118,7 @@ export function getAgentMetadata(): Array<{
 /**
  * Report a capability probe that could not build the agent's patterns.
  *
- * All three probes answer a boolean and every one of them turns a
+ * Both probes answer a boolean and each of them turns a
  * `createPatterns` failure — a gateway outage, a bad BAML client, a throw in an
  * agent factory — into a plain `false`/fallback. The degraded answer is correct
  * (nothing better is knowable) and is deliberately NOT cached, but it used to be
@@ -115,42 +132,6 @@ function warnProbeFailed(probe: string, agentId: string, err: unknown, consequen
       `(${err instanceof Error ? err.message : String(err)}) — ${consequence}. ` +
       'Not cached; the next call retries.',
   )
-}
-
-/** Memoized by agentId — a harness's pattern *structure* is
- *  session-independent (sessionId only parameterizes the closures), so the
- *  answer is stable for the process lifetime. Cleared implicitly on restart. */
-const codeModeCapabilityCache = new Map<string, boolean>()
-
-/**
- * Whether an agent composes a **code-mode pattern** anywhere in its (possibly
- * nested) pattern graph — i.e. whether the per-conversation
- * `codeModeAllowedTools` allowlist has any runtime consumer for this agent.
- * The Tools panel uses this to stay active vs. grey out (config.server.ts).
- *
- * Detection is structural (see `usesCodeMode` / `isCodeModeLoopConfig`), so a
- * future multi-route agent with a single code-mode route is covered without a
- * per-agent flag. Builds the patterns once via `createPatterns` and memoizes
- * the result. On a `createPatterns` failure (e.g. transient gateway outage
- * during pattern construction) we fall back to `id === 'code-mode'` and do NOT
- * cache, so the next call re-attempts a real detection.
- */
-export async function agentUsesCodeMode(agentId: string, sessionId: string): Promise<boolean> {
-  const cached = codeModeCapabilityCache.get(agentId)
-  if (cached !== undefined) return cached
-
-  const agent = getAgent(agentId)
-  if (!agent) return false
-
-  try {
-    const patterns = await agent.createPatterns(sessionId)
-    const result = usesCodeMode(patterns)
-    codeModeCapabilityCache.set(agentId, result)
-    return result
-  } catch (err) {
-    warnProbeFailed('agentUsesCodeMode', agentId, err, `falling back to id === 'code-mode'`)
-    return agentId === 'code-mode'
-  }
 }
 
 /** Memoized by agentId (harness structure is session-independent). */
@@ -191,9 +172,9 @@ export async function agentUsesRedisRetriever(
   }
 }
 
-/** Memoized by agentId — same rationale as `codeModeCapabilityCache`: the
- *  `withSandbox({ syncWorkspace })` flag is part of the static pattern shape,
- *  independent of sessionId. */
+/** Memoized by agentId — same rationale as `redisRetrieverCapabilityCache`:
+ *  the `withSandbox({ syncWorkspace })` flag is part of the static pattern
+ *  shape, independent of sessionId. */
 const syncWorkspaceCapabilityCache = new Map<string, boolean>()
 
 /**
@@ -204,7 +185,7 @@ const syncWorkspaceCapabilityCache = new Map<string, boolean>()
  * Shell opened before the agent's first turn still sees prior files (#97 Gap 3).
  *
  * Structural detection (`harnessUsesSyncWorkspace`) + memoized by agentId,
- * mirroring `agentUsesCodeMode`. On a `createPatterns` failure we return false
+ * mirroring `agentUsesRedisRetriever`. On a `createPatterns` failure we return false
  * and do NOT cache, so the next call re-attempts a real detection.
  */
 export async function agentUsesSyncWorkspace(agentId: string, sessionId: string): Promise<boolean> {
@@ -235,20 +216,19 @@ export async function agentUsesSyncWorkspace(agentId: string, sessionId: string)
 // ============================================================================
 
 // Import and register all example agents
-import { defaultAgent } from './examples/default.server'
-import { generalAgent } from './examples/general.server'
-import { codeModeAgent } from './examples/code-mode.server'
-import { multiSourceResearchAgent } from './examples/multi-source-research.server'
-import { sandboxSessionAgent } from './examples/sandbox-session.server'
-import { flavouredSandboxAgent } from './examples/flavoured-sandbox.server'
-import { retrieverAgent } from './examples/retriever-agent.server'
-import { microsoft365Agent } from './examples/microsoft-365.server'
+// `agents/multi-source-research.server.ts` is deliberately NOT imported here —
+// it is unregistered and NOT LIVE TESTED (owner decision 2026-08-23, PR #234).
+// See that file's header before re-adding it.
+import { searchAgent } from './agents/search.server'
+import { generalAgent } from './agents/general.server'
+import { sandboxSessionAgent } from './agents/sandbox-session.server'
+import { flavouredSandboxAgent } from './agents/flavoured-sandbox.server'
+import { retrieverAgent } from './agents/retriever-agent.server'
+import { microsoft365Agent } from './agents/microsoft-365.server'
 
 // Register all agents
-registerAgent(defaultAgent)
+registerAgent(searchAgent)
 registerAgent(generalAgent)
-registerAgent(codeModeAgent)
-registerAgent(multiSourceResearchAgent)
 registerAgent(sandboxSessionAgent)
 registerAgent(flavouredSandboxAgent)
 registerAgent(retrieverAgent)

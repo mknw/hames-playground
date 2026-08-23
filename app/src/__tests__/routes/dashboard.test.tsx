@@ -52,7 +52,7 @@ function unmetered(patternId: string): ContextEvent {
 }
 
 function conversation(id: string, events: ContextEvent[]): ConversationEvents {
-  return { id, title: `Thread ${id}`, agentId: 'default', updatedAt: 1_700_000_000_000, events }
+  return { id, title: `Thread ${id}`, agentId: 'search', updatedAt: 1_700_000_000_000, events }
 }
 
 describe('Dashboard route', () => {

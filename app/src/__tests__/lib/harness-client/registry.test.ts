@@ -1,11 +1,11 @@
 /**
  * Agent registry (`lib/harness-client/registry.server.ts`) — registration,
- * client-safe metadata, and the three structural capability probes
- * (code-mode / redis-retriever / durable sandbox workspace).
+ * client-safe metadata, and the two structural capability probes
+ * (redis-retriever / durable sandbox workspace).
  *
  * The structural detectors from harness-patterns are mocked so the probes can
- * be driven independently of any real pattern graph; the example agents that
- * the module registers on import are exercised through the public listing.
+ * be driven independently of any real pattern graph; the agents that the
+ * module registers on import are exercised through the public listing.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -16,17 +16,17 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServer: vi.fn(),
 }))
 
-const usesCodeMode = vi.fn(() => false)
 const harnessHasRedisRetriever = vi.fn(() => false)
 const harnessUsesSyncWorkspace = vi.fn(() => false)
 vi.mock('../../../lib/harness-patterns', () => ({
-  usesCodeMode,
   harnessHasRedisRetriever,
   harnessUsesSyncWorkspace,
 }))
 
-// The module registers the eight example agents on import; each example pulls
-// in the whole pattern/tool graph, so stub them down to bare configs.
+// The module registers the six agents on import; each one pulls in the whole
+// pattern/tool graph, so stub them down to bare configs.
+// `multi-source-research` is NOT among them — it is unregistered and NOT LIVE
+// TESTED (PR #234) — so it is neither stubbed nor expected below.
 function stubAgent(id: string): AgentConfig {
   return {
     id,
@@ -38,28 +38,22 @@ function stubAgent(id: string): AgentConfig {
     createPatterns: async () => [],
   }
 }
-vi.mock('../../../lib/harness-client/examples/default.server', () => ({
-  defaultAgent: stubAgent('default'),
+vi.mock('../../../lib/harness-client/agents/search.server', () => ({
+  searchAgent: stubAgent('search'),
 }))
-vi.mock('../../../lib/harness-client/examples/general.server', () => ({
+vi.mock('../../../lib/harness-client/agents/general.server', () => ({
   generalAgent: stubAgent('general'),
 }))
-vi.mock('../../../lib/harness-client/examples/code-mode.server', () => ({
-  codeModeAgent: stubAgent('code-mode'),
-}))
-vi.mock('../../../lib/harness-client/examples/multi-source-research.server', () => ({
-  multiSourceResearchAgent: stubAgent('multi-source-research'),
-}))
-vi.mock('../../../lib/harness-client/examples/sandbox-session.server', () => ({
+vi.mock('../../../lib/harness-client/agents/sandbox-session.server', () => ({
   sandboxSessionAgent: stubAgent('sandbox-session'),
 }))
-vi.mock('../../../lib/harness-client/examples/flavoured-sandbox.server', () => ({
+vi.mock('../../../lib/harness-client/agents/flavoured-sandbox.server', () => ({
   flavouredSandboxAgent: stubAgent('flavoured-sandbox'),
 }))
-vi.mock('../../../lib/harness-client/examples/retriever-agent.server', () => ({
+vi.mock('../../../lib/harness-client/agents/retriever-agent.server', () => ({
   retrieverAgent: stubAgent('retriever'),
 }))
-vi.mock('../../../lib/harness-client/examples/microsoft-365.server', () => ({
+vi.mock('../../../lib/harness-client/agents/microsoft-365.server', () => ({
   microsoft365Agent: stubAgent('microsoft-365'),
 }))
 
@@ -68,7 +62,7 @@ const {
   getAgent,
   getAllAgents,
   getAgentMetadata,
-  agentUsesCodeMode,
+  canonicalAgentId,
   agentUsesRedisRetriever,
   agentUsesSyncWorkspace,
 } = await import('../../../lib/harness-client/registry.server')
@@ -95,19 +89,16 @@ function freshAgent(overrides: Partial<{ createPatterns: PatternFactory }> = {})
 }
 
 beforeEach(() => {
-  usesCodeMode.mockReturnValue(false)
   harnessHasRedisRetriever.mockReturnValue(false)
   harnessUsesSyncWorkspace.mockReturnValue(false)
 })
 
 describe('registration + lookup', () => {
-  it('registers the example agents on import', () => {
+  it('registers the bundled agents on import', () => {
     expect(getAllAgents().map((a) => a.id)).toEqual(
       expect.arrayContaining([
-        'default',
+        'search',
         'general',
-        'code-mode',
-        'multi-source-research',
         'sandbox-session',
         'flavoured-sandbox',
         'retriever',
@@ -116,14 +107,40 @@ describe('registration + lookup', () => {
     )
   })
 
+  // PR #234: the agent is kept on disk but NOT LIVE TESTED, so it must not
+  // reach the dropdown. A stray `registerAgent` would otherwise ship it.
+  it('does not register multi-source-research', () => {
+    expect(getAllAgents().map((a) => a.id)).not.toContain('multi-source-research')
+    expect(getAgent('multi-source-research')).toBeUndefined()
+  })
+
   it('returns undefined for an unknown id rather than throwing', () => {
     expect(getAgent('no-such-agent')).toBeUndefined()
   })
 
+  // PR #234 renamed 'default' → 'search'. `conversations.agent_id` still holds
+  // 'default' for every row written before it, and getOrBuildPatterns throws on
+  // an unknown id — so without this mapping those threads stop opening.
+  describe('renamed agent ids stay resolvable', () => {
+    it("maps the legacy 'default' id to the search agent", () => {
+      expect(canonicalAgentId('default')).toBe('search')
+      expect(getAgent('default')?.id).toBe('search')
+    })
+
+    it('passes an id it does not know through unchanged', () => {
+      expect(canonicalAgentId('retriever')).toBe('retriever')
+      expect(canonicalAgentId('no-such-agent')).toBe('no-such-agent')
+    })
+
+    it('does not resurrect the old id in the listing', () => {
+      expect(getAllAgents().map((a) => a.id)).not.toContain('default')
+    })
+  })
+
   it('replaces an agent registered twice under the same id', () => {
     const before = getAllAgents().length
-    registerAgent({ ...stubAgent('default'), name: 'Renamed' })
-    expect(getAgent('default')?.name).toBe('Renamed')
+    registerAgent({ ...stubAgent('search'), name: 'Renamed' })
+    expect(getAgent('search')?.name).toBe('Renamed')
     expect(getAllAgents()).toHaveLength(before)
   })
 
@@ -143,7 +160,6 @@ describe('registration + lookup', () => {
 })
 
 describe.each([
-  ['agentUsesCodeMode', agentUsesCodeMode, usesCodeMode],
   ['agentUsesRedisRetriever', agentUsesRedisRetriever, harnessHasRedisRetriever],
   ['agentUsesSyncWorkspace', agentUsesSyncWorkspace, harnessUsesSyncWorkspace],
 ] as const)('%s — structural capability probe', (_name, probe, detector) => {
@@ -188,28 +204,12 @@ describe.each([
   })
 })
 
-describe('agentUsesCodeMode — failure fallback', () => {
-  it('assumes code-mode only for the agent literally named code-mode', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const boom = async () => {
-      throw new Error('gateway down')
-    }
-    registerAgent({ ...stubAgent('code-mode'), createPatterns: boom })
-    const { id } = freshAgent({ createPatterns: boom })
-
-    await expect(agentUsesCodeMode('code-mode', 's')).resolves.toBe(true)
-    await expect(agentUsesCodeMode(id, 's')).resolves.toBe(false)
-    warn.mockRestore()
-  })
-})
-
-// sf-M7. All three probes turn a `createPatterns` failure into a plain
+// sf-M7. Both probes turn a `createPatterns` failure into a plain
 // false/fallback. The degraded answer is correct — nothing better is knowable —
 // but it used to be indistinguishable from a real `false`, so the consequence
 // (no auto-ingest, an unhydrated Shell) never reached anyone.
 describe('capability probes report a degraded answer (sf-M7)', () => {
   it.each([
-    ['agentUsesCodeMode', agentUsesCodeMode],
     ['agentUsesRedisRetriever', agentUsesRedisRetriever],
     ['agentUsesSyncWorkspace', agentUsesSyncWorkspace],
   ])('%s warns, names the probe, and says the answer is not cached', async (name, probe) => {

@@ -33,7 +33,7 @@ import { actorCritic } from '../../harness-patterns/patterns/actorCritic.server'
 import { createScope } from '../../harness-patterns/context.server'
 import { createEventView } from '../../harness-patterns/patterns'
 import type {
-  CodeModeControllerFnWithLLMData,
+  ActorControllerFnWithLLMData,
   CriticFnWithLLMData,
 } from '../../harness-patterns/baml-adapters.server'
 import { printEventSummary, checkRootfsImage } from './_shared'
@@ -44,13 +44,13 @@ const SCRIPT = `text = "${SENTENCE}"\nprint(len(text.split()))\n`
 // Fresh actor/critic factory — one set of closures per invocation so counts
 // don't bleed between runs.
 function makeScriptedActorCritic(): {
-  actor: CodeModeControllerFnWithLLMData
+  actor: ActorControllerFnWithLLMData
   critic: CriticFnWithLLMData
   counts: () => { actorCalls: number; criticCalls: number }
 } {
   let actorCalls = 0
   let criticCalls = 0
-  const actor: CodeModeControllerFnWithLLMData = async () => {
+  const actor: ActorControllerFnWithLLMData = async () => {
     actorCalls += 1
     if (actorCalls === 1) {
       return {
@@ -79,9 +79,7 @@ function makeScriptedActorCritic(): {
       result: {
         is_sufficient: criticCalls >= 2,
         explanation:
-          criticCalls === 1
-            ? 'Script written but not yet executed.'
-            : 'Got the word count.',
+          criticCalls === 1 ? 'Script written but not yet executed.' : 'Got the word count.',
         suggested_approach: criticCalls === 1 ? 'Run it with python3.' : undefined,
       },
     }

@@ -378,7 +378,7 @@ thread.
 
 #### 5. AgentSelector.tsx
 **Props:** `selectedAgent: string`, `onAgentChange: (id: string) => void`, `disabled: boolean`
-- Dropdown listing registered agents (default, code-mode, multi-source-research, sandbox-session, flavoured-sandbox, retriever, microsoft-365)
+- Dropdown listing registered agents (search, general, sandbox-session, flavoured-sandbox, retriever, microsoft-365)
 - Agent icons are **iconify classes** on `AgentConfig.icon` (material-symbols set), rendered as `<span class={icon}>` with inline sizing — see the icon-scanning gotcha in §6a
 - Clearing the session on agent switch
 
@@ -392,7 +392,6 @@ Tabbed right panel. **Context manager is the default tab.** Uses `lazyMount` + `
 | All (Turn Explorer) | Turn-based graph explorer — select specific turns, color-coded |
 | **Context manager** *(default)* | Event timeline + LLM call detail |
 | Data | Data Stash — two collapsible groups: **Your Uploads** (drag-drop/picker + document chips) and **Agent Findings** (tool-result icons by turn), each with hide/archive/delete. See [DATA_STASH.md](DATA_STASH.md) for the upload→chunk→embed→search pipeline. |
-| Tools | MCP tool configuration via `ToolsPanel` |
 
 **Conversation Sync toggle:** The Neo4j and Memory graph tabs have a ⏸/▶ "Sync" button (cyan when live, amber when paused). Implemented in `GraphTabContent` via a `syncEnabled` signal. When paused, the current element list is snapshotted into `frozenElements` and passed to `GraphVisualization` instead of live `props.elements`. Resuming restores the live feed.
 
@@ -553,7 +552,6 @@ index.tsx (top-level state)
             ├─> ObservabilityPanel (events, context, onClear)
             │       ├─ buildTimelineItems() — merges tool pairs by callId
             │       └─ Save button → showSaveFilePicker() / <a download>
-            └─> ToolsPanel
 ```
 
 ### Message Type
@@ -634,7 +632,7 @@ The first 60 chars of the first `user_message` becomes the conversation title. O
 
 ### LLM-generated titles (§6b)
 
-Once the first turn completes, a minimal one-pattern harness agent in `lib/harness-client/examples/title-generator.server.ts` calls a single BAML function (`GenerateConversationTitle`, using the `DescribeFallback` chain) and writes the result via `updateConversationTitle()`. The result is pushed to the client over the existing `/api/events` SSE stream as an `event: title_updated` frame before the stream closes (capped at 3s so a slow LLM never wedges the response). The client patches the threads cache in-place — no refetch. See §6b for the full architecture.
+Once the first turn completes, a minimal one-pattern harness agent in `lib/harness-client/agents/title-generator.server.ts` calls a single BAML function (`GenerateConversationTitle`, using the `DescribeFallback` chain) and writes the result via `updateConversationTitle()`. The result is pushed to the client over the existing `/api/events` SSE stream as an `event: title_updated` frame before the stream closes (capped at 3s so a slow LLM never wedges the response). The client patches the threads cache in-place — no refetch. See §6b for the full architecture.
 
 ### Auth
 
@@ -719,11 +717,10 @@ mid-run cancellation is #105 PR 3, unbuilt.
    detaches for the query duration (blank flash, composer focus + scroll
    lost). Rule: resources that refetch during interaction are read via
    **`resource.latest`** (raw value once resolved, no Suspense; first load
-   still suspends). Applied to `threads`; `ToolsPanel` learned it
-   independently (local Suspense + optimistic updates).
+   still suspends). Applied to `threads`.
 3. **Icon classes in `.ts` files:** UnoCSS's default pipeline never scans
    plain `.ts` — so `AgentConfig.icon` literals in
-   `harness-client/examples/*.server.ts` need BOTH (verified against
+   `harness-client/agents/*.server.ts` need BOTH (verified against
    `@unocss/vite` source): the `content.filesystem` glob in `uno.config.ts`
    (the client build reads files that are never in its module graph) AND a
    literal `@unocss-include` comment in each file — filesystem-globbed files
@@ -742,9 +739,7 @@ mid-run cancellation is #105 PR 3, unbuilt.
    item that starved the sidebar's `flex:1` thread list to zero height
    (found via computed styles in a live browser; the built CSS was fine).
    Rule: give `Dialog.Root` `lazyMount unmountOnExit`, and position
-   Backdrop/Positioner with inline `style`. `EnvVarManager.tsx` still
-   carries the original idiom and mounts a hidden-but-rendered ghost into
-   ToolsPanel while closed — latent, flagged for follow-up.
+   Backdrop/Positioner with inline `style`.
 ---
 
 ## 6b. LLM-Generated Conversation Titles
@@ -753,10 +748,10 @@ Once the first user turn completes, a minimal harness agent generates a 3–5 wo
 
 ### Why a harness agent for one BAML call?
 
-The `harness-patterns/` library is the testbed for an eventual standalone npm package. Its current example catalog (`harness-client/examples/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, `guardrail`, and a full ontology-builder pipeline — but had no *minimum-rung* example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
+The `harness-patterns/` library is the testbed for an eventual standalone npm package. Its current example catalog (`harness-client/agents/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, `guardrail`, and a full ontology-builder pipeline — but had no *minimum-rung* example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
 
 ```ts
-// app/src/lib/harness-client/examples/title-generator.server.ts
+// app/src/lib/harness-client/agents/title-generator.server.ts
 export const titleAgent = harness<TitleAgentData>(
   compactExecution<TitleAgentData>({
     patternId: 'title-gen',
@@ -905,7 +900,7 @@ app/
 │   ├── clients.baml              # LLM client config + fallback chains
 │   ├── local-client.baml         # Local GLM-4.7 client (manual wiring)
 │   ├── router.baml               # Router (intent classification)
-│   ├── simpleLoop.baml           # Generic LoopController (used by all simpleLoop routes incl. code_mode)
+│   ├── simpleLoop.baml           # Generic LoopController (used by every simpleLoop route)
 │   ├── actorCritic.baml          # ActorController + Critic (used by guardrailed/ontology agents)
 │   ├── compactExecution.baml          # Final response synthesis
 │   ├── describe.baml             # Lightweight tool-result summarization
@@ -934,7 +929,6 @@ app/
 │   │       ├── SettingsPanel.tsx      # Harness settings FloatingPanel (sliders, number inputs)
 │   │       ├── ObservabilityPanel.tsx # Event timeline + tool-pair merging + Save button
 │   │       ├── EventDetailOverlay.tsx # Event detail modal
-│   │       ├── ToolsPanel.tsx         # MCP tool configuration UI
 │   │       ├── ToolCallDisplay.tsx    # Tool call status display (approval gate)
 │   │       ├── AgentSelector.tsx      # Agent selection dropdown
 │   │       └── EnvVarManager.tsx      # Environment variable config
@@ -983,7 +977,7 @@ app/
 │           ├── graph-extractor.ts # ContextEvent → GraphElement[]
 │           ├── neo4j-enricher.server.ts # onToolResult recipe (1-hop neighborhood + touched tags)
 │           ├── types.ts           # GraphElement, HarnessData, etc.
-│           └── examples/          # 6 pre-built agent configurations
+│           └── agents/            # 6 pre-built agent configurations
 ```
 
 ---

@@ -11,7 +11,6 @@ import type { OpenReferenceTarget } from '~/lib/harness-client'
 import { GraphVisualization } from './GraphVisualization'
 import { ObservabilityPanel } from './ObservabilityPanel'
 import { DataStashPanel, type StashAction } from './DataStashPanel'
-import { ToolsPanel } from './ToolsPanel'
 import { TerminalPanel } from './TerminalPanel'
 import { AllGraphTabWrapper } from './AllGraphTab'
 import type { ElementDefinition, StylesheetJsonBlock } from 'cytoscape'
@@ -61,8 +60,8 @@ export interface SupportPanelProps {
   onClearEvents?: () => void
   /** Session ID for stash API calls */
   sessionId?: string
-  /** The conversation's currently-selected agent — forwarded to the Tools
-   *  panel so its code-mode gate tracks the live selection. */
+  /** The conversation's currently-selected agent — forwarded to the Data
+   *  Stash and Terminal panels. */
   agentId?: string
   /** Callback for data stash actions (hide/unhide/archive/unarchive) */
   onStashAction?: (eventId: string, action: StashAction) => Promise<void>
@@ -197,22 +196,6 @@ export const SupportPanel = (props: SupportPanelProps) => {
           </Tabs.Trigger>
 
           <Tabs.Trigger
-            value="tools"
-            p="x-3 y-2"
-            text="sm dark-text-primary"
-            cursor="pointer"
-            border="b-2 transparent"
-            transition="all"
-            data-state={selectedTab() === 'tools' ? 'active' : 'inactive'}
-            style={{
-              'border-bottom-color': selectedTab() === 'tools' ? '#ff6600' : 'transparent',
-              color: selectedTab() === 'tools' ? '#ff6600' : '#a1a1aa',
-            }}
-          >
-            Tools
-          </Tabs.Trigger>
-
-          <Tabs.Trigger
             value="terminal"
             p="x-3 y-2"
             text="sm dark-text-primary"
@@ -319,20 +302,6 @@ export const SupportPanel = (props: SupportPanelProps) => {
                 pendingReference={props.pendingReference}
                 onUploaded={props.onUploaded}
               />
-            </Suspense>
-          </Tabs.Content>
-
-          {/* Tools Tab. Same local-Suspense guard (belt-and-braces with the
-              panel's own internal boundary) against the tab-mount white flash. */}
-          <Tabs.Content value="tools" h="full">
-            <Suspense
-              fallback={
-                <div p="4" text="sm dark-text-tertiary">
-                  Loading tools…
-                </div>
-              }
-            >
-              <ToolsPanel sessionId={props.sessionId} agentId={props.agentId} />
             </Suspense>
           </Tabs.Content>
 

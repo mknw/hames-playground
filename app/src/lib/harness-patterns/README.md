@@ -6,7 +6,7 @@ Functional, composable framework for agentic tool execution.
 > library. The kg-agent repo serves as both consumer and proving ground —
 > the library is intended to be extracted as a standalone npm package once
 > the core API has been validated across enough use cases (the agents under
-> `harness-client/examples/`).
+> `harness-client/agents/`).
 >
 > Library boundary rules — keep them strict so extraction stays cheap:
 >
@@ -54,7 +54,6 @@ Functional, composable framework for agentic tool execution.
   - [Per-Pattern: Events Read → BAML Inputs → BAML Return](#per-pattern-events-read--baml-inputs--baml-return)
   - [Conversion Reference](#conversion-reference)
 - [Full Example](#full-example)
-- [OpenTelemetry](#opentelemetry)
 - [File Structure](#file-structure)
 - [Design Principles](#design-principles)
 
@@ -77,11 +76,11 @@ simpleLoop(controller, tools.neo4j ?? [], { patternId: 'neo4j-query', schema })
 
 const actor = createActorControllerAdapter(tools.all)
 const critic = createCriticAdapter()
-actorCritic(actor, critic, tools.all, { patternId: 'code-mode' })
+actorCritic(actor, critic, tools.all, { patternId: 'actor-loop' })
 
 // Alternative: pass BAML functions directly (bind to preserve 'this' context)
 simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema })
-actorCritic(b.CodeModeController.bind(b), b.CodeModeCritic.bind(b), tools.all)
+actorCritic(b.ActorController.bind(b), b.Critic.bind(b), tools.all)
 
 // Router is two composable patterns: classify → dispatch
 router({ neo4j: 'Description', web: 'Description' }),
@@ -344,7 +343,7 @@ block into the controller prompt. Best for routes with a narrow tool surface whe
 LLM benefits from seeing the canonical query shape (e.g., parameterized Cypher with
 `MERGE` semantics, bulk `UNWIND` patterns, idiomatic `toLower()` substring search).
 Keep the list short (3-5) — the prompt grows with every shot and is sent on every turn.
-See `app/src/lib/harness-client/examples/neo4j-fewshots.server.ts` for a worked example
+See `app/src/lib/harness-client/agents/neo4j-fewshots.server.ts` for a worked example
 verified against the live Neo4j MCP.
 
 **Hooks: `onToolResult`** (closes #7). Called between `callTool()` and the
@@ -461,11 +460,12 @@ cached prompt head (system block + tier 1) at no per-turn cost.
 
 ### `actorCritic(actor, critic, tools, config?)`
 
-Generate-evaluate loop with retry. For code mode workflows.
+Generate-evaluate loop with retry: the actor proposes a tool call, the loop
+executes it, and the critic decides whether to stop or feed the result back.
 
 ```typescript
-actorCritic(b.CodeModeController.bind(b), b.CodeModeCritic.bind(b), tools.all, {
-  patternId: 'code-mode',
+actorCritic(b.ActorController.bind(b), b.Critic.bind(b), tools.all, {
+  patternId: 'actor-loop',
   maxRetries: 3,
 })
 
@@ -475,7 +475,7 @@ interface ActorCriticConfig extends PatternConfig {
   criticCadence?: number // Default: 1 (critic every turn). See below.
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Same semantics as simpleLoop's (see above);
   // a batch records as ONE Attempt whose result is the combined map
-  // the critic evaluates. Sandbox agents use 'sequential', code-mode 'off'.
+  // the critic evaluates. Sandbox agents use 'sequential'.
 }
 ```
 
@@ -746,7 +746,7 @@ pattern's `config` (commitStrategy, trackHistory, viewConfig, `estimateTurns`)
 governs everything unchanged and the inner pattern runs in the SAME scope — no
 extra lifecycle events, no change to `view.fromLastPattern()`. On a clean run
 there is no observable difference at all. `children` is exposed, so static
-introspection (`harnessHasRedisRetriever`, `usesCodeMode`) still sees through it,
+introspection (`harnessHasRedisRetriever`, `harnessUsesSyncWorkspace`) still sees through it,
 and the declared trust boundary is readable off
 `ConfiguredPattern.injectionGuard` (`{ namespaces, tools }`) — a sibling field,
 NOT part of `config`, so config identity is preserved. That field is what lets a
@@ -776,12 +776,12 @@ There is deliberately no way to ask for narrowing.
 **Wired agents** (their untrusted namespaces are declared at each agent
 definition, deliberately not in a shared default):
 
-| Agent                   | Untrusted namespaces        | Not guarded             |
-| ----------------------- | --------------------------- | ----------------------- |
-| `default`               | `web` (that route only)     | `neo4j` — our own graph |
-| `microsoft-365`         | `graph`                     | —                       |
-| `multi-source-research` | `web`, `github`, `context7` | —                       |
-| `retriever`             | `web`, `retriever`          | `neo4j`                 |
+| Agent                                    | Untrusted namespaces    | Not guarded             |
+| ---------------------------------------- | ----------------------- | ----------------------- |
+| `search`                                 | `web` (that route only) | `neo4j` — our own graph |
+| `microsoft-365`                          | `graph`                 | —                       |
+| `retriever`                              | `web`, `retriever`      | `neo4j`                 |
+| `multi-source-research` _(unregistered)_ | `web`, `context7`       | —                       |
 
 > Compare [`guardrail()`](#guardrailpattern-config): that pattern's output rails
 > run only AFTER the inner pattern completes, and a `RailResult` can block, warn
@@ -850,11 +850,10 @@ Each entry exit emits a `reference_attached` event with `{ candidates, selected,
 Either path records an `expansions[]` entry on the `LoopTurn`; the compact ref entry then renders `(expanded in turn N)` so the controller doesn't redundantly re-expand.
 
 ```typescript
-// Default agent migration (excerpt from examples/default.server.ts)
+// Search agent migration (excerpt from agents/search.server.ts)
 const routesPattern = routes<SessionData>({
   neo4j: withReferences(neo4jPattern, { scope: 'global' }),
   web_search: withReferences(webPattern, { scope: 'global' }),
-  code_mode: withReferences(codePattern, { scope: 'global' }),
 })
 ```
 
@@ -1012,8 +1011,8 @@ soft hint (steps are not tool calls) — it does not clamp `maxTurns`.
 > one-of-N intent classification; planner is strategic decomposition before
 > execution. `chain(router(...), routes({ x: chain(planner(...), simpleLoop(...)) }))`
 > is valid. The `general` agent
-> (`harness-client/examples/general.server.ts`) demonstrates the flat
-> planner → simpleLoop → compactExecution chain alongside the router-based `default`.
+> (`harness-client/agents/general.server.ts`) demonstrates the flat
+> planner → simpleLoop → compactExecution chain alongside the router-based `search`.
 
 ### `retriever(config)`
 
@@ -1645,8 +1644,6 @@ async function createPatterns() {
   // Use adapter factories (preferred over b.bind())
   const neo4jController = createNeo4jController(tools.neo4j ?? [])
   const webController = createWebSearchController(tools.web ?? [])
-  const actor = createActorControllerAdapter(tools.all)
-  const critic = createCriticAdapter()
 
   const neo4jPattern = simpleLoop(neo4jController, tools.neo4j ?? [], {
     patternId: 'neo4j-query',
@@ -1657,20 +1654,14 @@ async function createPatterns() {
     patternId: 'web-search',
   })
 
-  const codePattern = actorCritic(actor, critic, tools.all, {
-    patternId: 'code-mode',
-  })
-
   const routerPattern = router({
     neo4j: 'Database queries and graph operations',
     web_search: 'Web lookups and information retrieval',
-    code_mode: 'Multi-tool script composition',
   })
 
   const routesPattern = routes({
     neo4j: neo4jPattern,
     web_search: webPattern,
-    code_mode: codePattern,
   })
 
   const responseSynth = compactExecution({
@@ -1686,30 +1677,6 @@ const patterns = await createPatterns()
 const agent = harness(...patterns)
 const result = await agent('Show me all Person nodes', 'session-123')
 ```
-
-## OpenTelemetry
-
-All patterns include built-in OTel tracing with `CompactSpanExporter`:
-
-```
-[router] → neo4j (intent: "Query graph data")
-[simpleLoop] neo4j-query ✓ (1234ms)
-  [tool] read_neo4j_cypher ✓ (456ms)
-[harness] Session cl-3 completed in 1500ms
-```
-
-Span names:
-
-- `harness.run` - Top-level span
-- `harness.resume` - Resume from paused state
-- `harness.continue` - Continue session with new input
-- `router` - Intent classification
-- `pattern.simpleLoop` - Decide-execute loop
-- `pattern.actorCritic` - Generate-evaluate loop
-- `pattern.chain` - Sequential composition
-- `pattern.compactExecution` - Response synthesis
-- `controller` / `actor` / `critic` - BAML function calls
-- `tool.call` - MCP tool execution
 
 ## File Structure
 
@@ -1752,6 +1719,5 @@ harness-patterns/
 1. **BAML functions are first-class** - Pass them directly to patterns (use `.bind()`)
 2. **Patterns extract params** - Patterns pull data from context and call BAML
 3. **Config injects metadata** - Optional config for things like schema injection
-4. **OTel is built-in** - Tracing in patterns, not in adapters
-5. **Server-only enforcement** - `.server.ts` files with runtime guards
-6. **Session persistence** - Full context serializable for multi-turn conversations
+4. **Server-only enforcement** - `.server.ts` files with runtime guards
+5. **Session persistence** - Full context serializable for multi-turn conversations

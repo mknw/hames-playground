@@ -273,7 +273,7 @@ flowchart LR
     DECIDE -->|"no → host tools"| GW["MCP Gateway :8811"]
     GW --> NEO[("Neo4j")]
     GW --> RDS[("Redis · redis-stack<br/>Data Stash")]
-    GW --> WEBX["web · github · memory · …"]
+    GW --> WEBX["web · context7 · memory · …"]
 
     STASH -->|"gateway · default"| GW
     STASH -.->|"STASH_DIRECT_REDIS=1<br/>direct ioredis :6379"| RDS

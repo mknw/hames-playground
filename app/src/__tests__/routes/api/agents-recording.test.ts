@@ -53,7 +53,7 @@ function filePart(content: string, name: string, type: string) {
 }
 
 /** APIEvent shim whose request hands back an already-parsed form. */
-function evt(fields: Record<string, unknown>, id = 'default') {
+function evt(fields: Record<string, unknown>, id = 'search') {
   const form = new Map(Object.entries(fields))
   return {
     params: { id },
@@ -66,7 +66,7 @@ function evt(fields: Record<string, unknown>, id = 'default') {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  getAgent.mockReturnValue({ id: 'default' })
+  getAgent.mockReturnValue({ id: 'search' })
   storeDocument.mockResolvedValue({ id: 'doc-1' })
 })
 
@@ -104,7 +104,7 @@ describe('POST /api/agents/:id — recording provenance', () => {
       'run-fixed',
       'user-1',
       'add a node',
-      'default',
+      'search',
     ])
   })
 

@@ -366,17 +366,6 @@ describe('domain-specific adapters', () => {
     expect(mockLoopController).toHaveBeenCalled()
   })
 
-  it('should create GitHub controller', async () => {
-    const { createGitHubController } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
-
-    const controller = createGitHubController(['search_code', 'Return'])
-    expect(controller).toBeDefined()
-
-    await controller('find code', 'intent', '[]', 0)
-    expect(mockLoopController).toHaveBeenCalled()
-  })
-
   it('should create filesystem controller', async () => {
     const { createFilesystemController } =
       await import('../../../lib/harness-patterns/baml-adapters.server')

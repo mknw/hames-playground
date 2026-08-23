@@ -17,7 +17,6 @@ const mockToolSets = {
   neo4j: ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema', 'Return'],
   web: ['search', 'fetch', 'fetch_content', 'Return'],
   memory: ['create_entities', 'read_graph', 'Return'],
-  github: ['search_code', 'Return'],
   context7: ['resolve-library-id', 'get-library-docs', 'Return'],
   filesystem: ['read_text_file', 'write_file', 'edit_file', 'Return'],
   redis: ['hset', 'expire', 'Return'],
@@ -29,7 +28,6 @@ mockToolSets.all = [
     ...mockToolSets.neo4j,
     ...mockToolSets.web,
     ...mockToolSets.memory,
-    ...mockToolSets.github,
     ...mockToolSets.context7,
     ...mockToolSets.filesystem,
     ...mockToolSets.redis,
@@ -109,7 +107,7 @@ describe('Multi-Source Research judgeEvaluator', () => {
 
   it('should create parallel research with three sources', async () => {
     const { multiSourceResearchAgent } =
-      await import('../../../../lib/harness-client/examples/multi-source-research.server')
+      await import('../../../../lib/harness-client/agents/multi-source-research.server')
     const patterns = await multiSourceResearchAgent.createPatterns('test-session')
 
     const parallelPattern = patterns.find(
@@ -120,7 +118,7 @@ describe('Multi-Source Research judgeEvaluator', () => {
 
   it('should use quality judge for ranking', async () => {
     const { multiSourceResearchAgent } =
-      await import('../../../../lib/harness-client/examples/multi-source-research.server')
+      await import('../../../../lib/harness-client/agents/multi-source-research.server')
     const patterns = await multiSourceResearchAgent.createPatterns('test-session')
 
     const judgePattern = patterns.find(
@@ -131,7 +129,7 @@ describe('Multi-Source Research judgeEvaluator', () => {
 
   it('should have compactExecution for final response', async () => {
     const { multiSourceResearchAgent } =
-      await import('../../../../lib/harness-client/examples/multi-source-research.server')
+      await import('../../../../lib/harness-client/agents/multi-source-research.server')
     const patterns = await multiSourceResearchAgent.createPatterns('test-session')
 
     const synthPattern = patterns.find(

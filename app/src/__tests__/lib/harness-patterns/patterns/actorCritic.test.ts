@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockAction, mockFinalAction, mockCriticResult, mockBAMLClient } from '../../../mocks/baml'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 import type {
-  CodeModeControllerFnWithLLMData,
+  ActorControllerFnWithLLMData,
   CriticFnWithLLMData,
 } from '../../../../lib/harness-patterns/baml-adapters.server'
 
@@ -533,7 +533,7 @@ describe('actorCritic criticCadence', () => {
 
   // Minimal scope/view/context builder shared by the cadence tests.
   async function run(
-    mockActor: CodeModeControllerFnWithLLMData,
+    mockActor: ActorControllerFnWithLLMData,
     mockCritic: CriticFnWithLLMData,
     config: Record<string, unknown>,
   ) {
@@ -715,7 +715,7 @@ describe('actorCritic critic feedback reaches the next attempt', () => {
   }
 
   async function run(
-    actor: CodeModeControllerFnWithLLMData,
+    actor: ActorControllerFnWithLLMData,
     critic: CriticFnWithLLMData,
     config: Record<string, unknown> = {},
   ) {

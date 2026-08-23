@@ -14,7 +14,6 @@
  * The patterns expect:
  * - ControllerFn(user_message, intent, previous_results, n_turn, ...extra)
  * - CriticFn(intent, previous_attempts)
- * - CodeModeControllerFn(user_message, intent, available_tools, previous_attempts)
  */
 
 import { assertServerOnImport } from './assert.server'
@@ -608,7 +607,7 @@ async function getToolDescriptions(refresh = false): Promise<ToolDescription[]> 
 }
 
 /** Drop the cached tool description list. Use after operations that mutate
- *  the gateway's registered tools (e.g. the kg-agent `code-mode` factory)
+ *  the gateway's registered tools
  *  so the next adapter call re-fetches a fresh listing and the LLM sees
  *  newly-registered tools in subsequent attempts/turns. */
 export function invalidateToolDescriptions(): void {
@@ -618,7 +617,7 @@ export function invalidateToolDescriptions(): void {
 /** Filter tool descriptions by names plus an optional regex pattern for
  *  dynamically-discoverable tools. `refresh: true` forces a fresh listTools()
  *  call — needed when the toolset may have changed (e.g. the gateway created
- *  a `code-mode-<name>` tool on a prior turn that should now be visible). */
+ *  a tool on a prior turn that should now be visible). */
 async function filterToolDescriptions(
   toolNames: string[],
   options?: { dynamicPattern?: RegExp; refresh?: boolean },
@@ -999,10 +998,10 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData 
 // Adapters for actorCritic
 // ============================================================================
 
-/** Code mode controller function that returns action + observability data.
+/** Actor controller function that returns action + observability data.
  *  `attemptNumber` / `maxAttempts` are passed by `actorCritic.server.ts` so the
  *  actor's prompt can show "Attempt N of M" and prefer Return as budget runs low. */
-export type CodeModeControllerFnWithLLMData = (
+export type ActorControllerFnWithLLMData = (
   user_message: string,
   intent: string,
   available_tools: string[],
@@ -1017,7 +1016,7 @@ export type CodeModeControllerFnWithLLMData = (
 ) => Promise<ControllerCallResult>
 
 /** Options for `createActorControllerAdapter` when the actor's toolset may
- *  change at runtime (e.g. kg-agent's `code-mode` factory creates new tools
+ *  change at runtime (a backend that registers new tools
  *  that should be visible to subsequent actor calls in the same session). */
 export interface ActorAdapterOptions {
   /** Static tool names always available to the actor. Mutually exclusive
@@ -1025,7 +1024,7 @@ export interface ActorAdapterOptions {
   toolNames?: string[]
   /** Async closure resolved per actor invocation. Use this when the
    *  allowlist is user-curated and may change between turns of the same
-   *  session (e.g. the code-mode agent reads `data.codeModeAllowedTools`
+   *  session (e.g. an agent reading a per-conversation allowlist
    *  from the persisted conversation context). Adds one DB read per call. */
   toolNamesProvider?: () => Promise<string[]>
   /** Regex matched against gateway-listed tool names. Any match is added to
@@ -1037,13 +1036,12 @@ export interface ActorAdapterOptions {
   refreshOnCall?: boolean
   /** Optional domain-specific guidance prepended to the actor's prompt under
    *  the `CONTEXT:` heading. Mirrors `createLoopControllerAdapter(contextPrefix)`.
-   *  Used by the code-mode agent to teach the actor about the factory
+   *  Used to teach the actor about a backend-specific
    *  protocol, batching heuristics, etc. */
   contextPrefix?: string
   /** Like `contextPrefix` but resolved per actor invocation — use when the
-   *  context varies with live state (e.g. code-mode folds the conversation's
-   *  current ENABLED SERVERS catalog into the prompt so the actor knows which
-   *  servers to scope the factory to). Wins over `contextPrefix` when set. */
+   *  context varies with live state (e.g. folding the conversation's current
+   *  tool catalog into the prompt). Wins over `contextPrefix` when set. */
   contextProvider?: () => Promise<string>
   /** Optional FewShot examples rendered into the actor's prompt under
    *  `EXAMPLES:`. Mirrors LoopController's few-shots. Keep small (2–4). */
@@ -1051,7 +1049,7 @@ export interface ActorAdapterOptions {
 }
 
 /**
- * Create a CodeModeControllerFn adapter that uses the generic ActorController.
+ * Create an actor-controller adapter that uses the generic ActorController.
  *
  * Two call shapes:
  *   createActorControllerAdapter(['t1', 't2'])           // static toolset (back-compat)
@@ -1064,7 +1062,7 @@ export interface ActorAdapterOptions {
  */
 export function createActorControllerAdapter(
   toolsOrOptions: string[] | ActorAdapterOptions,
-): CodeModeControllerFnWithLLMData {
+): ActorControllerFnWithLLMData {
   const options: ActorAdapterOptions = Array.isArray(toolsOrOptions)
     ? { toolNames: toolsOrOptions }
     : toolsOrOptions
@@ -1105,16 +1103,16 @@ export function createActorControllerAdapter(
 
     // Convert ScriptExecutionEvent to Attempt format. `toolName` records the
     // actor's actual tool_name per push — so a rejected `mcp-exec` attempt
-    // renders as `Action: mcp-exec(<bad args>)` instead of the misleading
-    // `code-mode(<empty>)` it used to show. Falls back to `'code-mode'` for
-    // legacy callers that don't set `toolName`. `additionalCalls` (multi-call
-    // attempts) replays into the action so the attempt log shows the batch
-    // shape the actor actually emitted (exact-replay invariant).
+    // renders as `Action: mcp-exec(<bad args>)` rather than a placeholder.
+    // `actorCritic` always sets it; the fallback only covers a caller that
+    // constructs the events itself. `additionalCalls` (multi-call attempts)
+    // replays into the action so the attempt log shows the batch shape the
+    // actor actually emitted (exact-replay invariant).
     const attempts: Attempt[] = previous_attempts.map((event, i) => ({
       n: i + 1,
       action: {
         reasoning: '',
-        tool_name: event.toolName ?? 'code-mode',
+        tool_name: event.toolName ?? 'unknown',
         tool_args: event.script,
         ...(event.additionalCalls?.length ? { additional_calls: event.additionalCalls } : {}),
         status: event.error ? 'error' : 'success',
@@ -1296,13 +1294,12 @@ export function createCriticAdapter(): CriticFnWithLLMData {
     const startTime = Date.now()
 
     // Convert ScriptExecutionEvent to Attempt format. See the actor adapter
-    // above for why `toolName` is preferred over the legacy `'code-mode'`
-    // placeholder.
+    // above for why `toolName` carries the actor's real tool name.
     const attempts: Attempt[] = previous_attempts.map((event, i) => ({
       n: i + 1,
       action: {
         reasoning: '',
-        tool_name: event.toolName ?? 'code-mode',
+        tool_name: event.toolName ?? 'unknown',
         tool_args: event.script,
         ...(event.additionalCalls?.length ? { additional_calls: event.additionalCalls } : {}),
         status: event.error ? 'error' : 'success',
@@ -1518,11 +1515,6 @@ export function createContext7Controller(toolNames: string[]): ControllerFnWithL
   return createLoopControllerAdapter(toolNames)
 }
 
-/** GitHub controller */
-export function createGitHubController(toolNames: string[]): ControllerFnWithLLMData {
-  return createLoopControllerAdapter(toolNames)
-}
-
 /** Filesystem controller */
 export function createFilesystemController(toolNames: string[]): ControllerFnWithLLMData {
   return createLoopControllerAdapter(toolNames)
@@ -1536,18 +1528,4 @@ export function createRedisController(toolNames: string[]): ControllerFnWithLLMD
 /** Database controller */
 export function createDatabaseController(toolNames: string[]): ControllerFnWithLLMData {
   return createLoopControllerAdapter(toolNames)
-}
-
-/** Code-mode controller — drives a simpleLoop whose only tool is the MCP
- *  `code-mode` JS executor. The contextPrefix tells the LLM to author a JS
- *  script (passed via tool_args) that the gateway runs against the available
- *  MCP tools, then returns the script's output as a normal tool_result. */
-export function createCodeModeController(toolNames: string[]): ControllerFnWithLLMData {
-  return createLoopControllerAdapter(
-    toolNames,
-    'You compose JavaScript that orchestrates multiple MCP tools in a single turn. ' +
-      'Call the `code-mode` tool with tool_args = { "script": "<your JS>" }. ' +
-      "The script runs server-side with access to the gateway's tools; its return " +
-      'value comes back as the tool_result. Use Return when the result answers the user.',
-  )
 }

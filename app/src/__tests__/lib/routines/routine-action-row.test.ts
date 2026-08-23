@@ -26,7 +26,7 @@ vi.mock('../../../lib/db/routines.server', () => ({
 }))
 
 vi.mock('../../../lib/harness-client/registry.server', () => ({
-  getAgent: () => ({ id: 'default' }),
+  getAgent: () => ({ id: 'search' }),
 }))
 
 // The harness itself never runs here: `runAgentInBackground` is fire-and-forget
@@ -68,7 +68,7 @@ const routine = (over: Partial<Routine> = {}): Routine =>
   ({
     id: 'routine-1',
     userId: 'user-1',
-    agentId: 'default',
+    agentId: 'search',
     trigger: { kind: 'interval', intervalSeconds: 3600 },
     input: 'summarise what changed today',
     label: 'Daily digest',
@@ -94,7 +94,7 @@ describe('a routine run', () => {
     expect(row).toMatchObject({
       id: 'run-fixed',
       userId: 'user-1',
-      agentId: 'default',
+      agentId: 'search',
       kind: 'action',
       source: 'routine',
       // In-flight badge until the background run persists its result.

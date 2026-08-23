@@ -112,7 +112,7 @@ packages that import each other cannot both be `pnpm pack`-ed, since whichever
 publishes second would need the other already on the registry.
 
 The rest of the graph mirrors the import graph already `grep`-confirmed on
-this branch: `harness-client/examples/*` imports both `harness-patterns` and
+this branch: `harness-client/agents/*` imports both `harness-patterns` and
 `baml_client`; `sandbox/work-artifacts.server.ts` imports
 `document-store.server.ts` and `stash/upload-service.server.ts` — i.e.
 **sandbox already depends on stash at runtime**, which is exactly why the

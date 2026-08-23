@@ -2,7 +2,7 @@
 
 Catalog of 7 pre-built agents demonstrating pattern compositions.
 
-> **Full Code:** See [`app/src/lib/harness-client/examples/`](../../app/src/lib/harness-client/examples/) for complete implementations.
+> **Full Code:** See [`app/src/lib/harness-client/agents/`](../../app/src/lib/harness-client/agents/) for complete implementations.
 
 ---
 
@@ -12,18 +12,18 @@ All agents are registered in `registry.server.ts` and available via `getAgentLis
 
 | ID | Name | Patterns | Servers |
 |----|------|----------|---------|
-| `default` | Default Agent | router → compactExecution | neo4j, web_search, fetch |
-| `code-mode` | Code Mode Agent | router → actorCritic → compactExecution | all (via code-mode factory) |
-| `multi-source-research` | Multi-Source Research | parallel → judge → compactExecution | web_search, github, context7 |
+| `search` | Search Agent | router → compactExecution | neo4j, web_search, fetch |
 | `sandbox-session` | Sandbox · Session | compactIntent → withSandbox(actorCritic) → compactExecution | none (in-VM sandbox tools) |
 | `retriever` | Retriever Agent | router → { retriever \| neo4j \| web_search } → compactExecution | neo4j, web_search, fetch (+ Data Stash via Redis retriever) |
 | `flavoured-sandbox` | Sandbox · Flavoured (router) | router → withSandbox(actorCritic) per flavour (base / image-processing / data) → compactExecution | none (in-VM sandbox tools per flavour) |
 
 ---
 
-## 1. Default Agent
+## 1. Search Agent
 
-**File:** `default.server.ts`
+**File:** `search.server.ts`
+
+> Registered id `search`; it was `default` until PR #234.
 
 Router-based agent with Neo4j and Web Search routes. Each route is wrapped with `withReferences` so the inner pattern receives an LLM-curated set of relevant prior `tool_result` events from any earlier turn (subsumes #26 / #29 — see [`with-references.md`](with-references.md)).
 
@@ -40,63 +40,23 @@ router({ neo4j: '...', web_search: '...' })
 - Web search via DuckDuckGo (`search`, `fetch`, `fetch_content`)
 - Cross-turn data flow: `withReferences` selector attaches relevant prior refs at each route's ingress; the controller can use `expandPreviousResult` or pass `ref:<id>` in tool args to inline-expand the full data
 
-For JS-orchestration workflows that span multiple servers, see [Agent 4 — Code Mode](#4-code-mode-agent).
-
 ---
 
-## 2. Multi-Source Research
+## 2. Multi-Source Research — **unregistered**
 
 **File:** `multi-source-research.server.ts`
+
+> **NOT LIVE TESTED.** Unregistered per owner decision 2026-08-23 (PR #234) —
+> the file stays as a worked `parallel` example but is not in the registry, so
+> it never appears in the agent dropdown. Re-register only after a live test.
 
 Concurrent search with quality ranking.
 
 ```
-parallel([webSearch, githubSearch, docSearch])
+parallel([webSearch, docSearch])
 judge(evaluator)  → score: content, relevance, authority
 compactExecution({ mode: 'response' })
 ```
-
----
-
-## 3. Code Mode Agent
-
-**File:** `code-mode.server.ts`
-
-Orchestrate multiple MCP tools via JavaScript snippets executed server-side by the kg-agent gateway's `code-mode` tool family. The gateway's `code-mode` tool is a **factory** — its `args_schema` is `{name, servers}` and a successful call registers a new `code-mode-<name>` tool bound to those servers. The generated tool is what actually runs JS.
-
-```typescript
-router({ code_mode: 'Compose JS across multiple MCP tools…' })
-→ routes({
-    code_mode: chain(
-      actorCritic(
-        createActorControllerAdapter({
-          toolNames: ['mcp-find', 'mcp-add', 'code-mode', 'mcp-exec'],
-          dynamicPattern: /^code-mode-/,
-          refreshOnCall: true,        // see newly-created tools across turns
-        }),
-        createCriticAdapter(),
-        ['mcp-find', 'mcp-add', 'code-mode', 'mcp-exec'],
-        {
-          patternId: 'code-mode-loop',
-          dynamicToolPattern: /^code-mode-/,   // allowlist for factory output
-        }
-      ),
-      compactExecution({
-        mode: 'thread',
-        patternId: 'code-mode-synth',
-        viewConfig: {
-          // Final response built only from actor-side events; critic_result events
-          // are filtered out so the critic's reasoning doesn't leak into the prompt.
-          eventTypes: ['controller_action', 'tool_call', 'tool_result'],
-        },
-      })
-    )
-  })
-```
-
-- **Direct-response branch**: when `Router` returns `needs_tool: false`, the router sets `scope.data.response` to the conversational reply and `routes()` passes through — no compactExecution needed at the top level.
-- **Cross-turn tool reuse**: `refreshOnCall: true` on the actor adapter forces a fresh `mcpListTools()` per invocation so `code-mode-<name>` tools created in earlier turns of the same session are still visible to the actor. `invalidateToolDescriptions()` is called from `actorCritic.server.ts` right after a successful `code-mode` execution, so the new tool appears in the next attempt's prompt.
-- **actorCritic over simpleLoop**: the find → add → factory → call-generated-tool sequence has many ways to go wrong on the first try; actorCritic's retry-with-critic-feedback semantics fit better than simpleLoop's exit-on-tool-failure (a failed singular call — or a fully-failed multi-call batch — ends a simpleLoop pass with a recoverable error; partial batch failures continue in both patterns).
 
 ---
 

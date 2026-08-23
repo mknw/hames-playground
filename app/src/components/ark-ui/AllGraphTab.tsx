@@ -172,7 +172,10 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
             items="center"
             gap="1"
           >
-            <span class="i-mdi-layers-triple-outline" style={{ width: '14px', height: '14px' }} />
+            <span
+              class="i-material-symbols-layers-outline"
+              style={{ width: '14px', height: '14px' }}
+            />
             <span>Turns</span>
           </FloatingPanel.Trigger>
 
@@ -247,7 +250,7 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
             >
               <FloatingPanel.DragTrigger flex="1 ~" items="center" gap="2" cursor="grab">
                 <span
-                  class="i-mdi-drag"
+                  class="i-material-symbols-drag-indicator"
                   style={{ width: '16px', height: '16px', color: '#71717a' }}
                 />
                 <span text="sm dark-text-primary" font="medium">

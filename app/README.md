@@ -35,7 +35,7 @@ src/
 │   │   ├── registry.server.ts       # Registers all agents
 │   │   ├── graph-extractor.ts       # ContextEvent → GraphElement[] (MCP + driver + enriched payload)
 │   │   ├── neo4j-enricher.server.ts # `onToolResult` recipe — fetches 1-hop neighborhood for touched nodes
-│   │   └── examples/                # 6 pre-built agent configurations
+│   │   └── agents/                  # 6 pre-built agent configurations
 │   ├── db/
 │   │   ├── client.server.ts         # Lazy pg.Pool singleton + idempotent schema bootstrap
 │   │   └── conversations.server.ts  # Conversations repo (load/save/list/delete + deriveTitle)
@@ -117,20 +117,20 @@ env-var rewrites: [`docs/DOCKER_COMPOSE.md`](../docs/DOCKER_COMPOSE.md#app-the-s
 
 ## Adding a New Agent
 
-1. Create `src/lib/harness-client/examples/<name>.server.ts` exporting an `AgentConfig`
+1. Create `src/lib/harness-client/agents/<name>.server.ts` exporting an `AgentConfig`
 2. Register it in `src/lib/harness-client/registry.server.ts`
 
-See [examples/README.md](src/lib/harness-client/examples/README.md) for detailed patterns.
+See [agents/README.md](src/lib/harness-client/agents/README.md) for detailed patterns.
 
 ---
 
 ## Documentation Index
 
-| File                                                                                   | Contents                                                       |
-| -------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| [GitHub Project](https://github.com/users/mknw/projects/5)                             | Planning board / roadmap (replaced docs/ROADMAP.md)            |
-| [src/lib/harness-patterns/README.md](src/lib/harness-patterns/README.md)               | Harness patterns full API reference                            |
-| [src/lib/harness-client/examples/README.md](src/lib/harness-client/examples/README.md) | Example agent implementations (7 agents)                       |
-| [../docs/UI_ARCHITECTURE.md](../docs/UI_ARCHITECTURE.md)                               | Component structure, data flow, Chat-Graph linking             |
-| [../docs/DATA_STASH.md](../docs/DATA_STASH.md)                                         | Data Stash upload → chunk → embed → search pipeline (#6/#9/#8) |
-| [../docs/INDEX.md](../docs/INDEX.md)                                                   | Full project documentation index                               |
+| File                                                                               | Contents                                                       |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| [GitHub Project](https://github.com/users/mknw/projects/5)                         | Planning board / roadmap (replaced docs/ROADMAP.md)            |
+| [src/lib/harness-patterns/README.md](src/lib/harness-patterns/README.md)           | Harness patterns full API reference                            |
+| [src/lib/harness-client/agents/README.md](src/lib/harness-client/agents/README.md) | Example agent implementations (7 agents)                       |
+| [../docs/UI_ARCHITECTURE.md](../docs/UI_ARCHITECTURE.md)                           | Component structure, data flow, Chat-Graph linking             |
+| [../docs/DATA_STASH.md](../docs/DATA_STASH.md)                                     | Data Stash upload → chunk → embed → search pipeline (#6/#9/#8) |
+| [../docs/INDEX.md](../docs/INDEX.md)                                               | Full project documentation index                               |

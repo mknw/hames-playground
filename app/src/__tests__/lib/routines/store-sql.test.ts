@@ -38,7 +38,7 @@ function dbRow(over: Record<string, unknown> = {}) {
   return {
     id: 'r1',
     user_id: 'u1',
-    agent_id: 'default',
+    agent_id: 'search',
     trigger_kind: 'interval',
     trigger_config: { intervalSeconds: 3600 },
     input: 'go',
@@ -73,7 +73,7 @@ describe('createRoutine', () => {
     await createRoutine({
       id: 'r1',
       userId: 'u1',
-      agentId: 'default',
+      agentId: 'search',
       trigger: { kind: 'interval', intervalSeconds: 3600 },
       input: 'go',
     })
@@ -82,7 +82,7 @@ describe('createRoutine', () => {
     expect(params.slice(0, 6)).toEqual([
       'r1',
       'u1',
-      'default',
+      'search',
       'interval',
       JSON.stringify({ intervalSeconds: 3600 }),
       'go',
@@ -95,7 +95,7 @@ describe('createRoutine', () => {
     await createRoutine({
       id: 'r1',
       userId: 'u1',
-      agentId: 'default',
+      agentId: 'search',
       trigger: { kind: 'session_start' },
       input: 'go',
     })

@@ -12,7 +12,6 @@ compositions across all available MCP servers.
 | web_search          | `tools.web`        | DuckDuckGo search + content parsing                                       |
 | context7            | `tools.context7`   | Library doc resolution + retrieval                                        |
 | rust-mcp-filesystem | `tools.filesystem` | File read/write/search/edit                                               |
-| github              | `tools.github`     | Issues, PRs, code search, commits                                         |
 | memory              | `tools.memory`     | Entity/relation knowledge graph (ephemeral)                               |
 | redis               | `tools.redis`      | Key/value, hashes, lists, sets, sorted sets, streams, JSON, vector search |
 | database-server     | `tools.database`   | PostgreSQL/MySQL/SQLite query + schema introspection                      |
@@ -39,9 +38,9 @@ compositions across all available MCP servers.
 
 > **Synthetic tool:** simpleLoop's `LoopController` prompt also exposes `expandPreviousResult` when prior results are present — a virtual tool that loads the full data behind a `ref:<id>` and records it as a normal turn. See [`with-references.md`](../../../../docs/harness-patterns/with-references.md) for the ingress/expansion taxonomy.
 
-> **Who writes the final answer ([#149](https://github.com/mknw/harness-playground/issues/149)):** every `simpleLoop` here inherits `returnStyle: 'summary'` — its terminal `Return` carries a one-line completion summary, and the chain's `compactExecution` composes the user-facing answer from the full tool results. No agent overrides it: every registered chain ends in a `compactExecution` (in `code-mode` it sits inside the inner `chain`), and `'answer'` would only restore a second composition nothing renders. Affected loops: `default` (both tool routes), `general`, `microsoft-365`, `retriever-agent` (both loop routes), `multi-source-research` (×3).
+> **Who writes the final answer ([#149](https://github.com/mknw/harness-playground/issues/149)):** every `simpleLoop` here inherits `returnStyle: 'summary'` — its terminal `Return` carries a one-line completion summary, and the chain's `compactExecution` composes the user-facing answer from the full tool results. No agent overrides it: every registered chain ends in a `compactExecution`, and `'answer'` would only restore a second composition nothing renders. Affected loops: `search` (both tool routes), `general`, `microsoft-365`, `retriever-agent` (both loop routes), and the unregistered `multi-source-research` (×3).
 
-> **Multi-call modes across agents:** every agent inherits `multiToolCalls: 'parallel'` except the three that override it — `code-mode` → `'off'` (one script already replaces N round-trips), `sandbox-session` and `flavoured-sandbox` → `'sequential'` (linear effect-chains on one VM filesystem; in-order batches still save actor round-trips).
+> **Multi-call modes across agents:** every agent inherits `multiToolCalls: 'parallel'` except the two that override it — `sandbox-session` and `flavoured-sandbox` → `'sequential'` (linear effect-chains on one VM filesystem; in-order batches still save actor round-trips).
 
 ---
 
@@ -56,7 +55,7 @@ compositions across all available MCP servers.
 The smallest legal harness composition — one pattern, one BAML call, ~20 LoC. Demonstrates that the library is appropriate for one-shot LLM jobs, not just multi-pattern agentic workflows. Used in production by `/api/events` post-stream to title new conversations as soon as the first response lands.
 
 ```typescript
-// app/src/lib/harness-client/examples/title-generator.server.ts
+// app/src/lib/harness-client/agents/title-generator.server.ts
 export const titleAgent = harness<TitleAgentData>(
   compactExecution<TitleAgentData>({
     patternId: 'title-gen',
@@ -77,11 +76,11 @@ export const titleAgent = harness<TitleAgentData>(
 
 **Servers**: everything in `tools.all`
 **Patterns**: `planner` → `simpleLoop` → `compactExecution`
-**Use case**: cross-namespace questions the router-based `default` agent cannot
+**Use case**: cross-namespace questions the router-based `search` agent cannot
 serve, because a route can only be one namespace.
 
 ```typescript
-// app/src/lib/harness-client/examples/general.server.ts
+// app/src/lib/harness-client/agents/general.server.ts
 return [
   planner<SessionData>(tools.all, { patternId: 'plan', schema }),
   simpleLoop<SessionData>(createLoopControllerAdapter(tools.all), tools.all, {
@@ -97,14 +96,19 @@ The planner sees exactly the tool surface the executor will have, emits a
 numbered plan, and the loop receives it as the controller's `plan_context` —
 rendered beside the intent, outside the agent-static cached prefix — so the
 controller stops re-deriving the approach on every turn. Registered
-alongside `default` on purpose: same session shape, different strategy, so the
+alongside `search` on purpose: same session shape, different strategy, so the
 two can be A/B'd on the same question.
 
 ---
 
-### 1. Multi-Source Research (parallel)
+### 1. Multi-Source Research (parallel) — **unregistered**
 
-**Servers**: web_search, github, context7, redis
+> **NOT LIVE TESTED.** Unregistered per owner decision 2026-08-23 (PR #234): the
+> source file stays here as a worked `parallel` example, but `registry.server.ts`
+> does not import it, so it never reaches the agent dropdown. Re-register only
+> after a live test.
+
+**Servers**: web_search, context7, redis
 **Patterns**: `parallel` → `judge` → `compactExecution`
 **Use case**: Search three sources concurrently, cache in redis, rank results.
 
@@ -113,7 +117,6 @@ User: "What's the best way to handle auth in SvelteKit?"
 
 parallel:
   ├─ simpleLoop(webController, tools.web)          → DuckDuckGo results
-  ├─ simpleLoop(githubController, tools.github)     → GitHub code examples
   └─ simpleLoop(context7Controller, tools.context7) → SvelteKit official docs
 
 redis: cache each source's results as JSON with TTL
@@ -212,11 +215,6 @@ function withCache<T>(
 const researchPattern = parallel(
   withCache(
     simpleLoop(b.WebSearchController.bind(b), tools.web ?? [], { patternId: 'web-search' }),
-  ),
-  withCache(
-    simpleLoop(b.GitHubSearchController.bind(b), tools.github ?? [], {
-      patternId: 'github-search',
-    }),
   ),
   withCache(
     simpleLoop(b.Context7Controller.bind(b), tools.context7 ?? [], { patternId: 'doc-lookup' }),
@@ -460,14 +458,14 @@ See `sandbox-session.server.ts`. Debugging modalities for live sandboxes:
 
 ## Pattern Composition Matrix
 
-|                 | neo4j            | fetch         | web_search   | context7     | filesystem       | github         | memory          | redis        | database         |
-| --------------- | ---------------- | ------------- | ------------ | ------------ | ---------------- | -------------- | --------------- | ------------ | ---------------- |
-| **simpleLoop**  | Query/write      | Fetch URLs    | Search       | Resolve docs | Read/search      | Issues/PRs     | Entity CRUD     | Get/set/hash | SQL query        |
-| **actorCritic** | Complex queries  | -             | -            | -            | File refactoring | PR review      | -               | -            | Schema migration |
-| **parallel**    | Multi-query      | Multi-fetch   | Multi-search | Multi-lib    | Multi-file       | Multi-repo     | -               | -            | Multi-DB         |
-| **guardrail**   | Cypher injection | URL allowlist | Topic scope  | -            | Path safety      | Org/repo scope | -               | Rate limit   | SQL injection    |
-| **judge**       | -                | -             | Rank results | Rank docs    | -                | Rank code      | -               | Score cache  | -                |
-| **hook**        | KB distill       | -             | -            | -            | Log to file      | -              | Session cleanup | TTL mgmt     | Audit log        |
+|                 | neo4j            | fetch         | web_search   | context7     | filesystem       | memory          | redis        | database         |
+| --------------- | ---------------- | ------------- | ------------ | ------------ | ---------------- | --------------- | ------------ | ---------------- |
+| **simpleLoop**  | Query/write      | Fetch URLs    | Search       | Resolve docs | Read/search      | Entity CRUD     | Get/set/hash | SQL query        |
+| **actorCritic** | Complex queries  | -             | -            | -            | File refactoring | -               | -            | Schema migration |
+| **parallel**    | Multi-query      | Multi-fetch   | Multi-search | Multi-lib    | Multi-file       | -               | -            | Multi-DB         |
+| **guardrail**   | Cypher injection | URL allowlist | Topic scope  | -            | Path safety      | -               | Rate limit   | SQL injection    |
+| **judge**       | -                | -             | Rank results | Rank docs    | -                | -               | Score cache  | -                |
+| **hook**        | KB distill       | -             | -            | -            | Log to file      | Session cleanup | TTL mgmt     | Audit log        |
 
 ## BAML Functions Needed
 
@@ -478,7 +476,6 @@ See `sandbox-session.server.ts`. Debugging modalities for live sandboxes:
 | `MemoryReadController` / `MemoryCleanupController`      | simpleLoop (hook)      | memory                        |
 | `MemoryExtractController`                               | simpleLoop             | memory                        |
 | `DistillController`                                     | custom (hook)          | memory → neo4j                |
-| `GitHubSearchController` / `GitHubIssueController`      | simpleLoop             | github                        |
 | `FileEditController` / `FileEditCritic`                 | actorCritic            | rust-mcp-filesystem           |
 | `JudgeController`                                       | judge                  | (evaluator, no tools)         |
 | `TopicClassifier`                                       | guardrail (input rail) | (classifier, no tools)        |
@@ -491,4 +488,3 @@ See `sandbox-session.server.ts`. Debugging modalities for live sandboxes:
 | `EmbedQuery`                                            | custom (cache)         | (embedding, no tools)         |
 | `Neo4jController`                                       | simpleLoop             | neo4j-cypher (existing)       |
 | `WebSearchController`                                   | simpleLoop             | web_search (existing)         |
-| `CodeModeController` / `CodeModeCritic`                 | actorCritic (existing) | all                           |

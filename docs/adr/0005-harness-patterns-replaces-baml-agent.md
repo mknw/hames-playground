@@ -30,7 +30,7 @@ for it re-splits the session state that `UnifiedContext` exists to unify.
 ## Consequences
 
 - All agentic work goes through harness-patterns. New agents are an
-  `AgentConfig` in `app/src/lib/harness-client/examples/` registered in
+  `AgentConfig` in `app/src/lib/harness-client/agents/` registered in
   `registry.server.ts` — there is one place to add one.
 - The deletion took `/api/agent/[sessionId]`, `docs/baml_agent/` and
   `EventDetailOverlay` with it; anything reaching for those in old branches or

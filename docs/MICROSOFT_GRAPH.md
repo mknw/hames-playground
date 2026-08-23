@@ -35,7 +35,7 @@ budget in Finance", which is [file discovery](#finding-a-file), and "pull that
 spreadsheet in and chart it", which is [the file bridge](#files--the-data-stash).
 
 **The agent composes eight of the nine.** The **Microsoft 365** agent
-(`lib/harness-client/examples/microsoft-365.server.ts`) takes an explicit
+(`lib/harness-client/agents/microsoft-365.server.ts`) takes an explicit
 allowlist, `MICROSOFT_365_TOOLS`, and `graph_file_ingest` is deliberately not in
 it: ingestion puts a file's bytes in the Data Stash, which is reachable only
 through a **retriever pattern**, and that agent has none. Exposing it would
@@ -495,7 +495,7 @@ registerAppTool({
 ```
 
 3. To let the **Microsoft 365 agent** use it, add the name to
-   `MICROSOFT_365_TOOLS` in `examples/microsoft-365.server.ts`. Registration alone
+   `MICROSOFT_365_TOOLS` in `agents/microsoft-365.server.ts`. Registration alone
    makes it discoverable everywhere, but that agent composes an allowlist.
 
 No auth or dispatch wiring to touch. Guidelines that keep turns small and safe:

@@ -34,7 +34,10 @@ vi.mock('../../../lib/db/conversations.server', () => ({
 
 const createPatterns = vi.fn(async (sessionId: string) => [{ id: `p-${sessionId}` }])
 const getAgent = vi.fn((id: string) => (id === 'known' ? { id, createPatterns } : undefined))
-vi.mock('../../../lib/harness-client/registry.server', () => ({ getAgent }))
+// The real map, small enough to state: `loadSession` is the seam that turns a
+// legacy stored id into the current one, so stubbing it away would test nothing.
+const canonicalAgentId = vi.fn((id: string) => (id === 'renamed-away' ? 'known' : id))
+vi.mock('../../../lib/harness-client/registry.server', () => ({ getAgent, canonicalAgentId }))
 
 const { createContext, serializeContext } = await import('../../../lib/harness-patterns')
 const {
@@ -116,7 +119,7 @@ describe('pattern cache', () => {
   })
 
   it('ignores doNotCachePatterns from outside a getOrBuildPatterns build', async () => {
-    // The registry capability probes (agentUsesCodeMode &c.) call
+    // The registry capability probes (agentUsesRedisRetriever &c.) call
     // createPatterns directly and discard the result. A degraded probe build
     // must not leave a flag that costs the next REAL build its cache entry.
     doNotCachePatterns('cache-7')
@@ -170,6 +173,20 @@ describe('loadSession', () => {
   it('returns null when the row does not exist for this user', async () => {
     await expect(loadSession('s', 'u')).resolves.toBeNull()
     expect(loadConversation).toHaveBeenCalledWith('s', 'u')
+  })
+
+  // PR #234 renamed an agent, and `conversations.agent_id` keeps whatever id
+  // the turn ran under. Mapping it forward HERE (rather than at each caller) is
+  // what lets an old thread rebuild its patterns, show as selected in the
+  // dropdown, and rewrite itself to the current id on its next save.
+  it('maps a stored id the agent was renamed away from onto the current one', async () => {
+    loadConversation.mockResolvedValue({
+      serializedContext: '{}',
+      agentId: 'renamed-away',
+      kind: 'conversation',
+      status: 'done',
+    })
+    await expect(loadSession('s', 'u')).resolves.toMatchObject({ agentId: 'known' })
   })
 
   it('lifts kind and status out of the row alongside the blob', async () => {

@@ -30,7 +30,6 @@ export type {
   // Controller/Critic Types (BAML function signatures)
   ControllerFn,
   CriticFn,
-  CodeModeControllerFn,
 
   // BAML Types (re-exported)
   ControllerAction,
@@ -112,8 +111,6 @@ export { DIRECT_RESPONSE_ROUTE } from './types'
 // ============================================================================
 
 export {
-  usesCodeMode,
-  isCodeModeLoopConfig,
   isRetrieverConfig,
   harnessHasRetriever,
   harnessHasRedisRetriever,
@@ -262,11 +259,9 @@ export {
   createWebSearchController,
   createMemoryController,
   createContext7Controller,
-  createGitHubController,
   createFilesystemController,
   createRedisController,
   createDatabaseController,
-  createCodeModeController,
   createInjectionScreen,
   invalidateToolDescriptions,
   type ActorAdapterOptions,

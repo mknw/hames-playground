@@ -33,10 +33,7 @@ import {
   createEventView,
 } from '../../../lib/harness-patterns'
 import type { ContextEvent } from '../../../lib/harness-patterns'
-import {
-  saveSession,
-  loadSession,
-} from '../../../lib/harness-client/session.server'
+import { saveSession, loadSession } from '../../../lib/harness-client/session.server'
 import { closePool, query } from '../../../lib/db/client.server'
 
 const TEST_USER = `xtest-${Math.random().toString(36).slice(2, 10)}`
@@ -102,8 +99,16 @@ function makeConvoWithWebSearch(sessionId: string) {
         tool: 'search',
         result: {
           rows: [
-            { title: 'Kubernetes Documentation', url: 'https://kubernetes.io/docs', snippet: 'K8s is an open source container orchestrator…' },
-            { title: 'CNCF Kubernetes', url: 'https://www.cncf.io/projects/kubernetes', snippet: 'Graduated CNCF project…' },
+            {
+              title: 'Kubernetes Documentation',
+              url: 'https://kubernetes.io/docs',
+              snippet: 'K8s is an open source container orchestrator…',
+            },
+            {
+              title: 'CNCF Kubernetes',
+              url: 'https://www.cncf.io/projects/kubernetes',
+              snippet: 'Graduated CNCF project…',
+            },
           ],
         },
         success: true,
@@ -135,10 +140,10 @@ describe('cross-turn persistence after conversation switch', () => {
     const ctx = makeConvoWithWebSearch(sessionId)
     const originalEvents = JSON.parse(JSON.stringify(ctx.events))
 
-    await saveSession(sessionId, TEST_USER, 'default', serializeContext(ctx))
+    await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
     const loaded = await loadSession(sessionId, TEST_USER)
     expect(loaded).not.toBeNull()
-    expect(loaded!.agentId).toBe('default')
+    expect(loaded!.agentId).toBe('search')
 
     const restored = deserializeContext(loaded!.serializedContext)
     // Every event survives identically — this is what `ref:<id>` expansion,
@@ -150,7 +155,7 @@ describe('cross-turn persistence after conversation switch', () => {
     if (!dbAvailable) return
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
     const ctx = makeConvoWithWebSearch(sessionId)
-    await saveSession(sessionId, TEST_USER, 'default', serializeContext(ctx))
+    await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
 
     const loaded = await loadSession(sessionId, TEST_USER)
     const restored = deserializeContext(loaded!.serializedContext)
@@ -178,7 +183,7 @@ describe('cross-turn persistence after conversation switch', () => {
     if (!dbAvailable) return
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
     const ctx = makeConvoWithWebSearch(sessionId)
-    await saveSession(sessionId, TEST_USER, 'default', serializeContext(ctx))
+    await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
 
     // Load + simulate continueSession's append
     const loaded = await loadSession(sessionId, TEST_USER)
@@ -208,14 +213,14 @@ describe('cross-turn persistence after conversation switch', () => {
 
   it('agent mismatch on resume falls through to a fresh start (no cross-agent leak)', async () => {
     if (!dbAvailable) return
-    // Stored as default; if a request comes in claiming agentId="code-mode",
+    // Stored as search; if a request comes in claiming agentId="retriever",
     // runTurn ignores the loaded context. We assert the persistence layer
     // surfaces the stored agentId so the dispatch decision is unambiguous.
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
     const ctx = makeConvoWithWebSearch(sessionId)
-    await saveSession(sessionId, TEST_USER, 'default', serializeContext(ctx))
+    await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
     const loaded = await loadSession(sessionId, TEST_USER)
-    expect(loaded!.agentId).toBe('default')
+    expect(loaded!.agentId).toBe('search')
     // runTurn's dispatch: if request.agentId !== loaded.agentId → fresh harness.
     // (Captured here so a future refactor can't silently flip the contract.)
   })
@@ -224,7 +229,7 @@ describe('cross-turn persistence after conversation switch', () => {
     if (!dbAvailable) return
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
     const ctx = makeConvoWithWebSearch(sessionId)
-    await saveSession(sessionId, TEST_USER, 'default', serializeContext(ctx))
+    await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
 
     // Simulate a second turn: append a new event and re-save
     ctx.events.push({
@@ -234,7 +239,7 @@ describe('cross-turn persistence after conversation switch', () => {
       patternId: 'harness',
       data: { content: 'and now retrieve it' },
     })
-    await saveSession(sessionId, TEST_USER, 'default', serializeContext(ctx))
+    await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
 
     const { rows } = await query<{ count: string }>(
       'SELECT COUNT(*)::text AS count FROM conversations WHERE id = $1 AND user_id = $2',
@@ -257,19 +262,25 @@ describe('status lifting on save (agent-trigger status column)', () => {
   async function savedStatus(sessionId: string, ctxStatus: string): Promise<string | undefined> {
     const ctx = createContext('hi', {}, sessionId)
     ;(ctx as { status: string }).status = ctxStatus
-    await saveSession(sessionId, TEST_USER, 'default', serializeContext(ctx))
+    await saveSession(sessionId, TEST_USER, 'search', serializeContext(ctx))
     return (await loadSession(sessionId, TEST_USER))?.status
   }
 
   it("lifts a completed run's 'running' status to 'done'", async () => {
     if (!dbAvailable) return
-    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'running')).toBe('done')
+    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'running')).toBe(
+      'done',
+    )
   })
 
   it("preserves 'paused' (awaiting approval) and 'error'", async () => {
     if (!dbAvailable) return
-    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'paused')).toBe('paused')
-    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'error')).toBe('error')
+    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'paused')).toBe(
+      'paused',
+    )
+    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'error')).toBe(
+      'error',
+    )
   })
 
   it("maps an explicit 'done' through unchanged", async () => {

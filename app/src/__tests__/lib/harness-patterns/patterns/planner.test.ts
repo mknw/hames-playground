@@ -11,7 +11,7 @@ import { mockFinalAction } from '../../../mocks/baml'
 import type { ContextEvent, EventType, UnifiedContext } from '../../../../lib/harness-patterns'
 import type {
   ControllerFnWithLLMData,
-  CodeModeControllerFnWithLLMData,
+  ActorControllerFnWithLLMData,
   CriticFnWithLLMData,
 } from '../../../../lib/harness-patterns/baml-adapters.server'
 
@@ -412,7 +412,7 @@ describe('plan plumbing into the loop patterns', () => {
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
-    const actor = vi.fn<CodeModeControllerFnWithLLMData>(async () => ({
+    const actor = vi.fn<ActorControllerFnWithLLMData>(async () => ({
       action: {
         reasoning: 'r',
         tool_name: 'Return',

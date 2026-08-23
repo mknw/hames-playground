@@ -68,13 +68,13 @@ async function requireUser(): Promise<{ id: string; email: string }> {
 // ============================================================================
 
 /**
- * Process a user message using the default agent.
+ * Process a user message using the default agent (the `search` agent).
  */
 export async function processMessage(
   sessionId: string,
   message: string,
 ): Promise<HarnessResultScoped<SessionData>> {
-  return processMessageWithAgent(sessionId, message, 'default')
+  return processMessageWithAgent(sessionId, message, 'search')
 }
 
 /**
@@ -83,7 +83,7 @@ export async function processMessage(
 export async function processMessageWithAgent(
   sessionId: string,
   message: string,
-  agentId: string = 'default',
+  agentId: string = 'search',
 ): Promise<HarnessResultScoped<SessionData>> {
   const user = await requireUser()
   return runTurn(sessionId, user.id, message, agentId)
@@ -96,7 +96,7 @@ export async function processMessageWithAgent(
 export async function processMessageStreaming(
   sessionId: string,
   message: string,
-  agentId: string = 'default',
+  agentId: string = 'search',
   onEvent: (event: ContextEvent) => void,
   settings?: HarnessSettings,
 ): Promise<HarnessResultScoped<SessionData>> {
@@ -112,7 +112,7 @@ async function runTurn(
   onEvent?: (event: ContextEvent) => void,
 ): Promise<HarnessResultScoped<SessionData>> {
   // Establish the request scope so pattern closures and app-side tools that
-  // need per-conversation context at runtime (code-mode's tool-allowlist
+  // need per-conversation context at runtime (a per-conversation allowlist
   // reader, `graph_file_ingest`'s Data Stash target) resolve the right user and
   // conversation without an explicit parameter.
   return runWithRequestContext({ userId, sessionId }, async () => {
@@ -375,7 +375,7 @@ export async function regenerateConversationTitle(sessionId: string): Promise<st
   const loaded = await loadSession(sessionId, user.id)
   if (!loaded) return null
   const { deserializeContext } = await import('../harness-patterns')
-  const { runRegenerateTitle } = await import('./examples/title-generator.server')
+  const { runRegenerateTitle } = await import('./agents/title-generator.server')
   const ctx = deserializeContext(loaded.serializedContext)
   return runRegenerateTitle(ctx, sessionId, user.id)
 }

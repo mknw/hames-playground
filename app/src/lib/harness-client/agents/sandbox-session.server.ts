@@ -65,7 +65,7 @@ Guidance:
  * newlines) that the dispatch guard rejects as "Invalid tool_args JSON",
  * wasting retries. Two shots anchor the two tricky shapes: a multi-line file
  * write (newlines escaped inside a double-quoted JSON string) and a bash
- * command containing quotes. Mirrors `code-mode`'s `CODE_MODE_FEW_SHOTS`.
+ * command containing quotes.
  */
 const SANDBOX_SESSION_FEW_SHOTS: FewShot[] = [
   {

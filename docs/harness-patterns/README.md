@@ -92,8 +92,7 @@ view.fromLastPattern().tools().last(3).get()
 
 6 pre-built agents in the registry:
 
-1. **Default** - Router with Neo4j, Web, Code Mode
-2. **Code Mode** - JS orchestration across MCP tools
+1. **Default** - Router with Neo4j and Web
 3. **Multi-Source Research** - Parallel search + Judge
 4. **Conversational Memory** - Scratchpad + KB distillation
 5. **KG Builder** - Research → Extract → Persist

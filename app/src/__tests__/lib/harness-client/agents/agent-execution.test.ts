@@ -21,7 +21,7 @@ const mockToolSets = {
   context7: ['resolve-library-id', 'get-library-docs', 'Return'],
   filesystem: ['read_text_file', 'write_file', 'edit_file', 'Return'],
   redis: ['hset', 'expire', 'Return'],
-  all: [] as string[]
+  all: [] as string[],
 }
 
 mockToolSets.all = [
@@ -32,13 +32,13 @@ mockToolSets.all = [
     ...mockToolSets.github,
     ...mockToolSets.context7,
     ...mockToolSets.filesystem,
-    ...mockToolSets.redis
-  ])
+    ...mockToolSets.redis,
+  ]),
 ]
 
 // Mock assert.server
 vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
-  assertServerOnImport: vi.fn()
+  assertServerOnImport: vi.fn(),
 }))
 
 // MCP mock
@@ -48,16 +48,16 @@ const callToolMock = mockCallTool({
     read_graph: {
       entities: [
         { name: 'Class1', entityType: 'Class' },
-        { name: 'Class2', entityType: 'Class' }
+        { name: 'Class2', entityType: 'Class' },
       ],
-      relations: []
-    }
-  }
+      relations: [],
+    },
+  },
 })
 
 vi.mock('../../../../lib/harness-patterns/mcp-client.server', () => ({
   callTool: callToolMock,
-  listTools: mockListTools(mockToolSets.all)
+  listTools: mockListTools(mockToolSets.all),
 }))
 
 // BAML mock
@@ -70,10 +70,10 @@ vi.mock('../../../../../baml_client', () => ({
       intent: 'test',
       needs_tool: true,
       route: 'neo4j',
-      response: ''
+      response: '',
     })),
-    Synthesize: vi.fn(async () => 'Synthesized response')
-  }
+    Synthesize: vi.fn(async () => 'Synthesized response'),
+  },
 }))
 
 vi.mock('@boundaryml/baml', () => {
@@ -81,7 +81,7 @@ vi.mock('@boundaryml/baml', () => {
     last = {
       rawLlmResponse: 'Raw response',
       usage: { inputTokens: 100, outputTokens: 50 },
-      calls: [{ httpRequest: { body: {} } }]
+      calls: [{ httpRequest: { body: {} } }],
     }
     constructor(_name?: string) {}
   }
@@ -90,7 +90,7 @@ vi.mock('@boundaryml/baml', () => {
 
 vi.mock('../../../../lib/harness-patterns/tools.server', () => ({
   Tools: vi.fn(async () => mockToolSets),
-  ToolsFrom: vi.fn(async () => mockToolSets)
+  ToolsFrom: vi.fn(async () => mockToolSets),
 }))
 
 // ============================================================================
@@ -120,7 +120,7 @@ function createMockScope(data: Record<string, unknown> = {}): Scope {
   return {
     id: 'test-scope',
     data: { input: 'test query about react hooks', ...data },
-    events: []
+    events: [],
   }
 }
 
@@ -129,24 +129,24 @@ function createMockViewWithCandidates(candidates: Array<{ patternId: string; dat
     type: 'tool_result' as const,
     ts: Date.now() + i,
     patternId: c.patternId,
-    data: c.data
+    data: c.data,
   }))
 
   return {
     fromAll: () => ({
       ofType: (type: string) => ({
-        get: () => type === 'tool_result' ? events : []
-      })
+        get: () => (type === 'tool_result' ? events : []),
+      }),
     }),
     fromLastPattern: () => ({
       ofType: () => ({
         get: () => [],
         first: () => null,
-        last: () => null
-      })
+        last: () => null,
+      }),
     }),
     lastUserMessage: () => 'test query about react hooks',
-    allEvents: () => events
+    allEvents: () => events,
   }
 }
 
@@ -164,27 +164,32 @@ describe('Multi-Source Research Evaluator Execution', () => {
   })
 
   it('should score based on content length and relevance', async () => {
-    const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-    const patterns = await multiSourceResearchAgent.createPatterns('test-session') as Pattern[]
-    const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
+    const { multiSourceResearchAgent } =
+      await import('../../../../lib/harness-client/agents/multi-source-research.server')
+    const patterns = (await multiSourceResearchAgent.createPatterns('test-session')) as Pattern[]
+    const judgePattern = patterns.find((p) => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope({ input: 'python flask tutorial' })
     const view = createMockViewWithCandidates([
       {
         patternId: 'web-search',
         // >100 chars and contains query terms
-        data: 'This is a comprehensive python flask tutorial that covers all the basics of python and flask. It includes many examples and code snippets for learning flask development.'
+        data: 'This is a comprehensive python flask tutorial that covers all the basics of python and flask. It includes many examples and code snippets for learning flask development.',
       },
       {
-        patternId: 'github-search',
+        patternId: 'doc-lookup',
         // <100 chars
-        data: 'Short content'
-      }
+        data: 'Short content',
+      },
     ])
 
     await judgePattern.fn(scope, view)
 
-    const rankings = (scope as Scope).data.rankings as Array<{ source: string; score: number; reason: string }>
+    const rankings = (scope as Scope).data.rankings as Array<{
+      source: string
+      score: number
+      reason: string
+    }>
     expect(rankings).toBeDefined()
     expect(rankings.length).toBe(2)
     // Web search should score higher
@@ -192,16 +197,17 @@ describe('Multi-Source Research Evaluator Execution', () => {
   })
 
   it('should handle candidates with only content length', async () => {
-    const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-    const patterns = await multiSourceResearchAgent.createPatterns('test-session') as Pattern[]
-    const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
+    const { multiSourceResearchAgent } =
+      await import('../../../../lib/harness-client/agents/multi-source-research.server')
+    const patterns = (await multiSourceResearchAgent.createPatterns('test-session')) as Pattern[]
+    const judgePattern = patterns.find((p) => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope({ input: 'xyz123' }) // No matching terms
     const view = createMockViewWithCandidates([
       {
         patternId: 'web-search',
-        data: 'a'.repeat(150) // >100 chars but no relevant terms
-      }
+        data: 'a'.repeat(150), // >100 chars but no relevant terms
+      },
     ])
 
     await judgePattern.fn(scope, view)
@@ -212,16 +218,17 @@ describe('Multi-Source Research Evaluator Execution', () => {
   })
 
   it('should give correct reason for limited content', async () => {
-    const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-    const patterns = await multiSourceResearchAgent.createPatterns('test-session') as Pattern[]
-    const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
+    const { multiSourceResearchAgent } =
+      await import('../../../../lib/harness-client/agents/multi-source-research.server')
+    const patterns = (await multiSourceResearchAgent.createPatterns('test-session')) as Pattern[]
+    const judgePattern = patterns.find((p) => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope({ input: 'test' })
     const view = createMockViewWithCandidates([
       {
         patternId: 'web-search',
-        data: 'short' // <100 chars
-      }
+        data: 'short', // <100 chars
+      },
     ])
 
     await judgePattern.fn(scope, view)
@@ -232,20 +239,22 @@ describe('Multi-Source Research Evaluator Execution', () => {
   })
 
   it('should select best candidate', async () => {
-    const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-    const patterns = await multiSourceResearchAgent.createPatterns('test-session') as Pattern[]
-    const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
+    const { multiSourceResearchAgent } =
+      await import('../../../../lib/harness-client/agents/multi-source-research.server')
+    const patterns = (await multiSourceResearchAgent.createPatterns('test-session')) as Pattern[]
+    const judgePattern = patterns.find((p) => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope({ input: 'test query' })
-    const goodContent = 'This is a substantial test query response with lots of relevant test content about the query topic.'
+    const goodContent =
+      'This is a substantial test query response with lots of relevant test content about the query topic.'
     const view = createMockViewWithCandidates([
       { patternId: 'web-search', data: 'short' },
-      { patternId: 'github-search', data: goodContent }
+      { patternId: 'doc-lookup', data: goodContent },
     ])
 
     await judgePattern.fn(scope, view)
 
-    // Best should be github-search
+    // Best should be doc-lookup
     expect((scope as Scope).data.response).toBeDefined()
   })
 })

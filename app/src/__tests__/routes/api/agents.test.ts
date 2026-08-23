@@ -95,7 +95,7 @@ function multipartRequest(
         )
       })
       .join('') + `--${BOUNDARY}--\r\n`
-  return new Request('http://x/api/agents/default', {
+  return new Request('http://x/api/agents/search', {
     method: 'POST',
     headers: {
       'Content-Type': `multipart/form-data; boundary=${BOUNDARY}`,
@@ -112,7 +112,7 @@ function evt(id: string, request: Request) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  getAgent.mockReturnValue({ id: 'default' })
+  getAgent.mockReturnValue({ id: 'search' })
   resolveActionUser.mockReturnValue('user-1')
   storeDocument.mockResolvedValue({ id: 'doc-1' })
 })
@@ -128,7 +128,7 @@ describe('POST /api/agents/:id', () => {
   it('401s a missing or unknown Bearer secret', async () => {
     resolveActionUser.mockReturnValue(null)
     const res = await POST(
-      evt('default', multipartRequest([{ name: 'transcribed_command', value: 'hi' }])),
+      evt('search', multipartRequest([{ name: 'transcribed_command', value: 'hi' }])),
     )
     expect(res.status).toBe(401)
     expect(seedActionRow).not.toHaveBeenCalled()
@@ -137,7 +137,7 @@ describe('POST /api/agents/:id', () => {
   it('400s when transcribed_command is missing', async () => {
     const res = await POST(
       evt(
-        'default',
+        'search',
         multipartRequest([{ name: 'short_description', value: 'x' }], {
           Authorization: 'Bearer s',
         }),
@@ -150,7 +150,7 @@ describe('POST /api/agents/:id', () => {
   it('202s, stores the recording, seeds the row, and fires the run', async () => {
     const res = await POST(
       evt(
-        'default',
+        'search',
         multipartRequest(
           [
             { name: 'transcribed_command', value: 'add a node' },
@@ -183,7 +183,7 @@ describe('POST /api/agents/:id', () => {
     const [runId, userId, agentId, trigger] = seedActionRow.mock.calls[0]
     expect(runId).toBe('run-fixed')
     expect(userId).toBe('user-1')
-    expect(agentId).toBe('default')
+    expect(agentId).toBe('search')
     expect(trigger).toMatchObject({
       transcribedCommand: 'add a node',
       shortDescription: 'Apollo',
@@ -199,7 +199,7 @@ describe('POST /api/agents/:id', () => {
     storeDocument.mockRejectedValue(new Error('redis down'))
     const res = await POST(
       evt(
-        'default',
+        'search',
         multipartRequest(
           [
             { name: 'transcribed_command', value: 'cmd' },
@@ -223,7 +223,7 @@ describe('POST /api/agents/:id', () => {
   it('works without a recording (text-only trigger)', async () => {
     const res = await POST(
       evt(
-        'default',
+        'search',
         multipartRequest([{ name: 'transcribed_command', value: 'cmd' }], {
           Authorization: 'Bearer s',
         }),

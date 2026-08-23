@@ -8,7 +8,7 @@ import type { APIEvent } from '@solidjs/start/server'
 import { processMessageStreaming } from '../../lib/harness-client/actions.server'
 import { saveSession } from '../../lib/harness-client/session.server'
 import { compactBulkData, serializeContext } from '../../lib/harness-patterns'
-import { runFirstTurnTitleGen } from '../../lib/harness-client/examples/title-generator.server'
+import { runFirstTurnTitleGen } from '../../lib/harness-client/agents/title-generator.server'
 import { runWithRequestContext } from '../../lib/harness-client/request-user.server'
 import { runWithSettings } from '../../lib/settings-context.server'
 import { getAuthenticatedUser } from '../../lib/auth/server'
@@ -52,7 +52,7 @@ export async function POST(event: APIEvent) {
       { status: 401, headers: { 'Content-Type': 'application/json' } },
     )
   }
-  const resolvedAgentId = agentId ?? 'default'
+  const resolvedAgentId = agentId ?? 'search'
 
   const encoder = new TextEncoder()
 

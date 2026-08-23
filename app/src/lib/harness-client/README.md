@@ -13,7 +13,7 @@ harness-client/
 ├── neo4j-enricher.server.ts   # `onToolResult` recipe — fetches 1-hop neighborhood for touched nodes
 ├── types.ts                   # GraphElement (extends Cytoscape ElementDefinition)
 ├── index.ts                   # Public exports
-└── examples/                  # 10 pre-built agent configurations (see examples/README.md)
+└── agents/                    # 10 pre-built agent configurations (see agents/README.md)
 ```
 
 Persistence layer is in `../db/`:
@@ -28,21 +28,16 @@ db/
 
 ### `processMessage(sessionId, message)`
 
-Synchronous agent execution. Delegates to `processMessageWithAgent(sessionId, message, 'default')`.
+Synchronous agent execution. Delegates to `processMessageWithAgent(sessionId, message, 'search')`.
 
 ### `processMessageStreaming(sessionId, message, agentId, onEvent)`
 
 Streaming variant — calls the harness with an `onEvent` callback that fires for each committed `ContextEvent`. Used by the SSE endpoint (`/api/events`).
 
 ```typescript
-const result = await processMessageStreaming(
-  sessionId,
-  message,
-  'default',
-  (evt: ContextEvent) => {
-    controller.enqueue(encoder.encode(`data: ${JSON.stringify(evt)}\n\n`))
-  }
-)
+const result = await processMessageStreaming(sessionId, message, 'search', (evt: ContextEvent) => {
+  controller.enqueue(encoder.encode(`data: ${JSON.stringify(evt)}\n\n`))
+})
 ```
 
 ### `approveAction(sessionId)` / `rejectAction(sessionId)`
@@ -65,6 +60,7 @@ Server actions used by the sidebar. Both authenticate via the Entra session (`ge
 `extractGraphElements(events)` parses `ContextEvent[]` (specifically `tool_result` events) into `GraphElement[]` for Cytoscape visualization.
 
 Handles two Neo4j result formats:
+
 - **MCP format**: Flat records `{ n: { name, description }, r: [startNode, "TYPE", endNode] }`
 - **Neo4j driver format**: Structured objects with `identity`, `labels[]`, `properties{}`
 

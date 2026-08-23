@@ -4,7 +4,6 @@
   "router": { "color": "#8b5cf6", "tint": "rgba(139,92,246,0.06)" },
   "neo4j-query": { "color": "#06b6d4", "tint": "rgba(6,182,212,0.06)" },
   "web-search": { "color": "#f59e0b", "tint": "rgba(245,158,11,0.06)" },
-  "code-mode": { "color": "#10b981", "tint": "rgba(16,185,129,0.06)" },
   "response-synth": { "color": "#ec4899", "tint": "rgba(236,72,153,0.06)" },
   "quality-judge": { "color": "#f43f5e", "tint": "rgba(244,63,94,0.06)" },
   "doc-lookup": { "color": "#6366f1", "tint": "rgba(99,102,241,0.06)" },

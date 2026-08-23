@@ -2,7 +2,7 @@
 
 A playground for building agent applications out of composable **harness patterns** — primitives like `simpleLoop`, `actorCritic`, `parallel`, `router`, `withReferences`, `withApproval` that you chain into agents fit for any task. BAML provides typed LLM reasoning at each pattern's leaf; an MCP gateway provides the tools.
 
-The repo ships several example agents that exercise the framework (default Neo4j + web research, code-mode, and several more in the registry). The point of the project is the framework — the agents are showcases of what becomes easy when the primitives are right.
+The repo ships several agents that exercise the framework (default Neo4j + web research, a plan-first general agent, sandbox and retriever agents, and more in the registry). The point of the project is the framework — the agents are showcases of what becomes easy when the primitives are right.
 
 ## Feature showcase
 
@@ -148,9 +148,9 @@ The harness is the main deliverable. It's a composable pattern framework built o
 
 ### Tool namespaces (via MCP Gateway)
 
-`neo4j`, `web`, `context7`, `filesystem`, `github`, `memory`, `redis`, `database`, `code` — plus any custom servers added to `configs/custom-catalog.yaml`. Tool grouping happens in `app/src/lib/harness-patterns/tools.server.ts` (`inferServer()` + `KNOWN_TOOL_SERVERS` lookup).
+`neo4j`, `web`, `context7`, `filesystem`, `memory`, `redis`, `database` — plus any custom servers added to `configs/custom-catalog.yaml`. Tool grouping happens in `app/src/lib/harness-patterns/tools.server.ts` (`inferServer()` + `KNOWN_TOOL_SERVERS` lookup).
 
-Full API: [`app/src/lib/harness-patterns/README.md`](app/src/lib/harness-patterns/README.md) · Examples: [`app/src/lib/harness-client/examples/README.md`](app/src/lib/harness-client/examples/README.md) · Cross-pattern data flow walkthrough: [`docs/harness-patterns/withReferences-tutorial.md`](docs/harness-patterns/withReferences-tutorial.md).
+Full API: [`app/src/lib/harness-patterns/README.md`](app/src/lib/harness-patterns/README.md) · Examples: [`app/src/lib/harness-client/agents/README.md`](app/src/lib/harness-client/agents/README.md) · Cross-pattern data flow walkthrough: [`docs/harness-patterns/withReferences-tutorial.md`](docs/harness-patterns/withReferences-tutorial.md).
 
 ## Conversation Persistence
 
@@ -172,14 +172,13 @@ Configured in `configs/custom-catalog.yaml` and enabled via `configs/mcp-config.
 | `fetch`               | `fetch`                                                       | Retrieve content from the web                                    |
 | `web_search`          | `web_search`                                                  | DuckDuckGo web search                                            |
 | `rust-mcp-filesystem` | filesystem ops                                                | Sandboxed filesystem access via configured allowed directories   |
-| `github`              | repo / issue / PR ops                                         | GitHub API                                                       |
 | `memory`              | entity / observation / relation ops                           | Knowledge-graph–style scratch memory                             |
 | `redis`               | key / hash / json / vector ops                                | Redis primitives + RediSearch                                    |
 | `database-server`     | SQL ops                                                       | Generic database access                                          |
 | `playwright`          | browser automation                                            | E2E testing (requires `pnpm dev:exposed`)                        |
 | `context7`            | `resolve-library-id`, `get-library-docs`                      | Library docs                                                     |
 
-Tool namespaces consumed by `harness-patterns/tools.server.ts`: `neo4j`, `web`, `context7`, `filesystem`, `github`, `memory`, `redis`, `database`, `code` (and `all`). See `KNOWN_TOOL_SERVERS` in that file for the namespace lookup.
+Tool namespaces consumed by `harness-patterns/tools.server.ts`: `neo4j`, `web`, `context7`, `filesystem`, `memory`, `redis`, `database` (and `all`). See `KNOWN_TOOL_SERVERS` in that file for the namespace lookup.
 
 ## Neo4j Database
 
@@ -243,7 +242,7 @@ kg-agent/
 │   │   ├── components/       # UI components (Ark UI)
 │   │   └── lib/
 │   │       ├── harness-patterns/  # Composable pattern framework
-│   │       ├── harness-client/    # Server actions, registry, session, examples/
+│   │       ├── harness-client/    # Server actions, registry, session, agents/
 │   │       ├── db/                # Postgres pool + conversations repo
 │   │       ├── neo4j/             # neo4j-driver singleton + write actions
 │   │       └── auth/              # Entra OIDC (MSAL) + session store + helpers

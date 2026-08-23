@@ -159,7 +159,7 @@ function isConnectionError(err: unknown): boolean {
  * only belongs here if no tool in any catalogued server uses it for a write:
  * `create`, `update`, `delete`, `write`, `set`, `add`, `push`, `merge`, `move`,
  * `zip`, `unzip`, `publish` and friends are all absent on purpose, as is
- * anything that executes code (`code-mode`, `mcp-exec`, shell tools).
+ * anything that executes code (`mcp-exec`, shell tools).
  *
  * Matched against the leading `_`/`-`-separated token of the bare tool name, so
  * `get_neo4j_schema`, `read_file`, `list_issues`, `search_code`,
@@ -436,7 +436,7 @@ async function dispatchTool(name: string, args: Record<string, unknown>): Promis
  *  Two offending shapes:
  *    - `"<ToolName> Error: ..."` — e.g. `mcp-neo4j-cypher`'s `"Neo4j Error:"`.
  *    - bare `"Error: ..."`        — the kg-agent gateway's meta-tools
- *      (`mcp-add`, `code-mode`) emit `"Error: Cannot add server ..."` /
+ *      (`mcp-add`, `mcp-exec`) emit `"Error: Cannot add server ..."` /
  *      `"Error: Server '...' not found ..."`. Before this they were stamped
  *      success:true, so the actor/critic treated a failed `mcp-add` as a
  *      result (see .harness-logs/context-neo4j-nosecrets.json).
@@ -457,8 +457,9 @@ export async function listTools(): Promise<MCPToolDescription[]> {
   // hence they are appended on both the success and the failure path.
   const appTools = appToolDescriptions()
   try {
-    // The tool catalog is not memoized here (callers such as tool-config do
-    // their own caching), so this stays one live fetch per call — it just
+    // The tool catalog is not memoized here (callers do their own caching,
+    // e.g. the adapters' tool-description cache), so this stays one live
+    // fetch per call — it just
     // rides whichever connection the lease hands out. Every connection talks
     // to the same gateway, so any of them yields the same catalog.
     const { tools } = await withReconnect((c) => c.listTools(), {

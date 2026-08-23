@@ -51,26 +51,27 @@ interface ToolResultItem {
 }
 
 // ============================================================================
-// Tool → Icon mapping (MDI icons via @iconify-json/mdi + @unocss/preset-icons)
-// Usage: class="i-mdi-<icon-name>" renders as CSS background-mask icon
+// Tool → Icon mapping (material-symbols via @unocss/preset-icons)
+// Usage: class="i-material-symbols-<icon-name>" renders as a CSS mask icon
 // ============================================================================
 
 function getToolIcon(tool: string): string {
   const t = tool.toLowerCase()
   if (t.includes('neo4j') || t.includes('cypher') || t.includes('graph'))
-    return 'i-mdi-graph-outline'
+    return 'i-material-symbols-hub-outline'
   if (t.includes('search') || t.includes('web') || t.includes('browse') || t.includes('fetch'))
-    return 'i-mdi-web'
-  if (t.includes('redis') || t.includes('cache')) return 'i-mdi-lightning-bolt-outline'
-  if (t.includes('memory') || t.includes('brain')) return 'i-mdi-brain'
-  if (t.includes('github') || t.includes('git')) return 'i-mdi-github'
+    return 'i-material-symbols-language'
+  if (t.includes('redis') || t.includes('cache')) return 'i-material-symbols-bolt-outline'
+  if (t.includes('memory') || t.includes('brain')) return 'i-material-symbols-psychology-outline'
+  if (t.includes('github') || t.includes('git')) return 'i-material-symbols-commit'
   if (t.includes('file') || t.includes('filesystem') || t.includes('read') || t.includes('write'))
-    return 'i-mdi-file-document-outline'
+    return 'i-material-symbols-description-outline'
   if (t.includes('context7') || t.includes('doc') || t.includes('library'))
-    return 'i-mdi-book-open-variant'
-  if (t.includes('code') || t.includes('script') || t.includes('eval')) return 'i-mdi-code-braces'
-  if (t.includes('database') || t.includes('sql')) return 'i-mdi-database-outline'
-  return 'i-mdi-package-variant'
+    return 'i-material-symbols-menu-book-outline'
+  if (t.includes('code') || t.includes('script') || t.includes('eval'))
+    return 'i-material-symbols-data-object'
+  if (t.includes('database') || t.includes('sql')) return 'i-material-symbols-database-outline'
+  return 'i-material-symbols-package-2-outline'
 }
 
 /** Icon tint color — matches the pattern-color scheme loosely */
@@ -124,14 +125,14 @@ function isAudioDoc(doc: StashDocumentMeta): boolean {
 function getDocIcon(mimeType: string, filename: string): string {
   const m = mimeType.toLowerCase()
   const f = filename.toLowerCase()
-  if (m.startsWith('audio/') || AUDIO_EXT_RE.test(f)) return 'i-mdi-microphone'
-  if (m.includes('json') || f.endsWith('.json')) return 'i-mdi-code-json'
+  if (m.startsWith('audio/') || AUDIO_EXT_RE.test(f)) return 'i-material-symbols-mic-outline'
+  if (m.includes('json') || f.endsWith('.json')) return 'i-material-symbols-file-json-outline'
   if (m.includes('csv') || m.includes('tab-separated') || f.endsWith('.csv'))
-    return 'i-mdi-table-large'
-  if (m.includes('markdown') || f.endsWith('.md')) return 'i-mdi-language-markdown-outline'
-  if (m.includes('pdf') || f.endsWith('.pdf')) return 'i-mdi-file-pdf-box'
-  if (m.includes('html') || m.includes('xml')) return 'i-mdi-file-code-outline'
-  return 'i-mdi-file-document-outline'
+    return 'i-material-symbols-data-table-outline'
+  if (m.includes('markdown') || f.endsWith('.md')) return 'i-material-symbols-markdown-outline'
+  if (m.includes('pdf') || f.endsWith('.pdf')) return 'i-material-symbols-picture-as-pdf-outline'
+  if (m.includes('html') || m.includes('xml')) return 'i-material-symbols-code-blocks-outline'
+  return 'i-material-symbols-description-outline'
 }
 
 /** URL that streams a document's raw bytes (base64-decoded for binary). Used as
@@ -533,7 +534,11 @@ const DocChip = (props: {
           onMouseLeave={(e) => (e.currentTarget.style.opacity = props.active ? '1' : '0.55')}
         >
           <span
-            class={props.active ? 'i-mdi-eye' : 'i-mdi-eye-outline'}
+            class={
+              props.active
+                ? 'i-material-symbols-visibility'
+                : 'i-material-symbols-visibility-outline'
+            }
             style={{ width: '13px', height: '13px', color: '#22d3ee', display: 'block' }}
           />
         </button>
@@ -579,7 +584,7 @@ const DocChip = (props: {
           />
           <Show when={status() === 'pending'}>
             <span
-              class="i-mdi-loading"
+              class="i-material-symbols-progress-activity"
               title="Embedding into the vector store…"
               style={{
                 position: 'absolute',
@@ -594,7 +599,7 @@ const DocChip = (props: {
           </Show>
           <Show when={status() === 'failed'}>
             <span
-              class="i-mdi-alert-circle"
+              class="i-material-symbols-error"
               title="Ingest failed — not searchable (is the embedder running?)"
               style={{
                 position: 'absolute',
@@ -923,7 +928,7 @@ const FileViewer = (props: {
         <Show when={loading()}>
           <div p="3" flex="~" items="center" gap="2" text="xs dark-text-tertiary">
             <span
-              class="i-mdi-loading"
+              class="i-material-symbols-progress-activity"
               style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }}
             />
             <span>Loading file…</span>
@@ -1033,7 +1038,11 @@ const UploadZone = (props: {
         transition="all"
       >
         <span
-          class={props.uploading ? 'i-mdi-loading' : 'i-mdi-cloud-upload-outline'}
+          class={
+            props.uploading
+              ? 'i-material-symbols-progress-activity'
+              : 'i-material-symbols-cloud-upload'
+          }
           style={{
             width: '24px',
             height: '24px',
@@ -1321,7 +1330,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
         gap="3"
       >
         <span
-          class="i-mdi-package-variant-closed"
+          class="i-material-symbols-inventory-2-outline"
           style={{ width: '16px', height: '16px', color: '#71717a' }}
         />
         <span text="sm dark-text-primary" font="medium">
@@ -1367,7 +1376,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
         <Show when={loading() && docs().length === 0}>
           <div flex="~" items="center" gap="2" p="x-3 y-2" text="xs dark-text-tertiary">
             <span
-              class="i-mdi-loading"
+              class="i-material-symbols-progress-activity"
               style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }}
             />
             <span>Loading uploads…</span>
@@ -1380,7 +1389,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
         <Show when={toolCount() === 0}>
           <div flex="~ col" items="center" justify="center" p="6" text="dark-text-tertiary" gap="2">
             <span
-              class="i-mdi-flask-empty-outline"
+              class="i-material-symbols-experiment-outline"
               style={{ width: '28px', height: '28px', color: '#3f3f46', opacity: '0.6' }}
             />
             <span text="xs m-t-1">No tool results yet — run an agent to see data here</span>

@@ -204,8 +204,7 @@ const warnedNamespaces = new Set<string>()
  * that can ever match are the ones `inferServer` actually PRODUCES — i.e. its
  * fixed points. Catalog/server names are not: `inferServer('web_search')` is
  * `'web'`, `inferServer('rust-mcp-filesystem')` is `'rust'`,
- * `inferServer('database-server')` is `'database'` (the same three renames
- * `tool-config/server-catalog.server.ts` keeps in `NAMESPACE_TO_SERVER`). So
+ * `inferServer('database-server')` is `'database'`. So
  * `namespaces: ['web_search']` type-checks, reads like protection, and
  * sanitizes exactly nothing — the failure mode a security control must never
  * have (sf-H5).

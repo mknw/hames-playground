@@ -29,7 +29,6 @@ async function getBAML() {
 const DEFAULT_ROUTES = [
   { name: 'neo4j', description: 'Database queries and graph operations' },
   { name: 'web_search', description: 'Web lookups and information retrieval' },
-  { name: 'code_mode', description: 'Multi-tool script composition' },
 ]
 
 export interface RouteMessageResult {

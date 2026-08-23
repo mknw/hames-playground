@@ -77,7 +77,7 @@ vi.mock('../../../../lib/harness-patterns', () => ({
 import {
   microsoft365Agent,
   MICROSOFT_365_TOOLS,
-} from '../../../../lib/harness-client/examples/microsoft-365.server'
+} from '../../../../lib/harness-client/agents/microsoft-365.server'
 import { appToolNamespace, hasAppTool } from '../../../../lib/app-tools/index.server'
 
 /** The last `simpleLoop(controller, tools, config)` call the agent made. */

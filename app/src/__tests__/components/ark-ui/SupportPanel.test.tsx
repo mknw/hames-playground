@@ -9,7 +9,7 @@
  * the tests lean on that to prove routing rather than inspecting internals.
  *
  * Stubs: `GraphVisualization` (Cytoscape needs layout/canvas jsdom has not),
- * `DataStashPanel` and `ToolsPanel` (both load server-backed resources on
+ * `DataStashPanel` (loads server-backed resources on
  * mount). Each stub echoes the props the panel is contracted to pass down.
  */
 import { describe, it, expect, vi } from 'vitest'
@@ -32,12 +32,6 @@ vi.mock('../../../components/ark-ui/GraphVisualization', () => ({
 vi.mock('../../../components/ark-ui/DataStashPanel', () => ({
   DataStashPanel: (props: { sessionId: string; agentId?: string }) => (
     <div data-testid="data-stash" data-session={props.sessionId} data-agent={props.agentId} />
-  ),
-}))
-
-vi.mock('../../../components/ark-ui/ToolsPanel', () => ({
-  ToolsPanel: (props: { sessionId?: string; agentId?: string }) => (
-    <div data-testid="tools-panel" data-session={props.sessionId} data-agent={props.agentId} />
   ),
 }))
 
@@ -97,16 +91,6 @@ describe('SupportPanel — tab routing', () => {
     expect(
       container.querySelector('[data-testid="data-stash"]')!.getAttribute('data-session'),
     ).toBe('')
-  })
-
-  it('routes the Tools tab to the tools panel', async () => {
-    const { container } = render(() => (
-      <SupportPanel graphElements={[]} sessionId="sess-9" agentId="code-mode" />
-    ))
-
-    await clickTab(container, 'Tools')
-    const tools = container.querySelector('[data-testid="tools-panel"]')!
-    expect(tools.getAttribute('data-agent')).toBe('code-mode')
   })
 
   it('routes the Terminal tab to the sandbox feed', async () => {

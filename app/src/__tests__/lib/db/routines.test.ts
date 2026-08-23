@@ -38,7 +38,7 @@ async function seed(overrides: Partial<Parameters<typeof createRoutine>[0]> = {}
   return createRoutine({
     id: rid(),
     userId: TEST_USER,
-    agentId: 'default',
+    agentId: 'search',
     trigger: { kind: 'interval', intervalSeconds: 3600 },
     input: 'summarise my graph',
     ...overrides,
@@ -74,7 +74,7 @@ describe('routines CRUD', () => {
     expect(loaded!.trigger).toEqual({ kind: 'interval', intervalSeconds: 3600 })
     expect(loaded!.label).toBe('Hourly digest')
     expect(loaded!.input).toBe('summarise my graph')
-    expect(loaded!.agentId).toBe('default')
+    expect(loaded!.agentId).toBe('search')
   })
 
   it('stores event-kind triggers with an empty config', async () => {

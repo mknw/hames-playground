@@ -63,13 +63,13 @@ beforeEach(() => {
 
 describe('seedActionRow', () => {
   it('inserts a running action row whose context replays the trigger command', async () => {
-    await seedActionRow('run-1', 'user-1', 'default', TRIGGER)
+    await seedActionRow('run-1', 'user-1', 'search', TRIGGER)
 
     const row = dbSaveConversation.mock.calls[0][0]
     expect(row).toMatchObject({
       id: 'run-1',
       userId: 'user-1',
-      agentId: 'default',
+      agentId: 'search',
       title: 'Incident summary',
       kind: 'action',
       source: 'post', // default provenance for the POST endpoint
@@ -86,29 +86,29 @@ describe('seedActionRow', () => {
   })
 
   it('records a routine-fired run with source=routine, otherwise identically', async () => {
-    await seedActionRow('run-2', 'user-1', 'default', TRIGGER, 'routine')
+    await seedActionRow('run-2', 'user-1', 'search', TRIGGER, 'routine')
     expect(dbSaveConversation.mock.calls[0][0]).toMatchObject({ kind: 'action', source: 'routine' })
   })
 
   it('stores a null title when the trigger carries no description', async () => {
-    await seedActionRow('run-3', 'user-1', 'default', { ...TRIGGER, shortDescription: '' })
+    await seedActionRow('run-3', 'user-1', 'search', { ...TRIGGER, shortDescription: '' })
     expect(dbSaveConversation.mock.calls[0][0]).toMatchObject({ title: null })
   })
 })
 
 describe('runAgentInBackground', () => {
   it('runs a fresh turn under the run’s own user/session scope and persists the result', async () => {
-    await runAgentInBackground('run-4', 'user-1', 'do the thing', 'default', TRIGGER)
+    await runAgentInBackground('run-4', 'user-1', 'do the thing', 'search', TRIGGER)
 
-    expect(getOrBuildPatterns).toHaveBeenCalledWith('run-4', 'default')
-    expect(harness).toHaveBeenCalledWith('patterns:default')
+    expect(getOrBuildPatterns).toHaveBeenCalledWith('run-4', 'search')
+    expect(harness).toHaveBeenCalledWith('patterns:search')
     // Never continues the seeded placeholder — that would duplicate the user_message.
     expect(runAgent).toHaveBeenCalledWith('do the thing', 'run-4', { trigger: TRIGGER })
     expect(seenScopes).toEqual([{ userId: 'user-1', sessionId: 'run-4' }])
     expect(saveSession).toHaveBeenCalledWith(
       'run-4',
       'user-1',
-      'default',
+      'search',
       JSON.stringify({ sessionId: 'run-4', data: { trigger: TRIGGER } }),
     )
   })
@@ -118,7 +118,7 @@ describe('runAgentInBackground', () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     await expect(
-      runAgentInBackground('run-5', 'user-1', 'x', 'default', TRIGGER),
+      runAgentInBackground('run-5', 'user-1', 'x', 'search', TRIGGER),
     ).resolves.toBeUndefined()
 
     expect(saveSession).not.toHaveBeenCalled()
@@ -138,7 +138,7 @@ describe('runAgentInBackground', () => {
     // Still swallowed as far as the caller is concerned — this is a
     // fire-and-forget background run and must not reject.
     await expect(
-      runAgentInBackground('run-6', 'user-1', 'x', 'default', TRIGGER),
+      runAgentInBackground('run-6', 'user-1', 'x', 'search', TRIGGER),
     ).resolves.toBeUndefined()
 
     expect(logged).toHaveBeenCalledWith(expect.stringContaining('run-6'), expect.anything())

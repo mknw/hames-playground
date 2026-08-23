@@ -129,7 +129,7 @@ firing retroactively for the window that elapsed under the old one.
 ```bash
 # 15-minute digest
 curl -X POST localhost:3444/api/routines -H 'Content-Type: application/json' \
-  -d '{"agentId":"default","trigger":"interval","triggerConfig":{"intervalSeconds":900},
+  -d '{"agentId":"search","trigger":"interval","triggerConfig":{"intervalSeconds":900},
        "input":"summarise what changed in the graph","label":"Graph digest"}'
 
 # pause it

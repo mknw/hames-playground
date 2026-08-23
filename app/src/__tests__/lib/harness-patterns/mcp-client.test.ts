@@ -220,7 +220,7 @@ describe('mcp-client', () => {
       expect(result.data).toBe('Hello world — nothing wrong here.')
     })
 
-    // The kg-agent gateway's meta-tools (mcp-add, code-mode) emit failures as a
+    // The kg-agent gateway's meta-tools (mcp-add, mcp-exec) emit failures as a
     // bare "Error: ..." text result with no preceding tool-name token. The old
     // regex required "<Word> Error:" and missed these, so a failed mcp-add was
     // stamped success:true (see .harness-logs/context-neo4j-nosecrets.json).
@@ -603,7 +603,6 @@ describe('mcp-client', () => {
           'subscribe',
           'zip_directory',
           'unzip_file',
-          'code-mode',
           'mcp-exec',
           'mcp-add',
           'sandbox_bash',

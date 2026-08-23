@@ -63,7 +63,7 @@ repo's larger changes carry their narrative in the PR body (see
 ## Labels
 
 The label set is GitHub's defaults plus topic labels (`harness-patterns`, `ui`,
-`mcp`, `auth`, `code-mode`, `observability`, `tech-debt`, `investigation`,
+`mcp`, `auth`, `observability`, `tech-debt`, `investigation`,
 `refinement`, `low priority`, …). They are **topical, not procedural** — there is
 no triage state vocabulary, and no skill should invent one. Anything that wants
 to know a ticket's state reads the board.

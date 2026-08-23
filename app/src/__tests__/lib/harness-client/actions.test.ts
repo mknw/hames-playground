@@ -75,12 +75,12 @@ vi.mock('../../../lib/harness-client/session.server', () => ({
 
 // ── registry ────────────────────────────────────────────────────────────────
 const AGENTS: Record<string, { icon: string; accent: string }> = {
-  default: { icon: 'i-material-symbols-robot-2-outline', accent: 'cyan' },
+  search: { icon: 'i-material-symbols-robot-2-outline', accent: 'cyan' },
 }
 const getAgent = vi.fn((id: string) => AGENTS[id])
 const getAgentMetadata = vi.fn(() => [
   {
-    id: 'default',
+    id: 'search',
     name: 'Default',
     description: 'd',
     icon: 'i-x',
@@ -122,7 +122,7 @@ vi.mock('../../../lib/settings-context.server', () => ({ runWithSettings }))
 
 // ── title generator (dynamically imported by the action) ────────────────────
 const runRegenerateTitle = vi.fn(async () => 'A better title')
-vi.mock('../../../lib/harness-client/examples/title-generator.server', () => ({
+vi.mock('../../../lib/harness-client/agents/title-generator.server', () => ({
   runRegenerateTitle,
 }))
 
@@ -146,7 +146,7 @@ describe('processMessage / runTurn', () => {
     expect(seeded).toMatchObject({
       id: 'sess-1',
       userId: 'bypass-user',
-      agentId: 'default',
+      agentId: 'search',
       status: 'running',
     })
     expect(seeded.title).toBe('hello worl')
@@ -156,12 +156,7 @@ describe('processMessage / runTurn', () => {
 
     expect(continueSession).not.toHaveBeenCalled()
     expect(result.response).toBe('fresh:hello world, this is long')
-    expect(saveSession).toHaveBeenCalledWith(
-      'sess-1',
-      'bypass-user',
-      'default',
-      'serialized:sess-1',
-    )
+    expect(saveSession).toHaveBeenCalledWith('sess-1', 'bypass-user', 'search', 'serialized:sess-1')
   })
 
   // sf-M2. The pre-seeded row above is written with status='running'; the
@@ -216,42 +211,42 @@ describe('processMessage / runTurn', () => {
   it('continues an existing conversation instead of re-running it fresh', async () => {
     loadSession.mockResolvedValue({
       serializedContext: 'ctx-a',
-      agentId: 'default',
+      agentId: 'search',
       kind: 'conversation',
       status: 'done',
     })
 
-    const result = await actions.processMessageWithAgent('sess-2', 'follow up', 'default')
+    const result = await actions.processMessageWithAgent('sess-2', 'follow up', 'search')
 
     expect(dbSaveConversation).not.toHaveBeenCalled() // no re-seed for a known row
     expect(harness).not.toHaveBeenCalled()
     expect(continueSession).toHaveBeenCalledWith(
       'ctx-a',
-      ['patterns:default'],
+      ['patterns:search'],
       'follow up',
       undefined,
     )
     expect(result.response).toBe('continued:follow up')
-    expect(saveSession).toHaveBeenCalledWith('sess-2', 'bypass-user', 'default', 'ctx-a+follow up')
+    expect(saveSession).toHaveBeenCalledWith('sess-2', 'bypass-user', 'search', 'ctx-a+follow up')
   })
 
   it('starts fresh when the agent changed under an existing sessionId', async () => {
     loadSession.mockResolvedValue({
       serializedContext: 'ctx-a',
-      agentId: 'default',
+      agentId: 'search',
       kind: 'conversation',
       status: 'done',
     })
 
-    const result = await actions.processMessageWithAgent('sess-3', 'hi', 'code-mode')
+    const result = await actions.processMessageWithAgent('sess-3', 'hi', 'general')
 
     expect(continueSession).not.toHaveBeenCalled()
-    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-3', 'code-mode')
+    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-3', 'general')
     expect(result.response).toBe('fresh:hi')
     expect(saveSession).toHaveBeenCalledWith(
       'sess-3',
       'bypass-user',
-      'code-mode',
+      'general',
       'serialized:sess-3',
     )
   })
@@ -265,7 +260,7 @@ describe('processMessage / runTurn', () => {
     isBypassEnabled.mockReturnValue(false)
     await actions.processMessage('sess-5', 'who am i')
     expect(seenScopes).toEqual([{ userId: 'entra-user', sessionId: 'sess-5' }])
-    expect(saveSession).toHaveBeenCalledWith('sess-5', 'entra-user', 'default', 'serialized:sess-5')
+    expect(saveSession).toHaveBeenCalledWith('sess-5', 'entra-user', 'search', 'serialized:sess-5')
   })
 
   it('streams events and runs the turn under the caller-supplied settings', async () => {
@@ -273,20 +268,15 @@ describe('processMessage / runTurn', () => {
     const settings = { maxTurns: 3 } as never
     loadSession.mockResolvedValue({
       serializedContext: 'ctx-a',
-      agentId: 'default',
+      agentId: 'search',
       kind: 'conversation',
       status: 'done',
     })
 
-    await actions.processMessageStreaming('sess-6', 'stream me', 'default', onEvent, settings)
+    await actions.processMessageStreaming('sess-6', 'stream me', 'search', onEvent, settings)
 
     expect(runWithSettings).toHaveBeenCalledWith(settings, expect.any(Function))
-    expect(continueSession).toHaveBeenCalledWith(
-      'ctx-a',
-      ['patterns:default'],
-      'stream me',
-      onEvent,
-    )
+    expect(continueSession).toHaveBeenCalledWith('ctx-a', ['patterns:search'], 'stream me', onEvent)
   })
 })
 
@@ -294,25 +284,25 @@ describe('approval gate', () => {
   it('resumes the stored context as approved', async () => {
     loadSession.mockResolvedValue({
       serializedContext: 'ctx-p',
-      agentId: 'code-mode',
+      agentId: 'general',
       kind: 'conversation',
       status: 'paused',
     })
     const result = await actions.approveAction('sess-7')
-    expect(resumeHarness).toHaveBeenCalledWith('ctx-p', ['patterns:code-mode'], true)
+    expect(resumeHarness).toHaveBeenCalledWith('ctx-p', ['patterns:general'], true)
     expect(result.response).toBe('approved')
-    expect(saveSession).toHaveBeenCalledWith('sess-7', 'bypass-user', 'code-mode', 'resumed:true')
+    expect(saveSession).toHaveBeenCalledWith('sess-7', 'bypass-user', 'general', 'resumed:true')
   })
 
   it('resumes as rejected, ignoring the (unused) reason', async () => {
     loadSession.mockResolvedValue({
       serializedContext: 'ctx-p',
-      agentId: 'code-mode',
+      agentId: 'general',
       kind: 'conversation',
       status: 'paused',
     })
     const result = await actions.rejectAction('sess-8', 'too risky')
-    expect(resumeHarness).toHaveBeenCalledWith('ctx-p', ['patterns:code-mode'], false)
+    expect(resumeHarness).toHaveBeenCalledWith('ctx-p', ['patterns:general'], false)
     expect(result.response).toBe('rejected')
   })
 
@@ -352,7 +342,7 @@ describe('sidebar actions', () => {
     dbListConversations.mockResolvedValue([
       {
         id: 'c1',
-        agentId: 'default',
+        agentId: 'search',
         title: 'T',
         kind: 'conversation',
         source: 'chat',
@@ -374,7 +364,7 @@ describe('sidebar actions', () => {
 
     expect(rows[0]).toEqual({
       id: 'c1',
-      agentId: 'default',
+      agentId: 'search',
       agentIcon: 'i-material-symbols-robot-2-outline',
       agentAccent: 'cyan',
       title: 'T',
@@ -411,14 +401,14 @@ describe('loadConversation', () => {
     })
     loadSession.mockResolvedValue({
       serializedContext: serialized,
-      agentId: 'default',
+      agentId: 'search',
       kind: 'action',
       status: 'done',
     })
 
     const loaded = await actions.loadConversation('sess-12')
 
-    expect(loaded).toMatchObject({ id: 'sess-12', agentId: 'default', kind: 'action', serialized })
+    expect(loaded).toMatchObject({ id: 'sess-12', agentId: 'search', kind: 'action', serialized })
     expect(loaded.messages.map((m) => [m.role, m.content])).toEqual([
       ['user', 'hi'],
       ['assistant', 'hello'],
@@ -435,7 +425,7 @@ describe('regenerateConversationTitle', () => {
   it('runs the title generator against the stored context', async () => {
     loadSession.mockResolvedValue({
       serializedContext: '{"sessionId":"sess-13"}',
-      agentId: 'default',
+      agentId: 'search',
       kind: 'conversation',
       status: 'done',
     })

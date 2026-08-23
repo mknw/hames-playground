@@ -15,7 +15,20 @@ import { For, Show, createSignal, createMemo, createEffect, on, onCleanup } from
 import { isServer } from 'solid-js/web'
 import { Tooltip } from '@ark-ui/solid/tooltip'
 import type { ContextEvent, ToolResultEventData } from '~/lib/harness-patterns'
-import type { StashDocumentMeta } from '~/lib/document-store.server'
+import {
+  deleteStashDocument,
+  getStashDocument,
+  patchStashDocument,
+  stashDocumentDownloadUrl,
+  uploadStashDocument,
+} from '~/lib/api-client'
+import {
+  cacheDocuments,
+  cachedDocuments,
+  hasPendingIngest,
+  refreshDocuments,
+  type StashDocumentMeta,
+} from '~/lib/stash-documents'
 import {
   referencesForDoc,
   type OpenReferenceTarget,
@@ -133,13 +146,6 @@ function getDocIcon(mimeType: string, filename: string): string {
   if (m.includes('pdf') || f.endsWith('.pdf')) return 'i-material-symbols-picture-as-pdf-outline'
   if (m.includes('html') || m.includes('xml')) return 'i-material-symbols-code-blocks-outline'
   return 'i-material-symbols-description-outline'
-}
-
-/** URL that streams a document's raw bytes (base64-decoded for binary). Used as
- *  the `<audio>` src — the `?download` Content-Disposition is ignored by media
- *  elements, so the same route serves both download and playback. */
-function docDownloadUrl(id: string, sessionId: string): string {
-  return `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(sessionId)}&download`
 }
 
 /** Format a byte count compactly (e.g. 2.4 KB). */
@@ -727,7 +733,7 @@ const DocChip = (props: {
           <audio
             controls
             autoplay
-            src={docDownloadUrl(d().id, props.sessionId)}
+            src={stashDocumentDownloadUrl(d().id, props.sessionId)}
             style={{ width: '180px', height: '32px' }}
           />
         </div>
@@ -790,11 +796,8 @@ const FileViewer = (props: {
     setLoading(true)
     setError(null)
     setContent(null)
-    fetch(`/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(sid)}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      // The route wraps the doc: `{ document: { content, encoding, … } }`.
-      .then((body: { document?: { content?: string; encoding?: string } }) => {
-        const d = body.document
+    getStashDocument(id, sid)
+      .then((d) => {
         if (!d) setError('Document not found')
         else if (d.encoding === 'base64') setError('Binary file — no text preview')
         else setContent(d.content ?? '')
@@ -1078,27 +1081,13 @@ const UploadZone = (props: {
 // Main Component
 // ============================================================================
 
-// Client-side cache of a session's uploaded-doc list. Ark's Tabs unmounts the
-// inactive tab, so this panel re-mounts every time it's selected — without the
-// cache, each re-mount re-ran a ~12s `listDocuments` and the Suspense boundary
-// flashed "Loading data…". We seed the signal from the cache (instant) and
-// refresh in the background, so re-selecting the tab is immediate and never
-// blanks the panel. (No suspending resource → the Suspense fallback never fires.)
-const docCache = new Map<string, StashDocumentMeta[]>()
-
-async function fetchDocuments(sessionId: string): Promise<StashDocumentMeta[]> {
-  const res = await fetch(`/api/stash/upload?sessionId=${encodeURIComponent(sessionId)}`)
-  if (!res.ok) return []
-  const body = (await res.json()) as { documents?: StashDocumentMeta[] }
-  return body.documents ?? []
-}
-
 export const DataStashPanel = (props: DataStashPanelProps) => {
   // Uploaded documents live in Redis (Issue #6), separate from the tool_result
-  // events in `props.events`. Seeded from the module cache, refreshed in the
-  // background — see `docCache` above.
+  // events in `props.events`. Seeded from the shared cache in
+  // `lib/stash-documents` (instant), refreshed in the background — so
+  // re-selecting the tab never blanks the panel.
   const [docs, setDocs] = createSignal<StashDocumentMeta[]>(
-    props.sessionId ? (docCache.get(props.sessionId) ?? []) : [],
+    props.sessionId ? (cachedDocuments(props.sessionId) ?? []) : [],
   )
   const [loading, setLoading] = createSignal(false)
   const [uploading, setUploading] = createSignal(false)
@@ -1108,7 +1097,6 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   // status transitions even before the first `pending` lands.
   const [watching, setWatching] = createSignal(false)
   let watchTimer: ReturnType<typeof setTimeout> | undefined
-  let inFlight = false
   // Inline file viewer: which doc is open + an optional char range to highlight.
   const [viewer, setViewer] = createSignal<{
     doc: StashDocumentMeta
@@ -1131,7 +1119,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   }
 
   const applyDocs = (sid: string, list: StashDocumentMeta[]) => {
-    docCache.set(sid, list)
+    cacheDocuments(sid, list)
     if (sid === props.sessionId) setDocs(list)
   }
 
@@ -1163,17 +1151,20 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
     ),
   )
 
-  // Single-flight background refresh. Shows a spinner only on the cold load
-  // (nothing cached yet); otherwise updates silently behind the cached view.
+  // Background refresh. Single-flighting lives in `lib/stash-documents`, so
+  // this coalesces with the route's embedding poll on the same endpoint rather
+  // than racing it (#226 B4). Shows a spinner only on the cold load (nothing
+  // cached yet); otherwise updates silently behind the cached view.
   const refresh = async () => {
     const sid = props.sessionId
-    if (!sid || isServer || inFlight) return
-    inFlight = true
-    if (!docCache.has(sid)) setLoading(true)
+    if (!sid || isServer) return
+    const cold = cachedDocuments(sid) === undefined
+    if (cold) setLoading(true)
     try {
-      applyDocs(sid, await fetchDocuments(sid))
+      applyDocs(sid, await refreshDocuments(sid))
+    } catch {
+      // Unreachable server: keep showing what we last had rather than blanking.
     } finally {
-      inFlight = false
       setLoading(false)
     }
   }
@@ -1181,7 +1172,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   // (Re)seed from cache + refresh whenever the session changes.
   createEffect(() => {
     const sid = props.sessionId
-    setDocs(sid ? (docCache.get(sid) ?? []) : [])
+    setDocs(sid ? (cachedDocuments(sid) ?? []) : [])
     if (sid) void refresh()
   })
 
@@ -1195,22 +1186,10 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
     setUploadError(null)
     try {
       for (const file of files) {
-        const form = new FormData()
-        form.set('sessionId', sid)
-        if (props.agentId) form.set('agentId', props.agentId)
-        form.set('file', file)
-        const res = await fetch('/api/stash/upload', { method: 'POST', body: form })
-        const body = (await res.json().catch(() => ({}))) as {
-          error?: string
-          document?: StashDocumentMeta
-        }
-        if (!res.ok) throw new Error(body.error ?? `Upload failed (${res.status})`)
+        const doc = await uploadStashDocument({ sessionId: sid, agentId: props.agentId, file })
         // Show each upload the instant it's stored — the POST returns before
         // ingest finishes, so there's no blocking refetch here.
-        if (body.document) {
-          const doc = body.document
-          applyDocs(sid, [doc, ...docs().filter((d) => d.id !== doc.id)])
-        }
+        if (doc) applyDocs(sid, [doc, ...docs().filter((d) => d.id !== doc.id)])
       }
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed')
@@ -1236,7 +1215,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       // Stream the raw file via the ?download route (binary is base64-decoded
       // server-side). Anchor-click so the Content-Disposition filename is used.
       const a = document.createElement('a')
-      a.href = `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(sid)}&download`
+      a.href = stashDocumentDownloadUrl(id, sid)
       a.download = ''
       a.rel = 'noopener'
       document.body.appendChild(a)
@@ -1244,39 +1223,40 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       a.remove()
       return
     }
-    if (action === 'delete') {
-      applyDocs(
-        sid,
-        docs().filter((d) => d.id !== id),
-      ) // optimistic remove
-      await fetch(
-        `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(sid)}`,
-        { method: 'DELETE' },
-      )
-    } else {
-      const patch =
-        action === 'hide'
-          ? { hidden: true }
-          : action === 'unhide'
-            ? { hidden: false }
-            : action === 'archive'
-              ? { archived: true, hidden: false }
-              : { archived: false }
-      await fetch(`/api/stash/document/${encodeURIComponent(id)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: sid, ...patch }),
-      })
+    try {
+      if (action === 'delete') {
+        applyDocs(
+          sid,
+          docs().filter((d) => d.id !== id),
+        ) // optimistic remove
+        await deleteStashDocument(id, sid)
+      } else {
+        const patch =
+          action === 'hide'
+            ? { hidden: true }
+            : action === 'unhide'
+              ? { hidden: false }
+              : action === 'archive'
+                ? { archived: true, hidden: false }
+                : { archived: false }
+        await patchStashDocument(id, sid, patch)
+      }
+    } catch (err) {
+      // The optimistic update has already been applied, so a failure that only
+      // reached the console would leave the panel showing a change the server
+      // never took. The refresh below reconciles; this says why it snapped back.
+      setUploadError(err instanceof Error ? err.message : 'Action failed')
     }
     void refresh()
   }
 
   // Gentle, single-flight status poll while an upload is `pending` or within the
-  // post-upload watch window. The `inFlight` guard in `refresh` prevents overlap
-  // (no 12s list-storm), and the server-side list cache keeps each poll cheap.
+  // post-upload watch window. Single-flighting in `lib/stash-documents` prevents
+  // overlap (no 12s list-storm), and the server-side list cache keeps each poll
+  // cheap.
   createEffect(() => {
     if (isServer) return
-    const active = watching() || docs().some((d) => d.ingestStatus === 'pending')
+    const active = watching() || hasPendingIngest(docs())
     if (!active) return
     const timer = setInterval(() => void refresh(), 4000)
     onCleanup(() => clearInterval(timer))

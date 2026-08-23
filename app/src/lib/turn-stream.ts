@@ -26,6 +26,7 @@ import { extractReferences } from '~/lib/harness-client/reference-extractor'
 // exactly that guarantee.
 import { errorBubble } from '~/lib/harness-client/replay'
 import { parseChatStream, type DoneEventData } from '~/lib/sse-client'
+import { openChatStream } from '~/lib/api-client'
 import type { Message } from '~/components/ark-ui/ChatMessages'
 import type { GraphElement } from '~/lib/harness-client/types'
 import type {
@@ -124,19 +125,15 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
   transition({ status: 'streaming', runningTool: null })
 
   try {
-    const response = await fetch('/api/events', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const response = await openChatStream(
+      {
         sessionId: request.sessionId,
         message: request.message,
         agentId: request.agentId,
         settings: request.settings,
-      }),
-      signal: request.signal,
-    })
-
-    if (!response.ok) throw new Error(`Server error: ${response.status}`)
+      },
+      request.signal,
+    )
 
     let finalResult: DoneEventData | null = null
     let runAnnounced = false

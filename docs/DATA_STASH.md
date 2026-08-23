@@ -20,29 +20,35 @@ query ─────────────────────── embe
 
 ## Modules (`app/src/lib/`)
 
-| Module | Role |
-|--------|------|
-| `document-store.server.ts` (#6) | RedisJSON storage: CRUD, TTL, per-session index, hide/archive flags, `toPriorResult` adapter |
-| `chunking.server.ts` (#9) | Pure text chunking — `fixed` / `sentence` / `paragraph` + MIME-aware `chunkDocument` |
-| `embeddings.server.ts` (#8) | Provider-pluggable embedding with a one-model-per-corpus guard |
-| `vector-store.server.ts` | Shared RediSearch wrapper: `createVectorStore` → `ensureIndex` / `upsert` / `search`; owns the index/key/payload plumbing + naming (`spaceTag`) |
-| `document-ingest.server.ts` | Orchestrator: chunk → embed → vector store, `searchDocuments` (KNN), and the status-tracked `ingestStashDocument` / `ensureSessionIngested` (harness-aware ingest) |
-| `doc-convert.server.ts` | Binary → markdown conversion via the `doc-convert` HTTP sidecar (`POST /extract`); gated by `STASH_CONVERT_DOCS`. See [Document conversion](#document-conversion) |
+| Module                                                                      | Role                                                                                                                                                                |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `document-store.server.ts` (#6)                                             | RedisJSON storage: CRUD, TTL, per-session index, hide/archive flags, `toPriorResult` adapter                                                                        |
+| `chunking.server.ts` (#9)                                                   | Pure text chunking — `fixed` / `sentence` / `paragraph` + MIME-aware `chunkDocument`                                                                                |
+| `embeddings.server.ts` (#8)                                                 | Provider-pluggable embedding with a one-model-per-corpus guard                                                                                                      |
+| `vector-store.server.ts`                                                    | Shared RediSearch wrapper: `createVectorStore` → `ensureIndex` / `upsert` / `search`; owns the index/key/payload plumbing + naming (`spaceTag`)                     |
+| `document-ingest.server.ts`                                                 | Orchestrator: chunk → embed → vector store, `searchDocuments` (KNN), and the status-tracked `ingestStashDocument` / `ensureSessionIngested` (harness-aware ingest)  |
+| `doc-convert.server.ts`                                                     | Binary → markdown conversion via the `doc-convert` HTTP sidecar (`POST /extract`); gated by `STASH_CONVERT_DOCS`. See [Document conversion](#document-conversion)   |
 | `retriever/redis-backend.server.ts`, `retriever/supabase-backend.server.ts` | `RetrieverBackend` impls for the harness `retriever` pattern — local Data Stash (`redis`, live) + company pgvector via the Supabase MCP (`supabase`, deferred stub) |
-| `stash/upload-service.server.ts`, `stash/http.server.ts` | Upload request parsing (multipart + JSON), auth/response helpers |
+| `stash/upload-service.server.ts`, `stash/http.server.ts`                    | Upload request parsing (multipart + JSON), auth/response helpers                                                                                                    |
 
 ## API routes (`app/src/routes/api/stash/`)
 
-| Method · Path | Purpose |
-|---|---|
-| `POST /api/stash/upload` | Store a document (multipart `file`, or JSON `{sessionId, filename, content}`) |
-| `GET /api/stash/upload?sessionId=` | List a session's documents (metadata) |
-| `GET /api/stash/document/:id?sessionId=` | Fetch a document (content + metadata) |
+| Method · Path                                     | Purpose                                                                          |
+| ------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `POST /api/stash/upload`                          | Store a document (multipart `file`, or JSON `{sessionId, filename, content}`)    |
+| `GET /api/stash/upload?sessionId=`                | List a session's documents (metadata)                                            |
+| `GET /api/stash/document/:id?sessionId=`          | Fetch a document (content + metadata)                                            |
 | `GET /api/stash/document/:id?sessionId=&download` | Stream the raw file (base64 decoded for binary) with `Content-Disposition` (#89) |
-| `DELETE /api/stash/document/:id?sessionId=` | Remove a document + its index entry |
-| `PATCH /api/stash/document/:id` | Toggle `hidden` / `archived` (`{sessionId, hidden?, archived?}`) |
-| `POST /api/stash/ingest` | Chunk → embed → index a stored doc (`{sessionId, docId, chunk?, embedding?}`) |
-| `GET /api/stash/search?sessionId=&q=&k=` | KNN similarity search over a session's chunks |
+| `DELETE /api/stash/document/:id?sessionId=`       | Remove a document + its index entry                                              |
+| `PATCH /api/stash/document/:id`                   | Toggle `hidden` / `archived` (`{sessionId, hidden?, archived?}`)                 |
+| `POST /api/stash/ingest`                          | Chunk → embed → index a stored doc (`{sessionId, docId, chunk?, embedding?}`)    |
+| `GET /api/stash/search?sessionId=&q=&k=`          | KNN similarity search over a session's chunks                                    |
+
+The **client** never calls these directly: `app/src/lib/api-client.ts` owns the
+URLs, request/response types and error contract (#226 B4), and
+`app/src/lib/stash-documents.ts` layers the shared document cache and a
+single-flight guard over the list call — the Data Stash panel and the chat
+route's embedding gate poll the same endpoint and coalesce onto one request.
 
 Auth follows the existing posture (dev-bypass aware; see `lib/auth/dev-bypass.ts`), and every route additionally scopes the `sessionId` it is given to the caller — see [Session ownership](#session-ownership) below. Ingest runs two ways: **explicitly** via `POST /api/stash/ingest`, or **automatically on upload** when the session's agent composes a `retriever` wired to the redis backend (see [Harness-aware ingest](#harness-aware-ingest-the-retriever-pattern) below). Either way it needs an embedding backend and binds the corpus to one model.
 
@@ -62,10 +68,10 @@ is the single resolver; `lib/stash/http.server.ts` exposes it to routes as
 
 Ownership comes from two records:
 
-| Record | Written by | Covers |
-|---|---|---|
+| Record                                                   | Written by                                                                                                                                                                                    | Covers                                                                                      |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `session_claims` (Postgres, TTL = `DEFAULT_TTL_SECONDS`) | every stash write for a session (`POST /api/stash/upload`, `POST /api/stash/ingest`, `PATCH /api/stash/document/:id`), which records the first writer and refreshes the window for the holder | an upload that precedes the conversation row — a file dropped before the first chat message |
-| `conversations.user_id` | `actions.server.ts` (row seeded before the first turn runs, #105) and `seedActionRow` (agent trigger, same request that stores the recording) | everything after the session is persisted |
+| `conversations.user_id`                                  | `actions.server.ts` (row seeded before the first turn runs, #105) and `seedActionRow` (agent trigger, same request that stores the recording)                                                 | everything after the session is persisted                                                   |
 
 First toucher wins, in both records: the claim upsert only re-targets a row that
 is already the caller's or has expired, and `saveConversation` never updates
@@ -89,7 +95,7 @@ The Data Stash adapts to the agent's harness composition:
 
 **The gate.** `POST /api/stash/upload`, after storing, resolves the session's agent (`loadSession` → `getOrBuildPatterns`) and checks `harnessHasRedisRetriever(patterns)` — static introspection in `harness-patterns/pattern-capabilities.ts` that walks `ConfiguredPattern.children` (the combinators — `routes`, `chain`, `withReferences`, `withSandbox` — all expose them). On a match it marks the doc `ingestStatus: 'pending'` and ingests **in the background** (the response returns immediately — embedding a large doc takes seconds). Base64 binaries are skipped (`failed`) — unless [document conversion](#document-conversion) is on and the type is convertible, in which case they're converted to markdown first. Best-effort: any failure leaves the `201` untouched.
 
-**Safety net.** Docs uploaded *before* the agent was known (session not yet persisted) miss the gate. The redis backend runs `ensureSessionIngested` on its first search per session (idempotent via `ingestStatus`), so they still become searchable on first retrieval.
+**Safety net.** Docs uploaded _before_ the agent was known (session not yet persisted) miss the gate. The redis backend runs `ensureSessionIngested` on its first search per session (idempotent via `ingestStatus`), so they still become searchable on first retrieval.
 
 **The pattern** (`harness-patterns/patterns/retriever.server.ts`) is framework-pure: it forms ONE query, fans it out to injected `RetrieverBackend`s concurrently (per-backend error isolation), merges hits closest-first capped at `k`, sets `scope.data.matches`, and emits a `tool_result` the compactExecution consumes. It's a low-latency alternative to a tool-calling `simpleLoop` — one embed + KNN instead of a >30s LLM loop. Typical wiring (see `harness-client/agents/retriever-agent.server.ts`):
 
@@ -103,7 +109,7 @@ routes({
 compactExecution({ mode: 'thread' }),
 ```
 
-**Query formulation.** By default the query is the user's **raw last message** — their own words embed better than a paraphrase (a generic rewrite like *"search the documents for all sections that discuss X"* dilutes the vector). `generateQuery: true` rewrites it with a cheap `RetrieveQuery` (Haiku) call **only when the turn has history** — to resolve back-references (*"more on that"*, *"those sections"*) into a self-contained query; turn-1 messages are searched verbatim. `turnWindow: N` is a no-LLM alternative that concatenates the last N user turns.
+**Query formulation.** By default the query is the user's **raw last message** — their own words embed better than a paraphrase (a generic rewrite like _"search the documents for all sections that discuss X"_ dilutes the vector). `generateQuery: true` rewrites it with a cheap `RetrieveQuery` (Haiku) call **only when the turn has history** — to resolve back-references (_"more on that"_, _"those sections"_) into a self-contained query; turn-1 messages are searched verbatim. `turnWindow: N` is a no-LLM alternative that concatenates the last N user turns.
 
 **Backends** (`app/src/lib/retriever/`) implement `RetrieverBackend { name, type, search() }`:
 
@@ -128,7 +134,7 @@ Convertible binary uploads — **docx, odt, pptx, pdf** (+ legacy `.doc`/`.ppt`/
 
 - **Sidecar, not MCP.** Conversion is a host pipeline step (like the direct-Redis app path), so `doc-convert.server.ts` calls a document-extraction service over plain HTTP (`POST /extract`, multipart `files` + `config={"output_format":"markdown"}`) rather than the serial MCP gateway. `DOC_CONVERT_URL` defaults to `http://localhost:8000`.
 - **Engine.** The compose `doc-convert` service runs stable **kreuzberg 4.x** (`ghcr.io/kreuzberg-dev/kreuzberg-full`) — Rust core, native parsers (no LibreOffice/pandoc), heading-preserving markdown that feeds `bindHeadings`. The **xberg** successor exposes the same `/extract` contract and is a one-line image swap (RC-only today); the response parser accepts kreuzberg's bare array **and** xberg's `{results:[…]}`.
-- **When.** In `ingestStashDocument`: a convertible base64 doc is converted, the markdown persisted as `derivedText`, then *that* is chunked (an in-memory text doc is handed to the unchanged `ingestDocument`). The upload gate + `ensureSessionIngested` admit convertible binaries, so they get the `pending → indexed` UX + composer-block; non-convertible binaries (zip, images) stay stored-only. `convertFn` is injectable for tests.
+- **When.** In `ingestStashDocument`: a convertible base64 doc is converted, the markdown persisted as `derivedText`, then _that_ is chunked (an in-memory text doc is handed to the unchanged `ingestDocument`). The upload gate + `ensureSessionIngested` admit convertible binaries, so they get the `pending → indexed` UX + composer-block; non-convertible binaries (zip, images) stay stored-only. `convertFn` is injectable for tests.
 - **Both kept.** The original bytes remain in `content` (so `?download` + the `/work` sync serve the real file); `derivedText` holds the markdown. Chunk char-offsets and the file viewer index into `derivedText`, so chat citations line up with what's shown — `GET /api/stash/document/:id` (no `download`) serves `derivedText` for converted docs, and the panel shows the view-eye via the computed `converted` flag.
 - **Graceful fallback.** Sidecar down/unreachable → the doc is marked `ingestStatus: 'failed'`; the upload itself still succeeds. Flag off → binaries behave exactly as before.
 
@@ -147,7 +153,7 @@ Vectors are only comparable within one model, so there is **no silent cross-prov
 
 `embed()` returns vectors tagged with `{provider, model, dimensions}`; `assertSameSpace()` enforces comparability. The space is baked into the index name and key prefix, and re-ingesting a session under a different model **throws** (override with `allowSpaceChange`). Env: `EMBEDDINGS_PROVIDER`, `EMBEDDINGS_LOCAL_URL`, `EMBEDDINGS_LOCAL_MODEL`.
 
-Start the local embedder (separate from `pnpm dev:llama`, which serves a *chat* model on `:8080`):
+Start the local embedder (separate from `pnpm dev:llama`, which serves a _chat_ model on `:8080`):
 
 ```bash
 llama-server --embedding -m models/Qwen3-Embedding-0.6B-Q8_0.gguf --port 8090 --ctx-size 8192

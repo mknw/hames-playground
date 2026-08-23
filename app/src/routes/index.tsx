@@ -8,6 +8,8 @@ import { isEdgeElement, isNodeElement } from '~/lib/harness-client/graph-extract
 import type { OpenReferenceTarget } from '~/lib/harness-client'
 import { newSessionId } from '~/lib/session-id'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
+import { applyToolResultAction } from '~/lib/api-client'
+import { hasPendingIngest, refreshDocuments } from '~/lib/stash-documents'
 import { createSessionRegistry } from '~/lib/session-registry'
 import { SessionRegistryContext } from '~/lib/session-registry-context'
 import { createThreadListStore } from '~/lib/thread-list-store'
@@ -83,25 +85,26 @@ export default function Home() {
   // Block the chat composer while uploaded sources are still embedding, so the
   // user can't query the retriever before its documents are searchable. Tracked
   // here (always mounted) via a light status poll — works even when the Data
-  // Stash tab (which also polls) is closed; the list cache keeps polls cheap.
+  // Stash tab (which also polls) is closed. Both pollers now go through
+  // `stash-documents`, so they coalesce onto one request and warm one cache
+  // (#226 B4).
   const [embeddingSources, setEmbeddingSources] = createSignal(false)
   let embedPollTimer: ReturnType<typeof setTimeout> | undefined
   let embedPolls = 0
   const pollEmbedding = async (sid: string) => {
     if (!sid) return
     try {
-      const res = await fetch(`/api/stash/upload?sessionId=${encodeURIComponent(sid)}`)
-      const body = res.ok
-        ? ((await res.json()) as { documents?: Array<{ ingestStatus?: string }> })
-        : {}
+      const documents = await refreshDocuments(sid)
       if (sid !== selectedSessionId()) return // session switched mid-poll
-      const pending = (body.documents ?? []).some((d) => d.ingestStatus === 'pending')
+      const pending = hasPendingIngest(documents)
       setEmbeddingSources(pending)
       embedPolls += 1
       // Keep watching while pending (cap ~6 min so a stuck ingest can't block forever).
       if (pending && embedPolls < 120)
         embedPollTimer = setTimeout(() => void pollEmbedding(sid), 3000)
     } catch {
+      // A poll that cannot reach the server must not leave the composer
+      // blocked — the user can always retry the question.
       setEmbeddingSources(false)
     }
   }
@@ -221,12 +224,7 @@ export default function Home() {
       return { ...e, data: d }
     })
 
-    // Persist to server
-    await fetch('/api/stash', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: sid, eventId, action }),
-    })
+    await applyToolResultAction(sid, eventId, action)
   }
 
   // Build a set of known entity names/labels from graph elements for chat

@@ -20,6 +20,11 @@ import cytoscape, {
 import { createSignal, onMount, onCleanup, createEffect, Show, For } from 'solid-js'
 import { Collapsible } from '@ark-ui/solid/collapsible'
 import { runManualCypher, getNodeProperties } from '~/lib/neo4j/queries'
+import {
+  createGraphNode,
+  linkGraphNodes,
+  setGraphNodeProperty,
+} from '~/lib/neo4j/graph-edit.server'
 
 // ============================================================================
 // Types
@@ -31,8 +36,6 @@ export interface GraphVisualizationProps {
   onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void
   onElementsChange?: (elements: ElementDefinition[]) => void
-  /** Callback for executing Cypher write operations (node edits, relation creation) */
-  onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>
   layout?: 'cose' | 'cola' | 'dagre' | 'circle' | 'grid' | 'breadthfirst'
   /** Additional Cytoscape stylesheets appended after base styles (e.g. per-turn colors) */
   extraStyles?: StylesheetJsonBlock[]
@@ -247,13 +250,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
           },
         })
         setEdgeCount(cy?.edges().length ?? 0)
-        // Execute write if callback provided
-        if (props.onCypherWrite) {
-          props.onCypherWrite(
-            `MATCH (a {name: $sourceName}), (b {name: $targetName}) CREATE (a)-[:${relType}]->(b)`,
-            { sourceName: rm.sourceLabel, targetName: targetLabel },
-          )
-        }
+        linkGraphNodes(rm.sourceLabel, targetLabel, relType).catch((error) => {
+          console.error('Cypher write failed:', error)
+        })
         setRelationMode(null)
         return
       }
@@ -594,18 +593,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
     setNodeCount(cy?.nodes().length ?? 0)
 
     // Persist to Neo4j
-    if (props.onCypherWrite) {
-      const params: Record<string, unknown> = { name }
-      if (description) {
-        params.description = description
-        props.onCypherWrite(
-          `CREATE (n:\`${label}\` {name: $name, description: $description})`,
-          params,
-        )
-      } else {
-        props.onCypherWrite(`CREATE (n:\`${label}\` {name: $name})`, params)
-      }
-    }
+    createGraphNode(label, name, description || undefined).catch((error) => {
+      console.error('Cypher write failed:', error)
+    })
 
     // Reset form
     setNewNodeName('')
@@ -1244,7 +1234,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                           <div text="dark-text-tertiary" font="medium">
                             {key}
                           </div>
-                          <Show when={props.onCypherWrite && typeof value === 'string'}>
+                          <Show when={typeof value === 'string'}>
                             <button
                               onClick={() => setEditingField({ key, value: String(value) })}
                               text="dark-text-tertiary hover:neon-cyan"
@@ -1307,10 +1297,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                                     properties: { ...node().properties!, [key]: newVal },
                                   })
                                   // Persist to Neo4j
-                                  props.onCypherWrite?.(
-                                    `MATCH (n {name: $name}) SET n.${key} = $value`,
-                                    { name: node().label, value: newVal },
-                                  )
+                                  setGraphNodeProperty(node().label, key, newVal).catch((error) => {
+                                    console.error('Cypher write failed:', error)
+                                  })
                                   setEditingField(null)
                                 }}
                                 p="x-2 y-1"

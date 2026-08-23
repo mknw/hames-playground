@@ -170,6 +170,17 @@ vi.mock('~/lib/neo4j/queries', () => ({
   getNodeProperties: (...a: unknown[]) => getNodeProperties(...a),
 }))
 
+// Intent-shaped graph edit RPCs (#226 C2) — the component calls these
+// directly instead of shipping raw Cypher through an onCypherWrite prop.
+const createGraphNode = vi.fn(async (..._a: unknown[]) => {})
+const linkGraphNodes = vi.fn(async (..._a: unknown[]) => {})
+const setGraphNodeProperty = vi.fn(async (..._a: unknown[]) => {})
+vi.mock('~/lib/neo4j/graph-edit.server', () => ({
+  createGraphNode: (...a: unknown[]) => createGraphNode(...a),
+  linkGraphNodes: (...a: unknown[]) => linkGraphNodes(...a),
+  setGraphNodeProperty: (...a: unknown[]) => setGraphNodeProperty(...a),
+}))
+
 // ---------------------------------------------------------------------------
 // Environment
 // ---------------------------------------------------------------------------
@@ -523,10 +534,7 @@ describe('GraphVisualization — manual Cypher', () => {
 
 describe('GraphVisualization — node creation and editing', () => {
   it('creates a node locally and persists it', async () => {
-    const onCypherWrite = vi.fn(async () => {})
-    const { container } = render(() => (
-      <GraphVisualization elements={[]} onCypherWrite={onCypherWrite} />
-    ))
+    const { container } = render(() => <GraphVisualization elements={[]} />)
     await becomeVisible()
 
     button(container, '+ Node').click()
@@ -545,18 +553,12 @@ describe('GraphVisualization — node creation and editing', () => {
     expect(added.at(-1)).toMatchObject({
       data: { id: 'GraphQL', label: 'GraphQL', type: 'Concept', description: 'A query language' },
     })
-    expect(onCypherWrite).toHaveBeenCalledWith(
-      'CREATE (n:`Concept` {name: $name, description: $description})',
-      { name: 'GraphQL', description: 'A query language' },
-    )
+    expect(createGraphNode).toHaveBeenCalledWith('Concept', 'GraphQL', 'A query language')
     expect(container.textContent, 'the form closes again').not.toContain('Create Node')
   })
 
-  it('omits the description clause when none was given', async () => {
-    const onCypherWrite = vi.fn(async () => {})
-    const { container } = render(() => (
-      <GraphVisualization elements={[]} onCypherWrite={onCypherWrite} />
-    ))
+  it('omits the description when none was given', async () => {
+    const { container } = render(() => <GraphVisualization elements={[]} />)
     await becomeVisible()
 
     button(container, '+ Node').click()
@@ -569,9 +571,7 @@ describe('GraphVisualization — node creation and editing', () => {
     button(container, 'Create').click()
     await tick()
 
-    expect(onCypherWrite).toHaveBeenCalledWith('CREATE (n:`Concept` {name: $name})', {
-      name: 'REST',
-    })
+    expect(createGraphNode).toHaveBeenCalledWith('Concept', 'REST', undefined)
   })
 
   it('closes the create form without touching the graph', async () => {
@@ -641,10 +641,7 @@ describe('GraphVisualization — node properties panel', () => {
   })
 
   it('edits a string property and writes it back to Neo4j', async () => {
-    const onCypherWrite = vi.fn(async () => {})
-    const rendered = render(() => (
-      <GraphVisualization elements={nodes(['a'])} onCypherWrite={onCypherWrite} />
-    ))
+    const rendered = render(() => <GraphVisualization elements={nodes(['a'])} />)
     await becomeVisible()
 
     fire('tap', 'node', fakeNode('a', { label: 'Alpha', properties: { summary: 'old' } }))
@@ -659,21 +656,27 @@ describe('GraphVisualization — node properties panel', () => {
     button(rendered.container, 'Save').click()
     await tick()
 
-    expect(onCypherWrite).toHaveBeenCalledWith('MATCH (n {name: $name}) SET n.summary = $value', {
-      name: 'Alpha',
-      value: 'new summary',
-    })
+    expect(setGraphNodeProperty).toHaveBeenCalledWith('Alpha', 'summary', 'new summary')
     expect(dataWrites).toContainEqual(['a', 'summary', 'new summary'])
     expect(rendered.container.textContent).toContain('new summary')
   })
 
-  it('offers no edit affordance without a write callback', async () => {
-    const { container } = await openPanel()
+  it('survives a rejected property write instead of crashing the panel', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    setGraphNodeProperty.mockRejectedValueOnce(new Error('neo4j down'))
+    const rendered = render(() => <GraphVisualization elements={nodes(['a'])} />)
+    await becomeVisible()
 
     fire('tap', 'node', fakeNode('a', { label: 'Alpha', properties: { summary: 'old' } }))
     await tick()
+    rendered.container.querySelector<HTMLElement>('button[title="Edit field"]')!.click()
+    await tick()
+    button(rendered.container, 'Save').click()
+    await tick()
 
-    expect(container.querySelector('button[title="Edit field"]')).toBeNull()
+    expect(setGraphNodeProperty).toHaveBeenCalled()
+    expect(consoleError).toHaveBeenCalledWith('Cypher write failed:', expect.any(Error))
+    consoleError.mockRestore()
   })
 
   it('closes on a background tap', async () => {
@@ -710,10 +713,7 @@ describe('GraphVisualization — node properties panel', () => {
 
 describe('GraphVisualization — relation mode', () => {
   it('draws and persists a relation between two tapped nodes', async () => {
-    const onCypherWrite = vi.fn(async () => {})
-    const { container } = render(() => (
-      <GraphVisualization elements={nodes(['a', 'b'])} onCypherWrite={onCypherWrite} />
-    ))
+    const { container } = render(() => <GraphVisualization elements={nodes(['a', 'b'])} />)
     await becomeVisible()
 
     fire('tap', 'node', fakeNode('a', { label: 'Alpha' }))
@@ -732,10 +732,7 @@ describe('GraphVisualization — relation mode', () => {
     expect(added.at(-1)).toMatchObject({
       data: { id: 'a-DEPENDS_ON-b', source: 'a', target: 'b', label: 'DEPENDS_ON' },
     })
-    expect(onCypherWrite).toHaveBeenCalledWith(
-      'MATCH (a {name: $sourceName}), (b {name: $targetName}) CREATE (a)-[:DEPENDS_ON]->(b)',
-      { sourceName: 'Alpha', targetName: 'Beta' },
-    )
+    expect(linkGraphNodes).toHaveBeenCalledWith('Alpha', 'Beta', 'DEPENDS_ON')
     expect(container.textContent, 'the banner clears once the relation lands').not.toContain(
       'Select target node',
     )

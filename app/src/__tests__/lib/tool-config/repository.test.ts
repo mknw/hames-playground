@@ -6,6 +6,11 @@
  * into a `CodedTool`, what it does with an empty result set, how it coerces
  * Neo4j's Integer-like return values to booleans — and, in every case, that
  * the session is closed even when the query throws.
+ *
+ * #226 C3 pins: every CRUD operation requires an authenticated user and
+ * scopes its query by `owner`, so an unauthenticated browser is rejected
+ * before the driver is touched and user A's queries can never match user B's
+ * nodes.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -16,6 +21,11 @@ const driverSession = vi.fn(() => ({ run: sessionRun, close: sessionClose }))
 
 vi.mock('../../../lib/neo4j/client', () => ({
   getNeo4jDriver: () => ({ session: driverSession }),
+}))
+
+const getAuthenticatedUser = vi.fn(async () => ({ id: 'user-a' }))
+vi.mock('../../../lib/auth/server', () => ({
+  getAuthenticatedUser: () => getAuthenticatedUser(),
 }))
 
 /** A driver record: `.get(field)` over a fixed map. */
@@ -40,21 +50,62 @@ const lastParams = () => sessionRun.mock.calls.at(-1)![1]
 beforeEach(() => {
   vi.clearAllMocks()
   sessionClose.mockResolvedValue(undefined)
+  getAuthenticatedUser.mockResolvedValue({ id: 'user-a' })
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('auth gate (#226 C3)', () => {
+  // The dev bypass is off here (vitest runs with DEV=true but no
+  // VITE_DEV_BYPASS_AUTH), so every operation goes through
+  // getAuthenticatedUser and an unauthenticated caller is rejected
+  // before any driver session is opened.
+  it('rejects an unauthenticated caller on every CRUD operation', async () => {
+    getAuthenticatedUser.mockRejectedValue(
+      new Error('Authentication required: No user found in session.'),
+    )
+    const repo = await import('../../../lib/tool-config/repository.server')
+
+    await expect(repo.getCodedTools()).rejects.toThrow('Authentication required')
+    await expect(repo.getCodedToolsForPlanner()).rejects.toThrow('Authentication required')
+    await expect(repo.getCodedTool('x')).rejects.toThrow('Authentication required')
+    await expect(repo.codedToolExists('x')).rejects.toThrow('Authentication required')
+    await expect(repo.saveCodedTool({ name: 'n', description: 'd', script: 's' })).rejects.toThrow(
+      'Authentication required',
+    )
+    await expect(repo.deleteCodedTool('x')).rejects.toThrow('Authentication required')
+
+    expect(driverSession).not.toHaveBeenCalled()
+    expect(sessionRun).not.toHaveBeenCalled()
+  })
+
+  it("scopes by the CALLER's id — user B's queries can never match user A's nodes", async () => {
+    getAuthenticatedUser.mockResolvedValue({ id: 'user-b' })
+    const repo = await import('../../../lib/tool-config/repository.server')
+
+    sessionRun.mockResolvedValueOnce({ records: [] })
+    await repo.getCodedTools()
+    expect(lastParams()).toEqual({ owner: 'user-b' })
+
+    sessionRun.mockResolvedValueOnce({ records: [record({ deleted: 0 })] })
+    await repo.deleteCodedTool('word-count')
+    expect(lastCypher()).toContain('MATCH (t:CodedTool {owner: $owner, name: $name})')
+    expect(lastParams()).toEqual({ owner: 'user-b', name: 'word-count' })
+  })
+})
+
 describe('initializeToolRepository', () => {
-  it('creates the name index idempotently and closes the session', async () => {
+  it('creates the owner+name index idempotently and closes the session', async () => {
     sessionRun.mockResolvedValueOnce({ records: [] })
     const { initializeToolRepository } = await import('../../../lib/tool-config/repository.server')
     vi.spyOn(console, 'log').mockImplementation(() => {})
 
     await initializeToolRepository()
 
-    expect(lastCypher()).toContain('CREATE INDEX coded_tool_name IF NOT EXISTS')
+    expect(lastCypher()).toContain('CREATE INDEX coded_tool_owner_name IF NOT EXISTS')
+    expect(lastCypher()).toContain('(t.owner, t.name)')
     expect(sessionClose).toHaveBeenCalledTimes(1)
   })
 
@@ -69,7 +120,7 @@ describe('initializeToolRepository', () => {
 })
 
 describe('saveCodedTool', () => {
-  it('binds the tool fields and returns the saved node', async () => {
+  it('binds the tool fields plus the owner and returns the saved node', async () => {
     sessionRun.mockResolvedValueOnce({ records: [record({ tool: TOOL })] })
     const { saveCodedTool } = await import('../../../lib/tool-config/repository.server')
 
@@ -81,8 +132,9 @@ describe('saveCodedTool', () => {
     })
 
     expect(saved).toEqual(TOOL)
-    expect(lastCypher()).toContain('MERGE (t:CodedTool {name: $name})')
+    expect(lastCypher()).toContain('MERGE (t:CodedTool {owner: $owner, name: $name})')
     expect(lastParams()).toEqual({
+      owner: 'user-a',
       name: 'word-count',
       description: 'counts words',
       script: 'return 1',
@@ -122,6 +174,7 @@ describe('getCodedTools', () => {
     const tools = await getCodedTools()
 
     expect(tools.map((t) => t.name)).toEqual(['word-count', 'other'])
+    expect(lastCypher()).toContain('MATCH (t:CodedTool {owner: $owner})')
     expect(lastCypher()).toContain('ORDER BY t.usageCount DESC')
   })
 
@@ -134,7 +187,7 @@ describe('getCodedTools', () => {
 })
 
 describe('getCodedToolsForPlanner', () => {
-  it('projects to name/description only, capped for prompt context', async () => {
+  it('projects to name/description only, owner-scoped, capped for prompt context', async () => {
     sessionRun.mockResolvedValueOnce({
       records: [record({ name: 'word-count', description: 'counts words' })],
     })
@@ -143,6 +196,7 @@ describe('getCodedToolsForPlanner', () => {
     const refs = await getCodedToolsForPlanner()
 
     expect(refs).toEqual([{ name: 'word-count', description: 'counts words' }])
+    expect(lastCypher()).toContain('MATCH (t:CodedTool {owner: $owner})')
     expect(lastCypher()).toContain('LIMIT 20')
   })
 })
@@ -155,7 +209,7 @@ describe('getCodedTool', () => {
     const tool = await getCodedTool('word-count')
 
     expect(tool).toEqual(TOOL)
-    expect(lastParams()).toEqual({ name: 'word-count' })
+    expect(lastParams()).toEqual({ owner: 'user-a', name: 'word-count' })
     expect(lastCypher()).toContain('SET t.usageCount = COALESCE(t.usageCount, 0) + 1')
   })
 
@@ -176,7 +230,7 @@ describe('deleteCodedTool', () => {
     const { deleteCodedTool } = await import('../../../lib/tool-config/repository.server')
 
     await expect(deleteCodedTool('word-count')).resolves.toBe(true)
-    expect(lastParams()).toEqual({ name: 'word-count' })
+    expect(lastParams()).toEqual({ owner: 'user-a', name: 'word-count' })
   })
 
   it('reports false when the Integer count is zero (nothing matched)', async () => {
@@ -205,6 +259,7 @@ describe('codedToolExists', () => {
 
     sessionRun.mockResolvedValueOnce({ records: [record({ exists: false })] })
     await expect(codedToolExists('missing')).resolves.toBe(false)
+    expect(lastParams()).toEqual({ owner: 'user-a', name: 'missing' })
   })
 
   it('closes the session even when the query throws', async () => {
@@ -213,45 +268,5 @@ describe('codedToolExists', () => {
 
     await expect(codedToolExists('x')).rejects.toThrow('boom')
     expect(sessionClose).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('server-function wrappers', () => {
-  it('fetchCodedTools delegates to getCodedTools', async () => {
-    sessionRun.mockResolvedValueOnce({ records: [record({ tool: TOOL })] })
-    const { fetchCodedTools } = await import('../../../lib/tool-config/repository.server')
-
-    await expect(fetchCodedTools()).resolves.toEqual([TOOL])
-    expect(lastCypher()).toContain('MATCH (t:CodedTool)')
-  })
-
-  it('fetchCodedToolsForPlanner delegates to the planner projection', async () => {
-    sessionRun.mockResolvedValueOnce({
-      records: [record({ name: 'n', description: 'd' })],
-    })
-    const { fetchCodedToolsForPlanner } = await import('../../../lib/tool-config/repository.server')
-
-    await expect(fetchCodedToolsForPlanner()).resolves.toEqual([{ name: 'n', description: 'd' }])
-    expect(lastCypher()).toContain('LIMIT 20')
-  })
-
-  it('saveCodedToolServer delegates to saveCodedTool', async () => {
-    sessionRun.mockResolvedValueOnce({ records: [record({ tool: TOOL })] })
-    const { saveCodedToolServer } = await import('../../../lib/tool-config/repository.server')
-
-    await expect(
-      saveCodedToolServer({ name: 'word-count', description: 'counts words', script: 's' }),
-    ).resolves.toEqual(TOOL)
-    expect(lastCypher()).toContain('MERGE (t:CodedTool {name: $name})')
-  })
-
-  it('deleteCodedToolServer delegates to deleteCodedTool', async () => {
-    sessionRun.mockResolvedValueOnce({
-      records: [record({ deleted: { toNumber: () => 1 } })],
-    })
-    const { deleteCodedToolServer } = await import('../../../lib/tool-config/repository.server')
-
-    await expect(deleteCodedToolServer('word-count')).resolves.toBe(true)
-    expect(lastCypher()).toContain('DELETE t')
   })
 })

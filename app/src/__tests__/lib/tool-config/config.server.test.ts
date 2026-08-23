@@ -165,6 +165,26 @@ describe('getCodeModeAllowedTools — the allowed set', () => {
     expect(loadSession).toHaveBeenCalledWith('s1', 'dev-bypass-user')
     vi.unstubAllEnvs()
   })
+
+  // #226 C1: this module's bypass used to check VITE_DEV_BYPASS_AUTH inline,
+  // without the import.meta.env.DEV conjunct that lib/auth/dev-bypass.ts
+  // enforces — so a production build with the var still set silently returned
+  // the bypass user. Pin the gated behavior.
+  it('does NOT bypass in a production build even with VITE_DEV_BYPASS_AUTH=true', async () => {
+    const env = import.meta.env as Record<string, unknown>
+    const originalDev = env.DEV
+    env.DEV = false
+    vi.stubEnv('VITE_DEV_BYPASS_AUTH', 'true')
+    loadSession.mockResolvedValue(null)
+    const { getCodeModeAllowedTools } = await import('../../../lib/tool-config/config.server')
+
+    await getCodeModeAllowedTools('s1')
+
+    expect(getAuthenticatedUser).toHaveBeenCalled()
+    expect(loadSession).toHaveBeenCalledWith('s1', 'u1')
+    env.DEV = originalDev
+    vi.unstubAllEnvs()
+  })
 })
 
 describe('setCodeModeAllowedTools', () => {

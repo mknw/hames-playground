@@ -62,9 +62,6 @@ vi.mock('~/lib/harness-client', () => ({
   deleteConversationsBulk: (ids: string[]) => deleteConversationsBulk(ids),
 }))
 
-const executeCypherWrite = vi.fn<() => Promise<void>>(async () => {})
-vi.mock('~/lib/neo4j/write-action', () => ({ executeCypherWrite: () => executeCypherWrite() }))
-
 let nextId = 0
 vi.mock('~/lib/session-id', () => ({ newSessionId: () => `new-${++nextId}` }))
 
@@ -612,13 +609,6 @@ describe('chat route — support panel wiring', () => {
       await tick()
       expect(support.contextEvents[0].data).toMatchObject(expected)
     }
-  })
-
-  it('survives a failed Cypher write instead of rejecting into the graph UI', async () => {
-    await mount()
-    executeCypherWrite.mockRejectedValue(new Error('neo4j down'))
-    await expect(support.onCypherWrite('MERGE (n:X)', { a: 1 })).resolves.toBeUndefined()
-    expect(executeCypherWrite).toHaveBeenCalled()
   })
 
   it('tracks the agent the chat view reports, for the panel’s code-mode gate', async () => {

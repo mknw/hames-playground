@@ -33,7 +33,6 @@ interface AllGraphTabProps {
   highlightedIds?: string[]
   onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void
-  onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>
   /** Injected by AllGraphTabWrapper (which owns FloatingPanel.Root) — drives
    *  which window controls the Turn Explorer header shows. */
   panelStage?: PanelStage
@@ -222,7 +221,6 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
             highlightedIds={props.highlightedIds}
             onNodeClick={props.onNodeClick}
             onEdgeClick={props.onEdgeClick}
-            onCypherWrite={props.onCypherWrite}
             extraStyles={turnStyles()}
           />
         </Show>

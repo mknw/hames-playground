@@ -10,7 +10,7 @@ export {
   getCodeModeAllowedTools,
   setCodeModeAllowedTools,
   getAvailableTools,
-} from "./config.server";
+} from './config.server'
 
 // Server-only: real-server-name catalog (factory scoping) + master-catalog
 // search preview. getPresetTools/serverForTool are also imported server-side
@@ -20,7 +20,7 @@ export {
   getPresetTools,
   serverForTool,
   searchMasterCatalog,
-} from "./server-catalog.server";
+} from './server-catalog.server'
 
 // Pure data + types — must come from a non-"use server" module so the
 // client sees real arrays and not RPC stubs (see ToolsPanel hallucination
@@ -35,15 +35,14 @@ export {
   type CodeModeToolsState,
   type CatalogServer,
   type CatalogTool,
-} from "./constants";
+} from './constants'
 
-// Repository exports
+// Repository exports. The real functions carry 'use server' + auth themselves
+// (#226 C3 folded the unauthenticated pass-through wrappers away);
+// `fetchCodedTools` stays the client-facing name ToolsPanel imports.
 export {
-  fetchCodedTools,
-  fetchCodedToolsForPlanner,
-  saveCodedToolServer,
-  deleteCodedToolServer,
+  getCodedTools as fetchCodedTools,
   type CodedTool,
   type CodedToolReference,
   type SaveCodedToolInput,
-} from "./repository.server";
+} from './repository.server'

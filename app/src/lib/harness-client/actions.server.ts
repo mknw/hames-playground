@@ -35,6 +35,7 @@ import {
   saveConversation as dbSaveConversation,
   deleteConversations as dbDeleteConversations,
   deriveTitle,
+  setConversationStatus as dbSetConversationStatus,
   type ConversationKind,
   type ConversationSource,
   type ConversationStatus,
@@ -142,18 +143,37 @@ async function runTurn(
       })
     }
 
-    const patterns = await getOrBuildPatterns(sessionId, agentId)
+    // Anything that throws from here on leaves the row this function is
+    // responsible for at status='running' forever — the seeded new-conversation
+    // row above, or a pre-seeded action row. The harness itself catches
+    // internally, so the realistic throws are pattern construction (gateway
+    // outage) and the final `saveSession`, and the triggered path already
+    // guards exactly this (`action-runner.server.ts`). Mirror it: flip to
+    // 'error', then rethrow so the caller still sees the failure (sf-M2).
+    try {
+      const patterns = await getOrBuildPatterns(sessionId, agentId)
 
-    let result: HarnessResultScoped<SessionData>
-    if (loaded && loaded.agentId === agentId) {
-      result = await continueSession(loaded.serializedContext, patterns, message, onEvent)
-    } else {
-      const agent = harness(...patterns)
-      result = await agent(message, sessionId, undefined, onEvent)
+      let result: HarnessResultScoped<SessionData>
+      if (loaded && loaded.agentId === agentId) {
+        result = await continueSession(loaded.serializedContext, patterns, message, onEvent)
+      } else {
+        const agent = harness(...patterns)
+        result = await agent(message, sessionId, undefined, onEvent)
+      }
+
+      await saveSession(sessionId, userId, agentId, result.serialized)
+      return result
+    } catch (err) {
+      console.error(`[turn] run failed for ${sessionId}:`, err)
+      await dbSetConversationStatus(sessionId, userId, 'error').catch((statusErr: unknown) => {
+        console.error(
+          `[turn] could not flip ${sessionId} to status='error' — the row will keep showing ` +
+            'as running:',
+          statusErr,
+        )
+      })
+      throw err
     }
-
-    await saveSession(sessionId, userId, agentId, result.serialized)
-    return result
   })
 }
 

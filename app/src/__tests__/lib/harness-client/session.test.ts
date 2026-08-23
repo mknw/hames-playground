@@ -219,15 +219,21 @@ describe('saveSession — title + status lifting', () => {
     expect(saveConversation.mock.lastCall?.[0]).toMatchObject({ title: null })
   })
 
-  it('survives an unparseable blob without blocking the write', async () => {
+  // sf-L3: the write must still happen (the blob is all we have), but calling
+  // an unreadable conversation 'done' is the one case where that badge lies —
+  // nothing in it can be replayed.
+  it('persists an unparseable blob as status error, not done', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     await saveSession('sess-d', 'u1', 'known', 'not json at all')
     expect(saveConversation).toHaveBeenCalledWith(
       expect.objectContaining({
         title: null,
-        status: 'done',
+        status: 'error',
         serializedContext: 'not json at all',
       }),
     )
+    expect(err).toHaveBeenCalled()
+    err.mockRestore()
   })
 
   it('omits kind/source so an existing action row is never demoted', async () => {

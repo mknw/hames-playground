@@ -107,6 +107,7 @@ export function createInjectionGuard(
   const outer = getActiveInjectionGuard()
   const namespaces = new Set(config.namespaces ?? [])
   const tools = new Set(config.tools ?? [])
+  warnOnUnmatchableNamespaces(namespaces)
 
   const isUntrusted = (tool: string): boolean =>
     tools.has(tool) || namespaces.has(inferServer(tool)) || (outer?.isUntrusted(tool) ?? false)
@@ -190,6 +191,47 @@ export function createInjectionGuard(
       return { data: out, summary: redactReport(report, event.id) }
     },
   }
+}
+
+/** Declared namespaces already reported, so a per-turn pattern build doesn't
+ *  repeat the warning for the whole process lifetime. */
+const warnedNamespaces = new Set<string>()
+
+/**
+ * Warn about a declared namespace that can never match anything.
+ *
+ * `isUntrusted` asks `namespaces.has(inferServer(tool))`, so the only strings
+ * that can ever match are the ones `inferServer` actually PRODUCES — i.e. its
+ * fixed points. Catalog/server names are not: `inferServer('web_search')` is
+ * `'web'`, `inferServer('rust-mcp-filesystem')` is `'rust'`,
+ * `inferServer('database-server')` is `'database'` (the same three renames
+ * `tool-config/server-catalog.server.ts` keeps in `NAMESPACE_TO_SERVER`). So
+ * `namespaces: ['web_search']` type-checks, reads like protection, and
+ * sanitizes exactly nothing — the failure mode a security control must never
+ * have (sf-H5).
+ *
+ * The check is a fixed-point test rather than a live-catalog lookup on purpose:
+ * it is synchronous, needs no gateway, and cannot false-positive on a server
+ * that merely happens to be disabled right now. It cannot catch a plausible-
+ * but-nonexistent namespace (`'wikipedia'`), only one that is unmatchable *by
+ * construction* — which is the whole of the reported class.
+ */
+function warnOnUnmatchableNamespaces(namespaces: Set<string>): void {
+  for (const ns of namespaces) {
+    const canonical = inferServer(ns)
+    if (canonical === ns || warnedNamespaces.has(ns)) continue
+    warnedNamespaces.add(ns)
+    console.warn(
+      `[withInjectionGuard] declared namespace '${ns}' can never match a tool: ` +
+        `inferServer('${ns}') is '${canonical}'. NOTHING is being sanitized for it — ` +
+        `declare '${canonical}' instead, or list the exact tool names under \`tools\`.`,
+    )
+  }
+}
+
+/** Test-only: forget which namespaces have already been warned about. */
+export function __resetInjectionGuardNamespaceWarnings(): void {
+  warnedNamespaces.clear()
 }
 
 /**

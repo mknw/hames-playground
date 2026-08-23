@@ -21,6 +21,8 @@ vi.mock('../../../lib/db/client.server', () => ({ query }))
 
 const {
   claimRoutineRun,
+  claimRoutineRunAt,
+  releaseRoutineClaim,
   createRoutine,
   deleteRoutine,
   getRoutine,
@@ -159,6 +161,14 @@ describe('user scoping', () => {
 })
 
 describe('claimRoutineRun', () => {
+  // The claim now RETURNs the timestamp it stamped (so a caller whose run never
+  // starts can hand that exact value back to `releaseRoutineClaim`), so the
+  // fake has to answer with one.
+  const CLAIMED = new Date('2026-08-16T00:00:00.123Z')
+  beforeEach(() => {
+    query.mockResolvedValue({ rows: [{ last_run_at: CLAIMED }], rowCount: 1 })
+  })
+
   it('is a compare-and-set on last_run_at, gated on enabled', async () => {
     const prev = new Date('2026-08-15T23:00:00Z')
     expect(await claimRoutineRun('r1', prev)).toBe(true)
@@ -188,6 +198,34 @@ describe('claimRoutineRun', () => {
   it('reports a lost claim when no row was updated', async () => {
     query.mockResolvedValue({ rows: [], rowCount: 0 })
     expect(await claimRoutineRun('r1', null)).toBe(false)
+  })
+
+  it('hands the stamped timestamp back through claimRoutineRunAt', async () => {
+    expect(await claimRoutineRunAt('r1', null)).toEqual(CLAIMED)
+    expect(lastCall().text).toContain('RETURNING last_run_at')
+  })
+})
+
+// sf-L1
+describe('releaseRoutineClaim', () => {
+  it('CASes on the timestamp the claim stamped, not on the id alone', async () => {
+    const claimedAt = new Date('2026-08-16T00:00:00.123Z')
+    const restoreTo = new Date('2026-08-15T23:00:00Z')
+    query.mockResolvedValue({ rows: [], rowCount: 1 })
+
+    expect(await releaseRoutineClaim('r1', claimedAt, restoreTo)).toBe(true)
+
+    const { text, params } = lastCall()
+    // The CAS is the difference between a rollback and a stomp: another
+    // claimant that legitimately took the routine in the meantime moved
+    // last_run_at on, and this must then be a no-op.
+    expect(text).toContain('last_run_at = $2')
+    expect(params).toEqual(['r1', claimedAt, restoreTo])
+  })
+
+  it('reports a no-op when the row moved on', async () => {
+    query.mockResolvedValue({ rows: [], rowCount: 0 })
+    expect(await releaseRoutineClaim('r1', new Date(), null)).toBe(false)
   })
 })
 

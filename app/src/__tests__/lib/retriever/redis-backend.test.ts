@@ -82,12 +82,17 @@ describe('createRedisBackend', () => {
 
   it('skips the safety net entirely when ensureIngested is false', async () => {
     const ensureFn = vi.fn(async () => {})
-    const b = createRedisBackend('s1', { searchFn: vi.fn(async () => []), ensureFn, ensureIngested: false })
+    const b = createRedisBackend('s1', {
+      searchFn: vi.fn(async () => []),
+      ensureFn,
+      ensureIngested: false,
+    })
     await b.search({ text: 'a' }, { k: 5 })
     expect(ensureFn).not.toHaveBeenCalled()
   })
 
-  it('still searches when the safety net throws (best-effort)', async () => {
+  it('still searches when the safety net throws, and RE-ARMS it (sf-H2)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const ensureFn = vi.fn(async () => {
       throw new Error('embedder offline')
     })
@@ -96,7 +101,21 @@ describe('createRedisBackend', () => {
     const hits = await b.search({ text: 'q' }, { k: 5 })
     expect(hits).toHaveLength(1)
     expect(searchFn).toHaveBeenCalledTimes(1)
-    // A failed ensure isn't retried on the next query (marked done up-front).
+    // The failure is reported rather than swallowed…
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('embedder offline'))
+    // …and the flag, which was set BEFORE the call, is cleared, so the next
+    // query retries the net instead of searching a permanently half-filled
+    // index for the life of this backend.
+    await b.search({ text: 'q2' }, { k: 5 })
+    expect(ensureFn).toHaveBeenCalledTimes(2)
+    warn.mockRestore()
+  })
+
+  it('does not re-arm the net when it succeeded', async () => {
+    const ensureFn = vi.fn(async () => {})
+    const searchFn = vi.fn(async () => SAMPLE)
+    const b = createRedisBackend('s1', { searchFn, ensureFn })
+    await b.search({ text: 'q' }, { k: 5 })
     await b.search({ text: 'q2' }, { k: 5 })
     expect(ensureFn).toHaveBeenCalledTimes(1)
   })

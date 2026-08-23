@@ -43,13 +43,14 @@ interface Doc {
 }
 let doc: Doc | null = null
 const storeDocument = vi.fn<(input: Record<string, unknown>) => Promise<Doc>>()
+const deleteDocument = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {})
 const listDocuments = vi.fn(async () => [])
 vi.mock('../../../lib/document-store.server', () => ({
   DEFAULT_TTL_SECONDS: 604800,
   storeDocument: (...a: unknown[]) => storeDocument(...(a as [never])),
   getDocument: async () => doc,
   listDocuments: () => listDocuments(),
-  deleteDocument: async () => {},
+  deleteDocument: (...a: unknown[]) => deleteDocument(...(a as [never])),
   setDocumentFlags: async () => null,
   stripContent: (d: Doc) => d,
 }))
@@ -217,6 +218,32 @@ describe('GET /api/stash/document/:id', () => {
       evt(jsonReq('http://x/d', { hidden: true }, 'PATCH'), { id: 'doc-1' }),
     )
     expect(patch.status).toBe(400)
+  })
+
+  // sf-H4. The route answered `ok: true` unconditionally, so a rejected Redis
+  // write was reported as a completed deletion.
+  it('500s a DELETE whose store write failed, instead of reporting ok', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    deleteDocument.mockRejectedValueOnce(new Error('Failed to delete document doc-1: NOAUTH'))
+
+    const res = await document.DELETE(
+      evt(new Request('http://x/d?sessionId=s1', { method: 'DELETE' }), { id: 'doc-1' }),
+    )
+
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({
+      error: 'Failed to delete document doc-1: NOAUTH',
+    })
+    err.mockRestore()
+  })
+
+  it('still 200s a DELETE that succeeded', async () => {
+    deleteDocument.mockResolvedValueOnce(undefined)
+    const res = await document.DELETE(
+      evt(new Request('http://x/d?sessionId=s1', { method: 'DELETE' }), { id: 'doc-1' }),
+    )
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true })
   })
 
   it('400s a PATCH body that is not JSON, and 404s a flag edit on a missing document', async () => {

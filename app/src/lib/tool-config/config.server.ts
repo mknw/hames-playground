@@ -12,16 +12,16 @@
  *              calls getCodeModeAllowedTools live per actor invocation
  *              (see harness-client/examples/code-mode.server.ts).
  */
-"use server";
+'use server'
 
-import { deserializeContext, serializeContext } from "../harness-patterns";
-import type { UnifiedContext } from "../harness-patterns";
-import { listTools } from "../harness-patterns/mcp-client.server";
-import { loadSession, saveSession, type SessionData } from "../harness-client/session.server";
-import { agentUsesCodeMode } from "../harness-client/registry.server";
-import { getAuthenticatedUser } from "../auth/server";
-import { CODE_MODE_DEFAULTS, type CodeModeToolsState } from "./constants";
-import { getPresetTools } from "./server-catalog.server";
+import { deserializeContext, serializeContext } from '../harness-patterns'
+import type { UnifiedContext } from '../harness-patterns'
+import { listTools } from '../harness-patterns/mcp-client.server'
+import { loadSession, saveSession, type SessionData } from '../harness-client/session.server'
+import { agentUsesCodeMode } from '../harness-client/registry.server'
+import { getAuthenticatedUser } from '../auth/server'
+import { CODE_MODE_DEFAULTS, type CodeModeToolsState } from './constants'
+import { getPresetTools } from './server-catalog.server'
 
 // Constants and types live in ./constants because SolidStart's `"use server"`
 // transform rewrites every export from this file into an RPC stub on the
@@ -33,11 +33,11 @@ import { getPresetTools } from "./server-catalog.server";
 // ============================================================================
 
 async function requireUser(): Promise<{ id: string }> {
-  if (import.meta.env.VITE_DEV_BYPASS_AUTH === "true") {
-    return { id: "dev-bypass-user" };
+  if (import.meta.env.VITE_DEV_BYPASS_AUTH === 'true') {
+    return { id: 'dev-bypass-user' }
   }
-  const u = await getAuthenticatedUser();
-  return { id: u.id };
+  const u = await getAuthenticatedUser()
+  return { id: u.id }
 }
 
 // ============================================================================
@@ -59,23 +59,28 @@ export async function getCodeModeAllowedTools(
    *  Falls back to the persisted agent, then optimistic. */
   selectedAgentId?: string,
 ): Promise<CodeModeToolsState> {
-  const user = await requireUser();
+  const user = await requireUser()
 
-  const [loaded, gateway] = await Promise.all([
-    loadSession(sessionId, user.id),
-    listTools(),
-  ]);
+  const [loaded, gateway] = await Promise.all([loadSession(sessionId, user.id), listTools()])
 
-  const available = gateway.map((t) => t.name).sort();
-  const defaults = [...CODE_MODE_DEFAULTS];
+  const available = gateway.map((t) => t.name).sort()
+  const defaults = [...CODE_MODE_DEFAULTS]
 
-  let persisted: string[] | undefined;
+  let persisted: string[] | undefined
   if (loaded) {
     try {
-      const ctx = deserializeContext<SessionData>(loaded.serializedContext);
-      persisted = ctx.data?.codeModeAllowedTools;
-    } catch {
-      // Corrupt blob — fall through to defaults.
+      const ctx = deserializeContext<SessionData>(loaded.serializedContext)
+      persisted = ctx.data?.codeModeAllowedTools
+    } catch (err) {
+      // Corrupt blob — fall through to defaults. The panel then renders the
+      // DEFAULT selection as if it were the user's, and saving from that state
+      // silently replaces whatever they had picked (sf-L2). Nothing can be
+      // recovered here, but the substitution is no longer invisible.
+      console.error(
+        `[tool-config] conversation ${sessionId} has an unreadable context blob — showing the ` +
+          'default code-mode tool selection instead of the saved one:',
+        err instanceof Error ? err.message : err,
+      )
     }
   }
 
@@ -83,27 +88,32 @@ export async function getCodeModeAllowedTools(
   // preset's tools ∪ meta-tools — so the actor (and the panel's pre-checked
   // state) start scoped to Neo4j/web rather than meta-tools alone. Mirrors
   // toolNamesProvider in code-mode.server.ts.
-  let presetTools: string[] = [];
+  let presetTools: string[] = []
   try {
-    presetTools = await getPresetTools();
-  } catch {
-    presetTools = [];
+    presetTools = await getPresetTools()
+  } catch (err) {
+    // Same class: an empty preset silently narrows a fresh conversation's
+    // starting tool set to the meta-tools alone.
+    console.warn(
+      '[tool-config] could not read the code-mode preset — a fresh conversation starts with ' +
+        'meta-tools only:',
+      err instanceof Error ? err.message : err,
+    )
+    presetTools = []
   }
   const allowed =
     persisted && persisted.length > 0
       ? persisted
-      : Array.from(new Set([...defaults, ...presetTools]));
+      : Array.from(new Set([...defaults, ...presetTools]))
 
   // Does this conversation's agent actually consume the allowlist? Auto-detected
   // from its pattern graph. Prefer the client's live selection so a fresh chat
   // greys immediately on agent switch; fall back to the persisted agent, then
   // optimistic (true) when neither is known.
-  const agentId = selectedAgentId ?? loaded?.agentId;
-  const usesCodeMode = agentId
-    ? await agentUsesCodeMode(agentId, sessionId)
-    : true;
+  const agentId = selectedAgentId ?? loaded?.agentId
+  const usesCodeMode = agentId ? await agentUsesCodeMode(agentId, sessionId) : true
 
-  return { allowed, available, defaults, usesCodeMode };
+  return { allowed, available, defaults, usesCodeMode }
 }
 
 /**
@@ -116,22 +126,21 @@ export async function getCodeModeAllowedTools(
  * least one message before configuring tools — the row is created by the
  * first turn).
  */
-export async function setCodeModeAllowedTools(
-  sessionId: string,
-  tools: string[],
-): Promise<void> {
-  const user = await requireUser();
-  const loaded = await loadSession(sessionId, user.id);
+export async function setCodeModeAllowedTools(sessionId: string, tools: string[]): Promise<void> {
+  const user = await requireUser()
+  const loaded = await loadSession(sessionId, user.id)
   if (!loaded) {
     throw new Error(
       `Cannot set tool allowlist for unknown session ${sessionId}. Send a message first.`,
-    );
+    )
   }
 
-  const ctx = deserializeContext<SessionData>(loaded.serializedContext) as UnifiedContext<SessionData>;
-  ctx.data = { ...(ctx.data ?? {}), codeModeAllowedTools: [...tools] };
+  const ctx = deserializeContext<SessionData>(
+    loaded.serializedContext,
+  ) as UnifiedContext<SessionData>
+  ctx.data = { ...(ctx.data ?? {}), codeModeAllowedTools: [...tools] }
 
-  await saveSession(sessionId, user.id, loaded.agentId, serializeContext(ctx));
+  await saveSession(sessionId, user.id, loaded.agentId, serializeContext(ctx))
 }
 
 /**
@@ -140,6 +149,6 @@ export async function setCodeModeAllowedTools(
  * directly when sessionId isn't known yet.
  */
 export async function getAvailableTools(): Promise<string[]> {
-  const tools = await listTools();
-  return tools.map((t) => t.name).sort();
+  const tools = await listTools()
+  return tools.map((t) => t.name).sort()
 }

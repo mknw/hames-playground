@@ -367,6 +367,85 @@ describe('guardrail', () => {
     expect(JSON.stringify(errorEvents[0].data)).toContain('Circuit breaker')
   })
 
+  // sf-M1. Failing OPEN is the right call (a breaker outage must not block
+  // every turn) but it used to be indistinguishable from a breaker that is
+  // working: the pattern ran unguarded and reported normal operation.
+  describe('circuit-breaker fail-open is reported (sf-M1)', () => {
+    async function runWithBrokenRedis(): Promise<unknown> {
+      const { guardrail, __resetGuardrailBreakerWarnings } =
+        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+      const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+      const { createEventView } =
+        await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      __resetGuardrailBreakerWarnings()
+
+      const innerPattern = {
+        name: 'inner',
+        fn: vi.fn(async (scope: unknown) => scope),
+        config: { patternId: 'inner' },
+      }
+      mockCallTool.mockRejectedValue(new Error('redis unreachable'))
+
+      const ctx = createContext<{ input: string }>('test')
+      ctx.data = { input: 'test' }
+      const pattern = guardrail(innerPattern as never, {
+        rails: [],
+        circuitBreaker: { maxFailures: 3, windowMs: 60000, cooldownMs: 30000 },
+      })
+      await pattern.fn(
+        { id: 'guardrail', data: ctx.data, events: [], startTime: Date.now() } as never,
+        createEventView(ctx) as never,
+      )
+      return innerPattern
+    }
+
+    it('warns that the breaker can never trip, and still runs the pattern', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      const inner = (await runWithBrokenRedis()) as { fn: ReturnType<typeof vi.fn> }
+
+      // Fails OPEN — the wrapped pattern still runs.
+      expect(inner.fn).toHaveBeenCalledTimes(1)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('will never trip'))
+      expect(warn.mock.calls[0][0]).toContain('Failing OPEN')
+      warn.mockRestore()
+    })
+
+    it('warns ONCE, not on every turn', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const { guardrail, __resetGuardrailBreakerWarnings } =
+        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+      const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+      const { createEventView } =
+        await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      __resetGuardrailBreakerWarnings()
+      mockCallTool.mockRejectedValue(new Error('redis unreachable'))
+
+      const ctx = createContext<{ input: string }>('test')
+      ctx.data = { input: 'test' }
+      const pattern = guardrail(
+        {
+          name: 'inner',
+          fn: vi.fn(async (s: unknown) => s),
+          config: { patternId: 'inner' },
+        } as never,
+        { rails: [], circuitBreaker: { maxFailures: 3, windowMs: 60000, cooldownMs: 30000 } },
+      )
+
+      // The breaker is consulted on every turn; the warning must not become the
+      // noise it is meant to cut through.
+      for (let i = 0; i < 4; i++) {
+        await pattern.fn(
+          { id: 'guardrail', data: ctx.data, events: [], startTime: Date.now() } as never,
+          createEventView(ctx) as never,
+        )
+      }
+
+      expect(warn).toHaveBeenCalledTimes(1)
+      warn.mockRestore()
+    })
+  })
+
   it('should handle errors in pattern execution', async () => {
     const { guardrail } = await import('../../../../lib/harness-patterns/patterns/guardrail.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')

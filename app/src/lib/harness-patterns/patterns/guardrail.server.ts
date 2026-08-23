@@ -12,7 +12,7 @@ import type {
   EventView,
   ConfiguredPattern,
   PatternConfig,
-  ContextEvent
+  ContextEvent,
 } from '../types'
 import { trackEvent, resolveConfig, createEvent, createScope } from '../context.server'
 
@@ -59,6 +59,30 @@ export interface GuardrailConfig<T> extends PatternConfig {
 // Pattern
 // ============================================================================
 
+/** Circuit-breaker degradations already reported. The breaker is consulted on
+ *  every turn, so warning per turn would bury the signal it is meant to be. */
+const breakerWarned = new Set<'read' | 'write'>()
+
+/** Report — once per direction per process — that the circuit breaker is
+ *  running blind because its Redis store is unreachable. */
+function warnBreakerDegraded(direction: 'read' | 'write', err: unknown): void {
+  if (breakerWarned.has(direction)) return
+  breakerWarned.add(direction)
+  const what =
+    direction === 'read'
+      ? 'cannot read its failure window — it will never trip'
+      : 'cannot record a failure — the window stays empty and it will never trip'
+  console.warn(
+    `[guardrail] circuit breaker ${what} (${err instanceof Error ? err.message : String(err)}). ` +
+      'Failing OPEN: the wrapped pattern keeps running unguarded.',
+  )
+}
+
+/** Test-only: forget which breaker degradations have been reported. */
+export function __resetGuardrailBreakerWarnings(): void {
+  breakerWarned.clear()
+}
+
 /**
  * Wrap a pattern with multi-layered guardrails.
  *
@@ -78,7 +102,7 @@ export interface GuardrailConfig<T> extends PatternConfig {
  */
 export function guardrail<T extends Record<string, unknown>>(
   pattern: ConfiguredPattern<T>,
-  config: GuardrailConfig<T>
+  config: GuardrailConfig<T>,
 ): ConfiguredPattern<T> {
   const resolved = resolveConfig('guardrail', config)
   const inputRails = config.rails.filter((r) => r.phase === 'input')
@@ -97,28 +121,37 @@ export function guardrail<T extends Record<string, unknown>>(
             const recentFailures = await callTool('zrange', {
               key,
               start: String(now - cb.windowMs),
-              stop: String(now)
+              stop: String(now),
             })
             if (
               recentFailures.success &&
               Array.isArray(recentFailures.data) &&
               recentFailures.data.length >= cb.maxFailures
             ) {
-              trackEvent(scope, 'error', {
-                error: `Circuit breaker tripped: ${recentFailures.data.length} failures in ${cb.windowMs}ms`
-              }, true)
+              trackEvent(
+                scope,
+                'error',
+                {
+                  error: `Circuit breaker tripped: ${recentFailures.data.length} failures in ${cb.windowMs}ms`,
+                },
+                true,
+              )
               return scope
             }
-          } catch {
-            // Redis may not be available; proceed without circuit breaker
+          } catch (err) {
+            // Redis may not be available; proceed without circuit breaker.
+            // FAILING OPEN is deliberate (a breaker outage must not block every
+            // turn) but it used to be invisible: the breaker silently stopped
+            // existing and the pattern kept reporting normal operation (sf-M1).
+            warnBreakerDegraded('read', err)
           }
         }
 
         // --- Input rails ---
         const railCtx: RailContext<T> = {
-          input: (scope.data as Record<string, unknown>).input as string ?? '',
+          input: ((scope.data as Record<string, unknown>).input as string) ?? '',
           scope,
-          view
+          view,
         }
 
         for (const rail of inputRails) {
@@ -128,9 +161,14 @@ export function guardrail<T extends Record<string, unknown>>(
             if (result.action === 'redact' && result.redacted) {
               railCtx.input = result.redacted
             } else {
-              trackEvent(scope, 'error', {
-                error: `Input rail '${rail.name}' blocked: ${result.reason}`
-              }, true)
+              trackEvent(
+                scope,
+                'error',
+                {
+                  error: `Input rail '${rail.name}' blocked: ${result.reason}`,
+                },
+                true,
+              )
               config.onBlock?.(rail.name, result.reason ?? '')
               return scope
             }
@@ -171,7 +209,7 @@ export function guardrail<T extends Record<string, unknown>>(
             const check = await rail.check({
               ...railCtx,
               scope,
-              lastToolResult
+              lastToolResult,
             })
 
             if (!check.ok) {
@@ -182,19 +220,32 @@ export function guardrail<T extends Record<string, unknown>>(
                     await callTool('zadd', {
                       key: `circuit:${scope.id}`,
                       score: Date.now(),
-                      member: `fail-${Date.now()}`
+                      member: `fail-${Date.now()}`,
                     })
-                  } catch {
-                    // Redis may not be available
+                  } catch (err) {
+                    // Redis may not be available. Same fail-open as the read
+                    // above, and the more consequential half: a failure that is
+                    // never RECORDED can never trip the breaker (sf-M1).
+                    warnBreakerDegraded('write', err)
                   }
                 }
-                trackEvent(scope, 'error', {
-                  error: `Output rail '${rail.name}' rejected: ${check.reason}`
-                }, true)
+                trackEvent(
+                  scope,
+                  'error',
+                  {
+                    error: `Output rail '${rail.name}' rejected: ${check.reason}`,
+                  },
+                  true,
+                )
               } else if (check.action === 'warn') {
-                trackEvent(scope, 'error', {
-                  error: `Output rail '${rail.name}' warning: ${check.reason}`
-                }, true)
+                trackEvent(
+                  scope,
+                  'error',
+                  {
+                    error: `Output rail '${rail.name}' warning: ${check.reason}`,
+                  },
+                  true,
+                )
               }
             }
           }
@@ -209,7 +260,7 @@ export function guardrail<T extends Record<string, unknown>>(
     },
     config: resolved,
     estimateTurns: (s) => pattern.estimateTurns?.(s) ?? 1,
-    children: [pattern]
+    children: [pattern],
   }
 }
 
@@ -227,7 +278,7 @@ export const piiScanRail: Rail<any> = {
       { name: 'AWS key', re: /AKIA[0-9A-Z]{16}/ },
       { name: 'GitHub token', re: /ghp_[a-zA-Z0-9]{36}/ },
       { name: 'JWT', re: /eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+/ },
-      { name: 'private key', re: /-----BEGIN (RSA |EC )?PRIVATE KEY-----/ }
+      { name: 'private key', re: /-----BEGIN (RSA |EC )?PRIVATE KEY-----/ },
     ]
     for (const { name, re } of patterns) {
       if (re.test(input)) {
@@ -235,12 +286,12 @@ export const piiScanRail: Rail<any> = {
           ok: false,
           action: 'redact' as const,
           reason: `Found ${name} in input`,
-          redacted: input.replace(re, `[REDACTED:${name}]`)
+          redacted: input.replace(re, `[REDACTED:${name}]`),
         }
       }
     }
     return { ok: true }
-  }
+  },
 }
 
 /** Rail that blocks paths outside workspace */
@@ -256,7 +307,7 @@ export const pathAllowlistRail: Rail<any> = {
     return match
       ? { ok: false, reason: `Blocked path: ${data.args.path}`, action: 'block' as const }
       : { ok: true }
-  }
+  },
 }
 
 /** Rail that detects large file changes */
@@ -275,11 +326,13 @@ export const driftDetectorRail: Rail<any> = {
           return {
             ok: false,
             action: 'retry' as const,
-            reason: `Edit changed ${(ratio * 100).toFixed(0)}% of file — likely unintended`
+            reason: `Edit changed ${(ratio * 100).toFixed(0)}% of file — likely unintended`,
           }
         }
       }
-    } catch { /* non-diff result, pass through */ }
+    } catch {
+      /* non-diff result, pass through */
+    }
     return { ok: true }
-  }
+  },
 }

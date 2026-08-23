@@ -79,7 +79,17 @@ export async function DELETE(event: APIEvent) {
     if (!sessionId) return json({ error: 'sessionId is required' }, 400)
     const denied = await requireSessionOwner(sessionId, userId)
     if (denied) return denied
-    await deleteDocument(sessionId, event.params.id)
+    // `ok: true` used to be unconditional: both Redis writes were fired and
+    // neither checked, so a rejected delete answered "deleted" (sf-H4). The
+    // store now throws on a failed write and this is where it becomes a 500 —
+    // a privacy-relevant deletion must never be reported as done when it isn't.
+    try {
+      await deleteDocument(sessionId, event.params.id)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Delete failed'
+      console.error(`[stash] delete failed for ${event.params.id}:`, msg)
+      return json({ error: msg }, 500)
+    }
     return json({ ok: true })
   })
 }

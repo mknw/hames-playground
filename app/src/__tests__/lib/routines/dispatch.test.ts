@@ -11,10 +11,17 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServer: vi.fn(),
 }))
 
-const claimRoutineRun = vi.fn<(id: string, last: Date | null) => Promise<boolean>>(async () => true)
+const CLAIMED_AT = new Date('2026-08-16T12:00:00Z')
+const claimRoutineRunAt = vi.fn<(id: string, last: Date | null) => Promise<Date | null>>(
+  async () => CLAIMED_AT,
+)
+const releaseRoutineClaim = vi.fn<
+  (id: string, claimedAt: Date, restoreTo: Date | null) => Promise<boolean>
+>(async () => true)
 const listEnabledRoutinesForUser = vi.fn<() => Promise<unknown[]>>(async () => [])
 vi.mock('../../../lib/db/routines.server', () => ({
-  claimRoutineRun,
+  claimRoutineRunAt,
+  releaseRoutineClaim,
   listEnabledRoutinesForUser,
 }))
 
@@ -70,7 +77,8 @@ function routine(over: Partial<Routine> = {}): Routine {
 beforeEach(() => {
   vi.clearAllMocks()
   idCounter = 0
-  claimRoutineRun.mockResolvedValue(true)
+  claimRoutineRunAt.mockReset().mockResolvedValue(CLAIMED_AT)
+  releaseRoutineClaim.mockReset().mockResolvedValue(true)
   getAgent.mockReturnValue({ id: 'default' })
   seedActionRow.mockResolvedValue(undefined)
   listEnabledRoutinesForUser.mockResolvedValue([])
@@ -116,7 +124,7 @@ describe('fireRoutine', () => {
   })
 
   it('claims BEFORE seeding, so a lost claim runs nothing', async () => {
-    claimRoutineRun.mockResolvedValue(false)
+    claimRoutineRunAt.mockResolvedValue(null)
     expect(await fireRoutine(routine())).toBeNull()
     expect(seedActionRow).not.toHaveBeenCalled()
     expect(runAgentInBackground).not.toHaveBeenCalled()
@@ -125,7 +133,7 @@ describe('fireRoutine', () => {
   it('claims against the routine’s own last_run_at (compare-and-set input)', async () => {
     const last = new Date('2026-08-16T11:00:00Z')
     await fireRoutine(routine({ lastRunAt: last }))
-    expect(claimRoutineRun).toHaveBeenCalledWith('routine-1', last)
+    expect(claimRoutineRunAt).toHaveBeenCalledWith('routine-1', last)
   })
 
   it('skips a routine whose agent no longer exists, without burning the claim', async () => {
@@ -133,7 +141,7 @@ describe('fireRoutine', () => {
     getAgent.mockReturnValue(undefined)
 
     expect(await fireRoutine(routine({ agentId: 'deleted-agent' }))).toBeNull()
-    expect(claimRoutineRun).not.toHaveBeenCalled()
+    expect(claimRoutineRunAt).not.toHaveBeenCalled()
     expect(seedActionRow).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
@@ -145,6 +153,41 @@ describe('fireRoutine', () => {
     expect(await fireRoutine(routine())).toBeNull()
     expect(runAgentInBackground).not.toHaveBeenCalled()
     err.mockRestore()
+  })
+
+  // sf-L1: the claim advanced `last_run_at` and nothing ran, so without a
+  // rollback the routine sits out a whole interval for a transient DB failure —
+  // an hourly routine that fails to seed at 09:00 next fires at 11:00.
+  it('rolls the claim back when seeding fails, so the routine is due again', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const last = new Date('2026-08-16T11:00:00Z')
+    seedActionRow.mockRejectedValue(new Error('postgres down'))
+
+    expect(await fireRoutine(routine({ lastRunAt: last }))).toBeNull()
+
+    // Rolled back to the value the claim replaced, CAS'd on the value it wrote.
+    expect(releaseRoutineClaim).toHaveBeenCalledWith('routine-1', CLAIMED_AT, last)
+    err.mockRestore()
+  })
+
+  it('does not roll back a claim whose run actually started', async () => {
+    await fireRoutine(routine())
+    expect(releaseRoutineClaim).not.toHaveBeenCalled()
+  })
+
+  it('reports a rollback that lost its own CAS instead of assuming it worked', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    seedActionRow.mockRejectedValue(new Error('postgres down'))
+    // Another claimant moved `last_run_at` on after us: rolling that back would
+    // hand out a second claim for a run already in flight, so the CAS declines.
+    releaseRoutineClaim.mockResolvedValue(false)
+
+    expect(await fireRoutine(routine())).toBeNull()
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('not rolled back'))
+    err.mockRestore()
+    warn.mockRestore()
   })
 })
 
@@ -184,9 +227,9 @@ describe('fireRoutinesForEvent', () => {
       routine({ id: 'boom', trigger: { kind: 'session_start' } }),
       routine({ id: 'ok', trigger: { kind: 'session_start' } }),
     ])
-    claimRoutineRun.mockImplementation(async (id) => {
+    claimRoutineRunAt.mockImplementation(async (id) => {
       if (id === 'boom') throw new Error('claim exploded')
-      return true
+      return CLAIMED_AT
     })
 
     expect(await fireRoutinesForEvent('session_start', 'user-1')).toEqual(['run-1'])

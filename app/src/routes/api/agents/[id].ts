@@ -17,94 +17,92 @@
  * the design + the persistent-node-server caveat.
  */
 
-import type { APIEvent } from "@solidjs/start/server";
-import { getAgent } from "../../../lib/harness-client/registry.server";
-import {
-  bearerSecret,
-  resolveActionUser,
-} from "../../../lib/auth/action-tokens.server";
+import type { APIEvent } from '@solidjs/start/server'
+import { getAgent } from '../../../lib/harness-client/registry.server'
+import { bearerSecret, resolveActionUser } from '../../../lib/auth/action-tokens.server'
 import {
   seedActionRow,
   runAgentInBackground,
   type ActionTrigger,
-} from "../../../lib/harness-client/action-runner.server";
-import { storeDocument } from "../../../lib/document-store.server";
-import { guessMimeType } from "../../../lib/stash/upload-service.server";
-import { newSessionId } from "../../../lib/session-id";
+} from '../../../lib/harness-client/action-runner.server'
+import { storeDocument } from '../../../lib/document-store.server'
+import { guessMimeType } from '../../../lib/stash/upload-service.server'
+import { newSessionId } from '../../../lib/session-id'
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
-  });
+    headers: { 'Content-Type': 'application/json' },
+  })
 }
 
 export async function POST(event: APIEvent) {
-  const agentId = event.params.id;
+  const agentId = event.params.id
 
   // 1. Unknown agent → 404, before doing anything else.
   if (!getAgent(agentId)) {
-    return json({ error: `Unknown agent: ${agentId}` }, 404);
+    return json({ error: `Unknown agent: ${agentId}` }, 404)
   }
 
   // 2. Bearer secret → userId (per-device map in configs/action-tokens.yaml).
-  const userId = resolveActionUser(
-    bearerSecret(event.request.headers.get("authorization")),
-  );
+  const userId = resolveActionUser(bearerSecret(event.request.headers.get('authorization')))
   if (!userId) {
-    return json({ error: "Unauthorized" }, 401);
+    return json({ error: 'Unauthorized' }, 401)
   }
 
   // 3. Parse the multipart body.
-  let form: FormData;
+  let form: FormData
   try {
-    form = await event.request.formData();
+    form = await event.request.formData()
   } catch {
-    return json({ error: "multipart/form-data body required" }, 400);
+    return json({ error: 'multipart/form-data body required' }, 400)
   }
 
-  const transcribedCommand = String(
-    form.get("transcribed_command") ?? "",
-  ).trim();
+  const transcribedCommand = String(form.get('transcribed_command') ?? '').trim()
   if (!transcribedCommand) {
-    return json({ error: "transcribed_command is required" }, 400);
+    return json({ error: 'transcribed_command is required' }, 400)
   }
-  const shortDescription = String(form.get("short_description") ?? "").trim();
+  const shortDescription = String(form.get('short_description') ?? '').trim()
 
-  const runId = newSessionId();
+  const runId = newSessionId()
 
   // 4. Store the recording in the Data Stash (keyed by runId, so it surfaces in
   //    that conversation's "Your Uploads" and is playable via ?download).
   //    Best-effort: a storage failure (e.g. Redis down) must not block the run.
-  let recording: Pick<
-    ActionTrigger,
-    "recordingDocId" | "recordingFilename" | "recordingMimeType"
-  > = {};
-  const file = form.get("original_recording");
+  let recording: Pick<ActionTrigger, 'recordingDocId' | 'recordingFilename' | 'recordingMimeType'> =
+    {}
+  // Tri-state, reported back in the 202 (sf-L9): `null` = no recording was
+  // submitted, `true`/`false` = one was and whether it made it to the stash.
+  // The caller is a device that just uploaded audio it may be about to delete;
+  // "we lost it" only reaching a server log is not good enough.
+  let recordingStored: boolean | null = null
+  const file = form.get('original_recording')
   if (
     file != null &&
-    typeof file !== "string" &&
-    typeof (file as Blob).arrayBuffer === "function"
+    typeof file !== 'string' &&
+    typeof (file as Blob).arrayBuffer === 'function'
   ) {
-    const blob = file as File;
-    const filename = blob.name || "recording";
-    const mimeType = blob.type || guessMimeType(filename);
+    const blob = file as File
+    const filename = blob.name || 'recording'
+    const mimeType = blob.type || guessMimeType(filename)
     try {
-      const bytes = Buffer.from(await blob.arrayBuffer()).toString("base64");
+      const bytes = Buffer.from(await blob.arrayBuffer()).toString('base64')
       const doc = await storeDocument({
         sessionId: runId,
         filename,
         mimeType,
         content: bytes,
-        encoding: "base64",
-      });
+        encoding: 'base64',
+      })
       recording = {
         recordingDocId: doc.id,
         recordingFilename: filename,
         recordingMimeType: mimeType,
-      };
+      }
+      recordingStored = true
     } catch (err) {
-      console.error(`[action] failed to store recording for ${runId}:`, err);
+      console.error(`[action] failed to store recording for ${runId}:`, err)
+      recordingStored = false
     }
   }
 
@@ -112,22 +110,30 @@ export async function POST(event: APIEvent) {
     transcribedCommand,
     shortDescription,
     ...recording,
-  };
+  }
 
   // 5. Insert the observable row before returning, so the action is visible
   //    (with a running spinner) the moment the caller gets its 202.
   try {
-    await seedActionRow(runId, userId, agentId, trigger);
+    await seedActionRow(runId, userId, agentId, trigger)
   } catch (err) {
-    console.error(`[action] failed to seed action row for ${runId}:`, err);
-    return json({ error: "Failed to create action" }, 500);
+    console.error(`[action] failed to seed action row for ${runId}:`, err)
+    return json({ error: 'Failed to create action' }, 500)
   }
 
   // 6. Fire-and-forget the harness run. Intentionally NOT awaited — the run
   //    persists its own result/status on completion (persistent-node-server
   //    assumption; see INSTRUCTIONS.md).
-  void runAgentInBackground(runId, userId, transcribedCommand, agentId, trigger);
+  void runAgentInBackground(runId, userId, transcribedCommand, agentId, trigger)
 
-  // 7. 202 Accepted — run_id is the sessionId / conversation row id.
-  return json({ run_id: runId }, 202);
+  // 7. 202 Accepted — run_id is the sessionId / conversation row id. The run
+  //    starts either way; `recording_stored: false` says the audio did not
+  //    survive, so the caller can keep its own copy or retry the upload.
+  return json(
+    {
+      run_id: runId,
+      ...(recordingStored === null ? {} : { recording_stored: recordingStored }),
+    },
+    202,
+  )
 }

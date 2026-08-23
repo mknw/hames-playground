@@ -135,10 +135,11 @@ rotate.
 **Requirements:** Docker Desktop · Node.js >= 22 · pnpm
 
 ```bash
-git clone git@github.com:mknw/hames-playground.git
+git clone https://github.com/mknw/hames-playground.git
 cd hames-playground
 
-# 1. Backing services: Neo4j, Postgres, redis-stack, MCP gateway
+# 1. Backing services — Neo4j, Postgres, redis-stack, MCP gateway,
+#    doc-convert and n8n. The app itself is behind a profile (step 4).
 docker compose up -d
 docker compose ps                 # wait for healthy
 

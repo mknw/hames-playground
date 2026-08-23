@@ -4,7 +4,7 @@
 [#225](https://github.com/mknw/harness-playground/issues/225) review, item
 L22): this guide is meant to eventually ship **as a skill alongside the
 published package**, for developers doing agentic coding against `hames`
-(the working name for the extracted core — see
+(the extracted core — see
 [`docs/plan/harness-npm-lib.md`](harness-npm-lib.md)). Each section below is a
 placeholder naming what it must cover and the source material it draws from;
 none of it is finished prose yet, and it should not be treated as normative

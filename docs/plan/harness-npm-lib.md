@@ -7,10 +7,8 @@ converged. No code changes in this PR — it revises this plan doc, adds a
 skeleton developer guide (`docs/plan/hames-guide.md`), and updates
 `docs/INDEX.md`.
 
-**Working name: `hames`.** The published core package's leading name
-candidate is **`hames`** (free on npm, no search collisions); `whiffletree`
-is reserved for a future subcomponent. The name is not final — this doc uses
-`hames` as a placeholder throughout and will be updated once it is. The
+**Name: `hames`** — final, per owner decision (2026-08-23; free on npm, no
+search collisions); `whiffletree` is reserved for a future subcomponent. The
 in-tree module keeps its current `harness-patterns` name until the rename
 actually lands.
 
@@ -146,7 +144,12 @@ Two things move the **other** direction, per the owner's delegated decisions:
   (`HarnessError` / `ToolTransportError` / `LLMCallError` / `PatternConfigError`
   / `ToolNotAllowedError`) instead; `app/`'s `error-hints.ts` shrinks to what it
   should always have been — a map from those typed codes to this app's UI
-  copy, not a regex over exception messages.
+  copy, not a regex over exception messages. This work also owns the
+  actorCritic abort-on-first-`BamlValidationError` behaviour documented in
+  PR #232 (the loop's try/catch wraps the whole `for` and returns on the
+  first parse failure, leaving the turn budget unused while the event says
+  "recoverable") — owner decision 2026-08-23: fix it properly here, not as
+  a patch.
 - **`assertServerOnImport` stops being a dependency of the lib** (Q4). It is a
   30-line dev-time guarantee that almost never fired and, per #225 L10, had
   already leaked into 43 non-harness app modules that have nothing to do with
@@ -498,8 +501,10 @@ seam landing cleanly)_ Move today's `baml-adapters.server.ts` +
 Anthropic + custom-endpoint only (§4.4); `@boundaryml/baml` becomes a peer
 dependency of this package, not of `hames`.
 
-**Step 4 — extract `sandbox-docker`, `stash`, `retriever`** _(can run in
-parallel with each other once Step 1 is done; `stash` first in practice since
+**Step 4 — extract `harness-guard`, `sandbox-docker`, `stash`, `retriever`**
+_(can run in parallel with each other once Step 1 is done;
+`harness-guard` is the smallest — `injection-guard.ts` moves out of core into
+it, per §1.2; `stash` first in practice since
 both of the others declare it as a real dependency, not a peer, per §1.2)_
 `sandbox-docker`'s own npm publish may be postponed per §1.4 — it can extract
 into `packages/` and stay an unpublished workspace member indefinitely.
@@ -558,8 +563,8 @@ Resolved by the owner's 2026-08-23 review, kept here for the record:
 - **OTel (was Q5/L20)** — delete the README section, don't wire it.
 - **`patternId` required (was L11)** — derive deterministically instead of
   requiring it or leaving it random; collision tests required.
-- **Naming** — leading candidate `hames`; `whiffletree` reserved for a future
-  subcomponent. Not yet final.
+- **Naming** — **`hames`, final** (owner decision 2026-08-23); `whiffletree`
+  reserved for a future subcomponent.
 
 Still open, ordered by how much they'd change the plan:
 

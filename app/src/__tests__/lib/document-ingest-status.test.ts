@@ -144,6 +144,7 @@ describe('ingestStashDocument', () => {
   })
 
   it('marks status "failed" (and never throws) when ingest errors', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const boom: ReturnType<typeof makeEmbedder>['embedFn'] = async () => {
       throw new Error('embedder offline')
     }
@@ -151,6 +152,38 @@ describe('ingestStashDocument', () => {
     const res = await ingestStashDocument('s1', 'd2', { callTool: fake.callTool, embedFn: boom })
     expect(res).toBeNull()
     expect((await getDocument('s1', 'd2', fake.callTool))?.ingestStatus).toBe('failed')
+    // sf-H2: the reason used to be discarded by a bare `catch {}`, so an
+    // embedder outage and an unchunkable file both showed up as 'failed' with
+    // nothing anywhere saying which.
+    expect(err).toHaveBeenCalledWith(
+      expect.stringContaining('d2'),
+      'embedder offline',
+    )
+    err.mockRestore()
+  })
+
+  // sf-H2: `setDocumentFlags` throws when Redis rejects the write, and it is
+  // called from a function documented never to throw — including from inside
+  // the failure handler, where it would replace the real ingest error.
+  it('never throws when the status write itself is rejected', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { embedFn } = makeEmbedder('m', 3)
+    await seed(fake, 'd3', 'some text')
+
+    // Every json_set (the status write) now fails; reads still work.
+    const brittle = (async (name: string, args: Record<string, unknown>) =>
+      name === 'json_set'
+        ? { success: false, data: null, error: 'NOAUTH Authentication required' }
+        : fake.callTool(name, args)) as CallTool
+
+    await expect(
+      ingestStashDocument('s1', 'd3', { callTool: brittle, embedFn }),
+    ).resolves.not.toThrow()
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("ingestStatus='pending'"),
+      expect.anything(),
+    )
+    warn.mockRestore()
   })
 })
 
@@ -269,6 +302,38 @@ describe('ensureSessionIngested', () => {
     expect((await getDocument('s1', 'in-flight', fake.callTool))?.ingestStatus).toBe('pending') // skipped (gate owns it)
     expect((await getDocument('s1', 'bin', fake.callTool))?.ingestStatus).toBeUndefined() // skipped (binary)
     expect(embedSpy).toHaveBeenCalledTimes(2) // old-failed + fresh only
+  })
+
+  // sf-H2: the loop is the safety net for a whole corpus. A throw on document 2
+  // used to abort it, so documents 3..N stayed unsearchable and the retriever
+  // reported "no matching documents".
+  it('keeps ingesting the rest of the corpus when one document throws', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { embedFn } = makeEmbedder('m', 3)
+    await seed(fake, 'a', 'Aaa text.')
+    await seed(fake, 'boom', 'Bbb text.')
+    await seed(fake, 'c', 'Ccc text.')
+
+    // A hard throw out of the per-document path (not the caught ingest error).
+    // `listDocuments` reads every doc first, so only the SECOND read of 'boom'
+    // — the one `ingestStashDocument` itself makes — blows up.
+    let boomReads = 0
+    const brittle = (async (name: string, args: Record<string, unknown>) => {
+      if (name === 'json_get' && String(args.name).includes('boom') && ++boomReads > 1) {
+        throw new Error('gateway hung up')
+      }
+      return fake.callTool(name, args)
+    }) as CallTool
+
+    await ensureSessionIngested('s1', { callTool: brittle, embedFn })
+
+    expect((await getDocument('s1', 'a', fake.callTool))?.ingestStatus).toBe('indexed')
+    expect((await getDocument('s1', 'c', fake.callTool))?.ingestStatus).toBe('indexed')
+    expect(err).toHaveBeenCalledWith(
+      expect.stringContaining('continuing with the rest'),
+      'gateway hung up',
+    )
+    err.mockRestore()
   })
 
   it('with conversion enabled, ingests a convertible binary (no longer skipped)', async () => {

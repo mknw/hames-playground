@@ -114,6 +114,16 @@ export function createVectorStore(opts: VectorStoreOptions): VectorStore {
     if (mErr) throw new Error(`Failed to store payload for "${id}": ${mErr}`)
   }
 
+  /**
+   * KNN over the index. A FAILED search throws; only a genuinely empty result
+   * returns `[]`.
+   *
+   * These were the same answer before (sf-H2): a RediSearch error, a missing
+   * index or an unreachable gateway all came back as "no matching documents",
+   * so the retriever told the user their corpus held nothing relevant while the
+   * real story was an outage. `upsert`/`ensureIndex` in this file already throw
+   * on a rejected write — read now matches write.
+   */
   async function search(queryVector: number[], k = 5): Promise<VectorHit[]> {
     const res = await callTool('vector_search_hash', {
       index_name: opts.indexName,
@@ -121,7 +131,13 @@ export function createVectorStore(opts: VectorStoreOptions): VectorStore {
       k,
       return_fields: [META_FIELD],
     })
-    if (!res.success || res.data == null) return []
+    if (!res.success) {
+      throw new Error(
+        `Vector search on ${opts.indexName} failed: ${res.error ?? 'unknown error'}`,
+      )
+    }
+    // A successful call with no payload IS an empty result set.
+    if (res.data == null) return []
     return parseHits(res.data)
   }
 

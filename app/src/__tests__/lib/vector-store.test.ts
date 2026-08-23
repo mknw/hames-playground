@@ -142,8 +142,17 @@ describe('vector-store', () => {
       expect(call[1].k).toBe(5)
     })
 
-    it('returns [] on an unsuccessful search', async () => {
+    // sf-H2: a failed search used to return [], which every caller up the chain
+    // renders as "no matching documents" — a claim about the user's corpus made
+    // on the strength of a RediSearch error.
+    it('THROWS on an unsuccessful search rather than reporting no matches', async () => {
       const callTool: CallTool = async () => ({ success: false, data: null, error: 'no index' })
+      const store = createVectorStore({ indexName: 'idx1', prefix: 'p:', dim: 3, callTool })
+      await expect(store.search([1, 2, 3])).rejects.toThrow(/idx1 failed: no index/)
+    })
+
+    it('still returns [] for a successful search with no payload (genuinely empty)', async () => {
+      const callTool: CallTool = async () => ({ success: true, data: null })
       const store = createVectorStore({ indexName: 'idx1', prefix: 'p:', dim: 3, callTool })
       expect(await store.search([1, 2, 3])).toEqual([])
     })

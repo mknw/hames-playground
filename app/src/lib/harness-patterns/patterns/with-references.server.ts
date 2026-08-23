@@ -15,6 +15,7 @@ import { trackEvent, resolveConfig, createScope, createEvent } from '../context.
 import type {
   ConfiguredPattern,
   ContextEvent,
+  ErrorEventData,
   EventView,
   PatternScope,
   ReferenceAttachedEventData,
@@ -27,6 +28,7 @@ import type {
   AssistantMessageEventData,
 } from '../types'
 import type { PriorResult } from '../../../../baml_client/types'
+import { LLMCallError } from '../baml-adapters.server'
 
 assertServerOnImport()
 
@@ -173,21 +175,36 @@ function toPriorResults(refs: ReferenceCandidate[]): PriorResult[] {
 const defaultSelector: SelectorFn = async (input) => {
   const { b } = await import('../../../../baml_client')
   const { clientOverrideFor } = await import('../clients.server')
-  const { warnIfCollectorEmpty } = await import('../baml-adapters.server')
+  const { warnIfCollectorEmpty, wrapAsLLMCallError } = await import('../baml-adapters.server')
   const now = Date.now()
   const collector = new Collector('reference-selector')
-  const result = await b.ReferenceSelector(
-    input.intent,
-    input.recentMessages.map((m) => ({ role: m.role, content: m.content })),
-    input.candidates.map((c) => ({
-      ref_id: c.ref_id,
-      tool: c.tool,
-      summary: c.summary,
-      tool_args: c.tool_args ?? null,
-      ts_offset_s: Math.max(0, Math.floor((now - c.ts) / 1000)),
-    })),
-    { collector, ...clientOverrideFor('describe') },
-  )
+  const candidates = input.candidates.map((c) => ({
+    ref_id: c.ref_id,
+    tool: c.tool,
+    summary: c.summary,
+    tool_args: c.tool_args ?? null,
+    ts_offset_s: Math.max(0, Math.floor((now - c.ts) / 1000)),
+  }))
+  let result: Awaited<ReturnType<typeof b.ReferenceSelector>>
+  try {
+    result = await b.ReferenceSelector(
+      input.intent,
+      input.recentMessages.map((m) => ({ role: m.role, content: m.content })),
+      candidates,
+      { collector, ...clientOverrideFor('describe') },
+    )
+  } catch (e) {
+    // Non-fatal upstream (the wrapper falls back to attaching nothing), but the
+    // error event it emits is the ONLY record of the failure — wrap so the raw
+    // response travels with it instead of dying inside this collector.
+    throw wrapAsLLMCallError(
+      e,
+      'ReferenceSelector',
+      { intent: input.intent, candidates },
+      now,
+      collector,
+    )
+  }
   // Nothing here reads the collector, but an empty one still means the options
   // object never reached BAML — i.e. the client override was dropped too (#154).
   warnIfCollectorEmpty(collector, 'ReferenceSelector')
@@ -315,7 +332,17 @@ export function withReferences<T>(
       return scope
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
-      trackEvent(scope, 'error', { error: msg }, true)
+      const failedLlmCall = error instanceof LLMCallError ? error.llmCall : undefined
+      trackEvent(
+        scope,
+        'error',
+        {
+          error: msg,
+          ...(failedLlmCall ? { kind: 'llm_call' as const } : {}),
+        } as ErrorEventData,
+        true,
+        failedLlmCall,
+      )
       return scope
     }
   }

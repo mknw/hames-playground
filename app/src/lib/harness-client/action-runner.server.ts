@@ -126,7 +126,16 @@ export async function runAgentInBackground(
   } catch (err) {
     console.error(`[action] background run failed for ${runId}:`, err)
     // The seeded row exists with status='running'; flip it so the UI doesn't
-    // spin forever. Best-effort — a DB failure here is already logged above.
-    await dbSetConversationStatus(runId, userId, 'error').catch(() => {})
+    // spin forever. Best-effort, but its OWN failure is now reported: the old
+    // comment claimed "already logged above", which was about the run, not
+    // about this write — and if this write is what failed, the row keeps
+    // spinning forever with nothing to say why (sf-M3).
+    await dbSetConversationStatus(runId, userId, 'error').catch((statusErr: unknown) => {
+      console.error(
+        `[action] could not flip ${runId} to status='error' — the row will keep showing as ` +
+          'running:',
+        statusErr,
+      )
+    })
   }
 }

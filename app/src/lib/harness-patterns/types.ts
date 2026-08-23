@@ -59,6 +59,12 @@ export interface ScriptExecutionEvent {
   script: string
   output: string
   error?: string | null
+  /** The critic's reason for rejecting THIS attempt, stamped by actorCritic
+   *  when the critic returns `is_sufficient: false`. Both adapters map it onto
+   *  `Attempt.feedback`, which is what the actor's attempt log renders — the
+   *  channel that makes actorCritic more than simpleLoop-with-extra-steps.
+   *  Absent on an attempt the critic never judged (cadence skip) or accepted. */
+  feedback?: string
   /** Calls 2..N of a multi-call attempt, exactly as the actor emitted them —
    *  carried so the adapter's Attempt construction replays the real batch
    *  action instead of fabricating a singular one. */

@@ -118,14 +118,14 @@ template_string LoopMultiCalls(multi_call_mode: string?) #"
 // WHO WRITES THE USER-FACING ANSWER (#149). Measured on a real 5-turn run: the
 // terminal Return turn composed a 3,757-char answer into tool_args — 2,134
 // output tokens, ~22s, the most expensive turn of the run — and NOTHING read
-// it. The prose DOES travel to `Synthesize`: compactExecution maps the terminal
-// iteration to `tool_call: { args: action.tool_args }` and fabricates a
-// `tool_result` for it (result `null`), so the Return turn renders as
-// `Tool: Return / Result: null`. What keeps the prose out is that
-// compact-execution.baml renders `tool_result.tool` / `.result` ONLY and never
-// `tool_call.args` — the one guard to preserve if that template ever grows a
-// call-args section (#149 §2). The compactExecution then re-derived the whole
-// answer from the full-fidelity tool results.
+// it. The prose does not travel to `Synthesize` either: compactExecution now
+// DROPS the terminal Return iteration outright (SA-H4), because it has no
+// `tool_result` of its own and used to render as a fabricated success,
+// `Tool: Return / Result: null`. A second guard behind that: compact-execution
+// .baml renders `tool_result.tool` / `.result` ONLY and never `tool_call.args`
+// — preserve it if that template ever grows a call-args section (#149 §2). The
+// compactExecution derives the whole answer from the full-fidelity tool
+// results.
 //
 // So "summary" (the default) asks the loop for the cheapest text that still
 // terminates it, and leaves composition to the single better-informed author:

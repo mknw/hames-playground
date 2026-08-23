@@ -118,11 +118,19 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     syncWorkspace: true,
   })(loop)
 
+  // `fromPatterns` is explicit because a ViewConfig with no pattern scope
+  // silently gets the DEFAULT one — events from the immediately preceding
+  // pattern only — and the user's message lives at the harness level
+  // (patternId 'harness'), so it was filtered out and `Synthesize` ran with an
+  // empty USER MESSAGE (SA-M1). Listing 'harness' beside the loop restores it.
+  // The rewritten brief from `sandbox-session-intent` needs no entry — it
+  // reaches this pattern as `data.intent`, not as an event.
   const synth = compactExecution<SessionData>({
     mode: 'thread',
     patternId: 'sandbox-session-synth',
     liveEvents: true,
     viewConfig: {
+      fromPatterns: ['harness', 'sandbox-session-loop'],
       eventTypes: ['user_message', 'controller_action', 'tool_call', 'tool_result', 'error'],
     },
   })

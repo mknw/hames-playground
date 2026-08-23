@@ -124,7 +124,12 @@ class Message {
 /// Action decision returned by loop and actor controllers
 class ControllerAction {
   reasoning string @description("Step-by-step thought process")
-  tool_name string @description("Tool to call, or 'Return' to exit loop")
+  // Pattern-neutral, for the same reason `is_final` is (see below): one class
+  // serves both loop patterns, so this description renders into the ACTOR's
+  // output format too — and the actor has no `Return`. Naming it here taught
+  // the actor to propose a tool its allowlist rejects, burning an attempt on a
+  // "Tool not allowed" rejection. simpleLoop's own spine names `Return`.
+  tool_name string @description("Name of the tool to call, exactly as it appears in the available tools. Your instructions may also define a control-flow name that is not a tool — use one only when they describe it.")
   tool_args string @description("Valid JSON object string with the tool's arguments, e.g. {\"query\": \"search term\"}. Keys and string values MUST be double-quoted. For Return, use plain prose (not JSON), as your instructions describe.")
   // OPTIONAL and self-gating: one ControllerAction class serves every agent,
   // so this field is visible in ctx.output_format even for agents whose

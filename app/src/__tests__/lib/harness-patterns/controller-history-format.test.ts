@@ -459,3 +459,95 @@ describe('an action that omits is_final', () => {
     expect(loopRaw).toContain('set is_final to true')
   })
 })
+
+/**
+ * SA-C1 (prompt half) — the critic's reason has to be VISIBLE, and the
+ * imperative that references it must not fire without it.
+ *
+ * `ActorAttemptLog` has always carried a `CRITIC FEEDBACK` block, but the
+ * adapters hardcoded `feedback: undefined`, so it was dead code — while
+ * `ActorClosing` rendered "You MUST address the critic's feedback" on every
+ * call that had any attempt history at all. One prompt, an unsatisfiable
+ * instruction and nothing to satisfy it with.
+ */
+describe('the critic feedback channel', () => {
+  const REASON = 'the script wrote the file but never ran it'
+  const REJECTED = [
+    {
+      n: 1,
+      action: {
+        reasoning: 'write it',
+        tool_name: 'write_file',
+        tool_args: '{"path":"x.py"}',
+        status: 'Writing',
+        is_final: true,
+      },
+      result: 'written',
+      feedback: REASON,
+    },
+  ]
+  const UNJUDGED = [{ ...REJECTED[0], feedback: undefined }]
+
+  async function actorText(attempts: unknown[]): Promise<string> {
+    const req = await b.request.ActorController(
+      'x',
+      'x',
+      TOOLS,
+      attempts as never,
+      null,
+      null,
+      2,
+      5,
+    )
+    const body = req.body.json() as Body
+    // Unescaped: the blocks are rendered text, not JSON-quoted instructions.
+    const msgs = body.messages.flatMap((m) =>
+      typeof m.content === 'string' ? [m.content] : m.content.map((blk) => blk.text ?? ''),
+    )
+    return [JSON.stringify(body.system ?? ''), ...msgs].join('\n')
+  }
+
+  it('renders the reason beside the attempt it judged', async () => {
+    expect(await actorText(REJECTED)).toContain(`CRITIC FEEDBACK: ${REASON}`)
+  })
+
+  it('demands the actor address it only when there is one to address', async () => {
+    expect(await actorText(REJECTED)).toMatch(/MUST address the CRITIC FEEDBACK/)
+    // An attempt the critic never judged (cadence skip, or a tool that failed
+    // before the critic ran) carries no feedback — so no imperative.
+    const unjudged = await actorText(UNJUDGED)
+    expect(unjudged).not.toMatch(/MUST address/)
+    // The half that never depended on feedback survives.
+    expect(unjudged).toContain('Do not repeat failed approaches.')
+  })
+
+  it('says nothing about feedback on the first attempt', async () => {
+    const first = await actorText([])
+    expect(first).not.toMatch(/MUST address/)
+    expect(first).not.toMatch(/Do not repeat failed approaches/)
+  })
+
+  it('the shared tool_name description does not tell the actor to call Return', async () => {
+    // SA-M3, same class as the is_final case above: one ControllerAction serves
+    // both patterns, and the actor's allowlist REJECTS 'Return' — so a shared
+    // description naming it spends an attempt on "Tool not allowed".
+    const raw = allText(
+      (
+        await b.request.ActorController('x', 'x', TOOLS, ATTEMPTS as never, null, null, 3, 5)
+      ).body.json() as Body,
+    )
+    const start = raw.indexOf('Name of the tool to call')
+    expect(start).toBeGreaterThan(-1)
+    const END = 'when they describe it.'
+    const description = raw.slice(start, raw.indexOf(END, start) + END.length)
+    expect(description).not.toContain('Return')
+
+    // simpleLoop's own spine still names it, so nothing was lost.
+    const loop = allText(
+      (
+        await b.request.LoopController('x', 'x', TOOLS, TURNS as never, null, null, null)
+      ).body.json() as Body,
+    )
+    expect(loop).toContain('Use \\"Return\\" when you have enough information.')
+  })
+})

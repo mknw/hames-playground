@@ -65,8 +65,8 @@ dedicated `harness-baml` companion (§1.5), not a workaround inside core.
 
 The owner's answer to open question 2 (§7) collapses this plan's original
 five-package proposal into a single first step: **only `hames` (core) is
-extracted and published to start.** `harness-baml`, `sandbox-docker`,
-`stash`, `retriever`, and the ready-made-harnesses package all stay inside
+extracted and published to start.** `harness-baml`, `harness-guard`,
+`sandbox-docker`, `stash`, `retriever`, and the ready-made-harnesses package all stay inside
 `app/` until `hames` itself has proven out standalone. §1.5 keeps the
 eventual multi-package shape as a documented "later," not a Step 1 goal.
 
@@ -93,6 +93,7 @@ This is the shape once §1.5's companions exist — not what Step 1 builds.
 | -------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
 | 0 (leaf) | `hames`                                          | nothing extracted — target: BAML-free, no dependency on any other extracted package                                           |
 | 1        | `harness-baml`                                   | `hames`, `@boundaryml/baml` (peer)                                                                                            |
+| 1        | `harness-guard`                                  | `hames` only — `injection-guard.ts` moves out of core into this package (#225 §1)                                             |
 | 1        | `stash`                                          | `hames` only — **not** a consumer-facing companion (§1.5); exists so sandbox and retriever have somewhere shared to depend on |
 | 2        | `sandbox-docker` (+ future providers)            | `hames`, `stash`                                                                                                              |
 | 2        | `retriever`                                      | `hames`, `stash`                                                                                                              |
@@ -202,6 +203,19 @@ actually needs to install it. It can stay local — an unpublished workspace
 member, or even left inside `app/` — for as long as that holds, independent
 of whether `hames` itself has already shipped.
 
+### 1.5 Eventual layout (later)
+
+The owner's answer to Q2 (§7) is a **later, not a never**: once `hames` has
+proven out standalone as Step 1, the plan's full companion set gets
+extracted too — `harness-baml` (§1.2, §5 Step 3), `harness-guard`
+(`injection-guard.ts` moved out of core, §1.2), `stash` as a dependency of
+`sandbox-docker` and `retriever` rather than a standalone companion (§1.2, §5
+Step 4), `sandbox-docker` (renamed from `harness-sandbox`, above), `retriever`
+(§5 Step 4), and the ready-made-harnesses package (`agents`,
+framework-agnostic per Q7, §5 Step 5). §1.2's dependency table gives that
+target shape; §5 Steps 3–5 sequence the actual extraction — this section is
+only the doc's signpost for the "later" framing, not a second copy of either.
+
 ---
 
 ## 2. Dev mode — local workspace source, no publish loop
@@ -268,8 +282,20 @@ the workspace is introduced — there is no incremental halfway state where
 ## 3. Production (docker compose) — build from the workspace, not the published registry
 
 This section reverses the mechanism the original draft of this plan proposed
-(kept below in §3.4 for the record) after the owner's 2026-08-23 review:
-**prod does not need to consume `hames` from npm.**
+(kept below in §3.4 for the record). Unlike the rest of this doc, that
+reversal does not come from the #225/#226 review comments — neither mentions
+docker, the registry, or production loading. It traces to an owner Q&A in the
+coordination session of 2026-08-23: the owner asked whether "install from
+npm in prod" was an implicitly-enforced constraint the plan didn't actually
+need; the coordinator answered that publishing exists to serve **external**
+developers, that production instead builds from the pnpm workspace, and that
+dogfooding survives via a CI `pnpm pack` + install-tarball smoke job
+(§3.3/§4.3) rather than a registry install on the deploy path; the owner
+accepted that direction in follow-up feedback without objection. As a
+session decision rather than a recorded review comment, it carries the same
+standing §7 item 4 gives the §1.4 surgery timing — explicitly overridable by
+the owner if this doesn't hold: **prod does not need to consume `hames` from
+npm.**
 
 ### 3.1 Why registry-only was the wrong forcing function
 
@@ -469,8 +495,8 @@ exists purely to make `hames` installable by an external developer.
 seam landing cleanly)_ Move today's `baml-adapters.server.ts` +
 `clients.server.ts` + `baml-version-check.server.ts` out; ship a pre-generated
 `baml_client` inside the published tarball; scope the v1 client set to
-Anthropic + custom-endpoint only (§4.4); `@boundaryml/baml` becomes a real
-(peer) dependency of this package, not of `hames`.
+Anthropic + custom-endpoint only (§4.4); `@boundaryml/baml` becomes a peer
+dependency of this package, not of `hames`.
 
 **Step 4 — extract `sandbox-docker`, `stash`, `retriever`** _(can run in
 parallel with each other once Step 1 is done; `stash` first in practice since
@@ -478,10 +504,12 @@ both of the others declare it as a real dependency, not a peer, per §1.2)_
 `sandbox-docker`'s own npm publish may be postponed per §1.4 — it can extract
 into `packages/` and stay an unpublished workspace member indefinitely.
 Code-mode is **removed entirely** rather than extracted — it is not part of
-v1 of any package; its revival is tracked by a follow-up issue (`Could`
-MoSCoW priority) pointing at the last commit containing it. A cleanup PR
-doing that removal (and the `harness-client/examples` → `agents` rename
-below) is in flight in a parallel lane.
+v1 of any package, and neither is any other tool-reload mechanism: current
+agents hardcode their MCP tools, and v1 does not change that (#225 L5).
+Code-mode's revival will be tracked by a follow-up issue (`Could` MoSCoW
+priority) that the in-flight cleanup PR below will file, pointing at the last
+commit containing it. That cleanup PR (also doing the `harness-client/examples`
+→ `agents` rename below) is in flight in a parallel lane.
 
 **Step 5 — extract the ready-made-harnesses package (`harness-client` →
 `agents`)** _(depends on Step 4)_ Rename `examples/` to `agents/` (already

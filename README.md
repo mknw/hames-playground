@@ -1,363 +1,226 @@
-# harness-playground
+<div align="center">
 
-A playground for building agent applications out of composable **harness patterns** — primitives like `simpleLoop`, `actorCritic`, `parallel`, `router`, `withReferences`, `withApproval` that you chain into agents fit for any task. BAML provides typed LLM reasoning at each pattern's leaf; an MCP gateway provides the tools.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/harness-patterns/hames_light-text-on-transparent-bg.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/harness-patterns/hames_dark-text-on-transparent-bg.png">
+  <img src="docs/harness-patterns/hames_dark-text-on-transparent-bg.png" alt="hames" width="380">
+</picture>
 
-The repo ships several agents that exercise the framework (default Neo4j + web research, a plan-first general agent, sandbox and retriever agents, and more in the registry). The point of the project is the framework — the agents are showcases of what becomes easy when the primitives are right.
+### Application Lab for harness primitives
 
-## Feature showcase
+**MVP stage** · [What it is](#what-this-is) · [hames](#hames--the-primitives) · [Architecture](#architecture) · [Security](#security-disclaimer) · [Quickstart](#quickstart) · [Agents](#agents) · [Docs](#documentation)
 
-Cross-pattern data flow with `withReferences` — the agent searches the web in one turn, then writes the results into Neo4j on the next turn. The LLM-driven selector at each route's ingress attaches the most relevant prior `tool_result` events to the new pattern's `priorResults` channel; the controller uses the synthetic `expandPreviousResult` tool (or inline `ref:<id>` argument substitution) to pull the full data when it needs it. No re-fetching; no hallucinated content.
+</div>
 
-![TypeScript 5.7 features fetched via web_search and written to Neo4j as connected Concept nodes](docs/harness-patterns/screenshots/05-neo4j-graph-result.png)
+---
 
-→ Walkthrough: [`docs/harness-patterns/withReferences-tutorial.md`](docs/harness-patterns/withReferences-tutorial.md) · Design: [`docs/harness-patterns/with-references.md`](docs/harness-patterns/with-references.md)
+## What this is
 
-## Architecture Overview
+**hames-playground** is the application lab for **hames** — a small set of
+composable primitives for building LLM agents. The primitives are the point;
+this repo is where they get proven against real work.
 
+The lab gives each primitive somewhere to be wrong in public: a SolidStart app
+with a chat surface, a live event timeline, an interactive graph, and a handful
+of agents that compose the primitives differently on purpose. If a pattern only
+looks right in a README, it shows up here.
+
+**Status: MVP.** The API still moves, the agents are showcases rather than
+products, and nothing here has been hardened for a public deployment — see
+[Security disclaimer](#security-disclaimer) before you run it anywhere but
+localhost.
+
+## hames — the primitives
+
+`hames` is a functional pattern framework for agentic tool execution. A pattern
+is a function of `(scope, view, tools)` that reads and appends to one
+**`UnifiedContext`** event log; patterns compose into an agent and stay
+independent in semantics, so one can be swapped without disturbing the others.
+
+|                        |                                                                       |
+| ---------------------- | --------------------------------------------------------------------- |
+| **Loops**              | `simpleLoop` · `actorCritic`                                          |
+| **Planning & routing** | `planner` · `router` · `routes` · `parallel`                          |
+| **Context**            | `withReferences` · `retriever` · `compactExecution` · `compactIntent` |
+| **Guards**             | `withInjectionGuard`                                                  |
+| **Composition**        | `chain` · `harness` · `continueSession` · `resumeHarness`             |
+
+BAML supplies typed LLM reasoning at each pattern's leaf; an MCP gateway
+supplies the tools. Neither is baked in — the library is being pulled towards a
+BAML-free core behind injected call interfaces
+([`docs/plan/harness-npm-lib.md`](docs/plan/harness-npm-lib.md)).
+
+📖 **[Read the hames README →](app/src/lib/harness-patterns/README.md)** — full
+API, `UnifiedContext` architecture, the `EventView` query API, and the
+event→BAML type mapping.
+
+One primitive worth a closer look: **`withReferences`** carries data across
+turns without re-fetching. The agent searches the web on one turn and writes the
+findings into Neo4j on the next — an LLM-driven selector attaches the relevant
+prior `tool_result` events at the new pattern's ingress, and the controller pulls
+the full payload through the synthetic `expandPreviousResult` tool. No
+re-fetching, no hallucinated content.
+→ [Walkthrough](docs/harness-patterns/withReferences-tutorial.md) ·
+[Design](docs/harness-patterns/with-references.md)
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph APP["app/ — SolidStart playground, port 3444"]
+        UI["Chat · Graph · Observability timeline"]
+        REG["Agent registry<br/>search · general · sandbox · retriever · M365"]
+        UI --> REG
+    end
+
+    subgraph HAMES["app/src/lib/harness-patterns/ — hames"]
+        PAT["Patterns<br/>simpleLoop · actorCritic · planner<br/>router · parallel · withReferences<br/>withInjectionGuard · retriever"]
+        CTX["UnifiedContext<br/>event log + EventView"]
+        PAT <--> CTX
+    end
+
+    BAML["BAML functions<br/>typed LLM reasoning at each leaf"]
+    GW["MCP Gateway<br/>port 8811"]
+
+    subgraph SVC["Companion services"]
+        NEO["Neo4j<br/>7474 · 7687"]
+        RDS["redis-stack<br/>6379 — Data Stash"]
+        SBX["Sandbox containers<br/>docker run"]
+    end
+
+    PG["Postgres 5432<br/>conversations"]
+
+    REG -- composes --> PAT
+    PAT -- LLM leaf --> BAML
+    PAT -- tool calls --> GW
+    PAT -- compute --> SBX
+    GW --> NEO
+    GW --> RDS
+    APP --> PG
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    SolidStart UI (Port 3444)                    │
-│  ┌─────────────┐  ┌────────────────┐  ┌───────────────────────┐ │
-│  │ Chat +      │  │ Graph          │  │ Support Panel         │ │
-│  │ Sidebar     │  │ Visualization  │  │ (Observability/Tools) │ │
-│  └──────┬──────┘  └────────────────┘  └───────────────────────┘ │
-│         │                                                        │
-│         ▼                                                        │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │           Harness Patterns (Server Functions)             │   │
-│  │  Router → simpleLoop / actorCritic / withReferences /     │   │
-│  │  parallel / withApproval / … → compactExecution                │   │
-│  │  + UnifiedContext, EventView, BAML adapters, SSE stream   │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┼─────────────┬──────────────┐
-              ▼               ▼             ▼              ▼
-     ┌────────────┐  ┌────────────────┐  ┌──────────┐  ┌──────────┐
-     │ Neo4j      │  │ MCP Gateway    │  │ Postgres │  │ Redis    │
-     │ (Direct +  │  │ (Port 8811)    │  │ (5432)   │  │ (6379)   │
-     │  via MCP)  │  │ neo4j, web,    │  │ chat     │  │ guardrail│
-     │ Port 7687  │  │ memory, redis, │  │ history  │  │ + h9s    │
-     └────────────┘  │ filesystem, …  │  └──────────┘  └──────────┘
-                     └────────────────┘
-```
 
-## Requirements
+Events flow one way: every pattern appends to the `UnifiedContext` log, the UI
+streams that log over SSE, and `compactExecution` turns the accumulated events
+into the final answer. Session state is the serialized log, nothing else.
 
-- Docker Desktop
-- Node.js >= 22
-- pnpm
+## Security disclaimer
 
-## Quick Start
+**⚠️ This is MVP-stage software. Do not expose it to the internet without your own
+security review.**
+
+- **It runs LLM agents that hold real tool access.** Agents execute Cypher
+  against Neo4j, read and write the filesystem through MCP, shell out to
+  `docker run` for compute sandboxes, and — for the Microsoft 365 agent — act on
+  a signed-in user's own mailbox and files with delegated Graph scopes. Prompt
+  content reaches those tools.
+- **`'use server'` hardening is ongoing.** Several unauthenticated server-action
+  holes were closed in #227 / #229, but the work is not finished:
+  [#230](https://github.com/mknw/hames-playground/issues/230) is **open** —
+  `runManualCypher` still accepts raw Cypher behind a substring blacklist.
+- **Auth is off by default for development.** `app/.env.example` ships
+  `VITE_DEV_BYPASS_AUTH='true'`. A real deployment needs the Entra sign-in wired
+  and the bypass off ([`docs/deployment/entra-setup.md`](docs/deployment/entra-setup.md)).
+- **The compose stack publishes its databases on `0.0.0.0`.** Convenient on a
+  laptop, an internet-exposed database on a VM. Bind them to loopback first —
+  [`docs/deployment/azure-vm.md` §4](docs/deployment/azure-vm.md).
+- **Prompt injection is mitigated, not solved.** `withInjectionGuard` screens
+  tool results before they reach a controller (#207). Treat it as defence in
+  depth, not a boundary you can trust with real secrets.
+
+Run it on localhost, against data you can afford to lose, with API keys you can
+rotate.
+
+## Quickstart
+
+**Requirements:** Docker Desktop · Node.js >= 22 · pnpm
 
 ```bash
-# 1. Start backend services
+git clone git@github.com:mknw/hames-playground.git
+cd hames-playground
+
+# 1. Backing services: Neo4j, Postgres, redis-stack, MCP gateway
 docker compose up -d
+docker compose ps                 # wait for healthy
 
-# 2. Wait for Neo4j health check (check with docker compose ps)
-docker compose ps
-
-# 3. Load seed data into Neo4j
+# 2. Seed the graph
 ./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher
 
-# 4. Start the UI
+# 3. Configure — ANTHROPIC_API_KEY is the one required key
 cd app
+cp .env.example .env              # then fill in ANTHROPIC_API_KEY
+
+# 4. Run
 pnpm install
-pnpm dev
+pnpm dev                          # http://localhost:3444
 ```
 
-The app itself runs natively here on purpose — that is the development loop, and
-step 1 deliberately does not start it. To run it as a container instead (parity
-with deployment), see [Running the app in a container](#running-the-app-in-a-container).
+The app runs natively on the host on purpose — that is the development loop, and
+step 1 deliberately does not start it. A container shape exists for
+deployment parity (`docker compose --profile app up -d`); see
+[`docs/DOCKER_COMPOSE.md`](docs/DOCKER_COMPOSE.md#app-the-solidstart-app-197).
 
-**Access Points:**
+**Every `pnpm` command runs from `app/`** — never npm/npx, never from the repo
+root. Re-run `pnpm baml-generate` after editing anything under `app/baml_src/`.
 
-- **UI**: http://localhost:3444
-- **Neo4j Browser**: http://localhost:7474 (neo4j/password)
-- **MCP Gateway**: http://localhost:8811/mcp
-- **Postgres** (chat history): localhost:5432 (postgres/password, db `kgagent`)
-- **n8n** (optional): http://localhost:5678
+|               |                                                          |
+| ------------- | -------------------------------------------------------- |
+| App           | <http://localhost:3444>                                  |
+| Neo4j Browser | <http://localhost:7474> — `neo4j` / `password`           |
+| MCP Gateway   | <http://localhost:8811/mcp>                              |
+| Postgres      | `localhost:5432` — `postgres` / `password`, db `kgagent` |
 
-## Services
+## Agents
 
-All services run in Docker containers via the `app-network` bridge network:
+Each agent is a different composition of the same primitives — that is what they
+are for. Registered in
+[`app/src/lib/harness-client/registry.server.ts`](app/src/lib/harness-client/registry.server.ts).
 
-| Service         | Port       | Description                                                     |
-| --------------- | ---------- | --------------------------------------------------------------- |
-| **Neo4j**       | 7474, 7687 | Graph database with APOC and n10s plugins                       |
-| **MCP Gateway** | 8811       | Model Context Protocol gateway for AI tools                     |
-| **Postgres**    | 5432       | Conversation history (per-user, persisted across restarts)      |
-| **Redis**       | 6379       | Guardrail circuit-breaker state, ephemeral cache                |
-| **n8n**         | 5678       | Workflow automation (optional)                                  |
-| **app**         | 3444       | The SolidStart app itself — opt-in (`--profile app`), see below |
+| Agent                   | Composition                                                                       | What it shows                                                                                                                              |
+| ----------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Search**              | `router` → `routes(withReferences(simpleLoop))` → `compactExecution`              | Classify into one namespace and dispatch — Neo4j or web search. The `web` route is injection-guarded, `neo4j` is not                       |
+| **General**             | `planner` → `simpleLoop` → `compactExecution`                                     | Pay for strategy once, up front, then hand the whole tool surface to one executor. The A/B counterpart to Search on cross-domain questions |
+| **Sandbox · Session**   | `compactIntent` → `withSandbox(actorCritic)` → `compactExecution`                 | A container keyed to the session, persistent across turns and shared with the interactive Shell — build incrementally, inspect files live  |
+| **Sandbox · Flavoured** | `router` → `routes(withSandbox(actorCritic))` → `compactExecution`                | One route per purpose-built flavour: base, image-processing, data, office                                                                  |
+| **Retriever**           | `router` → `routes(retriever \| withReferences(simpleLoop))` → `compactExecution` | Semantic retrieval over uploaded documents (Data Stash) as a peer route beside Neo4j and web                                               |
+| **Microsoft 365**       | `withInjectionGuard(simpleLoop)` → `compactExecution`                             | Per-user identity end to end — answers from the signed-in user's own mailbox, calendar and files via delegated Graph scopes                |
 
-## Running the app in a container
-
-The app ships a Dockerfile (`app/Dockerfile`) and a compose service, `app`
-(#197). It is **deployment/parity, not the dev loop** — `pnpm dev` on the host
-stays the way to develop, and nothing about it changed.
-
-```bash
-docker compose build app        # multi-stage: pnpm install → baml-generate → vinxi build
-docker compose up -d app        # starts its dependencies too (postgres, neo4j, redis, gateway)
-curl localhost:3444/api/health  # {"status":"ok","uptimeSeconds":…}
-docker compose logs -f app
-```
-
-The service sits behind a compose **profile**, so a bare `docker compose up -d`
-still brings up only the backing services — naming `app` explicitly (as above)
-enables the profile. To bring up everything at once: `docker compose --profile app up -d`.
-
-Notes worth knowing before you run it:
-
-- **Config comes from `app/.env`** (`env_file`, optional so a fresh clone can
-  still start the rest of the stack). The compose service overrides the
-  host-facing endpoints in it with their in-network equivalents —
-  `postgres:5432`, `mcp-gateway:8811`, `redis`, `doc-convert:8000`. Neo4j needs
-  no override: `config/endpoints.ts` already resolves `bolt://neo4j:7687` in a
-  production build.
-- **Real auth is required.** The dev bypass is gated on `import.meta.env.DEV`,
-  which Vite replaces with `false` in the build that goes into the image — so
-  the container always runs the real Entra sign-in and needs `AZURE_*` +
-  `AUTH_SESSION_SECRET` + `VITE_ALLOWED_EMAILS` in `app/.env`
-  ([`docs/deployment/entra-setup.md`](docs/deployment/entra-setup.md)). The published
-  port is the same 3444, so the registered redirect URI keeps working.
-- **The Data Stash embedder is not a compose service** — it is a llama-server on
-  the host (port 8090). The container reaches it via
-  `EMBEDDINGS_LOCAL_URL=http://host.docker.internal:8090/v1`.
-- **`/var/run/docker.sock` is mounted** so the compute sandbox can keep shelling
-  out to `docker run` / `docker exec`; sandbox containers are then siblings on
-  the host. That mount is root-equivalent on the host — drop it (and add
-  `USER node` to the Dockerfile) if you do not need the sandbox agents. Building
-  `kg-sandbox:base` is still a separate step: `docker build -t kg-sandbox:base rootfs/`.
-- **Build resources:** the vinxi build peaks around 2.3 GB RSS. On
-  Docker Desktop / colima give the VM at least 4 GB, or the build is OOM-killed
-  mid-bundle (`cannot allocate memory`).
-
-Full service reference: [`docs/DOCKER_COMPOSE.md`](docs/DOCKER_COMPOSE.md).
-
-## Harness Patterns Framework
-
-The harness is the main deliverable. It's a composable pattern framework built on a `UnifiedContext` event log: patterns are functions of `(scope, view, tools)` that emit events and can be composed via `chain`, `router`, `parallel`, `withApproval`, `withReferences`, etc. BAML provides type-safe LLM reasoning at each pattern's leaf. Patterns share infrastructure (event commit, SSE streaming, session persistence) and stay independent in semantics — you can drop one in or out without disturbing the others.
-
-### Core flow
-
-1. **Router** classifies the user message and selects a route
-2. **Inner pattern** (typically `simpleLoop` or `actorCritic`) runs the tool loop, optionally wrapped with `withReferences` so prior `tool_result` events from earlier turns are attached to the new pattern's `priorResults` channel via an LLM-driven selector
-3. **compactExecution** turns the accumulated events into the final assistant response
-
-### Tool namespaces (via MCP Gateway)
-
-`neo4j`, `web`, `context7`, `filesystem`, `memory`, `redis`, `database` — plus any custom servers added to `configs/custom-catalog.yaml`. Tool grouping happens in `app/src/lib/harness-patterns/tools.server.ts` (`inferServer()` + `KNOWN_TOOL_SERVERS` lookup).
-
-Full API: [`app/src/lib/harness-patterns/README.md`](app/src/lib/harness-patterns/README.md) · Examples: [`app/src/lib/harness-client/agents/README.md`](app/src/lib/harness-client/agents/README.md) · Cross-pattern data flow walkthrough: [`docs/harness-patterns/withReferences-tutorial.md`](docs/harness-patterns/withReferences-tutorial.md).
-
-## Conversation Persistence
-
-Conversations are persisted to Postgres in a single `conversations(id, user_id, agent_id, title, context jsonb, created_at, updated_at)` table — the `context` column is the full `serializeContext()` blob, no normalization. Schema is bootstrapped idempotently on first DB hit, so the bring-up is just `docker compose up -d`.
-
-- Per-user scoping: every load/save is gated by `user_id` (the Entra `oid`, or `dev-bypass-user` when `VITE_DEV_BYPASS_AUTH=true`)
-- Sticky titles: first 60 chars of the first user message becomes the title, locked in via `COALESCE` on update
-- Sidebar lists threads via `listConversations()`; selecting one calls `loadConversation()` and replays events into the graph + observability panel
-
-Implementation: `app/src/lib/db/{client,conversations}.server.ts` and `app/src/lib/harness-client/session.server.ts`.
-
-## MCP Servers
-
-Configured in `configs/custom-catalog.yaml` and enabled via `configs/mcp-config.yaml`. The gateway runs with `--enable-all-servers`, so any registered server is exposed unless explicitly disabled.
-
-| Server                | Tools                                                         | Purpose                                                          |
-| --------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `neo4j-cypher`        | `get_neo4j_schema`, `read_neo4j_cypher`, `write_neo4j_cypher` | Execute Cypher (uses fixed `NEO4J_URI` mapping, not `NEO4J_URL`) |
-| `fetch`               | `fetch`                                                       | Retrieve content from the web                                    |
-| `web_search`          | `web_search`                                                  | DuckDuckGo web search                                            |
-| `rust-mcp-filesystem` | filesystem ops                                                | Sandboxed filesystem access via configured allowed directories   |
-| `memory`              | entity / observation / relation ops                           | Knowledge-graph–style scratch memory                             |
-| `redis`               | key / hash / json / vector ops                                | Redis primitives + RediSearch                                    |
-| `database-server`     | SQL ops                                                       | Generic database access                                          |
-| `playwright`          | browser automation                                            | E2E testing (requires `pnpm dev:exposed`)                        |
-| `context7`            | `resolve-library-id`, `get-library-docs`                      | Library docs                                                     |
-
-Tool namespaces consumed by `harness-patterns/tools.server.ts`: `neo4j`, `web`, `context7`, `filesystem`, `memory`, `redis`, `database` (and `all`). See `KNOWN_TOOL_SERVERS` in that file for the namespace lookup.
-
-## Neo4j Database
-
-**Access**: http://localhost:7474
-**Credentials**: neo4j / password
-**Plugins**: APOC, n10s (neosemantics)
-
-### Data Versioning
-
-Binary database files are **gitignored**. Graph data is version-controlled as human-readable Cypher:
-
-```bash
-# Export current graph state
-./scripts/export-neo4j.sh
-
-# Import from a Cypher dump
-./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher
-
-# Reset to seed data
-./scripts/reset-neo4j.sh
-```
-
-See [neo4j_dumps/README.md](neo4j_dumps/README.md) for the complete workflow.
-
-### Reset Database
-
-If you encounter authentication issues or need a fresh start:
-
-```bash
-docker compose down
-rm -rf neo4j_data
-docker compose up -d
-./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher
-```
-
-## Configuration Files
-
-| File                  | Purpose                                  | Key Settings                 |
-| --------------------- | ---------------------------------------- | ---------------------------- |
-| `docker-compose.yaml` | Service orchestration                    | Ports, volumes, healthchecks |
-| `mcp-config.yaml`     | MCP server connection parameters         | Neo4j URI, credentials       |
-| `custom-catalog.yaml` | Custom MCP catalog with tool definitions | Server images, env mappings  |
-| `.mcp.json`           | Claude Code MCP integration              | Gateway endpoint             |
-| `app/baml_src/*.baml` | BAML function definitions                | Agent prompts, types         |
-
-## Project Structure
-
-```
-kg-agent/
-├── docker-compose.yaml       # Neo4j, MCP Gateway, Postgres, Redis, n8n
-├── configs/
-│   ├── mcp-config.yaml       # MCP server connection params
-│   └── custom-catalog.yaml   # Custom MCP catalog (Docker image-based)
-├── .mcp.json                 # Claude Code MCP config
-├── neo4j_dumps/              # Cypher exports for data versioning
-├── scripts/                  # export-neo4j.sh, import-neo4j.sh, reset-neo4j.sh
-├── app/                       # SolidStart frontend
-│   ├── baml_src/             # BAML function definitions (regenerate via `pnpm baml-generate`)
-│   ├── src/
-│   │   ├── routes/           # SolidStart routes + /api/events SSE endpoint
-│   │   ├── components/       # UI components (Ark UI)
-│   │   └── lib/
-│   │       ├── harness-patterns/  # Composable pattern framework
-│   │       ├── harness-client/    # Server actions, registry, session, agents/
-│   │       ├── db/                # Postgres pool + conversations repo
-│   │       ├── neo4j/             # neo4j-driver singleton + write actions
-│   │       └── auth/              # Entra OIDC (MSAL) + session store + helpers
-│   └── package.json
-├── docs/                     # Documentation (see docs/INDEX.md)
-└── graphiti-mcp/             # Graphiti MCP utilities (optional)
-```
-
-## Adding New MCP Servers
-
-1. **Find the server's image digest**:
-
-   ```bash
-   docker pull mcp/<server-name>
-   docker inspect mcp/<server-name> --format='{{index .RepoDigests 0}}'
-   ```
-
-2. **Add to `custom-catalog.yaml`**:
-
-   ```yaml
-   registry:
-     your-server:
-       description: Description
-       title: Display Name
-       type: server
-       image: mcp/server-name@sha256:<digest>
-       tools:
-         - name: tool_name
-       env:
-         - name: CONFIG_VAR
-           value: "{{your-server.config_key}}"
-   ```
-
-3. **Add configuration to `mcp-config.yaml`** (if needed):
-
-   ```yaml
-   your-server:
-     config_key: value
-   ```
-
-4. **Update `docker-compose.yaml`**:
-
-   ```yaml
-   command:
-     - --servers=neo4j-cypher,fetch,web_search,your-server
-   ```
-
-5. **Restart the gateway**:
-   ```bash
-   docker compose restart mcp-gateway
-   ```
-
-**Important**: Always use SHA256 digests (`@sha256:...`), not tags (`:latest`).
+`multi-source-research` (a worked `parallel` example) ships unregistered and
+untested — see its file header. Writing a new agent is two steps:
+[`app/src/lib/harness-client/agents/README.md`](app/src/lib/harness-client/agents/README.md).
 
 ## Documentation
 
-| Document                                                                         | Description                                                     |
-| -------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| [docs/INDEX.md](docs/INDEX.md)                                                   | Documentation index and overview                                |
-| [docs/UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md)                               | SolidStart UI structure and patterns                            |
-| [docs/DOCKER_COMPOSE.md](docs/DOCKER_COMPOSE.md)                                 | Service configuration details                                   |
-| [docs/MCP_GATEWAY.md](docs/MCP_GATEWAY.md)                                       | MCP Gateway reference                                           |
-| [GitHub Project](https://github.com/users/mknw/projects/5)                       | Development roadmap / planning board (replaced docs/ROADMAP.md) |
-| [docs/harness-patterns/README.md](docs/harness-patterns/README.md)               | Harness patterns overview + tutorials                           |
-| [app/src/lib/harness-patterns/README.md](app/src/lib/harness-patterns/README.md) | Harness patterns API reference                                  |
-| [neo4j_dumps/README.md](neo4j_dumps/README.md)                                   | Neo4j data versioning workflow                                  |
+📚 **[`docs/INDEX.md`](docs/INDEX.md) is the index** — every doc, with a sentence
+on what each one holds.
 
-## Troubleshooting
+The ones reached most often:
 
-### MCP Gateway not loading servers
-
-```bash
-docker logs kg-agent-mcp-gateway-1
-```
-
-Look for image pull errors or configuration issues.
-
-### Agent not connecting to Neo4j
-
-1. Check Neo4j is healthy: `docker compose ps`
-2. Verify connection in `mcp-config.yaml`: `uri: bolt://neo4j:7687`
-3. Test directly: `docker exec neo4j-mldsgraph cypher-shell -u neo4j -p password`
-
-### UI build errors
-
-```bash
-cd app
-pnpm baml-generate  # Regenerate BAML client
-pnpm build
-```
-
-### View service logs
-
-```bash
-docker compose logs -f              # All services
-docker compose logs -f neo4j        # Neo4j only
-docker compose logs -f mcp-gateway  # Gateway only
-```
-
-## Development
-
-```bash
-# Start UI in development mode
-cd app && pnpm dev
-
-# Generate BAML TypeScript client
-cd app && pnpm baml-generate
-
-# Run BAML tests
-cd app && pnpm baml-test
-
-# Lint code
-cd app && pnpm eslint
-```
+|                                                                                                   |                                                                                |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| [`app/src/lib/harness-patterns/README.md`](app/src/lib/harness-patterns/README.md)                | The hames API reference                                                        |
+| [`GLOSSARY.md`](GLOSSARY.md)                                                                      | House vocabulary — pattern, controller, critic, harness, EventView, Data Stash |
+| [`docs/plan/ROADMAP.md`](docs/plan/ROADMAP.md)                                                    | Roadmap shape: multi-user target architecture, phased MoSCoW plan              |
+| [`docs/plan/harness-npm-lib.md`](docs/plan/harness-npm-lib.md)                                    | Extracting `hames` to npm — package layout, dev vs. production loading         |
+| [`docs/DOCKER_COMPOSE.md`](docs/DOCKER_COMPOSE.md) · [`docs/MCP_GATEWAY.md`](docs/MCP_GATEWAY.md) | Services, adding an MCP server, gateway troubleshooting                        |
+| [`docs/DATA_STASH.md`](docs/DATA_STASH.md)                                                        | Upload → chunk → embed → search pipeline                                       |
+| [`docs/adr/`](docs/adr/README.md)                                                                 | Decision records — and when one gets written                                   |
+| [GitHub Project](https://github.com/users/mknw/projects/5)                                        | The live planning board                                                        |
 
 ## License
 
-[Add your license information here]
+Two licenses, split along the library boundary:
+
+| Scope                                                   | License                                     |
+| ------------------------------------------------------- | ------------------------------------------- |
+| `app/src/lib/harness-patterns/` — the **hames** library | [MIT](app/src/lib/harness-patterns/LICENSE) |
+| Everything else — the **playground**                    | [PolyForm Noncommercial 1.0.0](LICENSE)     |
+
+Copyright (c) 2026 Michael Accetto. **Both require attribution.** The library is
+MIT so it is usable anywhere, including commercially, once extracted. The
+playground around it is noncommercial: run it, study it, modify it, self-host it
+locally or in the cloud — but not for a commercial purpose.
+
+Third-party notices are unaffected by either: the vendored files listed in
+[`.claude/skills/NOTICE.md`](.claude/skills/NOTICE.md) keep their own licenses,
+with upstream pins recorded in
+[`.claude/skills/PROVENANCE.md`](.claude/skills/PROVENANCE.md).

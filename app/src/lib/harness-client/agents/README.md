@@ -110,7 +110,7 @@ two can be A/B'd on the same question.
 
 **Servers**: web_search, context7, redis
 **Patterns**: `parallel` → `judge` → `compactExecution`
-**Use case**: Search three sources concurrently, cache in redis, rank results.
+**Use case**: Search two sources concurrently, cache in redis, rank results.
 
 ```
 User: "What's the best way to handle auth in SvelteKit?"

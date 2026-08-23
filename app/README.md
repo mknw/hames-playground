@@ -23,7 +23,7 @@ src/
 │   ├── ChatSidebar.tsx        # Thread list: live progress strip + completion marks (#105), agent icons + collapsed rail (#60), delete + select mode (#71)
 │   ├── ChatMessages.tsx       # Markdown rendering with interactive graph entity spans
 │   ├── GraphVisualization.tsx  # Cytoscape.js graph with controls, editing, extraStyles
-│   ├── SupportPanel.tsx       # Tabbed panel (lazyMount): Neo4j, Memory, All, Context manager, Tools
+│   ├── SupportPanel.tsx       # Tabbed panel (lazyMount): Neo4j, Memory, All, Context manager, Data, Terminal, Actions, Documents
 │   ├── AllGraphTab.tsx        # Turn-based graph explorer (FloatingPanel + color-coded Cytoscape)
 │   ├── SettingsPanel.tsx      # Harness settings FloatingPanel (sliders, number inputs)
 │   └── ObservabilityPanel.tsx  # Event timeline + LLM call detail

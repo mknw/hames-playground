@@ -1,5 +1,16 @@
 # Deploying to a single Azure VM (or any VPS)
 
+> **⚠️ PRELIMINARY PLAN — not a validated runbook.** Treat every step here as a
+> proposal to be checked against the box you are actually building, not as a
+> procedure that has been executed end to end. It has not been rehearsed on a
+> clean VM.
+>
+> **Secrets will be pushed to Azure later**, so keep that destination in mind
+> while reading: the `app/.env` + `configs/mcp-config.yaml` files below are the
+> interim shape, and the intended end state is Key Vault → an `EnvironmentFile`
+> materialized at boot via the VM's managed identity (§11, §12). Do not design
+> anything around the plaintext-file layout surviving.
+
 Lift-and-shift runbook for the current architecture. It maps 1:1 to what the
 app needs at runtime, so it works on a plain VPS or an Azure VM identically —
 "push to Azure" here just means "an Azure Linux VM running this stack."
@@ -19,7 +30,7 @@ app needs at runtime, so it works on a plain VPS or an Azure VM identically —
                     ┌───────▼────────┐
                     │     Caddy      │  TLS termination (auto Let's Encrypt)
                     └───────┬────────┘
-                            │  127.0.0.1:3000
+                            │  127.0.0.1:3444
         ┌───────────────────▼───────────────────┐
         │  UI (SolidStart)  — systemd, on host   │  `pnpm start` (vinxi start)
         │  • shells `docker run` for sandboxes    │  needs docker CLI + node-pty
@@ -169,7 +180,7 @@ Type=simple
 User=kgagent                        # a user in the `docker` group
 WorkingDirectory=/opt/kg-agent/app   # cwd must be app/ so ../configs resolves
 EnvironmentFile=/opt/kg-agent/app/.env
-Environment=PORT=3000
+Environment=PORT=3444
 Environment=HOST=127.0.0.1
 ExecStart=/usr/bin/pnpm start       # vinxi start — serves .output/
 Restart=on-failure
@@ -190,7 +201,10 @@ The Data Stash pipeline needs an embedder. Two options:
 
 - **Self-host** a `llama-server --embedding` on `:8090` (needs the GGUF model on
   disk) as its own systemd unit, and set `EMBEDDINGS_PROVIDER=local` +
-  `EMBEDDINGS_LOCAL_URL=http://127.0.0.1:8090`.
+  `EMBEDDINGS_LOCAL_URL=http://127.0.0.1:8090/v1`. **The `/v1` suffix is
+  required** — the value is used as `` `${baseUrl}/embeddings` ``
+  (`embeddings.server.ts`), and both the code default and the compose service
+  include it.
 - **Hosted provider** — set `EMBEDDINGS_PROVIDER` to a remote provider instead.
 
 If you don't use DataStash search, you can skip this.
@@ -201,7 +215,7 @@ If you don't use DataStash search, you can skip this.
 
 ```
 your.domain.com {
-    reverse_proxy 127.0.0.1:3000
+    reverse_proxy 127.0.0.1:3444
 }
 ```
 
@@ -213,23 +227,34 @@ sudo systemctl reload caddy    # auto-provisions a Let's Encrypt cert
 
 Every var the server reads (`grep process.env src/`), with its localhost default:
 
-| Var                                                                       | Purpose                                                 | Default / note                                                                                                      |
-| ------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY`                                                       | **Required** — all default BAML chains                  | —                                                                                                                   |
-| `USE_MIXED_CHAINS`                                                        | `1` to use mixed-provider chains                        | unset = Anthropic-only                                                                                              |
-| `OPENROUTER_API_KEY`                                                      | mixed chains + possibly embeddings                      | needed iff `USE_MIXED_CHAINS=1`                                                                                     |
-| `DATABASE_URL`                                                            | Postgres (conversations)                                | `postgresql://postgres:password@localhost:5432/kgagent` — **override the password**                                 |
-| `MCP_GATEWAY_URL`                                                         | MCP gateway endpoint                                    | `http://localhost:8811/mcp`                                                                                         |
-| `MCP_GATEWAY_POOL_SIZE`                                                   | warm gateway connections kept in the client pool (#120) | `4` — leases isolate reconnects; extra concurrent calls open a short-lived overflow connection rather than queueing |
-| `NEO4J_USER` / `NEO4J_PASSWORD`                                           | direct Neo4j driver                                     | resolves to `bolt://localhost:7687` on host (`config/endpoints.ts:37`)                                              |
-| `COMPUTE_BACKEND`                                                         | sandbox backend                                         | `docker` (firecracker `#78` not implemented)                                                                        |
-| `SANDBOX_IMAGE`                                                           | sandbox container image                                 | `kg-sandbox:base` (built in step 5)                                                                                 |
-| `DOCKER_BIN`                                                              | docker CLI path                                         | `docker`                                                                                                            |
-| `EMBEDDINGS_PROVIDER` / `EMBEDDINGS_LOCAL_URL` / `EMBEDDINGS_LOCAL_MODEL` | DataStash embedder                                      | see step 7                                                                                                          |
-| `STACK_SECRET_SERVER_KEY`                                                 | auth (Stack Auth)                                       | configure a real project; **do not** ship `DEV_BYPASS_AUTH=true` to prod                                            |
+| Var                                                                       | Purpose                                                 | Default / note                                                                                                                          |
+| ------------------------------------------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`                                                       | **Required** — all default BAML chains                  | —                                                                                                                                       |
+| `USE_MIXED_CHAINS`                                                        | `1` to use mixed-provider chains                        | unset = Anthropic-only                                                                                                                  |
+| `OPENROUTER_API_KEY`                                                      | mixed chains + possibly embeddings                      | needed iff `USE_MIXED_CHAINS=1`                                                                                                         |
+| `DATABASE_URL`                                                            | Postgres (conversations)                                | `postgresql://postgres:password@localhost:5432/kgagent` — **override the password**                                                     |
+| `MCP_GATEWAY_URL`                                                         | MCP gateway endpoint                                    | `http://localhost:8811/mcp`                                                                                                             |
+| `MCP_GATEWAY_POOL_SIZE`                                                   | warm gateway connections kept in the client pool (#120) | `4` — leases isolate reconnects; extra concurrent calls open a short-lived overflow connection rather than queueing                     |
+| `NEO4J_USER` / `NEO4J_PASSWORD`                                           | direct Neo4j driver                                     | resolves to `bolt://localhost:7687` on host (`config/endpoints.ts:37`)                                                                  |
+| `COMPUTE_BACKEND`                                                         | sandbox backend                                         | `docker` (firecracker `#78` not implemented)                                                                                            |
+| `SANDBOX_IMAGE`                                                           | sandbox container image                                 | `kg-sandbox:base` (built in step 5)                                                                                                     |
+| `DOCKER_BIN`                                                              | docker CLI path                                         | `docker`                                                                                                                                |
+| `EMBEDDINGS_PROVIDER` / `EMBEDDINGS_LOCAL_URL` / `EMBEDDINGS_LOCAL_MODEL` | DataStash embedder                                      | see step 7                                                                                                                              |
+| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET`             | **Required** — Microsoft Entra sign-in (#119)           | from the app registration; see [`entra-setup.md`](entra-setup.md)                                                                       |
+| `AUTH_SESSION_SECRET`                                                     | **Required** — HMAC key signing the auth cookies        | `openssl rand -base64 32`                                                                                                               |
+| `TOKEN_ENCRYPTION_KEY`                                                    | encrypts the per-user MSAL token cache at rest (#110)   | HKDF-derived from `AUTH_SESSION_SECRET` when unset; **set it explicitly in prod** so the two can rotate independently                   |
+| `AUTH_REDIRECT_URI` / `AUTH_POST_LOGOUT_REDIRECT_URI`                     | OIDC redirect / post-logout URIs                        | default to port **3444**; the redirect MUST match one registered on the app (Web platform)                                              |
+| `AZURE_GRAPH_SCOPES`                                                      | override the delegated Graph scope set                  | defaults to the full connector set; every scope must be consented under API permissions **first**, or sign-in fails                     |
+| `VITE_ALLOWED_EMAILS`                                                     | email allow-list for real auth                          | comma-separated; supports `*@domain.com`                                                                                                |
+| `VITE_DEV_BYPASS_AUTH`                                                    | skips sign-in entirely                                  | `'true'` in `.env.example`. **Must be `'false'` in prod** — and note the name: `DEV_BYPASS_AUTH` (no `VITE_` prefix) is read by nothing |
 
-> Redis is **not** a direct env connection — all Redis access is via the gateway's
-> redis MCP server, so there's no `REDIS_URL` to set.
+> **Redis has two paths.** The agentic one goes through the gateway's redis MCP
+> server (configured in `configs/mcp-config.yaml`, no app env var). The direct
+> one — `redis-direct.server.ts` — reads `REDIS_HOST_DIRECT` (falling back to
+> `REDIS_HOST`), `REDIS_PORT`, `REDIS_PWD` (falling back to `REDIS_PASSWORD`)
+> and `REDIS_SSL`. They default to `localhost:6379` with no password, which is
+> right for this single-VM shape, but set `REDIS_PWD` if you password the
+> instance. There is no `REDIS_URL`.
 
 ## 10. Operations
 
@@ -289,8 +314,13 @@ dump` + Redis RDB). These hold all conversations, the graph, and the Data Stash.
 - **Secrets are file-based.** Upgrade path: Azure Key Vault → an
   `EnvironmentFile` populated at boot (VM managed identity), instead of a
   plaintext `app/.env` + `configs/mcp-config.yaml`.
-- **Auth.** Confirm a real Stack Auth project (or the email allow-list) is wired
-  and `DEV_BYPASS_AUTH` is off.
+- **Auth.** Confirm the Entra app registration is wired (#119) — tenant/client
+  id + secret, a redirect URI registered for this host's domain, the delegated
+  Graph scopes consented, `AUTH_SESSION_SECRET` set — and that
+  `VITE_DEV_BYPASS_AUTH` is `'false'`. The Stack Auth keys this guide used to
+  name (`STACK_SECRET_SERVER_KEY`, …) are no longer read by the app; see
+  `app/.env.example`. Getting this wrong yields a deploy nobody can sign in to,
+  or one anybody can.
 - **Two supported run shapes.** Host `systemd` (this guide) or the `app` compose
   service (#197). The container shape has not yet been exercised on a real
   deployment — the `systemd` path is the one with mileage.

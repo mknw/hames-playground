@@ -2,7 +2,7 @@
  * Support Panel Component
  *
  * Tabbed interface for knowledge graph visualization and observability tools
- * Tabs: Neo4j Graph | Memory Graph | All (Turn Explorer) | Context manager | Data | Actions | Documents | Tools
+ * Tabs: Neo4j | Memory | All (Turn Explorer) | Context manager | Data | Terminal | Actions | Documents
  */
 
 import { Tabs } from '@ark-ui/solid/tabs'

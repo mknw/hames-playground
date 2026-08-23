@@ -315,14 +315,55 @@ export async function listEnabledRoutinesForUser(
  * never-run case takes the truncated `NOW()`.
  */
 export async function claimRoutineRun(id: string, lastRunAt: Date | null): Promise<boolean> {
+  return (await claimRoutineRunAt(id, lastRunAt)) !== null
+}
+
+/**
+ * The same claim, returning the timestamp it stamped instead of a boolean, so a
+ * caller that fails to actually START the run can hand that exact value back to
+ * {@link releaseRoutineClaim}. `null` means the claim was lost.
+ */
+export async function claimRoutineRunAt(
+  id: string,
+  lastRunAt: Date | null,
+): Promise<Date | null> {
   await ensureSchema()
-  const { rowCount } = await query(
+  const { rows } = await query<{ last_run_at: Date }>(
     `UPDATE routines
         SET last_run_at = GREATEST(date_trunc('milliseconds', NOW()),
                                    last_run_at + interval '1 millisecond'),
             updated_at = NOW()
-      WHERE id = $1 AND enabled = TRUE AND last_run_at IS NOT DISTINCT FROM $2`,
+      WHERE id = $1 AND enabled = TRUE AND last_run_at IS NOT DISTINCT FROM $2
+      RETURNING last_run_at`,
     [id, lastRunAt],
+  )
+  return rows[0]?.last_run_at ?? null
+}
+
+/**
+ * Undo a claim whose run never started, so the routine is due again on the next
+ * tick instead of losing a whole interval (sf-L1).
+ *
+ * CAS'd on `claimedAt` — the value {@link claimRoutineRunAt} actually stamped —
+ * not on the row id alone. That is the difference between a rollback and a
+ * stomp: in the window between our failed seed and this call another claimant
+ * can legitimately have claimed the routine (it reads the advanced timestamp
+ * and its own CAS succeeds), and rolling THAT back would hand out a second
+ * claim for a run that is already going. When the timestamp has moved on, this
+ * is a no-op and returns false.
+ */
+export async function releaseRoutineClaim(
+  id: string,
+  claimedAt: Date,
+  restoreTo: Date | null,
+): Promise<boolean> {
+  await ensureSchema()
+  const { rowCount } = await query(
+    `UPDATE routines
+        SET last_run_at = $3,
+            updated_at = NOW()
+      WHERE id = $1 AND last_run_at = $2`,
+    [id, claimedAt, restoreTo],
   )
   return (rowCount ?? 0) > 0
 }

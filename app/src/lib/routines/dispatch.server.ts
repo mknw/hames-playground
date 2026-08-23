@@ -15,9 +15,11 @@
  *   - {@link fireRoutinesForEvent} — every enabled routine of an `'event'`
  *     kind belonging to one user (the session-lifecycle hooks).
  *
- * Both are claim-first: `claimRoutineRun` is a compare-and-set on
+ * Both are claim-first: `claimRoutineRunAt` is a compare-and-set on
  * `last_run_at`, so an overlapping tick, a second app instance, or an HMR
- * re-arm can't double-fire the same routine.
+ * re-arm can't double-fire the same routine. `fireRoutine` hands the claim back
+ * via `releaseRoutineClaim` when the run it claimed for never started, so a
+ * failed seed costs a tick rather than a whole interval.
  *
  * Deliberately NOT a `"use server"` module: these functions take a `userId`
  * (from the routine row, not from the request), and exposing them as client
@@ -27,7 +29,12 @@
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { newSessionId } from '../session-id'
-import { claimRoutineRun, listEnabledRoutinesForUser, type RoutineRow } from '../db/routines.server'
+import {
+  claimRoutineRunAt,
+  releaseRoutineClaim,
+  listEnabledRoutinesForUser,
+  type RoutineRow,
+} from '../db/routines.server'
 import type { RoutineTriggerKind } from './triggers'
 
 assertServerOnImport()
@@ -74,8 +81,10 @@ export async function fireRoutine(routine: RoutineRow): Promise<string | null> {
     return null
   }
 
-  const claimed = await claimRoutineRun(routine.id, routine.lastRunAt)
-  if (!claimed) return null
+  // Claim FIRST (that is what makes double-firing impossible), but keep the
+  // stamped timestamp so a claim whose run never started can be handed back.
+  const claimedAt = await claimRoutineRunAt(routine.id, routine.lastRunAt)
+  if (!claimedAt) return null
 
   const { seedActionRow, runAgentInBackground } =
     await import('../harness-client/action-runner.server')
@@ -91,6 +100,24 @@ export async function fireRoutine(routine: RoutineRow): Promise<string | null> {
     await seedActionRow(runId, routine.userId, routine.agentId, trigger, 'routine')
   } catch (err) {
     console.error(`[routines] failed to seed run row for routine ${routine.id}:`, err)
+    // The claim advanced `last_run_at` and nothing ran, so without this the
+    // routine sits out a whole interval for a transient DB failure — and an
+    // hourly routine that fails to seed at 09:00 next fires at 11:00 (sf-L1).
+    // Roll the claim back so the next tick sees it as due again.
+    const released = await releaseRoutineClaim(
+      routine.id,
+      claimedAt,
+      routine.lastRunAt,
+    ).catch((relErr: unknown) => {
+      console.error(`[routines] could not roll back the claim for ${routine.id}:`, relErr)
+      return false
+    })
+    if (!released) {
+      console.warn(
+        `[routines] claim for ${routine.id} was not rolled back (another claimant moved it) ` +
+          '— this interval is skipped.',
+      )
+    }
     return null
   }
 

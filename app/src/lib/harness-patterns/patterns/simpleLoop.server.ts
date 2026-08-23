@@ -639,6 +639,11 @@ export function simpleLoop<T extends SimpleLoopData>(
             hasError = true
             errorMessage = `All ${allCalls.length} calls of the multi-call turn failed: ${errors.join('; ')}`
             errorTurn = turn
+            // A batch that failed wholesale because the response was CUT OFF is
+            // an LLM-output failure, not a tool failure: carry the response so
+            // the panel can show what was actually generated. Tool-level
+            // failures keep no llmCall — the model's output was fine.
+            if (llmCallHitOutputCap(controllerLlmCall)) errorLlmCall = controllerLlmCall
             break
           }
 
@@ -658,6 +663,10 @@ export function simpleLoop<T extends SimpleLoopData>(
           hasError = true
           errorMessage = `Tool not allowed: ${action.tool_name}. Allowed: ${tools.join(', ')}`
           errorTurn = turn
+          // The BAML call SUCCEEDED and still ended the loop: the tool name the
+          // model chose is the defect, so the response that named it is the
+          // evidence. Carry it (see the tool_args branch below for why).
+          errorLlmCall = controllerLlmCall
           break
         }
 
@@ -675,6 +684,11 @@ export function simpleLoop<T extends SimpleLoopData>(
               `limit (response truncated mid-generation)`
             : `Invalid tool_args JSON: ${action.tool_args}`
           errorTurn = turn
+          // Unparseable or truncated `tool_args` is a failure OF the response,
+          // and the reason is only ever visible in the raw text — a cut-off
+          // heredoc, a bare string where JSON was required. `errorMessage`
+          // quotes the args; the llmCall carries the whole response.
+          errorLlmCall = controllerLlmCall
           break
         }
 

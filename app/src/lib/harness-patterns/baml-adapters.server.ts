@@ -505,8 +505,11 @@ export class LLMCallError extends Error {
 /** Re-throw a BAML failure as an `LLMCallError` enriched with collector data.
  *  Preserves the original error's message and stack via `cause`. Used by all
  *  adapter catch paths so failures arriving at the calling pattern carry the
- *  same prompt/variables/HTTP shape that successful calls already attach. */
-function wrapAsLLMCallError(
+ *  same prompt/variables/HTTP shape that successful calls already attach.
+ *  Exported for the call sites that live outside this module (`routeMessageOp`
+ *  in `routing.server.ts`) — every BAML failure must reach its pattern the
+ *  same way, or the pattern's error event silently loses the raw response. */
+export function wrapAsLLMCallError(
   err: unknown,
   functionName: string,
   variables: Record<string, unknown>,

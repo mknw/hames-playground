@@ -192,6 +192,32 @@ describe('POST /api/events', () => {
     })
   })
 
+  it('runs the background compaction inside the request and settings scopes', async () => {
+    // SA-M13: this call is deliberately made AFTER `controller.close()`, so it
+    // inherits neither ALS scope the request handler opened. Without them
+    // `getRequestSettings()` silently fell back to DEFAULT_SETTINGS and the
+    // user's `maxResultForSummary` was ignored by every background summary.
+    const { getRequestSettings } = await import('../../../lib/settings-context.server')
+    const { getRequestUserId, getRequestSessionId } =
+      await import('../../../lib/harness-client/request-user.server')
+
+    const seen: { max?: number; userId?: string | null; sessionId?: string | null } = {}
+    compactBulkData.mockImplementationOnce(async (_ctx, persist) => {
+      seen.max = getRequestSettings().maxResultForSummary
+      seen.userId = getRequestUserId()
+      seen.sessionId = getRequestSessionId()
+      await persist()
+    })
+
+    await POST(
+      evt({ sessionId: 's1', message: 'hi', settings: { maxResultForSummary: 12_345 } }),
+    ).then((r) => r.text())
+
+    expect(seen.max).toBe(12_345)
+    expect(seen.userId).toBe('user-1')
+    expect(seen.sessionId).toBe('s1')
+  })
+
   it('emits an error frame — not a rejected response — when the harness throws', async () => {
     processMessageStreaming.mockRejectedValue(new Error('gateway unreachable'))
     const res = await POST(evt({ sessionId: 's1', message: 'hi' }))

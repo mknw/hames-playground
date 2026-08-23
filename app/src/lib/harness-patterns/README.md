@@ -1482,9 +1482,12 @@ BAML Return → string (assistant response text)
   → stored as assistant_message event
 ```
 
-> **Error scoping**: The compactExecution reads error state from EventView, not from the data stash.
-> This means errors are scoped by the compactExecution's `ViewConfig` (e.g. `fromLastNTurns: 1`) and
-> naturally expire — they don't persist across turns via serialization.
+> **Error scoping**: The compactExecution reads error state from EventView, not from the data stash,
+> so errors expire with the view instead of being carried forward by hand.
+> The read is bounded to the CURRENT TURN by default — `viewConfig.fromLastNTurns` when the
+> caller declared one, else 1. A pattern scope alone is not a turn scope: a loop keeps the
+> same `patternId` every turn and `ctx.events` persist across `continueSession`, so reading
+> errors off the bare view made one failed turn apologise on every turn after it.
 
 #### compactIntent → `CompactIntent`
 

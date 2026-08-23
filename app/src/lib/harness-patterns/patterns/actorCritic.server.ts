@@ -170,6 +170,20 @@ export function actorCritic<T extends ActorCriticData>(
         return 'accepted'
       }
 
+      // Stamp the rejection reason onto the attempt the critic just judged.
+      // This is the ONLY path by which feedback reaches the next actor call:
+      // both adapters map `ScriptExecutionEvent.feedback` onto
+      // `Attempt.feedback`, and `ActorAttemptLog` renders it as
+      // "CRITIC FEEDBACK" beside that attempt's result. Without the stamp the
+      // actor retried blind while the closing section told it to address
+      // feedback it could not see — an invitation to invent one.
+      // `scope.data.feedback` below is for consumers of the pattern's data;
+      // it is not on the actor's input path.
+      const judged = previousAttempts[previousAttempts.length - 1]
+      if (judged && evaluation.feedback) {
+        judged.feedback = evaluation.feedback
+      }
+
       // Update for next attempt
       scope.data = {
         ...scope.data,

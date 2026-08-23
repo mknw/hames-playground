@@ -354,15 +354,23 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   // loop-exhaustion signal to the BAML Synthesize template — without it the
   // compactExecution would happily fabricate a confident answer over an incomplete
   // trace (see hallucination-code-mode.json: Max retries fired, synth invented
-  // node names and fake web search results). The error scoping is naturally
-  // bounded by this compactExecution's own view window — see harness-patterns
-  // README "Error scoping" note.
+  // node names and fake web search results). The error read is bounded to the
+  // current turn by compactExecution itself — see harness-patterns README
+  // "Error scoping" note; this agent's patternId is the same every turn, so a
+  // pattern scope alone would have leaked turn 1's failure into turn 5.
+  //
+  // `fromPatterns` is explicit because a ViewConfig with no pattern scope
+  // silently gets the DEFAULT one — the immediately preceding pattern only —
+  // and the user's message lives at the harness level (patternId 'harness'),
+  // so it was filtered out and `Synthesize` ran with an empty USER MESSAGE
+  // (SA-M1). 'user_message' joins the type list for the same reason.
   const synth = compactExecution<SessionData>({
     mode: 'thread',
     patternId: 'code-mode-synth',
     liveEvents: true,
     viewConfig: {
-      eventTypes: ['controller_action', 'tool_call', 'tool_result', 'error'],
+      fromPatterns: ['harness', 'code-mode-loop'],
+      eventTypes: ['user_message', 'controller_action', 'tool_call', 'tool_result', 'error'],
     },
   })
 

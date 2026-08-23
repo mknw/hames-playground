@@ -805,3 +805,292 @@ describe('compactExecution — context-window trimming regression', () => {
     }
   })
 })
+
+/**
+ * SA-H1 / SA-H4 — what the answer-writer is actually shown.
+ *
+ * Both findings are about `Synthesize` receiving something that isn't true:
+ * an error from a turn that already ended (so it apologises forever), and a
+ * terminal `Return` presented as a tool that succeeded and returned nothing
+ * (so, under the template's FIDELITY rule, it hedges over results that were
+ * complete).
+ */
+describe('compactExecution synth input fidelity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  async function harness() {
+    const { compactExecution } =
+      await import('../../../../lib/harness-patterns/patterns/compactExecution.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+    return { compactExecution, createScope, createEventView }
+  }
+
+  type Ev = { type: string; ts: number; patternId: string; data: unknown }
+  function ctxOf(events: Ev[], input = 'q') {
+    return {
+      sessionId: 'test',
+      createdAt: events[0]?.ts ?? 1,
+      events: events as never,
+      status: 'running' as const,
+      data: {},
+      input,
+    }
+  }
+
+  /** One successful turn of a loop called `loop`, offset from `t`. */
+  function goodTurn(t: number): Ev[] {
+    return [
+      { type: 'pattern_enter', ts: t, patternId: 'loop', data: {} },
+      {
+        type: 'controller_action',
+        ts: t + 1,
+        patternId: 'loop',
+        data: {
+          action: {
+            reasoning: 'look it up',
+            tool_name: 'search',
+            tool_args: '{"q":"x"}',
+            status: 'Searching',
+            is_final: false,
+          },
+        },
+      },
+      {
+        type: 'tool_result',
+        ts: t + 2,
+        patternId: 'loop',
+        data: { callId: 'tc1', tool: 'search', result: ['the real answer'], success: true },
+      },
+    ]
+  }
+
+  it('does not apologise on turn 2 for an error that belonged to turn 1', async () => {
+    const { compactExecution, createScope, createEventView } = await harness()
+    let captured: import('../../../../lib/harness-patterns/types').CompactExecutionInput | undefined
+    const pattern = compactExecution({
+      mode: 'thread',
+      patternId: 'synth',
+      synthesize: async (input) => {
+        captured = input
+        return 'ok'
+      },
+    })
+
+    // Turn 1 failed; turn 2's tool calls all succeeded. Events persist across
+    // `continueSession`, and the loop's patternId is the SAME every turn — so a
+    // pattern-scoped read still sees turn 1's error. Only a turn window expires it.
+    const events: Ev[] = [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'turn 1' } },
+      { type: 'pattern_enter', ts: 2, patternId: 'loop', data: {} },
+      {
+        type: 'error',
+        ts: 3,
+        patternId: 'loop',
+        data: { error: 'Max turns (8) exceeded', severity: 'recoverable' },
+      },
+      { type: 'pattern_exit', ts: 4, patternId: 'loop', data: { status: 'completed' } },
+      { type: 'user_message', ts: 10, patternId: 'harness', data: { content: 'turn 2' } },
+      ...goodTurn(11),
+    ]
+
+    await pattern.fn(createScope('test', {}), createEventView(ctxOf(events, 'turn 2')))
+
+    expect(captured?.hasError).toBe(false)
+    expect(captured?.errorMessage).toBeUndefined()
+    // The good turn's results still reach the answer-writer.
+    expect(JSON.stringify(captured?.loopHistory?.iterations)).toContain('the real answer')
+  })
+
+  it('still reports an error from the turn it is answering', async () => {
+    const { compactExecution, createScope, createEventView } = await harness()
+    let captured: import('../../../../lib/harness-patterns/types').CompactExecutionInput | undefined
+    const pattern = compactExecution({
+      mode: 'thread',
+      patternId: 'synth',
+      synthesize: async (input) => {
+        captured = input
+        return 'ok'
+      },
+    })
+
+    const events: Ev[] = [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'turn 1' } },
+      ...goodTurn(2),
+      { type: 'user_message', ts: 10, patternId: 'harness', data: { content: 'turn 2' } },
+      ...goodTurn(11),
+      { type: 'error', ts: 20, patternId: 'loop', data: { error: 'gateway unreachable' } },
+    ]
+
+    await pattern.fn(createScope('test', {}), createEventView(ctxOf(events, 'turn 2')))
+
+    expect(captured?.hasError).toBe(true)
+    expect(captured?.errorMessage).toBe('gateway unreachable')
+  })
+
+  it('honours a wider window when the caller asked for one', async () => {
+    const { compactExecution, createScope, createEventView } = await harness()
+    let captured: import('../../../../lib/harness-patterns/types').CompactExecutionInput | undefined
+    const pattern = compactExecution({
+      mode: 'thread',
+      patternId: 'synth',
+      viewConfig: { fromLast: false, fromLastNTurns: 2 },
+      synthesize: async (input) => {
+        captured = input
+        return 'ok'
+      },
+    })
+
+    const events: Ev[] = [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'turn 1' } },
+      { type: 'error', ts: 2, patternId: 'loop', data: { error: 'two turns ago' } },
+      { type: 'user_message', ts: 10, patternId: 'harness', data: { content: 'turn 2' } },
+      ...goodTurn(11),
+    ]
+    const view = createEventView(
+      ctxOf(events, 'turn 2'),
+      { fromLast: false, fromLastNTurns: 2 },
+      'synth',
+    )
+
+    await pattern.fn(createScope('test', {}), view)
+
+    expect(captured?.hasError).toBe(true)
+    expect(captured?.errorMessage).toBe('two turns ago')
+  })
+
+  it('drops the terminal Return turn instead of passing it off as a success', async () => {
+    const { compactExecution, createScope, createEventView } = await harness()
+    const { b } = await import('../../../../../baml_client')
+
+    const events: Ev[] = [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'q' } },
+      ...goodTurn(2),
+      // simpleLoop emits NO tool_result for the terminal Return (#149), so the
+      // reconstruction used to hand Synthesize `Tool: Return / Result: null`
+      // with `success: true` — a fabricated success as the answer-writer's
+      // LAST and most salient input.
+      {
+        type: 'controller_action',
+        ts: 6,
+        patternId: 'loop',
+        data: {
+          action: {
+            reasoning: 'found it',
+            tool_name: 'Return',
+            tool_args: 'brief summary of what I did',
+            is_final: true,
+          },
+        },
+      },
+      { type: 'pattern_exit', ts: 7, patternId: 'loop', data: { status: 'completed' } },
+    ]
+
+    const pattern = compactExecution({ mode: 'thread', patternId: 'synth' })
+    await pattern.fn(createScope('test', {}), createEventView(ctxOf(events)))
+
+    const turns = vi.mocked(b.Synthesize).mock.calls[0][2] as Array<{
+      tool_call?: { tool?: string }
+      tool_result?: { tool?: string; result?: string; success?: boolean }
+    }>
+    expect(turns).toHaveLength(1)
+    expect(turns[0].tool_result?.tool).toBe('search')
+    expect(turns[0].tool_result?.result).toContain('the real answer')
+    // No Return turn, and no null result dressed up as a success, anywhere.
+    const json = JSON.stringify(turns)
+    expect(json).not.toContain('Return')
+    expect(json).not.toContain('"result":"null"')
+    // The Return prose was never the deliverable (#149) — it must not leak either.
+    expect(json).not.toContain('brief summary of what I did')
+  })
+
+  it('drops an action whose tool_result never arrived, but keeps a real null result', async () => {
+    const { compactExecution, createScope, createEventView } = await harness()
+    let captured: import('../../../../lib/harness-patterns/types').CompactExecutionInput | undefined
+    const pattern = compactExecution({
+      mode: 'thread',
+      patternId: 'synth',
+      synthesize: async (input) => {
+        captured = input
+        return 'ok'
+      },
+    })
+
+    const events: Ev[] = [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'q' } },
+      { type: 'pattern_enter', ts: 2, patternId: 'loop', data: {} },
+      // A tool that legitimately returns null — it HAS a paired tool_result, so
+      // its turn survives: "the store holds nothing" is a real finding.
+      {
+        type: 'controller_action',
+        ts: 3,
+        patternId: 'loop',
+        data: {
+          action: { reasoning: '', tool_name: 'lookup', tool_args: '{}', is_final: false },
+        },
+      },
+      {
+        type: 'tool_result',
+        ts: 4,
+        patternId: 'loop',
+        data: { callId: 'tc1', tool: 'lookup', result: null, success: true },
+      },
+      // The loop died mid-turn: an action with no result at all.
+      {
+        type: 'controller_action',
+        ts: 5,
+        patternId: 'loop',
+        data: {
+          action: { reasoning: '', tool_name: 'orphan', tool_args: '{}', is_final: false },
+        },
+      },
+    ]
+
+    await pattern.fn(createScope('test', {}), createEventView(ctxOf(events)))
+
+    const iterations = captured?.loopHistory?.iterations ?? []
+    expect(iterations.map((i) => i.action.tool_name)).toEqual(['lookup'])
+    expect(iterations[0].result).toBeNull()
+  })
+
+  it('falls back to response mode when nothing real is left to report', async () => {
+    const { compactExecution, createScope, createEventView } = await harness()
+    let captured: import('../../../../lib/harness-patterns/types').CompactExecutionInput | undefined
+    const pattern = compactExecution({
+      mode: 'thread',
+      patternId: 'synth',
+      synthesize: async (input) => {
+        captured = input
+        return 'ok'
+      },
+    })
+
+    const events: Ev[] = [
+      { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'q' } },
+      { type: 'pattern_enter', ts: 2, patternId: 'loop', data: {} },
+      {
+        type: 'controller_action',
+        ts: 3,
+        patternId: 'loop',
+        data: {
+          action: {
+            reasoning: '',
+            tool_name: 'Return',
+            tool_args: 'nothing to do',
+            is_final: true,
+          },
+        },
+      },
+      { type: 'pattern_exit', ts: 4, patternId: 'loop', data: { status: 'completed' } },
+    ]
+
+    await pattern.fn(createScope('test', {}), createEventView(ctxOf(events)))
+
+    // A Return-only trace has no loop history worth the name; the existing
+    // no-history path takes over rather than shipping an empty thread.
+    expect(captured?.loopHistory).toBeUndefined()
+    expect(captured?.mode).toBe('response')
+  })
+})

@@ -9,6 +9,8 @@ import { processMessageStreaming } from '../../lib/harness-client/actions.server
 import { saveSession } from '../../lib/harness-client/session.server'
 import { compactBulkData, serializeContext } from '../../lib/harness-patterns'
 import { runFirstTurnTitleGen } from '../../lib/harness-client/examples/title-generator.server'
+import { runWithRequestContext } from '../../lib/harness-client/request-user.server'
+import { runWithSettings } from '../../lib/settings-context.server'
 import { getAuthenticatedUser } from '../../lib/auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../../lib/auth/dev-bypass'
 import type { HarnessSettings } from '../../lib/settings'
@@ -104,9 +106,27 @@ export async function POST(event: APIEvent) {
         // Runs after the SSE stream is closed — user already has the response.
         // Summaries are stored on tool_result events and persisted to session,
         // so they appear as compact pointers on subsequent turns.
-        compactBulkData(result.context, async () => {
-          await saveSession(sessionId, userId, resolvedAgentId, serializeContext(result.context))
-        }).catch((err) => console.error('[summarize] background summarization failed:', err))
+        //
+        // Both scopes are re-established explicitly: this call is deliberately
+        // OUTSIDE the request-handler await chain (it runs after
+        // `controller.close()`), so it inherits neither the settings scope
+        // `processMessageStreaming` opened nor the request scope `runTurn`
+        // opened inside it. Without them `getRequestSettings()` fell back to
+        // DEFAULT_SETTINGS and silently ignored the user's
+        // `maxResultForSummary` (SA-M13), and any user-scoped work in the
+        // persist callback would resolve no user.
+        runWithRequestContext({ userId, sessionId }, () =>
+          runWithSettings(settings, () =>
+            compactBulkData(result.context, async () => {
+              await saveSession(
+                sessionId,
+                userId,
+                resolvedAgentId,
+                serializeContext(result.context),
+              )
+            }),
+          ),
+        ).catch((err) => console.error('[summarize] background summarization failed:', err))
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
         controller.enqueue(

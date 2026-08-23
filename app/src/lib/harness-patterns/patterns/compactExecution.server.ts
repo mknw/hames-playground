@@ -54,6 +54,11 @@ async function defaultSynthesize(
     // Convert loop history to LoopTurn array. Multi-call iterations carry
     // additional_calls through (their result is already the index-keyed map
     // holding every sub-call's tool + result/__error).
+    //
+    // `success: true` below is unconditional, which is only honest because
+    // `buildSynthesisInputFromView` has already dropped the iterations that
+    // have no result to report (the terminal `Return`, and actions whose
+    // `tool_result` never arrived) — see the SA-H4 note there.
     for (const iteration of input.loopHistory.iterations) {
       turns.push({
         n: iteration.turn,
@@ -213,19 +218,30 @@ function buildSynthesisInputFromView(
   mode: CompactExecutionConfig['mode'],
   view: EventView,
   data: CompactExecutionData,
+  errorTurnWindow: number,
 ): CompactExecutionInput {
   // Get user message
   const userMessage = view.fromAll().ofType('user_message').last(1).get()[0]
   const userContent = userMessage ? (userMessage.data as { content: string }).content : ''
 
+  // Read error state from the view rather than from the data stash, so errors
+  // expire with the window instead of being carried forward by hand — but read
+  // it through a TURN window, not the bare view. A ViewConfig's pattern scope
+  // is not a turn scope: a loop keeps the same patternId every turn and
+  // `ctx.events` persist across `continueSession`, so one failed turn had
+  // `Synthesize` apologise on turn 2, 3, 4… for work that all succeeded
+  // (`general.server.ts` documents the correct shape — `fromPatterns` +
+  // `fromLastNTurns: 1` — and was the only agent of the seven that had it).
+  // The default is one turn; a caller that asked for a wider window in its own
+  // `viewConfig` keeps it.
+  const errorView = view.fromLastNTurns(errorTurnWindow)
+
   const input: CompactExecutionInput = {
     mode,
     userMessage: userContent,
     intent: data.intent ?? userContent,
-    // Read error state from view (scoped by compactExecution's ViewConfig)
-    // rather than from data stash, so errors naturally expire with the view window
-    hasError: view.hasErrors(),
-    errorMessage: view.lastError(),
+    hasError: errorView.hasErrors(),
+    errorMessage: errorView.lastError(),
   }
 
   switch (mode) {
@@ -248,6 +264,9 @@ function buildSynthesisInputFromView(
       // Build loop history from events if available
       if (toolEvents.length > 0 || actionEvents.length > 0) {
         const iterations: LoopHistory['iterations'] = []
+        // Indices in `iterations` whose controller_action never received a
+        // paired tool_result — dropped below, see the SA-H4 note.
+        const unpaired = new Set<number>()
         let turn = 0
         // How many tool_results the open iteration still owns. A singular
         // action owns 1; a multi-call action owns 1 + additional_calls.length
@@ -262,6 +281,7 @@ function buildSynthesisInputFromView(
         for (const event of view.fromLastPattern().get()) {
           if (event.type === 'controller_action') {
             const actionData = event.data as { action: import('../types').ControllerAction }
+            unpaired.add(iterations.length)
             iterations.push({
               turn: turn++,
               action: actionData.action,
@@ -275,6 +295,7 @@ function buildSynthesisInputFromView(
             const open = iterations.length > 0 ? iterations[iterations.length - 1] : undefined
             if (open && openReceived < openExpected) {
               // Pair with the controller_action that owns this result.
+              unpaired.delete(iterations.length - 1)
               openReceived++
               if (openExpected === 1) {
                 open.result = resultData.result
@@ -307,10 +328,32 @@ function buildSynthesisInputFromView(
           }
         }
 
-        input.loopHistory = {
-          iterations,
-          startTime: toolEvents[0]?.ts ?? Date.now(),
-          endTime: Date.now(),
+        // Drop the turns that would reach `Synthesize` as a FABRICATED
+        // success: the conversion in `defaultSynthesize` stamps
+        // `success: true` on every turn it emits, so
+        //   - the terminal `Return` turn — simpleLoop deliberately emits no
+        //     `tool_result` for it (baml_src/simpleLoop.baml, #149) — and
+        //   - any action whose `tool_result` never arrived (the loop broke, the
+        //     pattern aborted mid-turn)
+        // both rendered as `Result: null` under a `success` flag — the
+        // Return case being the common one, and the answer-writer's LAST and
+        // most salient input: "a successful tool that returned nothing".
+        // Under the template's FIDELITY rule that buys a hedged answer over
+        // tool results that were in fact complete.
+        // A tool that legitimately returns null keeps its turn — it HAS a
+        // paired `tool_result`, which is what `unpaired` tracks.
+        const real = iterations.filter(
+          (it, i) => !unpaired.has(i) && it.action.tool_name !== 'Return',
+        )
+
+        // Nothing left to reconstruct: fall through to the existing
+        // no-loopHistory path below, which downgrades thread → response mode.
+        if (real.length > 0) {
+          input.loopHistory = {
+            iterations: real,
+            startTime: toolEvents[0]?.ts ?? Date.now(),
+            endTime: Date.now(),
+          }
         }
       }
 
@@ -369,8 +412,14 @@ export function compactExecution<T extends CompactExecutionData>(
         return scope
       }
 
-      // Build input from view
-      const input = buildSynthesisInputFromView(mode, view, scope.data)
+      // Build input from view. The error read is bounded to the caller's own
+      // turn window when it declared one, else to the current turn (SA-H1).
+      const input = buildSynthesisInputFromView(
+        mode,
+        view,
+        scope.data,
+        resolved.viewConfig?.fromLastNTurns ?? 1,
+      )
 
       // Validate thread mode
       if (mode === 'thread' && !input.loopHistory) {

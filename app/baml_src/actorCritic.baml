@@ -157,8 +157,10 @@ template_string ActorAttemptLog(attempts: Attempt[], attempt_n: int?) #"
 // of template_strings deliberately).
 template_string ActorClosing(attempts: Attempt[], attempt_n: int?, max_attempts: int?) #"
   {{ _.role("user") }}
-  {% if attempts|length > 0 %}
-  You MUST address the critic's feedback. Do not repeat failed approaches.
+  {% if attempts | selectattr("feedback") | list | length > 0 %}
+  You MUST address the CRITIC FEEDBACK above. Do not repeat failed approaches.
+  {% elif attempts|length > 0 %}
+  Do not repeat failed approaches.
   {% endif %}
 
   {% if attempt_n is not none and max_attempts is not none %}

@@ -682,3 +682,145 @@ describe('actorCritic criticCadence', () => {
     expect(mockCritic).toHaveBeenCalledTimes(2)
   })
 })
+
+/**
+ * SA-C1 — the critic's feedback has to reach the actor.
+ *
+ * `runCadenceAndCritic` wrote the rejection reason to `scope.data.feedback`,
+ * which nothing on the actor's input path reads, while the actor prompt's
+ * closing section told it to address feedback it was never shown. The retry
+ * therefore ran blind — the whole reason actorCritic exists over simpleLoop —
+ * and a false imperative invited the model to invent a critique. The reason now
+ * rides `ScriptExecutionEvent.feedback` on the attempt the critic judged, which
+ * both adapters map onto `Attempt.feedback` and `ActorAttemptLog` renders.
+ */
+describe('actorCritic critic feedback reaches the next attempt', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    callToolMock.mockResolvedValue({ success: true, data: { result: 'ok' } })
+  })
+
+  const REASON = 'the CSV is missing the amount column — re-read it with headers'
+
+  /** previous_attempts is one mutated array across calls, so snapshot per call. */
+  function snapshottingActor(snapshots: Array<Array<Record<string, unknown>>>) {
+    return vi.fn(async (...args: unknown[]) => {
+      const attempts = args[3] as Array<Record<string, unknown>>
+      snapshots.push(attempts.map((a) => ({ ...a })))
+      return {
+        action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"read()"}' }),
+        llmCall: undefined,
+      }
+    })
+  }
+
+  async function run(
+    actor: CodeModeControllerFnWithLLMData,
+    critic: CriticFnWithLLMData,
+    config: Record<string, unknown> = {},
+  ) {
+    const { actorCritic } =
+      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const pattern = actorCritic(actor, critic, ['code-mode'], {
+      patternId: 'feedback',
+      maxRetries: 2,
+      ...config,
+    })
+    const ctx = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        {
+          type: 'user_message' as const,
+          ts: Date.now(),
+          patternId: 'harness',
+          data: { content: 'total the invoices' },
+        },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'total the invoices',
+    }
+    return pattern.fn(createScope('test', {}), createEventView(ctx))
+  }
+
+  it('stamps the rejection reason onto the attempt the critic judged', async () => {
+    const snapshots: Array<Array<Record<string, unknown>>> = []
+    const actor = snapshottingActor(snapshots)
+    const critic = vi
+      .fn()
+      .mockResolvedValueOnce({
+        result: mockCriticResult({ is_sufficient: false, suggested_approach: REASON }),
+        llmCall: undefined,
+      })
+      .mockResolvedValueOnce({
+        result: mockCriticResult({ is_sufficient: true }),
+        llmCall: undefined,
+      })
+
+    await run(actor as never, critic as never)
+
+    // Attempt 1 sees an empty history; attempt 2 sees attempt 1 WITH the reason.
+    expect(snapshots).toHaveLength(2)
+    expect(snapshots[0]).toEqual([])
+    expect(snapshots[1]).toHaveLength(1)
+    expect(snapshots[1][0].feedback).toBe(REASON)
+  })
+
+  it('falls back to the explanation when the critic suggests no approach', async () => {
+    const snapshots: Array<Array<Record<string, unknown>>> = []
+    const critic = vi
+      .fn()
+      .mockResolvedValueOnce({
+        result: mockCriticResult({ is_sufficient: false, explanation: 'no total was printed' }),
+        llmCall: undefined,
+      })
+      .mockResolvedValueOnce({
+        result: mockCriticResult({ is_sufficient: true }),
+        llmCall: undefined,
+      })
+
+    await run(snapshottingActor(snapshots) as never, critic as never)
+
+    expect(snapshots[1][0].feedback).toBe('no total was printed')
+  })
+
+  it('leaves an accepted attempt unstamped — the closing nag stays off', async () => {
+    const snapshots: Array<Array<Record<string, unknown>>> = []
+    const critic = vi
+      .fn()
+      .mockResolvedValue({ result: mockCriticResult({ is_sufficient: true }), llmCall: undefined })
+
+    await run(snapshottingActor(snapshots) as never, critic as never)
+
+    // Accepted on attempt 1, so there is no second call and nothing to stamp.
+    expect(snapshots).toHaveLength(1)
+    expect(critic).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the critic its own prior feedback, so it can tell whether it was addressed', async () => {
+    const criticSnapshots: Array<Array<Record<string, unknown>>> = []
+    const critic = vi.fn(async (...args: unknown[]) => {
+      const attempts = args[1] as Array<Record<string, unknown>>
+      criticSnapshots.push(attempts.map((a) => ({ ...a })))
+      return {
+        result: mockCriticResult({
+          is_sufficient: criticSnapshots.length > 1,
+          suggested_approach: REASON,
+        }),
+        llmCall: undefined,
+      }
+    })
+
+    await run(snapshottingActor([]) as never, critic as never)
+
+    expect(criticSnapshots).toHaveLength(2)
+    // Its own first-round reason is on the attempt it rejected.
+    expect(criticSnapshots[1][0].feedback).toBe(REASON)
+    // ...and not on the attempt it has not judged yet.
+    expect(criticSnapshots[1][1].feedback).toBeUndefined()
+  })
+})

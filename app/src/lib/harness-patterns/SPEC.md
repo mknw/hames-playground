@@ -1266,8 +1266,10 @@ These are mutated post-commit via `enrichToolResult(ctx, eventId, { summary?, hi
 
 ### Batched bulk-data compaction
 
-`compactBulkData()` (in `compactBulkData.server.ts`, called by `/api/events` once
-the SSE response has been sent) folds the turn's results into **one
+`compactBulkData()` (in `compactBulkData.server.ts`, called by the consumer once
+its response has been sent — in this repo by `harness-client/turn.server.ts`,
+after the SSE stream closes on the interactive path and after the run completes on
+the triggered one) folds the turn's results into **one
 `ResultDescribeBatch` call per `MAX_BATCH_ITEMS` (8) results** instead of one
 `ResultDescribe` call each (#83 Part E). Batches also respect an input budget of
 25% of the describe client's context window, so a raised `maxResultForSummary`

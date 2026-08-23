@@ -427,3 +427,85 @@ describe('Agent Consistency', () => {
     }
   })
 })
+
+/**
+ * SA-M1 — a compactExecution's `viewConfig` must not hide the user's question.
+ *
+ * `ViewConfig`'s pattern scope is IMPLICIT: declare `eventTypes` and nothing
+ * else and you silently get `fromLast` — the immediately preceding pattern
+ * only. The user's message is tracked at the harness level (patternId
+ * 'harness'), so it was filtered out and `Synthesize` ran with an empty
+ * USER MESSAGE: the answer-writer had the tool results but not the question.
+ * `general.server.ts` is the shape the others now follow.
+ */
+describe('compactExecution view scope — the user message must survive', () => {
+  interface Node {
+    name: string
+    config: { patternId?: string; viewConfig?: Record<string, unknown> }
+    children?: Node[]
+  }
+
+  /** Depth-first walk — the synth can sit inside routes(chain(...)). */
+  function findSynth(nodes: Node[]): Node | undefined {
+    for (const n of nodes) {
+      if (n.name === 'compactExecution') return n
+      const inner = n.children ? findSynth(n.children) : undefined
+      if (inner) return inner
+    }
+    return undefined
+  }
+
+  async function synthOf(agentId: 'sandbox-session' | 'code-mode'): Promise<Node> {
+    // Static imports: a template-literal specifier defeats Vite's analysis.
+    const agent =
+      agentId === 'sandbox-session'
+        ? (await import('../../../../lib/harness-client/examples/sandbox-session.server'))
+            .sandboxSessionAgent
+        : (await import('../../../../lib/harness-client/examples/code-mode.server')).codeModeAgent
+    const patterns = (await agent.createPatterns('test-session')) as unknown as Node[]
+    const synth = findSynth(patterns)
+    expect(synth, `no compactExecution found in ${agentId}`).toBeDefined()
+    return synth!
+  }
+
+  /** The question, as the harness records it, plus one loop event beside it. */
+  function ctxWith(loopPatternId: string) {
+    return {
+      sessionId: 'sess',
+      createdAt: 1,
+      events: [
+        { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'why is it slow?' } },
+        { type: 'pattern_enter', ts: 2, patternId: loopPatternId, data: {} },
+        {
+          type: 'tool_result',
+          ts: 3,
+          patternId: loopPatternId,
+          data: { tool: 'run', success: true, result: 'ok' },
+        },
+      ] as never,
+      status: 'running' as const,
+      data: {},
+      input: 'why is it slow?',
+    }
+  }
+
+  it.each([
+    ['sandbox-session', 'sandbox-session-loop'],
+    ['code-mode', 'code-mode-loop'],
+  ] as const)('%s: the synth still sees the question', async (agentId, loopId) => {
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+    const synth = await synthOf(agentId)
+
+    // Mirrors compactExecution's own read: `view.fromAll().ofType('user_message')`.
+    const view = createEventView(ctxWith(loopId), synth.config.viewConfig, synth.config.patternId)
+    const msg = view.fromAll().ofType('user_message').last(1).get()[0]
+
+    expect((msg?.data as { content?: string })?.content).toBe('why is it slow?')
+    // 'harness' has to be named explicitly — the default scope is what hid it.
+    expect(synth.config.viewConfig?.fromPatterns).toContain('harness')
+    expect(synth.config.viewConfig?.fromPatterns).toContain(loopId)
+    // ...and the loop's own events are still in scope, or there is nothing to
+    // synthesize from.
+    expect(view.fromAll().ofType('tool_result').count()).toBe(1)
+  })
+})

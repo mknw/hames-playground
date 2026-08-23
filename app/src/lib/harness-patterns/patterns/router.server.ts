@@ -95,6 +95,20 @@ export function router<T extends RouterData>(
   })
   const directRoute = config?.directResponseRoute ?? DIRECT_RESPONSE_ROUTE
 
+  /** Drop a route + intent carried over from an earlier turn. Every exit path
+   *  that does NOT produce a fresh routing decision goes through this:
+   *  `scope.data` survives the turn boundary, so returning it untouched would
+   *  silently re-dispatch the previous turn's route on the previous turn's
+   *  intent — and where that route was the conversational one, pass straight
+   *  through `routes()` to an empty reply instead of surfacing the failure.
+   *  Both fields are cleared together: `intent` is the only conversational
+   *  context `routes()` forwards, so a fresh route paired with a stale intent
+   *  is the same bug one level down. Mirrors `planner`'s `clearPlan`. */
+  const clearRouting = (scope: PatternScope<T>): PatternScope<T> => {
+    scope.data = { ...scope.data, route: undefined, intent: undefined }
+    return scope
+  }
+
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
     try {
       // view is pre-configured by viewConfig (last N turns of user/assistant messages).
@@ -160,7 +174,7 @@ export function router<T extends RouterData>(
           { error: 'Router returned tool_call_needed but no tool_name' },
           true,
         )
-        return scope
+        return clearRouting(scope)
       }
 
       // Track the routing decision as an assistant message with LLM data.
@@ -190,7 +204,7 @@ export function router<T extends RouterData>(
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
       trackEvent(scope, 'error', { error: msg }, true)
-      return scope
+      return clearRouting(scope)
     }
   }
 
@@ -234,9 +248,15 @@ export function routes<T extends RouterData & Record<string, unknown>>(
     fn: async (scope, view) => {
       const routeName = scope.data.route as string | undefined
 
-      // route undefined means routes() was used without a preceding router()
+      // No route to dispatch. Two causes, and the throw is right for both:
+      // either routes() was wired without a preceding router(), or the router
+      // ran and failed, clearing the route so the previous turn's one cannot be
+      // re-dispatched. Throwing surfaces the failure (chain sets ctx.status
+      // 'error'); passing through would answer with an empty response.
       if (routeName === undefined) {
-        throw new Error('routes() called without a preceding router() — data.route is undefined')
+        throw new Error(
+          'routes() called without a preceding router(), or the router failed this turn — data.route is undefined',
+        )
       }
 
       // Direct-response route — router handled it, pass through

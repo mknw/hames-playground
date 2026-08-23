@@ -132,6 +132,41 @@ describe('conversations CRUD', () => {
     expect(JSON.parse(loaded!.serializedContext)).toEqual({ events: [{ id: 'a' }] })
   })
 
+  it("a save against another user's conversation id mutates nothing", async () => {
+    if (!dbAvailable) return
+    const id = `conv-${Math.random().toString(36).slice(2, 10)}`
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'default',
+      title: 'victim title',
+      serializedContext: JSON.stringify({ events: [{ id: 'victim' }] }),
+      status: 'done',
+    })
+
+    // The attacker's runTurn sees no row (loadSession is user-scoped), so it
+    // blind-INSERTs — which conflicts. The owner-scoped upsert must no-op.
+    const attacker = `attacker-${Math.random().toString(36).slice(2, 10)}`
+    await saveConversation({
+      id,
+      userId: attacker,
+      agentId: 'evil-agent',
+      title: 'clobbered',
+      serializedContext: JSON.stringify({ events: [] }),
+      status: 'running',
+    })
+
+    const row = await loadConversation(id, TEST_USER)
+    expect(row).not.toBeNull()
+    expect(row!.userId).toBe(TEST_USER)
+    expect(row!.agentId).toBe('default')
+    expect(row!.title).toBe('victim title')
+    expect(row!.status).toBe('done')
+    expect(JSON.parse(row!.serializedContext)).toEqual({ events: [{ id: 'victim' }] })
+    // And nothing became visible to the attacker either.
+    expect(await loadConversation(id, attacker)).toBeNull()
+  })
+
   it('only returns rows for the requesting user', async () => {
     if (!dbAvailable) return
     const id = `conv-${Math.random().toString(36).slice(2, 10)}`

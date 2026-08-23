@@ -1116,7 +1116,10 @@ export function createActorControllerAdapter(
       },
       result: event.output,
       error: event.error ?? undefined,
-      feedback: undefined,
+      // The critic's reason for rejecting this attempt (SA-C1). Hardcoded
+      // `undefined` here made `ActorAttemptLog`'s CRITIC FEEDBACK block dead
+      // code, so every retry ran blind.
+      feedback: event.feedback,
     }))
 
     // Adapter-level context (static prefix or per-call provider), with an
@@ -1301,7 +1304,10 @@ export function createCriticAdapter(): CriticFnWithLLMData {
       },
       result: event.output,
       error: event.error ?? undefined,
-      feedback: undefined,
+      // The critic's reason for rejecting this attempt (SA-C1). Hardcoded
+      // `undefined` here made `ActorAttemptLog`'s CRITIC FEEDBACK block dead
+      // code, so every retry ran blind.
+      feedback: event.feedback,
     }))
 
     const variables = { intent, attempts }

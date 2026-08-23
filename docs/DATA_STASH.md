@@ -83,7 +83,7 @@ stores the recording, so playback resolves through it.
 
 The Data Stash adapts to the agent's harness composition:
 
-- **Sandbox present** (`withSandbox` + `syncWorkspace`) → uploads are hydrated into the VM's `/work/in` on first boot (`hydrateWorkspace`, #89). No vector ingest implied.
+- **Sandbox present** (`withSandbox` + `syncWorkspace`) → uploads are hydrated into the VM's `/work/in` at the next turn's entry (`hydrateWorkspace`, #89 — diff-wise every turn since #206 §6.1, so a doc uploaded mid-session lands on the very next turn). No vector ingest implied.
 - **A `retriever` wired to the `redis` backend present** → uploads are **auto-ingested** into the local vector store so they're semantically searchable. An agent without such a retriever never ingests — the upload is just stored.
 - Both can hold at once (independent, composable).
 

@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { render } from '@solidjs/testing-library'
-import { createSignal } from 'solid-js'
+import { createSignal, type JSX } from 'solid-js'
 import { installDomObservers } from '../../mocks/dom-observers'
 import type { CompletionMark, SessionRunState } from '~/lib/run-registry'
 import type { ChainProgressSnapshot } from '~/components/ark-ui/useChainProgress'
@@ -26,7 +26,9 @@ const regenerateConversationTitle = vi.fn(
 vi.mock('~/lib/harness-client', () => ({ regenerateConversationTitle }))
 
 const { ChatSidebar } = await import('~/components/ark-ui/ChatSidebar')
+const { SessionRegistryContext } = await import('~/lib/session-registry-context')
 type ChatThreadSummary = import('~/components/ark-ui/ChatSidebar').ChatThreadSummary
+type SessionRegistry = import('~/lib/session-registry').SessionRegistry
 
 const tick = () => new Promise((r) => setTimeout(r, 20))
 
@@ -87,6 +89,26 @@ const baseProps = () => ({
   onNewChat: vi.fn(),
 })
 
+/**
+ * The sidebar reads run state, progress and completion marks from the session
+ * registry in context (#226 B1). Only those three reads matter here, so the
+ * stub implements them and leaves the rest of the interface unpopulated —
+ * touching any other member is a test failure by design.
+ */
+const stubRegistry = (over: Partial<SessionRegistry> = {}): SessionRegistry =>
+  ({
+    runState: () => idle,
+    progress: progressFor(snapshot()),
+    completion: () => undefined,
+    ...over,
+  }) as SessionRegistry
+
+/** Mount under a registry, the way `routes/index.tsx` does. */
+const mount = (node: () => JSX.Element, registry: SessionRegistry = stubRegistry()) =>
+  render(() => (
+    <SessionRegistryContext.Provider value={registry}>{node()}</SessionRegistryContext.Provider>
+  ))
+
 beforeEach(() => {
   regenerateConversationTitle.mockClear()
   regenerateConversationTitle.mockResolvedValue('Fresh title')
@@ -95,7 +117,7 @@ beforeEach(() => {
 describe('ChatSidebar — expanded list', () => {
   it('lists every thread by title and reports which one was clicked', () => {
     const onSelectThread = vi.fn()
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} onSelectThread={onSelectThread} />
     ))
 
@@ -109,7 +131,7 @@ describe('ChatSidebar — expanded list', () => {
   })
 
   it('names an untitled row and italicises the optimistic placeholder', () => {
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar
         {...baseProps()}
         threads={[thread({ id: 'u', title: null }), thread({ id: 'p', isPlaceholder: true })]}
@@ -120,7 +142,7 @@ describe('ChatSidebar — expanded list', () => {
   })
 
   it('offers an empty-state line worded for the active filter', () => {
-    const { container } = render(() => <ChatSidebar {...baseProps()} threads={[]} />)
+    const { container } = mount(() => <ChatSidebar {...baseProps()} threads={[]} />)
     expect(container.textContent).toContain('No conversations yet. Send a message to start.')
 
     byText(container, 'Actions')!.click()
@@ -128,9 +150,7 @@ describe('ChatSidebar — expanded list', () => {
   })
 
   it('filters the list by kind and keeps the active segment pressed', () => {
-    const { container } = render(() => (
-      <ChatSidebar {...baseProps()} threads={[...chats, action]} />
-    ))
+    const { container } = mount(() => <ChatSidebar {...baseProps()} threads={[...chats, action]} />)
     expect(rows(container)).toHaveLength(3)
 
     byText(container, 'Actions')!.click()
@@ -145,7 +165,7 @@ describe('ChatSidebar — expanded list', () => {
   })
 
   it('badges a running action but never a conversation', () => {
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} threads={[thread({ id: 'a', status: 'running' }), action]} />
     ))
     const labels = rows(container).map(
@@ -171,7 +191,7 @@ describe('ChatSidebar — expanded list', () => {
     ]
 
     for (const c of cases) {
-      const { container, unmount } = render(() => (
+      const { container, unmount } = mount(() => (
         <ChatSidebar
           {...baseProps()}
           threads={[thread({ id: 'x', kind: 'action', status: c.status as never })]}
@@ -189,7 +209,7 @@ describe('ChatSidebar — expanded list', () => {
   })
 
   it('marks the selected row with aria-current-style accent state', () => {
-    const { container } = render(() => <ChatSidebar {...baseProps()} selectedId="b" />)
+    const { container } = mount(() => <ChatSidebar {...baseProps()} selectedId="b" />)
     // Selection is carried by the attributify border, which the extractor only
     // emits for the literal value — assert the literal, not a computed style.
     expect(rows(container)[1].getAttribute('border')).toContain('neon-cyan/40')
@@ -198,7 +218,7 @@ describe('ChatSidebar — expanded list', () => {
 
   it('starts a new chat from the footer button', () => {
     const onNewChat = vi.fn()
-    const { container } = render(() => <ChatSidebar {...baseProps()} onNewChat={onNewChat} />)
+    const { container } = mount(() => <ChatSidebar {...baseProps()} onNewChat={onNewChat} />)
     byText(container, '+ New Chat')!.click()
     expect(onNewChat).toHaveBeenCalledTimes(1)
   })
@@ -206,55 +226,47 @@ describe('ChatSidebar — expanded list', () => {
 
 describe('ChatSidebar — live run readout (#105)', () => {
   it('replaces the timestamp with the live status line while a run streams', () => {
-    const { container } = render(() => (
-      <ChatSidebar
-        {...baseProps()}
-        threads={[thread({ id: 'a', title: 'Graph audit' })]}
-        getRunState={() => busy}
-        getProgress={progressFor(
+    const { container } = mount(
+      () => <ChatSidebar {...baseProps()} threads={[thread({ id: 'a', title: 'Graph audit' })]} />,
+      stubRegistry({
+        runState: () => busy,
+        progress: progressFor(
           snapshot({
             status: 'Querying Neo4j',
             currentTurn: 2,
             pathProjection: 8,
             maxProjection: 8,
           }),
-        )}
-      />
-    ))
+        ),
+      }),
+    )
     expect(container.textContent).toContain('Querying Neo4j')
     expect(container.textContent).not.toContain('just now')
   })
 
   it('falls back to "Starting…" before the first status arrives', () => {
-    const { container } = render(() => (
-      <ChatSidebar
-        {...baseProps()}
-        threads={[thread({ id: 'a' })]}
-        getRunState={() => busy}
-        getProgress={progressFor(snapshot())}
-      />
-    ))
+    const { container } = mount(
+      () => <ChatSidebar {...baseProps()} threads={[thread({ id: 'a' })]} />,
+      stubRegistry({ runState: () => busy }),
+    )
     expect(container.textContent).toContain('Starting…')
     // No denominator yet → the indeterminate shimmer, not a 0%-wide fill.
     expect(container.querySelector('.thread-progress-indeterminate')).toBeTruthy()
   })
 
   it('shows the relative timestamp for an idle row', () => {
-    const { container } = render(() => (
-      <ChatSidebar {...baseProps()} threads={[thread({ id: 'a' })]} getRunState={() => idle} />
+    const { container } = mount(() => (
+      <ChatSidebar {...baseProps()} threads={[thread({ id: 'a' })]} />
     ))
     expect(container.textContent).toContain('just now')
   })
 
   it('accents a row whose run finished while the user was elsewhere', () => {
     const completion: CompletionMark = { outcome: 'error', flashing: true }
-    const { container } = render(() => (
-      <ChatSidebar
-        {...baseProps()}
-        threads={[thread({ id: 'a' })]}
-        getCompletion={() => completion}
-      />
-    ))
+    const { container } = mount(
+      () => <ChatSidebar {...baseProps()} threads={[thread({ id: 'a' })]} />,
+      stubRegistry({ completion: () => completion }),
+    )
     const row = rows(container)[0]
     expect(row.dataset.completed).toBe('error')
     expect(row.className).toContain('thread-flash-error')
@@ -264,7 +276,7 @@ describe('ChatSidebar — live run readout (#105)', () => {
 
 describe('ChatSidebar — collapsed rail (#60)', () => {
   it('renders one labelled icon button per thread, ignoring the kind filter', () => {
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} collapsed threads={[...chats, action]} />
     ))
     const labels = [...container.querySelectorAll('button[aria-label]')].map((b) =>
@@ -279,7 +291,7 @@ describe('ChatSidebar — collapsed rail (#60)', () => {
   it('selects a thread and starts a new chat from the rail', () => {
     const onSelectThread = vi.fn()
     const onNewChat = vi.fn()
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar
         {...baseProps()}
         collapsed
@@ -295,14 +307,16 @@ describe('ChatSidebar — collapsed rail (#60)', () => {
   })
 
   it('compresses live state into a pulsing dot on the rail button', () => {
-    const { container } = render(() => (
-      <ChatSidebar
-        {...baseProps()}
-        collapsed
-        threads={[thread({ id: 'a', title: 'Graph audit' })]}
-        getRunState={() => busy}
-      />
-    ))
+    const { container } = mount(
+      () => (
+        <ChatSidebar
+          {...baseProps()}
+          collapsed
+          threads={[thread({ id: 'a', title: 'Graph audit' })]}
+        />
+      ),
+      stubRegistry({ runState: () => busy }),
+    )
     const dot = container.querySelector<HTMLElement>(
       'button[aria-label="Graph audit"] span.animate-pulse',
     )
@@ -311,7 +325,7 @@ describe('ChatSidebar — collapsed rail (#60)', () => {
 
   it('toggles the sidebar from the chevron', () => {
     const onToggle = vi.fn()
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} collapsed onToggle={onToggle} />
     ))
     container.querySelector<HTMLElement>('button[title="Expand sidebar"]')!.click()
@@ -325,7 +339,7 @@ describe('ChatSidebar — regenerate title', () => {
 
   it('regenerates a row title and forwards the new one to the route', async () => {
     const onTitleRegenerated = vi.fn()
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} onTitleRegenerated={onTitleRegenerated} />
     ))
 
@@ -338,7 +352,7 @@ describe('ChatSidebar — regenerate title', () => {
 
   it('does not also select the thread when the ↻ is clicked', () => {
     const onSelectThread = vi.fn()
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} onSelectThread={onSelectThread} />
     ))
     regenSpan(container).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -348,7 +362,7 @@ describe('ChatSidebar — regenerate title', () => {
   it('ignores a second click while the first regeneration is still in flight', async () => {
     let release: (v: string) => void = () => {}
     regenerateConversationTitle.mockReturnValueOnce(new Promise<string>((r) => (release = r)))
-    const { container } = render(() => <ChatSidebar {...baseProps()} />)
+    const { container } = mount(() => <ChatSidebar {...baseProps()} />)
 
     regenSpan(container).click()
     await tick()
@@ -366,7 +380,7 @@ describe('ChatSidebar — regenerate title', () => {
     const onTitleRegenerated = vi.fn()
     regenerateConversationTitle.mockRejectedValueOnce(new Error('LLM down'))
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} onTitleRegenerated={onTitleRegenerated} />
     ))
 
@@ -382,7 +396,7 @@ describe('ChatSidebar — regenerate title', () => {
   it('leaves the title alone when the server returns none', async () => {
     const onTitleRegenerated = vi.fn()
     regenerateConversationTitle.mockResolvedValueOnce(null)
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} onTitleRegenerated={onTitleRegenerated} />
     ))
     regenSpan(container).click()
@@ -391,7 +405,7 @@ describe('ChatSidebar — regenerate title', () => {
   })
 
   it('offers no ↻ on a placeholder row — there is nothing persisted to retitle', () => {
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} threads={[thread({ id: 'p', isPlaceholder: true })]} />
     ))
     expect(container.querySelector('span[title="Regenerate title"]')).toBeNull()
@@ -406,7 +420,7 @@ describe('ChatSidebar — delete (#71)', () => {
 
   it('confirms before deleting, naming the conversation', async () => {
     const onDeleteThreads = vi.fn(async () => {})
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} onDeleteThreads={onDeleteThreads} />
     ))
 
@@ -424,7 +438,7 @@ describe('ChatSidebar — delete (#71)', () => {
 
   it('cancels without deleting', async () => {
     const onDeleteThreads = vi.fn(async () => {})
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} onDeleteThreads={onDeleteThreads} />
     ))
     deleteSpan(container).click()
@@ -443,7 +457,7 @@ describe('ChatSidebar — delete (#71)', () => {
       throw new Error('network')
     })
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} onDeleteThreads={onDeleteThreads} />
     ))
     deleteSpan(container).click()
@@ -457,20 +471,22 @@ describe('ChatSidebar — delete (#71)', () => {
   })
 
   it('hides the delete affordance for placeholder and running rows', () => {
-    const { container } = render(() => (
-      <ChatSidebar
-        {...baseProps()}
-        threads={[thread({ id: 'p', isPlaceholder: true }), thread({ id: 'r' })]}
-        getRunState={(id) => (id === 'r' ? busy : idle)}
-        onDeleteThreads={vi.fn(async () => {})}
-      />
-    ))
+    const { container } = mount(
+      () => (
+        <ChatSidebar
+          {...baseProps()}
+          threads={[thread({ id: 'p', isPlaceholder: true }), thread({ id: 'r' })]}
+          onDeleteThreads={vi.fn(async () => {})}
+        />
+      ),
+      stubRegistry({ runState: (id) => (id === 'r' ? busy : idle) }),
+    )
     expect(container.querySelectorAll('span[title="Delete conversation"]')).toHaveLength(0)
   })
 
   it('does not select the thread when the delete affordance is clicked', async () => {
     const onSelectThread = vi.fn()
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar
         {...baseProps()}
         onSelectThread={onSelectThread}
@@ -495,7 +511,7 @@ describe('ChatSidebar — select mode (#71)', () => {
 
   it('turns rows into checkboxes and swaps the row click for a toggle', async () => {
     const onSelectThread = vi.fn()
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar
         {...baseProps()}
         onSelectThread={onSelectThread}
@@ -520,14 +536,16 @@ describe('ChatSidebar — select mode (#71)', () => {
   })
 
   it('select-all ticks only the eligible rows, then Clear drops them', async () => {
-    const { container } = render(() => (
-      <ChatSidebar
-        {...baseProps()}
-        threads={[...chats, thread({ id: 'r', title: 'Running one' })]}
-        getRunState={(id) => (id === 'r' ? busy : idle)}
-        onDeleteThreads={vi.fn(async () => {})}
-      />
-    ))
+    const { container } = mount(
+      () => (
+        <ChatSidebar
+          {...baseProps()}
+          threads={[...chats, thread({ id: 'r', title: 'Running one' })]}
+          onDeleteThreads={vi.fn(async () => {})}
+        />
+      ),
+      stubRegistry({ runState: (id) => (id === 'r' ? busy : idle) }),
+    )
     enterSelectMode(container)
     await tick()
 
@@ -543,14 +561,16 @@ describe('ChatSidebar — select mode (#71)', () => {
   })
 
   it('reports the running rows it had to skip in the bulk confirm', async () => {
-    const { container } = render(() => (
-      <ChatSidebar
-        {...baseProps()}
-        threads={[...chats, thread({ id: 'r', title: 'Running one' })]}
-        getRunState={(id) => (id === 'r' ? busy : idle)}
-        onDeleteThreads={vi.fn(async () => {})}
-      />
-    ))
+    const { container } = mount(
+      () => (
+        <ChatSidebar
+          {...baseProps()}
+          threads={[...chats, thread({ id: 'r', title: 'Running one' })]}
+          onDeleteThreads={vi.fn(async () => {})}
+        />
+      ),
+      stubRegistry({ runState: (id) => (id === 'r' ? busy : idle) }),
+    )
     enterSelectMode(container)
     await tick()
     byText(container, 'Select all')!.click()
@@ -565,7 +585,7 @@ describe('ChatSidebar — select mode (#71)', () => {
 
   it('leaves select mode after a successful bulk delete', async () => {
     const onDeleteThreads = vi.fn(async () => {})
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} onDeleteThreads={onDeleteThreads} />
     ))
     enterSelectMode(container)
@@ -583,14 +603,16 @@ describe('ChatSidebar — select mode (#71)', () => {
 
   it('refuses a bulk delete when every selected row started running', async () => {
     const [running, setRunning] = createSignal(false)
-    const { container } = render(() => (
-      <ChatSidebar
-        {...baseProps()}
-        threads={[chats[0]]}
-        getRunState={() => (running() ? busy : idle)}
-        onDeleteThreads={vi.fn(async () => {})}
-      />
-    ))
+    const { container } = mount(
+      () => (
+        <ChatSidebar
+          {...baseProps()}
+          threads={[chats[0]]}
+          onDeleteThreads={vi.fn(async () => {})}
+        />
+      ),
+      stubRegistry({ runState: () => (running() ? busy : idle) }),
+    )
     enterSelectMode(container)
     await tick()
     rows(container)[0].click()
@@ -606,7 +628,7 @@ describe('ChatSidebar — select mode (#71)', () => {
   })
 
   it('exits select mode on Escape and toggles select-all on Cmd/Ctrl-A', async () => {
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} onDeleteThreads={vi.fn(async () => {})} />
     ))
     enterSelectMode(container)
@@ -623,7 +645,7 @@ describe('ChatSidebar — select mode (#71)', () => {
 
   // Cmd-A inside the composer must keep meaning "select all text".
   it('leaves the shortcut alone while a text field has focus', async () => {
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} onDeleteThreads={vi.fn(async () => {})} />
     ))
     enterSelectMode(container)
@@ -639,7 +661,7 @@ describe('ChatSidebar — select mode (#71)', () => {
   })
 
   it('cancels select mode from its own Cancel button', async () => {
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar {...baseProps()} onDeleteThreads={vi.fn(async () => {})} />
     ))
     enterSelectMode(container)
@@ -653,7 +675,7 @@ describe('ChatSidebar — select mode (#71)', () => {
   // leave the state armed but invisible.
   it('exits select mode when the sidebar collapses', async () => {
     const [collapsed, setCollapsed] = createSignal(false)
-    const { container } = render(() => (
+    const { container } = mount(() => (
       <ChatSidebar
         {...baseProps()}
         collapsed={collapsed()}
@@ -672,14 +694,16 @@ describe('ChatSidebar — select mode (#71)', () => {
   })
 
   it('will not tick a running row', async () => {
-    const { container } = render(() => (
-      <ChatSidebar
-        {...baseProps()}
-        threads={[thread({ id: 'r', title: 'Running one' })]}
-        getRunState={() => busy}
-        onDeleteThreads={vi.fn(async () => {})}
-      />
-    ))
+    const { container } = mount(
+      () => (
+        <ChatSidebar
+          {...baseProps()}
+          threads={[thread({ id: 'r', title: 'Running one' })]}
+          onDeleteThreads={vi.fn(async () => {})}
+        />
+      ),
+      stubRegistry({ runState: () => busy }),
+    )
     enterSelectMode(container)
     await tick()
 

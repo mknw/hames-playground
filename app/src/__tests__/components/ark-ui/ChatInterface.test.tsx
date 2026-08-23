@@ -12,17 +12,17 @@
  *    action→conversation promotion confirm;
  *  - the approve/reject round trip on a paused write.
  *
- * The route's per-session registries are modelled here by a small in-test
- * harness (`makeHost`) that behaves the way `routes/index.tsx` does, so the
- * assertions are about ChatInterface's contract with the route rather than
- * about a particular route implementation.
+ * The route's per-session state is the real `SessionRegistry` (#226 B1),
+ * provided through context exactly as `routes/index.tsx` does — so these
+ * assertions read the registry rather than a hand-rolled stand-in that could
+ * drift from it.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { render } from '@solidjs/testing-library'
-import { createSignal, createRoot } from 'solid-js'
+import { createSignal, createRoot, type JSX } from 'solid-js'
 import { installDomObservers } from '../../mocks/dom-observers'
 import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns'
-import type { Message } from '~/components/ark-ui/ChatMessages'
+import singleNodeFixture from '../../lib/harness-client/fixtures/cypher-single-node.json'
 
 beforeAll(() => {
   installDomObservers()
@@ -73,7 +73,9 @@ vi.mock('~/lib/harness-client', async () => {
 })
 
 const { ChatInterface } = await import('~/components/ark-ui/ChatInterface')
-const { createChainProgress } = await import('~/components/ark-ui/useChainProgress')
+const { createSessionRegistry } = await import('~/lib/session-registry')
+const { SessionRegistryContext } = await import('~/lib/session-registry-context')
+type SessionRegistry = import('~/lib/session-registry').SessionRegistry
 
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms))
 /** Long enough for a full fetch → stream → finally cycle to settle. */
@@ -99,56 +101,35 @@ const sseResponse = (frames: Frame[], init: { ok?: boolean; status?: number } = 
   } as unknown as Response
 }
 
+/** A `tool_result` event the graph extractor turns into real elements. */
+const toolResult = (result: unknown) => ({
+  type: 'tool_result' as const,
+  ts: 1,
+  patternId: 'neo4j-query',
+  data: { tool: 'read_neo4j_cypher', result, success: true },
+})
+
 const doneFrame = (over: Record<string, unknown> = {}): Frame => ({
   event: 'done',
   data: { status: 'done', response: 'Here is your answer.', context: { events: [] }, ...over },
 })
 
 // ---------------------------------------------------------------------------
-// A stand-in for the route's per-session registries (#47/#105).
+// The route's registry, mounted around the component under test (#226 B1).
 // ---------------------------------------------------------------------------
-const makeHost = () => {
-  const buffers = new Map<string, Message[]>()
-  const runStates = new Map<string, { isProcessing: boolean; runningTool: string | null }>()
-  const progress = new Map<string, ReturnType<typeof createChainProgress>>()
-  const aborts = new Map<string, AbortController>()
-  const [version, bump] = createSignal(0, { equals: false })
-
-  const getMessages = (sid: string) => {
-    version()
-    return buffers.get(sid) ?? []
-  }
-  const setMessages = (sid: string, next: Message[] | ((prev: Message[]) => Message[])) => {
-    const prev = buffers.get(sid) ?? []
-    buffers.set(sid, typeof next === 'function' ? next(prev) : next)
-    bump(0)
-  }
-  const getRunState = (sid: string) => {
-    version()
-    return runStates.get(sid) ?? { isProcessing: false, runningTool: null }
-  }
+const makeHost = (over: Partial<SessionRegistry> = {}) => {
+  const registry: SessionRegistry = { ...createRoot(() => createSessionRegistry()), ...over }
   return {
-    buffers,
-    runStates,
-    aborts,
-    getMessages,
-    setMessages,
-    getRunState,
-    updateRunState: (sid: string, patch: Record<string, unknown>) => {
-      runStates.set(sid, { ...getRunState(sid), ...patch } as never)
-      bump(0)
+    registry,
+    /** Mount `node` under this registry, the way `routes/index.tsx` does. */
+    mount: (node: () => JSX.Element) =>
+      render(() => (
+        <SessionRegistryContext.Provider value={registry}>{node()}</SessionRegistryContext.Provider>
+      )),
+    /** Put `n` *other* conversations into a streaming state (concurrency cap). */
+    withOtherRuns: (n: number) => {
+      for (let i = 0; i < n; i++) registry.updateRunState(`other-${i}`, { isProcessing: true })
     },
-    getProgress: (sid: string) => {
-      let p = progress.get(sid)
-      if (!p) {
-        p = createRoot(() => createChainProgress())
-        progress.set(sid, p)
-      }
-      return p
-    },
-    registerAbortController: (sid: string, ac: AbortController) => aborts.set(sid, ac),
-    unregisterAbortController: (sid: string) => aborts.delete(sid),
-    runningCount: 0,
   }
 }
 
@@ -182,11 +163,11 @@ afterEach(() => {
 describe('ChatInterface — hydration', () => {
   it('greets on a brand-new session that has nothing persisted', async () => {
     const host = makeHost()
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     expect(transcript(container)).toContain("I'm your knowledge assistant")
-    expect(host.buffers.get('s1')).toHaveLength(1)
+    expect(host.registry.messages('s1')).toHaveLength(1)
   })
 
   it('rehydrates a persisted thread, reporting its agent and replaying its events', async () => {
@@ -207,16 +188,13 @@ describe('ChatInterface — hydration', () => {
         },
       ],
     })
-    const onEventsUpdate = vi.fn()
     const onContextUpdate = vi.fn()
     const onSelectedAgentChange = vi.fn()
     const host = makeHost()
 
-    const { container } = render(() => (
+    const { container } = host.mount(() => (
       <ChatInterface
         sessionId="s1"
-        {...host}
-        onEventsUpdate={onEventsUpdate}
         onContextUpdate={onContextUpdate}
         onSelectedAgentChange={onSelectedAgentChange}
       />
@@ -224,9 +202,9 @@ describe('ChatInterface — hydration', () => {
     await settle()
 
     expect(transcript(container)).toContain('earlier answer')
-    // Panel callbacks carry the session id (SA-H8), so a hydration that lands
-    // after the user has moved on still files into the thread it belongs to.
-    expect(onEventsUpdate).toHaveBeenCalledWith('s1', events)
+    // Registry writes are addressed by session id (SA-H8), so a hydration that
+    // lands after the user has moved on still files into the thread it belongs to.
+    expect(host.registry.events('s1')).toEqual(events)
     expect(onContextUpdate).toHaveBeenCalledWith('s1', { events })
     expect(onSelectedAgentChange).toHaveBeenLastCalledWith('kg')
   })
@@ -251,7 +229,7 @@ describe('ChatInterface — hydration', () => {
       ],
     })
     const host = makeHost()
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     expect(transcript(container)).toContain('Error in neo4j-query (turn 2)')
@@ -267,7 +245,7 @@ describe('ChatInterface — hydration', () => {
     })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const host = makeHost()
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     expect(transcript(container)).toContain('hi')
@@ -284,13 +262,12 @@ describe('ChatInterface — hydration', () => {
         { id: sid, role: 'user', content: `msg for ${sid}`, timestamp: '2026-05-10T09:00:00Z' },
       ],
     }))
-    const onResetForNewSession = vi.fn()
     const host = makeHost()
+    const clearPanels = vi.fn(host.registry.clearPanels)
+    host.registry.clearPanels = clearPanels
     const [sid, setSid] = createSignal('s1')
 
-    const { container } = render(() => (
-      <ChatInterface sessionId={sid()} {...host} onResetForNewSession={onResetForNewSession} />
-    ))
+    const { container } = host.mount(() => <ChatInterface sessionId={sid()} />)
     await settle()
     expect(transcript(container)).toContain('msg for s1')
 
@@ -298,19 +275,71 @@ describe('ChatInterface — hydration', () => {
     await settle()
 
     expect(transcript(container)).toContain('msg for s2')
-    expect(onResetForNewSession).toHaveBeenCalledTimes(2)
+    // One wipe per hydration, each addressed at the session being hydrated.
+    expect(clearPanels.mock.calls).toEqual([['s1'], ['s2']])
+  })
+
+  // Graph batches are filed against the conversation they belong to, and the
+  // highlight — which is view state, not session state — only moves when that
+  // conversation is the one on screen (SA-H8 / #226 B1).
+  it('files a replayed graph in its own thread and highlights it while displayed', async () => {
+    loadConversation.mockResolvedValue({
+      agentId: 'search',
+      kind: 'conversation',
+      serialized: JSON.stringify({ events: [toolResult(singleNodeFixture)] }),
+      messages: [],
+    })
+    const onHighlightEntities = vi.fn()
+    const host = makeHost()
+    host.mount(() => <ChatInterface sessionId="s1" onHighlightEntities={onHighlightEntities} />)
+    await settle()
+
+    expect(host.registry.graph('s1').map((e) => e.data?.id)).toEqual(['Redis'])
+    expect(onHighlightEntities).toHaveBeenCalledWith(['Redis'])
+  })
+
+  it('does not move the highlight for a batch landing in a thread that is not on screen', async () => {
+    let releaseS1: () => void = () => {}
+    loadConversation.mockImplementation(
+      (sid: string) =>
+        new Promise((resolve) => {
+          const payload = {
+            agentId: 'search',
+            kind: 'conversation',
+            serialized: JSON.stringify({ events: [toolResult(singleNodeFixture)] }),
+            messages: [],
+          }
+          if (sid === 's1') releaseS1 = () => resolve(payload)
+          else resolve({ agentId: 'search', kind: 'conversation', serialized: '{}', messages: [] })
+        }),
+    )
+    const onHighlightEntities = vi.fn()
+    const host = makeHost()
+    const [sid, setSid] = createSignal('s1')
+    host.mount(() => <ChatInterface sessionId={sid()} onHighlightEntities={onHighlightEntities} />)
+    await settle()
+
+    // The user moves on before s1's history comes back.
+    setSid('s2')
+    await settle()
+    releaseS1()
+    await settle()
+
+    // s1's graph is populated — but the thread on screen keeps its highlight.
+    expect(host.registry.graph('s1').map((e) => e.data?.id)).toEqual(['Redis'])
+    expect(onHighlightEntities).not.toHaveBeenCalled()
   })
 
   // The #105 bug in one test: a mid-stream session swap must not clear the
   // running thread's buffer, because nothing is persisted until the run ends.
   it("leaves a streaming session's buffer alone when it is re-selected", async () => {
     const host = makeHost()
-    host.buffers.set('s1', [
+    host.registry.setMessages('s1', [
       { id: 'live', role: 'assistant', content: 'streaming so far', timestamp: new Date() },
     ])
-    host.runStates.set('s1', { isProcessing: true, runningTool: null })
+    host.registry.updateRunState('s1', { isProcessing: true, runningTool: null })
 
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     expect(loadConversation).not.toHaveBeenCalled()
@@ -321,7 +350,7 @@ describe('ChatInterface — hydration', () => {
 describe('ChatInterface — sending a message', () => {
   it('posts the message and appends the user turn then the answer', async () => {
     const host = makeHost()
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     send(container, 'what nodes exist?')
@@ -342,10 +371,10 @@ describe('ChatInterface — sending a message', () => {
     const onRunStarted = vi.fn()
     const onRunSettled = vi.fn()
     const host = makeHost()
-    const { container } = render(() => (
+    const { container } = host.mount(() => (
       <ChatInterface
         sessionId="s1"
-        {...host}
+
         onRunStarted={onRunStarted}
         onRunSettled={onRunSettled}
       />
@@ -358,8 +387,7 @@ describe('ChatInterface — sending a message', () => {
     expect(onRunStarted).toHaveBeenCalledExactlyOnceWith('s1')
     expect(onRunSettled).toHaveBeenCalledExactlyOnceWith('s1', 'done')
     // The run released its slot and its abort controller.
-    expect(host.getRunState('s1').isProcessing).toBe(false)
-    expect(host.aborts.has('s1')).toBe(false)
+    expect(host.registry.runState('s1').isProcessing).toBe(false)
   })
 
   it('reports an error outcome when the run ends in an error status', async () => {
@@ -368,8 +396,8 @@ describe('ChatInterface — sending a message', () => {
     )
     const onRunSettled = vi.fn()
     const host = makeHost()
-    const { container } = render(() => (
-      <ChatInterface sessionId="s1" {...host} onRunSettled={onRunSettled} />
+    const { container } = host.mount(() => (
+      <ChatInterface sessionId="s1" onRunSettled={onRunSettled} />
     ))
     await settle()
 
@@ -386,8 +414,8 @@ describe('ChatInterface — sending a message', () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const onRunSettled = vi.fn()
     const host = makeHost()
-    const { container } = render(() => (
-      <ChatInterface sessionId="s1" {...host} onRunSettled={onRunSettled} />
+    const { container } = host.mount(() => (
+      <ChatInterface sessionId="s1" onRunSettled={onRunSettled} />
     ))
     await settle()
 
@@ -405,8 +433,8 @@ describe('ChatInterface — sending a message', () => {
     fetchMock.mockRejectedValue(new DOMException('aborted', 'AbortError'))
     const onRunSettled = vi.fn()
     const host = makeHost()
-    const { container } = render(() => (
-      <ChatInterface sessionId="s1" {...host} onRunSettled={onRunSettled} />
+    const { container } = host.mount(() => (
+      <ChatInterface sessionId="s1" onRunSettled={onRunSettled} />
     ))
     await settle()
 
@@ -423,7 +451,7 @@ describe('ChatInterface — sending a message', () => {
     )
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const host = makeHost()
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     send(container, 'go')
@@ -455,8 +483,8 @@ describe('ChatInterface — sending a message', () => {
     )
     const onRunSettled = vi.fn()
     const host = makeHost()
-    const { container } = render(() => (
-      <ChatInterface sessionId="s1" {...host} onRunSettled={onRunSettled} />
+    const { container } = host.mount(() => (
+      <ChatInterface sessionId="s1" onRunSettled={onRunSettled} />
     ))
     await settle()
 
@@ -479,8 +507,8 @@ describe('ChatInterface — sending a message', () => {
     )
     const onTitleUpdated = vi.fn()
     const host = makeHost()
-    const { container } = render(() => (
-      <ChatInterface sessionId="s1" {...host} onTitleUpdated={onTitleUpdated} />
+    const { container } = host.mount(() => (
+      <ChatInterface sessionId="s1" onTitleUpdated={onTitleUpdated} />
     ))
     await settle()
 
@@ -494,17 +522,14 @@ describe('ChatInterface — sending a message', () => {
     fetchMock.mockResolvedValue(
       sseResponse([{ event: 'telemetry', data: { anything: true } }, doneFrame()]),
     )
-    const onEventsUpdate = vi.fn()
     const host = makeHost()
-    const { container } = render(() => (
-      <ChatInterface sessionId="s1" {...host} onEventsUpdate={onEventsUpdate} />
-    ))
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     send(container, 'go')
     await settle()
 
-    expect(onEventsUpdate).not.toHaveBeenCalled()
+    expect(host.registry.events('s1')).toEqual([])
     expect(transcript(container)).toContain('Here is your answer.')
   })
 })
@@ -512,8 +537,8 @@ describe('ChatInterface — sending a message', () => {
 describe('ChatInterface — composer gates', () => {
   it('blocks the composer while this session is streaming', async () => {
     const host = makeHost()
-    host.runStates.set('s1', { isProcessing: true, runningTool: 'read_neo4j_cypher' })
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    host.registry.updateRunState('s1', { isProcessing: true, runningTool: 'read_neo4j_cypher' })
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     expect(composer(container).getAttribute('aria-disabled')).toBe('true')
@@ -533,16 +558,16 @@ describe('ChatInterface — composer gates', () => {
         doneFrame(),
       ]),
     )
-    const host = makeHost()
     const seen: Array<string | null> = []
-    const wrapped = {
-      ...host,
-      updateRunState: (sid: string, patch: Record<string, unknown>) => {
-        if ('runningTool' in patch) seen.push(patch.runningTool as string | null)
-        host.updateRunState(sid, patch)
+    const base = createRoot(() => createSessionRegistry())
+    const host = makeHost({
+      updateRunState: (sid, patch) => {
+        if ('runningTool' in patch) seen.push(patch.runningTool ?? null)
+        base.updateRunState(sid, patch)
       },
-    }
-    const { container } = render(() => <ChatInterface sessionId="s1" {...wrapped} />)
+      runState: (sid) => base.runState(sid),
+    })
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
     send(container, 'go')
     await settle()
@@ -571,8 +596,9 @@ describe('ChatInterface — composer gates', () => {
   })
 
   it('refuses to send once the concurrency cap is reached', async () => {
-    const host = { ...makeHost(), runningCount: 3 } // default cap is 3
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const host = makeHost()
+    host.withOtherRuns(3) // default cap is 3
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     expect(composer(container).getAttribute('aria-disabled')).toBe('true')
@@ -586,9 +612,10 @@ describe('ChatInterface — composer gates', () => {
   // The cap counts *other* sessions: a thread that is itself running is
   // already blocked by isProcessing and must not be double-counted out.
   it('does not cap-block a session that is itself the running one', async () => {
-    const host = { ...makeHost(), runningCount: 3 }
-    host.runStates.set('s1', { isProcessing: true, runningTool: 'read_neo4j_cypher' })
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const host = makeHost()
+    host.withOtherRuns(3)
+    host.registry.updateRunState('s1', { isProcessing: true, runningTool: 'read_neo4j_cypher' })
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     // Its own run blocks it, so it reads as "waiting for the tool" — not as
@@ -599,7 +626,7 @@ describe('ChatInterface — composer gates', () => {
 
   it('blocks the composer while uploaded sources are still embedding', async () => {
     const host = makeHost()
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} embeddingSources />)
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" embeddingSources />)
     await settle()
 
     expect(composer(container).getAttribute('aria-disabled')).toBe('true')
@@ -630,7 +657,7 @@ describe('ChatInterface — action promotion gate', () => {
   it('asks before sending into a triggered action, and sends nothing yet', async () => {
     asAction()
     const host = makeHost()
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     send(container, 'follow-up question')
@@ -644,7 +671,7 @@ describe('ChatInterface — action promotion gate', () => {
   it('drops the drafted message when the user declines', async () => {
     asAction()
     const host = makeHost()
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     send(container, 'follow-up question')
@@ -662,9 +689,7 @@ describe('ChatInterface — action promotion gate', () => {
     promoteAction.mockResolvedValue(undefined)
     const onPromoted = vi.fn()
     const host = makeHost()
-    const { container } = render(() => (
-      <ChatInterface sessionId="s1" {...host} onPromoted={onPromoted} />
-    ))
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" onPromoted={onPromoted} />)
     await settle()
 
     send(container, 'follow-up question')
@@ -689,7 +714,7 @@ describe('ChatInterface — action promotion gate', () => {
     promoteAction.mockRejectedValue(new Error('row locked'))
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const host = makeHost()
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     send(container, 'follow-up question')
@@ -724,7 +749,7 @@ describe('ChatInterface — paused write approval', () => {
     pausedRun()
     approveAction.mockResolvedValue({ response: 'Node created.', context: { events: [] } })
     const host = makeHost()
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     send(container, 'create a node')
@@ -748,7 +773,7 @@ describe('ChatInterface — paused write approval', () => {
     approveAction.mockRejectedValue(new Error('constraint violation'))
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const host = makeHost()
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     send(container, 'create a node')
@@ -768,7 +793,7 @@ describe('ChatInterface — paused write approval', () => {
     pausedRun()
     rejectAction.mockResolvedValue({ response: 'Understood, skipping the write.' })
     const host = makeHost()
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     send(container, 'create a node')
@@ -790,7 +815,7 @@ describe('ChatInterface — paused write approval', () => {
     rejectAction.mockRejectedValue(new Error('offline'))
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const host = makeHost()
-    const { container } = render(() => <ChatInterface sessionId="s1" {...host} />)
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
     send(container, 'create a node')
@@ -811,10 +836,10 @@ describe('ChatInterface — agent selection', () => {
     const onAgentChangeRequestsNewSession = vi.fn()
     const onSelectedAgentChange = vi.fn()
     const host = makeHost()
-    const { container } = render(() => (
+    const { container } = host.mount(() => (
       <ChatInterface
         sessionId="s1"
-        {...host}
+
         onAgentChangeRequestsNewSession={onAgentChangeRequestsNewSession}
         onSelectedAgentChange={onSelectedAgentChange}
       />

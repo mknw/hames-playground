@@ -1,24 +1,30 @@
 /**
- * The chat route's own job (#47 / #105): it owns everything that has to outlive
- * a sidebar switch — the per-session message buffers, run states, progress
- * controllers, completion marks and the thread list — and hands them to three
- * children as callbacks.
+ * The chat route's own job, after #226 B1: it *composes*. Per-session state
+ * lives in `SessionRegistry` (its own tests cover the eight slots, the prune
+ * rule and disposal); the conversation list lives in `ThreadListStore`. What
+ * is left here — and what this file covers — is the wiring: which session is
+ * on screen, what the panels are therefore shown, and which store call each
+ * navigation makes.
  *
- * Those children (sidebar, chat view, support panel) are stubbed to prop
- * recorders, so each case here drives a callback the way the real child would
- * and checks what the *other* children are handed afterwards. That is the
- * route's observable surface; the children have their own tests.
+ * The three children (sidebar, chat view, support panel) are stubbed to prop
+ * recorders. The chat stub also captures the registry the route provides
+ * through context, so a case can drive the writes the real `ChatInterface`
+ * would make and then check what the *other* children are handed.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup } from '@solidjs/testing-library'
 import type { JSX } from 'solid-js'
+import { useSessionRegistry } from '~/lib/session-registry-context'
+import type { SessionRegistry } from '~/lib/session-registry'
 
 // ── Child stubs ─────────────────────────────────────────────────────────────
 // Solid props are getters, so holding the props object keeps reading live values.
 let sidebar: any
 let chat: any
 let support: any
+/** The registry the route provides — captured from context by the chat stub. */
+let registry: SessionRegistry
 
 vi.mock('~/components/ark-ui/ChatSidebar', async () => {
   const actual = await vi.importActual<typeof import('~/components/ark-ui/ChatSidebar')>(
@@ -36,6 +42,9 @@ vi.mock('~/components/ark-ui/ChatSidebar', async () => {
 vi.mock('~/components/ark-ui/ChatInterface', () => ({
   ChatInterface: (props: any): JSX.Element => {
     chat = props
+    // The real ChatInterface reads the registry from context; capturing it here
+    // is how these cases drive the writes it would make.
+    registry = useSessionRegistry()
     return <div data-testid="chat" />
   },
 }))
@@ -161,7 +170,7 @@ describe('chat route — session selection', () => {
     sidebar.onSelectThread('t1')
     await tick()
 
-    chat.onGraphUpdate('t1', [{ data: { id: 'n1', label: 'Node' } }])
+    registry.mergeGraph('t1', [{ data: { id: 'n1', label: 'Node' } }])
     await tick()
     expect(support.graphElements).toHaveLength(1)
 
@@ -174,8 +183,8 @@ describe('chat route — session selection', () => {
   it('shows the newly-opened thread its own (empty) panels, not the previous one’s', async () => {
     listConversations.mockResolvedValue([thread('t1'), thread('t2')])
     await mount()
-    chat.onGraphUpdate('new-1', [{ data: { id: 'n1', label: 'Node' } }])
-    chat.onEventsUpdate('new-1', [{ type: 'tool_call', ts: 1 } as never])
+    registry.mergeGraph('new-1', [{ data: { id: 'n1', label: 'Node' } }])
+    registry.appendEvents('new-1', [{ type: 'tool_call', ts: 1 } as never])
     await tick()
     expect(support.graphElements).toHaveLength(1)
     expect(support.contextEvents).toHaveLength(1)
@@ -199,17 +208,17 @@ describe('chat route — session selection', () => {
     // t1 is running and has produced a node.
     sidebar.onSelectThread('t1')
     await tick()
-    chat.updateRunState('t1', { isProcessing: true })
-    chat.onGraphUpdate('t1', [{ data: { id: 't1-node', label: 'From t1' } }])
-    chat.onEventsUpdate('t1', [{ type: 'tool_call', ts: 1 } as never])
+    registry.updateRunState('t1', { isProcessing: true })
+    registry.mergeGraph('t1', [{ data: { id: 't1-node', label: 'From t1' } }])
+    registry.appendEvents('t1', [{ type: 'tool_call', ts: 1 } as never])
     await tick()
     expect(support.graphElements).toHaveLength(1)
 
     // Switch to t2. t1 keeps streaming into its OWN buffers while t2 is shown.
     sidebar.onSelectThread('t2')
     await tick()
-    chat.onGraphUpdate('t1', [{ data: { id: 't1-node-2', label: 'Also from t1' } }])
-    chat.onEventsUpdate('t1', [{ type: 'tool_result', ts: 2 } as never])
+    registry.mergeGraph('t1', [{ data: { id: 't1-node-2', label: 'Also from t1' } }])
+    registry.appendEvents('t1', [{ type: 'tool_result', ts: 2 } as never])
     await tick()
     expect(support.graphElements).toEqual([])
     expect(support.contextEvents).toEqual([])
@@ -224,29 +233,13 @@ describe('chat route — session selection', () => {
     expect(support.contextEvents).toHaveLength(2)
   })
 
-  it('only moves the highlight for a batch landing in the visible thread', async () => {
-    listConversations.mockResolvedValue([thread('t1'), thread('t2')])
-    await mount()
-    sidebar.onSelectThread('t1')
-    await tick()
-    chat.onGraphUpdate('t1', [{ data: { id: 'visible' } }])
-    await tick()
-    expect(support.highlightedIds).toEqual(['visible'])
-
-    // A backgrounded run's batch fills its own graph but must not steal the
-    // highlight from the thread on screen.
-    chat.onGraphUpdate('t2', [{ data: { id: 'background' } }])
-    await tick()
-    expect(support.highlightedIds).toEqual(['visible'])
-  })
-
   it('keeps a running thread’s panel buffers when the user browses elsewhere', async () => {
     listConversations.mockResolvedValue([thread('t1'), thread('t2'), thread('t3')])
     await mount()
     sidebar.onSelectThread('t1')
     await tick()
-    chat.updateRunState('t1', { isProcessing: true })
-    chat.onEventsUpdate('t1', [{ type: 'tool_call', ts: 1 } as never])
+    registry.updateRunState('t1', { isProcessing: true })
+    registry.appendEvents('t1', [{ type: 'tool_call', ts: 1 } as never])
     await tick()
 
     // Two hops away — pruning drops idle sessions' buffers but never a
@@ -263,12 +256,12 @@ describe('chat route — session selection', () => {
   it('resets only the session being hydrated', async () => {
     listConversations.mockResolvedValue([thread('t1'), thread('t2')])
     await mount()
-    chat.onEventsUpdate('t1', [{ type: 'tool_call', ts: 1 } as never])
-    chat.onEventsUpdate('t2', [{ type: 'tool_call', ts: 2 } as never])
+    registry.appendEvents('t1', [{ type: 'tool_call', ts: 1 } as never])
+    registry.appendEvents('t2', [{ type: 'tool_call', ts: 2 } as never])
     await tick()
 
     // ChatInterface calls this before it repopulates a thread from history.
-    chat.onResetForNewSession('t2')
+    registry.clearPanels('t2')
     await tick()
     sidebar.onSelectThread('t1')
     await tick()
@@ -281,13 +274,13 @@ describe('chat route — session selection', () => {
   it('drops a deleted thread’s panel buffers', async () => {
     listConversations.mockResolvedValue([thread('t1'), thread('t2')])
     await mount()
-    chat.onEventsUpdate('t1', [{ type: 'tool_call', ts: 1 } as never])
+    registry.appendEvents('t1', [{ type: 'tool_call', ts: 1 } as never])
     await tick()
     deleteConversationsBulk.mockResolvedValue({ deleted: ['t1'] })
     await sidebar.onDeleteThreads(['t1'])
     await tick()
 
-    chat.onEventsUpdate('t1', [] as never)
+    registry.appendEvents('t1', [] as never)
     await tick()
     sidebar.onSelectThread('t1')
     await tick()
@@ -389,68 +382,26 @@ describe('chat route — the thread list', () => {
   })
 })
 
+// The registry's own contract — the eight slots, the prune rule, disposal —
+// is covered by `lib/session-registry.test.ts`. What is left here is the
+// route's *policy* over it: which run gets marked, and when a stream is torn
+// down.
 describe('chat route — run state across threads', () => {
-  it('counts every streaming session, not just the visible one', async () => {
-    listConversations.mockResolvedValue([thread('t1'), thread('t2')])
-    await mount()
-
-    expect(chat.runningCount).toBe(0)
-    chat.updateRunState('t1', { isProcessing: true })
-    chat.updateRunState('t2', { isProcessing: true, runningTool: 'read_neo4j_cypher' })
-    await tick()
-
-    expect(chat.runningCount).toBe(2)
-    expect(sidebar.getRunState('t2')).toEqual({
-      isProcessing: true,
-      runningTool: 'read_neo4j_cypher',
-    })
-    // An untouched session reads as idle rather than undefined.
-    expect(sidebar.getRunState('t9')).toEqual({ isProcessing: false, runningTool: null })
-
-    chat.updateRunState('t1', { isProcessing: false })
-    await tick()
-    expect(chat.runningCount).toBe(1)
-  })
-
-  it('gives each session its own progress controller, stable across switches', async () => {
-    listConversations.mockResolvedValue([thread('t1'), thread('t2')])
-    await mount()
-
-    const p1 = chat.getProgress('t1')
-    expect(chat.getProgress('t1')).toBe(p1)
-    expect(chat.getProgress('t2')).not.toBe(p1)
-
-    sidebar.onSelectThread('t2')
-    await tick()
-    // The still-running thread's bar survives the switch.
-    expect(sidebar.getProgress('t1')).toBe(p1)
-  })
-
-  it('keeps a running session’s message buffer alive across a switch, and prunes idle ones', async () => {
+  it('prunes an idle session’s message buffer on a switch, but never a running one’s', async () => {
     listConversations.mockResolvedValue([thread('t1'), thread('t2'), thread('t3')])
     await mount()
 
-    chat.setMessages('t1', [{ id: 'm1', role: 'user', content: 'still streaming' }])
-    chat.setMessages('t3', [{ id: 'm2', role: 'user', content: 'finished' }])
-    chat.updateRunState('t1', { isProcessing: true })
+    registry.setMessages('t1', [{ id: 'm1', role: 'user', content: 'still streaming' } as never])
+    registry.setMessages('t3', [{ id: 'm2', role: 'user', content: 'finished' } as never])
+    registry.updateRunState('t1', { isProcessing: true })
     await tick()
 
     sidebar.onSelectThread('t2')
     await tick()
 
-    expect(chat.getMessages('t1')).toHaveLength(1)
+    expect(registry.messages('t1')).toHaveLength(1)
     // t3 is idle — Postgres is authoritative for it, so its buffer is disposable.
-    expect(chat.getMessages('t3')).toEqual([])
-  })
-
-  it('accepts an updater function as well as a plain array of messages', async () => {
-    await mount()
-    chat.setMessages('t1', [{ id: 'm1', role: 'user', content: 'one' }])
-    chat.setMessages('t1', (prev: unknown[]) => [
-      ...prev,
-      { id: 'm2', role: 'assistant', content: 'two' },
-    ])
-    expect(chat.getMessages('t1').map((m: { id: string }) => m.id)).toEqual(['m1', 'm2'])
+    expect(registry.messages('t3')).toEqual([])
   })
 
   it('marks a run that landed in a thread the user was not watching', async () => {
@@ -464,15 +415,15 @@ describe('chat route — run state across threads', () => {
 
       chat.onRunSettled('t1', 'done')
       await vi.advanceTimersByTimeAsync(1)
-      expect(sidebar.getCompletion('t1')).toEqual({ outcome: 'done', flashing: true })
+      expect(registry.completion('t1')).toEqual({ outcome: 'done', flashing: true })
 
       // The flash is one-shot; the mark itself survives until the thread is opened.
       await vi.advanceTimersByTimeAsync(2400)
-      expect(sidebar.getCompletion('t1')).toEqual({ outcome: 'done', flashing: false })
+      expect(registry.completion('t1')).toEqual({ outcome: 'done', flashing: false })
 
       sidebar.onSelectThread('t1')
       await vi.advanceTimersByTimeAsync(1)
-      expect(sidebar.getCompletion('t1')).toBeUndefined()
+      expect(registry.completion('t1')).toBeUndefined()
     } finally {
       vi.useRealTimers()
     }
@@ -486,7 +437,7 @@ describe('chat route — run state across threads', () => {
 
     chat.onRunSettled('t1', 'done')
     await tick()
-    expect(sidebar.getCompletion('t1')).toBeUndefined()
+    expect(registry.completion('t1')).toBeUndefined()
   })
 
   it('refetches the thread list when a run settles in any thread', async () => {
@@ -503,9 +454,9 @@ describe('chat route — run state across threads', () => {
     await mount()
     const a = new AbortController()
     const b = new AbortController()
-    chat.registerAbortController('t1', a)
-    chat.registerAbortController('t2', b)
-    chat.unregisterAbortController('t2')
+    registry.registerAbort('t1', a)
+    registry.registerAbort('t2', b)
+    registry.unregisterAbort('t2')
 
     window.dispatchEvent(new Event('beforeunload'))
     expect(a.signal.aborted).toBe(true)
@@ -514,18 +465,20 @@ describe('chat route — run state across threads', () => {
 })
 
 describe('chat route — support panel wiring', () => {
-  it('accumulates graph elements and highlights the newly-arrived ones', async () => {
+  it('shows the displayed session’s accumulated graph, and clears it on request', async () => {
     await mount()
-    chat.onGraphUpdate('new-1', [{ data: { id: 'n1', label: 'Alice' } }])
+    registry.mergeGraph('new-1', [{ data: { id: 'n1', label: 'Alice' } }])
     await tick()
-    chat.onGraphUpdate('new-1', [{ data: { id: 'n2', label: 'Acme' } }])
+    registry.mergeGraph('new-1', [{ data: { id: 'n2', label: 'Acme' } }])
+    // The chat view reports which ids just landed (it alone knows whether the
+    // batch belongs to the thread on screen).
+    chat.onHighlightEntities(['n2'])
     await tick()
 
     expect(support.graphElements.map((e: { data: { id: string } }) => e.data.id)).toEqual([
       'n1',
       'n2',
     ])
-    // Only the latest batch is highlighted.
     expect(support.highlightedIds).toEqual(['n2'])
 
     support.onClearGraph()
@@ -536,7 +489,7 @@ describe('chat route — support panel wiring', () => {
 
   it('indexes node and edge labels so chat can highlight known entities', async () => {
     await mount()
-    chat.onGraphUpdate('new-1', [
+    registry.mergeGraph('new-1', [
       { data: { id: 'n1', label: 'Alice', kind: 'node' } },
       { data: { id: 'n2', label: 'Alice', kind: 'node' } },
       { data: { id: 'e1', label: 'WORKS_AT', source: 'n1', target: 'n2', kind: 'edge' } },
@@ -552,7 +505,7 @@ describe('chat route — support panel wiring', () => {
 
   it('clears the observability buffers on request', async () => {
     await mount()
-    chat.onEventsUpdate('new-1', [{ type: 'tool_call', ts: 1 } as never])
+    registry.appendEvents('new-1', [{ type: 'tool_call', ts: 1 } as never])
     chat.onContextUpdate('new-1', { id: 'ctx' } as never)
     await tick()
     expect(support.unifiedContext).toEqual({ id: 'ctx' })
@@ -573,7 +526,7 @@ describe('chat route — support panel wiring', () => {
 
   it('applies a stash action optimistically and persists it', async () => {
     await mount()
-    chat.onEventsUpdate('new-1', [
+    registry.appendEvents('new-1', [
       { id: 'e1', type: 'tool_result', ts: 1, data: { output: 'x' } } as never,
       { id: 'e2', type: 'tool_result', ts: 2, data: { output: 'y' } } as never,
     ])
@@ -597,7 +550,7 @@ describe('chat route — support panel wiring', () => {
 
   it('maps each stash action to its flags', async () => {
     await mount()
-    chat.onEventsUpdate('new-1', [{ id: 'e1', type: 'tool_result', ts: 1, data: {} } as never])
+    registry.appendEvents('new-1', [{ id: 'e1', type: 'tool_result', ts: 1, data: {} } as never])
     await tick()
 
     for (const [action, expected] of [

@@ -4,7 +4,7 @@
 // since both are "tiny async post-process" jobs with identical cost shapes.
 //
 // Invoked as the body of a minimal one-pattern harness agent
-// (lib/harness-client/examples/title-generator.server.ts) on the first
+// (lib/harness-client/agents/title-generator.server.ts) on the first
 // turn of a conversation, and on-demand via the sidebar's regenerate
 // button. Output is sanitized client-side (quote stripping, length cap)
 // so the prompt rules are best-effort, not load-bearing.

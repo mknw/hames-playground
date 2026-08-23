@@ -1,13 +1,12 @@
 /**
  * Server actions (`lib/harness-client/actions.server.ts`).
  *
- * Everything below the actions — the harness itself, the pattern cache, the
- * Postgres layer and auth — is mocked; what is asserted is the behaviour the
- * actions themselves own:
- *   - who the run is attributed to (bypass vs. Entra), and that the request
- *     scope is actually visible to the patterns that run inside it,
- *   - the new-conversation pre-seed (#105) and the continue-vs-fresh decision
- *     when the agent changes mid-conversation,
+ * The turn itself is `runTurnAndPersist` (`turn.server.ts`, pinned by
+ * `turn.test.ts`) and is mocked here; everything below the actions — the
+ * pattern cache, the Postgres layer and auth — is mocked too. What is asserted
+ * is the behaviour the actions themselves own:
+ *   - who the run is attributed to (bypass vs. Entra), and that the turn is
+ *     handed the right request for it,
  *   - the sidebar surface: listing, bulk delete, load, title regeneration.
  */
 
@@ -18,59 +17,28 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServer: vi.fn(),
 }))
 
-// ── harness-patterns: a fake harness whose runs are observable ──────────────
-import {
-  getRequestUserId,
-  getRequestSessionId,
-} from '../../../lib/harness-client/request-user.server'
-
-/** Every fresh/continued run records the request scope it saw. */
-const seenScopes: Array<{ userId: string | null; sessionId: string | null }> = []
-
-const runFresh = vi.fn(async (message: string, sessionId: string) => {
-  seenScopes.push({ userId: getRequestUserId(), sessionId: getRequestSessionId() })
-  return { response: `fresh:${message}`, serialized: `serialized:${sessionId}`, data: {} }
-})
-const harness = vi.fn(() => runFresh)
-const continueSession = vi.fn(async (serialized: string, _p: unknown, message: string) => {
-  seenScopes.push({ userId: getRequestUserId(), sessionId: getRequestSessionId() })
-  return { response: `continued:${message}`, serialized: `${serialized}+${message}`, data: {} }
-})
-const resumeHarness = vi.fn(async (_s: string, _p: unknown, approved: boolean) => ({
-  response: approved ? 'approved' : 'rejected',
-  serialized: `resumed:${approved}`,
+// ── the shared turn driver ──────────────────────────────────────────────────
+const runTurnAndPersist = vi.fn(async (req: Record<string, unknown>) => ({
+  response: `ran:${req.mode as string}`,
+  serialized: 'serialized',
   data: {},
 }))
-const createContext = vi.fn((message: string, _data: unknown, sessionId: string) => ({
-  sessionId,
-  events: [{ type: 'user_message', data: { content: message } }],
-}))
-const serializeContext = vi.fn((ctx: unknown) => JSON.stringify(ctx))
-const deserializeContext = vi.fn((s: string) => JSON.parse(s))
+vi.mock('../../../lib/harness-client/turn.server', () => ({ runTurnAndPersist }))
 
-vi.mock('../../../lib/harness-patterns', () => ({
-  harness,
-  continueSession,
-  resumeHarness,
-  createContext,
-  serializeContext,
-  deserializeContext,
-}))
+// Only reached through `regenerateConversationTitle`'s dynamic import.
+const deserializeContext = vi.fn((s: string) => JSON.parse(s))
+vi.mock('../../../lib/harness-patterns', () => ({ deserializeContext }))
 
 // ── session.server (pattern cache + persistence) ────────────────────────────
 type Loaded = { serializedContext: string; agentId: string; kind: string; status: string } | null
 
 const loadSession = vi.fn<(id: string, userId: string) => Promise<Loaded>>(async () => null)
-const saveSession = vi.fn(async () => {})
 const deleteSession = vi.fn(async () => {})
 const evictPatterns = vi.fn()
-const getOrBuildPatterns = vi.fn(async (_s: string, agentId: string) => [`patterns:${agentId}`])
 vi.mock('../../../lib/harness-client/session.server', () => ({
   loadSession,
-  saveSession,
   deleteSession,
   evictPatterns,
-  getOrBuildPatterns,
 }))
 
 // ── registry ────────────────────────────────────────────────────────────────
@@ -93,18 +61,11 @@ vi.mock('../../../lib/harness-client/registry.server', () => ({ getAgent, getAge
 // ── db/conversations ────────────────────────────────────────────────────────
 const dbListConversations = vi.fn(async () => [] as Array<Record<string, unknown>>)
 const dbPromoteConversation = vi.fn<(id: string, userId: string) => Promise<void>>(async () => {})
-const dbSaveConversation = vi.fn<(row: Record<string, unknown>) => Promise<void>>(async () => {})
 const dbDeleteConversations = vi.fn(async (ids: string[]) => ids)
-const dbSetConversationStatus = vi.fn<
-  (id: string, userId: string, status: string) => Promise<void>
->(async () => {})
 vi.mock('../../../lib/db/conversations.server', () => ({
   listConversations: dbListConversations,
   promoteConversation: dbPromoteConversation,
-  saveConversation: dbSaveConversation,
   deleteConversations: dbDeleteConversations,
-  setConversationStatus: dbSetConversationStatus,
-  deriveTitle: (s: string) => s.slice(0, 10),
 }))
 
 // ── auth ────────────────────────────────────────────────────────────────────
@@ -116,10 +77,6 @@ vi.mock('../../../lib/auth/dev-bypass', () => ({
 }))
 vi.mock('../../../lib/auth/server', () => ({ getAuthenticatedUser }))
 
-// ── settings scope ──────────────────────────────────────────────────────────
-const runWithSettings = vi.fn(<T>(_s: unknown, fn: () => Promise<T>) => fn())
-vi.mock('../../../lib/settings-context.server', () => ({ runWithSettings }))
-
 // ── title generator (dynamically imported by the action) ────────────────────
 const runRegenerateTitle = vi.fn(async () => 'A better title')
 vi.mock('../../../lib/harness-client/agents/title-generator.server', () => ({
@@ -130,186 +87,72 @@ const actions = await import('../../../lib/harness-client/actions.server')
 
 beforeEach(() => {
   vi.clearAllMocks()
-  seenScopes.length = 0
   isBypassEnabled.mockReturnValue(true)
   loadSession.mockResolvedValue(null)
   dbDeleteConversations.mockImplementation(async (ids: string[]) => ids)
 })
 
-describe('processMessage / runTurn', () => {
-  it('runs a brand-new conversation fresh and pre-seeds its sidebar row (#105)', async () => {
+describe('processMessage / processMessageWithAgent', () => {
+  it('runs one interactive turn as the bypass user, on the default agent', async () => {
     const result = await actions.processMessage('sess-1', 'hello world, this is long')
 
-    // Row exists before the run so an in-flight new chat is visible.
-    expect(dbSaveConversation).toHaveBeenCalledTimes(1)
-    const seeded = dbSaveConversation.mock.calls[0][0]
-    expect(seeded).toMatchObject({
-      id: 'sess-1',
+    expect(runTurnAndPersist).toHaveBeenCalledWith({
+      mode: 'interactive',
+      sessionId: 'sess-1',
       userId: 'bypass-user',
       agentId: 'search',
-      status: 'running',
+      message: 'hello world, this is long',
     })
-    expect(seeded.title).toBe('hello worl')
-    expect(dbSaveConversation.mock.invocationCallOrder[0]).toBeLessThan(
-      runFresh.mock.invocationCallOrder[0],
+    expect(result.response).toBe('ran:interactive')
+  })
+
+  it('passes the named agent through', async () => {
+    await actions.processMessageWithAgent('sess-2', 'follow up', 'neo4j')
+    expect(runTurnAndPersist).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'neo4j', message: 'follow up' }),
     )
-
-    expect(continueSession).not.toHaveBeenCalled()
-    expect(result.response).toBe('fresh:hello world, this is long')
-    expect(saveSession).toHaveBeenCalledWith('sess-1', 'bypass-user', 'search', 'serialized:sess-1')
-  })
-
-  // sf-M2. The pre-seeded row above is written with status='running'; the
-  // TRIGGERED path (`action-runner.server.ts`) already flips it to 'error' when
-  // its run throws, but the interactive path did not, so a pattern-build
-  // failure left a sidebar row spinning for the life of the conversation.
-  describe('a throw does not leave the row spinning forever (sf-M2)', () => {
-    it('flips the row to error and rethrows when pattern construction fails', async () => {
-      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-      getOrBuildPatterns.mockRejectedValueOnce(new Error('gateway unreachable'))
-
-      await expect(actions.processMessage('sess-boom', 'do a thing')).rejects.toThrow(
-        'gateway unreachable',
-      )
-
-      expect(dbSetConversationStatus).toHaveBeenCalledWith('sess-boom', 'bypass-user', 'error')
-      err.mockRestore()
-    })
-
-    it('flips the row to error when the final persist fails', async () => {
-      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-      saveSession.mockRejectedValueOnce(new Error('postgres down'))
-
-      await expect(actions.processMessage('sess-save', 'do a thing')).rejects.toThrow(
-        'postgres down',
-      )
-
-      expect(dbSetConversationStatus).toHaveBeenCalledWith('sess-save', 'bypass-user', 'error')
-      err.mockRestore()
-    })
-
-    it('reports a status flip that itself failed, instead of swallowing it', async () => {
-      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-      getOrBuildPatterns.mockRejectedValueOnce(new Error('gateway unreachable'))
-      dbSetConversationStatus.mockRejectedValueOnce(new Error('postgres down too'))
-
-      // The original failure is still what the caller sees…
-      await expect(actions.processMessage('sess-both', 'do a thing')).rejects.toThrow(
-        'gateway unreachable',
-      )
-      // …and the fact that the row is now stuck is on the record.
-      expect(err).toHaveBeenCalledWith(expect.stringContaining('keep showing'), expect.anything())
-      err.mockRestore()
-    })
-
-    it('leaves the row alone on a successful turn', async () => {
-      await actions.processMessage('sess-ok', 'do a thing')
-      expect(dbSetConversationStatus).not.toHaveBeenCalled()
-    })
-  })
-
-  it('continues an existing conversation instead of re-running it fresh', async () => {
-    loadSession.mockResolvedValue({
-      serializedContext: 'ctx-a',
-      agentId: 'search',
-      kind: 'conversation',
-      status: 'done',
-    })
-
-    const result = await actions.processMessageWithAgent('sess-2', 'follow up', 'search')
-
-    expect(dbSaveConversation).not.toHaveBeenCalled() // no re-seed for a known row
-    expect(harness).not.toHaveBeenCalled()
-    expect(continueSession).toHaveBeenCalledWith(
-      'ctx-a',
-      ['patterns:search'],
-      'follow up',
-      undefined,
-    )
-    expect(result.response).toBe('continued:follow up')
-    expect(saveSession).toHaveBeenCalledWith('sess-2', 'bypass-user', 'search', 'ctx-a+follow up')
-  })
-
-  it('starts fresh when the agent changed under an existing sessionId', async () => {
-    loadSession.mockResolvedValue({
-      serializedContext: 'ctx-a',
-      agentId: 'search',
-      kind: 'conversation',
-      status: 'done',
-    })
-
-    const result = await actions.processMessageWithAgent('sess-3', 'hi', 'general')
-
-    expect(continueSession).not.toHaveBeenCalled()
-    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-3', 'general')
-    expect(result.response).toBe('fresh:hi')
-    expect(saveSession).toHaveBeenCalledWith(
-      'sess-3',
-      'bypass-user',
-      'general',
-      'serialized:sess-3',
-    )
-  })
-
-  it('exposes the user + conversation to the patterns as ambient request scope', async () => {
-    await actions.processMessage('sess-4', 'scope check')
-    expect(seenScopes).toEqual([{ userId: 'bypass-user', sessionId: 'sess-4' }])
   })
 
   it('attributes the run to the Entra user when the dev bypass is off', async () => {
     isBypassEnabled.mockReturnValue(false)
-    await actions.processMessage('sess-5', 'who am i')
-    expect(seenScopes).toEqual([{ userId: 'entra-user', sessionId: 'sess-5' }])
-    expect(saveSession).toHaveBeenCalledWith('sess-5', 'entra-user', 'search', 'serialized:sess-5')
+    await actions.processMessage('sess-3', 'who am i')
+    expect(runTurnAndPersist).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'entra-user' }),
+    )
   })
 
-  it('streams events and runs the turn under the caller-supplied settings', async () => {
-    const onEvent = vi.fn()
-    const settings = { maxTurns: 3 } as never
-    loadSession.mockResolvedValue({
-      serializedContext: 'ctx-a',
-      agentId: 'search',
-      kind: 'conversation',
-      status: 'done',
-    })
-
-    await actions.processMessageStreaming('sess-6', 'stream me', 'search', onEvent, settings)
-
-    expect(runWithSettings).toHaveBeenCalledWith(settings, expect.any(Function))
-    expect(continueSession).toHaveBeenCalledWith('ctx-a', ['patterns:search'], 'stream me', onEvent)
+  it('refuses to run at all without a session', async () => {
+    isBypassEnabled.mockReturnValue(false)
+    getAuthenticatedUser.mockRejectedValueOnce(new Error('Authentication required'))
+    await expect(actions.processMessage('sess-4', 'hi')).rejects.toThrow('Authentication required')
+    expect(runTurnAndPersist).not.toHaveBeenCalled()
   })
 })
 
 describe('approval gate', () => {
-  it('resumes the stored context as approved', async () => {
-    loadSession.mockResolvedValue({
-      serializedContext: 'ctx-p',
-      agentId: 'general',
-      kind: 'conversation',
-      status: 'paused',
-    })
+  it('resumes the stored context as approved, for the current user', async () => {
     const result = await actions.approveAction('sess-7')
-    expect(resumeHarness).toHaveBeenCalledWith('ctx-p', ['patterns:general'], true)
-    expect(result.response).toBe('approved')
-    expect(saveSession).toHaveBeenCalledWith('sess-7', 'bypass-user', 'general', 'resumed:true')
+    expect(runTurnAndPersist).toHaveBeenCalledWith({
+      mode: 'approval',
+      sessionId: 'sess-7',
+      userId: 'bypass-user',
+      approved: true,
+    })
+    expect(result.response).toBe('ran:approval')
   })
 
   it('resumes as rejected, ignoring the (unused) reason', async () => {
-    loadSession.mockResolvedValue({
-      serializedContext: 'ctx-p',
-      agentId: 'general',
-      kind: 'conversation',
-      status: 'paused',
-    })
-    const result = await actions.rejectAction('sess-8', 'too risky')
-    expect(resumeHarness).toHaveBeenCalledWith('ctx-p', ['patterns:general'], false)
-    expect(result.response).toBe('rejected')
+    await actions.rejectAction('sess-8', 'too risky')
+    expect(runTurnAndPersist).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'approval', approved: false }),
+    )
   })
 
-  it('refuses to resume a conversation the user does not own', async () => {
-    loadSession.mockResolvedValue(null)
+  // The turn driver owns the "does this session exist?" check — it needs the
+  // row anyway to know which agent to resume under.
+  it('surfaces the driver’s refusal for a session the user does not own', async () => {
+    runTurnAndPersist.mockRejectedValueOnce(new Error('No active session'))
     await expect(actions.approveAction('sess-9')).rejects.toThrow('No active session')
-    expect(resumeHarness).not.toHaveBeenCalled()
   })
 })
 

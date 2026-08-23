@@ -11,40 +11,20 @@
  */
 'use server'
 
-import {
-  harness,
-  resumeHarness,
-  continueSession,
-  createContext,
-  serializeContext,
-  type HarnessResultScoped,
-  type ContextEvent,
-} from '../harness-patterns'
-import {
-  getOrBuildPatterns,
-  loadSession,
-  saveSession,
-  deleteSession,
-  evictPatterns,
-  type SessionData,
-} from './session.server'
+import type { HarnessResultScoped } from '../harness-patterns'
+import { loadSession, deleteSession, evictPatterns, type SessionData } from './session.server'
+import { runTurnAndPersist } from './turn.server'
 import { getAgent, getAgentMetadata } from './registry.server'
 import {
   listConversations as dbListConversations,
   promoteConversation as dbPromoteConversation,
-  saveConversation as dbSaveConversation,
   deleteConversations as dbDeleteConversations,
-  deriveTitle,
-  setConversationStatus as dbSetConversationStatus,
   type ConversationKind,
   type ConversationSource,
   type ConversationStatus,
 } from '../db/conversations.server'
-import type { HarnessSettings } from '../settings'
-import { runWithSettings } from '../settings-context.server'
 import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
-import { runWithRequestContext } from './request-user.server'
 
 // ============================================================================
 // Auth helper
@@ -86,94 +66,12 @@ export async function processMessageWithAgent(
   agentId: string = 'search',
 ): Promise<HarnessResultScoped<SessionData>> {
   const user = await requireUser()
-  return runTurn(sessionId, user.id, message, agentId)
-}
-
-/**
- * Process a message with streaming events via callback.
- * Used by the SSE endpoint for real-time event delivery.
- */
-export async function processMessageStreaming(
-  sessionId: string,
-  message: string,
-  agentId: string = 'search',
-  onEvent: (event: ContextEvent) => void,
-  settings?: HarnessSettings,
-): Promise<HarnessResultScoped<SessionData>> {
-  const user = await requireUser()
-  return runWithSettings(settings, () => runTurn(sessionId, user.id, message, agentId, onEvent))
-}
-
-async function runTurn(
-  sessionId: string,
-  userId: string,
-  message: string,
-  agentId: string,
-  onEvent?: (event: ContextEvent) => void,
-): Promise<HarnessResultScoped<SessionData>> {
-  // Establish the request scope so pattern closures and app-side tools that
-  // need per-conversation context at runtime (a per-conversation allowlist
-  // reader, `graph_file_ingest`'s Data Stash target) resolve the right user and
-  // conversation without an explicit parameter.
-  return runWithRequestContext({ userId, sessionId }, async () => {
-    // If the user switched agent within an existing conversation, treat it as
-    // a fresh conversation by ignoring the prior serialized context. The UI is
-    // expected to mint a new sessionId on agent change, but we double-guard
-    // here so a stale id can't continue with a different agent's patterns.
-    const loaded = await loadSession(sessionId, userId)
-
-    // Brand-new conversation: persist the row BEFORE the run so it exists in
-    // the sidebar for its whole first turn (#105) — previously the row only
-    // appeared at run end, so an in-flight new chat was invisible (and lost
-    // outright if the user clicked "+ New Chat" again, dropping its
-    // placeholder). Mirrors `seedActionRow`: a minimal valid context carrying
-    // the user message (so a mid-run reload still replays it) and a title
-    // derived from the message; the run's own `saveSession` below overwrites
-    // the blob, and the first-turn LLM title replaces the derived one via the
-    // existing `title_updated` path. Guarded on `!loaded`, so pre-seeded
-    // action rows (which always exist before their run) are never touched.
-    if (!loaded) {
-      await dbSaveConversation({
-        id: sessionId,
-        userId,
-        agentId,
-        title: deriveTitle(message),
-        serializedContext: serializeContext(createContext(message, undefined, sessionId)),
-        status: 'running',
-      })
-    }
-
-    // Anything that throws from here on leaves the row this function is
-    // responsible for at status='running' forever — the seeded new-conversation
-    // row above, or a pre-seeded action row. The harness itself catches
-    // internally, so the realistic throws are pattern construction (gateway
-    // outage) and the final `saveSession`, and the triggered path already
-    // guards exactly this (`action-runner.server.ts`). Mirror it: flip to
-    // 'error', then rethrow so the caller still sees the failure (sf-M2).
-    try {
-      const patterns = await getOrBuildPatterns(sessionId, agentId)
-
-      let result: HarnessResultScoped<SessionData>
-      if (loaded && loaded.agentId === agentId) {
-        result = await continueSession(loaded.serializedContext, patterns, message, onEvent)
-      } else {
-        const agent = harness(...patterns)
-        result = await agent(message, sessionId, undefined, onEvent)
-      }
-
-      await saveSession(sessionId, userId, agentId, result.serialized)
-      return result
-    } catch (err) {
-      console.error(`[turn] run failed for ${sessionId}:`, err)
-      await dbSetConversationStatus(sessionId, userId, 'error').catch((statusErr: unknown) => {
-        console.error(
-          `[turn] could not flip ${sessionId} to status='error' — the row will keep showing ` +
-            'as running:',
-          statusErr,
-        )
-      })
-      throw err
-    }
+  return runTurnAndPersist({
+    mode: 'interactive',
+    sessionId,
+    userId: user.id,
+    agentId,
+    message,
   })
 }
 
@@ -209,16 +107,7 @@ async function resolveApproval(
   approved: boolean,
 ): Promise<HarnessResultScoped<SessionData>> {
   const user = await requireUser()
-  const loaded = await loadSession(sessionId, user.id)
-  if (!loaded) {
-    throw new Error('No active session')
-  }
-  return runWithRequestContext({ userId: user.id, sessionId }, async () => {
-    const patterns = await getOrBuildPatterns(sessionId, loaded.agentId)
-    const result = await resumeHarness(loaded.serializedContext, patterns, approved)
-    await saveSession(sessionId, user.id, loaded.agentId, result.serialized)
-    return result
-  })
+  return runTurnAndPersist({ mode: 'approval', sessionId, userId: user.id, approved })
 }
 
 /**

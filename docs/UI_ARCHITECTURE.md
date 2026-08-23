@@ -446,6 +446,7 @@ Displays the full agent event timeline:
 - **LLM call detail** (events with `llmCall`): two-tab layout — **Prompt** | **Output**. The Prompt tab uses an Ark UI Accordion with three sections: *Template* (Jinja source with `{{ vars }}` and `{% if %}` / `{% for %}` blocks, sourced from `baml_src/`), *Variables* (function inputs), *Rendered messages* (HTTP body parsed into role/content bubbles via `ParsedPromptView`). Sourced from `LLMCallData` in `baml-adapters.server.ts` — `httpRequest.body` is read via `body.text()` because BAML returns an `HttpBody` class instance, not a plain object.
 - **Save button** (floating, bottom-right): calls `showSaveFilePicker()` to save the full `UnifiedContext` as a named JSON file; falls back to `<a download>` on browsers without File System Access API
 - Requires `context?: UnifiedContext` prop threaded down from `index.tsx` → `SupportPanel` → `ObservabilityPanel`
+- **Split across files** (#226 B5): `ObservabilityPanel.tsx` is the composition root and the only public export. The pure projections live in `app/src/lib/observability/` — `projection.ts` (`buildTimelineItems()`, `getEventPreview()`, `getEventLane()`), `prompt-parse.ts` (`parsePromptBody()`, `flattenContent()`, `formatParamValue()`), `token-totals.ts` (`foldTokenTotals()`, `fmtTok()`, `fmtUsd()`) and `event-styles.ts` (icon/colour tables, `getPatternColor()`) — and the rendering in `components/ark-ui/observability/` (`SummaryBar`, `TimelineRows`, `EventDetail`, `LLMCallTabs`, `PromptView`)
 
 ### Theme System
 
@@ -928,6 +929,7 @@ app/
 │   │       ├── AllGraphTab.tsx        # Turn-based graph explorer (FloatingPanel + color-coded)
 │   │       ├── SettingsPanel.tsx      # Harness settings FloatingPanel (sliders, number inputs)
 │   │       ├── ObservabilityPanel.tsx # Event timeline + tool-pair merging + Save button
+│   │       ├── observability/         # Panel internals: SummaryBar, TimelineRows, EventDetail, LLMCallTabs, PromptView
 │   │       ├── EventDetailOverlay.tsx # Event detail modal
 │   │       ├── ToolCallDisplay.tsx    # Tool call status display (approval gate)
 │   │       ├── AgentSelector.tsx      # Agent selection dropdown
@@ -967,6 +969,11 @@ app/
 │       ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
 │       ├── turn-utils.ts           # splitIntoTurns(), extractTurnGraphElements()
 │       ├── turn-colors.ts         # TURN_COLORS palette, getTurnColor()
+│       ├── observability/         # Pure event-stream projections behind the timeline
+│       │   ├── projection.ts      # buildTimelineItems(), getEventPreview(), getEventLane()
+│       │   ├── prompt-parse.ts    # parsePromptBody(), flattenContent(), formatParamValue()
+│       │   ├── token-totals.ts    # foldTokenTotals(), fmtTok(), fmtUsd()
+│       │   └── event-styles.ts    # eventIcons/eventColors tables, getPatternColor()
 │       ├── neo4j/
 │       │   ├── queries.ts         # runManualCypher() (read-only), getNodeProperties()
 │       │   └── graph-edit.server.ts # createGraphNode()/linkGraphNodes()/setGraphNodeProperty() — authenticated, intent-shaped graph writes

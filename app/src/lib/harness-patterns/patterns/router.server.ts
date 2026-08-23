@@ -12,6 +12,7 @@
 
 import { assertServerOnImport } from '../assert.server'
 import { routeMessageOp } from '../routing.server'
+import { LLMCallError } from '../baml-adapters.server'
 import { Collector } from '@boundaryml/baml'
 import type {
   PatternScope,
@@ -22,6 +23,7 @@ import type {
   RouterConfig,
   RoutesConfig,
   ViewConfig,
+  ErrorEventData,
 } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import { trackEvent, resolveConfig, createEvent, createScope } from '../context.server'
@@ -171,8 +173,16 @@ export function router<T extends RouterData>(
         trackEvent(
           scope,
           'error',
-          { error: 'Router returned tool_call_needed but no tool_name' },
+          {
+            error: 'Router returned tool_call_needed but no tool_name',
+            kind: 'llm_call' as const,
+          } as ErrorEventData,
           true,
+          // `routeMessageOp` nulls a route the model invented (it validates
+          // against `routeDescriptions`), so this fires exactly when the
+          // router named a route that does not exist. WHICH name it invented
+          // lives only in the raw response — carry it.
+          result.llmCall,
         )
         return clearRouting(scope)
       }
@@ -203,7 +213,19 @@ export function router<T extends RouterData>(
       return scope
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
-      trackEvent(scope, 'error', { error: msg }, true)
+      // The adapter wraps a failed `b.Router` as `LLMCallError` so the raw
+      // response survives the throw — same contract as simpleLoop / planner.
+      const failedLlmCall = error instanceof LLMCallError ? error.llmCall : undefined
+      trackEvent(
+        scope,
+        'error',
+        {
+          error: msg,
+          ...(failedLlmCall ? { kind: 'llm_call' as const } : {}),
+        } as ErrorEventData,
+        true,
+        failedLlmCall,
+      )
       return clearRouting(scope)
     }
   }

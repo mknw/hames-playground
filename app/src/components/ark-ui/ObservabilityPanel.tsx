@@ -1665,7 +1665,27 @@ const PromptAccordion = (props: { llmCall: LLMCallData }) => {
 }
 
 const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
-  const [activeTab, setActiveTab] = createSignal<LLMTab>('prompt')
+  /** What the model actually said, before BAML coerced it into a value. */
+  const rawOutput = () => (props.llmCall.rawOutput?.trim() ? props.llmCall.rawOutput : undefined)
+  const parsedText = () =>
+    props.llmCall.parsedOutput == null
+      ? undefined
+      : typeof props.llmCall.parsedOutput === 'string'
+        ? props.llmCall.parsedOutput
+        : JSON.stringify(props.llmCall.parsedOutput, null, 2)
+
+  /**
+   * A response the model produced that BAML could NOT turn into a value — the
+   * shape of every parse failure (`BamlValidationError`, a truncated
+   * `tool_args`, a controller that answered in prose). `rawOutput` is then the
+   * only record of what was said, so the tabs open on it: this panel used to
+   * render "Output not captured" over a response that had been captured all
+   * along, which is why a recurring class of failure was undebuggable from the
+   * UI (#225 owner review).
+   */
+  const unparsed = () => parsedText() === undefined && rawOutput() !== undefined
+
+  const [activeTab, setActiveTab] = createSignal<LLMTab>(unparsed() ? 'output' : 'prompt')
 
   return (
     <div border="b dark-border-primary" m="b-4" p="b-4">
@@ -1692,16 +1712,32 @@ const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
           <PromptAccordion llmCall={props.llmCall} />
         </Match>
         <Match when={activeTab() === 'output'}>
-          <CodeBlock
-            content={
-              props.llmCall.parsedOutput != null
-                ? typeof props.llmCall.parsedOutput === 'string'
-                  ? props.llmCall.parsedOutput
-                  : JSON.stringify(props.llmCall.parsedOutput, null, 2)
-                : undefined
-            }
-            placeholder="Output not captured"
-          />
+          {/* Both blocks, each only when captured. Parsed leads when it
+              exists (it is what the harness acted on); on a parse failure
+              there is no parsed value and the raw response is the whole tab. */}
+          <Show
+            when={parsedText() !== undefined || rawOutput() !== undefined}
+            fallback={<CodeBlock content={undefined} placeholder="Output not captured" />}
+          >
+            <div flex="~ col" gap="3">
+              <Show when={parsedText() !== undefined}>
+                <div>
+                  <div text="xs dark-text-tertiary" m="b-1">
+                    Parsed output
+                  </div>
+                  <CodeBlock content={parsedText()} />
+                </div>
+              </Show>
+              <Show when={rawOutput() !== undefined}>
+                <div>
+                  <div text={`xs ${unparsed() ? 'amber-400' : 'dark-text-tertiary'}`} m="b-1">
+                    {unparsed() ? 'Raw response — BAML could not parse this' : 'Raw response'}
+                  </div>
+                  <CodeBlock content={rawOutput()} />
+                </div>
+              </Show>
+            </div>
+          </Show>
         </Match>
       </Switch>
     </div>
@@ -1784,6 +1820,16 @@ const EventDetailPanel = (props: {
 
       {/* Content */}
       <div flex="1" overflow="auto" p="4">
+        {/* An error leads with its own message + hint: they say WHAT failed,
+            and the LLM tabs below are then read as the evidence for it. Every
+            other event type reads better the other way round, so `error` is
+            the one type lifted out of the Switch below. */}
+        <Show when={type === 'error'}>
+          <div m="b-4">
+            <ErrorDetail data={data as ErrorEventData} />
+          </div>
+        </Show>
+
         {/* LLM Call Tabs - shown when event has llmCall data */}
         <Show when={llmCall}>
           <LLMCallTabs llmCall={llmCall!} />
@@ -1795,7 +1841,7 @@ const EventDetailPanel = (props: {
             a dict, so nothing rendered the router's own reply, and on the
             direct-response route the router IS the author. Compare the values
             instead of assuming they duplicate. */}
-        <Show when={!duplicatesLlmOutput()}>
+        <Show when={type !== 'error' && !duplicatesLlmOutput()}>
           <Switch fallback={<GenericDetail data={data} />}>
             <Match when={type === 'tool_call'}>
               <ToolCallDetail data={data as ToolCallEventData} />
@@ -1814,9 +1860,6 @@ const EventDetailPanel = (props: {
             </Match>
             <Match when={type === 'assistant_message'}>
               <MessageDetail data={data as AssistantMessageEventData} role="assistant" />
-            </Match>
-            <Match when={type === 'error'}>
-              <ErrorDetail data={data as ErrorEventData} />
             </Match>
             <Match when={type === 'content_sanitized'}>
               <ContentSanitizedDetail data={data as ContentSanitizedEventData} />

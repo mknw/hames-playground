@@ -780,6 +780,102 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
   })
 })
 
+describe('ObservabilityPanel — raw LLM output on a failed call', () => {
+  /**
+   * The recurring complaint behind #225: when BAML cannot parse a response,
+   * `parsedOutput` is absent and the panel used to render "Output not
+   * captured" — over a `rawOutput` that had been captured all along. The
+   * response text is the ONLY record of what the model said, so it must be
+   * reachable, and reachable without hunting: the tabs open on it.
+   */
+  const parseFailure = (over: Partial<LLMCallData> = {}): LLMCallData => ({
+    functionName: 'ActorController',
+    variables: { intent: 'convert the PDF' },
+    promptTemplate: 'You are an actor. {{ intent }}',
+    rawOutput: 'sandbox_write\n\n{"path":"/work/parse_pdf.py","content":"import pymupdf"}',
+    // No parsedOutput: BAML threw before producing one.
+    usage: {
+      inputTokens: 554,
+      outputTokens: 2452,
+      cachedInputTokens: 19_514,
+      totalTokens: 22_520,
+    },
+    ...over,
+  })
+
+  const openError = (call: LLMCallData | undefined) => {
+    const events = [
+      ev(
+        'error',
+        {
+          error: 'BamlValidationError: Missing required field: tool_name',
+          severity: 'recoverable',
+          hint: 'The LLM output could not be parsed.',
+          kind: 'llm_call',
+        },
+        call ? { llmCall: call } : {},
+      ),
+    ]
+    const rendered = render(() => <ObservabilityPanel events={events} />)
+    fireEvent.click(rows(rendered.container)[0])
+    return detailIn(rendered.container)!
+  }
+
+  it('shows the raw response for an error event, without any tab hunting', () => {
+    const panel = openError(parseFailure())
+
+    expect(panel.textContent).toContain('import pymupdf')
+    expect(panel.textContent).toContain('BAML could not parse this')
+    expect(panel.textContent).not.toContain('Output not captured')
+  })
+
+  it('keeps the error message and hint ABOVE the raw response', () => {
+    const panel = openError(parseFailure())
+    const text = panel.textContent ?? ''
+
+    expect(text.indexOf('Missing required field: tool_name')).toBeGreaterThanOrEqual(0)
+    expect(text.indexOf('Missing required field: tool_name')).toBeLessThan(
+      text.indexOf('import pymupdf'),
+    )
+    expect(text.indexOf('The LLM output could not be parsed.')).toBeLessThan(
+      text.indexOf('import pymupdf'),
+    )
+  })
+
+  it('still renders the prompt drill-down for the failed call', () => {
+    const panel = openError(parseFailure())
+
+    fireEvent.click([...panel.querySelectorAll('button')].find((b) => b.textContent === 'Prompt')!)
+    expect(panel.textContent).toContain('You are an actor')
+  })
+
+  it('leaves an error with no captured call as a plain error detail', () => {
+    const panel = openError(undefined)
+
+    expect(panel.textContent).toContain('BamlValidationError')
+    expect(panel.textContent).not.toContain('Prompt')
+    expect(panel.textContent).not.toContain('Raw response')
+  })
+
+  it('shows the raw response alongside the parsed one when both were captured', () => {
+    const panel = openError(parseFailure({ parsedOutput: { tool_name: 'sandbox_write' } }))
+
+    fireEvent.click([...panel.querySelectorAll('button')].find((b) => b.textContent === 'Output')!)
+    expect(panel.textContent).toContain('Parsed output')
+    expect(panel.textContent).toContain('"sandbox_write"')
+    expect(panel.textContent).toContain('Raw response')
+    expect(panel.textContent).toContain('import pymupdf')
+    // Parsed exists, so this is NOT a parse failure — no alarm label.
+    expect(panel.textContent).not.toContain('BAML could not parse this')
+  })
+
+  it('opens on the Prompt tab when a parsed value exists', () => {
+    const panel = openError(parseFailure({ parsedOutput: { tool_name: 'sandbox_write' } }))
+
+    expect(panel.textContent).toContain('You are an actor')
+  })
+})
+
 describe('ObservabilityPanel — save session', () => {
   const originalCreate = URL.createObjectURL
   const originalRevoke = URL.revokeObjectURL

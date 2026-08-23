@@ -6,7 +6,7 @@
 
 import { assertServerOnImport } from './assert.server'
 import { Collector } from '@boundaryml/baml'
-import { extractLLMCallData } from './baml-adapters.server'
+import { extractLLMCallData, wrapAsLLMCallError } from './baml-adapters.server'
 import { clientOverrideFor } from './clients.server'
 import type { LLMCallData } from './types'
 
@@ -55,13 +55,24 @@ export async function routeMessageOp(
   // `RouterAnthropic` (Haiku 4.5 primary, Sonnet 4.6 backstop).
   const routerOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('router') }
   const hasRouterOpts = Object.keys(routerOpts).length > 0
-  const result = hasRouterOpts
-    ? await b.Router(message, routes, history, routerOpts)
-    : await b.Router(message, routes, history)
+  const variables = { message, routes, history }
+  // Wrap like every other adapter does: the router is the FIRST LLM call of a
+  // turn, so a parse failure here aborts routing before any tool runs. Bare,
+  // it reached `router`'s catch as a plain Error and the emitted error event
+  // carried no `llmCall` at all — the raw response that failed to parse was
+  // captured in the collector and then thrown away.
+  let result: Awaited<ReturnType<typeof b.Router>>
+  try {
+    result = hasRouterOpts
+      ? await b.Router(message, routes, history, routerOpts)
+      : await b.Router(message, routes, history)
+  } catch (e) {
+    throw wrapAsLLMCallError(e, 'Router', variables, startTime, collector)
+  }
 
   // Extract LLM call data if collector present
   const llmCall = collector
-    ? extractLLMCallData(collector, 'Router', { message, routes, history }, startTime, result)
+    ? extractLLMCallData(collector, 'Router', variables, startTime, result)
     : undefined
 
   return {

@@ -269,8 +269,17 @@ function extractStatusFromContext(serializedContext: string): ConversationStatus
     if (status === 'paused' || status === 'error') return status
     // 'running' (completed-but-unflipped), 'done', or anything unexpected → done.
     return 'done'
-  } catch {
-    return 'done'
+  } catch (err) {
+    // A blob we cannot deserialize is the one case where 'done' is a lie: the
+    // conversation we are about to persist is unreadable, so whatever the run
+    // produced cannot be replayed. It used to be stored as a completed turn
+    // (sf-L3). 'error' is what the badge should say, and the reason belongs in
+    // the log — this is the only place that sees it.
+    console.error(
+      `[session] serialized context is not deserializable — persisting status='error':`,
+      err instanceof Error ? err.message : err,
+    )
+    return 'error'
   }
 }
 

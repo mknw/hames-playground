@@ -107,7 +107,11 @@ describe('getCodeModeAllowedTools — the allowed set', () => {
     expect(res.allowed.filter((t) => t === 'mcp-find')).toHaveLength(1)
   })
 
-  it('falls back to defaults when the persisted blob is corrupt', async () => {
+  // sf-L2: the panel then renders the DEFAULT selection as if it were the
+  // user's, and saving from that state silently replaces what they had picked.
+  // Nothing is recoverable here, but the substitution is no longer invisible.
+  it('falls back to defaults when the persisted blob is corrupt, and logs it', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     loadSession.mockResolvedValue({ serializedContext: 'not-json', agentId: 'code-mode' })
     deserializeContext.mockImplementation(() => {
       throw new Error('corrupt blob')
@@ -117,10 +121,18 @@ describe('getCodeModeAllowedTools — the allowed set', () => {
     const res = await getCodeModeAllowedTools('s1')
 
     expect(res.allowed).toContain('mcp-exec')
+    expect(err).toHaveBeenCalledWith(
+      expect.stringContaining('unreadable context blob'),
+      'corrupt blob',
+    )
+    // The session is named, so the affected conversation is identifiable.
+    expect(err.mock.calls[0][0]).toContain('s1')
     deserializeContext.mockImplementation(() => ({ data: {} }))
+    err.mockRestore()
   })
 
-  it('still answers when the preset lookup fails (gateway/catalog down)', async () => {
+  it('still answers when the preset lookup fails (gateway/catalog down), and logs it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     loadSession.mockResolvedValue(null)
     getPresetTools.mockRejectedValue(new Error('gateway down'))
     const { getCodeModeAllowedTools } = await import('../../../lib/tool-config/config.server')
@@ -128,6 +140,8 @@ describe('getCodeModeAllowedTools — the allowed set', () => {
     const res = await getCodeModeAllowedTools('s1')
 
     expect(res.allowed).toEqual(['mcp-find', 'mcp-add', 'code-mode', 'mcp-exec'])
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('meta-tools only'), 'gateway down')
+    warn.mockRestore()
   })
 
   it('reports the live gateway tools, sorted', async () => {

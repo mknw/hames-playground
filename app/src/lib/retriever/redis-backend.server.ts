@@ -45,8 +45,19 @@ export function createRedisBackend(
         // as ingest completes (the panel shows per-doc "embedding…" → "indexed").
         // Mark first so racing searches don't re-trigger it.
         ensured = true
-        void ensureFn(sessionId).catch(() => {
-          /* best-effort net; the upload-time gate is the primary path */
+        void ensureFn(sessionId).catch((err: unknown) => {
+          // Best-effort net — but not a silent one (sf-H2). The flag was set
+          // BEFORE the call, so a net that failed used to stay "done" for the
+          // life of this backend: every later query searched an index the net
+          // never finished filling and answered "no matching documents".
+          // Clearing it lets the next query re-arm the net; `ensureSessionIngested`
+          // is idempotent (it skips 'indexed' docs), so a retry is cheap.
+          ensured = false
+          console.warn(
+            `[retriever] background ingest net failed for session ${sessionId} ` +
+              `(${err instanceof Error ? err.message : String(err)}) — searches until the ` +
+              'next attempt may see an incomplete index.',
+          )
         })
       }
       const hits = await searchFn(sessionId, text, { k })

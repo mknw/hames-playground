@@ -34,6 +34,7 @@ import {
   listDocuments,
   setDocumentFlags,
   type CallTool,
+  type IngestStatus,
   type StashDocument,
 } from './document-store.server'
 import { chunkDocument, type Chunk, type ChunkConfig } from './chunking.server'
@@ -125,13 +126,28 @@ function spaceKey(sessionId: string): string {
 // Embedding-space bookkeeping
 // ============================================================================
 
-/** Read the embedding space a session's corpus was built with, if any. */
+/** Read the embedding space a session's corpus was built with, if any.
+ *
+ *  `null` covers both "this session has no ingested corpus" and "the store
+ *  could not be read". The two are indistinguishable in the return value for
+ *  compatibility with every existing caller, so the second one is LOGGED —
+ *  otherwise a Redis outage reaches the user as the sentence "no matching
+ *  documents", which is a statement about their corpus rather than about the
+ *  store (sf-H2). {@link searchDocuments} adds the same distinction to its own
+ *  "no matches" answer. */
 export async function getEmbeddingSpace(
   sessionId: string,
   callTool: CallTool = stashCallTool(),
 ): Promise<EmbeddingSpace | null> {
   const res = await callTool('json_get', { name: spaceKey(sessionId), path: '$' })
-  if (!res.success || res.data == null) return null
+  if (!res.success) {
+    console.warn(
+      `[ingest] could not read the embedding space for session ${sessionId} ` +
+        `(${res.error ?? 'unknown error'}) — treated as "no corpus".`,
+    )
+    return null
+  }
+  if (res.data == null) return null
   let value: unknown = res.data
   if (typeof value === 'string') {
     try {
@@ -250,7 +266,14 @@ export async function ingestDocument(
  *  - ingest ok              → status `'indexed'`, returns the {@link IngestResult}
  *
  * Best-effort by contract: it never throws (failures live in the status field),
- * so callers on the upload hot path don't need their own try/catch.
+ * so callers on the upload hot path don't need their own try/catch. "Never
+ * throws" is enforced here rather than assumed — the status writes are Redis
+ * writes and `setDocumentFlags` throws on a rejected one, which used to escape
+ * this function and abort `ensureSessionIngested`'s whole loop (sf-H2).
+ *
+ * The REASON a document failed is logged. It used to be discarded entirely, so
+ * an embedder outage and an unchunkable file were indistinguishable — the panel
+ * said 'failed' and nothing anywhere said why.
  */
 export async function ingestStashDocument(
   sessionId: string,
@@ -266,7 +289,7 @@ export async function ingestStashDocument(
   // the try below; any other base64 is marked failed so we don't retry forever.
   const needsConversion = doc.encoding === 'base64'
   if (needsConversion && !(conversionEnabled() && isConvertible(doc.mimeType))) {
-    await setDocumentFlags(sessionId, docId, { ingestStatus: 'failed' }, callTool)
+    await markIngestStatus(sessionId, docId, 'failed', callTool)
     return null
   }
 
@@ -275,7 +298,7 @@ export async function ingestStashDocument(
   // in the store write, so skip the redundant round-trip there — re-writing the
   // same value only burns a gateway call and a list-cache invalidation.
   if (doc.ingestStatus !== 'pending') {
-    await setDocumentFlags(sessionId, docId, { ingestStatus: 'pending' }, callTool)
+    await markIngestStatus(sessionId, docId, 'pending', callTool)
   }
   try {
     let ingestDoc = doc
@@ -290,11 +313,40 @@ export async function ingestStashDocument(
       ingestDoc = { ...doc, content: markdown, mimeType: MARKDOWN_MIME, encoding: undefined }
     }
     const result = await ingestDocument(ingestDoc, opts)
-    await setDocumentFlags(sessionId, docId, { ingestStatus: 'indexed' }, callTool)
+    await markIngestStatus(sessionId, docId, 'indexed', callTool)
     return result
-  } catch {
-    await setDocumentFlags(sessionId, docId, { ingestStatus: 'failed' }, callTool)
+  } catch (err) {
+    console.error(
+      `[ingest] ${doc.filename} (${docId}) failed for session ${sessionId}:`,
+      err instanceof Error ? err.message : err,
+    )
+    await markIngestStatus(sessionId, docId, 'failed', callTool)
     return null
+  }
+}
+
+/**
+ * Write an ingest status without letting the write itself break the caller.
+ *
+ * `setDocumentFlags` throws when Redis rejects the write, and every call site
+ * above is on the "best-effort, never throws" path — including the one inside
+ * the failure handler, where a throw would replace the real ingest error with a
+ * Redis one AND propagate out of a function documented not to throw. The status
+ * is a progress indicator; losing it must not cost the ingest run (sf-H2).
+ */
+async function markIngestStatus(
+  sessionId: string,
+  docId: string,
+  ingestStatus: IngestStatus,
+  callTool: CallTool,
+): Promise<void> {
+  try {
+    await setDocumentFlags(sessionId, docId, { ingestStatus }, callTool)
+  } catch (err) {
+    console.warn(
+      `[ingest] could not persist ingestStatus='${ingestStatus}' for ${docId}:`,
+      err instanceof Error ? err.message : err,
+    )
   }
 }
 
@@ -324,7 +376,18 @@ export async function ensureSessionIngested(
     // Skip binaries we can't turn into text; convertible ones (with conversion
     // enabled) fall through to ingestStashDocument, which converts them.
     if (m.encoding === 'base64' && !(conversionEnabled() && isConvertible(m.mimeType))) continue
-    await ingestStashDocument(sessionId, m.id, opts)
+    // `ingestStashDocument` is documented not to throw, and now enforces that
+    // for its own status writes — but this loop is the safety net for a whole
+    // corpus and must not lose documents 3..N to an unexpected throw on
+    // document 2 (sf-H2). Per-document isolation, loudly.
+    try {
+      await ingestStashDocument(sessionId, m.id, opts)
+    } catch (err) {
+      console.error(
+        `[ingest] safety-net ingest of ${m.filename} (${m.id}) threw; continuing with the rest:`,
+        err instanceof Error ? err.message : err,
+      )
+    }
   }
 }
 

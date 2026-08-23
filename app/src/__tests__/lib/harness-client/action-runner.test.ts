@@ -127,14 +127,25 @@ describe('runAgentInBackground', () => {
     logged.mockRestore()
   })
 
-  it('swallows a failure of the error-flip itself (already logged)', async () => {
+  // sf-M3. The flip itself was `.catch(() => {})` with a comment claiming the
+  // failure was "already logged above" — that log was about the RUN. When the
+  // flip is what failed, the row keeps spinning and nothing said why.
+  it('does not swallow a failure of the error-flip itself — it names the stuck row', async () => {
     getOrBuildPatterns.mockRejectedValueOnce(new Error('gateway down'))
     dbSetConversationStatus.mockRejectedValueOnce(new Error('db down'))
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
 
+    // Still swallowed as far as the caller is concerned — this is a
+    // fire-and-forget background run and must not reject.
     await expect(
       runAgentInBackground('run-6', 'user-1', 'x', 'default', TRIGGER),
     ).resolves.toBeUndefined()
+
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining('run-6'), expect.anything())
+    expect(logged).toHaveBeenCalledWith(
+      expect.stringContaining('keep showing as'),
+      expect.anything(),
+    )
     logged.mockRestore()
   })
 })

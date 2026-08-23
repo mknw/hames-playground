@@ -16,9 +16,12 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServer: vi.fn(),
 }))
 
-const claimRoutineRun = vi.fn<() => Promise<boolean>>(async () => true)
+const claimRoutineRunAt = vi.fn<() => Promise<Date | null>>(
+  async () => new Date('2026-08-16T12:00:00Z'),
+)
 vi.mock('../../../lib/db/routines.server', () => ({
-  claimRoutineRun,
+  claimRoutineRunAt,
+  releaseRoutineClaim: vi.fn(async () => true),
   listEnabledRoutinesForUser: vi.fn(async () => []),
 }))
 
@@ -78,7 +81,7 @@ const routine = (over: Partial<Routine> = {}): Routine =>
 
 beforeEach(() => {
   vi.clearAllMocks()
-  claimRoutineRun.mockResolvedValue(true)
+  claimRoutineRunAt.mockResolvedValue(new Date('2026-08-16T12:00:00Z'))
 })
 
 describe('a routine run', () => {

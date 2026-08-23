@@ -35,7 +35,7 @@ function defaultSecret(): string {
   if (!s) {
     throw new Error(
       '[auth] AUTH_SESSION_SECRET is not set — required to sign auth cookies. ' +
-        'Generate one with `openssl rand -base64 32` (see docs/deploy/entra-setup.md).',
+        'Generate one with `openssl rand -base64 32` (see docs/deployment/entra-setup.md).',
     )
   }
   return s

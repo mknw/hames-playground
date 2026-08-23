@@ -7,7 +7,7 @@
  * decision to go direct (rather than federate Entra into Stack) hinges on
  * #110 (OBO) needing the raw Entra token server-side — a Stack-brokered flow
  * never yields it. Tenant-owner provisioning is documented in
- * `docs/deploy/entra-setup.md`.
+ * `docs/deployment/entra-setup.md`.
  */
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import type { Configuration } from '@azure/msal-node'
@@ -58,7 +58,7 @@ const RESERVED_SCOPES = new Set(['openid', 'profile', 'offline_access'])
  * the full set up front.
  *
  * Each scope must also exist under the app registration's API permissions with
- * consent granted — see `docs/deploy/entra-setup.md`. A scope requested here but
+ * consent granted — see `docs/deployment/entra-setup.md`. A scope requested here but
  * not consented fails the whole sign-in (not just that connector), so
  * `AZURE_GRAPH_SCOPES` exists as an escape hatch: set it to a trimmed,
  * space- or comma-separated list to drop a problem scope without a code change.
@@ -129,7 +129,7 @@ function required(env: Record<string, string | undefined>, key: string): string 
     throw new Error(
       `[entra] ${key} is not set. Entra SSO is not configured — set ` +
         `AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET (see ` +
-        `docs/deploy/entra-setup.md), or run dev with VITE_DEV_BYPASS_AUTH=true.`,
+        `docs/deployment/entra-setup.md), or run dev with VITE_DEV_BYPASS_AUTH=true.`,
     )
   }
   return v

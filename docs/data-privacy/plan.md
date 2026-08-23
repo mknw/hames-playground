@@ -111,7 +111,7 @@ Against that:
   material above.
 - The committed compose publishes Postgres, Redis and Neo4j on `0.0.0.0` with
   password `password`. Fine on a laptop, unacceptable on a VM — which is why
-  `docs/deploy/azure-vm.md` overrides it. That override is now load-bearing.
+  `docs/deployment/azure-vm.md` overrides it. That override is now load-bearing.
 - **No Postgres backups exist.** This is an Art. 32(1)(c) obligation ("ability
   to restore availability and access to personal data in a timely manner"), not
   merely ops hygiene.
@@ -190,7 +190,7 @@ questions and can start immediately; only item 4 blocks on someone else.
 ## Related
 
 - Issue **#129** — auth hardening (session sweep, prod cutover chores).
-- [`docs/deploy/azure-vm.md`](../deploy/azure-vm.md) — the compose override that
+- [`docs/deployment/azure-vm.md`](../deployment/azure-vm.md) — the compose override that
   stops the databases listening on `0.0.0.0` in production.
 - [`docs/MICROSOFT_GRAPH.md`](../MICROSOFT_GRAPH.md) — what the Graph tools
   retrieve, i.e. what can end up inside `conversations.context`.

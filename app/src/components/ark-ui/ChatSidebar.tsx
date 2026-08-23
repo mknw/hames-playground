@@ -3,8 +3,9 @@ import { Dialog } from '@ark-ui/solid/dialog'
 import { SettingsPanel } from './SettingsPanel'
 import { regenerateConversationTitle } from '../../lib/harness-client'
 import { accentColor } from '../../lib/agent-palette'
-import type { CompletionMark, SessionRunState } from '../../lib/run-registry'
-import type { ChainProgressController, ChainProgressSnapshot } from './useChainProgress'
+import type { CompletionMark } from '../../lib/run-registry'
+import type { ChainProgressSnapshot } from './useChainProgress'
+import { useSessionRegistry } from '../../lib/session-registry-context'
 
 /** Mirror of the server's ConversationKind/Status (kept local so the sidebar
  *  has no server-module import). */
@@ -105,21 +106,9 @@ interface ChatSidebarProps {
    *  LLM title. The sidebar handles the server action itself, then forwards
    *  the new title so the parent can patch its threads cache in-place. */
   onTitleRegenerated?: (sessionId: string, title: string) => void
-  /** Live per-session run state from the route registry (#105). Drives the
-   *  per-row progress readout while *its* run is in flight, regardless of
-   *  which thread is selected. Optional so the sidebar renders without it. */
-  getRunState?: (sessionId: string) => SessionRunState
-  /** Per-session progress controller from the route registry — the same one
-   *  feeding the in-chat LiveProgressBar. Only consulted for rows whose run
-   *  state says a stream is open (a run's controller always exists by then). */
-  getProgress?: (sessionId: string) => ChainProgressController
-  /** Completion mark for a run that finished while the user was reading
-   *  another thread: the row flashes once, then keeps an accent border
-   *  until opened (#105). */
-  getCompletion?: (sessionId: string) => CompletionMark | undefined
   /** Delete the given conversations (#71). The sidebar owns the confirm UX;
-   *  the route owns the mutation (server action + threads cache + its
-   *  per-session registries). Rejects → the dialog stays open for retry. */
+   *  the route owns the mutation (thread list + registry disposal).
+   *  Rejects → the dialog stays open for retry. */
   onDeleteThreads?: (ids: string[]) => Promise<void>
 }
 
@@ -422,6 +411,10 @@ const FILTER_LABELS: ReadonlyArray<{ value: ThreadFilter; label: string }> = [
 ]
 
 export const ChatSidebar = (props: ChatSidebarProps) => {
+  // Live per-session run state, progress and completion marks come from the
+  // session registry in context (#226 B1) rather than three accessor props
+  // that only handed the sidebar back into the route's maps.
+  const registry = useSessionRegistry()
   // Per-thread pending state for the ↻ button — keyed by sessionId.
   const [pendingRegen, setPendingRegen] = createSignal<ReadonlySet<string>>(new Set())
   // Delete confirm state (#71): non-null while the dialog is up. `deleting`
@@ -460,7 +453,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
   // Running rows skipped by the last select-all — reported in the confirm.
   const [skippedRunning, setSkippedRunning] = createSignal(0)
 
-  const isRunning = (id: string) => !!props.getRunState?.(id).isProcessing
+  const isRunning = (id: string) => registry.runState(id).isProcessing
 
   const exitSelectMode = () => {
     setSelectionMode(false)
@@ -632,8 +625,8 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                 const isSelected = () => thread.id === props.selectedId
                 const dot = () =>
                   railDot({
-                    live: !!props.getRunState?.(thread.id).isProcessing,
-                    completion: props.getCompletion?.(thread.id),
+                    live: registry.runState(thread.id).isProcessing,
+                    completion: registry.completion(thread.id),
                   })
                 return (
                   <button
@@ -811,10 +804,10 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                     // Live run state for THIS row — a backgrounded run keeps
                     // its progress readout while the user reads another
                     // thread (#105).
-                    const live = () => !!props.getRunState?.(thread.id).isProcessing
+                    const live = () => registry.runState(thread.id).isProcessing
                     const indicator = () =>
                       rowIndicator({ kind: thread.kind, status: thread.status })
-                    const completion = () => props.getCompletion?.(thread.id)
+                    const completion = () => registry.completion(thread.id)
                     const completionTitle = () => {
                       const c = completion()
                       if (!c) return undefined
@@ -933,14 +926,14 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             same per-session controller that feeds the
                             in-chat bar (#105). Reappears when the run ends. */}
                         <Show
-                          when={live() && props.getProgress}
+                          when={live()}
                           fallback={
                             <div text="xs dark-text-tertiary" m="t-1">
                               {formatTimestamp(thread.updatedAt)}
                             </div>
                           }
                         >
-                          <RowProgress snapshot={props.getProgress!(thread.id).snapshot()} />
+                          <RowProgress snapshot={registry.progress(thread.id).snapshot()} />
                         </Show>
                         {/* Hover-reveal delete button (#71). Hidden — not
                             disabled — for placeholders and running rows: a

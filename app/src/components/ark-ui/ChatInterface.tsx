@@ -10,11 +10,16 @@
  * - Context event streaming for observability
  *
  * Architecture:
+ * - The streaming turn itself lives in `lib/turn-stream.ts` (#226 B2): this
+ *   component supplies the request and a `TurnSink` bound to the session
+ *   captured at submit time, and renders what comes back.
  * - Uses harness-client server actions
- * - ContextEvents streamed to parent for observability
- * - Per-session progress + run state lives in the parent route — see #47.
- *   The fetch loop captures `runSessionId` at submit time and routes ingest
- *   calls into the correct controller even after the user switches threads.
+ * - Per-session state (messages, events, graph, context, progress, run state,
+ *   abort controllers) is read from the `SessionRegistry` in context, not
+ *   handed down as eleven accessor props — see #226 B1. The fetch loop
+ *   captures `runSessionId` at submit time and addresses the registry with it,
+ *   so a run keeps filling its own conversation after the user switches
+ *   threads (#47 / #105).
  */
 
 import { createSignal, createEffect, createMemo, untrack, Show } from 'solid-js'
@@ -22,36 +27,26 @@ import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { AgentSelector } from './AgentSelector'
 import { LiveProgressBar } from './LiveProgressBar'
-import type { ChainProgressController } from './useChainProgress'
 import {
   approveAction,
   rejectAction,
   promoteAction,
   loadConversation,
-  extractGraphFromResult,
   extractGraphElements,
   extractReferences,
   type OpenReferenceTarget,
 } from '~/lib/harness-client'
-// Imported from the module rather than the barrel: `replay.ts` is deliberately
-// dependency-free (no server-only imports), and the live stream handler wants
-// exactly that guarantee.
-import { errorBubble } from '~/lib/harness-client/replay'
 import { getSettings } from '~/lib/settings-store'
-import { parseChatStream, type DoneEventData } from '~/lib/sse-client'
+import { applyApprovalResult, runTurn, type TurnSink } from '~/lib/turn-stream'
 import type { GraphElement } from './SupportPanel'
-import type {
-  ContextEvent,
-  UnifiedContext,
-  ControllerActionEventData,
-  ErrorEventData,
-} from '~/lib/harness-patterns'
+import type { UnifiedContext } from '~/lib/harness-patterns'
 import {
   capReachedMessage,
   isAtConcurrencyCap,
   type RunOutcome,
   type SessionRunState,
 } from '~/lib/run-registry'
+import { useSessionRegistry } from '~/lib/session-registry-context'
 
 // ============================================================================
 // Types
@@ -65,16 +60,11 @@ export interface ChatInterfaceProps {
   /** Session ID for server-side state (shared with SupportPanel for stash actions).
    *  When this changes, ChatInterface hydrates messages from persisted history. */
   sessionId: string
-  // Panel updates are addressed by session id (SA-H8), the same way chat
-  // buffers are (#105). A run that continues after the user switches threads
-  // keeps filling its OWN session's graph and event stream instead of either
-  // being dropped or leaking into whichever thread is on screen.
-  onGraphUpdate?: (sessionId: string, elements: GraphElement[]) => void
-  onEventsUpdate?: (sessionId: string, events: ContextEvent[]) => void
+  /** A turn (or a hydration) produced a fresh `UnifiedContext`. The route
+   *  files it in the registry AND refreshes the sidebar — titles update once
+   *  the first user_message lands — which is why this stays a callback
+   *  rather than a direct registry write. */
   onContextUpdate?: (sessionId: string, ctx: UnifiedContext) => void
-  /** Called before hydration so the parent can clear that session's
-   *  graph/event signals before they are repopulated. */
-  onResetForNewSession?: (sessionId: string) => void
   /** Called when the user changes agent — parent should mint a fresh sessionId so
    *  the new agent gets its own conversation row rather than overwriting an existing one. */
   onAgentChangeRequestsNewSession?: () => void
@@ -83,39 +73,23 @@ export interface ChatInterfaceProps {
   onSelectedAgentChange?: (agentId: string) => void
   /** Map of entity/relation names → graph element IDs for interactive highlighting */
   graphEntityNames?: Map<string, string[]>
-  /** Callback to highlight specific graph element IDs */
+  /** Callback to highlight specific graph element IDs — driven both by a click
+   *  in the transcript and by a batch of graph elements landing in the thread
+   *  currently on screen. */
   onHighlightEntities?: (ids: string[]) => void
   /** Open the inline file viewer for a citation clicked in an assistant message. */
   onOpenReference?: (target: OpenReferenceTarget) => void
   /** True while uploaded sources are still embedding — blocks the composer so the
    *  user can't query the retriever before its documents are searchable. */
   embeddingSources?: boolean
-  // ---- Per-session progress + run state (lives in the route, see #47) ----
-  getProgress: (sessionId: string) => ChainProgressController
-  getRunState: (sessionId: string) => SessionRunState
-  updateRunState: (sessionId: string, patch: Partial<SessionRunState>) => void
-  registerAbortController: (sessionId: string, ac: AbortController) => void
-  unregisterAbortController: (sessionId: string) => void
-  /** Abort the in-flight SSE stream for a session. The route owns the
-   *  controller map, so it owns the abort; this is what the composer's Stop
-   *  control calls (SA-M11). */
-  abortSession?: (sessionId: string) => void
-  /** Per-session chat buffer, owned by the route (#105). Reads/writes are
-   *  always addressed by session id so a backgrounded run keeps filling its
-   *  own thread while the user reads another one. */
-  getMessages: (sessionId: string) => Message[]
-  setMessages: (sessionId: string, next: Message[] | ((prev: Message[]) => Message[])) => void
-  /** How many sessions are streaming right now, across the whole route.
-   *  Only the route can know this — used for the concurrency cap (#105). */
-  runningCount: number
   /** Fired once per run, on the first SSE event. By then the server has
    *  persisted the conversation row (the early save in `runTurn` strictly
    *  precedes event emission), so the route can refetch the sidebar and the
    *  new thread appears with its derived title while still streaming (#105). */
   onRunStarted?: (sessionId: string) => void
-  /** Fired when a run finishes, with how it ended. The route marks the
-   *  thread so a run that lands while the user is elsewhere is visible
-   *  (#105). Not fired for an abort — that's page teardown. */
+  /** Fired when a run finishes, with how it ended. The route refetches the
+   *  thread list and marks the row so a run that lands while the user is
+   *  elsewhere is visible (#105). Not fired for an abort — that's page teardown. */
   onRunSettled?: (sessionId: string, outcome: RunOutcome) => void
   /** Push-driven sidebar title update — fired when the server emits a
    *  `title_updated` SSE event after the first-turn LLM title resolves.
@@ -143,13 +117,25 @@ const WELCOME_MESSAGE: Message = {
 // ============================================================================
 
 export const ChatInterface = (props: ChatInterfaceProps) => {
-  // Chat buffer for the *displayed* session. The underlying arrays are owned
-  // by the route (one per session), so an in-flight turn survives the user
-  // switching threads — see #105. Writes that belong to a specific run always
-  // address `runSessionId` explicitly rather than going through this setter.
-  const messages = () => props.getMessages(props.sessionId)
+  // Per-session state lives in the registry (#226 B1), so an in-flight turn
+  // survives the user switching threads (#105). Writes that belong to a
+  // specific run always address `runSessionId` explicitly rather than going
+  // through these displayed-session shorthands.
+  const registry = useSessionRegistry()
+  const messages = () => registry.messages(props.sessionId)
   const setMessages = (next: Message[] | ((prev: Message[]) => Message[])) =>
-    props.setMessages(props.sessionId, next)
+    registry.setMessages(props.sessionId, next)
+
+  /**
+   * File a batch of graph elements against the run's own conversation, and
+   * move the highlight only when that conversation is the one on screen —
+   * highlighting is view state, not per-session data.
+   */
+  const pushGraph = (sid: string, elements: GraphElement[]) => {
+    if (elements.length === 0) return
+    const ids = registry.mergeGraph(sid, elements)
+    if (sid === props.sessionId) props.onHighlightEntities?.(ids)
+  }
   const [selectedAgent, setSelectedAgent] = createSignal('search')
   // Row kind for the open thread — gates the promotion confirm on send. A
   // brand-new chat (load throws) stays 'conversation'. Set from loadConversation.
@@ -171,9 +157,9 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   // Reactive accessors into the per-session registries owned by the route.
   // Re-reading `props.sessionId` inside the memo means snapshot/run-state
   // tracking automatically swaps when the user picks a different thread.
-  const currentProgress = createMemo(() => props.getProgress(props.sessionId))
+  const currentProgress = createMemo(() => registry.progress(props.sessionId))
   const currentSnapshot = () => currentProgress().snapshot()
-  const currentRunState = () => props.getRunState(props.sessionId)
+  const currentRunState = () => registry.runState(props.sessionId)
   const isProcessing = () => currentRunState().isProcessing
   const runningTool = () => currentRunState().runningTool
 
@@ -186,7 +172,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     const sid = props.sessionId
     if (!currentRunState().isProcessing) return
     stoppedSessions.add(sid)
-    props.abortSession?.(sid)
+    registry.abort(sid)
   }
 
   // Concurrency cap (#105 slice 2). Multiple sessions may stream at once; at
@@ -195,7 +181,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const concurrencyCap = () => getSettings().maxConcurrentRuns
   const atCap = () =>
     isAtConcurrencyCap({
-      runningCount: props.runningCount,
+      runningCount: registry.runningCount(),
       cap: concurrencyCap(),
       thisSessionRunning: isProcessing(),
     })
@@ -213,11 +199,14 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     // Read untracked — if this effect subscribed to run state it would re-run
     // the instant a run finished, clearing the graph/observability panels that
     // just streamed in and flashing the freshly-landed assistant message.
-    if (untrack(() => props.getRunState(sid).isProcessing)) return
+    if (untrack(() => registry.runState(sid).isProcessing)) return
 
-    props.setMessages(sid, [])
+    registry.setMessages(sid, [])
     prevEventCount = 0
-    props.onResetForNewSession?.(sid)
+    // Wipe this conversation's panel state so a rehydration replaces rather
+    // than appends. Progress is NOT cleared — a still-running stream for
+    // another thread keeps populating its own controller.
+    registry.clearPanels(sid)
 
     // Default to 'conversation' until the load resolves — a brand-new chat
     // (load rejects) must never gate its first send.
@@ -233,7 +222,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           setSelectedAgent(loaded.agentId)
           setCurrentKind(loaded.kind)
         }
-        props.setMessages(
+        registry.setMessages(
           sid,
           // Spread, don't re-list: this map used to pick four fields, which
           // silently dropped the hint/patternId/turnInfo that error and warning
@@ -247,14 +236,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           const ctx = JSON.parse(loaded.serialized) as UnifiedContext
           const events = ctx.events ?? []
           prevEventCount = events.length
-          if (props.onEventsUpdate && events.length) {
-            props.onEventsUpdate(sid, events)
-          }
-          if (props.onGraphUpdate) {
-            const toolEvents = events.filter((e) => e.type === 'tool_result')
-            const els = extractGraphElements(toolEvents)
-            if (els.length) props.onGraphUpdate(sid, els)
-          }
+          registry.appendEvents(sid, events)
+          pushGraph(sid, extractGraphElements(events.filter((e) => e.type === 'tool_result')))
           if (props.onContextUpdate) {
             props.onContextUpdate(sid, ctx)
           }
@@ -263,7 +246,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           // most recent turn's references are recoverable from the event stream).
           const refs = extractReferences(events)
           if (refs.length) {
-            props.setMessages(sid, (prev) => {
+            registry.setMessages(sid, (prev) => {
               const next = [...prev]
               for (let i = next.length - 1; i >= 0; i--) {
                 if (next[i].role === 'assistant') {
@@ -280,7 +263,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       })
       .catch(() => {
         // Either a brand-new session id or no row yet — show welcome.
-        props.setMessages(sid, [WELCOME_MESSAGE])
+        registry.setMessages(sid, [WELCOME_MESSAGE])
       })
   })
 
@@ -330,253 +313,102 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     setPromotionDraft(null)
   }
 
+  /**
+   * The narrow set of effects a turn performs, all bound to the session
+   * captured at submit time. Both the streaming turn and the approval path
+   * write through this, which is what stops the two fanning out differently.
+   */
+  const sinkFor = (runSessionId: string): TurnSink => {
+    const progress = registry.progress(runSessionId)
+    return {
+      appendMessage: (message) => registry.appendMessage(runSessionId, message),
+      pushEvents: (events) => registry.appendEvents(runSessionId, events),
+      pushGraph: (elements) => pushGraph(runSessionId, elements),
+      setContext: (context) => {
+        // The cursor the approval path slices its event delta from.
+        prevEventCount = context.events?.length ?? prevEventCount
+        props.onContextUpdate?.(runSessionId, context)
+      },
+      ingestProgress: (event) => progress.ingest(event),
+      finishProgress: () => progress.finish(),
+      onStarted: () => props.onRunStarted?.(runSessionId),
+      onTitleUpdated: (sid, title) => props.onTitleUpdated?.(sid, title),
+      // Run state is a projection of the turn state: streaming means the
+      // composer is blocked and may name a tool; every terminal state releases it.
+      onState: (state) =>
+        registry.updateRunState(runSessionId, {
+          isProcessing: state.status === 'streaming',
+          runningTool: state.status === 'streaming' ? state.runningTool : null,
+        }),
+    }
+  }
+
   const runSend = async (content: string) => {
     // Snapshot the active sessionId at submit time. The user may switch
     // threads mid-stream; without this, late-arriving events would corrupt
     // whichever thread happens to be in view (#47).
     const runSessionId = props.sessionId
 
-    // Per-session progress controller — owned by the route registry so it
-    // survives the user navigating away to a different chat.
-    const progress = props.getProgress(runSessionId)
-    progress.reset()
-    props.updateRunState(runSessionId, { isProcessing: true, runningTool: null })
+    registry.progress(runSessionId).reset()
 
     // Add the user message to *this run's* buffer. No "still on this thread"
     // guard is needed any more: the buffer is addressed by session id, so
     // switching away can't misfile it into the thread now on screen (#105).
-    const userMessage: Message = {
+    registry.appendMessage(runSessionId, {
       id: Date.now().toString(),
       role: 'user',
       content,
       timestamp: new Date(),
-    }
-    props.setMessages(runSessionId, (prev) => [...prev, userMessage])
+    })
 
     const abortController = new AbortController()
-    props.registerAbortController(runSessionId, abortController)
-
-    // How this run ended, reported once in `finally` so the route can mark
-    // the thread if the user has moved on. `aborted` stays unreported — that
-    // path is page teardown, not a result worth announcing.
-    let outcome: RunOutcome = 'done'
-    let aborted = false
+    registry.registerAbort(runSessionId, abortController)
 
     try {
-      // Stream events via SSE endpoint for real-time updates
-      const response = await fetch('/api/events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const { outcome, aborted } = await runTurn(
+        {
           sessionId: runSessionId,
           message: content,
           agentId: selectedAgent(),
           settings: getSettings(),
-        }),
-        signal: abortController.signal,
-      })
+          signal: abortController.signal,
+        },
+        sinkFor(runSessionId),
+      )
 
-      if (!response.ok) {
-        throw new Error(`Server error: ${response.status}`)
-      }
-
-      let finalResult: DoneEventData | null = null
-      let runAnnounced = false
-
-      // Typed SSE iteration — the parser handles frame buffering, malformed
-      // JSON, partial reads, and yields discriminated `ChatStreamEvent`s.
-      for await (const sseEvt of parseChatStream(response)) {
-        // First event of the stream: the server-side early persist has
-        // committed, so the sidebar can pick up the new row.
-        if (!runAnnounced) {
-          runAnnounced = true
-          props.onRunStarted?.(runSessionId)
-        }
-        if (sseEvt.event === 'done') {
-          finalResult = sseEvt.data as DoneEventData
-          continue
-        }
-        if (sseEvt.event === 'error') {
-          throw new Error((sseEvt.data as { error: string }).error)
-        }
-        if (sseEvt.event === 'title_updated') {
-          // Server pushed the LLM-generated title for this conversation —
-          // patch the sidebar's threads cache in place. Lands regardless of
-          // which thread the user is currently viewing.
-          const { sessionId: sid, title } = sseEvt.data
-          props.onTitleUpdated?.(sid, title)
-          continue
-        }
-        if (sseEvt.event !== 'message') continue // Forward-compat: ignore unknown event names
-
-        const evt = sseEvt.data as ContextEvent
-
-        // Progress is always routed into the captured run session's
-        // controller, even if the user has navigated away.
-        progress.ingest(evt)
-
-        // Surface the currently-running tool for the composer guard. A
-        // multi-call turn shows the batch size ("3 tools") instead of one name.
-        if (evt.type === 'controller_action') {
-          const data = evt.data as ControllerActionEventData
-          const toolName = data.action?.tool_name
-          const extraCalls = data.action?.additional_calls?.length ?? 0
-          if (toolName && toolName !== 'Return') {
-            props.updateRunState(runSessionId, {
-              runningTool: extraCalls > 0 ? `${extraCalls + 1} tools` : toolName,
-            })
-          } else if (data.action?.is_final) {
-            props.updateRunState(runSessionId, { runningTool: null })
-          }
-        }
-
-        // Inline error/warning bubbles belong to the run's own transcript, so
-        // they are filed by session id ahead of the view guard below — a
-        // backgrounded run that hits a recoverable error still shows it when
-        // the user switches back (#105).
-        if (evt.type === 'error') {
-          // Presentation lives in `errorBubble` so this and `replayMessages`
-          // cannot diverge — the bubble must look identical whether it was
-          // painted from the live stream or rebuilt after a reload.
-          const errorMsg: Message = {
-            id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            timestamp: new Date(),
-            patternId: evt.patternId,
-            ...errorBubble(evt.data as ErrorEventData),
-          }
-          props.setMessages(runSessionId, (prev) => [...prev, errorMsg])
-        }
-
-        // Panel state is per-session (SA-H8), so events go to the run's own
-        // buffer no matter which thread is on screen. This used to `continue`
-        // here for a backgrounded run — which both lost those events from the
-        // panels and, because the hydration effect skips a session that is
-        // still processing, left the previous thread's events in place when the
-        // user came back.
-        if (props.onEventsUpdate) {
-          props.onEventsUpdate(runSessionId, [evt])
-        }
-
-        // Reactive graph update on tool_result events
-        if (evt.type === 'tool_result' && props.onGraphUpdate) {
-          const graphElements = extractGraphElements([evt])
-          if (graphElements.length > 0) {
-            props.onGraphUpdate(runSessionId, graphElements)
-          }
-        }
-      }
-
-      // Mark progress complete — bar fills, fades, and unmounts.
-      progress.finish()
-
-      // Update the event-count cursor and emit the final context into this
-      // run's own session (SA-H8) — no longer gated on it being on screen.
-      if (finalResult?.context) {
-        prevEventCount = finalResult.context.events?.length ?? 0
-        props.onContextUpdate?.(runSessionId, finalResult.context as UnifiedContext)
-      }
-
-      // Build assistant message from final result — only if there's a real
-      // response (not an error status with empty/stale response). Filed into
-      // the run's own buffer, so a turn that lands while the user is reading
-      // another chat is waiting for them when they switch back (#105).
-      const finalResponse = finalResult?.response ?? ''
-      if (finalResult?.status === 'error') outcome = 'error'
-      if (finalResponse && finalResult?.status !== 'error') {
-        const assistantMessage: Message = {
-          id: Date.now().toString(),
-          role: 'assistant',
-          content: finalResponse,
+      // A torn-down stream is either the user's Stop or page teardown, and the
+      // two want different transcripts: teardown stays silent, a deliberate
+      // cancel says what actually happens next.
+      if (aborted && stoppedSessions.has(runSessionId)) {
+        registry.appendMessage(runSessionId, {
+          id: `stop-${Date.now()}`,
+          role: 'warning',
+          content: 'Stopped watching this response.',
+          hint: 'The agent finishes server-side — reopen this chat to see the result.',
           timestamp: new Date(),
-          // Retriever citations for this turn (inline superscripts + footer).
-          references: extractReferences(finalResult?.context?.events ?? []),
-          toolCall:
-            finalResult?.status === 'paused' &&
-            (finalResult.data as Record<string, unknown>).pendingAction
-              ? {
-                  type: 'neo4j',
-                  status: 'pending',
-                  tool: (
-                    (finalResult.data as Record<string, unknown>).pendingAction as {
-                      action: string
-                    }
-                  ).action,
-                  explanation: (
-                    (finalResult.data as Record<string, unknown>).pendingAction as {
-                      reason: string
-                    }
-                  ).reason,
-                  isReadOnly: false,
-                }
-              : undefined,
-        }
-        props.setMessages(runSessionId, (prev) => [...prev, assistantMessage])
+        })
       }
-    } catch (error) {
-      // Suppress the noisy AbortError that fires on page-unload teardown.
-      aborted = error instanceof DOMException && error.name === 'AbortError'
-      if (aborted && stoppedSessions.delete(runSessionId)) {
-        // A deliberate Stop, not teardown. The server-side chain keeps running
-        // and its result is persisted, so say exactly that rather than
-        // pretending the turn never happened.
-        props.setMessages(runSessionId, (prev) => [
-          ...prev,
-          {
-            id: `stop-${Date.now()}`,
-            role: 'warning',
-            content: 'Stopped watching this response.',
-            hint: 'The agent finishes server-side — reopen this chat to see the result.',
-            timestamp: new Date(),
-          },
-        ])
-      }
-      if (!aborted) {
-        outcome = 'error'
-        console.error('Error processing message:', error)
-        const errorMessage: Message = {
-          id: Date.now().toString(),
-          role: 'error',
-          content: error instanceof Error ? error.message : 'Unknown error',
-          timestamp: new Date(),
-        }
-        props.setMessages(runSessionId, (prev) => [...prev, errorMessage])
-      }
-      progress.finish()
+      if (!aborted) props.onRunSettled?.(runSessionId, outcome)
     } finally {
-      // Belt and braces: if a Stop raced the stream to completion no AbortError
-      // was thrown, and a stale flag here would put a spurious "stopped" bubble
+      // Belt and braces: if a Stop raced the stream to completion no abort was
+      // reported, and a stale flag here would put a spurious "stopped" bubble
       // on the NEXT teardown of this session.
       stoppedSessions.delete(runSessionId)
-      props.updateRunState(runSessionId, { isProcessing: false, runningTool: null })
-      props.unregisterAbortController(runSessionId)
-      if (!aborted) props.onRunSettled?.(runSessionId, outcome)
+      registry.updateRunState(runSessionId, { isProcessing: false, runningTool: null })
+      registry.unregisterAbort(runSessionId)
     }
   }
 
   const handleApproveWrite = async (messageId: string) => {
-    props.updateRunState(props.sessionId, { isProcessing: true })
+    registry.updateRunState(props.sessionId, { isProcessing: true })
 
     try {
       // Execute the approved operation
       const result = await approveAction(props.sessionId)
 
-      const sid = props.sessionId
-
-      // Extract graph elements from result and update visualization
-      const graphElements = extractGraphFromResult(result)
-      if (graphElements.length > 0 && props.onGraphUpdate) {
-        props.onGraphUpdate(sid, graphElements)
-      }
-
-      // Emit only new context events (delta since last turn)
-      if (result.context?.events && props.onEventsUpdate) {
-        const newEvents = result.context.events.slice(prevEventCount)
-        prevEventCount = result.context.events.length
-        if (newEvents.length > 0) props.onEventsUpdate(sid, newEvents)
-      }
-      if (result.context && props.onContextUpdate) {
-        props.onContextUpdate(sid, result.context)
-      }
+      // Same fan-out as the streaming turn, through the same sink — only the
+      // event slicing differs, because an approval resumes an existing context.
+      prevEventCount = applyApprovalResult(result, prevEventCount, sinkFor(props.sessionId))
 
       // Update the message with executed tool call
       setMessages(
@@ -623,7 +455,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       }
       setMessages([...messages(), errorMessage])
     } finally {
-      props.updateRunState(props.sessionId, { isProcessing: false })
+      registry.updateRunState(props.sessionId, { isProcessing: false })
     }
   }
 
@@ -727,7 +559,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
                 : blockedMessage()
           }
           isProcessing={isProcessing()}
-          onStop={props.abortSession ? handleStop : undefined}
+          onStop={handleStop}
           focusToken={props.focusInputToken}
         />
       </div>

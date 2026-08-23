@@ -335,3 +335,84 @@ describe('content_sanitized commit semantics', () => {
     expect(ctx.events.map((e) => e.type)).not.toContain('tool_call')
   })
 })
+
+// ============================================================================
+// Declared-namespace validation (sf-H5)
+// ============================================================================
+
+// `isUntrusted` asks `namespaces.has(inferServer(tool))`, so only the strings
+// `inferServer` PRODUCES can ever match. A catalog/server name — `web_search`,
+// `rust-mcp-filesystem`, `database-server` — type-checks, reads like
+// protection, and sanitizes nothing at all. A security control must not have a
+// silent no-op mode.
+describe('unmatchable declared namespaces warn (sf-H5)', () => {
+  async function load() {
+    const mod = await import('../../../lib/harness-patterns/patterns/withInjectionGuard.server')
+    mod.__resetInjectionGuardNamespaceWarnings()
+    return mod
+  }
+
+  it('warns for a catalog/server name used where a namespace was expected', async () => {
+    const { createInjectionGuard } = await load()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const guard = createInjectionGuard({ namespaces: ['web_search'] }, () => {}, 'p')
+
+    expect(warn).toHaveBeenCalledTimes(1)
+    // The warning names the namespace that WOULD have worked.
+    expect(warn.mock.calls[0][0]).toContain("'web_search'")
+    expect(warn.mock.calls[0][0]).toContain("'web'")
+    // And the demonstration of why it matters: the web tool is not untrusted.
+    expect(guard.isUntrusted('search')).toBe(false)
+    warn.mockRestore()
+  })
+
+  it.each(['rust-mcp-filesystem', 'database-server'])(
+    'warns for %s (the other two NAMESPACE_TO_SERVER renames)',
+    async (ns) => {
+      const { createInjectionGuard } = await load()
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      createInjectionGuard({ namespaces: [ns] }, () => {}, 'p')
+      expect(warn).toHaveBeenCalledTimes(1)
+      warn.mockRestore()
+    },
+  )
+
+  it('stays silent for every namespace the real agents declare', async () => {
+    const { createInjectionGuard } = await load()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    createInjectionGuard(
+      { namespaces: ['web', 'github', 'context7', 'retriever', 'graph', 'filesystem', 'neo4j'] },
+      () => {},
+      'p',
+    )
+
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('warns once per namespace, not once per pattern build', async () => {
+    const { createInjectionGuard } = await load()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // The guard is rebuilt on every turn; the warning must not become noise.
+    for (let i = 0; i < 5; i++) {
+      createInjectionGuard({ namespaces: ['web_search'] }, () => {}, 'p')
+    }
+
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
+  it('leaves explicit `tools` entries alone — they are matched by exact name', async () => {
+    const { createInjectionGuard } = await load()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const guard = createInjectionGuard({ tools: ['web_search'] }, () => {}, 'p')
+
+    expect(warn).not.toHaveBeenCalled()
+    expect(guard.isUntrusted('web_search')).toBe(true)
+    warn.mockRestore()
+  })
+})

@@ -1,11 +1,11 @@
 /**
- * ThemeSwitcher — the `dark` class on <html> and the persisted `theme` key.
+ * ThemeSwitcher — the classes on <html> and the persisted `theme` key.
  *
  * The switcher is the only thing in the app that writes `localStorage.theme`,
- * and UnoCSS's dark variant keys off `documentElement.classList`. Both are the
- * observable contract, so that is what is asserted here: what the button does
- * to the document, and how a stored preference (or the OS one) is honoured on
- * first mount.
+ * and the palette in `uno.config.ts` keys off `documentElement.classList`.
+ * Both are the observable contract, so that is what is asserted here: what the
+ * button does to the document, and how a stored preference is honoured on
+ * first mount. The rule itself lives in `lib/theme.ts` and is tested there.
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { installDomStubs } from './dom-stubs'
@@ -13,11 +13,12 @@ import { installDomStubs } from './dom-stubs'
 const { render } = await import('@solidjs/testing-library')
 const { ThemeSwitcher } = await import('../../../components/ark-ui/ThemeSwitcher')
 
-const isDark = () => document.documentElement.classList.contains('dark')
+const classes = () => document.documentElement.classList
+const isDark = () => classes().contains('dark')
 
 beforeEach(() => {
   localStorage.clear()
-  document.documentElement.classList.remove('dark')
+  classes().remove('dark', 'light')
   installDomStubs({ prefersDark: true })
 })
 
@@ -27,6 +28,7 @@ describe('ThemeSwitcher', () => {
     render(() => <ThemeSwitcher />)
 
     expect(isDark()).toBe(false)
+    expect(classes().contains('light')).toBe(true)
     expect(localStorage.getItem('theme')).toBe('light')
   })
 
@@ -35,46 +37,51 @@ describe('ThemeSwitcher', () => {
     render(() => <ThemeSwitcher />)
 
     expect(isDark()).toBe(true)
+    expect(classes().contains('light')).toBe(false)
   })
 
-  it('falls back to the OS preference when nothing is stored', () => {
+  it('defaults to dark when nothing is stored, whatever the OS prefers', () => {
+    // Light is opt-in while only some screens are on the themed tokens — see
+    // the header of lib/theme.ts.
     installDomStubs({ prefersDark: false })
     render(() => <ThemeSwitcher />)
 
-    expect(isDark()).toBe(false)
-    // First mount also writes the resolved theme through, so a later visit
-    // no longer depends on the OS setting.
-    expect(localStorage.getItem('theme')).toBe('light')
+    expect(isDark()).toBe(true)
+    // First mount also writes the resolved theme through, so a later visit no
+    // longer depends on the default.
+    expect(localStorage.getItem('theme')).toBe('dark')
   })
 
-  it('toggles the document class and persists both directions', () => {
+  it('toggles both document classes and persists both directions', () => {
     localStorage.setItem('theme', 'dark')
     const { container } = render(() => <ThemeSwitcher />)
     const button = container.querySelector('button')!
 
     expect(button.getAttribute('title')).toBe('Switch to light mode')
+    expect(button.getAttribute('aria-label')).toBe('Switch to light mode')
 
     button.click()
     expect(isDark()).toBe(false)
+    expect(classes().contains('light')).toBe(true)
     expect(localStorage.getItem('theme')).toBe('light')
     expect(button.getAttribute('title')).toBe('Switch to dark mode')
+    expect(button.getAttribute('aria-pressed')).toBe('true')
 
     button.click()
     expect(isDark()).toBe(true)
+    expect(classes().contains('light')).toBe(false)
     expect(localStorage.getItem('theme')).toBe('dark')
   })
 
-  it('swaps the sun/moon glyph with the mode', () => {
+  it('swaps the material-symbols glyph with the mode', () => {
     localStorage.setItem('theme', 'dark')
     const { container } = render(() => <ThemeSwitcher />)
     const button = container.querySelector('button')!
+    const glyph = () => container.querySelector('span[aria-hidden="true"]')!.className
 
-    // The sun path is drawn while dark (it offers the light mode).
-    const darkPath = container.querySelector('svg path')!.getAttribute('d')!
+    // The sun is drawn while dark — the glyph offers the mode you would get.
+    expect(glyph()).toBe('i-material-symbols-light-mode')
     button.click()
-    const lightPath = container.querySelector('svg path')!.getAttribute('d')!
-
-    expect(darkPath).not.toBe(lightPath)
-    expect(container.querySelector('svg')!.getAttribute('style')).toContain('#4f46e5')
+    expect(glyph()).toBe('i-material-symbols-dark-mode')
   })
 })

@@ -54,18 +54,20 @@ Every utility goes in an attribute. Never `class=`.
    necessity. Do not introduce new ones without a preflight rule to back them.
 
 Anything else in a `class=` is a violation, and the fix is mechanical. Measured
-on this branch, the live violations are `Counter.tsx`, `AuthProvider.tsx`,
-`AgentSelector.tsx:99`, `ChatSidebar.tsx:939`, `ChatInput.tsx:59` and
-`LiveProgressBar.tsx:164`. Migrating them is not this skill's job — not writing
-new ones is.
+on this branch, the live violations are `Counter.tsx`, `AgentSelector.tsx:99`,
+`ChatSidebar.tsx:939`, `ChatInput.tsx:59` and `LiveProgressBar.tsx:164`.
+(`AuthProvider.tsx` and `routes/auth/*` were on that list until #226 B8;
+`src/__tests__/routes/auth-pages.test.tsx` now keeps them off it.) Migrating
+the rest is not this skill's job — not writing new ones is.
 
 ### Three traps, verified against this config
 
-| Trap                                                                                     | Wrong                                             | Right                                     |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------- |
-| `color` is a real HTML attribute and collides with attributify                           | `color="cyan-400"`                                | fold it into `text`: `text="xs cyan-400"` |
-| `opacity` does **not** resolve as an attributify attribute; the short alias does         | `opacity="0 group-hover:100"` → emits **nothing** | `op="0 group-hover:100"`                  |
-| Shortcuts work as **valueless** attributes — this is what makes recipe R1 below possible | `class="cyber-button"`                            | `<button cyber-button p="2">`             |
+| Trap                                                                                                                                                                                                   | Wrong                                             | Right                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- | ----------------------------------------- |
+| `color` is a real HTML attribute and collides with attributify                                                                                                                                         | `color="cyan-400"`                                | fold it into `text`: `text="xs cyan-400"` |
+| `opacity` does **not** resolve as an attributify attribute; the short alias does                                                                                                                       | `opacity="0 group-hover:100"` → emits **nothing** | `op="0 group-hover:100"`                  |
+| A valueless shortcut works on an intrinsic element but **not** on a component — the JSX transformer only rewrites the former, so Solid renders the boolean as `="true"` and `[cyber-button=""]` misses | `<A cyber-button>` → unstyled link                | `<A cyber-button="">`                     |
+| Shortcuts work as **valueless** attributes — this is what makes recipe R1 below possible                                                                                                               | `class="cyber-button"`                            | `<button cyber-button p="2">`             |
 
 The `opacity` one is the expensive kind of bug: no error, no CSS, an element
 that is simply always visible. If a utility silently emits nothing, try the
@@ -82,19 +84,58 @@ explains why both are required.
 
 ---
 
-## 2. Dark only, in practice
+## 2. Two palettes, one dark by default
 
-There is one palette and it is dark. `theme.colors.dark.*` names the surfaces,
-the preflight CSS hard-codes `#0a0a0f` and `rgba(255,255,255,0.06)` hairlines,
-and every component is tuned for that ground.
+There are two colour families in `uno.config.ts` and the difference between
+them is the whole theming story:
 
-There is a `ThemeSwitcher` component, but no light token set exists behind it.
-**Do not write `dark:` variants and do not add light-mode branches** — they are
-untestable today and they double the surface of every recipe. If light mode is
-ever wanted it is a design project, not a per-component flag.
+| Family                                                           | Shape         | Theme-aware?                            |
+| ---------------------------------------------------------------- | ------------- | --------------------------------------- |
+| `dark-bg-*`, `dark-text-*`, `dark-border-*`, `neon-*`, `cyber-*` | fixed hexes   | **no** — the same colour in either mode |
+| `ui-bg-*`, `ui-text-*`, `ui-border-*`, `ui-accent`, `ui-danger`  | `var(--ui-…)` | **yes**                                 |
 
-Practical consequence: contrast is checked against `#0a0a0f` / `#12121a` /
-`#1a1a24`, never against white.
+`ui-*` names **the same roles** as `dark-*`, and its dark values are the
+`dark-*` hexes byte for byte (`ui-accent`'s is `neon-cyan`). So a component
+joins the theme by a rename — `bg="dark-bg-secondary"` →
+`bg="ui-bg-secondary"` — with no visual change in dark and no second branch to
+maintain. `src/__tests__/lib/uno-theme.test.ts` asserts that equality, so the
+rename stays safe.
+
+### How the switch works (#226 B8)
+
+1. `uno.config.ts`'s **first preflight** declares every `--ui-*` variable on
+   `:root` (dark) and redefines it on `:root.light`. That is the entire
+   palette; nothing else in the pipeline knows about themes.
+2. `src/lib/theme.ts` owns which class `<html>` carries. It applies **both**
+   `dark` (UnoCSS's own dark-variant hook) and `light` (what the override keys
+   off). `light` is a positive marker on purpose: a document with neither
+   class — the server-rendered one — is dark, so there is no flash.
+3. `THEME_BOOT_SCRIPT` from the same module is inlined in the head by
+   `entry-server.tsx` and applies the stored choice before first paint.
+4. `ThemeSwitcher` in `Nav` is the only writer of `localStorage.theme`.
+
+**Dark is the default and the OS `prefers-color-scheme` is deliberately
+ignored** — only the auth pages and `Nav` are on `ui-*` so far, so honouring a
+light OS setting would hand an unasked-for light sign-in page to someone whose
+app is still dark. `resolveTheme()` is the one place to change that once the
+app's screens have migrated.
+
+### Still do not write `dark:` variants
+
+The rule that produced the old "dark only" advice survives, for the same
+reason: a per-component light branch doubles the surface of every recipe.
+**Flip the token, not the component.** If a colour needs to differ between
+modes, it needs a `ui-*` token — add the variable to both blocks of the
+palette preflight, not a `dark:` utility to the component.
+
+Practical consequence for contrast: a `dark-*`/`neon-*` surface is checked
+against `#0a0a0f` / `#12121a` / `#1a1a24` only. A `ui-*` surface has to clear
+4.5:1 in **both** palettes — that is why `ui-accent` is not `#00ffff` in light
+mode.
+
+Migrated so far: `Nav`, `AuthProvider`'s loading screen, `routes/auth/*`,
+`routes/[...404]`. Everything else is still fixed dark, by design — retheming
+the app is its own piece of work.
 
 ---
 
@@ -160,8 +201,10 @@ per-entity; do not invent a second one.
 
 > ⚠️ **This table is a proposal awaiting one-time confirmation from the repo
 > owner.** It was derived by measuring which hex is spent on which role across
-> `app/src`; it is not derivable from `uno.config.ts`, because **none of these
-> semantic roles has a token today**. Until it is confirmed, treat it as
+> `app/src`; it is not derivable from `uno.config.ts`. #226 B8 has since added
+> exactly two of these roles as theme-aware tokens — `ui-accent` (the brand
+> cyan) and `ui-danger` (error) — because the themed surfaces needed them.
+> **The rest of the table still has no token.** Until it is confirmed, treat it as
 > documentation of current practice, not as a rule to enforce — and do not add
 > tokens to `uno.config.ts` on its authority.
 
@@ -329,7 +372,9 @@ chat HTML.
   as a work list this skill executes.
 - It does not add tokens. The role table in §4 is a proposal; adding
   `theme.colors` entries needs the confirmation first.
-- It does not cover light mode, native mobile, or any surface outside `app/src`.
+- It does not cover native mobile or any surface outside `app/src`. It does
+  cover the light palette (§2), but only the mechanism — retheming the
+  unmigrated screens is not this skill's work list either.
 
 Related repo documentation: [`docs/UI_ARCHITECTURE.md`](../../../docs/UI_ARCHITECTURE.md)
 for component structure and data flow.

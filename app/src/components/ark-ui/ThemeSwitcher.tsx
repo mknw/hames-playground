@@ -1,38 +1,38 @@
-import { createSignal, createEffect, onMount } from 'solid-js'
+import { createSignal, onMount } from 'solid-js'
+import { applyTheme, resolveTheme, type Theme } from '~/lib/theme'
 
+/**
+ * The light/dark control (#226 B8). The palette it switches lives in
+ * `uno.config.ts` as `--ui-*` variables and the switch rule in `lib/theme.ts`
+ * — this component is only the button.
+ *
+ * Dark is rendered on the server and applied by the boot script in
+ * `entry-server.tsx`, so the initial signal is dark and `onMount` only
+ * re-reads storage to stay in step after hydration. There is no `createEffect`
+ * writing the document: the toggle handler is the single write path, so the
+ * component cannot fight the boot script for the class.
+ */
 export const ThemeSwitcher = () => {
-  const [isDark, setIsDark] = createSignal(true) // Default to dark theme
+  const [theme, setTheme] = createSignal<Theme>('dark')
 
-  // Initialize theme from localStorage or default to dark
   onMount(() => {
-    const savedTheme = localStorage.getItem('theme')
-    const prefersDark = savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
-    setIsDark(prefersDark)
-    updateTheme(prefersDark)
+    const resolved = resolveTheme()
+    setTheme(resolved)
+    applyTheme(resolved)
   })
 
-  // Update theme when toggled
-  createEffect(() => {
-    updateTheme(isDark())
-  })
-
-  const updateTheme = (dark: boolean) => {
-    if (dark) {
-      document.documentElement.classList.add('dark')
-      localStorage.setItem('theme', 'dark')
-    } else {
-      document.documentElement.classList.remove('dark')
-      localStorage.setItem('theme', 'light')
-    }
+  const toggle = () => {
+    const next: Theme = theme() === 'dark' ? 'light' : 'dark'
+    setTheme(next)
+    applyTheme(next)
   }
 
-  const toggleTheme = () => {
-    setIsDark(!isDark())
-  }
+  const isDark = () => theme() === 'dark'
+  const label = () => (isDark() ? 'Switch to light mode' : 'Switch to dark mode')
 
   return (
     <button
-      onClick={toggleTheme}
+      onClick={toggle}
       flex="~"
       items="center"
       justify="center"
@@ -43,41 +43,18 @@ export const ThemeSwitcher = () => {
       border="1 cyber-700/50"
       transition="all"
       cursor="pointer"
-      title={isDark() ? 'Switch to light mode' : 'Switch to dark mode'}
+      title={label()}
+      aria-label={label()}
+      aria-pressed={!isDark()}
     >
-      {isDark() ? (
-        <svg
-          width="20"
-          height="20"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          style={{"color":"#00ffff"}}
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
-          />
-        </svg>
-      ) : (
-        <svg
-          width="20"
-          height="20"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          style={{"color":"#4f46e5"}}
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
-          />
-        </svg>
-      )}
+      {/* The glyph offers the mode you would get, not the one you are in. */}
+      <span
+        class={isDark() ? 'i-material-symbols-light-mode' : 'i-material-symbols-dark-mode'}
+        w="5"
+        h="5"
+        text="ui-accent"
+        aria-hidden="true"
+      />
     </button>
   )
 }

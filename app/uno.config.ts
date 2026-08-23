@@ -97,6 +97,36 @@ export default defineConfig({
           tertiary: '#71717a',
         },
       },
+      // Theme-aware semantic palette (#226 B8). These are the SAME roles as
+      // `dark.*` above, but each value is a CSS variable rather than a hex, so
+      // the palette flips at the `:root` level (see the first preflight below)
+      // and a component never needs a `dark:` / light branch of its own.
+      //
+      // The dark values of these variables are byte-identical to the `dark.*`
+      // hexes, and `ui-accent`'s is `neon-cyan` — so migrating a component is
+      // a rename (`dark-bg-primary` → `ui-bg-primary`) with no visual change.
+      // `uno-theme.test.ts` asserts that equality so it cannot silently drift.
+      ui: {
+        bg: {
+          primary: 'var(--ui-bg-primary)',
+          secondary: 'var(--ui-bg-secondary)',
+          tertiary: 'var(--ui-bg-tertiary)',
+          hover: 'var(--ui-bg-hover)',
+        },
+        border: {
+          primary: 'var(--ui-border-primary)',
+          secondary: 'var(--ui-border-secondary)',
+          accent: 'var(--ui-border-accent)',
+        },
+        text: {
+          primary: 'var(--ui-text-primary)',
+          secondary: 'var(--ui-text-secondary)',
+          tertiary: 'var(--ui-text-tertiary)',
+        },
+        // Brand accent and the one status colour the themed surfaces need.
+        accent: 'var(--ui-accent)',
+        danger: 'var(--ui-danger)',
+      },
     },
   },
   shortcuts: {
@@ -106,8 +136,66 @@ export default defineConfig({
     'cyber-button':
       'bg-cyber-700 hover:bg-cyber-600 text-white font-medium px-4 py-2 rounded-md transition-all duration-200 hover:shadow-[0_0_15px_rgba(79,70,229,0.5)]',
   },
-  // Custom CSS for markdown rendering
   preflights: [
+    // Theme palette (#226 B8). `<html>` carries `dark` (UnoCSS's own dark
+    // variant hook) or `light`; nothing at all means dark, so a server-
+    // rendered page paints dark before hydration and never flashes. The
+    // `light` class is a POSITIVE marker for exactly that reason — keying
+    // light off `:root:not(.dark)` would make the pre-hydration document
+    // light. `:root.light` also outranks `:root` on specificity, so the
+    // override wins wherever UnoCSS chooses to emit the two blocks.
+    //
+    // Only these variables are theme-aware. `dark-*`, `neon-*` and `cyber-*`
+    // are still fixed hexes, so the rest of the app is unchanged in either
+    // mode; a screen joins the theme by moving to the `ui-*` tokens.
+    {
+      getCSS: () => `
+        /* The document's own ground. Nothing painted it before, so any gap
+           a page left uncovered fell through to the browser's white — visible
+           on the 404, and on overscroll. Dark is the app's ground either way,
+           so this cannot change a surface that was already covered. */
+        html {
+          background-color: var(--ui-bg-primary);
+        }
+        :root {
+          --ui-bg-primary: #0a0a0f;
+          --ui-bg-secondary: #12121a;
+          --ui-bg-tertiary: #1a1a24;
+          --ui-bg-hover: #22222f;
+          --ui-border-primary: #2a2a3a;
+          --ui-border-secondary: #3a3a4a;
+          --ui-border-accent: #4a4a5a;
+          --ui-text-primary: #e4e4e7;
+          --ui-text-secondary: #a1a1aa;
+          --ui-text-tertiary: #71717a;
+          --ui-accent: #00ffff;
+          --ui-danger: #f87171;
+        }
+        :root.light {
+          /* Contrast-checked against the light grounds below: every text
+             token clears 4.5:1 on both #ffffff and #f5f6f8. Cyan and red
+             are darkened because the neon versions are unreadable on white. */
+          --ui-bg-primary: #f5f6f8;
+          --ui-bg-secondary: #ffffff;
+          --ui-bg-tertiary: #eceef2;
+          --ui-bg-hover: #e2e5ea;
+          --ui-border-primary: #d9dde4;
+          --ui-border-secondary: #c3c9d2;
+          --ui-border-accent: #a7aeba;
+          --ui-text-primary: #14161a;
+          --ui-text-secondary: #4a4f57;
+          --ui-text-tertiary: #6b7079;
+          --ui-accent: #0e7490;
+          --ui-danger: #b91c1c;
+          /* Native controls, scrollbars and form widgets follow the theme.
+             Deliberately not declared on the dark default: the dark app is
+             on the browser default today and this change keeps it there. */
+          color-scheme: light;
+        }
+      `,
+    },
+    // Hand-written CSS classes: markdown rendering, chat affordances, the
+    // sidebar animations. Listed as exceptions in the kg-dtalk-ui skill.
     {
       getCSS: () => `
         .prose-chat {

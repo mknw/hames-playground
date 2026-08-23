@@ -252,7 +252,9 @@ UnoCSS attributify mode — always use attribute syntax:
 <button bg="cyan-600/10 hover:cyan-600/20" text="xs cyan-400">
 ```
 
-Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secondary,tertiary}`, `dark-border-{primary,secondary}`, `neon-{cyan,magenta,purple}`, `cyber-{600,700,800}`.
+Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secondary,tertiary}`, `dark-border-{primary,secondary}`, `neon-{cyan,magenta,purple}`, `cyber-{600,700,800}` — all fixed hexes.
+
+**Theming (#226 B8):** a second family, `ui-bg-*` / `ui-text-*` / `ui-border-*` / `ui-accent` / `ui-danger`, names the same roles but resolves to `var(--ui-…)`. `uno.config.ts`'s first preflight declares those variables on `:root` (dark, byte-identical to the `dark-*` hexes) and redefines them on `:root.light`; `src/lib/theme.ts` decides which class `<html>` carries and exports the `THEME_BOOT_SCRIPT` that `entry-server.tsx` inlines to avoid a flash. Dark is the default and the OS preference is ignored on purpose — light is opt-in via `ThemeSwitcher` while most screens are still fixed dark. **A component joins the theme by renaming `dark-*` → `ui-*`, never by adding a `dark:` variant.** Migrated so far: `Nav`, `AuthProvider`'s loading screen, `routes/auth/*`, `routes/[...404]`.
 
 **Icons** — `material-symbols` (+ `material-symbols-light`) is **the** icon set; they are the only two collections registered in `presetIcons` (`app/uno.config.ts`):
 

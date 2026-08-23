@@ -271,6 +271,12 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
         { error: msg, severity: resolved.errorSeverity, hint: getErrorHint(msg) } as ErrorEventData,
         true,
       )
+      // `scope.data` survives the turn boundary, so returning it untouched
+      // would leave the PREVIOUS turn's matches for the synthesizer to cite as
+      // if they answered this question. Mirror the no-query/no-backend early
+      // return above and hand downstream an honest empty result. (No
+      // `emitMatches` here: the error event is the report for this path.)
+      scope.data = { ...scope.data, matches: [] }
       return scope
     }
   }

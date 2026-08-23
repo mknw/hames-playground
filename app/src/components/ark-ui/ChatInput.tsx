@@ -154,7 +154,12 @@ export const ChatInput = (props: ChatInputProps) => {
             transition="all"
             flex="~ items-center gap-1.5"
           >
-            <span class="i-material-symbols-stop-circle-outline" w="3.5" h="3.5" aria-hidden="true" />
+            <span
+              class="i-material-symbols-stop-circle-outline"
+              w="3.5"
+              h="3.5"
+              aria-hidden="true"
+            />
             Stop
           </button>
         </Show>

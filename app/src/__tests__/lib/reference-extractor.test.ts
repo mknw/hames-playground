@@ -12,11 +12,21 @@ function retrieverResult(references: RetrievalReference[]): ContextEvent {
     type: 'tool_result',
     ts: 1,
     patternId: 'retriever',
-    data: { tool: 'retriever', success: true, result: { query: 'q', backends: ['redis'], matches: [], references } },
+    data: {
+      tool: 'retriever',
+      success: true,
+      result: { query: 'q', backends: ['redis'], matches: [], references },
+    },
   } as unknown as ContextEvent
 }
 
-const ref = (docId: string, source: string, startOffset: number, endOffset: number, chunkIndex = 0): RetrievalReference => ({
+const ref = (
+  docId: string,
+  source: string,
+  startOffset: number,
+  endOffset: number,
+  chunkIndex = 0,
+): RetrievalReference => ({
   source,
   docId,
   chunkIndex,
@@ -28,7 +38,12 @@ describe('extractReferences', () => {
   it('returns [] when there is no retriever tool_result', () => {
     const events = [
       { type: 'user_message', ts: 1, patternId: 'h', data: { content: 'hi' } },
-      { type: 'tool_result', ts: 2, patternId: 'neo4j-query', data: { tool: 'read_neo4j_cypher', success: true, result: {} } },
+      {
+        type: 'tool_result',
+        ts: 2,
+        patternId: 'neo4j-query',
+        data: { tool: 'read_neo4j_cypher', success: true, result: {} },
+      },
     ] as unknown as ContextEvent[]
     expect(extractReferences(events)).toEqual([])
   })
@@ -86,13 +101,23 @@ describe('extractReferences', () => {
 
   it('ignores non-retriever tool_results', () => {
     const events = [
-      { type: 'tool_result', ts: 1, patternId: 'web', data: { tool: 'search', success: true, result: { hits: [] } } },
+      {
+        type: 'tool_result',
+        ts: 1,
+        patternId: 'web',
+        data: { tool: 'search', success: true, result: { hits: [] } },
+      },
     ] as unknown as ContextEvent[]
     expect(extractReferences(events)).toEqual([])
   })
 
   it('tolerates a retriever result with no references field', () => {
-    const bad = { type: 'tool_result', ts: 1, patternId: 'retriever', data: { tool: 'retriever', success: true, result: { query: 'q' } } } as unknown as ContextEvent
+    const bad = {
+      type: 'tool_result',
+      ts: 1,
+      patternId: 'retriever',
+      data: { tool: 'retriever', success: true, result: { query: 'q' } },
+    } as unknown as ContextEvent
     expect(extractReferences([bad])).toEqual([])
   })
 })

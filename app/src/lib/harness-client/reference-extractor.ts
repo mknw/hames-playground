@@ -55,10 +55,7 @@ export function extractReferences(events: ContextEvent[]): RetrievalReference[] 
 }
 
 /** References for a single document, sorted by position in the source text. */
-export function referencesForDoc(
-  events: ContextEvent[],
-  docId: string,
-): RetrievalReference[] {
+export function referencesForDoc(events: ContextEvent[], docId: string): RetrievalReference[] {
   return extractReferences(events)
     .filter((r) => r.docId === docId)
     .sort((a, b) => a.startOffset - b.startOffset)

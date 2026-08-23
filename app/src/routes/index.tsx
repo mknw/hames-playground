@@ -1,5 +1,12 @@
 import { Splitter } from '@ark-ui/solid/splitter'
-import { createSignal, createMemo, createResource, createEffect, onCleanup, onMount } from 'solid-js'
+import {
+  createSignal,
+  createMemo,
+  createResource,
+  createEffect,
+  onCleanup,
+  onMount,
+} from 'solid-js'
 import { ChatInterface } from '~/components/ark-ui/ChatInterface'
 import type { Message } from '~/components/ark-ui/ChatMessages'
 import { ChatSidebar, mergeThreadsWithPlaceholder } from '~/components/ark-ui/ChatSidebar'
@@ -8,10 +15,17 @@ import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/ha
 import { executeCypherWrite } from '~/lib/neo4j/write-action'
 import { mergeGraphElements } from '~/lib/graph-merge'
 import { isEdgeElement, isNodeElement } from '~/lib/harness-client/graph-extractor'
-import { listConversations, deleteConversationsBulk, type OpenReferenceTarget } from '~/lib/harness-client'
+import {
+  listConversations,
+  deleteConversationsBulk,
+  type OpenReferenceTarget,
+} from '~/lib/harness-client'
 import { newSessionId } from '~/lib/session-id'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
-import { createChainProgress, type ChainProgressController } from '~/components/ark-ui/useChainProgress'
+import {
+  createChainProgress,
+  type ChainProgressController,
+} from '~/components/ark-ui/useChainProgress'
 import {
   DEFAULT_RUN_STATE,
   COMPLETION_FLASH_MS,
@@ -106,13 +120,16 @@ export default function Home() {
     if (!sid) return
     try {
       const res = await fetch(`/api/stash/upload?sessionId=${encodeURIComponent(sid)}`)
-      const body = res.ok ? ((await res.json()) as { documents?: Array<{ ingestStatus?: string }> }) : {}
+      const body = res.ok
+        ? ((await res.json()) as { documents?: Array<{ ingestStatus?: string }> })
+        : {}
       if (sid !== selectedSessionId()) return // session switched mid-poll
       const pending = (body.documents ?? []).some((d) => d.ingestStatus === 'pending')
       setEmbeddingSources(pending)
       embedPolls += 1
       // Keep watching while pending (cap ~6 min so a stuck ingest can't block forever).
-      if (pending && embedPolls < 120) embedPollTimer = setTimeout(() => void pollEmbedding(sid), 3000)
+      if (pending && embedPolls < 120)
+        embedPollTimer = setTimeout(() => void pollEmbedding(sid), 3000)
     } catch {
       setEmbeddingSources(false)
     }
@@ -148,19 +165,21 @@ export default function Home() {
   // nodes are re-attached, not recreated). `latest` returns the stale list
   // without touching Suspense once a first value exists; the initial page
   // load still suspends as before.
-  const [threads, { refetch: refetchThreads, mutate: mutateThreads }] = createResource(() => listConversations())
+  const [threads, { refetch: refetchThreads, mutate: mutateThreads }] = createResource(() =>
+    listConversations(),
+  )
 
   // Push-driven title update from the SSE stream — the server emits a
   // `title_updated` event after the LLM title generator resolves. We splice
   // the new title into the threads cache; no refetch needed.
   const handleTitleUpdated = (sid: string, title: string) => {
-    mutateThreads(list => (list ?? []).map(t => (t.id === sid ? { ...t, title } : t)))
+    mutateThreads((list) => (list ?? []).map((t) => (t.id === sid ? { ...t, title } : t)))
   }
 
   // Promotion: flip the row's kind in-place so it moves from Actions to Chats.
   const handlePromoted = (sid: string) => {
-    mutateThreads(list =>
-      (list ?? []).map(t => (t.id === sid ? { ...t, kind: 'conversation' as const } : t)),
+    mutateThreads((list) =>
+      (list ?? []).map((t) => (t.id === sid ? { ...t, kind: 'conversation' as const } : t)),
     )
   }
 
@@ -170,7 +189,7 @@ export default function Home() {
   // a running action exists, and clears it as soon as none remain.
   createEffect(() => {
     const hasRunningAction = (threads.latest ?? []).some(
-      t => t.kind === 'action' && t.status === 'running',
+      (t) => t.kind === 'action' && t.status === 'running',
     )
     if (!hasRunningAction) return
     const interval = setInterval(() => refetchThreads(), 5000)
@@ -201,7 +220,7 @@ export default function Home() {
   const [runStates, setRunStates] = createSignal<Record<string, SessionRunState>>({})
   const getRunState = (sid: string): SessionRunState => runStates()[sid] ?? DEFAULT_RUN_STATE
   const updateRunState = (sid: string, patch: Partial<SessionRunState>) => {
-    setRunStates(prev => ({
+    setRunStates((prev) => ({
       ...prev,
       [sid]: { ...DEFAULT_RUN_STATE, ...prev[sid], ...patch },
     }))
@@ -228,7 +247,7 @@ export default function Home() {
       clearTimeout(timer)
       flashTimers.delete(sid)
     }
-    setCompletions(prev => {
+    setCompletions((prev) => {
       if (!(sid in prev)) return prev
       const next = { ...prev }
       delete next[sid]
@@ -253,13 +272,13 @@ export default function Home() {
     if (sid === selectedSessionId()) return
     const existing = flashTimers.get(sid)
     if (existing) clearTimeout(existing)
-    setCompletions(prev => ({ ...prev, [sid]: { outcome, flashing: true } }))
+    setCompletions((prev) => ({ ...prev, [sid]: { outcome, flashing: true } }))
     flashTimers.set(
       sid,
       setTimeout(() => {
         flashTimers.delete(sid)
         // Decay to the static border; the mark itself survives until visited.
-        setCompletions(prev =>
+        setCompletions((prev) =>
           sid in prev ? { ...prev, [sid]: { ...prev[sid], flashing: false } } : prev,
         )
       }, COMPLETION_FLASH_MS),
@@ -295,10 +314,7 @@ export default function Home() {
     return sig
   }
   const getMessages = (sid: string): Message[] => messagesSignal(sid)[0]()
-  const setMessages = (
-    sid: string,
-    next: Message[] | ((prev: Message[]) => Message[]),
-  ) => {
+  const setMessages = (sid: string, next: Message[] | ((prev: Message[]) => Message[])) => {
     const set = messagesSignal(sid)[1]
     // Solid reads a bare function argument as an updater — wrap plain arrays.
     if (typeof next === 'function') set(next)
@@ -329,13 +345,21 @@ export default function Home() {
   const abortSession = (sid: string) => {
     const ac = abortControllers.get(sid)
     if (!ac) return
-    try { ac.abort() } catch { /* already settled */ }
+    try {
+      ac.abort()
+    } catch {
+      /* already settled */
+    }
   }
 
   onMount(() => {
     const onUnload = () => {
       for (const ac of abortControllers.values()) {
-        try { ac.abort() } catch { /* ignore */ }
+        try {
+          ac.abort()
+        } catch {
+          /* ignore */
+        }
       }
       abortControllers.clear()
     }
@@ -346,17 +370,17 @@ export default function Home() {
   // Accumulate graph elements for one session. Dedup + touched-flag refresh
   // logic lives in `mergeGraphElements` so it can be unit-tested in isolation.
   const accumulateGraphElements = (sid: string, newElements: GraphElement[]) => {
-    graphSignal(sid)[1](prev => mergeGraphElements(prev, newElements))
+    graphSignal(sid)[1]((prev) => mergeGraphElements(prev, newElements))
     // Highlighting is view state, not per-session data: only a batch landing in
     // the thread on screen should move the highlight.
     if (sid !== selectedSessionId()) return
-    const newIds = newElements.map(e => e.data?.id).filter((id): id is string => !!id)
+    const newIds = newElements.map((e) => e.data?.id).filter((id): id is string => !!id)
     setHighlightedIds(newIds)
   }
 
   // Accumulate context events for one session.
   const accumulateEvents = (sid: string, newEvents: ContextEvent[]) => {
-    eventsSignal(sid)[1](prev => [...prev, ...newEvents])
+    eventsSignal(sid)[1]((prev) => [...prev, ...newEvents])
   }
 
   const setSessionContext = (sid: string, ctx: UnifiedContext) => {
@@ -407,7 +431,7 @@ export default function Home() {
     prunePanelState(id)
     setSelectedSessionId(id)
     setPlaceholderSessionId(id)
-    setFocusInputToken(t => t + 1)
+    setFocusInputToken((t) => t + 1)
   }
 
   const handleSelectThread = (threadId: string) => {
@@ -431,7 +455,7 @@ export default function Home() {
     const { deleted } = await deleteConversationsBulk(ids)
     if (deleted.length === 0) return
     const gone = new Set(deleted)
-    mutateThreads(list => (list ?? []).filter(t => !gone.has(t.id)))
+    mutateThreads((list) => (list ?? []).filter((t) => !gone.has(t.id)))
     for (const id of deleted) {
       messagesBySession.delete(id)
       progressBySession.delete(id)
@@ -441,8 +465,8 @@ export default function Home() {
       clearCompletion(id)
       abortControllers.delete(id)
     }
-    setRunStates(prev => {
-      if (!deleted.some(id => id in prev)) return prev
+    setRunStates((prev) => {
+      if (!deleted.some((id) => id in prev)) return prev
       const next = { ...prev }
       for (const id of deleted) delete next[id]
       return next
@@ -450,7 +474,7 @@ export default function Home() {
     // If the open conversation was deleted, land somewhere sensible: the
     // most recent remaining thread, or a fresh chat when none are left.
     if (gone.has(selectedSessionId())) {
-      const remaining = (threads.latest ?? []).filter(t => !gone.has(t.id))
+      const remaining = (threads.latest ?? []).filter((t) => !gone.has(t.id))
       if (remaining.length > 0) handleSelectThread(remaining[0].id)
       else handleNewChat()
     }
@@ -462,7 +486,7 @@ export default function Home() {
     const ph = placeholderSessionId()
     if (!ph) return
     const list = threads.latest ?? []
-    if (list.some(t => t.id === ph)) {
+    if (list.some((t) => t.id === ph)) {
       setPlaceholderSessionId(null)
     }
   })
@@ -470,7 +494,7 @@ export default function Home() {
   // Display threads = optimistic placeholder (if any) on top, then persisted
   // rows, deduped by id. See `mergeThreadsWithPlaceholder` for the rule.
   const displayThreads = createMemo(() =>
-    mergeThreadsWithPlaceholder(threads.latest ?? [], placeholderSessionId())
+    mergeThreadsWithPlaceholder(threads.latest ?? [], placeholderSessionId()),
   )
 
   // Wrap the supplied unified-context setter so each save also refreshes the
@@ -494,15 +518,20 @@ export default function Home() {
   const handleStashAction = async (eventId: string, action: StashAction) => {
     const sid = selectedSessionId()
     // Optimistic UI update: mutate local signal immediately
-    eventsSignal(sid)[1](prev => prev.map(e => {
-      if (e.id !== eventId || e.type !== 'tool_result') return e
-      const d = { ...(e.data as ToolResultEventData) }
-      if (action === 'hide') d.hidden = true
-      if (action === 'unhide') d.hidden = false
-      if (action === 'archive') { d.archived = true; d.hidden = false }
-      if (action === 'unarchive') d.archived = false
-      return { ...e, data: d }
-    }))
+    eventsSignal(sid)[1]((prev) =>
+      prev.map((e) => {
+        if (e.id !== eventId || e.type !== 'tool_result') return e
+        const d = { ...(e.data as ToolResultEventData) }
+        if (action === 'hide') d.hidden = true
+        if (action === 'unhide') d.hidden = false
+        if (action === 'archive') {
+          d.archived = true
+          d.hidden = false
+        }
+        if (action === 'unarchive') d.archived = false
+        return { ...e, data: d }
+      }),
+    )
 
     // Persist to server
     await fetch('/api/stash', {
@@ -540,7 +569,7 @@ export default function Home() {
         defaultSize={[60, 40]}
         panels={[
           { id: 'chat', collapsible: true, minSize: 40, maxSize: 80 },
-          { id: 'support', collapsible: true, minSize: 30, maxSize: 60 }
+          { id: 'support', collapsible: true, minSize: 30, maxSize: 60 },
         ]}
         h="full"
       >

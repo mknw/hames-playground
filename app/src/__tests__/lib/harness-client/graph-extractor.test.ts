@@ -57,13 +57,15 @@ describe('graph-extractor — read_neo4j_cypher (MCP shape)', () => {
   })
 
   it('extracts nodes + edges from a 5-row 3-tuple neighborhood result', () => {
-    const elements = extractGraphElements([toolResultEvent('read_neo4j_cypher', neighborhoodFixture)])
+    const elements = extractGraphElements([
+      toolResultEvent('read_neo4j_cypher', neighborhoodFixture),
+    ])
 
-    const nodes = elements.filter(e => !isEdge(e))
-    const edges = elements.filter(e => isEdge(e))
+    const nodes = elements.filter((e) => !isEdge(e))
+    const edges = elements.filter((e) => isEdge(e))
 
     // Redis + 5 unique neighbors
-    expect(nodes.map(n => n.data?.id).sort()).toEqual([
+    expect(nodes.map((n) => n.data?.id).sort()).toEqual([
       'C Programming Language',
       'In-Memory Data Platform',
       'Open Source',
@@ -93,23 +95,23 @@ describe('graph-extractor — enrichment payload', () => {
   it('processes rows + neighborhood and tags touched nodes', () => {
     const elements = extractGraphElements([toolResultEvent('read_neo4j_cypher', enrichedFixture)])
 
-    const nodes = elements.filter(e => !isEdge(e))
-    const edges = elements.filter(e => isEdge(e))
+    const nodes = elements.filter((e) => !isEdge(e))
+    const edges = elements.filter((e) => isEdge(e))
 
-    const ids = nodes.map(n => n.data?.id).sort()
+    const ids = nodes.map((n) => n.data?.id).sort()
     expect(ids).toEqual(['Open Source', 'Redis', 'vector embedding'])
 
     // Only `Redis` is in `_touched` — should be tagged. Neighbors must not be.
-    const redis = nodes.find(n => n.data?.id === 'Redis')
-    const ve = nodes.find(n => n.data?.id === 'vector embedding')
-    const os = nodes.find(n => n.data?.id === 'Open Source')
+    const redis = nodes.find((n) => n.data?.id === 'Redis')
+    const ve = nodes.find((n) => n.data?.id === 'vector embedding')
+    const os = nodes.find((n) => n.data?.id === 'Open Source')
     expect(redis?.data?.touched).toBe(true)
     expect(ve?.data?.touched).toBeUndefined()
     expect(os?.data?.touched).toBeUndefined()
 
     // Both neighborhood edges land
     expect(edges).toHaveLength(2)
-    expect(edges.every(e => e.data?.source === 'Redis')).toBe(true)
+    expect(edges.every((e) => e.data?.source === 'Redis')).toBe(true)
   })
 })
 

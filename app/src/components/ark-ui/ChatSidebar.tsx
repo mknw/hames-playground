@@ -55,7 +55,7 @@ export function mergeThreadsWithPlaceholder(
   nowIso: () => string = () => new Date().toISOString(),
 ): ChatThreadSummary[] {
   if (!placeholderId) return threads
-  if (threads.some(t => t.id === placeholderId)) return threads
+  if (threads.some((t) => t.id === placeholderId)) return threads
   const placeholder: ChatThreadSummary = {
     id: placeholderId,
     title: null,
@@ -75,7 +75,7 @@ export function filterThreads(
   filter: ThreadFilter,
 ): ChatThreadSummary[] {
   if (filter === 'all') return threads
-  return threads.filter(t => t.kind === filter)
+  return threads.filter((t) => t.kind === filter)
 }
 
 const formatTimestamp = (iso: string): string => {
@@ -138,13 +138,9 @@ interface ChatSidebarProps {
  * Selection is handled by the existing attributify border and wins by virtue
  * of the mark being cleared on select — the two only collide for a frame.
  */
-export function completionBorderColor(
-  completion?: CompletionMark,
-): string | undefined {
+export function completionBorderColor(completion?: CompletionMark): string | undefined {
   if (!completion) return undefined
-  return completion.outcome === 'error'
-    ? 'rgba(248, 113, 113, 0.55)'
-    : 'rgba(74, 222, 128, 0.55)'
+  return completion.outcome === 'error' ? 'rgba(248, 113, 113, 0.55)' : 'rgba(74, 222, 128, 0.55)'
 }
 
 /** One-shot flash class while a completion is still animating. */
@@ -164,17 +160,9 @@ export function rowFlashClass(completion?: CompletionMark): string {
  *
  * Pure so the precedence rules can be unit-tested without rendering.
  */
-export type RowIndicator =
-  | 'running'
-  | 'action-error'
-  | 'action-paused'
-  | 'action-done'
-  | 'none'
+export type RowIndicator = 'running' | 'action-error' | 'action-paused' | 'action-done' | 'none'
 
-export function rowIndicator(args: {
-  kind: ThreadKind
-  status: ThreadStatus
-}): RowIndicator {
+export function rowIndicator(args: { kind: ThreadKind; status: ThreadStatus }): RowIndicator {
   if (args.kind !== 'action') return 'none'
   if (args.status === 'running') return 'running'
   if (args.status === 'error') return 'action-error'
@@ -205,10 +193,7 @@ export function progressPercent(snap: {
  * row. Threads whose agent no longer exists fall back to a generic robot
  * (the fallback literal lives in this scanned .tsx, so it always emits).
  */
-export function threadIcon(t: {
-  isPlaceholder?: boolean
-  agentIcon?: string
-}): string | null {
+export function threadIcon(t: { isPlaceholder?: boolean; agentIcon?: string }): string | null {
   if (t.isPlaceholder) return null
   return t.agentIcon ?? 'i-material-symbols-smart-toy-outline'
 }
@@ -234,10 +219,7 @@ export function railDot(args: {
  * running rows are blocked because the run's end-save upsert would silently
  * recreate the deleted row — mid-run cancellation is out of scope (#105 PR 3).
  */
-export function canDeleteRow(args: {
-  isPlaceholder?: boolean
-  isProcessing: boolean
-}): boolean {
+export function canDeleteRow(args: { isPlaceholder?: boolean; isProcessing: boolean }): boolean {
   return !args.isPlaceholder && !args.isProcessing
 }
 
@@ -253,9 +235,7 @@ export function deleteConfirmCopy(target: DeleteTarget): string {
   }
   const n = target.ids.length
   const base = `Delete ${n} conversation${n === 1 ? '' : 's'}? This can't be undone.`
-  return target.skippedRunning > 0
-    ? `${base} ${target.skippedRunning} running — skipped.`
-    : base
+  return target.skippedRunning > 0 ? `${base} ${target.skippedRunning} running — skipped.` : base
 }
 
 // ---------------------------------------------------------------------------
@@ -264,10 +244,7 @@ export function deleteConfirmCopy(target: DeleteTarget): string {
 // ---------------------------------------------------------------------------
 
 /** Immutably toggle one id in a selection set. */
-export function toggleSelection(
-  set: ReadonlySet<string>,
-  id: string,
-): ReadonlySet<string> {
+export function toggleSelection(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
   const next = new Set(set)
   if (next.has(id)) next.delete(id)
   else next.add(id)
@@ -492,8 +469,9 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
   }
 
   const toggleRow = (thread: ChatThreadSummary) => {
-    if (!canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: isRunning(thread.id) })) return
-    setSelectedIds(prev => toggleSelection(prev, thread.id))
+    if (!canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: isRunning(thread.id) }))
+      return
+    setSelectedIds((prev) => toggleSelection(prev, thread.id))
   }
 
   // Select-all acts on the VISIBLE (filtered) threads; selections persist
@@ -505,7 +483,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
       setSkippedRunning(0)
     } else {
       const { selected, skippedRunning: skipped } = selectAllEligible(visibleThreads(), isRunning)
-      setSelectedIds(prev => new Set([...prev, ...selected]))
+      setSelectedIds((prev) => new Set([...prev, ...selected]))
       setSkippedRunning(skipped)
     }
   }
@@ -515,7 +493,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
     // selected thread since it was ticked. Newly-running rows move into the
     // skip count rather than being deleted out from under their run.
     const chosen = [...selectedIds()]
-    const stillIdle = chosen.filter(id => !isRunning(id))
+    const stillIdle = chosen.filter((id) => !isRunning(id))
     const newlyRunning = chosen.length - stillIdle.length
     if (stillIdle.length === 0) return
     setConfirmTarget({
@@ -543,7 +521,8 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
       if (
         t &&
         (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable)
-      ) return
+      )
+        return
       if (e.key === 'Escape') {
         exitSelectMode()
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
@@ -564,14 +543,14 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
     e.stopPropagation()
     e.preventDefault()
     if (pendingRegen().has(threadId)) return
-    setPendingRegen(prev => new Set(prev).add(threadId))
+    setPendingRegen((prev) => new Set(prev).add(threadId))
     try {
       const title = await regenerateConversationTitle(threadId)
       if (title) props.onTitleRegenerated?.(threadId, title)
     } catch (err) {
       console.error('[sidebar] regenerate title failed:', err)
     } finally {
-      setPendingRegen(prev => {
+      setPendingRegen((prev) => {
         const next = new Set(prev)
         next.delete(threadId)
         return next
@@ -586,13 +565,15 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
       bg="dark-bg-primary"
       border="r dark-border-primary"
       transition="width"
-      style={{width: props.collapsed ? '3rem' : '16rem'}}
+      style={{ width: props.collapsed ? '3rem' : '16rem' }}
     >
       {/* Header with Toggle */}
       <div p="4" border="b dark-border-primary" flex="~" items="center" justify="between">
         {!props.collapsed && (
           <div flex="~" items="center" gap="2">
-            <span text="sm dark-text-primary" font="medium">Chat History</span>
+            <span text="sm dark-text-primary" font="medium">
+              Chat History
+            </span>
             {/* Select-mode toggle (#71) */}
             <button
               onClick={() => (selectionMode() ? exitSelectMode() : setSelectionMode(true))}
@@ -626,18 +607,12 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
           flex="shrink-0"
           title={props.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
-          <svg
-            width="16"
-            height="16"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
+          <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               stroke-linecap="round"
               stroke-linejoin="round"
               stroke-width="2"
-              d={props.collapsed ? "M9 5l7 7-7 7" : "M15 19l-7-7 7-7"}
+              d={props.collapsed ? 'M9 5l7 7-7 7' : 'M15 19l-7-7 7-7'}
             />
           </svg>
         </button>
@@ -663,8 +638,8 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                 return (
                   <button
                     onClick={() => props.onSelectThread(thread.id)}
-                    title={thread.isPlaceholder ? 'new chat' : thread.title ?? '(untitled)'}
-                    aria-label={thread.isPlaceholder ? 'new chat' : thread.title ?? '(untitled)'}
+                    title={thread.isPlaceholder ? 'new chat' : (thread.title ?? '(untitled)')}
+                    aria-label={thread.isPlaceholder ? 'new chat' : (thread.title ?? '(untitled)')}
                     aria-current={isSelected() ? 'true' : undefined}
                     style={{
                       position: 'relative',
@@ -728,7 +703,13 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
               bg="cyber-700 hover:cyber-600"
               rounded="md"
               transition="all"
-              style={{ width: '32px', height: '32px', display: 'flex', 'align-items': 'center', 'justify-content': 'center' }}
+              style={{
+                width: '32px',
+                height: '32px',
+                display: 'flex',
+                'align-items': 'center',
+                'justify-content': 'center',
+              }}
             >
               <span
                 class="i-material-symbols-add-2"
@@ -853,7 +834,9 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         bg={isSelected() ? 'cyber-700/30' : ''}
                         hover="bg-dark-bg-hover"
                         transition="all"
-                        border={isSelected() ? '1 neon-cyan/40' : '1 transparent hover:neon-cyan/30'}
+                        border={
+                          isSelected() ? '1 neon-cyan/40' : '1 transparent hover:neon-cyan/30'
+                        }
                         cursor="pointer"
                         data-placeholder={thread.isPlaceholder ? '' : undefined}
                         data-completed={completion()?.outcome}
@@ -865,7 +848,12 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         {/* Inline padding-right: two hover actions need
                             ~3.5rem clearance, and new attributify spacing
                             literals are extractor roulette (see t-1.5). */}
-                        <div flex="~" items="center" gap="1.5" style={{ 'padding-right': '3.5rem' }}>
+                        <div
+                          flex="~"
+                          items="center"
+                          gap="1.5"
+                          style={{ 'padding-right': '3.5rem' }}
+                        >
                           {/* Select-mode checkbox (#71) — a styled span, not
                               an <input>: rows are <button>s and nesting an
                               interactive element would break semantics.
@@ -876,7 +864,10 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                               role="checkbox"
                               aria-checked={selectedIds().has(thread.id) ? 'true' : 'false'}
                               aria-disabled={
-                                canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: live() })
+                                canDeleteRow({
+                                  isPlaceholder: thread.isPlaceholder,
+                                  isProcessing: live(),
+                                })
                                   ? undefined
                                   : 'true'
                               }
@@ -890,7 +881,10 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                                 height: '16px',
                                 'flex-shrink': 0,
                                 color: selectedIds().has(thread.id) ? '#22d3ee' : '#71717a',
-                                opacity: canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: live() })
+                                opacity: canDeleteRow({
+                                  isPlaceholder: thread.isPlaceholder,
+                                  isProcessing: live(),
+                                })
                                   ? 1
                                   : 0.35,
                               }}
@@ -920,14 +914,18 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                           </Show>
                           <StatusBadge indicator={indicator()} />
                           <div
-                            text={thread.isPlaceholder ? 'sm dark-text-tertiary' : 'sm dark-text-primary'}
+                            text={
+                              thread.isPlaceholder
+                                ? 'sm dark-text-tertiary'
+                                : 'sm dark-text-primary'
+                            }
                             font={thread.isPlaceholder ? 'normal italic' : 'medium'}
                             truncate
                             flex="1"
                           >
                             {thread.isPlaceholder
                               ? PLACEHOLDER_TITLE
-                              : thread.title ?? '(untitled)'}
+                              : (thread.title ?? '(untitled)')}
                           </div>
                         </div>
                         {/* While a run streams, the timestamp row gives way
@@ -950,7 +948,15 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             end-save upsert, so the affordance simply isn't
                             offered (mid-run cancel is #105 PR 3 scope). Same
                             span-not-button idiom as the regenerate action. */}
-                        <Show when={!selectionMode() && canDeleteRow({ isPlaceholder: thread.isPlaceholder, isProcessing: live() })}>
+                        <Show
+                          when={
+                            !selectionMode() &&
+                            canDeleteRow({
+                              isPlaceholder: thread.isPlaceholder,
+                              isProcessing: live(),
+                            })
+                          }
+                        >
                           <span
                             aria-hidden="true"
                             onClick={(e) => requestDelete(e, thread)}
@@ -996,7 +1002,9 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             }}
                             text="xs dark-text-tertiary hover:neon-cyan"
                             transition="opacity"
-                            class={isRegenerating() ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
+                            class={
+                              isRegenerating() ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                            }
                           >
                             <svg
                               width="14"
@@ -1090,7 +1098,13 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
             <Show when={confirmTarget()}>
               {(target) => (
                 <>
-                  <Dialog.Title text="sm dark-text-primary" font="medium" flex="~" items="center" gap="2">
+                  <Dialog.Title
+                    text="sm dark-text-primary"
+                    font="medium"
+                    flex="~"
+                    items="center"
+                    gap="2"
+                  >
                     <span
                       class="i-material-symbols-delete-outline"
                       aria-hidden="true"
@@ -1098,7 +1112,11 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                     />
                     {target().kind === 'single' ? 'Delete conversation' : 'Delete conversations'}
                   </Dialog.Title>
-                  <Dialog.Description text="xs dark-text-secondary" m="t-2 b-4" style={{ 'line-height': '1.5' }}>
+                  <Dialog.Description
+                    text="xs dark-text-secondary"
+                    m="t-2 b-4"
+                    style={{ 'line-height': '1.5' }}
+                  >
                     {deleteConfirmCopy(target())}
                   </Dialog.Description>
                   <div flex="~" gap="2" justify="end">

@@ -15,11 +15,11 @@ import type { GraphElement } from './types'
 const PATTERN_SOURCE_MAP: Record<string, GraphElement['source']> = {
   // Neo4j patterns
   'neo4j-query': 'neo4j',
-  'neo4j': 'neo4j',
-  'ontology': 'neo4j',
+  neo4j: 'neo4j',
+  ontology: 'neo4j',
 
   // Memory patterns
-  'memory': 'memory',
+  memory: 'memory',
   'memory-loop': 'memory',
   'session-memory': 'memory',
   'conversational-memory': 'memory',
@@ -51,12 +51,8 @@ function getSourceFromPattern(patternId: string): GraphElement['source'] {
 
 /** Check if a tool result contains Neo4j graph data */
 export function isNeo4jGraphResult(toolName: string, _result: unknown): boolean {
-  const neo4jTools = [
-    'read_neo4j_cypher',
-    'write_neo4j_cypher',
-    'get_neo4j_schema'
-  ]
-  return neo4jTools.some(t => toolName.includes(t))
+  const neo4jTools = ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema']
+  return neo4jTools.some((t) => toolName.includes(t))
 }
 
 /** Check if a tool result contains Memory graph data */
@@ -67,9 +63,9 @@ export function isMemoryGraphResult(toolName: string, _result: unknown): boolean
     'open_nodes',
     'create_entities',
     'create_relations',
-    'add_observations'
+    'add_observations',
   ]
-  return memoryTools.some(t => toolName.includes(t))
+  return memoryTools.some((t) => toolName.includes(t))
 }
 
 /** Enrichment payload produced by `enrichNeo4jResult()` — original rows plus
@@ -154,10 +150,7 @@ function edgeElement(
  * "has both endpoints" shape — that last branch is what keeps graphs restored
  * from a session persisted before `kind` existed classifying correctly.
  */
-export function isEdgeElement(el: {
-  group?: string
-  data?: Record<string, unknown>
-}): boolean {
+export function isEdgeElement(el: { group?: string; data?: Record<string, unknown> }): boolean {
   const d = el.data
   if (!d) return false
   if (d.kind === 'edge') return true
@@ -189,7 +182,11 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
   // Handle stringified JSON (MCP may return text)
   let parsed = result
   if (typeof result === 'string') {
-    try { parsed = JSON.parse(result) } catch { return elements }
+    try {
+      parsed = JSON.parse(result)
+    } catch {
+      return elements
+    }
   }
 
   // Enrichment payload from onToolResult hook: original rows + 1-hop neighborhood.
@@ -221,10 +218,15 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
       if (!value) continue
 
       // MCP relationship format: [startNodeObj, "REL_TYPE", endNodeObj]
-      if (Array.isArray(value) && value.length === 3 &&
-          typeof value[1] === 'string' &&
-          value[0] && typeof value[0] === 'object' &&
-          value[2] && typeof value[2] === 'object') {
+      if (
+        Array.isArray(value) &&
+        value.length === 3 &&
+        typeof value[1] === 'string' &&
+        value[0] &&
+        typeof value[0] === 'object' &&
+        value[2] &&
+        typeof value[2] === 'object'
+      ) {
         const startNode = value[0] as Record<string, unknown>
         const relType = value[1] as string
         const endNode = value[2] as Record<string, unknown>
@@ -401,18 +403,14 @@ function isNeo4jNode(value: unknown): value is Neo4jNode {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
   return (
-    ('identity' in v || 'elementId' in v) &&
-    (Array.isArray(v.labels) || v.properties !== undefined)
+    ('identity' in v || 'elementId' in v) && (Array.isArray(v.labels) || v.properties !== undefined)
   )
 }
 
 function isNeo4jRelationship(value: unknown): value is Neo4jRelationship {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
-  return (
-    ('identity' in v || 'elementId' in v) &&
-    ('type' in v || 'start' in v || 'end' in v)
-  )
+  return ('identity' in v || 'elementId' in v) && ('type' in v || 'start' in v || 'end' in v)
 }
 
 function isNeo4jPath(value: unknown): value is Neo4jPath {
@@ -427,7 +425,7 @@ function isNeo4jPath(value: unknown): value is Neo4jPath {
 
 function deduplicateElements(elements: GraphElement[]): GraphElement[] {
   const seen = new Set<string>()
-  return elements.filter(el => {
+  return elements.filter((el) => {
     const id = el.data?.id
     if (!id || seen.has(String(id))) return false
     seen.add(String(id))

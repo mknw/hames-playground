@@ -40,7 +40,12 @@ import { errorBubble } from '~/lib/harness-client/replay'
 import { getSettings } from '~/lib/settings-store'
 import { parseChatStream, type DoneEventData } from '~/lib/sse-client'
 import type { GraphElement } from './SupportPanel'
-import type { ContextEvent, UnifiedContext, ControllerActionEventData, ErrorEventData } from '~/lib/harness-patterns'
+import type {
+  ContextEvent,
+  UnifiedContext,
+  ControllerActionEventData,
+  ErrorEventData,
+} from '~/lib/harness-patterns'
 import {
   capReachedMessage,
   isAtConcurrencyCap,
@@ -99,10 +104,7 @@ export interface ChatInterfaceProps {
    *  always addressed by session id so a backgrounded run keeps filling its
    *  own thread while the user reads another one. */
   getMessages: (sessionId: string) => Message[]
-  setMessages: (
-    sessionId: string,
-    next: Message[] | ((prev: Message[]) => Message[]),
-  ) => void
+  setMessages: (sessionId: string, next: Message[] | ((prev: Message[]) => Message[])) => void
   /** How many sessions are streaming right now, across the whole route.
    *  Only the route can know this — used for the concurrency cap (#105). */
   runningCount: number
@@ -131,7 +133,8 @@ export interface ChatInterfaceProps {
 const WELCOME_MESSAGE: Message = {
   id: 'welcome',
   role: 'assistant',
-  content: 'Hello! I\'m your knowledge assistant. I can help you:\n\n- Query and explore your Knowledge Base\n- Create new observations\n- Analyze patterns and connections\n- Use additional tools\n\nSelect an agent from the dropdown above, then ask me anything!',
+  content:
+    "Hello! I'm your knowledge assistant. I can help you:\n\n- Query and explore your Knowledge Base\n- Create new observations\n- Analyze patterns and connections\n- Use additional tools\n\nSelect an agent from the dropdown above, then ask me anything!",
   timestamp: new Date(),
 }
 
@@ -232,7 +235,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           // Spread, don't re-list: this map used to pick four fields, which
           // silently dropped the hint/patternId/turnInfo that error and warning
           // bubbles carry. `timestamp` is the only field needing conversion.
-          loaded.messages.map((m) => ({ ...m, timestamp: new Date(m.timestamp) }))
+          loaded.messages.map((m) => ({ ...m, timestamp: new Date(m.timestamp) })),
         )
         // Replay events to parent so graph + observability repopulate. These
         // are filed under `sid`, so a slow hydration that resolves after the
@@ -343,7 +346,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       id: Date.now().toString(),
       role: 'user',
       content,
-      timestamp: new Date()
+      timestamp: new Date(),
     }
     props.setMessages(runSessionId, (prev) => [...prev, userMessage])
 
@@ -365,7 +368,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           sessionId: runSessionId,
           message: content,
           agentId: selectedAgent(),
-          settings: getSettings()
+          settings: getSettings(),
         }),
         signal: abortController.signal,
       })
@@ -484,13 +487,25 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           timestamp: new Date(),
           // Retriever citations for this turn (inline superscripts + footer).
           references: extractReferences(finalResult?.context?.events ?? []),
-          toolCall: finalResult?.status === 'paused' && (finalResult.data as Record<string, unknown>).pendingAction ? {
-            type: 'neo4j',
-            status: 'pending',
-            tool: ((finalResult.data as Record<string, unknown>).pendingAction as { action: string }).action,
-            explanation: ((finalResult.data as Record<string, unknown>).pendingAction as { reason: string }).reason,
-            isReadOnly: false
-          } : undefined
+          toolCall:
+            finalResult?.status === 'paused' &&
+            (finalResult.data as Record<string, unknown>).pendingAction
+              ? {
+                  type: 'neo4j',
+                  status: 'pending',
+                  tool: (
+                    (finalResult.data as Record<string, unknown>).pendingAction as {
+                      action: string
+                    }
+                  ).action,
+                  explanation: (
+                    (finalResult.data as Record<string, unknown>).pendingAction as {
+                      reason: string
+                    }
+                  ).reason,
+                  isReadOnly: false,
+                }
+              : undefined,
         }
         props.setMessages(runSessionId, (prev) => [...prev, assistantMessage])
       }
@@ -519,7 +534,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           id: Date.now().toString(),
           role: 'error',
           content: error instanceof Error ? error.message : 'Unknown error',
-          timestamp: new Date()
+          timestamp: new Date(),
         }
         props.setMessages(runSessionId, (prev) => [...prev, errorMessage])
       }
@@ -561,43 +576,47 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       }
 
       // Update the message with executed tool call
-      setMessages(messages().map(msg => {
-        if (msg.id === messageId && msg.toolCall) {
-          return {
-            ...msg,
-            toolCall: { ...msg.toolCall, status: 'executed' as const }
+      setMessages(
+        messages().map((msg) => {
+          if (msg.id === messageId && msg.toolCall) {
+            return {
+              ...msg,
+              toolCall: { ...msg.toolCall, status: 'executed' as const },
+            }
           }
-        }
-        return msg
-      }))
+          return msg
+        }),
+      )
 
       // Add success message
       const successMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
         content: result.response,
-        timestamp: new Date()
+        timestamp: new Date(),
       }
       setMessages([...messages(), successMessage])
     } catch (error) {
       console.error('Error executing write query:', error)
 
       // Update the message to mark tool call as error
-      setMessages(messages().map(msg => {
-        if (msg.id === messageId && msg.toolCall) {
-          return {
-            ...msg,
-            toolCall: { ...msg.toolCall, status: 'error' as const, error: String(error) }
+      setMessages(
+        messages().map((msg) => {
+          if (msg.id === messageId && msg.toolCall) {
+            return {
+              ...msg,
+              toolCall: { ...msg.toolCall, status: 'error' as const, error: String(error) },
+            }
           }
-        }
-        return msg
-      }))
+          return msg
+        }),
+      )
 
       const errorMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
         content: `Write operation failed:\n\n\`\`\`\n${error instanceof Error ? error.message : 'Unknown error'}\n\`\`\``,
-        timestamp: new Date()
+        timestamp: new Date(),
       }
       setMessages([...messages(), errorMessage])
     } finally {
@@ -611,22 +630,24 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       const result = await rejectAction(props.sessionId)
 
       // Update the message to show rejection in tool call
-      setMessages(messages().map(msg => {
-        if (msg.id === messageId && msg.toolCall) {
-          return {
-            ...msg,
-            toolCall: { ...msg.toolCall, status: 'error' as const, error: 'Rejected by user' }
+      setMessages(
+        messages().map((msg) => {
+          if (msg.id === messageId && msg.toolCall) {
+            return {
+              ...msg,
+              toolCall: { ...msg.toolCall, status: 'error' as const, error: 'Rejected by user' },
+            }
           }
-        }
-        return msg
-      }))
+          return msg
+        }),
+      )
 
       // Add rejection message from agent
       const responseMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
         content: result.response,
-        timestamp: new Date()
+        timestamp: new Date(),
       }
       setMessages([...messages(), responseMessage])
     } catch (error) {
@@ -649,48 +670,46 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
 
   return (
     <div flex="~ col" h="full" bg="dark-bg-secondary">
-        {/* Agent Selector Header */}
-        <div
-          flex="~ items-center gap-4"
-          border="b dark-border-primary"
-          px="4"
-          py="2"
-          bg="dark-bg-tertiary/50"
-        >
-          <span text="sm dark-text-secondary">Agent:</span>
-          <div w="64">
-            <AgentSelector
-              selectedAgent={selectedAgent()}
-              onAgentChange={handleAgentChange}
-              disabled={isProcessing()}
-            />
-          </div>
+      {/* Agent Selector Header */}
+      <div
+        flex="~ items-center gap-4"
+        border="b dark-border-primary"
+        px="4"
+        py="2"
+        bg="dark-bg-tertiary/50"
+      >
+        <span text="sm dark-text-secondary">Agent:</span>
+        <div w="64">
+          <AgentSelector
+            selectedAgent={selectedAgent()}
+            onAgentChange={handleAgentChange}
+            disabled={isProcessing()}
+          />
         </div>
+      </div>
 
-        {/* Messages — the live progress bar rides as a trailing slot so it
+      {/* Messages — the live progress bar rides as a trailing slot so it
             appears where the next assistant bubble will land, then animates
             out as that bubble takes its place. */}
-        <ChatMessages
-          messages={messages()}
-          onApproveWrite={handleApproveWrite}
-          onRejectWrite={handleRejectWrite}
-          graphEntityNames={props.graphEntityNames}
-          onHighlightEntities={props.onHighlightEntities}
-          onOpenReference={props.onOpenReference}
-          trailing={() => (
-            <LiveProgressBar
-              status={currentSnapshot().status}
-              current={currentSnapshot().currentTurn}
-              pathProjection={currentSnapshot().pathProjection}
-              maxProjection={currentSnapshot().maxProjection}
-              visible={
-                isProcessing() &&
-                !currentSnapshot().done &&
-                currentSnapshot().maxProjection > 0
-              }
-            />
-          )}
-        />
+      <ChatMessages
+        messages={messages()}
+        onApproveWrite={handleApproveWrite}
+        onRejectWrite={handleRejectWrite}
+        graphEntityNames={props.graphEntityNames}
+        onHighlightEntities={props.onHighlightEntities}
+        onOpenReference={props.onOpenReference}
+        trailing={() => (
+          <LiveProgressBar
+            status={currentSnapshot().status}
+            current={currentSnapshot().currentTurn}
+            pathProjection={currentSnapshot().pathProjection}
+            maxProjection={currentSnapshot().maxProjection}
+            visible={
+              isProcessing() && !currentSnapshot().done && currentSnapshot().maxProjection > 0
+            }
+          />
+        )}
+      />
 
       {/* Input */}
       <div border="t dark-border-primary" p="4" bg="dark-bg-secondary/80" backdrop-blur="sm">
@@ -735,13 +754,17 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
             style={{ 'max-width': '24rem', margin: '1rem' }}
           >
             <div flex="~" items="center" gap="2" m="b-2">
-              <span class="i-mdi-lightning-bolt-outline" style={{ width: '20px', height: '20px', color: '#22d3ee' }} />
-              <span text="sm dark-text-primary" font="medium">Turn this action into a conversation?</span>
+              <span
+                class="i-mdi-lightning-bolt-outline"
+                style={{ width: '20px', height: '20px', color: '#22d3ee' }}
+              />
+              <span text="sm dark-text-primary" font="medium">
+                Turn this action into a conversation?
+              </span>
             </div>
             <p text="xs dark-text-secondary" m="b-4" style={{ 'line-height': '1.5' }}>
-              Sending a message will promote this triggered action into a regular
-              conversation. If you cancel, the message won't be sent and it stays
-              an action.
+              Sending a message will promote this triggered action into a regular conversation. If
+              you cancel, the message won't be sent and it stays an action.
             </p>
             <div flex="~" gap="2" justify="end">
               <button

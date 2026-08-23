@@ -7,7 +7,11 @@
 
 import type { ContextEvent, ToolResultEventData } from '~/lib/harness-patterns'
 import type { GraphElement } from '~/lib/harness-client/types'
-import { extractGraphElements, isNeo4jGraphResult, isMemoryGraphResult } from '~/lib/harness-client/graph-extractor'
+import {
+  extractGraphElements,
+  isNeo4jGraphResult,
+  isMemoryGraphResult,
+} from '~/lib/harness-client/graph-extractor'
 
 // ============================================================================
 // Types

@@ -8,7 +8,11 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { extractGraphElements } from '../../../lib/harness-client/graph-extractor'
+import {
+  extractGraphElements,
+  isEdgeElement,
+  isNodeElement,
+} from '../../../lib/harness-client/graph-extractor'
 
 import schemaFixture from './fixtures/neo4j-schema.json'
 import singleNodeFixture from './fixtures/cypher-single-node.json'
@@ -110,5 +114,104 @@ describe('graph-extractor — enrichment payload', () => {
 })
 
 function isEdge(element: { data?: Record<string, unknown> }): boolean {
-  return element.data?.source !== undefined && element.data?.target !== undefined
+  return isEdgeElement(element)
 }
+
+// ============================================================================
+// SA-H9 / SA-M12 — element identity and node-vs-edge classification
+// ============================================================================
+
+describe('graph-extractor — element identity (SA-H9)', () => {
+  // A Neo4j node may carry any property name, `id` included. The builders used
+  // to spread properties AFTER pinning the computed id, so such a property
+  // silently replaced it — Cytoscape then rejected the element and `cy.add()`
+  // threw inside a createEffect, blanking the entire graph tab.
+  it('keeps the derived id when a record property is also called id', () => {
+    const result = [{ n: { name: 'Redis', id: 4711, label: 'not-a-label', type: 'not-a-type' } }]
+    const [node] = extractGraphElements([toolResultEvent('read_neo4j_cypher', result)])
+
+    expect(node.data?.id).toBe('Redis')
+    expect(node.data?.label).toBe('Redis')
+    expect(node.data?.type).toBe('Node')
+    // The colliding property is not silently dropped either — it is preserved
+    // under its own key for the property inspector.
+    expect(node.data?.kind).toBe('node')
+  })
+
+  it('keeps derived ids on both endpoints of a relationship triple', () => {
+    const result = [{ r: [{ name: 'A', id: 1 }, 'LINKS', { name: 'B', id: 2 }] }]
+    const elements = extractGraphElements([toolResultEvent('read_neo4j_cypher', result)])
+
+    const nodes = elements.filter(isNodeElement)
+    const edges = elements.filter(isEdgeElement)
+    expect(nodes.map((n) => n.data?.id)).toEqual(['A', 'B'])
+    expect(edges).toHaveLength(1)
+    expect(edges[0].data?.id).toBe('A-LINKS-B')
+    expect(edges[0].data?.source).toBe('A')
+    expect(edges[0].data?.target).toBe('B')
+  })
+
+  it('keeps the derived id on a memory entity whose property is called id', () => {
+    const result = { entities: [{ name: 'Ada', id: 99, entityType: 'Person' }], relations: [] }
+    const [node] = extractGraphElements([toolResultEvent('read_graph', result)])
+    expect(node.data?.id).toBe('Ada')
+    expect(node.data?.type).toBe('Person')
+  })
+
+  it('keeps the derived label on a driver-shaped node with a label property', () => {
+    const result = [
+      { n: { identity: 7, labels: ['Concept'], properties: { name: 'Graphs', id: 'nope' } } },
+    ]
+    const [node] = extractGraphElements([toolResultEvent('read_neo4j_cypher', result)])
+    expect(node.data?.id).toBe('7')
+    expect(node.data?.label).toBe('Graphs')
+    expect(node.data?.type).toBe('Concept')
+  })
+})
+
+describe('graph-extractor — node vs edge (SA-M12)', () => {
+  // `(:Chunk {source: …})` is a real shape in this repo's Data Stash schema.
+  // Classification used to be "has a `source` key", so such a node was counted,
+  // styled and (via Cytoscape's own inference) constructed as an edge.
+  it('classifies a node with source/target properties as a node', () => {
+    const result = [{ c: { name: 'chunk-1', source: 'report.pdf', target: 'irrelevant' } }]
+    const [el] = extractGraphElements([toolResultEvent('read_neo4j_cypher', result)])
+
+    expect(el.data?.kind).toBe('node')
+    expect(el.group).toBe('nodes')
+    expect(isNodeElement(el)).toBe(true)
+    expect(isEdgeElement(el)).toBe(false)
+    // The property survives for display — it is just no longer load-bearing.
+    expect(el.data?.source).toBe('report.pdf')
+  })
+
+  it('stamps kind and group on memory relations', () => {
+    const result = {
+      entities: [{ name: 'A' }, { name: 'B' }],
+      relations: [{ from: 'A', to: 'B', relationType: 'KNOWS' }],
+    }
+    const elements = extractGraphElements([toolResultEvent('read_graph', result)])
+    const edge = elements.find((e) => e.data?.id === 'A-KNOWS-B')!
+    expect(edge.data?.kind).toBe('edge')
+    expect(edge.group).toBe('edges')
+    expect(isEdgeElement(edge)).toBe(true)
+  })
+
+  it('falls back to the endpoint shape for elements with no kind stamp', () => {
+    // Graphs restored from a session persisted before `kind` existed.
+    expect(isEdgeElement({ data: { id: 'e', source: 'a', target: 'b' } })).toBe(true)
+    expect(isNodeElement({ data: { id: 'n', label: 'x' } })).toBe(true)
+    // A legacy node carrying only `source` is not an edge either.
+    expect(isEdgeElement({ data: { id: 'n', source: 'report.pdf' } })).toBe(false)
+  })
+
+  it('prefers an explicit kind over the endpoint shape', () => {
+    expect(isEdgeElement({ data: { id: 'n', kind: 'node', source: 'a', target: 'b' } })).toBe(false)
+    expect(isEdgeElement({ data: { id: 'e', kind: 'edge' } })).toBe(true)
+  })
+
+  it('treats a data-less element as neither', () => {
+    expect(isEdgeElement({})).toBe(false)
+    expect(isNodeElement({})).toBe(false)
+  })
+})

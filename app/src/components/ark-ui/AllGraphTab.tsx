@@ -17,7 +17,9 @@ import { GraphVisualization } from './GraphVisualization'
 import type { ContextEvent } from '~/lib/harness-patterns'
 import { splitIntoTurns, extractMultiTurnGraphElements, type TurnData } from '~/lib/turn-utils'
 import { getTurnColor } from '~/lib/turn-colors'
+import { SanitizedChip } from './SanitizedChip'
 import type { GraphElement } from '~/lib/harness-client/types'
+import { isEdgeElement, isNodeElement } from '~/lib/harness-client/graph-extractor'
 
 // ============================================================================
 // Types
@@ -107,8 +109,11 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
   })
 
   // Counts
-  const nodeCount = createMemo(() => graphElements().filter((e) => !e.data?.source).length)
-  const edgeCount = createMemo(() => graphElements().filter((e) => e.data?.source).length)
+  // Node/edge split comes from the extractor's explicit `data.kind` stamp, not
+  // from guessing at a `source` key — a node property called `source` used to
+  // be enough to have it counted as an edge (SA-M12).
+  const nodeCount = createMemo(() => graphElements().filter(isNodeElement).length)
+  const edgeCount = createMemo(() => graphElements().filter(isEdgeElement).length)
 
   // Turn selection handlers
   const toggleTurn = (turnNumber: number) => {
@@ -587,6 +592,14 @@ const TurnColumn = (props: TurnColumnProps) => {
                     <div text="xs dark-text-tertiary" font="italic">
                       {truncate(JSON.stringify(item.data.result), 200)}
                     </div>
+                  </Show>
+                  {/* Whatever is shown above is post-guard text (SA-H10). */}
+                  <Show when={item.data.sanitized}>
+                    {(summary) => (
+                      <div m="t-1">
+                        <SanitizedChip summary={summary()} compact />
+                      </div>
+                    )}
                   </Show>
                 </Tooltip.Content>
               </Tooltip.Positioner>

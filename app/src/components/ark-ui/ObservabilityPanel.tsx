@@ -27,6 +27,7 @@ import type {
   UnifiedContext,
 } from '~/lib/harness-patterns'
 import patternColorsJson from '../../../pattern-colors.json'
+import { SanitizedChip } from './SanitizedChip'
 
 interface ObservabilityPanelProps {
   events: ContextEvent[]
@@ -643,6 +644,10 @@ const ToolPairRow = (props: {
   const success = () => resultData()?.success ?? true
   const preview = () =>
     `${callData().tool}: ${resultData() ? (success() ? 'ok' : 'error') : 'pending'}`
+  // A guarded result is marked on the row itself, not only inside the detail
+  // panel — otherwise the only way to learn a result was rewritten is to open
+  // every one of them (SA-H10).
+  const sanitized = () => resultData()?.sanitized
 
   return (
     <div
@@ -694,6 +699,9 @@ const ToolPairRow = (props: {
           >
             {preview()}
           </div>
+          <Show when={sanitized()}>
+            {(summary) => <SanitizedChip summary={summary()} compact />}
+          </Show>
         </div>
       </div>
     </div>
@@ -708,6 +716,7 @@ const ToolPairDetail = (props: {
   call: ContextEvent
   result?: ContextEvent
   onClose: () => void
+  onJumpToEvent?: (eventId: string) => void
 }) => {
   const callData = () => props.call.data as ToolCallEventData
   const resultData = () => props.result?.data as ToolResultEventData | undefined
@@ -801,6 +810,14 @@ const ToolPairDetail = (props: {
             </div>
           </div>
           <div>
+            {/* Post-guard text — see SanitizedChip. */}
+            <Show when={resultData()!.sanitized}>
+              {(summary) => (
+                <div m="b-1">
+                  <SanitizedChip summary={summary()} onJump={props.onJumpToEvent} />
+                </div>
+              )}
+            </Show>
             <div text="xs dark-text-tertiary" m="b-1">
               Result
             </div>
@@ -853,7 +870,10 @@ const ToolCallDetail = (props: { data: ToolCallEventData }) => (
   </div>
 )
 
-const ToolResultDetail = (props: { data: ToolResultEventData }) => (
+const ToolResultDetail = (props: {
+  data: ToolResultEventData
+  onJumpToEvent?: (eventId: string) => void
+}) => (
   <div flex="~ col" gap="3">
     <div>
       <div text="xs dark-text-tertiary" m="b-1">
@@ -872,6 +892,14 @@ const ToolResultDetail = (props: { data: ToolResultEventData }) => (
       </div>
     </div>
     <div>
+      {/* The result below is the POST-guard text. Say so before it is read. */}
+      <Show when={props.data.sanitized}>
+        {(summary) => (
+          <div m="b-1">
+            <SanitizedChip summary={summary()} onJump={props.onJumpToEvent} />
+          </div>
+        )}
+      </Show>
       <div text="xs dark-text-tertiary" m="b-1">
         Result
       </div>
@@ -1194,7 +1222,52 @@ const roleColors: Record<string, string> = {
   tool: '#22d3ee', // cyan-400
 }
 
-/** Parse OpenAI-compatible HTTP body into structured messages + metadata */
+/**
+ * Flatten one message's `content` into readable text.
+ *
+ * OpenAI-shaped bodies put a plain string here. Anthropic puts an array of
+ * typed blocks — `{type:'text',text}`, `{type:'tool_use',…}`,
+ * `{type:'tool_result',…}` — and dumping that array through `JSON.stringify`
+ * is what made the prompt viewer useless on the default client chain (SA-H11):
+ * the prompt read as one wall of escaped JSON. Text blocks are concatenated;
+ * anything non-text keeps its JSON, labelled with its block type so it is still
+ * findable.
+ */
+function flattenContent(content: unknown): string {
+  if (content == null) return ''
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return JSON.stringify(content, null, 2)
+  return content
+    .map((block) => {
+      if (typeof block === 'string') return block
+      if (!block || typeof block !== 'object') return JSON.stringify(block)
+      const b = block as { type?: string; text?: unknown }
+      if (b.type === 'text' && typeof b.text === 'string') return b.text
+      return `[${b.type ?? 'block'}]\n${JSON.stringify(block, null, 2)}`
+    })
+    .join('\n\n')
+}
+
+/** A `system` value that is a string, or Anthropic's array of text blocks. */
+function hasSystemContent(system: unknown): boolean {
+  if (typeof system === 'string') return system.trim().length > 0
+  return Array.isArray(system) && system.length > 0
+}
+
+/**
+ * Parse an LLM HTTP request body into structured messages + metadata.
+ *
+ * Handles both provider shapes this app actually sends. OpenAI-compatible
+ * bodies carry the system prompt as `messages[0]` and string content;
+ * Anthropic's carries it as a **top-level `system` field** with content as
+ * block arrays. On the Anthropic shape the old parser swept `system` into the
+ * params bar (rendered as one unwrapped line of JSON) and escaped every message
+ * body — and since Anthropic-only is this repo's dev default, that blinded the
+ * primary debug surface exactly where it is needed most.
+ *
+ * The system prompt is lifted into a synthetic leading `system` message so both
+ * shapes render identically.
+ */
 function parsePromptBody(
   rawInput: string,
 ): { messages: ParsedMessage[]; model?: string; params: Record<string, unknown> } | null {
@@ -1205,16 +1278,31 @@ function parsePromptBody(
     const messages: ParsedMessage[] = body.messages.map(
       (m: { role?: string; content?: unknown }) => ({
         role: String(m.role ?? 'unknown'),
-        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 2),
+        content: flattenContent(m.content),
       }),
     )
 
-    // Extract non-message params
-    const { messages: _, model, ...rest } = body
+    // Anthropic's top-level system prompt becomes the first message.
+    if (hasSystemContent(body.system)) {
+      messages.unshift({ role: 'system', content: flattenContent(body.system) })
+    }
+
+    // Extract non-message params. `system` is dropped from `rest` whether or
+    // not it was liftable, so a malformed one can't reappear in the params bar.
+    const { messages: _messages, model, system: _system, ...rest } = body
     return { messages, model, params: rest }
   } catch {
     return null
   }
+}
+
+/** Longest param value rendered inline before it is truncated. */
+const PARAM_VALUE_MAX = 160
+
+/** Render a param value as a single wrappable, bounded string. */
+function formatParamValue(value: unknown): string {
+  const text = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value)
+  return text.length > PARAM_VALUE_MAX ? `${text.slice(0, PARAM_VALUE_MAX)}…` : text
 }
 
 const PromptMessage = (props: { msg: ParsedMessage }) => {
@@ -1286,10 +1374,21 @@ const ParsedPromptView = (props: { rawInput: string }) => {
                 )}
               >
                 {([key, val]) => (
-                  <div flex="~ col" gap="0.5">
+                  <div flex="~ col" gap="0.5" max-w="full" min-w="0">
                     <span text="dark-text-tertiary">{key}</span>
-                    <span text="dark-text-primary" font="mono">
-                      {typeof val === 'object' ? JSON.stringify(val) : String(val)}
+                    {/* Wrapped and capped: `tools` and `metadata` are objects
+                        that used to render as one unbroken line and push the
+                        model name off screen (SA-H11). */}
+                    <span
+                      text="dark-text-primary"
+                      font="mono"
+                      max-w="[28rem]"
+                      title={
+                        typeof val === 'object' && val !== null ? JSON.stringify(val) : String(val)
+                      }
+                      style={{ 'overflow-wrap': 'anywhere', 'white-space': 'pre-wrap' }}
+                    >
+                      {formatParamValue(val)}
                     </span>
                   </div>
                 )}
@@ -1613,8 +1712,31 @@ const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
 // Event Detail Panel Component
 // ============================================================================
 
-const EventDetailPanel = (props: { event: ContextEvent; onClose: () => void }) => {
+const EventDetailPanel = (props: {
+  event: ContextEvent
+  onClose: () => void
+  onJumpToEvent?: (eventId: string) => void
+}) => {
   const { type, ts, patternId, data, llmCall } = props.event
+
+  /**
+   * True when the LLM tabs above already render this event's `content`
+   * verbatim, so repeating it below would be pure duplication (SA-M8).
+   *
+   * That holds exactly when `parsedOutput` IS the message text — a plain
+   * string equal to `data.content`. Any structured `parsedOutput` (the
+   * Router's `{ route, intent }` dict, a controller action) is a different
+   * value, and suppressing the message on its account is how the router's
+   * reply came to be shown nowhere at all.
+   */
+  const duplicatesLlmOutput = () => {
+    if (!llmCall) return false
+    if (type !== 'assistant_message' && type !== 'user_message') return false
+    const parsed = llmCall.parsedOutput
+    if (typeof parsed !== 'string') return false
+    const content = (data as { content?: unknown })?.content
+    return typeof content === 'string' && parsed.trim() === content.trim()
+  }
 
   return (
     <div
@@ -1667,14 +1789,22 @@ const EventDetailPanel = (props: { event: ContextEvent; onClose: () => void }) =
           <LLMCallTabs llmCall={llmCall!} />
         </Show>
 
-        {/* Event-specific content — skip for messages with LLM tabs (avoids duplication) */}
-        <Show when={!(llmCall && (type === 'assistant_message' || type === 'user_message'))}>
+        {/* Event-specific content. Skipped only when the LLM tabs above already
+            show this exact text (SA-M8): the old test was "has an llmCall and
+            is a message", which is false for the Router — its `parsedOutput` is
+            a dict, so nothing rendered the router's own reply, and on the
+            direct-response route the router IS the author. Compare the values
+            instead of assuming they duplicate. */}
+        <Show when={!duplicatesLlmOutput()}>
           <Switch fallback={<GenericDetail data={data} />}>
             <Match when={type === 'tool_call'}>
               <ToolCallDetail data={data as ToolCallEventData} />
             </Match>
             <Match when={type === 'tool_result'}>
-              <ToolResultDetail data={data as ToolResultEventData} />
+              <ToolResultDetail
+                data={data as ToolResultEventData}
+                onJumpToEvent={props.onJumpToEvent}
+              />
             </Match>
             <Match when={type === 'controller_action'}>
               <ActionDetail data={data as ControllerActionEventData} />
@@ -1788,6 +1918,24 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
   const handleExpand = (index: number) => setExpandedIndex(index)
   const handleClose = () => setExpandedIndex(null)
 
+  /**
+   * Open the detail panel for an event by id — the shield chip's click-through
+   * from a neutralized `tool_result` to the `content_sanitized` event holding
+   * the verbatim spans (SA-H10).
+   *
+   * The two are never merged into one timeline item (`content_sanitized` is
+   * emitted before the `tool_result` it annotates, so `buildTimelineItems`
+   * pairs it with nothing), which is exactly why the link has to be explicit.
+   * A missing id leaves the current panel open rather than closing it — the
+   * audit event can be outside the window the panel was handed.
+   */
+  const handleJumpToEvent = (eventId: string) => {
+    const idx = timelineItems().findIndex(
+      (item) => item.kind === 'event' && item.event.id === eventId,
+    )
+    if (idx >= 0) setExpandedIndex(idx)
+  }
+
   const hasEvents = () => timelineItems().length > 0
 
   return (
@@ -1888,6 +2036,7 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
               <EventDetailPanel
                 event={(item() as { kind: 'event'; event: ContextEvent }).event}
                 onClose={handleClose}
+                onJumpToEvent={handleJumpToEvent}
               />
             }
           >
@@ -1899,6 +2048,7 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
                 (item() as { kind: 'tool_pair'; call: ContextEvent; result?: ContextEvent }).result
               }
               onClose={handleClose}
+              onJumpToEvent={handleJumpToEvent}
             />
           </Show>
         )}

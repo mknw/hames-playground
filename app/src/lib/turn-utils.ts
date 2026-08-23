@@ -33,6 +33,19 @@ export interface TurnData {
 // Turn Splitting
 // ============================================================================
 
+/**
+ * Index of the most recent `user_message` in the stream, or -1 when there is
+ * none. This is the turn boundary: everything after it belongs to the current
+ * turn. Shared so the Data Stash partition and the citation extractor agree on
+ * where "this turn" starts (SA-H7).
+ */
+export function findLastUserMessageIndex(events: ContextEvent[]): number {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].type === 'user_message') return i
+  }
+  return -1
+}
+
 /** Check if a tool_result event produces graph data */
 function isGraphProducingResult(data: ToolResultEventData): boolean {
   if (!data.success || !data.result) return false

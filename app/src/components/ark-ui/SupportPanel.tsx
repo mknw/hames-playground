@@ -47,6 +47,7 @@ export interface PromptStat {
 // Re-export GraphElement from shared types
 export type { GraphElement } from '~/lib/harness-client/types'
 import type { GraphElement } from '~/lib/harness-client/types'
+import { isEdgeElement, isNodeElement } from '~/lib/harness-client/graph-extractor'
 
 export interface SupportPanelProps {
   graphElements: GraphElement[];
@@ -380,8 +381,10 @@ const GraphTabContent = (props: GraphTabContentProps) => {
   const [frozenElements, setFrozenElements] = createSignal<ElementDefinition[]>([]);
 
   const effectiveElements = () => syncEnabled() ? props.elements : frozenElements();
-  const nodeCount = () => effectiveElements().filter(e => !e.data?.source).length;
-  const edgeCount = () => effectiveElements().filter(e => e.data?.source).length;
+  // See SA-M12: `data.kind` is the discriminator, not the presence of a
+  // `source` key (which is also a legitimate node property).
+  const nodeCount = () => effectiveElements().filter(isNodeElement).length;
+  const edgeCount = () => effectiveElements().filter(isEdgeElement).length;
 
   const toggleSync = () => {
     if (syncEnabled()) {

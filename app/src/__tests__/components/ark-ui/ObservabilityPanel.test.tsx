@@ -706,12 +706,19 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
     expect(emptyPanel.textContent).toContain('Output not captured')
   })
 
-  it('does not duplicate the message body under the LLM tabs for a message event', () => {
+  // SA-M8. Suppressing the message body is only right when the LLM tabs above
+  // already show that exact text — i.e. `parsedOutput` IS the content.
+  it('does not duplicate the message body when parsedOutput is that same text', () => {
     const events = [
       ev(
         'assistant_message',
         { content: 'the synthesised answer' },
-        { llmCall: llmCall({ functionName: 'Synthesize' }) },
+        {
+          llmCall: llmCall({
+            functionName: 'Synthesize',
+            parsedOutput: 'the synthesised answer',
+          }),
+        },
       ),
     ]
     const { container } = render(() => <ObservabilityPanel events={events} />)
@@ -721,6 +728,44 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
     expect(panel.textContent).toContain('Synthesize')
     // The MessageDetail block (Role/Content) is suppressed in favour of the tabs.
     expect(panel.textContent).not.toContain('Role')
+  })
+
+  // The old test was "has an llmCall and is a message", which is false for the
+  // Router: its parsedOutput is a `{ route, intent }` dict, so the router's own
+  // reply was rendered nowhere at all — and on the direct-response route the
+  // router IS the author of the answer the user sees.
+  it('still shows the message body when parsedOutput is structured, not the text', () => {
+    const events = [
+      ev(
+        'assistant_message',
+        { content: 'Sure — nothing to look up for that one.' },
+        {
+          llmCall: llmCall({
+            functionName: 'Router',
+            parsedOutput: { route: 'conversational', intent: 'greeting' },
+          }),
+        },
+      ),
+    ]
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+    fireEvent.click(rows(container)[0])
+
+    const panel = detail()!
+    expect(panel.textContent).toContain('Router')
+    expect(panel.textContent).toContain('Sure — nothing to look up for that one.')
+  })
+
+  it('shows the message body when the two texts merely differ', () => {
+    const events = [
+      ev(
+        'assistant_message',
+        { content: 'the answer the user saw' },
+        { llmCall: llmCall({ parsedOutput: 'something else entirely' }) },
+      ),
+    ]
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+    fireEvent.click(rows(container)[0])
+    expect(detail()!.textContent).toContain('the answer the user saw')
   })
 
   it('shows the LLM badge on a merged tool pair whose call carried an LLM step', () => {
@@ -858,5 +903,259 @@ describe('ObservabilityPanel — live updates', () => {
 
     expect(rows(container)).toHaveLength(2)
     expect(container.textContent).toContain('read_neo4j_cypher: ok')
+  })
+})
+
+// ============================================================================
+// SA-H10 — the shield chip
+// ============================================================================
+describe('ObservabilityPanel — neutralized tool results', () => {
+  const summary = (over: Record<string, unknown> = {}) => ({
+    tool: 'fetch',
+    namespace: 'web',
+    findingCount: 2,
+    rules: ['instruction-override', 'exfil-url'],
+    neutralized: true,
+    spotlighted: true,
+    scanned: 4096,
+    eventId: 'audit-1',
+    ...over,
+  })
+
+  const guardedPair = (resultOver: Record<string, unknown> = {}) => [
+    ev(
+      'content_sanitized',
+      {
+        tool: 'fetch',
+        namespace: 'web',
+        scanned: 4096,
+        spotlighted: true,
+        findings: [
+          {
+            rule: 'instruction-override',
+            layer: 'deterministic',
+            description: 'imperative aimed at the agent',
+            match: 'ignore all previous instructions',
+            replacement: '',
+          },
+        ],
+      },
+      { id: 'audit-1' },
+    ),
+    ev('tool_call', { callId: 'c1', tool: 'fetch', args: { url: 'https://x.test' } }),
+    ev('tool_result', {
+      callId: 'c1',
+      tool: 'fetch',
+      success: true,
+      result: 'the neutralized page text',
+      sanitized: summary(),
+      ...resultOver,
+    }),
+  ]
+
+  const chips = (root: ParentNode) => [
+    ...root.querySelectorAll<HTMLElement>('[data-role="sanitized-chip"]'),
+  ]
+
+  it('marks a guarded result on the timeline row, before it is opened', () => {
+    const { container } = render(() => <ObservabilityPanel events={guardedPair()} />)
+    const row = chips(container)
+    expect(row).toHaveLength(1)
+    expect(row[0].textContent).toContain('2 findings neutralized')
+  })
+
+  it('shows the finding count and rules above the result body', () => {
+    const { container } = render(() => <ObservabilityPanel events={guardedPair()} />)
+    fireEvent.click(rows(container).at(-1)!)
+
+    const panel = detailIn(container)!
+    const chip = chips(panel)[0]
+    expect(chip.textContent).toContain('2 findings neutralized')
+    expect(chip.textContent).toContain('instruction-override')
+    expect(chip.textContent).toContain('exfil-url')
+    // The result itself still renders — the chip annotates, it does not hide.
+    expect(panel.textContent).toContain('the neutralized page text')
+  })
+
+  it('caps a long rule list rather than spilling it', () => {
+    const events = guardedPair({
+      sanitized: summary({ rules: ['a', 'b', 'c', 'd', 'e'], findingCount: 5 }),
+    })
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+    fireEvent.click(rows(container).at(-1)!)
+    expect(chips(detailIn(container)!)[0].textContent).toContain('+2 more')
+  })
+
+  it('says "1 finding" for a single finding', () => {
+    const events = guardedPair({ sanitized: summary({ findingCount: 1, rules: ['x'] }) })
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+    expect(chips(container)[0].textContent).toContain('1 finding neutralized')
+  })
+
+  // `content_sanitized` is emitted BEFORE the tool_result it annotates, so
+  // buildTimelineItems never pairs them — the link has to be explicit.
+  it('jumps from the chip to the audit event holding the removed text', () => {
+    const { container } = render(() => <ObservabilityPanel events={guardedPair()} />)
+    fireEvent.click(rows(container).at(-1)!)
+
+    const chip = chips(detailIn(container)!).find((c) => c.tagName === 'BUTTON')!
+    fireEvent.click(chip)
+
+    const panel = detailIn(container)!
+    expect(panel.textContent).toContain('imperative aimed at the agent')
+    expect(panel.textContent).toContain('ignore all previous instructions')
+  })
+
+  it('renders a plain marker, not a button, when there is no audit event to open', () => {
+    const events = guardedPair({ sanitized: summary({ eventId: undefined }) })
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+    fireEvent.click(rows(container).at(-1)!)
+    expect(chips(detailIn(container)!).every((c) => c.tagName !== 'BUTTON')).toBe(true)
+  })
+
+  it('shows no chip for a result the guard did not touch', () => {
+    const events = [
+      ev('tool_call', { callId: 'c1', tool: 'fetch', args: {} }),
+      ev('tool_result', { callId: 'c1', tool: 'fetch', success: true, result: 'clean' }),
+    ]
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+    fireEvent.click(rows(container)[0])
+    expect(chips(container)).toHaveLength(0)
+  })
+
+  it('marks a standalone tool_result with no paired call', () => {
+    const events = [
+      ev('tool_result', { tool: 'fetch', success: true, result: 'x', sanitized: summary() }),
+    ]
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+    fireEvent.click(rows(container)[0])
+    expect(chips(detailIn(container)!)[0].textContent).toContain('2 findings neutralized')
+  })
+})
+
+// ============================================================================
+// SA-H11 — the prompt viewer on Anthropic-shaped bodies
+// ============================================================================
+describe('ObservabilityPanel — Anthropic prompt bodies', () => {
+  const openPrompt = (rawInput: string) => {
+    const events = [
+      ev(
+        'controller_action',
+        { action: { tool_name: 'x', tool_args: '{}' } },
+        {
+          llmCall: {
+            functionName: 'LoopController',
+            variables: {},
+            rawInput,
+            parsedOutput: {},
+          } as unknown as LLMCallData,
+        },
+      ),
+    ]
+    const rendered = render(() => <ObservabilityPanel events={events} />)
+    fireEvent.click(rows(rendered.container)[0])
+    return detailIn(rendered.container)!
+  }
+
+  // Anthropic-only is this repo's dev default, so a viewer that only understood
+  // the OpenAI shape blinded the primary debug surface.
+  it('flattens content blocks into readable text instead of escaped JSON', () => {
+    const panel = openPrompt(
+      JSON.stringify({
+        model: 'claude-sonnet-5',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'first paragraph' },
+              { type: 'text', text: 'second paragraph' },
+            ],
+          },
+        ],
+      }),
+    )
+    expect(panel.textContent).toContain('first paragraph')
+    expect(panel.textContent).toContain('second paragraph')
+    expect(panel.textContent).not.toContain('"type": "text"')
+  })
+
+  it('lifts the top-level system prompt into a system message', () => {
+    const panel = openPrompt(
+      JSON.stringify({
+        model: 'claude-sonnet-5',
+        system: 'You are a controller.',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      }),
+    )
+    expect(panel.textContent).toContain('2 messages')
+    expect(panel.textContent).toContain('system')
+    expect(panel.textContent).toContain('You are a controller.')
+  })
+
+  it('lifts a system prompt supplied as text blocks', () => {
+    const panel = openPrompt(
+      JSON.stringify({
+        system: [{ type: 'text', text: 'cached preamble' }],
+        messages: [{ role: 'user', content: 'go' }],
+      }),
+    )
+    expect(panel.textContent).toContain('cached preamble')
+  })
+
+  it('labels a non-text block by type rather than dropping it', () => {
+    const panel = openPrompt(
+      JSON.stringify({
+        messages: [
+          {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 'tu_1', name: 'read_neo4j_cypher', input: {} }],
+          },
+        ],
+      }),
+    )
+    expect(panel.textContent).toContain('[tool_use]')
+    expect(panel.textContent).toContain('read_neo4j_cypher')
+  })
+
+  it('does not surface an empty system field as a message', () => {
+    const panel = openPrompt(
+      JSON.stringify({ system: '   ', messages: [{ role: 'user', content: 'go' }] }),
+    )
+    expect(panel.textContent).toContain('1 message')
+  })
+
+  it('still renders the OpenAI shape', () => {
+    const panel = openPrompt(
+      JSON.stringify({
+        model: 'gpt-oss-120b',
+        messages: [
+          { role: 'system', content: 'be brief' },
+          { role: 'user', content: 'go' },
+        ],
+      }),
+    )
+    expect(panel.textContent).toContain('2 messages')
+    expect(panel.textContent).toContain('be brief')
+  })
+
+  it('truncates an oversized param value instead of letting it push the bar out', () => {
+    const panel = openPrompt(
+      JSON.stringify({
+        model: 'claude-sonnet-5',
+        metadata: { note: 'x'.repeat(400) },
+        messages: [{ role: 'user', content: 'go' }],
+      }),
+    )
+    // The model name survives, and the long value is elided.
+    expect(panel.textContent).toContain('claude-sonnet-5')
+    expect(panel.textContent).not.toContain('x'.repeat(300))
+    expect(panel.textContent).toContain('…')
+  })
+
+  it('keeps the system prompt out of the params bar', () => {
+    const panel = openPrompt(JSON.stringify({ system: 'You are a controller.', messages: [] }))
+    // Rendered once, as a message — the params bar has no `system` row.
+    expect(panel.textContent).toContain('You are a controller.')
+    expect(panel.textContent).toContain('1 message')
   })
 })

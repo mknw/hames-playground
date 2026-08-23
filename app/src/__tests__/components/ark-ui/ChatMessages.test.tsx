@@ -110,8 +110,12 @@ describe('ChatMessages — transcript shape', () => {
   })
 })
 
-describe('ChatMessages — think blocks', () => {
-  it('splits a leading <think> block out of the visible answer', () => {
+// SA-L10: the <think> extraction is gone. It was a local-GLM leftover; the
+// Anthropic chains this app routes through never expose a reasoning trace, so
+// the only strings that pattern could still match were answers that genuinely
+// begin with those characters — which it silently hid.
+describe('ChatMessages — no think-block extraction', () => {
+  it('renders an answer that opens with a think tag in full, with no affordance', () => {
     const { container } = render(() => (
       <ChatMessages
         messages={[
@@ -122,23 +126,22 @@ describe('ChatMessages — think blocks', () => {
         ]}
       />
     ))
-    // The reasoning lands in its own collapsible preview…
-    expect(container.querySelector('.think-preview')?.textContent).toBe('weighing the options')
-    // …and is not repeated in the answer body.
-    const body = container.querySelector('.prose-chat:not(.think-body)')!
+    expect(container.querySelector('.think-root')).toBeNull()
+    expect(container.querySelector('.think-preview')).toBeNull()
+    const body = container.querySelector('.prose-chat')!
     expect(body.textContent).toContain('The answer is 42.')
-    expect(body.textContent).not.toContain('weighing the options')
+    // Nothing was peeled off and thrown behind a collapsible.
+    expect(container.textContent).toContain('weighing the options')
   })
 
-  it('renders no think affordance for an answer without one', () => {
+  it('renders no think affordance for an ordinary answer', () => {
     const { container } = render(() => (
       <ChatMessages messages={[msg({ role: 'assistant', content: 'Just the answer.' })]} />
     ))
     expect(container.querySelector('.think-root')).toBeNull()
+    expect(container.textContent).toContain('Just the answer.')
   })
 
-  // Only a *leading* block is reasoning — a `<think>` mid-answer is content
-  // the model wrote about thinking, and must stay in the body.
   it('leaves a non-leading think tag in the answer body', () => {
     const { container } = render(() => (
       <ChatMessages
@@ -302,6 +305,55 @@ describe('ChatMessages — retriever citations', () => {
     expect(inline.textContent).toContain('report.pdf')
     inline.click()
     expect(onOpenReference).toHaveBeenCalledWith({ docId: 'doc-1' })
+  })
+
+  // SA-M10. A model that writes citation markup into its answer must not get a
+  // working citation out of it: the sanitizer strips `class` and `data-*`, and
+  // only the annotators — running on typed reference data afterwards — put them
+  // back. Nothing here is escaped away, so the prose still reads normally.
+  it('ignores citation markup written by the model itself', () => {
+    const onOpenReference = vi.fn()
+    const { container } = render(() => (
+      <ChatMessages
+        messages={[
+          msg({
+            role: 'assistant',
+            content:
+              'Confirmed in <span class="doc-ref" data-doc-id="attacker-doc">payroll.xlsx</span>.',
+            references: [],
+          }),
+        ]}
+        onOpenReference={onOpenReference}
+      />
+    ))
+    expect(container.querySelector('.doc-ref')).toBeNull()
+    expect(container.querySelector('[data-doc-id]')).toBeNull()
+    expect(container.textContent).toContain('payroll.xlsx')
+
+    // Nothing clickable was produced, so nothing can open.
+    container.querySelector<HTMLElement>('.prose-chat')!.click()
+    expect(onOpenReference).not.toHaveBeenCalled()
+  })
+
+  it('still annotates a genuine citation for the same filename', () => {
+    const onOpenReference = vi.fn()
+    const { container } = render(() => (
+      <ChatMessages
+        messages={[
+          msg({
+            role: 'assistant',
+            content:
+              'Confirmed in <span class="doc-ref" data-doc-id="attacker-doc">payroll.xlsx</span>.',
+            references: [reference('payroll.xlsx', 'doc-real')],
+          }),
+        ]}
+        onOpenReference={onOpenReference}
+      />
+    ))
+    const inline = container.querySelector<HTMLElement>('.doc-ref')!
+    inline.click()
+    // The annotator's docId, never the one the model wrote.
+    expect(onOpenReference).toHaveBeenCalledWith({ docId: 'doc-real' })
   })
 })
 

@@ -224,8 +224,10 @@ describe('ChatInterface — hydration', () => {
     await settle()
 
     expect(transcript(container)).toContain('earlier answer')
-    expect(onEventsUpdate).toHaveBeenCalledWith(events)
-    expect(onContextUpdate).toHaveBeenCalledWith({ events })
+    // Panel callbacks carry the session id (SA-H8), so a hydration that lands
+    // after the user has moved on still files into the thread it belongs to.
+    expect(onEventsUpdate).toHaveBeenCalledWith('s1', events)
+    expect(onContextUpdate).toHaveBeenCalledWith('s1', { events })
     expect(onSelectedAgentChange).toHaveBeenLastCalledWith('kg')
   })
 

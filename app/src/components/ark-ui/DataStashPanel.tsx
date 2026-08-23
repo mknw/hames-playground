@@ -20,6 +20,8 @@ import {
   referencesForDoc,
   type OpenReferenceTarget,
 } from '~/lib/harness-client/reference-extractor'
+import { findLastUserMessageIndex } from '~/lib/turn-utils'
+import { SanitizedChip } from './SanitizedChip'
 
 // ============================================================================
 // Types
@@ -150,13 +152,6 @@ function formatBytes(bytes: number): string {
 // Helpers
 // ============================================================================
 
-function findLastUserMessageIndex(events: ContextEvent[]): number {
-  for (let i = events.length - 1; i >= 0; i--) {
-    if (events[i].type === 'user_message') return i
-  }
-  return -1
-}
-
 function truncate(str: string, max: number): string {
   if (str.length <= max) return str
   return str.slice(0, max) + '…'
@@ -219,6 +214,12 @@ const StashIcon = (props: {
   const [loading, setLoading] = createSignal(false)
   const [menuOpen, setMenuOpen] = createSignal(false)
 
+  // Summary if the background summarizer has produced one, else a raw preview.
+  // There is deliberately no "Summary pending…" caption (SA-M9): summarization
+  // runs after `/api/events` closes its stream and nothing re-delivers the
+  // result to the page that is open, so the caption was permanent for the whole
+  // live session and told the user to wait for something that would only ever
+  // appear on the next load. The raw preview is the honest fallback.
   const tooltipText = () => {
     const data = d()
     if (data.summary) return data.summary
@@ -306,6 +307,19 @@ const StashIcon = (props: {
                 }}
               />
             </Show>
+            {/* Injection guard rewrote this result (SA-H10). Marked on the chip
+                so it is visible in the gallery, not only on hover. */}
+            <Show when={d().sanitized}>
+              <span
+                class="i-material-symbols-shield-outline"
+                w="3"
+                h="3"
+                text="orange-400"
+                role="img"
+                aria-label="Content neutralized by the injection guard"
+                title="Content neutralized by the injection guard"
+              />
+            </Show>
           </div>
         </Tooltip.Trigger>
 
@@ -333,10 +347,13 @@ const StashIcon = (props: {
             >
               {tooltipText()}
             </div>
-            <Show when={!d().summary}>
-              <div text="xs dark-text-tertiary" m="t-2" style={{ 'font-style': 'italic' }}>
-                Summary pending…
-              </div>
+            {/* The preview above is post-guard text — say so next to it. */}
+            <Show when={d().sanitized}>
+              {(summary) => (
+                <div m="t-2">
+                  <SanitizedChip summary={summary()} />
+                </div>
+              )}
             </Show>
           </Tooltip.Content>
         </Tooltip.Positioner>

@@ -1,4 +1,3 @@
-import { Collapsible } from '@ark-ui/solid/collapsible'
 import { ScrollArea } from '@ark-ui/solid/scroll-area'
 import { For, Show, Switch, Match, createEffect, createSignal, type JSX } from 'solid-js'
 import type { ElementDefinition } from 'cytoscape'
@@ -163,6 +162,12 @@ function dedupeReferencesByDoc(references: RetrievalReference[]): RetrievalRefer
  * they interpolate are individually escaped instead (see the annotators
  * above). Sanitizing last would have to allow those spans back in anyway,
  * and would re-parse markup we just produced.
+ *
+ * This order is also what makes the citations trustworthy (SA-M10):
+ * `sanitizeMarkdownHtml` strips `class` down to an allowlist and drops the
+ * `data-*` hooks entirely, so a `doc-ref` span in *model output* cannot reach
+ * the DOM. Every interactive span the click handlers below respond to was put
+ * there by one of these two annotators, from typed reference data.
  */
 export function renderAssistantMarkdown(
   content: string,
@@ -171,20 +176,6 @@ export function renderAssistantMarkdown(
 ): string {
   const html = sanitizeMarkdownHtml(marked.parse(content ?? '') as string)
   return annotateReferences(annotateEntities(html, entityNames), references)
-}
-
-// ============================================================================
-// Think Block Extraction
-// ============================================================================
-
-/** Separate <think> blocks from visible content */
-function extractThinking(content: string): { thinking: string | null; body: string } {
-  const match = content.match(/^<think>([\s\S]*?)<\/think>\s*/)
-  if (!match) return { thinking: null, body: content }
-  return {
-    thinking: match[1].trim(),
-    body: content.slice(match[0].length),
-  }
 }
 
 export const ChatMessages = (props: ChatMessagesProps) => {
@@ -367,64 +358,50 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                       }
                     >
                       <Match when={message.role === 'assistant'}>
-                        {(() => {
-                          const { thinking, body } = extractThinking(message.content)
-                          return (
-                            <>
-                              <Show when={thinking}>
-                                <Collapsible.Root class="think-root">
-                                  <Collapsible.Trigger class="think-trigger">
-                                    <span
-                                      class="i-mdi-brain"
-                                      style={{ width: '14px', height: '14px', 'flex-shrink': 0 }}
-                                    />
-                                    <span class="think-preview">{thinking!.slice(0, 140)}</span>
-                                  </Collapsible.Trigger>
-                                  <Collapsible.Content class="think-content">
-                                    <div
-                                      class="think-body prose-chat"
-                                      // eslint-disable-next-line solid/no-innerhtml
-                                      innerHTML={sanitizeMarkdownHtml(
-                                        marked.parse(thinking!) as string,
-                                      )}
-                                    />
-                                  </Collapsible.Content>
-                                </Collapsible.Root>
-                              </Show>
-                              <div
-                                text="sm"
-                                class="prose-chat"
-                                // eslint-disable-next-line solid/no-innerhtml
-                                innerHTML={renderAssistantContent(body, message.references ?? [])}
-                              />
-                              {/* Sources footer — one chip per cited file; opens
-                                  the inline file viewer (navigator pages chunks). */}
-                              <Show when={message.references && message.references.length > 0}>
-                                <div class="doc-ref-footer">
-                                  <span text="xs dark-text-tertiary">Sources:</span>
-                                  <For each={dedupeReferencesByDoc(message.references!)}>
-                                    {(r) => (
-                                      <button
-                                        class="doc-ref-chip"
-                                        title={`Open ${r.source} in viewer`}
-                                        onClick={(e) => {
-                                          e.stopPropagation()
-                                          props.onOpenReference?.({ docId: r.docId })
-                                        }}
-                                      >
-                                        <span
-                                          class="i-mdi-file-document-outline"
-                                          style={{ width: '11px', height: '11px' }}
-                                        />
-                                        {r.source}
-                                      </button>
-                                    )}
-                                  </For>
-                                </div>
-                              </Show>
-                            </>
-                          )
-                        })()}
+                        {/* No <think> extraction here (SA-L10). It was a local-GLM
+                    leftover: a leading `<think>…</think>` was peeled off the
+                    answer and shown as a collapsed reasoning block. The
+                    Anthropic clients this app now routes through never expose
+                    their trace (empty string + signature, see CLAUDE.md), so
+                    the only strings that pattern can still match are answers
+                    that legitimately open with those literal characters —
+                    which it would silently hide. */}
+                        <div
+                          text="sm"
+                          class="prose-chat"
+                          // eslint-disable-next-line solid/no-innerhtml
+                          innerHTML={renderAssistantContent(
+                            message.content,
+                            message.references ?? [],
+                          )}
+                        />
+                        {/* Sources footer — one chip per cited file; opens
+                    the inline file viewer (navigator pages chunks). */}
+                        <Show when={message.references && message.references.length > 0}>
+                          <div class="doc-ref-footer">
+                            <span text="xs dark-text-tertiary">Sources:</span>
+                            <For each={dedupeReferencesByDoc(message.references!)}>
+                              {(r) => (
+                                <button
+                                  class="doc-ref-chip"
+                                  title={`Open ${r.source} in viewer`}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    props.onOpenReference?.({ docId: r.docId })
+                                  }}
+                                >
+                                  <span
+                                    class="i-material-symbols-description-outline"
+                                    w="[11px]"
+                                    h="[11px]"
+                                    aria-hidden="true"
+                                  />
+                                  {r.source}
+                                </button>
+                              )}
+                            </For>
+                          </div>
+                        </Show>
                       </Match>
                       <Match when={message.role === 'error' || message.role === 'warning'}>
                         <div flex="~ col" gap="1">

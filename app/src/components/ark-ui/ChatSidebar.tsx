@@ -366,34 +366,59 @@ const RowProgress = (props: { snapshot: ChainProgressSnapshot }) => {
   )
 }
 
-/** Renders the indicator chosen by {@link rowIndicator}. Branches live in
- *  <Switch>/<Match>, not early returns — Solid components run once, so a
- *  body-level `if (props.…) return …` freezes the branch at mount
- *  (solid/components-return-once). */
+/**
+ * Icon-only status glyph for a thread row, keyed by {@link rowIndicator}.
+ *
+ * Icons are `material-symbols` (SA-L7). They used to be `i-mdi-*`, which is
+ * **not** a registered collection in `uno.config.ts` — those classes emitted no
+ * CSS at all, so every state rendered as the same empty 14px box and a failed
+ * action was visually identical to a completed one. This is the load-bearing
+ * case for the icon-set rule, not a cosmetic one.
+ *
+ * Each state carries an `aria-label` (icon-only, so the glyph *is* the control's
+ * name) and a `title` — the text alternative `color-not-only` requires, since a
+ * row has no space for a visible caption.
+ *
+ * Branches live in <Switch>/<Match>, not early returns — Solid components run
+ * once, so a body-level `if (props.…) return …` freezes the branch at mount
+ * (solid/components-return-once).
+ */
 const StatusBadge = (props: { indicator: RowIndicator }) => (
   <Switch>
     <Match when={props.indicator === 'running'}>
       <span
         title="Running"
-        aria-label="running"
-        class="i-mdi-loading animate-spin"
-        style={{ width: '14px', height: '14px', color: '#22d3ee', 'flex-shrink': 0 }}
+        role="img"
+        aria-label="Running"
+        class="i-material-symbols-progress-activity animate-spin"
+        w="3.5"
+        h="3.5"
+        text="cyan-400"
+        style={{ 'flex-shrink': 0 }}
       />
     </Match>
     <Match when={props.indicator === 'action-error'}>
       <span
         title="Failed"
-        aria-label="error"
-        class="i-mdi-alert-circle-outline"
-        style={{ width: '14px', height: '14px', color: '#f87171', 'flex-shrink': 0 }}
+        role="img"
+        aria-label="Failed"
+        class="i-material-symbols-error-outline"
+        w="3.5"
+        h="3.5"
+        text="red-400"
+        style={{ 'flex-shrink': 0 }}
       />
     </Match>
     <Match when={props.indicator === 'action-paused'}>
       <span
         title="Awaiting approval"
-        aria-label="paused"
-        class="i-mdi-pause-circle-outline"
-        style={{ width: '14px', height: '14px', color: '#f59e0b', 'flex-shrink': 0 }}
+        role="img"
+        aria-label="Awaiting approval"
+        class="i-material-symbols-pause-circle-outline"
+        w="3.5"
+        h="3.5"
+        text="amber-500"
+        style={{ 'flex-shrink': 0 }}
       />
     </Match>
     {/* Done action — a subtle bolt marks it as POST-triggered. 'none'
@@ -401,9 +426,13 @@ const StatusBadge = (props: { indicator: RowIndicator }) => (
     <Match when={props.indicator === 'action-done'}>
       <span
         title="Action (completed)"
-        aria-label="action"
-        class="i-mdi-lightning-bolt-outline"
-        style={{ width: '13px', height: '13px', color: '#71717a', 'flex-shrink': 0 }}
+        role="img"
+        aria-label="Action, completed"
+        class="i-material-symbols-bolt-outline"
+        w="3.5"
+        h="3.5"
+        text="dark-text-tertiary"
+        style={{ 'flex-shrink': 0 }}
       />
     </Match>
   </Switch>

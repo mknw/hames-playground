@@ -151,7 +151,41 @@ describe('ChatSidebar — expanded list', () => {
     const labels = rows(container).map(
       (r) => r.querySelector('[aria-label]')?.getAttribute('aria-label') ?? null,
     )
-    expect(labels).toEqual([null, 'running'])
+    expect(labels).toEqual([null, 'Running'])
+  })
+
+  // SA-L7. `i-mdi-*` is not a registered icon collection in `uno.config.ts`, so
+  // these classes emitted no CSS at all — every state rendered as the same
+  // empty box and a failed action was indistinguishable from a completed one.
+  // The status glyph is the load-bearing case for the icon-set rule.
+  it('draws every status glyph from the registered icon set, each with a label', () => {
+    const cases: { status: string; icon: string; label: string }[] = [
+      { status: 'running', icon: 'i-material-symbols-progress-activity', label: 'Running' },
+      { status: 'error', icon: 'i-material-symbols-error-outline', label: 'Failed' },
+      {
+        status: 'paused',
+        icon: 'i-material-symbols-pause-circle-outline',
+        label: 'Awaiting approval',
+      },
+      { status: 'done', icon: 'i-material-symbols-bolt-outline', label: 'Action, completed' },
+    ]
+
+    for (const c of cases) {
+      const { container, unmount } = render(() => (
+        <ChatSidebar
+          {...baseProps()}
+          threads={[thread({ id: 'x', kind: 'action', status: c.status as never })]}
+        />
+      ))
+      const glyph = container.querySelector('[aria-label]')!
+      expect(glyph.className, c.status).toContain(c.icon)
+      expect(glyph.className, c.status).not.toContain('i-mdi-')
+      expect(glyph.getAttribute('aria-label')).toBe(c.label)
+      // A text alternative as well as the hue — the row has no room for a
+      // caption, so `title` carries it (`color-not-only`).
+      expect(glyph.getAttribute('title')).toBeTruthy()
+      unmount()
+    }
   })
 
   it('marks the selected row with aria-current-style accent state', () => {

@@ -7,6 +7,7 @@ import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPane
 import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns'
 import { executeCypherWrite } from '~/lib/neo4j/write-action'
 import { mergeGraphElements } from '~/lib/graph-merge'
+import { isEdgeElement, isNodeElement } from '~/lib/harness-client/graph-extractor'
 import { listConversations, deleteConversationsBulk, type OpenReferenceTarget } from '~/lib/harness-client'
 import { newSessionId } from '~/lib/session-id'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
@@ -36,13 +37,63 @@ export default function Home() {
   // focuses the textarea so the user can start typing without an extra click.
   const [focusInputToken, setFocusInputToken] = createSignal(0)
 
-  const [graphElements, setGraphElements] = createSignal<GraphElement[]>([])
   const [highlightedIds, setHighlightedIds] = createSignal<string[]>([])
   // A citation clicked in an assistant message → SupportPanel switches to the
   // Data Stash tab and opens the inline viewer at that reference.
   const [pendingReference, setPendingReference] = createSignal<OpenReferenceTarget | null>(null)
-  const [contextEvents, setContextEvents] = createSignal<ContextEvent[]>([])
-  const [unifiedContext, setUnifiedContext] = createSignal<UnifiedContext | undefined>(undefined)
+
+  // ---------------------------------------------------------------------------
+  // Per-session panel state (SA-H8)
+  // ---------------------------------------------------------------------------
+  // Graph elements, the observability event stream and the unified context used
+  // to be three route-level singletons shared by every thread, on the
+  // assumption that only the thread on screen produces them. Two things break
+  // that: a run keeps streaming after the user switches away, and the hydration
+  // effect in ChatInterface deliberately early-returns for a session that is
+  // still processing (it must not wipe a live buffer, #105) — so
+  // `onResetForNewSession` never fires on the way back in. Run A, switch to B,
+  // return to A, and A's live events appended onto B's panels: a graph and a
+  // timeline mixing two conversations, with no indication of it.
+  //
+  // The fix is the one #105 already applied to chat buffers: address the state
+  // by session id and let each thread accumulate its own. The panels then read
+  // the *displayed* session and nothing else.
+  const eventsBySession = new Map<string, ReturnType<typeof createSignal<ContextEvent[]>>>()
+  const graphBySession = new Map<string, ReturnType<typeof createSignal<GraphElement[]>>>()
+  const contextBySession = new Map<
+    string,
+    ReturnType<typeof createSignal<UnifiedContext | undefined>>
+  >()
+
+  const eventsSignal = (sid: string) => {
+    let sig = eventsBySession.get(sid)
+    if (!sig) {
+      sig = createSignal<ContextEvent[]>([])
+      eventsBySession.set(sid, sig)
+    }
+    return sig
+  }
+  const graphSignal = (sid: string) => {
+    let sig = graphBySession.get(sid)
+    if (!sig) {
+      sig = createSignal<GraphElement[]>([])
+      graphBySession.set(sid, sig)
+    }
+    return sig
+  }
+  const contextSignal = (sid: string) => {
+    let sig = contextBySession.get(sid)
+    if (!sig) {
+      sig = createSignal<UnifiedContext | undefined>(undefined)
+      contextBySession.set(sid, sig)
+    }
+    return sig
+  }
+
+  // What the panels render: always the session currently on screen.
+  const contextEvents = () => eventsSignal(selectedSessionId())[0]()
+  const graphElements = () => graphSignal(selectedSessionId())[0]()
+  const unifiedContext = () => contextSignal(selectedSessionId())[0]()
 
   // Block the chat composer while uploaded sources are still embedding, so the
   // user can't query the retriever before its documents are searchable. Tracked
@@ -271,6 +322,15 @@ export default function Home() {
   const unregisterAbortController = (sid: string) => {
     abortControllers.delete(sid)
   }
+  // Explicit user cancel from the composer's Stop control (SA-M11). Aborting
+  // only tears down the browser's half of the stream — the chain keeps running
+  // server-side and persists its result, which is what the bubble the composer
+  // leaves behind says.
+  const abortSession = (sid: string) => {
+    const ac = abortControllers.get(sid)
+    if (!ac) return
+    try { ac.abort() } catch { /* already settled */ }
+  }
 
   onMount(() => {
     const onUnload = () => {
@@ -283,46 +343,68 @@ export default function Home() {
     onCleanup(() => window.removeEventListener('beforeunload', onUnload))
   })
 
-  // Accumulate graph elements across calls. Dedup + touched-flag refresh logic
-  // lives in `mergeGraphElements` so it can be unit-tested in isolation.
-  const accumulateGraphElements = (newElements: GraphElement[]) => {
-    setGraphElements(prev => mergeGraphElements(prev, newElements))
-    // Track newly added IDs for highlighting
+  // Accumulate graph elements for one session. Dedup + touched-flag refresh
+  // logic lives in `mergeGraphElements` so it can be unit-tested in isolation.
+  const accumulateGraphElements = (sid: string, newElements: GraphElement[]) => {
+    graphSignal(sid)[1](prev => mergeGraphElements(prev, newElements))
+    // Highlighting is view state, not per-session data: only a batch landing in
+    // the thread on screen should move the highlight.
+    if (sid !== selectedSessionId()) return
     const newIds = newElements.map(e => e.data?.id).filter((id): id is string => !!id)
     setHighlightedIds(newIds)
   }
 
-  // Accumulate context events
-  const accumulateEvents = (newEvents: ContextEvent[]) => {
-    setContextEvents(prev => [...prev, ...newEvents])
+  // Accumulate context events for one session.
+  const accumulateEvents = (sid: string, newEvents: ContextEvent[]) => {
+    eventsSignal(sid)[1](prev => [...prev, ...newEvents])
   }
 
-  // Clear all graph elements
-  const clearGraph = () => {
-    setGraphElements([])
-    setHighlightedIds([])
+  const setSessionContext = (sid: string, ctx: UnifiedContext) => {
+    contextSignal(sid)[1](() => ctx)
   }
 
-  // Clear all events
-  const clearEvents = () => {
-    setContextEvents([])
-    setUnifiedContext(undefined)
+  // Clear one session's graph.
+  const clearGraph = (sid: string = selectedSessionId()) => {
+    graphSignal(sid)[1](() => [])
+    if (sid === selectedSessionId()) setHighlightedIds([])
   }
 
-  // Wipe per-conversation state. Called by ChatInterface before it hydrates a
-  // newly selected sessionId so the graph + observability tabs don't keep
-  // showing stale data from the previous thread. Progress state is NOT cleared
-  // here — it belongs to the per-session registry, so a still-running stream
-  // for the previous thread keeps populating its own controller.
-  const resetForNewSession = () => {
-    clearGraph()
-    clearEvents()
+  // Clear one session's events + context.
+  const clearEvents = (sid: string = selectedSessionId()) => {
+    eventsSignal(sid)[1](() => [])
+    contextSignal(sid)[1](() => undefined)
+  }
+
+  // Wipe one conversation's panel state. Called by ChatInterface before it
+  // hydrates a session, so a rehydration replaces rather than appends. Progress
+  // state is NOT cleared here — it belongs to the per-session registry, so a
+  // still-running stream for another thread keeps populating its own
+  // controller.
+  const resetForNewSession = (sid: string) => {
+    clearGraph(sid)
+    clearEvents(sid)
+  }
+
+  // Panel state for an idle session is disposable — ChatInterface reloads it
+  // from the persisted context on the next visit — so it is pruned alongside
+  // the chat buffers. A *running* session's buffers are the only live copy and
+  // are never dropped.
+  const prunePanelState = (keep: string) => {
+    const states = runStates()
+    for (const map of [eventsBySession, graphBySession, contextBySession]) {
+      for (const sid of [...map.keys()]) {
+        if (sid === keep || states[sid]?.isProcessing) continue
+        map.delete(sid)
+      }
+    }
   }
 
   const handleNewChat = () => {
-    resetForNewSession()
     const id = newSessionId()
+    // A fresh id has no panel state to clear; what matters is not clearing the
+    // outgoing thread's (it may still be streaming into it).
     pruneIdleBuffers(id)
+    prunePanelState(id)
     setSelectedSessionId(id)
     setPlaceholderSessionId(id)
     setFocusInputToken(t => t + 1)
@@ -330,10 +412,10 @@ export default function Home() {
 
   const handleSelectThread = (threadId: string) => {
     if (threadId === selectedSessionId()) return
-    resetForNewSession()
     // Opening the thread is the acknowledgement — drop its completion mark.
     clearCompletion(threadId)
     pruneIdleBuffers(threadId)
+    prunePanelState(threadId)
     setSelectedSessionId(threadId)
     // User picked an existing thread — drop the optimistic row.
     setPlaceholderSessionId(null)
@@ -353,6 +435,9 @@ export default function Home() {
     for (const id of deleted) {
       messagesBySession.delete(id)
       progressBySession.delete(id)
+      eventsBySession.delete(id)
+      graphBySession.delete(id)
+      contextBySession.delete(id)
       clearCompletion(id)
       abortControllers.delete(id)
     }
@@ -390,8 +475,8 @@ export default function Home() {
 
   // Wrap the supplied unified-context setter so each save also refreshes the
   // sidebar list (titles update once the first user_message lands).
-  const handleContextUpdate = (ctx: UnifiedContext) => {
-    setUnifiedContext(ctx)
+  const handleContextUpdate = (sid: string, ctx: UnifiedContext) => {
+    setSessionContext(sid, ctx)
     refetchThreads()
   }
 
@@ -404,10 +489,12 @@ export default function Home() {
     }
   }
 
-  // Handle data stash actions (hide/unhide/archive/unarchive)
+  // Handle data stash actions (hide/unhide/archive/unarchive). The panel only
+  // ever shows the displayed session, so that is the buffer this patches.
   const handleStashAction = async (eventId: string, action: StashAction) => {
+    const sid = selectedSessionId()
     // Optimistic UI update: mutate local signal immediately
-    setContextEvents(prev => prev.map(e => {
+    eventsSignal(sid)[1](prev => prev.map(e => {
       if (e.id !== eventId || e.type !== 'tool_result') return e
       const d = { ...(e.data as ToolResultEventData) }
       if (action === 'hide') d.hidden = true
@@ -421,34 +508,28 @@ export default function Home() {
     await fetch('/api/stash', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: selectedSessionId(), eventId, action }),
+      body: JSON.stringify({ sessionId: sid, eventId, action }),
     })
   }
 
-  // Build a set of known entity names/labels from graph elements for chat highlighting
+  // Build a set of known entity names/labels from graph elements for chat
+  // highlighting. Nodes are indexed first so a name that is both a node label
+  // and a relationship type resolves to the node's id first; node-vs-edge is
+  // read off the extractor's explicit `data.kind` stamp rather than guessed
+  // from a `source` key (SA-M12).
   const graphEntityNames = createMemo(() => {
     const names = new Map<string, string[]>() // name → [id1, id2, ...]
-    for (const el of graphElements()) {
+    const index = (el: GraphElement) => {
       const d = el.data
-      if (!d?.id) continue
+      if (!d?.id) return
       const label = d.label as string | undefined
-      if (label && !d.source) { // node, not edge
-        const existing = names.get(label) ?? []
-        existing.push(d.id as string)
-        names.set(label, existing)
-      }
+      if (!label) return
+      const existing = names.get(label) ?? []
+      existing.push(d.id as string)
+      names.set(label, existing)
     }
-    // Also index edge labels → edge IDs
-    for (const el of graphElements()) {
-      const d = el.data
-      if (!d?.id || !d.source) continue // skip nodes
-      const label = d.label as string | undefined
-      if (label) {
-        const existing = names.get(label) ?? []
-        existing.push(d.id as string)
-        names.set(label, existing)
-      }
-    }
+    for (const el of graphElements()) if (isNodeElement(el)) index(el)
+    for (const el of graphElements()) if (isEdgeElement(el)) index(el)
     return names
   })
 
@@ -503,6 +584,7 @@ export default function Home() {
                 onRunSettled={handleRunSettled}
                 registerAbortController={registerAbortController}
                 unregisterAbortController={unregisterAbortController}
+                abortSession={abortSession}
                 onTitleUpdated={handleTitleUpdated}
                 onPromoted={handlePromoted}
                 focusInputToken={focusInputToken()}
@@ -528,8 +610,8 @@ export default function Home() {
             highlightedIds={highlightedIds()}
             contextEvents={contextEvents()}
             unifiedContext={unifiedContext()}
-            onClearGraph={clearGraph}
-            onClearEvents={clearEvents}
+            onClearGraph={() => clearGraph()}
+            onClearEvents={() => clearEvents()}
             onCypherWrite={handleCypherWrite}
             sessionId={selectedSessionId()}
             agentId={currentAgentId()}

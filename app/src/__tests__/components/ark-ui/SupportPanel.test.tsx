@@ -180,14 +180,26 @@ describe('SupportPanel — per-source graph split', () => {
 })
 
 describe('SupportPanel — graph controls bar', () => {
-  // A graph element is counted as an edge iff its `data.source` is set — that
-  // is the node/edge discriminator Cytoscape itself uses.
+  // Node vs edge comes from the extractor's explicit `data.kind` stamp
+  // (SA-M12), with the legacy both-endpoints shape as the fallback for graphs
+  // restored from a session persisted before `kind` existed.
   const mixed = [node('n1'), node('n2'), edge('e1', 'n1', 'n2')]
 
   it('counts nodes and edges for the visible source', async () => {
     const { container } = render(() => <SupportPanel graphElements={mixed} />)
     await clickTab(container, 'Neo4j')
     expect(container.textContent).toContain('2 nodes, 1 edges')
+  })
+
+  it('counts a node carrying a source property as a node', async () => {
+    // `(:Chunk {source: 'report.pdf'})` — a real shape in this repo's Data
+    // Stash schema, which the old `data.source` test read as an edge.
+    const chunk: GraphElement = {
+      data: { id: 'chunk-1', label: 'chunk-1', source: 'report.pdf', kind: 'node' },
+    }
+    const { container } = render(() => <SupportPanel graphElements={[chunk, node('n1')]} />)
+    await clickTab(container, 'Neo4j')
+    expect(container.textContent).toContain('2 nodes, 0 edges')
   })
 
   it('hides the controls bar entirely when the tab has no elements', async () => {

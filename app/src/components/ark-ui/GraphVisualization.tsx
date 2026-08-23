@@ -11,6 +11,7 @@
  */
 
 import cytoscape, {
+  type CollectionReturnValue,
   type Core,
   type ElementDefinition,
   type LayoutOptions,
@@ -159,6 +160,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
   const [nodeCount, setNodeCount] = createSignal(0)
   const [edgeCount, setEdgeCount] = createSignal(0)
   const [isLoading, setIsLoading] = createSignal(true)
+  // Elements Cytoscape refused. Surfaced in the stats bar rather than swallowed
+  // — see `addElements` below (SA-H9).
+  const [rejectedCount, setRejectedCount] = createSignal(0)
 
   // Manual Cypher input state
   const [cypherInput, setCypherInput] = createSignal('')
@@ -347,6 +351,48 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
     ;(cy as any).style([...BASE_STYLES, ...extra])
   })
 
+  /**
+   * Add elements to the graph, degrading one element at a time instead of
+   * taking the tab down with the batch.
+   *
+   * `cy.add()` throws on a malformed element — a missing id, or an edge whose
+   * endpoint isn't in the graph. Called bare inside a `createEffect`, that
+   * throw propagates out of the effect and the whole canvas renders empty: one
+   * bad row from one Cypher query blanked the entire Neo4j tab (SA-H9). The
+   * extractor's `nodeElement`/`edgeElement` builders close the id-overwrite
+   * hole that produced the known case, but the input is tool output and the
+   * failure mode is total, so the render path does not assume it is well-formed.
+   *
+   * Retrying element-by-element is the whole point: everything renderable
+   * renders, and what didn't is counted for the stats bar rather than dropped
+   * in silence.
+   */
+  const addElements = (batch: ElementDefinition[]): CollectionReturnValue | null => {
+    const graph = cy
+    if (!graph) return null
+    try {
+      return graph.add(batch)
+    } catch (batchErr) {
+      // The batch may have been applied up to the offending element before it
+      // threw, so re-adding is per-element and skips ids already in the graph.
+      console.warn('[GraphVisualization] batch add failed, retrying per element:', batchErr)
+      let accepted = graph.collection()
+      let rejected = 0
+      for (const el of batch) {
+        const id = el?.data?.id
+        if (id !== undefined && graph.getElementById(String(id)).nonempty()) continue
+        try {
+          accepted = accepted.union(graph.add(el))
+        } catch (err) {
+          rejected += 1
+          console.warn('[GraphVisualization] element rejected by Cytoscape:', id, err)
+        }
+      }
+      setRejectedCount((n) => n + rejected)
+      return accepted.nonempty() ? accepted : null
+    }
+  }
+
   // Update graph incrementally when elements change (re-triggers on visibility)
   createEffect(() => {
     const isVisible = visible()
@@ -358,6 +404,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
       cy.elements().remove()
       setNodeCount(0)
       setEdgeCount(0)
+      setRejectedCount(0)
       return
     }
 
@@ -372,19 +419,19 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
 
     if (existingIds.size === 0) {
       // First load: add all and layout everything
-      cy.add(elements)
+      addElements(elements)
       cy.resize()
       cy.layout(getLayoutOptions(selectedLayout())).run()
       cy.fit(undefined, 50)
     } else if (newElements.length > 0) {
       // Incremental: add new elements, layout only them
-      const added = cy.add(newElements)
+      const added = addElements(newElements)
       cy.resize()
       // Run layout on just the new elements to find positions without disrupting existing
       const layoutOpts = getLayoutOptions(selectedLayout())
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(layoutOpts as any).fit = false
-      added.layout(layoutOpts).run()
+      added?.layout(layoutOpts).run()
     }
 
     setNodeCount(cy.nodes().length)
@@ -621,6 +668,20 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
         <div flex="~ 1" items="center" gap="4" justify="end" text="xs dark-text-tertiary">
           <span>{nodeCount()} nodes</span>
           <span>{edgeCount()} edges</span>
+          {/* Elements Cytoscape refused. Glyph + wording, not colour alone
+              (`color-not-only`), so the state survives a monochrome view. */}
+          <Show when={rejectedCount() > 0}>
+            <span
+              flex="~"
+              items="center"
+              gap="1"
+              text="xs amber-400"
+              title="These elements were malformed (missing id, or an edge pointing at a node that isn't in the graph) and were skipped so the rest of the graph could render."
+            >
+              <span class="i-material-symbols-warning-outline" w="3.5" h="3.5" aria-hidden="true" />
+              {rejectedCount()} skipped
+            </span>
+          </Show>
         </div>
 
         {/* Actions */}

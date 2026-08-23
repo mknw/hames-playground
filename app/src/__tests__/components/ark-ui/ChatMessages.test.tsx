@@ -191,7 +191,7 @@ describe('ChatMessages — error and warning bubbles', () => {
     const plain = render(() => (
       <ChatMessages messages={[msg({ role: 'error', content: 'boom' })]} />
     ))
-    expect(plain.container.querySelector('.i-mdi-lightbulb-outline')).toBeNull()
+    expect(plain.container.querySelector('.i-material-symbols-lightbulb-outline')).toBeNull()
   })
 
   it('omits the pattern attribution when the error has no pattern', () => {

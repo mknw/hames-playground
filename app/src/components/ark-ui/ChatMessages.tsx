@@ -408,7 +408,9 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                           <div flex="~ items-center" gap="1.5">
                             <span
                               class={
-                                message.role === 'error' ? 'i-mdi-alert-circle' : 'i-mdi-alert'
+                                message.role === 'error'
+                                  ? 'i-material-symbols-error'
+                                  : 'i-material-symbols-warning'
                               }
                               style={{
                                 width: '16px',
@@ -442,7 +444,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                               gap="1.5"
                             >
                               <span
-                                class="i-mdi-lightbulb-outline"
+                                class="i-material-symbols-lightbulb-outline"
                                 style={{
                                   width: '14px',
                                   height: '14px',

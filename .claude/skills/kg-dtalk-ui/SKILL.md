@@ -113,12 +113,10 @@ the only two collections registered in `presetIcons` in `uno.config.ts`.
 />
 ```
 
-- `@iconify-json/mdi` is still in `package.json` and 41 `i-mdi-*` references
-  survive in `src/` — but **mdi is not a registered collection**, so those
-  classes emit no CSS. Treat every `i-mdi-*` you meet as a live bug, not as
-  precedent. Do not add more.
-- Migrating the existing 41 is separate future work. This skill states the set;
-  it does not perform the migration.
+- **mdi is gone.** `@iconify-json/mdi` was dropped from `package.json` and
+  every `i-mdi-*` reference in `src/` was migrated to this set (#226 B6). mdi is
+  not a registered collection, so an `i-mdi-*` emits no CSS and renders as an
+  empty span — treat any that reappears as a live bug, not as precedent.
 - Browse names at [icones.js.org](https://icones.js.org), filtered to
   `material-symbols`.
 - Size and colour the glyph with attributify (`w="5" h="5" text="neon-cyan"`),
@@ -326,9 +324,9 @@ chat HTML.
 ## 6. What this skill does not do
 
 - It does not restate tokens. `app/uno.config.ts` owns them.
-- It does not migrate existing code. The `i-mdi-*` references, the hex-instead-
-  of-token sites, and the `class=` violations named above are all recorded as
-  _evidence for the rules_, not as a work list this skill executes.
+- It does not migrate existing code. The hex-instead-of-token sites and the
+  `class=` violations named above are recorded as _evidence for the rules_, not
+  as a work list this skill executes.
 - It does not add tokens. The role table in §4 is a proposal; adding
   `theme.colors` entries needs the confirmation first.
 - It does not cover light mode, native mobile, or any surface outside `app/src`.

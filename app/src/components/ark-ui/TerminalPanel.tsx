@@ -174,7 +174,10 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
         border="b dark-border-primary"
       >
         <div flex="~" items="center" gap="2">
-          <span class="i-mdi-console" style={{ width: '16px', height: '16px', color: '#10b981' }} />
+          <span
+            class="i-material-symbols-terminal"
+            style={{ width: '16px', height: '16px', color: '#10b981' }}
+          />
           <span text="xs dark-text-secondary">
             {entries().length} sandbox {entries().length === 1 ? 'command' : 'commands'}
           </span>
@@ -195,7 +198,11 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
           <button
             onClick={() => hasSession() && setView('shell')}
             disabled={!hasSession()}
-            title={hasSession() ? 'Open an interactive shell in this session sandbox' : 'No active session'}
+            title={
+              hasSession()
+                ? 'Open an interactive shell in this session sandbox'
+                : 'No active session'
+            }
             p="x-2 y-0.5"
             text={view() === 'shell' ? 'xs emerald-400' : 'xs dark-text-tertiary'}
             bg={view() === 'shell' ? 'emerald-600/15' : 'transparent hover:dark-bg-primary'}
@@ -220,10 +227,9 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
               <div flex="~ col" items="center" justify="center" h="full" text="center" gap="3">
                 <span text="4xl">🖥️</span>
                 <span text="sm dark-text-secondary" max-w="xs">
-                  No sandbox activity yet. Run the <strong>Sandbox Demo</strong> agent
-                  (or any agent wrapped in <code>withSandbox</code>) to see commands
-                  here — or hit <strong>Shell</strong> to open a live terminal in this
-                  session's sandbox.
+                  No sandbox activity yet. Run the <strong>Sandbox Demo</strong> agent (or any agent
+                  wrapped in <code>withSandbox</code>) to see commands here — or hit{' '}
+                  <strong>Shell</strong> to open a live terminal in this session's sandbox.
                 </span>
               </div>
             }
@@ -234,7 +240,9 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
                 {(e) => (
                   <div m="b-3">
                     <div flex="~" items="start" gap="2">
-                      <span text="sm emerald-400" style={{ 'flex-shrink': '0' }}>$</span>
+                      <span text="sm emerald-400" style={{ 'flex-shrink': '0' }}>
+                        $
+                      </span>
                       <span
                         text="xs emerald-300"
                         style={{ 'white-space': 'pre-wrap', 'word-break': 'break-word' }}
@@ -243,7 +251,9 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
                       </span>
                     </div>
                     <Show when={e.pending}>
-                      <div text="2xs amber-400" m="t-1" pl="4">running…</div>
+                      <div text="2xs amber-400" m="t-1" pl="4">
+                        running…
+                      </div>
                     </Show>
                     <Show when={!e.pending && e.output}>
                       <pre
@@ -271,7 +281,9 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
                       </div>
                     </Show>
                     <Show when={typeof e.exitCode === 'number' && e.exitCode !== 0}>
-                      <div text="2xs red-400" m="t-1" pl="4">exit {e.exitCode}</div>
+                      <div text="2xs red-400" m="t-1" pl="4">
+                        exit {e.exitCode}
+                      </div>
                     </Show>
                   </div>
                 )}

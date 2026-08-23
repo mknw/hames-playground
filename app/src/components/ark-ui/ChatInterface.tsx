@@ -755,7 +755,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           >
             <div flex="~" items="center" gap="2" m="b-2">
               <span
-                class="i-mdi-lightning-bolt-outline"
+                class="i-material-symbols-bolt-outline"
                 style={{ width: '20px', height: '20px', color: '#22d3ee' }}
               />
               <span text="sm dark-text-primary" font="medium">

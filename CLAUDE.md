@@ -259,7 +259,7 @@ Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secon
 - Use via `class="i-material-symbols-<icon-name>"` — icon classes are the one sanctioned `class=` exception, since `presetIcons` has no attributify form
 - Example: `<span class="i-material-symbols-database-outline" w="5" h="5" text="neon-cyan" aria-hidden="true" />`
 - Browse icons at [https://icones.js.org](https://icones.js.org) — filter by `material-symbols`
-- ⚠️ `@iconify-json/mdi` is still in `package.json` and `i-mdi-*` classes survive in `app/src`, but **mdi is not registered**, so those classes emit no CSS. Treat every `i-mdi-*` as a bug; do not add more
+- ⚠️ mdi is gone (#226 B6): `@iconify-json/mdi` is no longer a dependency and no `i-mdi-*` class survives in `app/src`. An `i-mdi-*` is a bug — the collection is not registered, so it emits no CSS and the glyph renders as an empty span
 - Full styleguide (attributify rules, house recipes, role→colour mapping, a11y + graph checklists): the `kg-dtalk-ui` skill
 
 ---

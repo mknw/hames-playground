@@ -39,7 +39,7 @@ export default function SignIn() {
           rel="external"
           class="text-white font-medium px-4 py-3 rounded-md bg-blue-600 flex gap-2 w-full shadow-sm items-center justify-center focus:outline-none hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
         >
-          <span class="i-mdi-microsoft" style={{ width: '20px', height: '20px' }} />
+          <span class="i-material-symbols-grid-view" style={{ width: '20px', height: '20px' }} />
           Sign in with Microsoft
         </a>
 

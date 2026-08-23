@@ -175,7 +175,7 @@ export function SettingsPanel() {
         justify="center"
       >
         <span
-          class="i-mdi-cog-outline"
+          class="i-material-symbols-settings-outline"
           style={{ width: '18px', height: '18px', color: '#a1a1aa' }}
         />
       </FloatingPanel.Trigger>
@@ -206,7 +206,7 @@ export function SettingsPanel() {
           >
             <FloatingPanel.DragTrigger flex="1 ~" items="center" gap="2" cursor="grab">
               <span
-                class="i-mdi-drag"
+                class="i-material-symbols-drag-indicator"
                 style={{ width: '16px', height: '16px', color: '#71717a' }}
               />
               <span text="sm dark-text-primary" font="medium">

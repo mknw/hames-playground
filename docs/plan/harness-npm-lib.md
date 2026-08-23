@@ -20,11 +20,14 @@ workspace wiring, the dev/production loading split, and the publish flow.
 
 Three-sentence answer:
 
-1. **Today there is no workspace at all** — `app/` is the sole `package.json`
-   in the repo, the Docker build context is `app/` with `app/node_modules`
-   `.dockerignore`'d, and CI's `defaults.run.working-directory` is `app/`.
-   Introducing packages means promoting the repo root to a pnpm workspace
-   root and moving `app/` to be one workspace member among several.
+1. **Today there is no workspace root** — `rootfs/mcp-shell/package.json`
+   also exists (it is a sandbox image build input, not a workspace member),
+   but there is no `pnpm-workspace.yaml` and no root `package.json`; the
+   lockfile lives at `app/pnpm-lock.yaml`. The Docker build context is `app/`
+   with `app/node_modules` `.dockerignore`'d, and CI's
+   `defaults.run.working-directory` is `app/`. Introducing packages means
+   promoting the repo root to a pnpm workspace root and moving `app/` to be
+   one workspace member among several.
 2. **Dev must keep editing-a-library-and-seeing-it-live** — pnpm's
    `workspace:*` protocol symlinks a package straight out of
    `packages/<name>/src`, so Vite/vinxi's dev server picks up an edit the same
@@ -75,7 +78,7 @@ kg-agent/                          (repo root — becomes the workspace root)
 ### 1.2 Dependency direction
 
 ```
-harness-patterns   (leaf — no dependency on any other extracted package)
+harness-patterns   (target: leaf — no dependency on any other extracted package)
        ↑
 harness-client     (depends on harness-patterns)
        ↑
@@ -88,18 +91,33 @@ harness-sandbox ── harness-stash ── harness-retriever   (each depends on
                               SolidStart UI live)
 ```
 
-This mirrors the import graph already `grep`-confirmed on this branch:
-`sandbox/` imports `harness-patterns/assert.server` and
-`harness-patterns/types`; `harness-client/examples/*` imports both
-`harness-patterns` and `baml_client`; `sandbox/work-artifacts.server.ts`
-imports `document-store.server.ts` and `stash/upload-service.server.ts` — i.e.
+This is the **target** shape, not what exists on this branch today.
+`harness-patterns` is not currently a leaf — it is one half of a real
+circular package dependency with `harness-sandbox`: `baml-adapters.server.ts:39`,
+`mcp-client.server.ts:9`, `patterns/actorCritic.server.ts:32`, and
+`patterns/simpleLoop.server.ts:33` import the runtime value `getActiveSandbox`
+from `sandbox/scope.server`, while `sandbox/{scope,index,warm-pool,with-sandbox,
+scheduler,work-artifacts,docker-backend,attachment-table,work-sync}.server.ts`
+and `sandbox/types.ts` import back from `harness-patterns/assert.server`,
+`harness-patterns/types`, and `harness-patterns/context.server`. §1.4 tables
+this as its own coupling row with the same injected-dependency remedy used for
+the `baml_client`/`settings` rows, because it is not optional cleanup: two
+packages that import each other cannot both be `pnpm pack`-ed, since whichever
+publishes second would need the other already on the registry.
+
+The rest of the graph (below `harness-patterns`, once that cycle is broken)
+mirrors the import graph already `grep`-confirmed on this branch:
+`harness-client/examples/*` imports both `harness-patterns` and
+`baml_client`; `sandbox/work-artifacts.server.ts` imports
+`document-store.server.ts` and `stash/upload-service.server.ts` — i.e.
 **sandbox already depends on stash**, so `harness-sandbox`'s `package.json`
 must declare `harness-stash` as a real dependency, not a peer the app happens
 to also install. `harness-patterns/README.md`'s existing rule 1 ("must not
 import from `harness-client/` or any other consumer") is exactly the
 no-back-edges constraint this graph needs to keep holding once each box is a
 separately versioned package — a cycle here is a circular npm dependency, not
-just a lint nit.
+just a lint nit, and the `harness-patterns` ⇄ `harness-sandbox` edge above is
+that violation already in effect, not a hypothetical future risk.
 
 ### 1.3 What stays in `app/`
 
@@ -116,29 +134,33 @@ SolidStart routes/components, and both Docker artifacts. None of this moves.
 Grepping the actual imports on this branch surfaces the thing that makes this
 more than a `git mv`:
 
-| File                                                                                                                                                                                                                                    | Imports                                                          | Why it blocks extraction as-is                                                                                                                                                                                                                                                                            |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `harness-patterns/baml-adapters.server.ts`, `types.ts`, `controller-action.ts`, `routing.server.ts`, `baml-version-check.server.ts`, `patterns/{planner,compactExecution,with-references,simpleLoop,compactIntent,retriever}.server.ts` | `../../../baml_client/types`, `../../../baml_client/inlinedbaml` | `baml_client/` is **generated per-consumer** from that consumer's own `baml_src/` and is gitignored — there is no version of it to publish. A published `@scope/harness-patterns` cannot contain a relative import into a directory that only exists inside whichever app happens to run `baml-generate`. |
-| `harness-patterns/{compactBulkData,harness}.server.ts`, `patterns/{router,simpleLoop,actorCritic}.server.ts`                                                                                                                            | `../settings` (`CLIENT_MAX_OUTPUT_TOKENS`, `estimateLlmCostUsd`) | App-level config module, not a library concern.                                                                                                                                                                                                                                                           |
-| `sandbox/pty-manager.server.ts`                                                                                                                                                                                                         | `../settings` (`DEFAULT_SETTINGS`)                               | Same.                                                                                                                                                                                                                                                                                                     |
-| `sandbox/work-artifacts.server.ts`                                                                                                                                                                                                      | `../document-store.server` (app `lib/`, not inside `stash/`)     | Confirms `harness-stash` as proposed in §1.1 must absorb `document-store.server.ts` / `document-ingest.server.ts` / `chunking.server.ts`, or `harness-sandbox` needs a narrower interface than the concrete module today.                                                                                 |
+| File                                                                                                                                                                                                                                    | Imports                                                                                                                                                                                                                                                                                                   | Why it blocks extraction as-is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `harness-patterns/{baml-adapters,mcp-client}.server.ts`, `patterns/{actorCritic,simpleLoop}.server.ts`                                                                                                                                  | `../sandbox/scope.server` (`getActiveSandbox`, a **runtime value**, not a type) — while `sandbox/{scope,index,warm-pool,with-sandbox,scheduler,work-artifacts,docker-backend,attachment-table,work-sync}.server.ts` + `types.ts` import back from `harness-patterns/{assert.server,types,context.server}` | **Circular package dependency**, both directions verified. Neither `harness-patterns` nor `harness-sandbox` can publish first — whichever does needs the other already on the registry. Fix: `harness-patterns` declares a sandbox-provider seam (a typed interface for "get the active sandbox scope") that `harness-sandbox` or `app/` implements and injects at the call site — the same injected-dependency shape as the `baml_client`/`settings` rows below — so the runtime edge inverts and the graph in §1.2 becomes real. |
+| `harness-patterns/baml-adapters.server.ts`, `types.ts`, `controller-action.ts`, `routing.server.ts`, `baml-version-check.server.ts`, `patterns/{planner,compactExecution,with-references,simpleLoop,compactIntent,retriever}.server.ts` | `../../../baml_client/types`, `../../../baml_client/inlinedbaml`                                                                                                                                                                                                                                          | `baml_client/` is **generated per-consumer** from that consumer's own `baml_src/` and is gitignored — there is no version of it to publish. A published `@scope/harness-patterns` cannot contain a relative import into a directory that only exists inside whichever app happens to run `baml-generate`.                                                                                                                                                                                                                          |
+| `harness-patterns/harness.server.ts`, `patterns/{router,simpleLoop,actorCritic,compactBulkData}.server.ts`                                                                                                                              | `../settings-context.server` (`getRequestSettings`)                                                                                                                                                                                                                                                       | Runtime request-scoped settings via AsyncLocalStorage. `settings-context.server.ts` stays in `app/` per §1.3, so this is a live `harness-patterns` → `app/` coupling in 5 files, not just the `settings.ts` one below — both need the same seam.                                                                                                                                                                                                                                                                                   |
+| `harness-patterns/{compactBulkData,baml-adapters,token-budget}.server.ts`                                                                                                                                                               | `../settings` (`CLIENT_MAX_OUTPUT_TOKENS`, `estimateLlmCostUsd`, `MODEL_CONTEXT_WINDOWS`)                                                                                                                                                                                                                 | App-level config module, not a library concern.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `sandbox/pty-manager.server.ts`                                                                                                                                                                                                         | `../settings` (`DEFAULT_SETTINGS`)                                                                                                                                                                                                                                                                        | Same.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `sandbox/work-artifacts.server.ts`                                                                                                                                                                                                      | `../document-store.server` (app `lib/`, not inside `stash/`)                                                                                                                                                                                                                                              | Confirms `harness-stash` as proposed in §1.1 must absorb `document-store.server.ts` / `document-ingest.server.ts` / `chunking.server.ts`, or `harness-sandbox` needs a narrower interface than the concrete module today.                                                                                                                                                                                                                                                                                                          |
 
 The fix is the same shape in every row: replace the direct import with an
 **injected dependency** — a typed interface the package declares and the
-consumer (`app/`) supplies at the call site — exactly the pattern
-`README.md` rule 3 already uses for runtime settings
-(`settings-context.server.ts`, AsyncLocalStorage) rather than function
-parameters. Concretely for BAML: the package should accept the _shape_ of a
-BAML-generated client (the function signatures it calls, e.g. a
-`ControllerFn` type) as a generic/parameter, never the literal
-`baml_client` import — which is also exactly what the "pass BAML functions
-directly... bind to preserve `this`" calling convention in the README
-already does at the call site (`b.Neo4jController.bind(b)`); the type import
-is the one piece that still reaches into the generated tree and needs to
-move to a declared interface. **This is squarely the sibling ergonomics
-lane's job to resolve** — it is called out here only because it gates
-whether `harness-patterns` can be `pnpm pack`-ed at all, which this plan's
-§3/§4 depend on.
+consumer (`app/`, or in the sandbox cycle's case whichever package wires the
+two together) supplies at the call site — exactly the pattern `README.md`
+rule 3 already uses for runtime settings (`settings-context.server.ts`,
+AsyncLocalStorage) rather than function parameters. Concretely for BAML: the
+package should accept the _shape_ of a BAML-generated client (the function
+signatures it calls, e.g. a `ControllerFn` type) as a generic/parameter,
+never the literal `baml_client` import — which is also exactly what the
+"pass BAML functions directly... bind to preserve `this`" calling convention
+in the README already does at the call site (`b.Neo4jController.bind(b)`);
+the type import is the one piece that still reaches into the generated tree
+and needs to move to a declared interface. **This is squarely the sibling
+ergonomics lane's job to resolve** — it is called out here only because it
+gates whether `harness-patterns` can be `pnpm pack`-ed at all, which this
+plan's §3/§4 depend on. The `harness-patterns` ⇄ `harness-sandbox` cycle
+gates it even harder: it isn't a lint nit deferred to later, it is the
+difference between a publishable graph and one that cannot resolve at all.
 
 ---
 

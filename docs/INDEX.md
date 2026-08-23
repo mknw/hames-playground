@@ -67,7 +67,8 @@ Records: [0001](adr/0001-anthropic-only-default-chains.md) Anthropic-only defaul
 
 Authoritative source-level docs (closer to the code):
 
-- [`app/src/lib/harness-patterns/README.md`](../app/src/lib/harness-patterns/README.md) — full framework API
+- [`app/src/lib/harness-patterns/SPEC.md`](../app/src/lib/harness-patterns/SPEC.md) — full framework API and design spec
+- [`app/src/lib/harness-patterns/README.md`](../app/src/lib/harness-patterns/README.md) — the `hames` library front page
 - [`app/src/lib/harness-client/agents/README.md`](../app/src/lib/harness-client/agents/README.md) — example implementations
 
 ### UI Frontend

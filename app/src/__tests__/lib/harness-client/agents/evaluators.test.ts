@@ -105,7 +105,7 @@ describe('Multi-Source Research judgeEvaluator', () => {
     vi.resetModules()
   })
 
-  it('should create parallel research with three sources', async () => {
+  it('should create parallel research with two sources', async () => {
     const { multiSourceResearchAgent } =
       await import('../../../../lib/harness-client/agents/multi-source-research.server')
     const patterns = await multiSourceResearchAgent.createPatterns('test-session')

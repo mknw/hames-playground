@@ -96,7 +96,7 @@ The extractor processes both `rows` and `_neighborhood.rows` through the same MC
 4. Serialises records to the MCP cypher tuple shape (`[startProps, "TYPE", endProps]`) — **always in the relationship's actual direction** (`rel.start → rel.end`), not the query-binding order. This keeps edge IDs stable across queries that touch the same rel from either endpoint, so dedup collapses what would otherwise be duplicate edges.
 5. Returns the enriched payload above.
 
-Wire it into a pattern via the `onToolResult` config knob (see `harness-patterns/README.md` for the hook spec).
+Wire it into a pattern via the `onToolResult` config knob (see `harness-patterns/SPEC.md` for the hook spec).
 
 Failures are non-fatal: `simpleLoop` / `actorCritic` catch the throw, log a `recoverable` `error` event, and proceed with the original (un-enriched) result.
 

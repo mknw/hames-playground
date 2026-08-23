@@ -623,7 +623,7 @@ export default function Home() {
           shadow="hover:[0_0_10px_rgba(0,255,255,0.3)]"
         />
 
-        {/* Support Panel (Graph, Stats, Actions, Docs, Tools) */}
+        {/* Support Panel (Graph, Context manager, Data, Terminal, Actions, Docs) */}
         <Splitter.Panel id="support">
           <SupportPanel
             graphElements={graphElements()}

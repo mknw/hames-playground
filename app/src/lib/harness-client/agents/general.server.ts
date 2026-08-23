@@ -3,7 +3,7 @@
  *
  * Pattern: planner → simpleLoop → compactExecution.
  *
- * The A/B counterpart to the router-based `default` agent. Where `default`
+ * The A/B counterpart to the router-based `search` agent. Where `search`
  * classifies the request into ONE namespace and dispatches there — which
  * degrades on cross-domain questions, since a route can only be one thing —
  * this agent hands the whole tool surface to a single executor and pays for
@@ -15,7 +15,7 @@
  *     agent-static `context` prefix), so the controller stops re-deriving the
  *     approach each turn.
  *
- * Kept alongside `default` deliberately: same session shape, different
+ * Kept alongside `search` deliberately: same session shape, different
  * strategy, so the two can be compared on the same questions.
  */
 'use server'

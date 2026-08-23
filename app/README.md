@@ -23,7 +23,7 @@ src/
 │   ├── ChatSidebar.tsx        # Thread list: live progress strip + completion marks (#105), agent icons + collapsed rail (#60), delete + select mode (#71)
 │   ├── ChatMessages.tsx       # Markdown rendering with interactive graph entity spans
 │   ├── GraphVisualization.tsx  # Cytoscape.js graph with controls, editing, extraStyles
-│   ├── SupportPanel.tsx       # Tabbed panel (lazyMount): Neo4j, Memory, All, Context manager, Tools
+│   ├── SupportPanel.tsx       # Tabbed panel (lazyMount): Neo4j, Memory, All, Context manager, Data, Terminal, Actions, Documents
 │   ├── AllGraphTab.tsx        # Turn-based graph explorer (FloatingPanel + color-coded Cytoscape)
 │   ├── SettingsPanel.tsx      # Harness settings FloatingPanel (sliders, number inputs)
 │   └── ObservabilityPanel.tsx  # Event timeline + LLM call detail
@@ -96,7 +96,7 @@ It also recognises the **enriched payload** produced by `neo4j-enricher.server.t
 
 ### Agent Framework
 
-See [harness-patterns/README.md](src/lib/harness-patterns/README.md) for the full API reference. Cross-pattern data flow is handled by `withReferences` ([design](../docs/harness-patterns/with-references.md)) — every default-agent route is wrapped so the inner pattern receives an LLM-curated set of relevant prior `tool_result` events on entry, plus a synthetic `expandPreviousResult` tool the controller can call to load full content.
+See [harness-patterns/SPEC.md](src/lib/harness-patterns/SPEC.md) for the full API reference ([README.md](src/lib/harness-patterns/README.md) is the library front page). Cross-pattern data flow is handled by `withReferences` ([design](../docs/harness-patterns/with-references.md)) — every default-agent route is wrapped so the inner pattern receives an LLM-curated set of relevant prior `tool_result` events on entry, plus a synthetic `expandPreviousResult` tool the controller can call to load full content.
 
 ## Commands
 
@@ -129,7 +129,7 @@ See [agents/README.md](src/lib/harness-client/agents/README.md) for detailed pat
 | File                                                                               | Contents                                                       |
 | ---------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | [GitHub Project](https://github.com/users/mknw/projects/5)                         | Planning board / roadmap (replaced docs/ROADMAP.md)            |
-| [src/lib/harness-patterns/README.md](src/lib/harness-patterns/README.md)           | Harness patterns full API reference                            |
+| [src/lib/harness-patterns/SPEC.md](src/lib/harness-patterns/SPEC.md)               | Harness patterns full API reference                            |
 | [src/lib/harness-client/agents/README.md](src/lib/harness-client/agents/README.md) | Example agent implementations (7 agents)                       |
 | [../docs/UI_ARCHITECTURE.md](../docs/UI_ARCHITECTURE.md)                           | Component structure, data flow, Chat-Graph linking             |
 | [../docs/DATA_STASH.md](../docs/DATA_STASH.md)                                     | Data Stash upload → chunk → embed → search pipeline (#6/#9/#8) |

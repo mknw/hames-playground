@@ -19,7 +19,7 @@ else**, so this file stays cheap to maintain and safe to read in parallel.
   code it touches, not just the five sections above:
   [`docs/INDEX.md`](INDEX.md) and what it points at, and for any
   `harness-patterns` change,
-  [`app/src/lib/harness-patterns/README.md`](../app/src/lib/harness-patterns/README.md)
+  [`app/src/lib/harness-patterns/SPEC.md`](../app/src/lib/harness-patterns/SPEC.md)
   (its `multiToolCalls: 'off'` still-serial semantics, `EventView`/
   `ViewConfig` scoping). This is the map naming where area docs live, so the
   generic skill's area-README fallback still applies even with this map

@@ -1,5 +1,6 @@
 {
   "name": "seederis-ai-kg-ui",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "scripts": {
     "baml-test": "baml-cli test",

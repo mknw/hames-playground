@@ -1,3 +1,17 @@
+# The owner's LOCAL DEV ENVIRONMENT — nix-darwin on aarch64-darwin, and only
+# that. `system` below is hardcoded and the docker-mcp fetch pulls the
+# darwin-arm64 tarball, so this devshell does not evaluate anywhere else.
+#
+# That is deliberate and it is not the deployment story: DEPLOYMENT GOES VIA
+# DOCKER (`app/Dockerfile` + the `app` compose service, #197), and CI runs on
+# `ubuntu-latest` with its own toolchain setup. Nothing outside one Mac plans
+# around this file.
+#
+# So: do NOT extend it. No `flake-utils.lib.eachDefaultSystem`, no per-system
+# docker-mcp source, no second platform — a portable devshell would be a third
+# toolchain to keep in step with the Dockerfile and the CI workflow, for no
+# consumer that exists. If you need a reproducible cross-platform environment,
+# that is the Docker image's job.
 {
   inputs = {
     # Your stable base (what you already use)

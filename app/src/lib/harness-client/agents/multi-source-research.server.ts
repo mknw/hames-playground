@@ -1,6 +1,9 @@
 /**
  * Multi-Source Research Agent
  *
+ * NOT LIVE TESTED — experimental agent, unregistered per owner decision
+ * 2026-08-23 (PR #234). Re-register only after a live test.
+ *
  * Pattern: parallel → judge → compactExecution
  * Use case: Search multiple sources concurrently, cache in redis, rank results.
  */

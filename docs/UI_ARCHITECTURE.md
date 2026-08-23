@@ -378,7 +378,7 @@ thread.
 
 #### 5. AgentSelector.tsx
 **Props:** `selectedAgent: string`, `onAgentChange: (id: string) => void`, `disabled: boolean`
-- Dropdown listing registered agents (default, general, multi-source-research, sandbox-session, flavoured-sandbox, retriever, microsoft-365)
+- Dropdown listing registered agents (default, general, sandbox-session, flavoured-sandbox, retriever, microsoft-365)
 - Agent icons are **iconify classes** on `AgentConfig.icon` (material-symbols set), rendered as `<span class={icon}>` with inline sizing — see the icon-scanning gotcha in §6a
 - Clearing the session on agent switch
 

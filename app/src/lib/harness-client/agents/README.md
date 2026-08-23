@@ -39,7 +39,7 @@ compositions across all available MCP servers.
 
 > **Synthetic tool:** simpleLoop's `LoopController` prompt also exposes `expandPreviousResult` when prior results are present — a virtual tool that loads the full data behind a `ref:<id>` and records it as a normal turn. See [`with-references.md`](../../../../docs/harness-patterns/with-references.md) for the ingress/expansion taxonomy.
 
-> **Who writes the final answer ([#149](https://github.com/mknw/harness-playground/issues/149)):** every `simpleLoop` here inherits `returnStyle: 'summary'` — its terminal `Return` carries a one-line completion summary, and the chain's `compactExecution` composes the user-facing answer from the full tool results. No agent overrides it: every registered chain ends in a `compactExecution`, and `'answer'` would only restore a second composition nothing renders. Affected loops: `default` (both tool routes), `general`, `microsoft-365`, `retriever-agent` (both loop routes), `multi-source-research` (×3).
+> **Who writes the final answer ([#149](https://github.com/mknw/harness-playground/issues/149)):** every `simpleLoop` here inherits `returnStyle: 'summary'` — its terminal `Return` carries a one-line completion summary, and the chain's `compactExecution` composes the user-facing answer from the full tool results. No agent overrides it: every registered chain ends in a `compactExecution`, and `'answer'` would only restore a second composition nothing renders. Affected loops: `default` (both tool routes), `general`, `microsoft-365`, `retriever-agent` (both loop routes), and the unregistered `multi-source-research` (×3).
 
 > **Multi-call modes across agents:** every agent inherits `multiToolCalls: 'parallel'` except the two that override it — `sandbox-session` and `flavoured-sandbox` → `'sequential'` (linear effect-chains on one VM filesystem; in-order batches still save actor round-trips).
 
@@ -102,7 +102,12 @@ two can be A/B'd on the same question.
 
 ---
 
-### 1. Multi-Source Research (parallel)
+### 1. Multi-Source Research (parallel) — **unregistered**
+
+> **NOT LIVE TESTED.** Unregistered per owner decision 2026-08-23 (PR #234): the
+> source file stays here as a worked `parallel` example, but `registry.server.ts`
+> does not import it, so it never reaches the agent dropdown. Re-register only
+> after a live test.
 
 **Servers**: web_search, github, context7, redis
 **Patterns**: `parallel` → `judge` → `compactExecution`

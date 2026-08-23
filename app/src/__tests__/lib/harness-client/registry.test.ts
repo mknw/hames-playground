@@ -23,8 +23,10 @@ vi.mock('../../../lib/harness-patterns', () => ({
   harnessUsesSyncWorkspace,
 }))
 
-// The module registers the seven agents on import; each one pulls in the whole
+// The module registers the six agents on import; each one pulls in the whole
 // pattern/tool graph, so stub them down to bare configs.
+// `multi-source-research` is NOT among them — it is unregistered and NOT LIVE
+// TESTED (PR #234) — so it is neither stubbed nor expected below.
 function stubAgent(id: string): AgentConfig {
   return {
     id,
@@ -41,9 +43,6 @@ vi.mock('../../../lib/harness-client/agents/default.server', () => ({
 }))
 vi.mock('../../../lib/harness-client/agents/general.server', () => ({
   generalAgent: stubAgent('general'),
-}))
-vi.mock('../../../lib/harness-client/agents/multi-source-research.server', () => ({
-  multiSourceResearchAgent: stubAgent('multi-source-research'),
 }))
 vi.mock('../../../lib/harness-client/agents/sandbox-session.server', () => ({
   sandboxSessionAgent: stubAgent('sandbox-session'),
@@ -99,13 +98,19 @@ describe('registration + lookup', () => {
       expect.arrayContaining([
         'default',
         'general',
-        'multi-source-research',
         'sandbox-session',
         'flavoured-sandbox',
         'retriever',
         'microsoft-365',
       ]),
     )
+  })
+
+  // PR #234: the agent is kept on disk but NOT LIVE TESTED, so it must not
+  // reach the dropdown. A stray `registerAgent` would otherwise ship it.
+  it('does not register multi-source-research', () => {
+    expect(getAllAgents().map((a) => a.id)).not.toContain('multi-source-research')
+    expect(getAgent('multi-source-research')).toBeUndefined()
   })
 
   it('returns undefined for an unknown id rather than throwing', () => {

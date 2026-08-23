@@ -13,7 +13,6 @@ All agents are registered in `registry.server.ts` and available via `getAgentLis
 | ID | Name | Patterns | Servers |
 |----|------|----------|---------|
 | `default` | Default Agent | router → compactExecution | neo4j, web_search, fetch |
-| `multi-source-research` | Multi-Source Research | parallel → judge → compactExecution | web_search, github, context7 |
 | `sandbox-session` | Sandbox · Session | compactIntent → withSandbox(actorCritic) → compactExecution | none (in-VM sandbox tools) |
 | `retriever` | Retriever Agent | router → { retriever \| neo4j \| web_search } → compactExecution | neo4j, web_search, fetch (+ Data Stash via Redis retriever) |
 | `flavoured-sandbox` | Sandbox · Flavoured (router) | router → withSandbox(actorCritic) per flavour (base / image-processing / data) → compactExecution | none (in-VM sandbox tools per flavour) |
@@ -41,9 +40,13 @@ router({ neo4j: '...', web_search: '...' })
 
 ---
 
-## 2. Multi-Source Research
+## 2. Multi-Source Research — **unregistered**
 
 **File:** `multi-source-research.server.ts`
+
+> **NOT LIVE TESTED.** Unregistered per owner decision 2026-08-23 (PR #234) —
+> the file stays as a worked `parallel` example but is not in the registry, so
+> it never appears in the agent dropdown. Re-register only after a live test.
 
 Concurrent search with quality ranking.
 

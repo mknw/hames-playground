@@ -34,23 +34,32 @@ vi.mock('../../../lib/auth/action-tokens.server', () => ({
   },
 }))
 
-const seedActionRow =
-  vi.fn<(runId: string, userId: string, agentId: string, trigger: Trigger) => Promise<void>>(
-    async () => {},
-  )
-const runAgentInBackground =
-  vi.fn<(runId: string, userId: string, message: string, agentId: string, trigger: Trigger) => Promise<void>>(
-    async () => {},
-  )
+const seedActionRow = vi.fn<
+  (runId: string, userId: string, agentId: string, trigger: Trigger) => Promise<void>
+>(async () => {})
+const runAgentInBackground = vi.fn<
+  (
+    runId: string,
+    userId: string,
+    message: string,
+    agentId: string,
+    trigger: Trigger,
+  ) => Promise<void>
+>(async () => {})
 vi.mock('../../../lib/harness-client/action-runner.server', () => ({
   seedActionRow,
   runAgentInBackground,
 }))
 
-const storeDocument =
-  vi.fn<(input: { sessionId: string; filename: string; mimeType: string; content: string; encoding: string }) => Promise<{ id: string }>>(
-    async () => ({ id: 'doc-1' }),
-  )
+const storeDocument = vi.fn<
+  (input: {
+    sessionId: string
+    filename: string
+    mimeType: string
+    content: string
+    encoding: string
+  }) => Promise<{ id: string }>
+>(async () => ({ id: 'doc-1' }))
 vi.mock('../../../lib/document-store.server', () => ({ storeDocument }))
 
 vi.mock('../../../lib/stash/upload-service.server', () => ({
@@ -146,14 +155,19 @@ describe('POST /api/agents/:id', () => {
           [
             { name: 'transcribed_command', value: 'add a node' },
             { name: 'short_description', value: 'Apollo' },
-            { name: 'original_recording', filename: 'memo.m4a', type: 'audio/mp4', content: 'BYTES' },
+            {
+              name: 'original_recording',
+              filename: 'memo.m4a',
+              type: 'audio/mp4',
+              content: 'BYTES',
+            },
           ],
           { Authorization: 'Bearer s' },
         ),
       ),
     )
     expect(res.status).toBe(202)
-    expect(await res.json()).toEqual({ run_id: 'run-fixed' })
+    expect(await res.json()).toEqual({ run_id: 'run-fixed', recording_stored: true })
 
     // Recording stored in the Data Stash under the run id, as base64 binary.
     expect(storeDocument).toHaveBeenCalledTimes(1)
@@ -196,6 +210,10 @@ describe('POST /api/agents/:id', () => {
       ),
     )
     expect(res.status).toBe(202)
+    // The run still starts — but the caller is TOLD the audio did not survive,
+    // rather than only a server log knowing (sf-L9). It may be about to delete
+    // its own copy.
+    expect(await res.json()).toEqual({ run_id: 'run-fixed', recording_stored: false })
     // Row still seeded, but without a recording doc id.
     const trigger = seedActionRow.mock.calls[0][3]
     expect(trigger.recordingDocId).toBeUndefined()
@@ -212,6 +230,8 @@ describe('POST /api/agents/:id', () => {
       ),
     )
     expect(res.status).toBe(202)
+    // No recording submitted → the field is absent, not `false`.
+    expect(await res.json()).toEqual({ run_id: 'run-fixed' })
     expect(storeDocument).not.toHaveBeenCalled()
     expect(seedActionRow).toHaveBeenCalledTimes(1)
   })

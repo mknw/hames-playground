@@ -120,7 +120,11 @@ describe('ChatInput — blocked state (#47)', () => {
     expect(textarea(container).hasAttribute('aria-disabled')).toBe(false)
   })
 
-  it('shows the guard banner only when a block message accompanies the block', () => {
+  // SA-M11: a blocked composer must never be silent. The banner used to
+  // require `blockedMessage`, which was derived from `runningTool` — null in
+  // every gap between tool calls (router, planner, compaction, synthesis). In
+  // those windows Enter did nothing and nothing on screen said why.
+  it('always shows the guard banner while submit is blocked', () => {
     const guard = (root: HTMLElement) => root.querySelector('[data-role="composer-guard"]')
 
     const blocked = render(() => (
@@ -129,9 +133,9 @@ describe('ChatInput — blocked state (#47)', () => {
     expect(guard(blocked.container)?.textContent).toContain('Waiting for `web_search`.')
     blocked.unmount()
 
-    // Blocked with no message (e.g. the run just started) — no empty banner.
+    // Blocked with no specific reason — a fallback, never an empty banner.
     const silent = render(() => <ChatInput onSend={vi.fn()} disabled />)
-    expect(guard(silent.container)).toBeNull()
+    expect(guard(silent.container)?.textContent).toContain('Working on your last message')
     silent.unmount()
 
     // A stale message left on a freed composer must not keep the banner up.
@@ -139,6 +143,79 @@ describe('ChatInput — blocked state (#47)', () => {
       <ChatInput onSend={vi.fn()} blockedMessage="Waiting for `web_search`." />
     ))
     expect(guard(free.container)).toBeNull()
+  })
+
+  it('announces the guard politely, without moving focus', () => {
+    const { container } = render(() => <ChatInput onSend={vi.fn()} disabled />)
+    const guard = container.querySelector('[data-role="composer-guard"]')!
+    expect(guard.getAttribute('role')).toBe('status')
+    expect(guard.getAttribute('aria-live')).toBe('polite')
+  })
+})
+
+// SA-M11: submit used to be keyboard-only (Enter), and there was no way at all
+// to abandon a running turn.
+describe('ChatInput — send and stop controls', () => {
+  const send = (root: HTMLElement) =>
+    root.querySelector('[data-role="composer-send"]') as HTMLButtonElement | null
+  const stop = (root: HTMLElement) =>
+    root.querySelector('[data-role="composer-stop"]') as HTMLButtonElement | null
+
+  it('offers a labelled send button, disabled until there is something to send', () => {
+    const onSend = vi.fn()
+    const { container } = render(() => <ChatInput onSend={onSend} />)
+    const button = send(container)!
+    expect(button.getAttribute('aria-label')).toBe('Send message')
+    expect(button.disabled).toBe(true)
+
+    const el = textarea(container)
+    el.value = 'hello'
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(send(container)!.disabled).toBe(false)
+
+    send(container)!.click()
+    expect(onSend).toHaveBeenCalledWith('hello')
+    // Sent — the draft is cleared, so the button locks again.
+    expect(send(container)!.disabled).toBe(true)
+  })
+
+  it('never sends while blocked, however it is triggered', () => {
+    const onSend = vi.fn()
+    const { container } = render(() => <ChatInput onSend={onSend} disabled />)
+    const el = textarea(container)
+    el.value = 'hello'
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+
+    send(container)!.click()
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('swaps send for stop while the session is streaming', () => {
+    const onStop = vi.fn()
+    const { container } = render(() => (
+      <ChatInput onSend={vi.fn()} disabled isProcessing onStop={onStop} />
+    ))
+    expect(send(container)).toBeNull()
+    const button = stop(container)!
+    expect(button.getAttribute('aria-label')).toBe('Stop generating')
+    button.click()
+    expect(onStop).toHaveBeenCalledTimes(1)
+  })
+
+  // The cap and the embedding gate also disable the composer, but neither is
+  // something this session can cancel — so no Stop is offered for them.
+  it('keeps send in place when blocked for a reason this session cannot cancel', () => {
+    const { container } = render(() => (
+      <ChatInput onSend={vi.fn()} disabled blockedMessage="max 2 reached" onStop={vi.fn()} />
+    ))
+    expect(stop(container)).toBeNull()
+    expect(send(container)).not.toBeNull()
+  })
+
+  it('offers no stop control when the parent supplies no handler', () => {
+    const { container } = render(() => <ChatInput onSend={vi.fn()} disabled isProcessing />)
+    expect(stop(container)).toBeNull()
   })
 })
 

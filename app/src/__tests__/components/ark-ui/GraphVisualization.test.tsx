@@ -22,6 +22,19 @@ interface Handler {
   fn: (evt: { target: unknown }) => void
 }
 
+interface FakeCollection {
+  length: number
+  ids: string[]
+  map: <T>(fn: (el: { id: () => string }) => T) => T[]
+  nonempty: () => boolean
+  union: (other: FakeCollection) => FakeCollection
+  remove: () => void
+  removeClass: () => void
+  addClass: (cls: string) => void
+  layout: (opts: { name: string }) => { run: () => void }
+  position: unknown
+}
+
 const added: unknown[] = []
 const layoutsRun: string[] = []
 /** Every `layout(opts)` the component runs, with the options object it handed
@@ -40,9 +53,15 @@ let zoomLevel = 1
 let cyInstance: FakeCore | undefined
 let highlighted: string[] = []
 
-const collection = (ids: string[]) => ({
+/** Ids `add` should refuse, so the per-element retry path can be exercised. */
+let rejectIds: string[] = []
+
+const collection = (ids: string[]): FakeCollection => ({
   length: ids.length,
+  ids,
   map: <T,>(fn: (el: { id: () => string }) => T) => ids.map((id) => fn({ id: () => id })),
+  nonempty: () => ids.length > 0,
+  union: (other: FakeCollection) => collection([...ids, ...other.ids]),
   remove: () => {
     nodeIds = []
     edgeIds = []
@@ -72,13 +91,18 @@ class FakeCore {
   }
   add(els: ElementDefinition | ElementDefinition[]) {
     const list = Array.isArray(els) ? els : [els]
-    added.push(...list)
     for (const el of list) {
       const id = el.data?.id as string
+      // Real Cytoscape aborts the whole batch on a malformed element.
+      if (rejectIds.includes(id)) throw new Error(`bad element: ${id}`)
+      added.push(el)
       if (el.data?.source) edgeIds.push(id)
       else nodeIds.push(id)
     }
     return collection(list.map((el) => el.data?.id as string))
+  }
+  collection() {
+    return collection([])
   }
   elements() {
     return collection([...nodeIds, ...edgeIds])
@@ -95,6 +119,7 @@ class FakeCore {
   getElementById(id: string) {
     return {
       data: (key: string, value: unknown) => dataWrites.push([id, key, value]),
+      nonempty: () => nodeIds.includes(id) || edgeIds.includes(id),
     }
   }
   layout(opts: { name: string }) {
@@ -188,6 +213,7 @@ beforeEach(() => {
   handlers = []
   nodeIds = []
   edgeIds = []
+  rejectIds = []
   highlighted = []
   zoomLevel = 1
   cyInstance = undefined
@@ -243,6 +269,44 @@ describe('GraphVisualization — mounting and elements', () => {
     // is not opted out of fitting.
     expect(layoutRuns).toEqual([{ scope: 'core', opts: expect.objectContaining({ name: 'cose' }) }])
     expect(layoutRuns[0].opts.fit).not.toBe(false)
+  })
+
+  // SA-H9. `cy.add()` throws on a malformed element, and it was called bare
+  // inside a createEffect — so one bad row from one Cypher query took the whole
+  // canvas down rather than costing itself.
+  it('renders the rest of the batch when Cytoscape rejects one element', async () => {
+    rejectIds = ['bad']
+    const { container } = render(() => (
+      <GraphVisualization elements={[...nodes(['a']), ...nodes(['bad']), ...nodes(['c'])]} />
+    ))
+    await becomeVisible()
+
+    expect(added.map((e) => (e as ElementDefinition).data.id)).toEqual(['a', 'c'])
+    expect(container.textContent).toContain('2 nodes')
+    // Counted and named, not swallowed.
+    expect(container.textContent).toContain('1 skipped')
+    expect(container.textContent).not.toContain('No Graph Data')
+  })
+
+  it('says nothing about skipped elements when the batch is clean', async () => {
+    const { container } = render(() => <GraphVisualization elements={nodes(['a', 'b'])} />)
+    await becomeVisible()
+    expect(container.textContent).not.toContain('skipped')
+  })
+
+  it('keeps rendering an incremental batch that contains a bad element', async () => {
+    const [elements, setElements] = createSignal(nodes(['a']))
+    const { container } = render(() => <GraphVisualization elements={elements()} />)
+    await becomeVisible()
+    added.length = 0
+
+    rejectIds = ['bad']
+    setElements([...nodes(['a']), ...nodes(['bad']), ...nodes(['c'])])
+    await tick()
+
+    expect(added.map((e) => (e as ElementDefinition).data.id)).toEqual(['c'])
+    expect(container.textContent).toContain('2 nodes')
+    expect(container.textContent).toContain('1 skipped')
   })
 
   it('adds only the new elements on an incremental update', async () => {

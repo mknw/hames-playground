@@ -95,11 +95,15 @@ const dbListConversations = vi.fn(async () => [] as Array<Record<string, unknown
 const dbPromoteConversation = vi.fn<(id: string, userId: string) => Promise<void>>(async () => {})
 const dbSaveConversation = vi.fn<(row: Record<string, unknown>) => Promise<void>>(async () => {})
 const dbDeleteConversations = vi.fn(async (ids: string[]) => ids)
+const dbSetConversationStatus = vi.fn<
+  (id: string, userId: string, status: string) => Promise<void>
+>(async () => {})
 vi.mock('../../../lib/db/conversations.server', () => ({
   listConversations: dbListConversations,
   promoteConversation: dbPromoteConversation,
   saveConversation: dbSaveConversation,
   deleteConversations: dbDeleteConversations,
+  setConversationStatus: dbSetConversationStatus,
   deriveTitle: (s: string) => s.slice(0, 10),
 }))
 
@@ -158,6 +162,55 @@ describe('processMessage / runTurn', () => {
       'default',
       'serialized:sess-1',
     )
+  })
+
+  // sf-M2. The pre-seeded row above is written with status='running'; the
+  // TRIGGERED path (`action-runner.server.ts`) already flips it to 'error' when
+  // its run throws, but the interactive path did not, so a pattern-build
+  // failure left a sidebar row spinning for the life of the conversation.
+  describe('a throw does not leave the row spinning forever (sf-M2)', () => {
+    it('flips the row to error and rethrows when pattern construction fails', async () => {
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+      getOrBuildPatterns.mockRejectedValueOnce(new Error('gateway unreachable'))
+
+      await expect(actions.processMessage('sess-boom', 'do a thing')).rejects.toThrow(
+        'gateway unreachable',
+      )
+
+      expect(dbSetConversationStatus).toHaveBeenCalledWith('sess-boom', 'bypass-user', 'error')
+      err.mockRestore()
+    })
+
+    it('flips the row to error when the final persist fails', async () => {
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+      saveSession.mockRejectedValueOnce(new Error('postgres down'))
+
+      await expect(actions.processMessage('sess-save', 'do a thing')).rejects.toThrow(
+        'postgres down',
+      )
+
+      expect(dbSetConversationStatus).toHaveBeenCalledWith('sess-save', 'bypass-user', 'error')
+      err.mockRestore()
+    })
+
+    it('reports a status flip that itself failed, instead of swallowing it', async () => {
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+      getOrBuildPatterns.mockRejectedValueOnce(new Error('gateway unreachable'))
+      dbSetConversationStatus.mockRejectedValueOnce(new Error('postgres down too'))
+
+      // The original failure is still what the caller sees…
+      await expect(actions.processMessage('sess-both', 'do a thing')).rejects.toThrow(
+        'gateway unreachable',
+      )
+      // …and the fact that the row is now stuck is on the record.
+      expect(err).toHaveBeenCalledWith(expect.stringContaining('keep showing'), expect.anything())
+      err.mockRestore()
+    })
+
+    it('leaves the row alone on a successful turn', async () => {
+      await actions.processMessage('sess-ok', 'do a thing')
+      expect(dbSetConversationStatus).not.toHaveBeenCalled()
+    })
   })
 
   it('continues an existing conversation instead of re-running it fresh', async () => {

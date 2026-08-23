@@ -190,6 +190,7 @@ describe.each([
 
 describe('agentUsesCodeMode — failure fallback', () => {
   it('assumes code-mode only for the agent literally named code-mode', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const boom = async () => {
       throw new Error('gateway down')
     }
@@ -198,6 +199,51 @@ describe('agentUsesCodeMode — failure fallback', () => {
 
     await expect(agentUsesCodeMode('code-mode', 's')).resolves.toBe(true)
     await expect(agentUsesCodeMode(id, 's')).resolves.toBe(false)
+    warn.mockRestore()
+  })
+})
+
+// sf-M7. All three probes turn a `createPatterns` failure into a plain
+// false/fallback. The degraded answer is correct — nothing better is knowable —
+// but it used to be indistinguishable from a real `false`, so the consequence
+// (no auto-ingest, an unhydrated Shell) never reached anyone.
+describe('capability probes report a degraded answer (sf-M7)', () => {
+  it.each([
+    ['agentUsesCodeMode', agentUsesCodeMode],
+    ['agentUsesRedisRetriever', agentUsesRedisRetriever],
+    ['agentUsesSyncWorkspace', agentUsesSyncWorkspace],
+  ])('%s warns, names the probe, and says the answer is not cached', async (name, probe) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { id } = freshAgent({
+      createPatterns: async () => {
+        throw new Error('gateway down')
+      },
+    })
+
+    await probe(id, 'sess-x')
+
+    expect(warn).toHaveBeenCalledTimes(1)
+    const msg = warn.mock.calls[0][0] as string
+    expect(msg).toContain(name)
+    expect(msg).toContain(id)
+    expect(msg).toContain('gateway down')
+    expect(msg).toContain('Not cached')
+    warn.mockRestore()
+  })
+
+  it('warns again on the next call, because the outage may be persistent', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { id } = freshAgent({
+      createPatterns: async () => {
+        throw new Error('gateway down')
+      },
+    })
+
+    await agentUsesRedisRetriever(id, 's1')
+    await agentUsesRedisRetriever(id, 's2')
+
+    expect(warn).toHaveBeenCalledTimes(2)
+    warn.mockRestore()
   })
 })
 

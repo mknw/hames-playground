@@ -2,9 +2,14 @@
  * Sanitizer for the chat rendering path.
  *
  * Covers what must be removed from marked's output (scripts, event handlers,
- * script-bearing URLs), what must survive it (the markdown feature set the
- * chat actually renders, plus the entity/reference annotation spans), and the
- * attribute-escaping helper the annotators interpolate through.
+ * script-bearing URLs, and — since SA-M10 — every `class`/`data-*` hook a model
+ * could use to forge a citation), what must survive it (the markdown feature
+ * set the chat actually renders), and the attribute-escaping helper the
+ * annotators interpolate through.
+ *
+ * The annotators' own spans are NOT expected to survive this function: they are
+ * added afterwards, by `renderAssistantMarkdown`, which is where the
+ * end-to-end citation behaviour is tested.
  */
 import { describe, it, expect } from 'vitest'
 import { escapeHtmlAttribute, sanitizeMarkdownHtml } from '~/lib/sanitize-html'
@@ -39,12 +44,49 @@ describe('sanitizeMarkdownHtml', () => {
     expect(out).not.toContain('<form')
   })
 
-  it('drops unknown data attributes while keeping the annotator ones', () => {
+  // SA-M10: the annotator hooks used to be allowlisted here, so model output
+  // could forge them. They are now stripped unconditionally — the annotators
+  // run AFTER this function and add their own.
+  it('drops every data attribute, the annotator hooks included', () => {
     const out = sanitizeMarkdownHtml(
-      '<span data-entity-name="Acme" data-unexpected="1">Acme</span>',
+      '<span data-entity-name="Acme" data-entity-ids="n1" data-doc-id="doc-1" ' +
+        'data-unexpected="1">Acme</span>',
     )
-    expect(out).toContain('data-entity-name="Acme"')
+    expect(out).not.toContain('data-entity-name')
+    expect(out).not.toContain('data-entity-ids')
+    expect(out).not.toContain('data-doc-id')
     expect(out).not.toContain('data-unexpected')
+    expect(out).toContain('Acme')
+  })
+
+  it('strips the interactive classes so a forged citation cannot render', () => {
+    const forged =
+      '<p>See <span class="doc-ref" data-doc-id="attacker-chosen">payroll.xlsx</span> ' +
+      'and <span class="graph-entity toggled" data-entity-ids="n9">Acme</span></p>'
+    const out = sanitizeMarkdownHtml(forged)
+
+    expect(out).not.toContain('doc-ref')
+    expect(out).not.toContain('graph-entity')
+    expect(out).not.toContain('attacker-chosen')
+    // The text itself is untouched — this neutralizes the hooks, not the prose.
+    expect(out).toContain('payroll.xlsx')
+    expect(out).toContain('Acme')
+  })
+
+  it('keeps the class values marked legitimately emits', () => {
+    const out = sanitizeMarkdownHtml(
+      '<pre><code class="language-ts">x</code></pre>' +
+        '<ul class="contains-task-list"><li class="task-list-item">a</li></ul>',
+    )
+    expect(out).toContain('class="language-ts"')
+    expect(out).toContain('class="contains-task-list"')
+    expect(out).toContain('class="task-list-item"')
+  })
+
+  it('drops only the disallowed half of a mixed class attribute', () => {
+    const out = sanitizeMarkdownHtml('<code class="language-js doc-ref">x</code>')
+    expect(out).toContain('class="language-js"')
+    expect(out).not.toContain('doc-ref')
   })
 
   it('keeps the markdown feature set the chat renders', () => {
@@ -79,20 +121,19 @@ describe('sanitizeMarkdownHtml', () => {
     expect(out).toContain('<hr>')
   })
 
-  it('keeps the annotation spans the post-processors emit', () => {
+  // The annotator markup is NOT expected to survive a round trip any more —
+  // it is never fed back through. This pins that, so nobody restores the
+  // allowlist entries to "fix" it.
+  it('does not preserve annotator markup fed back through it', () => {
     const annotated =
       '<p><span class="graph-entity toggled" data-entity-name="Acme Corp" ' +
-      'data-entity-ids="n1,n2" title="Click to pin highlight">Acme Corp</span> and ' +
-      '<span class="doc-ref" data-doc-id="doc-1" title="Open notes.md in viewer">' +
-      'notes.md<sup class="doc-ref-mark">↗</sup></span></p>'
+      'data-entity-ids="n1,n2" title="Click to pin highlight">Acme Corp</span></p>'
     const out = sanitizeMarkdownHtml(annotated)
 
-    expect(out).toContain('class="graph-entity toggled"')
-    expect(out).toContain('data-entity-name="Acme Corp"')
-    expect(out).toContain('data-entity-ids="n1,n2"')
-    expect(out).toContain('class="doc-ref"')
-    expect(out).toContain('data-doc-id="doc-1"')
-    expect(out).toContain('<sup class="doc-ref-mark">↗</sup>')
+    expect(out).not.toContain('graph-entity')
+    expect(out).not.toContain('data-entity-name')
+    // `title` is harmless and stays; only the interactive hooks go.
+    expect(out).toContain('title="Click to pin highlight"')
   })
 })
 

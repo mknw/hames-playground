@@ -42,25 +42,20 @@ import {
   withReferences,
   withInjectionGuard,
   Tools,
-  callTool,
   createNeo4jController,
   createWebSearchController,
   type ConfiguredPattern,
 } from '../../harness-patterns'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
+import { getGraphSchema } from './graph-schema.server'
 import { NEO4J_FEW_SHOTS_DEFAULT } from './neo4j-fewshots.server'
 import { enrichNeo4jResult } from '../neo4j-enricher.server'
 import { createRedisBackend } from '../../retriever'
 
-async function getSchema(): Promise<string> {
-  const result = await callTool('get_neo4j_schema', {})
-  return result.success ? JSON.stringify(result.data) : ''
-}
-
 async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools()
-  const schema = await getSchema()
+  const schema = await getGraphSchema('retriever-agent', sessionId)
 
   // ── retriever route: vector search over this session's uploaded docs ──
   // Raw user message by default; rewritten to a search query only when the turn

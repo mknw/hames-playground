@@ -522,6 +522,60 @@ describe('document-store (Issue #6)', () => {
     it('is idempotent for a non-existent document', async () => {
       await expect(deleteDocument('s1', 'nope', fake.callTool)).resolves.toBeUndefined()
     })
+
+    // sf-H4. Neither write was checked, so the route above this answered
+    // `ok: true` for a deletion that Redis rejected — a privacy-relevant "your
+    // document is gone" that isn't. `storeDocument`/`setDocumentFlags` in this
+    // same file have always checked; delete was the outlier.
+    it('THROWS when the document key write is rejected', async () => {
+      const callTool = (async (name: string) =>
+        name === 'delete'
+          ? { success: false, data: null, error: 'NOAUTH Authentication required' }
+          : { success: true, data: 1 }) as CallTool
+
+      await expect(deleteDocument('s1', 'doc-1', callTool)).rejects.toThrow(
+        /Failed to delete document doc-1.*document: NOAUTH/,
+      )
+    })
+
+    it('THROWS when the index entry write is rejected', async () => {
+      const callTool = (async (name: string) =>
+        name === 'srem'
+          ? { success: false, data: null, error: 'WRONGTYPE' }
+          : { success: true, data: 1 }) as CallTool
+
+      // A key that went but stayed in the index is a phantom the panel keeps
+      // listing, so this half is checked too.
+      await expect(deleteDocument('s1', 'doc-1', callTool)).rejects.toThrow(
+        /session index: WRONGTYPE/,
+      )
+    })
+
+    it('names BOTH failures, and still attempts both writes', async () => {
+      const seen: string[] = []
+      const callTool = (async (name: string) => {
+        seen.push(name)
+        return { success: false, data: null, error: 'connection refused' }
+      }) as CallTool
+
+      await expect(deleteDocument('s1', 'doc-1', callTool)).rejects.toThrow(
+        /document: connection refused; session index: connection refused/,
+      )
+      // The second write is attempted even after the first failed, so a retry
+      // of a half-completed delete still converges.
+      expect(seen).toEqual(['delete', 'srem'])
+    })
+
+    it('reports an error-shaped success payload as a failure', async () => {
+      // `redisWriteError` demotes `"ERR ..."`-style text returned on a
+      // success:true call — the shape the Redis MCP actually uses.
+      const callTool = (async (name: string) =>
+        name === 'delete'
+          ? { success: true, data: 'ERROR: misconfigured' }
+          : { success: true, data: 1 }) as CallTool
+
+      await expect(deleteDocument('s1', 'doc-1', callTool)).rejects.toThrow(/misconfigured/)
+    })
   })
 
   describe('toPriorResult', () => {

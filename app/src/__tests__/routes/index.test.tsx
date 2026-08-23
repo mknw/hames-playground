@@ -164,7 +164,7 @@ describe('chat route — session selection', () => {
     sidebar.onSelectThread('t1')
     await tick()
 
-    chat.onGraphUpdate([{ data: { id: 'n1', label: 'Node' } }])
+    chat.onGraphUpdate('t1', [{ data: { id: 'n1', label: 'Node' } }])
     await tick()
     expect(support.graphElements).toHaveLength(1)
 
@@ -174,11 +174,11 @@ describe('chat route — session selection', () => {
     expect(support.graphElements).toHaveLength(1)
   })
 
-  it('wipes graph + events when switching to another thread', async () => {
+  it('shows the newly-opened thread its own (empty) panels, not the previous one’s', async () => {
     listConversations.mockResolvedValue([thread('t1'), thread('t2')])
     await mount()
-    chat.onGraphUpdate([{ data: { id: 'n1', label: 'Node' } }])
-    chat.onEventsUpdate([{ type: 'tool_call', ts: 1 } as never])
+    chat.onGraphUpdate('new-1', [{ data: { id: 'n1', label: 'Node' } }])
+    chat.onEventsUpdate('new-1', [{ type: 'tool_call', ts: 1 } as never])
     await tick()
     expect(support.graphElements).toHaveLength(1)
     expect(support.contextEvents).toHaveLength(1)
@@ -186,6 +186,114 @@ describe('chat route — session selection', () => {
     sidebar.onSelectThread('t2')
     await tick()
     expect(support.graphElements).toEqual([])
+    expect(support.contextEvents).toEqual([])
+  })
+
+  // ── SA-H8 ────────────────────────────────────────────────────────────────
+  // Panel state used to be three route-level singletons. Combined with the
+  // hydration effect's deliberate early-return for a still-running session
+  // (#105 — it must not wipe a live buffer), that meant re-entering a running
+  // thread never cleared the panels, and the running thread's own events then
+  // appended onto the OTHER thread's graph and timeline.
+  it('keeps a backgrounded run’s events in its own thread, out of the visible one', async () => {
+    listConversations.mockResolvedValue([thread('t1'), thread('t2')])
+    await mount()
+
+    // t1 is running and has produced a node.
+    sidebar.onSelectThread('t1')
+    await tick()
+    chat.updateRunState('t1', { isProcessing: true })
+    chat.onGraphUpdate('t1', [{ data: { id: 't1-node', label: 'From t1' } }])
+    chat.onEventsUpdate('t1', [{ type: 'tool_call', ts: 1 } as never])
+    await tick()
+    expect(support.graphElements).toHaveLength(1)
+
+    // Switch to t2. t1 keeps streaming into its OWN buffers while t2 is shown.
+    sidebar.onSelectThread('t2')
+    await tick()
+    chat.onGraphUpdate('t1', [{ data: { id: 't1-node-2', label: 'Also from t1' } }])
+    chat.onEventsUpdate('t1', [{ type: 'tool_result', ts: 2 } as never])
+    await tick()
+    expect(support.graphElements).toEqual([])
+    expect(support.contextEvents).toEqual([])
+
+    // Back to t1: both of its own elements are there, and nothing of t2's.
+    sidebar.onSelectThread('t1')
+    await tick()
+    expect(support.graphElements.map((e: { data: { id: string } }) => e.data.id)).toEqual([
+      't1-node',
+      't1-node-2',
+    ])
+    expect(support.contextEvents).toHaveLength(2)
+  })
+
+  it('only moves the highlight for a batch landing in the visible thread', async () => {
+    listConversations.mockResolvedValue([thread('t1'), thread('t2')])
+    await mount()
+    sidebar.onSelectThread('t1')
+    await tick()
+    chat.onGraphUpdate('t1', [{ data: { id: 'visible' } }])
+    await tick()
+    expect(support.highlightedIds).toEqual(['visible'])
+
+    // A backgrounded run's batch fills its own graph but must not steal the
+    // highlight from the thread on screen.
+    chat.onGraphUpdate('t2', [{ data: { id: 'background' } }])
+    await tick()
+    expect(support.highlightedIds).toEqual(['visible'])
+  })
+
+  it('keeps a running thread’s panel buffers when the user browses elsewhere', async () => {
+    listConversations.mockResolvedValue([thread('t1'), thread('t2'), thread('t3')])
+    await mount()
+    sidebar.onSelectThread('t1')
+    await tick()
+    chat.updateRunState('t1', { isProcessing: true })
+    chat.onEventsUpdate('t1', [{ type: 'tool_call', ts: 1 } as never])
+    await tick()
+
+    // Two hops away — pruning drops idle sessions' buffers but never a
+    // running one's, which is the only live copy of the in-flight turn.
+    sidebar.onSelectThread('t2')
+    await tick()
+    sidebar.onSelectThread('t3')
+    await tick()
+    sidebar.onSelectThread('t1')
+    await tick()
+    expect(support.contextEvents).toHaveLength(1)
+  })
+
+  it('resets only the session being hydrated', async () => {
+    listConversations.mockResolvedValue([thread('t1'), thread('t2')])
+    await mount()
+    chat.onEventsUpdate('t1', [{ type: 'tool_call', ts: 1 } as never])
+    chat.onEventsUpdate('t2', [{ type: 'tool_call', ts: 2 } as never])
+    await tick()
+
+    // ChatInterface calls this before it repopulates a thread from history.
+    chat.onResetForNewSession('t2')
+    await tick()
+    sidebar.onSelectThread('t1')
+    await tick()
+    expect(support.contextEvents).toHaveLength(1)
+    sidebar.onSelectThread('t2')
+    await tick()
+    expect(support.contextEvents).toEqual([])
+  })
+
+  it('drops a deleted thread’s panel buffers', async () => {
+    listConversations.mockResolvedValue([thread('t1'), thread('t2')])
+    await mount()
+    chat.onEventsUpdate('t1', [{ type: 'tool_call', ts: 1 } as never])
+    await tick()
+    deleteConversationsBulk.mockResolvedValue({ deleted: ['t1'] })
+    await sidebar.onDeleteThreads(['t1'])
+    await tick()
+
+    chat.onEventsUpdate('t1', [] as never)
+    await tick()
+    sidebar.onSelectThread('t1')
+    await tick()
     expect(support.contextEvents).toEqual([])
   })
 })
@@ -411,9 +519,9 @@ describe('chat route — run state across threads', () => {
 describe('chat route — support panel wiring', () => {
   it('accumulates graph elements and highlights the newly-arrived ones', async () => {
     await mount()
-    chat.onGraphUpdate([{ data: { id: 'n1', label: 'Alice' } }])
+    chat.onGraphUpdate('new-1', [{ data: { id: 'n1', label: 'Alice' } }])
     await tick()
-    chat.onGraphUpdate([{ data: { id: 'n2', label: 'Acme' } }])
+    chat.onGraphUpdate('new-1', [{ data: { id: 'n2', label: 'Acme' } }])
     await tick()
 
     expect(support.graphElements.map((e: { data: { id: string } }) => e.data.id)).toEqual([
@@ -431,11 +539,11 @@ describe('chat route — support panel wiring', () => {
 
   it('indexes node and edge labels so chat can highlight known entities', async () => {
     await mount()
-    chat.onGraphUpdate([
-      { data: { id: 'n1', label: 'Alice' } },
-      { data: { id: 'n2', label: 'Alice' } },
-      { data: { id: 'e1', label: 'WORKS_AT', source: 'n1', target: 'n2' } },
-      { data: { label: 'no id — skipped' } },
+    chat.onGraphUpdate('new-1', [
+      { data: { id: 'n1', label: 'Alice', kind: 'node' } },
+      { data: { id: 'n2', label: 'Alice', kind: 'node' } },
+      { data: { id: 'e1', label: 'WORKS_AT', source: 'n1', target: 'n2', kind: 'edge' } },
+      { data: { label: 'no id — skipped', kind: 'node' } },
     ])
     await tick()
 
@@ -447,8 +555,8 @@ describe('chat route — support panel wiring', () => {
 
   it('clears the observability buffers on request', async () => {
     await mount()
-    chat.onEventsUpdate([{ type: 'tool_call', ts: 1 } as never])
-    chat.onContextUpdate({ id: 'ctx' } as never)
+    chat.onEventsUpdate('new-1', [{ type: 'tool_call', ts: 1 } as never])
+    chat.onContextUpdate('new-1', { id: 'ctx' } as never)
     await tick()
     expect(support.unifiedContext).toEqual({ id: 'ctx' })
 
@@ -461,14 +569,14 @@ describe('chat route — support panel wiring', () => {
   it('refreshes the sidebar when the turn’s context is saved', async () => {
     await mount()
     listConversations.mockClear()
-    chat.onContextUpdate({ id: 'ctx' } as never)
+    chat.onContextUpdate('new-1', { id: 'ctx' } as never)
     await tick(10)
     expect(listConversations).toHaveBeenCalledTimes(1)
   })
 
   it('applies a stash action optimistically and persists it', async () => {
     await mount()
-    chat.onEventsUpdate([
+    chat.onEventsUpdate('new-1', [
       { id: 'e1', type: 'tool_result', ts: 1, data: { output: 'x' } } as never,
       { id: 'e2', type: 'tool_result', ts: 2, data: { output: 'y' } } as never,
     ])
@@ -492,7 +600,7 @@ describe('chat route — support panel wiring', () => {
 
   it('maps each stash action to its flags', async () => {
     await mount()
-    chat.onEventsUpdate([{ id: 'e1', type: 'tool_result', ts: 1, data: {} } as never])
+    chat.onEventsUpdate('new-1', [{ id: 'e1', type: 'tool_result', ts: 1, data: {} } as never])
     await tick()
 
     for (const [action, expected] of [

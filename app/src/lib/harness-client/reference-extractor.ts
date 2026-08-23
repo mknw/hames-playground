@@ -15,6 +15,9 @@ import type {
   RetrievalReference,
   RetrieverResult,
 } from '~/lib/harness-patterns'
+// Value import: the turn boundary is shared with the Data Stash partition, so
+// both derive "this turn" from one definition (see SA-H7).
+import { findLastUserMessageIndex } from '~/lib/turn-utils'
 
 /**
  * The payload a chat citation passes across panes to open the inline viewer.
@@ -28,11 +31,19 @@ export interface OpenReferenceTarget {
 }
 
 /**
- * References from the **most recent** retriever `tool_result` in the stream
- * (one retriever call per turn). Returns `[]` when there's no retriever result.
+ * References from the retriever `tool_result` of the **current turn** — the
+ * scan runs backwards from the end of the stream and stops at the last
+ * `user_message`. Returns `[]` when this turn had no retriever result.
+ *
+ * The turn bound is the whole point (SA-H7): `events` is the *accumulated*
+ * stream, so an unbounded scan let a neo4j-only or web-only turn inherit the
+ * previous turn's citations. Those render as clickable provenance on an answer
+ * that was never derived from them, and open the wrong chunks — fabricated
+ * sourcing, which is worse than no sourcing.
  */
 export function extractReferences(events: ContextEvent[]): RetrievalReference[] {
-  for (let i = events.length - 1; i >= 0; i--) {
+  const turnStart = findLastUserMessageIndex(events)
+  for (let i = events.length - 1; i > turnStart; i--) {
     const e = events[i]
     if (e.type !== 'tool_result') continue
     const data = e.data as ToolResultEventData
@@ -44,10 +55,7 @@ export function extractReferences(events: ContextEvent[]): RetrievalReference[] 
 }
 
 /** References for a single document, sorted by position in the source text. */
-export function referencesForDoc(
-  events: ContextEvent[],
-  docId: string,
-): RetrievalReference[] {
+export function referencesForDoc(events: ContextEvent[], docId: string): RetrievalReference[] {
   return extractReferences(events)
     .filter((r) => r.docId === docId)
     .sort((a, b) => a.startOffset - b.startOffset)

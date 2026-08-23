@@ -81,7 +81,9 @@ describe('POST /api/agents/:id — recording provenance', () => {
     )
 
     expect(res.status).toBe(202)
-    expect(await res.json()).toEqual({ run_id: 'run-fixed' })
+    // `recording_stored` reports the audio's fate to the caller — a device that
+    // may be about to delete its own copy (sf-L9).
+    expect(await res.json()).toEqual({ run_id: 'run-fixed', recording_stored: true })
     expect(storeDocument).toHaveBeenCalledWith({
       sessionId: 'run-fixed',
       filename: 'memo.m4a',

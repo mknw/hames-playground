@@ -131,7 +131,7 @@ OpenID Connect **auth-code flow** — the code→token exchange runs server-side
 
 Config lives in `app/src/lib/auth/entra-config.server.ts` (env: `AZURE_TENANT_ID`,
 `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AUTH_SESSION_SECRET`; see
-[`docs/deploy/entra-setup.md`](deploy/entra-setup.md)). `isEntraConfigured()`
+[`docs/deployment/entra-setup.md`](deployment/entra-setup.md)). `isEntraConfigured()`
 lets `/api/auth/login` fail soft (503) when the tenant config is absent, so
 dev-bypass stays a zero-config path.
 
@@ -210,7 +210,7 @@ did not match the `user_id` Postgres rows were written under.
 `VITE_DEV_BYPASS_AUTH='false'` in `app/.env`, fill in the `AZURE_*` +
 `AUTH_SESSION_SECRET` values, and sign in with an email in
 `VITE_ALLOWED_EMAILS`. See `app/.env.example` and
-[`docs/deploy/entra-setup.md`](deploy/entra-setup.md).
+[`docs/deployment/entra-setup.md`](deployment/entra-setup.md).
 
 **Known footgun (out of scope for #42):** because `BYPASS_USER.id` is a
 single literal, all devs running against shared Postgres share one

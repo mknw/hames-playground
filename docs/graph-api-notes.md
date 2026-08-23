@@ -7,7 +7,7 @@ surprised us.
 This is **not** the architecture doc. How the app acquires a per-user token,
 dispatches a tool call and isolates users lives in
 [`MICROSOFT_GRAPH.md`](MICROSOFT_GRAPH.md); tenant provisioning and consent live
-in [`deploy/entra-setup.md`](deploy/entra-setup.md). This file is for the moment
+in [`deployment/entra-setup.md`](deployment/entra-setup.md). This file is for the moment
 you have a Graph response on screen and it does not say what you expected.
 
 > **See also:** [`MICROSOFT_GRAPH.md`](MICROSOFT_GRAPH.md) for why we made each

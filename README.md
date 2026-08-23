@@ -120,7 +120,7 @@ Notes worth knowing before you run it:
   which Vite replaces with `false` in the build that goes into the image — so
   the container always runs the real Entra sign-in and needs `AZURE_*` +
   `AUTH_SESSION_SECRET` + `VITE_ALLOWED_EMAILS` in `app/.env`
-  ([`docs/deploy/entra-setup.md`](docs/deploy/entra-setup.md)). The published
+  ([`docs/deployment/entra-setup.md`](docs/deployment/entra-setup.md)). The published
   port is the same 3444, so the registered redirect URI keeps working.
 - **The Data Stash embedder is not a compose service** — it is a llama-server on
   the host (port 8090). The container reaches it via

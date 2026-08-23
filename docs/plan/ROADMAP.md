@@ -52,7 +52,7 @@ Two reframes drive everything:
 ```
 
 Deployment stays **single VM + `docker compose up -d` + Caddy** for this whole
-cycle (see [`../deploy/azure-vm.md`](../deploy/azure-vm.md)); the app keeps
+cycle (see [`../deployment/azure-vm.md`](../deployment/azure-vm.md)); the app keeps
 per-session state in process memory, so multi-replica is out of scope until
 that state is externalized.
 
@@ -128,7 +128,7 @@ first; everything in Phase 0 proceeds in parallel meanwhile.
 ## Standing decisions this plan encodes
 
 - **~30 users forecast**; single-instance, persistent Node server.
-- **Deploy = Azure VM (or any VPS) + compose + Caddy** — [`../deploy/azure-vm.md`](../deploy/azure-vm.md).
+- **Deploy = Azure VM (or any VPS) + compose + Caddy** — [`../deployment/azure-vm.md`](../deployment/azure-vm.md).
 - **MS-only per-user identity this cycle**; org-wide tokens + app-side RBAC where org scope is acceptable (#108); Entra OBO where personal scope is required (#110).
 - **Per-user graph = DozerDB db-per-user** (#121) — free, drop-in on Neo4j 5.26; accepts no-RBAC + no-Fabric limits at this scale.
 - **Sandbox**: Docker backend with `base`/`image-processing`/`data`/`office` flavours (shipped #117); Firecracker deferred — see [`sandbox.md`](sandbox.md).

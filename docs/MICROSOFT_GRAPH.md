@@ -4,7 +4,7 @@ How the app calls Microsoft Graph **as the signed-in user**, so Entra enforces
 each request's scope instead of an org token guarded by app code. This is
 Pattern C of the identity model in #107; issue #110.
 
-> **See also:** [`deploy/entra-setup.md`](deploy/entra-setup.md) for tenant setup
+> **See also:** [`deployment/entra-setup.md`](deployment/entra-setup.md) for tenant setup
 > (app registration, scopes, consent, env vars) · [UI_ARCHITECTURE.md
 > §3](UI_ARCHITECTURE.md) for the sign-in/session machinery ·
 > [`graph-api-notes.md`](graph-api-notes.md) for what Graph itself actually
@@ -477,7 +477,7 @@ behaviour, the fix belongs in `graphFetch` (one place), not in tool bodies.
 ## Adding a read connector
 
 1. Ensure the delegated scope is consented **and** in the sign-in request — see
-   [`deploy/entra-setup.md`](deploy/entra-setup.md). No re-consent is needed for
+   [`deployment/entra-setup.md`](deployment/entra-setup.md). No re-consent is needed for
    a scope already in that set.
 2. Register the tool:
 

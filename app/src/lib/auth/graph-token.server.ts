@@ -18,7 +18,7 @@
  * `acquireTokenOnBehalfOf` becomes necessary only if a distinct client ever
  * authenticates to Entra itself and calls our API (e.g. giving the iOS
  * Shortcut its own client id). The token-cache plumbing here is the seam for
- * that; see `docs/deploy/entra-setup.md`.
+ * that; see `docs/deployment/entra-setup.md`.
  *
  * ## Security posture (#107 principle 1)
  * Tokens are resolved server-side from the authenticated `userId` and are
@@ -30,15 +30,15 @@ import {
   ConfidentialClientApplication,
   InteractionRequiredAuthError,
   type AccountInfo,
-} from "@azure/msal-node";
-import { assertServerOnImport } from "../harness-patterns/assert.server";
-import { buildEntraConfig, msalConfiguration } from "./entra-config.server";
-import { loadUserTokenCache, saveUserTokenCache } from "./user-tokens.server";
+} from '@azure/msal-node'
+import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { buildEntraConfig, msalConfiguration } from './entra-config.server'
+import { loadUserTokenCache, saveUserTokenCache } from './user-tokens.server'
 
-assertServerOnImport();
+assertServerOnImport()
 
 /** Graph base URL (v1.0). */
-export const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
+export const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
 
 /**
  * Default delegated scope set. `User.Read` is already admin-consented in the
@@ -46,7 +46,7 @@ export const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
  * (Mail.Read, Files.Read.All, …) are requested at **sign-in** so the refresh
  * token can mint them silently — see `entra-config.server.ts`.
  */
-export const DEFAULT_GRAPH_SCOPES = ["User.Read"] as const;
+export const DEFAULT_GRAPH_SCOPES = ['User.Read'] as const
 
 /**
  * Raised when we cannot get a token without user interaction — no stored cache,
@@ -65,8 +65,8 @@ export class GraphAuthRequiredError extends Error {
      *  help" (e.g. Loop content, #137). */
     readonly status?: number,
   ) {
-    super(message);
-    this.name = "GraphAuthRequiredError";
+    super(message)
+    this.name = 'GraphAuthRequiredError'
   }
 }
 
@@ -82,37 +82,37 @@ export async function getUserGraphToken(
   userId: string,
   scopes: readonly string[] = DEFAULT_GRAPH_SCOPES,
 ): Promise<string> {
-  const stored = await loadUserTokenCache(userId);
+  const stored = await loadUserTokenCache(userId)
   if (!stored) {
     throw new GraphAuthRequiredError(
-      "No Microsoft token cache for this user — sign in to connect Microsoft 365.",
+      'No Microsoft token cache for this user — sign in to connect Microsoft 365.',
       userId,
-    );
+    )
   }
 
-  const cfg = buildEntraConfig();
-  const cca = new ConfidentialClientApplication(msalConfiguration(cfg));
-  const cache = cca.getTokenCache();
-  await cache.deserialize(stored.tokenCache);
+  const cfg = buildEntraConfig()
+  const cca = new ConfidentialClientApplication(msalConfiguration(cfg))
+  const cache = cca.getTokenCache()
+  await cache.deserialize(stored.tokenCache)
 
-  const account = await resolveAccount(cache, stored.homeAccountId);
+  const account = await resolveAccount(cache, stored.homeAccountId)
   if (!account) {
     throw new GraphAuthRequiredError(
-      "Stored Microsoft token cache has no usable account — sign in again.",
+      'Stored Microsoft token cache has no usable account — sign in again.',
       userId,
-    );
+    )
   }
 
   try {
     const result = await cca.acquireTokenSilent({
       account,
       scopes: [...scopes],
-    });
+    })
     if (!result?.accessToken) {
       throw new GraphAuthRequiredError(
-        "Microsoft returned no access token — sign in again.",
+        'Microsoft returned no access token — sign in again.',
         userId,
-      );
+      )
     }
 
     // Persist rotation. `hasChanged` avoids a pointless write when MSAL served
@@ -125,34 +125,34 @@ export async function getUserGraphToken(
       ).catch((err) =>
         // A failed write-back doesn't invalidate the token we just got; the
         // next call will simply re-redeem. Log, don't fail the request.
-        console.error("[graph-token] failed to persist rotated cache:", err),
-      );
+        console.error('[graph-token] failed to persist rotated cache:', err),
+      )
     }
 
-    return result.accessToken;
+    return result.accessToken
   } catch (err) {
-    if (err instanceof GraphAuthRequiredError) throw err;
+    if (err instanceof GraphAuthRequiredError) throw err
     if (err instanceof InteractionRequiredAuthError) {
       throw new GraphAuthRequiredError(
-        "Microsoft requires interactive sign-in (consent or expired credential) — sign in again.",
+        'Microsoft requires interactive sign-in (consent or expired credential) — sign in again.',
         userId,
-      );
+      )
     }
-    throw err;
+    throw err
   }
 }
 
 /** Prefer the recorded account; fall back to the cache's sole account. */
 async function resolveAccount(
-  cache: ReturnType<ConfidentialClientApplication["getTokenCache"]>,
+  cache: ReturnType<ConfidentialClientApplication['getTokenCache']>,
   homeAccountId: string | null,
 ): Promise<AccountInfo | null> {
   if (homeAccountId) {
-    const byId = await cache.getAccountByHomeId(homeAccountId);
-    if (byId) return byId;
+    const byId = await cache.getAccountByHomeId(homeAccountId)
+    if (byId) return byId
   }
-  const all = await cache.getAllAccounts();
-  return all.length === 1 ? all[0] : null;
+  const all = await cache.getAllAccounts()
+  return all.length === 1 ? all[0] : null
 }
 
 /**
@@ -178,39 +178,39 @@ export async function graphFetch(
   userId: string,
   path: string,
   init: {
-    method?: string;
-    scopes?: readonly string[];
-    body?: unknown;
+    method?: string
+    scopes?: readonly string[]
+    body?: unknown
     /** Extra request headers, e.g. `Prefer: outlook.timezone="Europe/Brussels"`.
      *  Cannot override Authorization — the credential is set here, not by callers. */
-    headers?: Record<string, string>;
+    headers?: Record<string, string>
     /**
      * How to decode the response body. `'json'` (default) parses JSON;
      * `'base64'` returns the raw bytes base64-encoded — the only faithful way to
      * carry a binary file (xlsx/pdf/png) through the string-typed Data Stash.
      */
-    responseType?: "json" | "base64";
+    responseType?: 'json' | 'base64'
   } = {},
 ): Promise<unknown> {
-  const token = await getUserGraphToken(userId, init.scopes ?? DEFAULT_GRAPH_SCOPES);
-  const url = path.startsWith("http") ? path : `${GRAPH_BASE}${path}`;
-  const wantsBytes = init.responseType === "base64";
+  const token = await getUserGraphToken(userId, init.scopes ?? DEFAULT_GRAPH_SCOPES)
+  const url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`
+  const wantsBytes = init.responseType === 'base64'
 
   const res = await fetch(url, {
-    method: init.method ?? "GET",
+    method: init.method ?? 'GET',
     headers: {
       ...init.headers,
       // Set last so a caller can never replace the credential or content type.
       Authorization: `Bearer ${token}`,
-      Accept: wantsBytes ? "*/*" : "application/json",
+      Accept: wantsBytes ? '*/*' : 'application/json',
       // Decorated traffic is prioritized under Graph throttling; undecorated
       // traffic is first to be shed. NONISV|<company>|<app>/<version> is the
       // documented shape for internal (non-ISV) apps.
-      "User-Agent": "NONISV|DTSC|kg-agent/1.0",
-      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      'User-Agent': 'NONISV|DTSC|kg-agent/1.0',
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
     },
     ...(init.body ? { body: JSON.stringify(init.body) } : {}),
-  });
+  })
 
   if (res.status === 401 || res.status === 403) {
     // Entra rejected the delegated token — treat as re-auth/consent needed.
@@ -219,14 +219,14 @@ export async function graphFetch(
       `Microsoft Graph denied the request (${res.status}) — the account may lack consent for this scope.`,
       userId,
       res.status,
-    );
+    )
   }
   if (!res.ok) {
     throw new Error(
-      `[graph] ${init.method ?? "GET"} ${path} failed: ${res.status} ${res.statusText}`,
-    );
+      `[graph] ${init.method ?? 'GET'} ${path} failed: ${res.status} ${res.statusText}`,
+    )
   }
-  if (res.status === 204) return null;
-  if (wantsBytes) return Buffer.from(await res.arrayBuffer()).toString("base64");
-  return res.json();
+  if (res.status === 204) return null
+  if (wantsBytes) return Buffer.from(await res.arrayBuffer()).toString('base64')
+  return res.json()
 }

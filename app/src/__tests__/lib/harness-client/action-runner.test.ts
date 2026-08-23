@@ -3,8 +3,10 @@
  * the fire-and-forget path shared by `POST /api/agents/:id` and routines.
  *
  * Asserts the two contracts the route depends on: the seeded row is a valid,
- * replayable `action` row that exists before the run, and a background failure
- * always leaves the row in a terminal state instead of spinning on 'running'.
+ * replayable `action` row that exists before the run, and the background run
+ * itself is the shared turn driver in `triggered` mode (`turn.server.ts`,
+ * pinned by `turn.test.ts`) with its rejection stopping here — nobody is
+ * awaiting it.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -14,35 +16,14 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServer: vi.fn(),
 }))
 
-import {
-  getRequestUserId,
-  getRequestSessionId,
-} from '../../../lib/harness-client/request-user.server'
-
-const seenScopes: Array<{ userId: string | null; sessionId: string | null }> = []
-const runAgent = vi.fn(async (message: string, sessionId: string, data: unknown) => {
-  seenScopes.push({ userId: getRequestUserId(), sessionId: getRequestSessionId() })
-  return { response: `ran:${message}`, serialized: JSON.stringify({ sessionId, data }), data: {} }
-})
-const harness = vi.fn(() => runAgent)
-vi.mock('../../../lib/harness-patterns', async () => {
-  const actual = await vi.importActual<Record<string, unknown>>('../../../lib/harness-patterns')
-  return { ...actual, harness }
-})
-
-const getOrBuildPatterns = vi.fn(async (_s: string, agentId: string) => [`patterns:${agentId}`])
-const saveSession = vi.fn(async () => {})
-vi.mock('../../../lib/harness-client/session.server', () => ({ getOrBuildPatterns, saveSession }))
+const runTurnAndPersist = vi.fn<(req: Record<string, unknown>) => Promise<unknown>>(
+  async () => ({}),
+)
+vi.mock('../../../lib/harness-client/turn.server', () => ({ runTurnAndPersist }))
 
 type Saved = Record<string, unknown>
 const dbSaveConversation = vi.fn<(row: Saved) => Promise<void>>(async () => {})
-const dbSetConversationStatus = vi.fn<
-  (id: string, userId: string, status: string) => Promise<void>
->(async () => {})
-vi.mock('../../../lib/db/conversations.server', () => ({
-  saveConversation: dbSaveConversation,
-  setConversationStatus: dbSetConversationStatus,
-}))
+vi.mock('../../../lib/db/conversations.server', () => ({ saveConversation: dbSaveConversation }))
 
 const { seedActionRow, runAgentInBackground } =
   await import('../../../lib/harness-client/action-runner.server')
@@ -58,7 +39,6 @@ const TRIGGER = {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  seenScopes.length = 0
 })
 
 describe('seedActionRow', () => {
@@ -97,55 +77,27 @@ describe('seedActionRow', () => {
 })
 
 describe('runAgentInBackground', () => {
-  it('runs a fresh turn under the run’s own user/session scope and persists the result', async () => {
+  it('drives one triggered turn, carrying the trigger as the run’s data', async () => {
     await runAgentInBackground('run-4', 'user-1', 'do the thing', 'search', TRIGGER)
 
-    expect(getOrBuildPatterns).toHaveBeenCalledWith('run-4', 'search')
-    expect(harness).toHaveBeenCalledWith('patterns:search')
-    // Never continues the seeded placeholder — that would duplicate the user_message.
-    expect(runAgent).toHaveBeenCalledWith('do the thing', 'run-4', { trigger: TRIGGER })
-    expect(seenScopes).toEqual([{ userId: 'user-1', sessionId: 'run-4' }])
-    expect(saveSession).toHaveBeenCalledWith(
-      'run-4',
-      'user-1',
-      'search',
-      JSON.stringify({ sessionId: 'run-4', data: { trigger: TRIGGER } }),
-    )
+    expect(runTurnAndPersist).toHaveBeenCalledWith({
+      mode: 'triggered',
+      sessionId: 'run-4',
+      userId: 'user-1',
+      agentId: 'search',
+      message: 'do the thing',
+      data: { trigger: TRIGGER },
+    })
   })
 
-  it('flips the row to error when pattern construction throws, instead of spinning forever', async () => {
-    getOrBuildPatterns.mockRejectedValueOnce(new Error('gateway down'))
-    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+  // The driver has already logged the failure and flipped the row off
+  // 'running' (sf-M2/sf-M3). Rethrowing here would only surface as an
+  // unhandled rejection: the callers `void` this.
+  it('never rejects — a failed run must not take the process with it', async () => {
+    runTurnAndPersist.mockRejectedValueOnce(new Error('gateway down'))
 
     await expect(
       runAgentInBackground('run-5', 'user-1', 'x', 'search', TRIGGER),
     ).resolves.toBeUndefined()
-
-    expect(saveSession).not.toHaveBeenCalled()
-    expect(dbSetConversationStatus).toHaveBeenCalledWith('run-5', 'user-1', 'error')
-    expect(logged).toHaveBeenCalled()
-    logged.mockRestore()
-  })
-
-  // sf-M3. The flip itself was `.catch(() => {})` with a comment claiming the
-  // failure was "already logged above" — that log was about the RUN. When the
-  // flip is what failed, the row keeps spinning and nothing said why.
-  it('does not swallow a failure of the error-flip itself — it names the stuck row', async () => {
-    getOrBuildPatterns.mockRejectedValueOnce(new Error('gateway down'))
-    dbSetConversationStatus.mockRejectedValueOnce(new Error('db down'))
-    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
-
-    // Still swallowed as far as the caller is concerned — this is a
-    // fire-and-forget background run and must not reject.
-    await expect(
-      runAgentInBackground('run-6', 'user-1', 'x', 'search', TRIGGER),
-    ).resolves.toBeUndefined()
-
-    expect(logged).toHaveBeenCalledWith(expect.stringContaining('run-6'), expect.anything())
-    expect(logged).toHaveBeenCalledWith(
-      expect.stringContaining('keep showing as'),
-      expect.anything(),
-    )
-    logged.mockRestore()
   })
 })

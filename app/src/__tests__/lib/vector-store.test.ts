@@ -30,7 +30,10 @@ function makeFakeRedis() {
   const indexes = new Map<string, { prefix: string; dim: number; metric: string }>()
   const calls: Array<[string, Record<string, unknown>]> = []
 
-  const callTool = (async (name: string, args: Record<string, unknown>): Promise<ToolCallResult> => {
+  const callTool = (async (
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<ToolCallResult> => {
     calls.push([name, args])
     switch (name) {
       case 'create_vector_index_hash':
@@ -77,7 +80,12 @@ describe('vector-store', () => {
 
   describe('ensureIndex', () => {
     it('creates an HNSW index with the given name/prefix/dim/metric', async () => {
-      const store = createVectorStore({ indexName: 'idx1', prefix: 'p:', dim: 8, callTool: fake.callTool })
+      const store = createVectorStore({
+        indexName: 'idx1',
+        prefix: 'p:',
+        dim: 8,
+        callTool: fake.callTool,
+      })
       await store.ensureIndex()
       expect(fake.indexes.get('idx1')).toEqual({ prefix: 'p:', dim: 8, metric: 'COSINE' })
     })
@@ -92,7 +100,11 @@ describe('vector-store', () => {
     })
 
     it('throws on a non-exists index error', async () => {
-      const callTool: CallTool = async () => ({ success: false, data: null, error: 'WRONGTYPE boom' })
+      const callTool: CallTool = async () => ({
+        success: false,
+        data: null,
+        error: 'WRONGTYPE boom',
+      })
       const store = createVectorStore({ indexName: 'idx1', prefix: 'p:', dim: 8, callTool })
       await expect(store.ensureIndex()).rejects.toThrow(/WRONGTYPE/)
     })
@@ -100,7 +112,12 @@ describe('vector-store', () => {
 
   describe('upsert', () => {
     it('stores a vector + base64 payload at prefix+id, with TTL', async () => {
-      const store = createVectorStore({ indexName: 'idx1', prefix: 'p:', dim: 3, callTool: fake.callTool })
+      const store = createVectorStore({
+        indexName: 'idx1',
+        prefix: 'p:',
+        dim: 3,
+        callTool: fake.callTool,
+      })
       await store.upsert('a', [1, 2, 3], { content: 'hi', n: 5 }, 60)
 
       const h = fake.hashes.get('p:a')!
@@ -125,7 +142,12 @@ describe('vector-store', () => {
 
   describe('search', () => {
     it('returns hits with decoded payloads, id (from _vid) and score', async () => {
-      const store = createVectorStore({ indexName: 'idx1', prefix: 'p:', dim: 3, callTool: fake.callTool })
+      const store = createVectorStore({
+        indexName: 'idx1',
+        prefix: 'p:',
+        dim: 3,
+        callTool: fake.callTool,
+      })
       await store.upsert('doc-1', [1, 2, 3], { content: 'alpha', kind: 'x' })
       await store.upsert('doc-2', [4, 5, 6], { content: 'beta' })
 
@@ -163,7 +185,8 @@ describe('vector-store', () => {
       // un-aggregated. The old parseHits treated any non-array object as a
       // wrapper, found no .results/.documents/.matches, and yielded [] → search
       // silently returned nothing. (N≥2 matches arrive as an array and worked.)
-      const meta = 'b64:' + Buffer.from(JSON.stringify({ content: 'hello', _vid: 'd1:0' })).toString('base64')
+      const meta =
+        'b64:' + Buffer.from(JSON.stringify({ content: 'hello', _vid: 'd1:0' })).toString('base64')
       const callTool: CallTool = async (name) =>
         name === 'vector_search_hash'
           ? { success: true, data: { id: 'p:d1:0', payload: null, score: '0.2044', meta } }
@@ -191,7 +214,9 @@ describe('vector-store', () => {
         name === 'vector_search_hash'
           ? {
               success: true,
-              data: { results: [{ meta: JSON.stringify({ result: 'r', _vid: 'q1' }), score: 0.04 }] },
+              data: {
+                results: [{ meta: JSON.stringify({ result: 'r', _vid: 'q1' }), score: 0.04 }],
+              },
             }
           : { success: true, data: 1 }
       const store = createVectorStore({ indexName: 'idx1', prefix: 'p:', dim: 3, callTool })

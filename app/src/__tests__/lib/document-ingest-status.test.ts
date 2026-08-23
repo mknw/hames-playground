@@ -30,7 +30,10 @@ function makeFakeRedis() {
   const json = new Map<string, unknown>()
   const hashes = new Map<string, Record<string, unknown>>()
   const sets = new Map<string, Set<string>>()
-  const callTool = (async (name: string, args: Record<string, unknown>): Promise<ToolCallResult> => {
+  const callTool = (async (
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<ToolCallResult> => {
     switch (name) {
       case 'json_set':
         json.set(args.name as string, JSON.parse(args.value as string))
@@ -140,7 +143,9 @@ describe('ingestStashDocument', () => {
 
   it('returns null for a missing doc', async () => {
     const { embedFn } = makeEmbedder('m', 3)
-    expect(await ingestStashDocument('s1', 'ghost', { callTool: fake.callTool, embedFn })).toBeNull()
+    expect(
+      await ingestStashDocument('s1', 'ghost', { callTool: fake.callTool, embedFn }),
+    ).toBeNull()
   })
 
   it('marks status "failed" (and never throws) when ingest errors', async () => {
@@ -155,10 +160,7 @@ describe('ingestStashDocument', () => {
     // sf-H2: the reason used to be discarded by a bare `catch {}`, so an
     // embedder outage and an unchunkable file both showed up as 'failed' with
     // nothing anywhere saying which.
-    expect(err).toHaveBeenCalledWith(
-      expect.stringContaining('d2'),
-      'embedder offline',
-    )
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('d2'), 'embedder offline')
     err.mockRestore()
   })
 

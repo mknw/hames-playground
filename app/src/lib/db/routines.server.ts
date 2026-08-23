@@ -323,10 +323,7 @@ export async function claimRoutineRun(id: string, lastRunAt: Date | null): Promi
  * caller that fails to actually START the run can hand that exact value back to
  * {@link releaseRoutineClaim}. `null` means the claim was lost.
  */
-export async function claimRoutineRunAt(
-  id: string,
-  lastRunAt: Date | null,
-): Promise<Date | null> {
+export async function claimRoutineRunAt(id: string, lastRunAt: Date | null): Promise<Date | null> {
   await ensureSchema()
   const { rows } = await query<{ last_run_at: Date }>(
     `UPDATE routines

@@ -34,23 +34,32 @@ vi.mock('../../../lib/auth/action-tokens.server', () => ({
   },
 }))
 
-const seedActionRow =
-  vi.fn<(runId: string, userId: string, agentId: string, trigger: Trigger) => Promise<void>>(
-    async () => {},
-  )
-const runAgentInBackground =
-  vi.fn<(runId: string, userId: string, message: string, agentId: string, trigger: Trigger) => Promise<void>>(
-    async () => {},
-  )
+const seedActionRow = vi.fn<
+  (runId: string, userId: string, agentId: string, trigger: Trigger) => Promise<void>
+>(async () => {})
+const runAgentInBackground = vi.fn<
+  (
+    runId: string,
+    userId: string,
+    message: string,
+    agentId: string,
+    trigger: Trigger,
+  ) => Promise<void>
+>(async () => {})
 vi.mock('../../../lib/harness-client/action-runner.server', () => ({
   seedActionRow,
   runAgentInBackground,
 }))
 
-const storeDocument =
-  vi.fn<(input: { sessionId: string; filename: string; mimeType: string; content: string; encoding: string }) => Promise<{ id: string }>>(
-    async () => ({ id: 'doc-1' }),
-  )
+const storeDocument = vi.fn<
+  (input: {
+    sessionId: string
+    filename: string
+    mimeType: string
+    content: string
+    encoding: string
+  }) => Promise<{ id: string }>
+>(async () => ({ id: 'doc-1' }))
 vi.mock('../../../lib/document-store.server', () => ({ storeDocument }))
 
 vi.mock('../../../lib/stash/upload-service.server', () => ({
@@ -146,7 +155,12 @@ describe('POST /api/agents/:id', () => {
           [
             { name: 'transcribed_command', value: 'add a node' },
             { name: 'short_description', value: 'Apollo' },
-            { name: 'original_recording', filename: 'memo.m4a', type: 'audio/mp4', content: 'BYTES' },
+            {
+              name: 'original_recording',
+              filename: 'memo.m4a',
+              type: 'audio/mp4',
+              content: 'BYTES',
+            },
           ],
           { Authorization: 'Bearer s' },
         ),

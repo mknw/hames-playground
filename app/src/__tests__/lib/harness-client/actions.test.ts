@@ -203,10 +203,7 @@ describe('processMessage / runTurn', () => {
         'gateway unreachable',
       )
       // …and the fact that the row is now stuck is on the record.
-      expect(err).toHaveBeenCalledWith(
-        expect.stringContaining('keep showing'),
-        expect.anything(),
-      )
+      expect(err).toHaveBeenCalledWith(expect.stringContaining('keep showing'), expect.anything())
       err.mockRestore()
     })
 

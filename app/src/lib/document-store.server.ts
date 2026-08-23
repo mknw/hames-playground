@@ -147,10 +147,7 @@ const INDEX_KEY_PREFIX = 'stash:docs'
 
 /** A `callTool`-shaped function. Injectable so the store is unit-testable
  *  without a live MCP gateway (tests pass a stub; prod uses the MCP client). */
-export type CallTool = (
-  name: string,
-  args: Record<string, unknown>,
-) => Promise<ToolCallResult>
+export type CallTool = (name: string, args: Record<string, unknown>) => Promise<ToolCallResult>
 
 // ============================================================================
 // Key helpers
@@ -271,7 +268,10 @@ export function redisWriteError(result: ToolCallResult): string | null {
     candidates.push((result.data as { result?: unknown }).result)
   }
   for (const c of candidates) {
-    if (typeof c === 'string' && (/^error\b/i.test(c.trim()) || /\b(NO)?AUTH\b/.test(c) || /WRONGTYPE|misconfigur/i.test(c))) {
+    if (
+      typeof c === 'string' &&
+      (/^error\b/i.test(c.trim()) || /\b(NO)?AUTH\b/.test(c) || /WRONGTYPE|misconfigur/i.test(c))
+    ) {
       return c
     }
   }
@@ -296,12 +296,9 @@ export async function storeDocument(
   const encoding = input.encoding ?? 'utf8'
   // `size` is the ORIGINAL byte count: for base64 that's the decoded length
   // (the limit applies to the real file, not the larger encoded string).
-  const size =
-    encoding === 'base64' ? base64ByteLength(input.content) : byteLength(input.content)
+  const size = encoding === 'base64' ? base64ByteLength(input.content) : byteLength(input.content)
   if (size > MAX_CONTENT_BYTES) {
-    throw new Error(
-      `Document too large: ${size} bytes exceeds limit of ${MAX_CONTENT_BYTES} bytes`,
-    )
+    throw new Error(`Document too large: ${size} bytes exceeds limit of ${MAX_CONTENT_BYTES} bytes`)
   }
 
   const doc: StashDocument = {
@@ -545,10 +542,11 @@ export function toPriorResult(
   // Base64 (binary) content is not human-readable — fall back to a metadata
   // preview rather than slicing the encoded blob into the summary.
   const isBinary = doc.encoding === 'base64'
-  const preview = doc.content && !isBinary
-    ? doc.content.slice(0, previewChars).replace(/\s+/g, ' ').trim() +
-      (doc.content.length > previewChars ? '…' : '')
-    : `${doc.filename} (${doc.mimeType}, ${doc.size} bytes)`
+  const preview =
+    doc.content && !isBinary
+      ? doc.content.slice(0, previewChars).replace(/\s+/g, ' ').trim() +
+        (doc.content.length > previewChars ? '…' : '')
+      : `${doc.filename} (${doc.mimeType}, ${doc.size} bytes)`
   return {
     ref_id: doc.id,
     tool: `upload:${doc.filename}`,

@@ -141,10 +141,7 @@ describe('runAgentInBackground', () => {
       runAgentInBackground('run-6', 'user-1', 'x', 'default', TRIGGER),
     ).resolves.toBeUndefined()
 
-    expect(logged).toHaveBeenCalledWith(
-      expect.stringContaining('run-6'),
-      expect.anything(),
-    )
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining('run-6'), expect.anything())
     expect(logged).toHaveBeenCalledWith(
       expect.stringContaining('keep showing as'),
       expect.anything(),

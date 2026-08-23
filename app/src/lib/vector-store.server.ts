@@ -61,7 +61,12 @@ export interface VectorStore {
   /** Create the HNSW index, tolerating "already exists". */
   ensureIndex(): Promise<void>
   /** Store a vector + JSON payload at `${prefix}${id}` (2 Redis writes). */
-  upsert(id: string, vector: number[], payload?: Record<string, unknown>, ttlSeconds?: number): Promise<void>
+  upsert(
+    id: string,
+    vector: number[],
+    payload?: Record<string, unknown>,
+    ttlSeconds?: number,
+  ): Promise<void>
   /** KNN search; returns hits with decoded payloads, closest first. */
   search(queryVector: number[], k?: number): Promise<VectorHit[]>
 }
@@ -132,9 +137,7 @@ export function createVectorStore(opts: VectorStoreOptions): VectorStore {
       return_fields: [META_FIELD],
     })
     if (!res.success) {
-      throw new Error(
-        `Vector search on ${opts.indexName} failed: ${res.error ?? 'unknown error'}`,
-      )
+      throw new Error(`Vector search on ${opts.indexName} failed: ${res.error ?? 'unknown error'}`)
     }
     // A successful call with no payload IS an empty result set.
     if (res.data == null) return []

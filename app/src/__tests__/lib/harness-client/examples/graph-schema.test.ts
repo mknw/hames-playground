@@ -73,10 +73,16 @@ describe('getGraphSchema', () => {
 // agent did with the result.
 describe.each([
   ['default', () => import('../../../../lib/harness-client/examples/default.server')],
-  ['retriever-agent', () => import('../../../../lib/harness-client/examples/retriever-agent.server')],
+  [
+    'retriever-agent',
+    () => import('../../../../lib/harness-client/examples/retriever-agent.server'),
+  ],
 ])('%s agent — schema failure', (label, importAgent) => {
   async function build(sessionId: string): Promise<{ name: string }[]> {
-    const mod = (await importAgent()) as Record<string, { createPatterns: (s: string) => Promise<unknown> }>
+    const mod = (await importAgent()) as Record<
+      string,
+      { createPatterns: (s: string) => Promise<unknown> }
+    >
     const agent = Object.values(mod).find((v) => typeof v?.createPatterns === 'function')!
     return (await agent.createPatterns(sessionId)) as { name: string }[]
   }

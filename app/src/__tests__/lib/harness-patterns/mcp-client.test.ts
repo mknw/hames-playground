@@ -557,9 +557,7 @@ describe('mcp-client', () => {
       })
 
       it('classifies reads and writes conservatively', async () => {
-        const { isReadOnlyTool } = await import(
-          '../../../lib/harness-patterns/mcp-client.server'
-        )
+        const { isReadOnlyTool } = await import('../../../lib/harness-patterns/mcp-client.server')
 
         for (const name of [
           'read_neo4j_cypher',

@@ -14,10 +14,7 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServer: vi.fn(),
 }))
 
-import {
-  parseActionTokens,
-  bearerSecret,
-} from '../../../lib/auth/action-tokens.server'
+import { parseActionTokens, bearerSecret } from '../../../lib/auth/action-tokens.server'
 
 describe('parseActionTokens', () => {
   it('maps secret → userId for well-formed entries', () => {
@@ -73,10 +70,7 @@ tokens:
     it('reports a YAML parse failure, not just an empty map', () => {
       const err = vi.spyOn(console, 'error').mockImplementation(() => {})
       expect(parseActionTokens(': : : not yaml').size).toBe(0)
-      expect(err).toHaveBeenCalledWith(
-        expect.stringContaining('not valid YAML'),
-        expect.anything(),
-      )
+      expect(err).toHaveBeenCalledWith(expect.stringContaining('not valid YAML'), expect.anything())
       err.mockRestore()
     })
 

@@ -239,7 +239,7 @@ const READ_ONLY_TOOLS = new Set([
  */
 export function isReadOnlyTool(name: string): boolean {
   // Gateway-prefixed names (`mcp__server__tool`) classify on the bare tool.
-  const bare = name.includes('__') ? name.split('__').pop() ?? name : name
+  const bare = name.includes('__') ? (name.split('__').pop() ?? name) : name
   const lower = bare.toLowerCase()
   if (READ_ONLY_TOOLS.has(lower)) return true
   const verb = lower.split(/[_-]/)[0]

@@ -82,7 +82,11 @@ describe('createRedisBackend', () => {
 
   it('skips the safety net entirely when ensureIngested is false', async () => {
     const ensureFn = vi.fn(async () => {})
-    const b = createRedisBackend('s1', { searchFn: vi.fn(async () => []), ensureFn, ensureIngested: false })
+    const b = createRedisBackend('s1', {
+      searchFn: vi.fn(async () => []),
+      ensureFn,
+      ensureIngested: false,
+    })
     await b.search({ text: 'a' }, { k: 5 })
     expect(ensureFn).not.toHaveBeenCalled()
   })

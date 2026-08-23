@@ -109,12 +109,7 @@ export function getAgentMetadata(): Array<{
  * anyone (sf-M7). Not warn-once: these are per-request and a repeated warning is
  * the signal that the outage is persistent.
  */
-function warnProbeFailed(
-  probe: string,
-  agentId: string,
-  err: unknown,
-  consequence: string,
-): void {
+function warnProbeFailed(probe: string, agentId: string, err: unknown, consequence: string): void {
   console.warn(
     `[registry] ${probe}('${agentId}') could not build the agent's patterns ` +
       `(${err instanceof Error ? err.message : String(err)}) — ${consequence}. ` +

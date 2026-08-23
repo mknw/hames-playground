@@ -221,10 +221,7 @@ export function withSandbox(config?: WithSandboxConfig) {
     // marker below reflects that reality: syncWorkspace without an id is a no-op.
     const willSyncWorkspace = syncWorkspace && id !== undefined
 
-    const fn = async (
-      scope: PatternScope<T>,
-      view: EventView,
-    ): Promise<PatternScope<T>> => {
+    const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
       const settings = getRequestSettings()
       const runtime: RuntimeConfig = {
         cpus: config?.resources?.cpus,
@@ -332,8 +329,7 @@ async function runWithFreshVm<T>(
 }
 
 const WORKSPACE_FAILURE_MESSAGE: Record<'hydrate' | 'snapshot' | 'promote', string> = {
-  hydrate:
-    'Stored documents were not restored into /work/in — this turn ran without prior files.',
+  hydrate: 'Stored documents were not restored into /work/in — this turn ran without prior files.',
   snapshot:
     'The pre-turn /work/out snapshot failed, so promotion was skipped to avoid re-storing ' +
     'the whole directory as duplicates. Files stay in the container until a later turn.',

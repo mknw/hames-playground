@@ -406,9 +406,7 @@ describe('guardrail', () => {
 
       // Fails OPEN — the wrapped pattern still runs.
       expect(inner.fn).toHaveBeenCalledTimes(1)
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('will never trip'),
-      )
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('will never trip'))
       expect(warn.mock.calls[0][0]).toContain('Failing OPEN')
       warn.mockRestore()
     })
@@ -426,7 +424,11 @@ describe('guardrail', () => {
       const ctx = createContext<{ input: string }>('test')
       ctx.data = { input: 'test' }
       const pattern = guardrail(
-        { name: 'inner', fn: vi.fn(async (s: unknown) => s), config: { patternId: 'inner' } } as never,
+        {
+          name: 'inner',
+          fn: vi.fn(async (s: unknown) => s),
+          config: { patternId: 'inner' },
+        } as never,
         { rails: [], circuitBreaker: { maxFailures: 3, windowMs: 60000, cooldownMs: 30000 } },
       )
 

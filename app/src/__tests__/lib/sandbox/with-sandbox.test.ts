@@ -16,9 +16,10 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
 // mocked so the sync tests assert *when* they run, not what they store (that
 // is work-artifacts.test.ts's job).
 const artifacts = vi.hoisted(() => ({
-  hydrateWorkspace: vi.fn(
-    async () => ({ written: 0, skipped: [] as Array<{ filename: string; error: string }> }),
-  ),
+  hydrateWorkspace: vi.fn(async () => ({
+    written: 0,
+    skipped: [] as Array<{ filename: string; error: string }>,
+  })),
   snapshotOutputs: vi.fn(async () => new Map<string, string>()),
   promoteOutputs: vi.fn(async () => ({
     promoted: [] as string[],

@@ -12,7 +12,7 @@ import type {
   EventView,
   ConfiguredPattern,
   PatternConfig,
-  ContextEvent
+  ContextEvent,
 } from '../types'
 import { trackEvent, resolveConfig, createEvent, createScope } from '../context.server'
 
@@ -102,7 +102,7 @@ export function __resetGuardrailBreakerWarnings(): void {
  */
 export function guardrail<T extends Record<string, unknown>>(
   pattern: ConfiguredPattern<T>,
-  config: GuardrailConfig<T>
+  config: GuardrailConfig<T>,
 ): ConfiguredPattern<T> {
   const resolved = resolveConfig('guardrail', config)
   const inputRails = config.rails.filter((r) => r.phase === 'input')
@@ -121,16 +121,21 @@ export function guardrail<T extends Record<string, unknown>>(
             const recentFailures = await callTool('zrange', {
               key,
               start: String(now - cb.windowMs),
-              stop: String(now)
+              stop: String(now),
             })
             if (
               recentFailures.success &&
               Array.isArray(recentFailures.data) &&
               recentFailures.data.length >= cb.maxFailures
             ) {
-              trackEvent(scope, 'error', {
-                error: `Circuit breaker tripped: ${recentFailures.data.length} failures in ${cb.windowMs}ms`
-              }, true)
+              trackEvent(
+                scope,
+                'error',
+                {
+                  error: `Circuit breaker tripped: ${recentFailures.data.length} failures in ${cb.windowMs}ms`,
+                },
+                true,
+              )
               return scope
             }
           } catch (err) {
@@ -144,9 +149,9 @@ export function guardrail<T extends Record<string, unknown>>(
 
         // --- Input rails ---
         const railCtx: RailContext<T> = {
-          input: (scope.data as Record<string, unknown>).input as string ?? '',
+          input: ((scope.data as Record<string, unknown>).input as string) ?? '',
           scope,
-          view
+          view,
         }
 
         for (const rail of inputRails) {
@@ -156,9 +161,14 @@ export function guardrail<T extends Record<string, unknown>>(
             if (result.action === 'redact' && result.redacted) {
               railCtx.input = result.redacted
             } else {
-              trackEvent(scope, 'error', {
-                error: `Input rail '${rail.name}' blocked: ${result.reason}`
-              }, true)
+              trackEvent(
+                scope,
+                'error',
+                {
+                  error: `Input rail '${rail.name}' blocked: ${result.reason}`,
+                },
+                true,
+              )
               config.onBlock?.(rail.name, result.reason ?? '')
               return scope
             }
@@ -199,7 +209,7 @@ export function guardrail<T extends Record<string, unknown>>(
             const check = await rail.check({
               ...railCtx,
               scope,
-              lastToolResult
+              lastToolResult,
             })
 
             if (!check.ok) {
@@ -210,7 +220,7 @@ export function guardrail<T extends Record<string, unknown>>(
                     await callTool('zadd', {
                       key: `circuit:${scope.id}`,
                       score: Date.now(),
-                      member: `fail-${Date.now()}`
+                      member: `fail-${Date.now()}`,
                     })
                   } catch (err) {
                     // Redis may not be available. Same fail-open as the read
@@ -219,13 +229,23 @@ export function guardrail<T extends Record<string, unknown>>(
                     warnBreakerDegraded('write', err)
                   }
                 }
-                trackEvent(scope, 'error', {
-                  error: `Output rail '${rail.name}' rejected: ${check.reason}`
-                }, true)
+                trackEvent(
+                  scope,
+                  'error',
+                  {
+                    error: `Output rail '${rail.name}' rejected: ${check.reason}`,
+                  },
+                  true,
+                )
               } else if (check.action === 'warn') {
-                trackEvent(scope, 'error', {
-                  error: `Output rail '${rail.name}' warning: ${check.reason}`
-                }, true)
+                trackEvent(
+                  scope,
+                  'error',
+                  {
+                    error: `Output rail '${rail.name}' warning: ${check.reason}`,
+                  },
+                  true,
+                )
               }
             }
           }
@@ -240,7 +260,7 @@ export function guardrail<T extends Record<string, unknown>>(
     },
     config: resolved,
     estimateTurns: (s) => pattern.estimateTurns?.(s) ?? 1,
-    children: [pattern]
+    children: [pattern],
   }
 }
 
@@ -258,7 +278,7 @@ export const piiScanRail: Rail<any> = {
       { name: 'AWS key', re: /AKIA[0-9A-Z]{16}/ },
       { name: 'GitHub token', re: /ghp_[a-zA-Z0-9]{36}/ },
       { name: 'JWT', re: /eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+/ },
-      { name: 'private key', re: /-----BEGIN (RSA |EC )?PRIVATE KEY-----/ }
+      { name: 'private key', re: /-----BEGIN (RSA |EC )?PRIVATE KEY-----/ },
     ]
     for (const { name, re } of patterns) {
       if (re.test(input)) {
@@ -266,12 +286,12 @@ export const piiScanRail: Rail<any> = {
           ok: false,
           action: 'redact' as const,
           reason: `Found ${name} in input`,
-          redacted: input.replace(re, `[REDACTED:${name}]`)
+          redacted: input.replace(re, `[REDACTED:${name}]`),
         }
       }
     }
     return { ok: true }
-  }
+  },
 }
 
 /** Rail that blocks paths outside workspace */
@@ -287,7 +307,7 @@ export const pathAllowlistRail: Rail<any> = {
     return match
       ? { ok: false, reason: `Blocked path: ${data.args.path}`, action: 'block' as const }
       : { ok: true }
-  }
+  },
 }
 
 /** Rail that detects large file changes */
@@ -306,11 +326,13 @@ export const driftDetectorRail: Rail<any> = {
           return {
             ok: false,
             action: 'retry' as const,
-            reason: `Edit changed ${(ratio * 100).toFixed(0)}% of file — likely unintended`
+            reason: `Edit changed ${(ratio * 100).toFixed(0)}% of file — likely unintended`,
           }
         }
       }
-    } catch { /* non-diff result, pass through */ }
+    } catch {
+      /* non-diff result, pass through */
+    }
     return { ok: true }
-  }
+  },
 }

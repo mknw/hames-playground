@@ -202,9 +202,7 @@ describe('hydrateWorkspace', () => {
     expect(fs.get('/work/in/here.csv')).toBe('a,b')
     // The missing one is NAMED rather than silently dropped: the agent has been
     // told the file exists and will not find it in /work/in.
-    expect(skipped).toEqual([
-      { filename: 'gone.csv', error: 'document not found in store' },
-    ])
+    expect(skipped).toEqual([{ filename: 'gone.csv', error: 'document not found in store' }])
   })
 })
 
@@ -270,12 +268,10 @@ describe('promoteOutputs', () => {
       return {} as never
     })
 
-    const { promoted, skipped } = await promoteOutputs(
-      transport,
-      's',
-      new Map(),
-      (async () => ({ success: true, data: null })) as never,
-    )
+    const { promoted, skipped } = await promoteOutputs(transport, 's', new Map(), (async () => ({
+      success: true,
+      data: null,
+    })) as never)
 
     // One bad file still does not cost the others...
     expect(promoted).toEqual(['small.csv'])
@@ -298,12 +294,10 @@ describe('promoteOutputs', () => {
       return original(name, args)
     }
 
-    const { promoted, skipped } = await promoteOutputs(
-      transport,
-      's',
-      new Map(),
-      (async () => ({ success: true, data: null })) as never,
-    )
+    const { promoted, skipped } = await promoteOutputs(transport, 's', new Map(), (async () => ({
+      success: true,
+      data: null,
+    })) as never)
 
     expect(promoted).toEqual([])
     expect(skipped).toHaveLength(1)

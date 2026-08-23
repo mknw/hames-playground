@@ -20,12 +20,7 @@
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
-import {
-  listDocuments,
-  getDocument,
-  storeDocument,
-  type CallTool,
-} from '../document-store.server'
+import { listDocuments, getDocument, storeDocument, type CallTool } from '../document-store.server'
 import { guessMimeType, isTextMime } from '../stash/upload-service.server'
 import type { McpTransport } from './types'
 import {
@@ -42,7 +37,10 @@ assertServerOnImport()
 /** Reduce a stored filename to a safe basename for `/work/in` (no path
  *  traversal, no shell-hostile characters). */
 function safeBasename(name: string): string {
-  const base = name.replace(/^.*[\\/]/, '').replace(/[^\w.\- ]+/g, '_').trim()
+  const base = name
+    .replace(/^.*[\\/]/, '')
+    .replace(/[^\w.\- ]+/g, '_')
+    .trim()
   return base || 'file'
 }
 
@@ -104,9 +102,7 @@ function errText(err: unknown): string {
 
 /** Hash `/work/out` so a later {@link promoteOutputs} only stores what this
  *  turn actually produced (relative path → sha256). */
-export async function snapshotOutputs(
-  transport: McpTransport,
-): Promise<Map<string, string>> {
+export async function snapshotOutputs(transport: McpTransport): Promise<Map<string, string>> {
   return listWorkFiles(transport, WORK_OUT_DIR)
 }
 

@@ -140,10 +140,7 @@ describe('getCodeModeAllowedTools — the allowed set', () => {
     const res = await getCodeModeAllowedTools('s1')
 
     expect(res.allowed).toEqual(['mcp-find', 'mcp-add', 'code-mode', 'mcp-exec'])
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining('meta-tools only'),
-      'gateway down',
-    )
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('meta-tools only'), 'gateway down')
     warn.mockRestore()
   })
 

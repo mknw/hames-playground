@@ -28,14 +28,14 @@ db/
 
 ### `processMessage(sessionId, message)`
 
-Synchronous agent execution. Delegates to `processMessageWithAgent(sessionId, message, 'default')`.
+Synchronous agent execution. Delegates to `processMessageWithAgent(sessionId, message, 'search')`.
 
 ### `processMessageStreaming(sessionId, message, agentId, onEvent)`
 
 Streaming variant — calls the harness with an `onEvent` callback that fires for each committed `ContextEvent`. Used by the SSE endpoint (`/api/events`).
 
 ```typescript
-const result = await processMessageStreaming(sessionId, message, 'default', (evt: ContextEvent) => {
+const result = await processMessageStreaming(sessionId, message, 'search', (evt: ContextEvent) => {
   controller.enqueue(encoder.encode(`data: ${JSON.stringify(evt)}\n\n`))
 })
 ```

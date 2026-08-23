@@ -219,7 +219,7 @@ describe('aggregateByPattern', () => {
 // ============================================================================
 
 function conversation(id: string, events: ContextEvent[]): ConversationEvents {
-  return { id, title: `title-${id}`, agentId: 'default', updatedAt: 1_700_000_000_000, events }
+  return { id, title: `title-${id}`, agentId: 'search', updatedAt: 1_700_000_000_000, events }
 }
 
 describe('aggregateByConversation', () => {

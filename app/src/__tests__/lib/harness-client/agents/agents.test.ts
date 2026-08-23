@@ -192,17 +192,17 @@ describe('Agent Harnesses', () => {
     vi.resetModules()
   })
 
-  describe('defaultAgent', () => {
+  describe('searchAgent', () => {
     it('should have valid config', async () => {
-      const { defaultAgent } = await import('../../../../lib/harness-client/agents/default.server')
-      validateAgentConfig(defaultAgent)
-      expect(defaultAgent.id).toBe('default')
-      expect(defaultAgent.servers).toContain('neo4j-cypher')
+      const { searchAgent } = await import('../../../../lib/harness-client/agents/search.server')
+      validateAgentConfig(searchAgent)
+      expect(searchAgent.id).toBe('search')
+      expect(searchAgent.servers).toContain('neo4j-cypher')
     })
 
     it('should create valid patterns', async () => {
-      const { defaultAgent } = await import('../../../../lib/harness-client/agents/default.server')
-      const patterns = await validatePatterns(defaultAgent)
+      const { searchAgent } = await import('../../../../lib/harness-client/agents/search.server')
+      const patterns = await validatePatterns(searchAgent)
 
       // Should have router and compactExecution
       const patternNames = patterns.map((p) => p.name)
@@ -211,8 +211,8 @@ describe('Agent Harnesses', () => {
     })
 
     it('should have unique pattern IDs', async () => {
-      const { defaultAgent } = await import('../../../../lib/harness-client/agents/default.server')
-      const patterns = (await defaultAgent.createPatterns('test-session')) as Pattern[]
+      const { searchAgent } = await import('../../../../lib/harness-client/agents/search.server')
+      const patterns = (await searchAgent.createPatterns('test-session')) as Pattern[]
       const ids = patterns.map((p) => p.config.patternId)
       const uniqueIds = new Set(ids)
       expect(uniqueIds.size).toBe(ids.length)
@@ -356,24 +356,24 @@ describe('Judge Evaluators', () => {
 describe('Agent Consistency', () => {
   it('all agents should have unique IDs', async () => {
     // Import all agents statically
-    const { defaultAgent } = await import('../../../../lib/harness-client/agents/default.server')
+    const { searchAgent } = await import('../../../../lib/harness-client/agents/search.server')
     const { sandboxSessionAgent } =
       await import('../../../../lib/harness-client/agents/sandbox-session.server')
     const { multiSourceResearchAgent } =
       await import('../../../../lib/harness-client/agents/multi-source-research.server')
 
-    const ids = [defaultAgent.id, sandboxSessionAgent.id, multiSourceResearchAgent.id]
+    const ids = [searchAgent.id, sandboxSessionAgent.id, multiSourceResearchAgent.id]
 
     const uniqueIds = new Set(ids)
     expect(uniqueIds.size).toBe(ids.length)
   })
 
   it('all agents should contain compactExecution pattern', async () => {
-    const { defaultAgent } = await import('../../../../lib/harness-client/agents/default.server')
+    const { searchAgent } = await import('../../../../lib/harness-client/agents/search.server')
     const { multiSourceResearchAgent } =
       await import('../../../../lib/harness-client/agents/multi-source-research.server')
 
-    const agents = [defaultAgent, multiSourceResearchAgent]
+    const agents = [searchAgent, multiSourceResearchAgent]
 
     for (const config of agents) {
       const patterns = (await config.createPatterns('test-session')) as Pattern[]

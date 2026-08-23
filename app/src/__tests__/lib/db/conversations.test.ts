@@ -92,7 +92,7 @@ describe('conversations CRUD', () => {
     await saveConversation({
       id,
       userId: TEST_USER,
-      agentId: 'default',
+      agentId: 'search',
       title: 'hi',
       serializedContext: serialized,
     })
@@ -101,7 +101,7 @@ describe('conversations CRUD', () => {
     expect(loaded).not.toBeNull()
     expect(loaded!.id).toBe(id)
     expect(loaded!.userId).toBe(TEST_USER)
-    expect(loaded!.agentId).toBe('default')
+    expect(loaded!.agentId).toBe('search')
     expect(loaded!.title).toBe('hi')
     expect(JSON.parse(loaded!.serializedContext)).toEqual(ctx)
   })
@@ -113,7 +113,7 @@ describe('conversations CRUD', () => {
     await saveConversation({
       id,
       userId: TEST_USER,
-      agentId: 'default',
+      agentId: 'search',
       title: 'first title',
       serializedContext: JSON.stringify({ events: [] }),
     })
@@ -122,7 +122,7 @@ describe('conversations CRUD', () => {
     await saveConversation({
       id,
       userId: TEST_USER,
-      agentId: 'default',
+      agentId: 'search',
       title: 'attempted rename',
       serializedContext: JSON.stringify({ events: [{ id: 'a' }] }),
     })
@@ -138,7 +138,7 @@ describe('conversations CRUD', () => {
     await saveConversation({
       id,
       userId: TEST_USER,
-      agentId: 'default',
+      agentId: 'search',
       title: 'victim title',
       serializedContext: JSON.stringify({ events: [{ id: 'victim' }] }),
       status: 'done',
@@ -159,7 +159,7 @@ describe('conversations CRUD', () => {
     const row = await loadConversation(id, TEST_USER)
     expect(row).not.toBeNull()
     expect(row!.userId).toBe(TEST_USER)
-    expect(row!.agentId).toBe('default')
+    expect(row!.agentId).toBe('search')
     expect(row!.title).toBe('victim title')
     expect(row!.status).toBe('done')
     expect(JSON.parse(row!.serializedContext)).toEqual({ events: [{ id: 'victim' }] })
@@ -173,7 +173,7 @@ describe('conversations CRUD', () => {
     await saveConversation({
       id,
       userId: TEST_USER,
-      agentId: 'default',
+      agentId: 'search',
       title: 't',
       serializedContext: '{}',
     })
@@ -188,7 +188,7 @@ describe('conversations CRUD', () => {
     await saveConversation({
       id,
       userId: TEST_USER,
-      agentId: 'default',
+      agentId: 'search',
       title: 't',
       serializedContext: '{}',
     })
@@ -207,7 +207,7 @@ describe('conversations CRUD', () => {
       await saveConversation({
         id,
         userId: TEST_USER,
-        agentId: 'default',
+        agentId: 'search',
         title: `t${n}`,
         serializedContext: '{}',
       })
@@ -232,7 +232,7 @@ describe('conversations CRUD', () => {
       await saveConversation({
         id,
         userId: TEST_USER,
-        agentId: 'default',
+        agentId: 'search',
         title: 't',
         serializedContext: '{}',
       })
@@ -242,7 +242,7 @@ describe('conversations CRUD', () => {
     await saveConversation({
       id: older,
       userId: TEST_USER,
-      agentId: 'default',
+      agentId: 'search',
       title: 't',
       serializedContext: '{"turn":2}',
     })
@@ -258,7 +258,7 @@ describe('conversations CRUD', () => {
     await saveConversation({
       id,
       userId: TEST_USER,
-      agentId: 'default',
+      agentId: 'search',
       title: 't',
       serializedContext: '{}',
     })
@@ -286,7 +286,7 @@ describe('conversations CRUD', () => {
       await saveConversation({
         id,
         userId,
-        agentId: 'default',
+        agentId: 'search',
         title: 't',
         serializedContext: '{}',
       })
@@ -317,7 +317,7 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
     await saveConversation({
       id,
       userId: TEST_USER,
-      agentId: 'default',
+      agentId: 'search',
       title: 't',
       serializedContext: '{}',
     })
@@ -333,7 +333,7 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
     await saveConversation({
       id,
       userId: TEST_USER,
-      agentId: 'default',
+      agentId: 'search',
       title: 'Voice action',
       serializedContext: JSON.stringify({ events: [], status: 'running' }),
       kind: 'action',
@@ -350,7 +350,7 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
     await saveConversation({
       id,
       userId: TEST_USER,
-      agentId: 'default',
+      agentId: 'search',
       title: 'derived-from-command', // sticky → ignored
       serializedContext: JSON.stringify({ events: [{ id: 'a' }], status: 'done' }),
       status: 'done',
@@ -368,7 +368,7 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
     await saveConversation({
       id,
       userId: TEST_USER,
-      agentId: 'default',
+      agentId: 'search',
       title: 't',
       serializedContext: '{}',
       kind: 'action',
@@ -396,7 +396,7 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
     await saveConversation({
       id,
       userId: TEST_USER,
-      agentId: 'default',
+      agentId: 'search',
       title: 't',
       serializedContext: ctx,
       kind: 'action',
@@ -420,7 +420,7 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
     await saveConversation({
       id,
       userId: TEST_USER,
-      agentId: 'default',
+      agentId: 'search',
       title: 't',
       serializedContext: '{}',
       kind: 'action',

@@ -55,10 +55,32 @@ export function registerAgent(config: AgentConfig): void {
 }
 
 /**
- * Get an agent by ID.
+ * Ids that agents used to be registered under, mapped to their current id.
+ *
+ * `conversations.agent_id` stores whatever id the turn ran under, so a rename
+ * strands every row written before it: `getOrBuildPatterns` would throw
+ * `Unknown agent: default` and the thread would simply fail to open. Rather
+ * than a SQL migration, the id is mapped forward on read — `getAgent` for
+ * display lookups off raw rows, and `loadSession` for the resume path, which
+ * also means the row rewrites itself to the current id on its next save.
+ *
+ * Only ever add here; an entry is cheap and removing one re-strands old rows.
+ */
+const RENAMED_AGENT_IDS: Record<string, string> = {
+  // PR #234 — 'default' named its position in the list, not what it does.
+  default: 'search',
+}
+
+/** Current id for a possibly-legacy agent id. Unknown ids pass through. */
+export function canonicalAgentId(id: string): string {
+  return RENAMED_AGENT_IDS[id] ?? id
+}
+
+/**
+ * Get an agent by ID. Accepts an id the agent was previously registered under.
  */
 export function getAgent(id: string): AgentConfig | undefined {
-  return agentRegistry.get(id)
+  return agentRegistry.get(id) ?? agentRegistry.get(canonicalAgentId(id))
 }
 
 /**
@@ -197,7 +219,7 @@ export async function agentUsesSyncWorkspace(agentId: string, sessionId: string)
 // `agents/multi-source-research.server.ts` is deliberately NOT imported here —
 // it is unregistered and NOT LIVE TESTED (owner decision 2026-08-23, PR #234).
 // See that file's header before re-adding it.
-import { defaultAgent } from './agents/default.server'
+import { searchAgent } from './agents/search.server'
 import { generalAgent } from './agents/general.server'
 import { sandboxSessionAgent } from './agents/sandbox-session.server'
 import { flavouredSandboxAgent } from './agents/flavoured-sandbox.server'
@@ -205,7 +227,7 @@ import { retrieverAgent } from './agents/retriever-agent.server'
 import { microsoft365Agent } from './agents/microsoft-365.server'
 
 // Register all agents
-registerAgent(defaultAgent)
+registerAgent(searchAgent)
 registerAgent(generalAgent)
 registerAgent(sandboxSessionAgent)
 registerAgent(flavouredSandboxAgent)

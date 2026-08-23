@@ -1,7 +1,7 @@
 # Tutorial: Cross-pattern data flow with `withReferences`
 
 > **Reading time:** ~5 minutes · **Prerequisite:** the dev stack running (`pnpm dev:exposed` + `docker compose up`).
-> **What you'll see:** the default agent fetching information about a topic, then writing the same data to Neo4j on a follow-up turn — without re-fetching, and without the controller hallucinating content.
+> **What you'll see:** the `search` agent fetching information about a topic, then writing the same data to Neo4j on a follow-up turn — without re-fetching, and without the controller hallucinating content.
 
 This tutorial walks through the same workflow that motivated the `withReferences` design ([#30](https://github.com/mknw/harness-playground/issues/30)) and the synthetic `expandPreviousResult` tool ([#19](https://github.com/mknw/harness-playground/issues/19)). The full design rationale lives in [`with-references.md`](with-references.md); this is the hands-on counterpart.
 
@@ -14,15 +14,15 @@ A two-turn conversation:
 1. **Turn 1** — *"Search the web for TypeScript 5.7 release info — what are the 5 most important new features?"*
 2. **Turn 2** — *"Add these 5 features to the Neo4j graph as Concept nodes connected to a TypeScript 5.7 root node."*
 
-Without `withReferences`, turn 2 fails: the neo4j route receives `priorResults: []` and the controller has no access to the data the web-search route fetched in turn 1. With `withReferences` (now wired into the default agent), the LLM-driven selector picks the most relevant prior `tool_result` events and attaches them to the neo4j route's `priorResults` channel on entry.
+Without `withReferences`, turn 2 fails: the neo4j route receives `priorResults: []` and the controller has no access to the data the web-search route fetched in turn 1. With `withReferences` (now wired into the `search` agent), the LLM-driven selector picks the most relevant prior `tool_result` events and attaches them to the neo4j route's `priorResults` channel on entry.
 
 ---
 
 ## Step 1 — start with a fresh chat
 
-Pick the **Default Agent** in the agent picker, click **+ New Chat**.
+Pick the **Search Agent** in the agent picker, click **+ New Chat**.
 
-![Fresh chat, default agent selected, observability panel empty](screenshots/01-fresh-chat.png)
+![Fresh chat, Search Agent selected, observability panel empty](screenshots/01-fresh-chat.png)
 
 The right panel's **Observability** tab will fill with events as the agent runs. The agent is composed of:
 
@@ -33,7 +33,7 @@ router → routes({
 }) → compactExecution
 ```
 
-See [`app/src/lib/harness-client/agents/default.server.ts`](../../app/src/lib/harness-client/agents/default.server.ts) for the source.
+See [`app/src/lib/harness-client/agents/search.server.ts`](../../app/src/lib/harness-client/agents/search.server.ts) for the source.
 
 ---
 
@@ -165,7 +165,7 @@ You can then filter the timeline by event type (use the eye icon in the panel he
 
 The image filenames above (in `docs/harness-patterns/screenshots/`) are placeholders. To capture them:
 
-1. `01-fresh-chat.png` — fresh chat, default agent selected, Observability tab open and empty
+1. `01-fresh-chat.png` — fresh chat, Search Agent selected, Observability tab open and empty
 2. `02-search-response.png` — full chat reply for the TypeScript 5.7 query, with the Observability tab visible in the side panel showing the chain
 3. `03-add-to-graph-response.png` — chat reply for the "add to graph" turn, side panel showing the second route's events
 4. `04-reference-attached-detail.png` — close-up of a `controller_action` detail overlay (click an event in the timeline) showing the `Variables` block with `turns_previous_runs` containing `expanded_in_turn: null`

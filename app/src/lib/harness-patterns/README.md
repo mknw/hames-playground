@@ -778,7 +778,7 @@ definition, deliberately not in a shared default):
 
 | Agent                                    | Untrusted namespaces    | Not guarded             |
 | ---------------------------------------- | ----------------------- | ----------------------- |
-| `default`                                | `web` (that route only) | `neo4j` — our own graph |
+| `search`                                 | `web` (that route only) | `neo4j` — our own graph |
 | `microsoft-365`                          | `graph`                 | —                       |
 | `retriever`                              | `web`, `retriever`      | `neo4j`                 |
 | `multi-source-research` _(unregistered)_ | `web`, `context7`       | —                       |
@@ -850,7 +850,7 @@ Each entry exit emits a `reference_attached` event with `{ candidates, selected,
 Either path records an `expansions[]` entry on the `LoopTurn`; the compact ref entry then renders `(expanded in turn N)` so the controller doesn't redundantly re-expand.
 
 ```typescript
-// Default agent migration (excerpt from agents/default.server.ts)
+// Search agent migration (excerpt from agents/search.server.ts)
 const routesPattern = routes<SessionData>({
   neo4j: withReferences(neo4jPattern, { scope: 'global' }),
   web_search: withReferences(webPattern, { scope: 'global' }),
@@ -1012,7 +1012,7 @@ soft hint (steps are not tool calls) — it does not clamp `maxTurns`.
 > execution. `chain(router(...), routes({ x: chain(planner(...), simpleLoop(...)) }))`
 > is valid. The `general` agent
 > (`harness-client/agents/general.server.ts`) demonstrates the flat
-> planner → simpleLoop → compactExecution chain alongside the router-based `default`.
+> planner → simpleLoop → compactExecution chain alongside the router-based `search`.
 
 ### `retriever(config)`
 

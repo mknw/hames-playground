@@ -134,7 +134,7 @@ describe('POST /api/events', () => {
     bypass = true
     await POST(evt({ sessionId: 's1', message: 'hi' })).then((r) => r.text())
     expect(getAuthenticatedUser).not.toHaveBeenCalled()
-    expect(saveSession).toHaveBeenCalledWith('s1', 'dev-bypass-user', 'default', expect.anything())
+    expect(saveSession).toHaveBeenCalledWith('s1', 'dev-bypass-user', 'search', expect.anything())
   })
 
   it('streams each harness event, stamped with the sessionId, then a done frame', async () => {
@@ -157,9 +157,9 @@ describe('POST /api/events', () => {
     expect(processMessageStreaming.mock.calls[0][4]).toEqual({ maxTurns: 3 })
   })
 
-  it('defaults the agent to "default" when none is named', async () => {
+  it('defaults the agent to "search" when none is named', async () => {
     await POST(evt({ sessionId: 's1', message: 'hi' })).then((r) => r.text())
-    expect(processMessageStreaming.mock.calls[0][2]).toBe('default')
+    expect(processMessageStreaming.mock.calls[0][2]).toBe('search')
 
     await POST(evt({ sessionId: 's1', message: 'hi', agentId: 'neo4j' })).then((r) => r.text())
     expect(processMessageStreaming.mock.calls[1][2]).toBe('neo4j')

@@ -2,7 +2,7 @@
  * The shared graph-schema fetch (sf-M6).
  *
  * Three agents primed their Cypher controllers with `get_neo4j_schema` and only
- * ONE of them — `general` — handled a failure. `default` and `retriever-agent`
+ * ONE of them — `general` — handled a failure. `search` and `retriever-agent`
  * returned `''` and let `getOrBuildPatterns` cache that build, so a Neo4j or
  * gateway blip during the first message froze a schema-blind controller into the
  * conversation for its whole life. This file pins the behaviour for all three,
@@ -72,7 +72,7 @@ describe('getGraphSchema', () => {
 // `createPatterns`, because the bug was not in a helper — it was in what the
 // agent did with the result.
 describe.each([
-  ['default', () => import('../../../../lib/harness-client/agents/default.server')],
+  ['search', () => import('../../../../lib/harness-client/agents/search.server')],
   ['retriever-agent', () => import('../../../../lib/harness-client/agents/retriever-agent.server')],
 ])('%s agent — schema failure', (label, importAgent) => {
   async function build(sessionId: string): Promise<{ name: string }[]> {

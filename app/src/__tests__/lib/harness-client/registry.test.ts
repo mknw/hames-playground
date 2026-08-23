@@ -38,8 +38,8 @@ function stubAgent(id: string): AgentConfig {
     createPatterns: async () => [],
   }
 }
-vi.mock('../../../lib/harness-client/agents/default.server', () => ({
-  defaultAgent: stubAgent('default'),
+vi.mock('../../../lib/harness-client/agents/search.server', () => ({
+  searchAgent: stubAgent('search'),
 }))
 vi.mock('../../../lib/harness-client/agents/general.server', () => ({
   generalAgent: stubAgent('general'),
@@ -62,6 +62,7 @@ const {
   getAgent,
   getAllAgents,
   getAgentMetadata,
+  canonicalAgentId,
   agentUsesRedisRetriever,
   agentUsesSyncWorkspace,
 } = await import('../../../lib/harness-client/registry.server')
@@ -96,7 +97,7 @@ describe('registration + lookup', () => {
   it('registers the bundled agents on import', () => {
     expect(getAllAgents().map((a) => a.id)).toEqual(
       expect.arrayContaining([
-        'default',
+        'search',
         'general',
         'sandbox-session',
         'flavoured-sandbox',
@@ -117,10 +118,29 @@ describe('registration + lookup', () => {
     expect(getAgent('no-such-agent')).toBeUndefined()
   })
 
+  // PR #234 renamed 'default' → 'search'. `conversations.agent_id` still holds
+  // 'default' for every row written before it, and getOrBuildPatterns throws on
+  // an unknown id — so without this mapping those threads stop opening.
+  describe('renamed agent ids stay resolvable', () => {
+    it("maps the legacy 'default' id to the search agent", () => {
+      expect(canonicalAgentId('default')).toBe('search')
+      expect(getAgent('default')?.id).toBe('search')
+    })
+
+    it('passes an id it does not know through unchanged', () => {
+      expect(canonicalAgentId('retriever')).toBe('retriever')
+      expect(canonicalAgentId('no-such-agent')).toBe('no-such-agent')
+    })
+
+    it('does not resurrect the old id in the listing', () => {
+      expect(getAllAgents().map((a) => a.id)).not.toContain('default')
+    })
+  })
+
   it('replaces an agent registered twice under the same id', () => {
     const before = getAllAgents().length
-    registerAgent({ ...stubAgent('default'), name: 'Renamed' })
-    expect(getAgent('default')?.name).toBe('Renamed')
+    registerAgent({ ...stubAgent('search'), name: 'Renamed' })
+    expect(getAgent('search')?.name).toBe('Renamed')
     expect(getAllAgents()).toHaveLength(before)
   })
 

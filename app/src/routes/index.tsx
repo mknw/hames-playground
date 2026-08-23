@@ -148,8 +148,9 @@ export default function Home() {
     if (embedPollTimer) clearTimeout(embedPollTimer)
   })
   // The conversation's selected agent, reported up from ChatInterface, so the
-  // agent-aware support panels track the live selection (default until set).
-  const [currentAgentId, setCurrentAgentId] = createSignal<string>('default')
+  // agent-aware support panels track the live selection (the default agent
+  // until set).
+  const [currentAgentId, setCurrentAgentId] = createSignal<string>('search')
 
   // Sidebar threads — refetched after each turn completes (see onContextUpdate).
   // `mutate` is exposed so the `title_updated` SSE event can patch a single

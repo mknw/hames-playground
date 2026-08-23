@@ -68,13 +68,13 @@ async function requireUser(): Promise<{ id: string; email: string }> {
 // ============================================================================
 
 /**
- * Process a user message using the default agent.
+ * Process a user message using the default agent (the `search` agent).
  */
 export async function processMessage(
   sessionId: string,
   message: string,
 ): Promise<HarnessResultScoped<SessionData>> {
-  return processMessageWithAgent(sessionId, message, 'default')
+  return processMessageWithAgent(sessionId, message, 'search')
 }
 
 /**
@@ -83,7 +83,7 @@ export async function processMessage(
 export async function processMessageWithAgent(
   sessionId: string,
   message: string,
-  agentId: string = 'default',
+  agentId: string = 'search',
 ): Promise<HarnessResultScoped<SessionData>> {
   const user = await requireUser()
   return runTurn(sessionId, user.id, message, agentId)
@@ -96,7 +96,7 @@ export async function processMessageWithAgent(
 export async function processMessageStreaming(
   sessionId: string,
   message: string,
-  agentId: string = 'default',
+  agentId: string = 'search',
   onEvent: (event: ContextEvent) => void,
   settings?: HarnessSettings,
 ): Promise<HarnessResultScoped<SessionData>> {

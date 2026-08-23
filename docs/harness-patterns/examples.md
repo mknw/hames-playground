@@ -12,16 +12,18 @@ All agents are registered in `registry.server.ts` and available via `getAgentLis
 
 | ID | Name | Patterns | Servers |
 |----|------|----------|---------|
-| `default` | Default Agent | router → compactExecution | neo4j, web_search, fetch |
+| `search` | Search Agent | router → compactExecution | neo4j, web_search, fetch |
 | `sandbox-session` | Sandbox · Session | compactIntent → withSandbox(actorCritic) → compactExecution | none (in-VM sandbox tools) |
 | `retriever` | Retriever Agent | router → { retriever \| neo4j \| web_search } → compactExecution | neo4j, web_search, fetch (+ Data Stash via Redis retriever) |
 | `flavoured-sandbox` | Sandbox · Flavoured (router) | router → withSandbox(actorCritic) per flavour (base / image-processing / data) → compactExecution | none (in-VM sandbox tools per flavour) |
 
 ---
 
-## 1. Default Agent
+## 1. Search Agent
 
-**File:** `default.server.ts`
+**File:** `search.server.ts`
+
+> Registered id `search`; it was `default` until PR #234.
 
 Router-based agent with Neo4j and Web Search routes. Each route is wrapped with `withReferences` so the inner pattern receives an LLM-curated set of relevant prior `tool_result` events from any earlier turn (subsumes #26 / #29 — see [`with-references.md`](with-references.md)).
 

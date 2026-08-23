@@ -4,7 +4,7 @@
 # Each entry maps a Bearer secret presented to `POST /api/agents/:id` to the
 # userId that owns the resulting action rows. One entry per device/user.
 #
-#   curl -X POST https://host/api/agents/default \
+#   curl -X POST https://host/api/agents/search \
 #     -H "Authorization: Bearer <secret>" \
 #     -F transcribed_command="add a node for Project Apollo" \
 #     -F short_description="Apollo node" \

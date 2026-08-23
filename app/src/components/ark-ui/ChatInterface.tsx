@@ -150,7 +150,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const messages = () => props.getMessages(props.sessionId)
   const setMessages = (next: Message[] | ((prev: Message[]) => Message[])) =>
     props.setMessages(props.sessionId, next)
-  const [selectedAgent, setSelectedAgent] = createSignal('default')
+  const [selectedAgent, setSelectedAgent] = createSignal('search')
   // Row kind for the open thread — gates the promotion confirm on send. A
   // brand-new chat (load throws) stays 'conversation'. Set from loadConversation.
   const [currentKind, setCurrentKind] = createSignal<'conversation' | 'action'>('conversation')
@@ -158,7 +158,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   // null → modal closed. Declining clears it WITHOUT sending (hard gate).
   const [promotionDraft, setPromotionDraft] = createSignal<string | null>(null)
   const [promoting, setPromoting] = createSignal(false)
-  // Report the selected agent up to the parent (initial 'default', then on load
+  // Report the selected agent up to the parent (initial 'search', then on load
   // and on every change) so agent-aware UI like the Tools panel can react.
   createEffect(() => props.onSelectedAgentChange?.(selectedAgent()))
   // Cursor into ctx.events — tracks how many events were sent last turn so we

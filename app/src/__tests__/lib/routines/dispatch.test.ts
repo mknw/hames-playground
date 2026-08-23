@@ -25,7 +25,7 @@ vi.mock('../../../lib/db/routines.server', () => ({
   listEnabledRoutinesForUser,
 }))
 
-const getAgent = vi.fn<(id: string) => { id: string } | undefined>(() => ({ id: 'default' }))
+const getAgent = vi.fn<(id: string) => { id: string } | undefined>(() => ({ id: 'search' }))
 vi.mock('../../../lib/harness-client/registry.server', () => ({ getAgent }))
 
 type Trigger = {
@@ -62,7 +62,7 @@ function routine(over: Partial<Routine> = {}): Routine {
   return {
     id: 'routine-1',
     userId: 'user-1',
-    agentId: 'default',
+    agentId: 'search',
     trigger: { kind: 'interval', intervalSeconds: 3600 },
     input: 'summarise the graph',
     label: null,
@@ -79,7 +79,7 @@ beforeEach(() => {
   idCounter = 0
   claimRoutineRunAt.mockReset().mockResolvedValue(CLAIMED_AT)
   releaseRoutineClaim.mockReset().mockResolvedValue(true)
-  getAgent.mockReturnValue({ id: 'default' })
+  getAgent.mockReturnValue({ id: 'search' })
   seedActionRow.mockResolvedValue(undefined)
   listEnabledRoutinesForUser.mockResolvedValue([])
 })
@@ -93,7 +93,7 @@ describe('fireRoutine', () => {
     const [seededRunId, userId, agentId, trigger, source] = seedActionRow.mock.calls[0]
     expect(seededRunId).toBe('run-1')
     expect(userId).toBe('user-1')
-    expect(agentId).toBe('default')
+    expect(agentId).toBe('search')
     expect(source).toBe('routine')
     expect(trigger).toMatchObject({
       transcribedCommand: 'summarise the graph',
@@ -107,7 +107,7 @@ describe('fireRoutine', () => {
       'run-1',
       'user-1',
       'summarise the graph',
-      'default',
+      'search',
     ])
   })
 

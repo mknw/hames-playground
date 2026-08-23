@@ -1,7 +1,11 @@
 /**
- * Default Agent
+ * Search Agent
  *
  * Router-based agent with Neo4j and Web Search routes.
+ *
+ * Registered id `search`. It was `default` until PR #234 — a name that said
+ * "the fallback" rather than what the agent does. `registry.server.ts` maps the
+ * old id forward so conversations persisted under it still open.
  */
 'use server'
 
@@ -26,7 +30,7 @@ import { enrichNeo4jResult } from '../neo4j-enricher.server'
 
 async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools()
-  const schema = await getGraphSchema('default', sessionId)
+  const schema = await getGraphSchema('search', sessionId)
 
   const neo4jController = createNeo4jController(tools.neo4j ?? [])
   const webTools = tools.web ?? []
@@ -84,9 +88,9 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   return [routerPattern, routesPattern, responseSynth]
 }
 
-export const defaultAgent: AgentConfig = {
-  id: 'default',
-  name: 'Default Agent',
+export const searchAgent: AgentConfig = {
+  id: 'search',
+  name: 'Search Agent',
   description: 'Router-based agent with Neo4j and Web Search',
   icon: 'i-material-symbols-robot-2-outline',
   accent: 'indigo',

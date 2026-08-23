@@ -613,7 +613,7 @@ describe('chat route — support panel wiring', () => {
 
   it('tracks the agent the chat view reports, for the agent-aware panels', async () => {
     await mount()
-    expect(support.agentId).toBe('default')
+    expect(support.agentId).toBe('search')
     chat.onSelectedAgentChange('sandbox')
     await tick()
     expect(support.agentId).toBe('sandbox')

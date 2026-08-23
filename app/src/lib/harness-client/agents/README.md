@@ -38,7 +38,7 @@ compositions across all available MCP servers.
 
 > **Synthetic tool:** simpleLoop's `LoopController` prompt also exposes `expandPreviousResult` when prior results are present — a virtual tool that loads the full data behind a `ref:<id>` and records it as a normal turn. See [`with-references.md`](../../../../docs/harness-patterns/with-references.md) for the ingress/expansion taxonomy.
 
-> **Who writes the final answer ([#149](https://github.com/mknw/harness-playground/issues/149)):** every `simpleLoop` here inherits `returnStyle: 'summary'` — its terminal `Return` carries a one-line completion summary, and the chain's `compactExecution` composes the user-facing answer from the full tool results. No agent overrides it: every registered chain ends in a `compactExecution`, and `'answer'` would only restore a second composition nothing renders. Affected loops: `default` (both tool routes), `general`, `microsoft-365`, `retriever-agent` (both loop routes), and the unregistered `multi-source-research` (×3).
+> **Who writes the final answer ([#149](https://github.com/mknw/harness-playground/issues/149)):** every `simpleLoop` here inherits `returnStyle: 'summary'` — its terminal `Return` carries a one-line completion summary, and the chain's `compactExecution` composes the user-facing answer from the full tool results. No agent overrides it: every registered chain ends in a `compactExecution`, and `'answer'` would only restore a second composition nothing renders. Affected loops: `search` (both tool routes), `general`, `microsoft-365`, `retriever-agent` (both loop routes), and the unregistered `multi-source-research` (×3).
 
 > **Multi-call modes across agents:** every agent inherits `multiToolCalls: 'parallel'` except the two that override it — `sandbox-session` and `flavoured-sandbox` → `'sequential'` (linear effect-chains on one VM filesystem; in-order batches still save actor round-trips).
 
@@ -76,7 +76,7 @@ export const titleAgent = harness<TitleAgentData>(
 
 **Servers**: everything in `tools.all`
 **Patterns**: `planner` → `simpleLoop` → `compactExecution`
-**Use case**: cross-namespace questions the router-based `default` agent cannot
+**Use case**: cross-namespace questions the router-based `search` agent cannot
 serve, because a route can only be one namespace.
 
 ```typescript
@@ -96,7 +96,7 @@ The planner sees exactly the tool surface the executor will have, emits a
 numbered plan, and the loop receives it as the controller's `plan_context` —
 rendered beside the intent, outside the agent-static cached prefix — so the
 controller stops re-deriving the approach on every turn. Registered
-alongside `default` on purpose: same session shape, different strategy, so the
+alongside `search` on purpose: same session shape, different strategy, so the
 two can be A/B'd on the same question.
 
 ---

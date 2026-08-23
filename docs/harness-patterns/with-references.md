@@ -9,7 +9,7 @@
 
 Cross-pattern data flow is currently implicit, ad-hoc, and underspecified.
 
-**Concrete failure** (debugging session 2026-04-30, agent `default`):
+**Concrete failure** (debugging session 2026-04-30, agent `default` — since renamed `search`):
 
 | Turn | User input | Route | What the controller saw |
 |---|---|---|---|
@@ -247,7 +247,7 @@ Each case stubs the LLM (or runs against the real fallback model with a recorded
 5. **Cache** — small in-memory `Map<sessionId, Map<hash, decision>>` cleared on session end.
 6. **Tests** — unit tests for skip optimizations + eval suite.
 7. **Docs** — update `harness-patterns/README.md` API reference + add an example.
-8. **Migration** — close #26 / #29; update `default` agent to wrap routes with `withReferences`.
+8. **Migration** — close #26 / #29; update the `default` agent (now `search`) to wrap routes with `withReferences`.
 
 ## 11. Open questions
 

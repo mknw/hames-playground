@@ -18,11 +18,10 @@ import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 const toolSets = {
   neo4j: ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema'],
   web: ['search', 'fetch', 'fetch_content'],
-  github: ['search_code', 'search_repositories', 'get_issue'],
   context7: ['resolve-library-id', 'get-library-docs'],
   all: [] as string[],
 }
-toolSets.all = [...toolSets.neo4j, ...toolSets.web, ...toolSets.github, ...toolSets.context7]
+toolSets.all = [...toolSets.neo4j, ...toolSets.web, ...toolSets.context7]
 
 vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -65,9 +64,9 @@ function allGuards(patterns: Pattern[]): Pattern[] {
 beforeEach(() => vi.clearAllMocks())
 
 describe('agents that consume untrusted content are guarded', () => {
-  it('default: the web route is guarded, the neo4j route is not', async () => {
-    const { defaultAgent } = await import('../../../../lib/harness-client/agents/default.server')
-    const patterns = (await defaultAgent.createPatterns('s')) as Pattern[]
+  it('search: the web route is guarded, the neo4j route is not', async () => {
+    const { searchAgent } = await import('../../../../lib/harness-client/agents/search.server')
+    const patterns = (await searchAgent.createPatterns('s')) as Pattern[]
 
     // The guard sits INSIDE routes, on the web route only — the chain itself is
     // router → routes → compactExecution, unchanged.

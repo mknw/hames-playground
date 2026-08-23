@@ -52,7 +52,7 @@ export async function POST(event: APIEvent) {
       { status: 401, headers: { 'Content-Type': 'application/json' } },
     )
   }
-  const resolvedAgentId = agentId ?? 'default'
+  const resolvedAgentId = agentId ?? 'search'
 
   const encoder = new TextEncoder()
 

@@ -18,7 +18,7 @@ import type { RouterData } from '../harness-patterns/patterns/router.server'
 import type { SimpleLoopData } from '../harness-patterns/patterns'
 import { deserializeContext, serializeContext } from '../harness-patterns'
 import type { UnifiedContext } from '../harness-patterns'
-import { getAgent } from './registry.server'
+import { canonicalAgentId, getAgent } from './registry.server'
 import {
   loadConversation,
   saveConversation,
@@ -174,7 +174,10 @@ export async function loadSession(
   if (!row) return null
   return {
     serializedContext: row.serializedContext,
-    agentId: row.agentId,
+    // Rows written before an agent was renamed still carry the old id; map it
+    // forward here so the resume path builds patterns, the selector shows the
+    // agent as selected, and the next `saveSession` writes the current id.
+    agentId: canonicalAgentId(row.agentId),
     kind: row.kind,
     status: row.status,
   }

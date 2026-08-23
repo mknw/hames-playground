@@ -41,7 +41,7 @@ export async function processMessage(
 export async function processMessageWithAgent(
   sessionId: string,
   message: string,
-  agentId: string = "default"
+  agentId: string = "search"
 ): Promise<HarnessResultScoped<SessionData>>
 
 // Get list of available agents
@@ -442,7 +442,7 @@ import { getAgentList, processMessageWithAgent } from '~/lib/harness-client'
 
 const AgentSelector = () => {
   const [agents] = createResource(getAgentList)
-  const [selectedAgent, setSelectedAgent] = createSignal('default')
+  const [selectedAgent, setSelectedAgent] = createSignal('search')
 
   const handleSend = async (message: string) => {
     const result = await processMessageWithAgent(

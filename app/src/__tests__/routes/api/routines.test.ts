@@ -50,7 +50,7 @@ const T0 = new Date('2026-08-16T12:00:00Z')
 const row = (over: Partial<Row> = {}): Row => ({
   id: 'routine-1',
   userId: 'user-1',
-  agentId: 'default',
+  agentId: 'search',
   trigger: { kind: 'interval', intervalSeconds: 3600 },
   input: 'go',
   label: null,
@@ -78,7 +78,7 @@ function jsonEvent(body: unknown, id = 'routine-1') {
 beforeEach(() => {
   vi.clearAllMocks()
   getAuthenticatedUser.mockResolvedValue({ id: 'user-1', email: 'u@x' })
-  getAgent.mockReturnValue({ id: 'default' })
+  getAgent.mockReturnValue({ id: 'search' })
   listRoutines.mockResolvedValue([])
   createRoutine.mockImplementation(async (input) => row(input as Partial<Row>))
   updateRoutine.mockResolvedValue(row({ enabled: false }))
@@ -102,7 +102,7 @@ describe('GET /api/routines', () => {
     expect(body.routines).toEqual([
       {
         id: 'routine-1',
-        agentId: 'default',
+        agentId: 'search',
         trigger: 'interval',
         triggerConfig: { intervalSeconds: 3600 },
         input: 'go',
@@ -131,7 +131,7 @@ describe('POST /api/routines', () => {
   it('creates an interval routine owned by the caller', async () => {
     const res = await index.POST(
       jsonEvent({
-        agentId: 'default',
+        agentId: 'search',
         trigger: 'interval',
         triggerConfig: { intervalSeconds: 3600 },
         input: '  daily digest  ',
@@ -142,7 +142,7 @@ describe('POST /api/routines', () => {
     expect(createRoutine).toHaveBeenCalledWith({
       id: 'routine-fixed',
       userId: 'user-1',
-      agentId: 'default',
+      agentId: 'search',
       trigger: { kind: 'interval', intervalSeconds: 3600 },
       input: 'daily digest',
       label: 'Digest',
@@ -153,7 +153,7 @@ describe('POST /api/routines', () => {
 
   it('creates a session-lifecycle routine with no config', async () => {
     const res = await index.POST(
-      jsonEvent({ agentId: 'default', trigger: 'session_start', input: 'brief me' }),
+      jsonEvent({ agentId: 'search', trigger: 'session_start', input: 'brief me' }),
     )
     expect(res.status).toBe(201)
     expect(createRoutine.mock.calls[0][0].trigger).toEqual({ kind: 'session_start' })
@@ -161,7 +161,7 @@ describe('POST /api/routines', () => {
 
   it('400s a missing agentId, input, or unknown agent', async () => {
     expect((await index.POST(jsonEvent({ trigger: 'interval', input: 'x' }))).status).toBe(400)
-    expect((await index.POST(jsonEvent({ agentId: 'default', trigger: 'interval' }))).status).toBe(
+    expect((await index.POST(jsonEvent({ agentId: 'search', trigger: 'interval' }))).status).toBe(
       400,
     )
     getAgent.mockReturnValue(undefined)
@@ -173,14 +173,14 @@ describe('POST /api/routines', () => {
 
   it('400s an unknown trigger kind or an out-of-range interval', async () => {
     const unknown = await index.POST(
-      jsonEvent({ agentId: 'default', trigger: 'webhook', input: 'x' }),
+      jsonEvent({ agentId: 'search', trigger: 'webhook', input: 'x' }),
     )
     expect(unknown.status).toBe(400)
     expect((await unknown.json()).error).toMatch(/Unknown routine trigger kind/)
 
     const tooFast = await index.POST(
       jsonEvent({
-        agentId: 'default',
+        agentId: 'search',
         trigger: 'interval',
         triggerConfig: { intervalSeconds: 5 },
         input: 'x',

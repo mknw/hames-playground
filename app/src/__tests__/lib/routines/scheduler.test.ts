@@ -34,7 +34,7 @@ function routine(over: Partial<Routine> = {}): Routine {
   return {
     id: 'r1',
     userId: 'u1',
-    agentId: 'default',
+    agentId: 'search',
     trigger: { kind: 'interval', intervalSeconds: 300 },
     input: 'go',
     label: null,

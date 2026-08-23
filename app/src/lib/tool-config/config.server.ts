@@ -74,8 +74,16 @@ export async function getCodeModeAllowedTools(
     try {
       const ctx = deserializeContext<SessionData>(loaded.serializedContext);
       persisted = ctx.data?.codeModeAllowedTools;
-    } catch {
-      // Corrupt blob — fall through to defaults.
+    } catch (err) {
+      // Corrupt blob — fall through to defaults. The panel then renders the
+      // DEFAULT selection as if it were the user's, and saving from that state
+      // silently replaces whatever they had picked (sf-L2). Nothing can be
+      // recovered here, but the substitution is no longer invisible.
+      console.error(
+        `[tool-config] conversation ${sessionId} has an unreadable context blob — showing the ` +
+          'default code-mode tool selection instead of the saved one:',
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 
@@ -86,7 +94,14 @@ export async function getCodeModeAllowedTools(
   let presetTools: string[] = [];
   try {
     presetTools = await getPresetTools();
-  } catch {
+  } catch (err) {
+    // Same class: an empty preset silently narrows a fresh conversation's
+    // starting tool set to the meta-tools alone.
+    console.warn(
+      '[tool-config] could not read the code-mode preset — a fresh conversation starts with ' +
+        'meta-tools only:',
+      err instanceof Error ? err.message : err,
+    );
     presetTools = [];
   }
   const allowed =

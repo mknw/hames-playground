@@ -93,8 +93,15 @@ function parseCustomCatalog(): Map<string, ParsedServer> {
         secrets,
       });
     }
-  } catch {
-    // Unparseable catalog — degrade to empty (callers tolerate it).
+  } catch (err) {
+    // Unparseable catalog — degrade to empty (callers tolerate it). The result
+    // is cached for the process lifetime, so this one failure means an empty
+    // Tools panel until the next restart: say so once, loudly (sf-M4).
+    console.error(
+      "[tool-config] custom-catalog.yaml could not be parsed — the server catalog is EMPTY " +
+        "for the rest of this process:",
+      err,
+    );
   }
   customCatalogCache = out;
   return out;
@@ -116,8 +123,14 @@ function parseEnabledServers(): Set<string> {
         out.add(key);
       }
     }
-  } catch {
-    // Unparseable — degrade to empty.
+  } catch (err) {
+    // Unparseable — degrade to empty, i.e. "no server is enabled", cached for
+    // the process lifetime (sf-M4).
+    console.error(
+      "[tool-config] mcp-config.yaml could not be parsed — NO servers will be reported as " +
+        "enabled for the rest of this process:",
+      err,
+    );
   }
   enabledCache = out;
   return out;
@@ -240,7 +253,11 @@ function masterServerNames(): string[] {
       const doc = parseYaml(readFileSync(file, "utf8")) as Record<string, unknown>;
       const registry = (doc?.registry ?? doc) as Record<string, unknown>;
       names = Object.keys(registry ?? {});
-    } catch {
+    } catch (err) {
+      // The master catalog is only used for the "N more in catalog" preview, so
+      // an empty list degrades a hint rather than a capability — but silently
+      // losing 1.3k entries looked identical to "no matches" (sf-M4).
+      console.error("[tool-config] catalog.yaml could not be parsed:", err);
       names = [];
     }
   }

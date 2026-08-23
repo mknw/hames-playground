@@ -98,6 +98,30 @@ export function getAgentMetadata(): Array<{
 // Capability introspection
 // ============================================================================
 
+/**
+ * Report a capability probe that could not build the agent's patterns.
+ *
+ * All three probes answer a boolean and every one of them turns a
+ * `createPatterns` failure — a gateway outage, a bad BAML client, a throw in an
+ * agent factory — into a plain `false`/fallback. The degraded answer is correct
+ * (nothing better is knowable) and is deliberately NOT cached, but it used to be
+ * indistinguishable from a real `false`, so the consequence below never reached
+ * anyone (sf-M7). Not warn-once: these are per-request and a repeated warning is
+ * the signal that the outage is persistent.
+ */
+function warnProbeFailed(
+  probe: string,
+  agentId: string,
+  err: unknown,
+  consequence: string,
+): void {
+  console.warn(
+    `[registry] ${probe}('${agentId}') could not build the agent's patterns ` +
+      `(${err instanceof Error ? err.message : String(err)}) — ${consequence}. ` +
+      'Not cached; the next call retries.',
+  )
+}
+
 /** Memoized by agentId — a harness's pattern *structure* is
  *  session-independent (sessionId only parameterizes the closures), so the
  *  answer is stable for the process lifetime. Cleared implicitly on restart. */
@@ -128,7 +152,8 @@ export async function agentUsesCodeMode(agentId: string, sessionId: string): Pro
     const result = usesCodeMode(patterns)
     codeModeCapabilityCache.set(agentId, result)
     return result
-  } catch {
+  } catch (err) {
+    warnProbeFailed('agentUsesCodeMode', agentId, err, `falling back to id === 'code-mode'`)
     return agentId === 'code-mode'
   }
 }
@@ -160,7 +185,13 @@ export async function agentUsesRedisRetriever(
     const result = harnessHasRedisRetriever(patterns)
     redisRetrieverCapabilityCache.set(agentId, result)
     return result
-  } catch {
+  } catch (err) {
+    warnProbeFailed(
+      'agentUsesRedisRetriever',
+      agentId,
+      err,
+      'uploads for this session will NOT be auto-ingested on this request',
+    )
     return false
   }
 }
@@ -193,7 +224,13 @@ export async function agentUsesSyncWorkspace(agentId: string, sessionId: string)
     const result = harnessUsesSyncWorkspace(patterns)
     syncWorkspaceCapabilityCache.set(agentId, result)
     return result
-  } catch {
+  } catch (err) {
+    warnProbeFailed(
+      'agentUsesSyncWorkspace',
+      agentId,
+      err,
+      'a Shell opened before the first turn will NOT hydrate /work/in',
+    )
     return false
   }
 }

@@ -184,13 +184,39 @@ registry:
     await expect(getServerCatalog()).resolves.toEqual([])
   })
 
-  it('degrades to nothing when the catalog YAML is unparseable', async () => {
+  // sf-M4. The parse result is cached for the process lifetime, so one bad file
+  // means an empty Tools panel until the next restart. Degrading is fine;
+  // degrading without a word in the log is not.
+  it('degrades to nothing when the catalog YAML is unparseable, and says so', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { getServerCatalog } = await loadCatalogModule({
       'custom-catalog.yaml': 'registry:\n  - [unbalanced',
       'mcp-config.yaml': MCP_CONFIG,
     })
 
     await expect(getServerCatalog()).resolves.toEqual([])
+    expect(err).toHaveBeenCalledWith(
+      expect.stringContaining('custom-catalog.yaml could not be parsed'),
+      expect.anything(),
+    )
+    // The consequence, not just the cause.
+    expect(err.mock.calls[0][0]).toContain('rest of this process')
+    err.mockRestore()
+  })
+
+  it('reports an unparseable mcp-config the same way (sf-M4)', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { getServerCatalog } = await loadCatalogModule({
+      'custom-catalog.yaml': CATALOG,
+      'mcp-config.yaml': 'neo4j-cypher:\n  - [unbalanced',
+    })
+
+    await expect(getServerCatalog()).resolves.toEqual([])
+    expect(err).toHaveBeenCalledWith(
+      expect.stringContaining('mcp-config.yaml could not be parsed'),
+      expect.anything(),
+    )
+    err.mockRestore()
   })
 
   it('treats every server as disabled when mcp-config is missing', async () => {

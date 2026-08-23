@@ -34,25 +34,56 @@ interface TokenEntry {
 }
 
 /**
- * Parse the YAML text into a `secret → userId` map. Pure (no filesystem) so it
- * can be unit-tested directly. Tolerant of a missing/empty `tokens` list and
- * skips entries without a non-empty `secret` and `userId`.
+ * Parse the YAML text into a `secret → userId` map. Pure apart from logging (no
+ * filesystem) so it can be unit-tested directly. Tolerant of a missing/empty
+ * `tokens` list and skips entries without a non-empty `secret` and `userId`.
+ *
+ * Every degradation is logged (sf-M5). An empty map means POST /api/agents/:id
+ * answers 401 to every trigger — the same symptom as a wrong token — and a
+ * malformed file used to produce that with nothing in the log to distinguish
+ * "your token is wrong" from "the token file is broken". The secrets themselves
+ * are never logged.
  */
 export function parseActionTokens(yamlText: string): Map<string, string> {
   const out = new Map<string, string>();
   let doc: unknown;
   try {
     doc = parseYaml(yamlText);
-  } catch {
+  } catch (err) {
+    console.error(
+      "[action-tokens] action-tokens.yaml is not valid YAML — EVERY trigger will be " +
+        "rejected with 401:",
+      err instanceof Error ? err.message : err,
+    );
     return out;
   }
   const tokens = (doc as { tokens?: unknown })?.tokens;
-  if (!Array.isArray(tokens)) return out;
+  if (!Array.isArray(tokens)) {
+    if (tokens !== undefined) {
+      console.error(
+        `[action-tokens] the \`tokens\` key is ${typeof tokens}, not a list — every trigger ` +
+          "will be rejected with 401.",
+      );
+    }
+    return out;
+  }
+  let skipped = 0;
   for (const raw of tokens) {
     const entry = raw as Partial<TokenEntry>;
     const secret = typeof entry.secret === "string" ? entry.secret.trim() : "";
     const userId = typeof entry.userId === "string" ? entry.userId.trim() : "";
-    if (secret && userId) out.set(secret, userId);
+    if (secret && userId) {
+      out.set(secret, userId);
+    } else {
+      skipped++;
+    }
+  }
+  if (skipped > 0) {
+    console.warn(
+      `[action-tokens] skipped ${skipped} of ${tokens.length} token entr${
+        skipped === 1 ? "y" : "ies"
+      } missing a non-empty \`secret\` and \`userId\`.`,
+    );
   }
   return out;
 }

@@ -58,10 +58,60 @@ tokens:
   })
 
   it('returns an empty map for missing/empty/invalid yaml', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     expect(parseActionTokens('').size).toBe(0)
     expect(parseActionTokens('tokens: []').size).toBe(0)
     expect(parseActionTokens('not: a token file').size).toBe(0)
     expect(parseActionTokens(': : : not yaml').size).toBe(0)
+    err.mockRestore()
+  })
+
+  // sf-M5. An empty map means every trigger gets a 401 — the same symptom as a
+  // wrong token — so a broken file used to be indistinguishable from a bad
+  // credential, with nothing in the log to tell them apart.
+  describe('degradations are logged (sf-M5)', () => {
+    it('reports a YAML parse failure, not just an empty map', () => {
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+      expect(parseActionTokens(': : : not yaml').size).toBe(0)
+      expect(err).toHaveBeenCalledWith(
+        expect.stringContaining('not valid YAML'),
+        expect.anything(),
+      )
+      err.mockRestore()
+    })
+
+    it('reports a `tokens` key that is not a list', () => {
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+      expect(parseActionTokens('tokens: a-string').size).toBe(0)
+      expect(err).toHaveBeenCalledWith(expect.stringContaining('not a list'))
+      err.mockRestore()
+    })
+
+    it('stays quiet when `tokens` is simply absent (a legitimate empty file)', () => {
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      expect(parseActionTokens('# nothing here yet\n').size).toBe(0)
+      expect(err).not.toHaveBeenCalled()
+      expect(warn).not.toHaveBeenCalled()
+      err.mockRestore()
+      warn.mockRestore()
+    })
+
+    it('counts skipped entries without ever logging a secret', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      parseActionTokens(`
+tokens:
+  - secret: only-secret
+  - userId: only-user
+  - secret: good
+    userId: u
+`)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('skipped 2 of 3'))
+      // The whole point of the file is that these do not get logged.
+      expect(warn.mock.calls[0][0]).not.toContain('only-secret')
+      expect(warn.mock.calls[0][0]).not.toContain('good')
+      warn.mockRestore()
+    })
   })
 })
 

@@ -59,6 +59,30 @@ export interface GuardrailConfig<T> extends PatternConfig {
 // Pattern
 // ============================================================================
 
+/** Circuit-breaker degradations already reported. The breaker is consulted on
+ *  every turn, so warning per turn would bury the signal it is meant to be. */
+const breakerWarned = new Set<'read' | 'write'>()
+
+/** Report — once per direction per process — that the circuit breaker is
+ *  running blind because its Redis store is unreachable. */
+function warnBreakerDegraded(direction: 'read' | 'write', err: unknown): void {
+  if (breakerWarned.has(direction)) return
+  breakerWarned.add(direction)
+  const what =
+    direction === 'read'
+      ? 'cannot read its failure window — it will never trip'
+      : 'cannot record a failure — the window stays empty and it will never trip'
+  console.warn(
+    `[guardrail] circuit breaker ${what} (${err instanceof Error ? err.message : String(err)}). ` +
+      'Failing OPEN: the wrapped pattern keeps running unguarded.',
+  )
+}
+
+/** Test-only: forget which breaker degradations have been reported. */
+export function __resetGuardrailBreakerWarnings(): void {
+  breakerWarned.clear()
+}
+
 /**
  * Wrap a pattern with multi-layered guardrails.
  *
@@ -109,8 +133,12 @@ export function guardrail<T extends Record<string, unknown>>(
               }, true)
               return scope
             }
-          } catch {
-            // Redis may not be available; proceed without circuit breaker
+          } catch (err) {
+            // Redis may not be available; proceed without circuit breaker.
+            // FAILING OPEN is deliberate (a breaker outage must not block every
+            // turn) but it used to be invisible: the breaker silently stopped
+            // existing and the pattern kept reporting normal operation (sf-M1).
+            warnBreakerDegraded('read', err)
           }
         }
 
@@ -184,8 +212,11 @@ export function guardrail<T extends Record<string, unknown>>(
                       score: Date.now(),
                       member: `fail-${Date.now()}`
                     })
-                  } catch {
-                    // Redis may not be available
+                  } catch (err) {
+                    // Redis may not be available. Same fail-open as the read
+                    // above, and the more consequential half: a failure that is
+                    // never RECORDED can never trip the breaker (sf-M1).
+                    warnBreakerDegraded('write', err)
                   }
                 }
                 trackEvent(scope, 'error', {

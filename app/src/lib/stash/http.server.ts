@@ -6,6 +6,10 @@
  * `/api/stash/ingest`). Mirrors the auth posture of the existing
  * `routes/api/stash.ts` (dev-bypass aware) so every stash path gates the same
  * way: authenticate the caller, then check that the session it names is theirs.
+ *
+ * The sandbox PTY routes (`/api/sandbox/pty/*`) gate on the same helpers —
+ * a session's terminal and its stash share one ownership record, so the two
+ * surfaces cannot disagree about who a session belongs to.
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'

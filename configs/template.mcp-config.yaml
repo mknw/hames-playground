@@ -22,10 +22,6 @@ rust-mcp-filesystem:
   allowed_directories:
     - /workspace
 
-github:
-  enabled: true
-  personal_access_token: <GITHUB_PERSONAL_ACCESS_TOKEN>
-
 memory:
   enabled: true
 

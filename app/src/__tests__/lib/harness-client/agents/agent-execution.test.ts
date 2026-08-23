@@ -177,7 +177,7 @@ describe('Multi-Source Research Evaluator Execution', () => {
         data: 'This is a comprehensive python flask tutorial that covers all the basics of python and flask. It includes many examples and code snippets for learning flask development.',
       },
       {
-        patternId: 'github-search',
+        patternId: 'doc-lookup',
         // <100 chars
         data: 'Short content',
       },
@@ -249,12 +249,12 @@ describe('Multi-Source Research Evaluator Execution', () => {
       'This is a substantial test query response with lots of relevant test content about the query topic.'
     const view = createMockViewWithCandidates([
       { patternId: 'web-search', data: 'short' },
-      { patternId: 'github-search', data: goodContent },
+      { patternId: 'doc-lookup', data: goodContent },
     ])
 
     await judgePattern.fn(scope, view)
 
-    // Best should be github-search
+    // Best should be doc-lookup
     expect((scope as Scope).data.response).toBeDefined()
   })
 })

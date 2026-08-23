@@ -525,7 +525,6 @@ createNeo4jController(tools: string[]): ControllerFn
 createWebSearchController(tools: string[]): ControllerFn
 createMemoryController(tools: string[]): ControllerFn
 createContext7Controller(tools: string[]): ControllerFn
-createGitHubController(tools: string[]): ControllerFn
 createFilesystemController(tools: string[]): ControllerFn
 createRedisController(tools: string[]): ControllerFn
 createDatabaseController(tools: string[]): ControllerFn

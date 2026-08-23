@@ -19,7 +19,7 @@ parallel([pattern1, pattern2, pattern3], { patternId: 'concurrent-search' })
 - Errors logged but don't fail the overall pattern
 
 **Use cases:**
-- Multi-source search (web + github + docs)
+- Multi-source search (web + docs + graph)
 - Parallel data fetching
 - Fan-out queries
 
@@ -62,7 +62,7 @@ Common pattern: parallel search + quality ranking
 ```typescript
 const sources = parallel([
   simpleLoop(webController, tools.web, { patternId: 'web' }),
-  simpleLoop(githubController, tools.github, { patternId: 'github' }),
+  simpleLoop(neo4jController, tools.neo4j, { patternId: 'graph' }),
   simpleLoop(docsController, tools.context7, { patternId: 'docs' })
 ])
 

@@ -57,7 +57,7 @@ All services communicate via a shared bridge network (`app-network`).
 
 - **Image**: docker/mcp-gateway
 - **Ports**: 8811:8811
-- **MCP Servers**: neo4j-cypher, fetch, web_search, context7, rust-mcp-filesystem, github, memory, redis, database-server
+- **MCP Servers**: neo4j-cypher, fetch, web_search, context7, rust-mcp-filesystem, memory, redis, database-server
 - **Transport**: streaming
 - **Dependencies**: Waits for Neo4j healthcheck
 
@@ -198,7 +198,6 @@ All MCP configuration files are located in the `configs/` directory:
    - **web_search**: DuckDuckGo search
    - **context7**: Library documentation lookup
    - **rust-mcp-filesystem**: File system operations
-   - **github**: GitHub API (PAT configured via `mcp-config-set`)
    - **memory**: Knowledge graph memory
    - **redis**: Redis operations (connects to redis container)
    - **database-server**: PostgreSQL/MySQL/SQLite queries (connects to postgres container)

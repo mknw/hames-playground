@@ -229,7 +229,7 @@ Docker-based gateway on port 8811.
 - `configs/custom-catalog.yaml` — available MCP servers (Docker image-based)
 - `configs/mcp-config.yaml` — enable/disable and connection params per server
 
-Tool namespaces in `tools.server.ts`: `neo4j`, `web`, `context7`, `filesystem`, `github`, `memory`, `redis`, `database` (and `all`).
+Tool namespaces in `tools.server.ts`: `neo4j`, `web`, `context7`, `filesystem`, `memory`, `redis`, `database` (and `all`). There is no `github` namespace: the GitHub MCP server and its PAT were removed in #226 E3 — no agent used it, and the `gh` CLI covers this repo's own GitHub work.
 
 `KNOWN_TOOL_SERVERS` maps tool names to namespaces when auto-detection would fail.
 

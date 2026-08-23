@@ -12,7 +12,6 @@ compositions across all available MCP servers.
 | web_search          | `tools.web`        | DuckDuckGo search + content parsing                                       |
 | context7            | `tools.context7`   | Library doc resolution + retrieval                                        |
 | rust-mcp-filesystem | `tools.filesystem` | File read/write/search/edit                                               |
-| github              | `tools.github`     | Issues, PRs, code search, commits                                         |
 | memory              | `tools.memory`     | Entity/relation knowledge graph (ephemeral)                               |
 | redis               | `tools.redis`      | Key/value, hashes, lists, sets, sorted sets, streams, JSON, vector search |
 | database-server     | `tools.database`   | PostgreSQL/MySQL/SQLite query + schema introspection                      |
@@ -109,7 +108,7 @@ two can be A/B'd on the same question.
 > does not import it, so it never reaches the agent dropdown. Re-register only
 > after a live test.
 
-**Servers**: web_search, github, context7, redis
+**Servers**: web_search, context7, redis
 **Patterns**: `parallel` → `judge` → `compactExecution`
 **Use case**: Search three sources concurrently, cache in redis, rank results.
 
@@ -118,7 +117,6 @@ User: "What's the best way to handle auth in SvelteKit?"
 
 parallel:
   ├─ simpleLoop(webController, tools.web)          → DuckDuckGo results
-  ├─ simpleLoop(githubController, tools.github)     → GitHub code examples
   └─ simpleLoop(context7Controller, tools.context7) → SvelteKit official docs
 
 redis: cache each source's results as JSON with TTL
@@ -217,11 +215,6 @@ function withCache<T>(
 const researchPattern = parallel(
   withCache(
     simpleLoop(b.WebSearchController.bind(b), tools.web ?? [], { patternId: 'web-search' }),
-  ),
-  withCache(
-    simpleLoop(b.GitHubSearchController.bind(b), tools.github ?? [], {
-      patternId: 'github-search',
-    }),
   ),
   withCache(
     simpleLoop(b.Context7Controller.bind(b), tools.context7 ?? [], { patternId: 'doc-lookup' }),
@@ -465,14 +458,14 @@ See `sandbox-session.server.ts`. Debugging modalities for live sandboxes:
 
 ## Pattern Composition Matrix
 
-|                 | neo4j            | fetch         | web_search   | context7     | filesystem       | github         | memory          | redis        | database         |
-| --------------- | ---------------- | ------------- | ------------ | ------------ | ---------------- | -------------- | --------------- | ------------ | ---------------- |
-| **simpleLoop**  | Query/write      | Fetch URLs    | Search       | Resolve docs | Read/search      | Issues/PRs     | Entity CRUD     | Get/set/hash | SQL query        |
-| **actorCritic** | Complex queries  | -             | -            | -            | File refactoring | PR review      | -               | -            | Schema migration |
-| **parallel**    | Multi-query      | Multi-fetch   | Multi-search | Multi-lib    | Multi-file       | Multi-repo     | -               | -            | Multi-DB         |
-| **guardrail**   | Cypher injection | URL allowlist | Topic scope  | -            | Path safety      | Org/repo scope | -               | Rate limit   | SQL injection    |
-| **judge**       | -                | -             | Rank results | Rank docs    | -                | Rank code      | -               | Score cache  | -                |
-| **hook**        | KB distill       | -             | -            | -            | Log to file      | -              | Session cleanup | TTL mgmt     | Audit log        |
+|                 | neo4j            | fetch         | web_search   | context7     | filesystem       | memory          | redis        | database         |
+| --------------- | ---------------- | ------------- | ------------ | ------------ | ---------------- | --------------- | ------------ | ---------------- |
+| **simpleLoop**  | Query/write      | Fetch URLs    | Search       | Resolve docs | Read/search      | Entity CRUD     | Get/set/hash | SQL query        |
+| **actorCritic** | Complex queries  | -             | -            | -            | File refactoring | -               | -            | Schema migration |
+| **parallel**    | Multi-query      | Multi-fetch   | Multi-search | Multi-lib    | Multi-file       | -               | -            | Multi-DB         |
+| **guardrail**   | Cypher injection | URL allowlist | Topic scope  | -            | Path safety      | -               | Rate limit   | SQL injection    |
+| **judge**       | -                | -             | Rank results | Rank docs    | -                | -               | Score cache  | -                |
+| **hook**        | KB distill       | -             | -            | -            | Log to file      | Session cleanup | TTL mgmt     | Audit log        |
 
 ## BAML Functions Needed
 
@@ -483,7 +476,6 @@ See `sandbox-session.server.ts`. Debugging modalities for live sandboxes:
 | `MemoryReadController` / `MemoryCleanupController`      | simpleLoop (hook)      | memory                        |
 | `MemoryExtractController`                               | simpleLoop             | memory                        |
 | `DistillController`                                     | custom (hook)          | memory → neo4j                |
-| `GitHubSearchController` / `GitHubIssueController`      | simpleLoop             | github                        |
 | `FileEditController` / `FileEditCritic`                 | actorCritic            | rust-mcp-filesystem           |
 | `JudgeController`                                       | judge                  | (evaluator, no tools)         |
 | `TopicClassifier`                                       | guardrail (input rail) | (classifier, no tools)        |

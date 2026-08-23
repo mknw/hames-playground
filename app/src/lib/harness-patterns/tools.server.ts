@@ -54,7 +54,7 @@ function groupTools(mcpTools: MCPToolDescription[]): ToolSet {
 /**
  * Explicit mapping of tool names to server groups.
  * Checked before the heuristic. Covers tools whose names don't encode
- * the server identity (memory, context7, redis, github, filesystem, web).
+ * the server identity (memory, context7, redis, filesystem, web).
  */
 const KNOWN_TOOL_SERVERS: Record<string, string> = {}
 
@@ -132,37 +132,6 @@ for (const t of [
   'get_index_info',
 ])
   KNOWN_TOOL_SERVERS[t] = 'redis'
-
-// GitHub server
-for (const t of [
-  'search_code',
-  'search_issues',
-  'search_repositories',
-  'search_users',
-  'get_issue',
-  'list_issues',
-  'create_issue',
-  'update_issue',
-  'add_issue_comment',
-  'get_file_contents',
-  'create_or_update_file',
-  'push_files',
-  'get_pull_request',
-  'list_pull_requests',
-  'create_pull_request',
-  'merge_pull_request',
-  'get_pull_request_files',
-  'get_pull_request_comments',
-  'get_pull_request_reviews',
-  'get_pull_request_status',
-  'create_pull_request_review',
-  'update_pull_request_branch',
-  'list_commits',
-  'create_branch',
-  'create_repository',
-  'fork_repository',
-])
-  KNOWN_TOOL_SERVERS[t] = 'github'
 
 // Filesystem server
 for (const t of [

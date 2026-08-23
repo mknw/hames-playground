@@ -1515,11 +1515,6 @@ export function createContext7Controller(toolNames: string[]): ControllerFnWithL
   return createLoopControllerAdapter(toolNames)
 }
 
-/** GitHub controller */
-export function createGitHubController(toolNames: string[]): ControllerFnWithLLMData {
-  return createLoopControllerAdapter(toolNames)
-}
-
 /** Filesystem controller */
 export function createFilesystemController(toolNames: string[]): ControllerFnWithLLMData {
   return createLoopControllerAdapter(toolNames)

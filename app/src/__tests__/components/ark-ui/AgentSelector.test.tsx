@@ -122,7 +122,7 @@ describe('AgentSelector', () => {
 
   it('caps the server chips at three and counts the rest', async () => {
     getAgentList.mockResolvedValue([
-      agent('kitchen-sink', 'Kitchen Sink', ['neo4j', 'web', 'redis', 'github', 'memory']),
+      agent('kitchen-sink', 'Kitchen Sink', ['neo4j', 'web', 'redis', 'context7', 'memory']),
     ])
     const { container } = render(() => (
       <AgentSelector selectedAgent="kitchen-sink" onAgentChange={vi.fn()} />
@@ -134,7 +134,7 @@ describe('AgentSelector', () => {
     const option = buttons(container).find((b) => b.textContent?.includes('does things'))!
     expect(option.textContent).toContain('neo4j')
     expect(option.textContent).toContain('redis')
-    expect(option.textContent).not.toContain('github')
+    expect(option.textContent).not.toContain('context7')
     expect(option.textContent).toContain('+2')
   })
 

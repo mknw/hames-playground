@@ -103,9 +103,9 @@ with cwd = `app/` (`server-catalog.server.ts:42`).
 
 Create the git-ignored config files with **real** values:
 
-- **`configs/mcp-config.yaml`** — the enabled-servers list + secrets (GitHub PAT,
-  neo4j password, …). Per #88, scope the GitHub token to **public/read-only** and
-  pre-provision statically; there is no runtime secret-setting on a Linux host.
+- **`configs/mcp-config.yaml`** — the enabled-servers list + secrets (neo4j
+  password, …). Pre-provision them statically; there is no runtime
+  secret-setting on a Linux host.
 - **`docker-config.json`** — Docker registry auth so the gateway can pull MCP
   server images (mounted read-only into the gateway).
 - **`app/.env`** — see the env table in step 9.
@@ -297,7 +297,7 @@ dump` + Redis RDB). These hold all conversations, the graph, and the Data Stash.
 
 ## 12. Azure niceties (optional)
 
-- **Key Vault** for `ANTHROPIC_API_KEY` / DB passwords / the GitHub PAT, fetched
+- **Key Vault** for `ANTHROPIC_API_KEY` / DB passwords, fetched
   into the systemd `EnvironmentFile` via the VM's managed identity.
 - **Azure Backup** on the data disk instead of hand-rolled volume dumps.
 - **cloud-init / setup script** to make the box reproducible (steps 2–8 as a

@@ -85,40 +85,6 @@ registry:
       - "{{rust-mcp-filesystem.allowed_directories|volume|into}}"
     disableNetwork: true
 
-  github:
-    description: GitHub API interaction - issues, pull requests, repositories, and code search
-    title: GitHub
-    type: server
-    image: mcp/github@sha256:89fd71b6f2dd098de0d7517c1899b7fe90590d3193e253991d61a800b041bfd4
-    tools:
-      - name: search_repositories
-      - name: search_code
-      - name: search_issues
-      - name: list_issues
-      - name: get_issue
-      - name: create_issue
-      - name: update_issue
-      - name: add_issue_comment
-      - name: list_pull_requests
-      - name: get_pull_request
-      - name: get_file_contents
-      - name: list_commits
-    secrets:
-      - name: github.personal_access_token
-        env: GITHUB_PERSONAL_ACCESS_TOKEN
-        example: <YOUR_TOKEN>
-    env:
-      - name: GITHUB_PERSONAL_ACCESS_TOKEN
-        value: "{{github.personal_access_token}}"
-    config:
-      - name: github
-        description: Configure GitHub authentication
-        type: object
-        properties:
-          personal_access_token:
-            type: string
-            description: GitHub personal access token
-
   memory:
     description: Knowledge graph-based persistent memory - entities, relations, and observations
     title: Memory

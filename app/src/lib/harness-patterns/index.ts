@@ -259,7 +259,6 @@ export {
   createWebSearchController,
   createMemoryController,
   createContext7Controller,
-  createGitHubController,
   createFilesystemController,
   createRedisController,
   createDatabaseController,

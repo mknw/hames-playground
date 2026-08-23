@@ -383,7 +383,7 @@ describe('unmatchable declared namespaces warn (sf-H5)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     createInjectionGuard(
-      { namespaces: ['web', 'github', 'context7', 'retriever', 'graph', 'filesystem', 'neo4j'] },
+      { namespaces: ['web', 'context7', 'retriever', 'graph', 'filesystem', 'neo4j'] },
       () => {},
       'p',
     )

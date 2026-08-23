@@ -51,7 +51,7 @@ router({ neo4j: '...', web_search: '...' })
 Concurrent search with quality ranking.
 
 ```
-parallel([webSearch, githubSearch, docSearch])
+parallel([webSearch, docSearch])
 judge(evaluator)  → score: content, relevance, authority
 compactExecution({ mode: 'response' })
 ```

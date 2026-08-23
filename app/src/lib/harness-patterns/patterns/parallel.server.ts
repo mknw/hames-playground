@@ -5,10 +5,7 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import type {
-  ConfiguredPattern,
-  PatternConfig
-} from '../types'
+import type { ConfiguredPattern, PatternConfig } from '../types'
 import { trackEvent, resolveConfig, createEvent } from '../context.server'
 import { emitLive } from '../live-event-context.server'
 
@@ -27,13 +24,13 @@ assertServerOnImport()
  * @example
  * const research = parallel(
  *   simpleLoop(b.LoopController, tools.web, { patternId: 'web-search' }),
- *   simpleLoop(b.LoopController, tools.github, { patternId: 'github-search' }),
+ *   simpleLoop(b.LoopController, tools.neo4j, { patternId: 'graph-lookup' }),
  *   simpleLoop(b.LoopController, tools.context7, { patternId: 'doc-lookup' }),
  * )
  */
 export function parallel<T extends Record<string, unknown>>(
   patterns: ConfiguredPattern<T>[],
-  config?: PatternConfig
+  config?: PatternConfig,
 ): ConfiguredPattern<T> {
   const resolved = resolveConfig('parallel', config ?? { patternId: 'parallel' })
 
@@ -46,9 +43,9 @@ export function parallel<T extends Record<string, unknown>>(
           patterns.map((p) =>
             p.fn(
               { ...scope, id: p.config.patternId ?? p.name, events: [], startTime: Date.now() },
-              view
-            )
-          )
+              view,
+            ),
+          ),
         )
 
         // Merge fulfilled events; log rejected branches.
@@ -59,7 +56,7 @@ export function parallel<T extends Record<string, unknown>>(
             const branchMaxTurns = (patterns[i].config as { maxTurns?: number }).maxTurns
             const enterEvt = createEvent('pattern_enter', branchId, {
               pattern: patterns[i].name,
-              ...(branchMaxTurns !== undefined ? { maxTurns: branchMaxTurns } : {})
+              ...(branchMaxTurns !== undefined ? { maxTurns: branchMaxTurns } : {}),
             })
             scope.events.push(enterEvt)
             emitLive(enterEvt)
@@ -69,9 +66,14 @@ export function parallel<T extends Record<string, unknown>>(
             emitLive(exitEvt)
             scope.data = { ...scope.data, ...r.value.data }
           } else {
-            trackEvent(scope, 'error', {
-              error: `Branch ${patterns[i].name} failed: ${r.reason}`
-            }, true)
+            trackEvent(
+              scope,
+              'error',
+              {
+                error: `Branch ${patterns[i].name} failed: ${r.reason}`,
+              },
+              true,
+            )
           }
         }
 
@@ -84,8 +86,7 @@ export function parallel<T extends Record<string, unknown>>(
     },
     config: resolved,
     // Branches run concurrently; user-perceived duration tracks the longest one.
-    estimateTurns: (s) =>
-      Math.max(...patterns.map((p) => p.estimateTurns?.(s) ?? 1)),
-    children: patterns
+    estimateTurns: (s) => Math.max(...patterns.map((p) => p.estimateTurns?.(s) ?? 1)),
+    children: patterns,
   }
 }

@@ -28,15 +28,6 @@ const mockToolSets = {
     'read_graph',
     'Return',
   ],
-  github: [
-    'get_issue',
-    'list_issues',
-    'create_issue',
-    'search_code',
-    'search_repositories',
-    'get_pull_request',
-    'Return',
-  ],
   context7: ['resolve-library-id', 'get-library-docs', 'Return'],
   filesystem: [
     'read_text_file',
@@ -67,7 +58,6 @@ mockToolSets.all = [
     ...mockToolSets.neo4j,
     ...mockToolSets.web,
     ...mockToolSets.memory,
-    ...mockToolSets.github,
     ...mockToolSets.context7,
     ...mockToolSets.filesystem,
     ...mockToolSets.redis,

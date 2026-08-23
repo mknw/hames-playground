@@ -114,21 +114,20 @@ describe('tools', () => {
         expect(tools.neo4j).toContain('get_neo4j_schema')
       })
 
-      it('should group github tools under github namespace', async () => {
+      // #226 E3: the GitHub server and its KNOWN_TOOL_SERVERS block are gone, so
+      // these names now fall through to the heuristic. Asserted rather than
+      // deleted: re-adding a `github` namespace should be a deliberate act.
+      it('has no github namespace — those names fall through to the heuristic', async () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
         const tools = ToolsFrom([
           { name: 'search_code', description: 'Search code', inputSchema: {} },
-          { name: 'search_issues', description: 'Search issues', inputSchema: {} },
           { name: 'get_issue', description: 'Get issue', inputSchema: {} },
-          { name: 'list_commits', description: 'List commits', inputSchema: {} },
-          { name: 'create_pull_request', description: 'Create PR', inputSchema: {} },
         ])
 
-        expect(tools.github).toHaveLength(5)
-        expect(tools.github).toContain('search_code')
-        expect(tools.github).toContain('get_issue')
-        expect(tools.github).toContain('list_commits')
+        expect(tools.github).toBeUndefined()
+        expect(tools.code).toContain('search_code')
+        expect(tools.issue).toContain('get_issue')
       })
 
       it('should group context7 tools under context7 namespace', async () => {
@@ -355,9 +354,9 @@ describe('tools', () => {
           { name: 'create_entities', description: 'Create', inputSchema: {} },
           { name: 'create_relations', description: 'Relations', inputSchema: {} },
           { name: 'read_graph', description: 'Read graph', inputSchema: {} },
-          // GitHub
-          { name: 'search_code', description: 'Code search', inputSchema: {} },
-          { name: 'get_issue', description: 'Get issue', inputSchema: {} },
+          // Filesystem
+          { name: 'read_file', description: 'Read file', inputSchema: {} },
+          { name: 'write_file', description: 'Write file', inputSchema: {} },
           // Redis
           { name: 'get', description: 'Get', inputSchema: {} },
           { name: 'set', description: 'Set', inputSchema: {} },
@@ -370,7 +369,7 @@ describe('tools', () => {
         expect(tools.web).toHaveLength(2)
         expect(tools.neo4j).toHaveLength(3)
         expect(tools.memory).toHaveLength(3)
-        expect(tools.github).toHaveLength(2)
+        expect(tools.filesystem).toHaveLength(2)
         expect(tools.redis).toHaveLength(3)
         expect(tools.context7).toHaveLength(2)
         expect(tools.all).toHaveLength(15)

@@ -188,7 +188,7 @@ describe('callTool + withInjectionGuard', () => {
 
   it("nests by UNION — an inner guard cannot drop an outer one's coverage", async () => {
     // The composition mistake a security control must not permit: an inner
-    // wrapper listing only 'github' must not silently un-guard 'web' for its
+    // wrapper listing only 'filesystem' must not silently un-guard 'web' for its
     // whole subtree. `createInjectionGuard` reads the enclosing guard at
     // construction and ORs it, so nesting can only ever widen coverage.
     const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
@@ -200,12 +200,12 @@ describe('callTool + withInjectionGuard', () => {
     const result = await runWithInjectionGuard(outer, () => {
       // Built INSIDE the outer scope — which is what the wrapper's `fn` does.
       const inner = createInjectionGuard(
-        { namespaces: ['github'] },
+        { namespaces: ['filesystem'] },
         (e) => innerEvents.push(e),
         'inner',
       )
       expect(inner.isUntrusted('search')).toBe(true) // inherited from outer
-      expect(inner.isUntrusted('search_code')).toBe(true) // its own
+      expect(inner.isUntrusted('read_file')).toBe(true) // its own
       return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
     })
 
@@ -499,10 +499,10 @@ describe('nested guards union the sanitizer options', () => {
     const outer = createInjectionGuard({ namespaces: ['web'] }, () => {}, 'outer')
 
     const result = await runWithInjectionGuard(outer, () => {
-      // 'github' only — this guard never claimed 'web', yet its config is what
+      // 'filesystem' only — this guard never claimed 'web', yet its config is what
       // would have sanitized the inherited 'web' coverage.
       const inner = createInjectionGuard(
-        { namespaces: ['github'], disableRules: ['instruction-override'] },
+        { namespaces: ['filesystem'], disableRules: ['instruction-override'] },
         () => {},
         'inner',
       )
@@ -528,7 +528,7 @@ describe('nested guards union the sanitizer options', () => {
 
     const result = await runWithInjectionGuard(outer, () => {
       const inner = createInjectionGuard(
-        { namespaces: ['github'], disableRules: ['instruction-override'] },
+        { namespaces: ['filesystem'], disableRules: ['instruction-override'] },
         () => {},
         'inner',
       )
@@ -552,7 +552,7 @@ describe('nested guards union the sanitizer options', () => {
     const result = await runWithInjectionGuard(outer, () => {
       // Leaves `spotlight` at its 'on-detection' default — which, shadowed,
       // would have dropped the fence the outer wrapper asked for.
-      const inner = createInjectionGuard({ namespaces: ['github'] }, () => {}, 'inner')
+      const inner = createInjectionGuard({ namespaces: ['filesystem'] }, () => {}, 'inner')
       return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
     })
 
@@ -568,7 +568,7 @@ describe('nested guards union the sanitizer options', () => {
     const outer = createInjectionGuard({ namespaces: ['web'], screen }, () => {}, 'outer')
 
     await runWithInjectionGuard(outer, () => {
-      const inner = createInjectionGuard({ namespaces: ['github'] }, () => {}, 'inner')
+      const inner = createInjectionGuard({ namespaces: ['filesystem'] }, () => {}, 'inner')
       return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
     })
 
@@ -589,7 +589,7 @@ describe('nested guards union the sanitizer options', () => {
     const outer = createInjectionGuard({ namespaces: ['web'], rules: [extra] }, () => {}, 'outer')
 
     const result = await runWithInjectionGuard(outer, () => {
-      const inner = createInjectionGuard({ namespaces: ['github'] }, () => {}, 'inner')
+      const inner = createInjectionGuard({ namespaces: ['filesystem'] }, () => {}, 'inner')
       return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
     })
 
@@ -610,7 +610,7 @@ describe('nested guards union the sanitizer options', () => {
     )
 
     await runWithInjectionGuard(outer, async () => {
-      const mid = createInjectionGuard({ namespaces: ['github'] }, () => {}, 'mid')
+      const mid = createInjectionGuard({ namespaces: ['filesystem'] }, () => {}, 'mid')
       await runWithInjectionGuard(mid, async () => {
         const inner = createInjectionGuard(
           { namespaces: ['context7'], disableRules: ['instruction-secrecy'] },

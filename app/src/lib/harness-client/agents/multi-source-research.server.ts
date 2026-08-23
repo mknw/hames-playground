@@ -6,6 +6,11 @@
  *
  * Pattern: parallel → judge → compactExecution
  * Use case: Search multiple sources concurrently, cache in redis, rank results.
+ *
+ * Sources were web + GitHub + docs. The GitHub branch went with the GitHub MCP
+ * server in #226 E3: with the gateway server gone `tools.github` is always
+ * undefined, so the branch would have run a controller over an empty tool list
+ * and contributed nothing — a third of the sources missing with no error.
  */
 'use server'
 
@@ -18,7 +23,6 @@ import {
   compactExecution,
   Tools,
   createWebSearchController,
-  createGitHubController,
   createContext7Controller,
   type ConfiguredPattern,
   type EvaluatorFn,
@@ -84,29 +88,21 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
     { patternId: 'web-search', maxTurns: 3 },
   )
 
-  const githubSearch = simpleLoop<SessionData>(
-    createGitHubController(tools.github ?? []),
-    tools.github ?? [],
-    { patternId: 'github-search', maxTurns: 3 },
-  )
-
   const docSearch = simpleLoop<SessionData>(
     createContext7Controller(tools.context7 ?? []),
     tools.context7 ?? [],
     { patternId: 'doc-lookup', maxTurns: 3 },
   )
 
-  // Parallel execution of all three searches.
+  // Parallel execution of both searches.
   //
-  // Every one of this agent's three sources is attacker-controlled prose: web
-  // pages, arbitrary GitHub repositories (READMEs, issue bodies, code comments)
-  // and third-party library documentation. So the guard wraps the whole
-  // `parallel` rather than each branch — the ALS scope reaches into every
-  // branch, and listing the namespaces in one place makes this agent's trust
-  // boundary readable at a glance. Behaviour is unchanged unless a detection
-  // fires.
-  const researchPattern = withInjectionGuard({ namespaces: ['web', 'github', 'context7'] })(
-    parallel<SessionData>([webSearch, githubSearch, docSearch], {
+  // Both of this agent's sources are attacker-controlled prose: web pages and
+  // third-party library documentation. So the guard wraps the whole `parallel`
+  // rather than each branch — the ALS scope reaches into every branch, and
+  // listing the namespaces in one place makes this agent's trust boundary
+  // readable at a glance. Behaviour is unchanged unless a detection fires.
+  const researchPattern = withInjectionGuard({ namespaces: ['web', 'context7'] })(
+    parallel<SessionData>([webSearch, docSearch], {
       patternId: 'parallel-research',
     }),
   )
@@ -128,9 +124,9 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
 export const multiSourceResearchAgent: AgentConfig = {
   id: 'multi-source-research',
   name: 'Multi-Source Research',
-  description: 'Parallel search across web, GitHub, and docs with quality ranking',
+  description: 'Parallel search across web and docs with quality ranking',
   icon: 'i-material-symbols-biotech-outline',
   accent: 'violet',
-  servers: ['web_search', 'github', 'context7'],
+  servers: ['web_search', 'context7'],
   createPatterns,
 }

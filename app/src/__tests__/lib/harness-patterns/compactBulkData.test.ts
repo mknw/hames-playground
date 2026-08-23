@@ -386,6 +386,46 @@ describe('compactBulkData', () => {
     }
   })
 
+  it('sizes batches to the mixed chain weakest leaf output cap (SA-M6)', async () => {
+    // Under USE_MIXED_CHAINS=1 the describe role resolves to DescribeFallback,
+    // whose weakest leaf (GroqFast) caps output at 2 048 tokens. A fixed
+    // 8-item batch (~1.6K tokens of summaries plus JSON scaffolding) could
+    // truncate there, drop its tail summaries, and pay the per-item fallback
+    // for each — so the batch size derives from the resolved client's cap:
+    // floor((2048 × 0.5) / 200) = 5.
+    process.env.USE_MIXED_CHAINS = '1'
+    try {
+      const { compactBulkData, maxBatchItems } =
+        await import('../../../lib/harness-patterns/compactBulkData.server')
+      expect(maxBatchItems()).toBe(5)
+
+      const events: ContextEvent[] = [
+        { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
+        ...Array.from({ length: 7 }, (_, i) => toolResult(i + 1)),
+      ]
+      mockDescribeBatch.mockImplementation(
+        async (items: Array<{ id: string }>) =>
+          new Map(items.map((i) => [i.id, `summary ${i.id}`])),
+      )
+
+      const ctx = createTestContext(events)
+      await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined))
+
+      const sizes = mockDescribeBatch.mock.calls.map((c) => (c[0] as unknown[]).length)
+      expect(sizes).toEqual([5, 2])
+    } finally {
+      delete process.env.USE_MIXED_CHAINS
+    }
+  })
+
+  it('keeps the full MAX_BATCH_ITEMS ceiling on the Anthropic-only default', async () => {
+    const { maxBatchItems, MAX_BATCH_ITEMS } =
+      await import('../../../lib/harness-patterns/compactBulkData.server')
+    // DescribeAnthropic floors at Haiku's 16 384-token cap — far more than the
+    // ceiling needs, so the derivation clamps to it.
+    expect(maxBatchItems()).toBe(MAX_BATCH_ITEMS)
+  })
+
   it('should use the single-item path for a lone result, never the batch', async () => {
     const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 

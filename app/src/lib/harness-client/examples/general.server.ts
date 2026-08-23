@@ -26,44 +26,18 @@ import {
   simpleLoop,
   compactExecution,
   Tools,
-  callTool,
   createLoopControllerAdapter,
   type ConfiguredPattern,
 } from '../../harness-patterns'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
-
-/** Best-effort graph schema — the planner and the executor both benefit from
- *  knowing the shape of the graph before proposing Cypher.
- *
- *  A failure is logged, never swallowed: `planner.baml` tells the model "only
- *  plan steps the listed tools can actually perform", so a silently empty
- *  schema shows up as worse plans rather than as an error. `listTools` logs on
- *  the same principle. */
-async function getSchema(): Promise<string> {
-  const result = await callTool('get_neo4j_schema', {})
-  if (!result.success) {
-    console.warn(
-      `[general] graph schema unavailable (${result.error ?? 'unknown error'}) — the planner ` +
-        'and executor run without it this turn; patterns will be rebuilt on the next message.',
-    )
-    return ''
-  }
-  return JSON.stringify(result.data)
-}
+import { getGraphSchema } from './graph-schema.server'
 
 async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools()
-  const schema = await getSchema()
-
-  // Patterns are cached per session and never rebuilt, so a transient schema
-  // failure would otherwise freeze a schema-less planner AND executor into the
-  // whole conversation. Keep this build (it works, just blind) but refuse the
-  // cache entry so the next message retries the fetch.
-  if (!schema) {
-    const { doNotCachePatterns } = await import('../session.server')
-    doNotCachePatterns(sessionId)
-  }
+  // Warns and refuses the pattern cache on failure — see `graph-schema.server.ts`,
+  // which this function used to be the only correct copy of (sf-M6).
+  const schema = await getGraphSchema('general', sessionId)
 
   // The planner sees exactly the tool surface the executor will have — a plan
   // that names a tool the loop cannot call is worse than no plan.

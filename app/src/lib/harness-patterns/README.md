@@ -54,7 +54,6 @@ Functional, composable framework for agentic tool execution.
   - [Per-Pattern: Events Read → BAML Inputs → BAML Return](#per-pattern-events-read--baml-inputs--baml-return)
   - [Conversion Reference](#conversion-reference)
 - [Full Example](#full-example)
-- [OpenTelemetry](#opentelemetry)
 - [File Structure](#file-structure)
 - [Design Principles](#design-principles)
 
@@ -1667,30 +1666,6 @@ const agent = harness(...patterns)
 const result = await agent('Show me all Person nodes', 'session-123')
 ```
 
-## OpenTelemetry
-
-All patterns include built-in OTel tracing with `CompactSpanExporter`:
-
-```
-[router] → neo4j (intent: "Query graph data")
-[simpleLoop] neo4j-query ✓ (1234ms)
-  [tool] read_neo4j_cypher ✓ (456ms)
-[harness] Session cl-3 completed in 1500ms
-```
-
-Span names:
-
-- `harness.run` - Top-level span
-- `harness.resume` - Resume from paused state
-- `harness.continue` - Continue session with new input
-- `router` - Intent classification
-- `pattern.simpleLoop` - Decide-execute loop
-- `pattern.actorCritic` - Generate-evaluate loop
-- `pattern.chain` - Sequential composition
-- `pattern.compactExecution` - Response synthesis
-- `controller` / `actor` / `critic` - BAML function calls
-- `tool.call` - MCP tool execution
-
 ## File Structure
 
 ```
@@ -1732,6 +1707,5 @@ harness-patterns/
 1. **BAML functions are first-class** - Pass them directly to patterns (use `.bind()`)
 2. **Patterns extract params** - Patterns pull data from context and call BAML
 3. **Config injects metadata** - Optional config for things like schema injection
-4. **OTel is built-in** - Tracing in patterns, not in adapters
-5. **Server-only enforcement** - `.server.ts` files with runtime guards
-6. **Session persistence** - Full context serializable for multi-turn conversations
+4. **Server-only enforcement** - `.server.ts` files with runtime guards
+5. **Session persistence** - Full context serializable for multi-turn conversations

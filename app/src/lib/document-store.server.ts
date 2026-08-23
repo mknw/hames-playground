@@ -488,16 +488,42 @@ export async function setDocumentFlags(
 // Delete
 // ============================================================================
 
-/** Remove a document from Redis and from the session index. Idempotent. */
+/**
+ * Remove a document from Redis and from the session index. Idempotent.
+ *
+ * @throws if either write fails. Both are checked with `redisWriteError`, like
+ *         `storeDocument` / `setDocumentFlags` in this file — a *deletion* that
+ *         reports success without happening is the worst of the three to get
+ *         wrong, because the caller (and the person who asked for it) is told
+ *         their document is gone. The index `srem` is checked too: a key that
+ *         went but stayed in the index is a phantom entry the panel keeps
+ *         listing, and one that stayed while the index entry went is an
+ *         invisible document still occupying its TTL window.
+ */
 export async function deleteDocument(
   sessionId: string,
   docId: string,
   callTool: CallTool = stashCallTool(),
 ): Promise<void> {
   // `delete` uses `key` (not `name`) — see CLAUDE.md Redis quirks.
-  await callTool('delete', { key: docKey(sessionId, docId) })
-  await callTool('srem', { name: indexKey(sessionId), value: docId })
+  // Both writes are attempted even if the first fails, so a retry of a
+  // half-completed delete still converges (the operation stays idempotent);
+  // the list cache is invalidated either way, because a *partial* delete is
+  // exactly when a stale cached listing is most misleading.
+  const del = await callTool('delete', { key: docKey(sessionId, docId) })
+  const srem = await callTool('srem', { name: indexKey(sessionId), value: docId })
   invalidateDocumentList(sessionId)
+
+  const failures = [
+    ['document', redisWriteError(del)],
+    ['session index', redisWriteError(srem)],
+  ].filter((f): f is [string, string] => f[1] != null)
+  if (failures.length > 0) {
+    throw new Error(
+      `Failed to delete document ${docId}: ` +
+        failures.map(([what, err]) => `${what}: ${err}`).join('; '),
+    )
+  }
 }
 
 // ============================================================================

@@ -90,9 +90,10 @@ export class AttachmentTable {
       // under us between turns — host crash, external `docker rm`, OOM-kill.
       // Reusing its dead transport would fail every tool call and wedge the
       // session until idle-evict. On a non-healthy verdict, tear the stale
-      // entry down and fall through to a fresh boot; the new attachment is
-      // `isFirstBoot=true`, so the `withSandbox` syncWorkspace path re-hydrates
-      // /work transparently (#89). Costs ~1 `docker inspect` per reuse.
+      // entry down and fall through to a fresh boot; the fresh container's
+      // /work/in is empty, so the `withSandbox` syncWorkspace path re-hydrates
+      // it transparently on that turn's entry (#89, #206 §6.1). Costs ~1
+      // `docker inspect` per reuse.
       const health = await this.backend
         .health(existing.vm)
         .catch((): HealthStatus => ({ state: 'gone' }))

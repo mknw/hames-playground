@@ -11,8 +11,9 @@
  * fallback (`ControllerFallback`, `CriticFallback`, etc.) defined in
  * `baml_src/clients.baml`. Call sites spread the override into the BAML
  * options bag to swap at runtime. Production deployments and occasional
- * mixed-chain testing both go through this. One role opts out — the `planner`
- * pins its Anthropic client in both modes; the reason is on the map entry.
+ * mixed-chain testing both go through this. Two roles opt out — `planner` and
+ * `screen` pin their Anthropic clients in both modes; the reasons are on the
+ * map entries.
  *
  * Why default to Anthropic: cross-provider rate limits (Groq + OpenRouter +
  * OpenAI) interfered too much during dev iteration of multi-turn / actorCritic
@@ -30,6 +31,7 @@ export type BamlRole =
   | 'compactExecution' // Synthesize
   | 'router' // Router
   | 'describe' // ResultDescribe + GenerateConversationTitle + ReferenceSelector
+  | 'screen' // ScreenUntrustedContent (withInjectionGuard's opt-in LLM layer)
 
 const MIXED_CLIENT_BY_ROLE: Record<BamlRole, string> = {
   controller: 'ControllerFallback',
@@ -52,6 +54,19 @@ const MIXED_CLIENT_BY_ROLE: Record<BamlRole, string> = {
   compactExecution: 'SynthesizerFallback',
   router: 'RouterFallback',
   describe: 'DescribeFallback',
+  // The injection screen does NOT join the mixed chains either — pinned like
+  // the planner, but for a security reason rather than a reliability one. It
+  // used to ride the `describe` role, which under USE_MIXED_CHAINS=1 silently
+  // put prompt-injection screening on DescribeFallback's first leaf (GroqFast,
+  // the weakest model in the repo) while the guard's docs promised
+  // DescribeAnthropic. The screen is only worth running on a model that (a)
+  // cannot be talked out of reporting by the very content it reviews and (b)
+  // copies `spans` VERBATIM — the guard locates and neutralizes them
+  // character-for-character, so a paraphrased span is a missed injection.
+  // Both properties are exactly what the weakest model is worst at. The cost
+  // of pinning is one Haiku-tier call per otherwise-clean untrusted result on
+  // agents that opted in — screening was never on the default path. (SA-M5)
+  screen: 'DescribeAnthropic',
 }
 
 /** The BAML-declared (default) client per role — the Anthropic-only chain each
@@ -65,6 +80,7 @@ const DECLARED_CLIENT_BY_ROLE: Record<BamlRole, string> = {
   compactExecution: 'SynthesizerAnthropic',
   router: 'RouterAnthropic',
   describe: 'DescribeAnthropic',
+  screen: 'DescribeAnthropic', // injection-screen.baml's declared client
 }
 
 /**

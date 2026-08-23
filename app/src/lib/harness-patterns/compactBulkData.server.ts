@@ -32,19 +32,43 @@ import type {
 import { getRequestSettings } from '../settings-context.server'
 import { estimateTokens, getContextWindow } from './token-budget.server'
 import { resolveClientForRole } from './clients.server'
+import { CLIENT_MAX_OUTPUT_TOKENS } from '../settings'
 
 assertServerOnImport()
 
 /**
- * Max tool results folded into one `ResultDescribeBatch` call.
- *
- * Bounded by the OUTPUT side, not the input: each summary is capped at ~200
- * tokens by the prompt, so 8 items ≈ 1.6K output tokens — an order of magnitude
- * under the describe client's cap, leaving room for a verbose batch. A
- * truncated response would silently drop the tail items (the per-item fallback
- * repairs it, but at the cost the batching exists to avoid).
+ * Ceiling on tool results folded into one `ResultDescribeBatch` call — the
+ * most `maxBatchItems()` below may return, hit whenever the describe client's
+ * output cap is roomy (the Anthropic-only default: 8 × ~200 ≈ 1.6K tokens,
+ * an order of magnitude under Haiku's 16 384 cap).
  */
 export const MAX_BATCH_ITEMS = 8
+
+/** Output tokens one summary may cost — the batch prompt caps each at ~200. */
+const SUMMARY_OUTPUT_TOKENS = 200
+
+/** Fraction of the describe client's OUTPUT cap the summaries may claim; the
+ *  rest absorbs JSON scaffolding, echoed ids, and summaries that overrun the
+ *  prompt's soft per-item cap. */
+const BATCH_OUTPUT_SHARE = 0.5
+
+/**
+ * Batch size the OUTPUT side actually affords, derived from the output cap of
+ * whatever client the `describe` role resolves to right now (SA-M6). The fixed
+ * ceiling alone was sized against the Anthropic cap only: under
+ * `USE_MIXED_CHAINS=1` the describe chain's weakest leaf (GroqFast) caps output
+ * at 2 048 tokens, so a full 8-item batch could truncate, silently drop its
+ * tail summaries, and send every dropped item down the per-item fallback —
+ * N+1 calls, exactly the cost batching exists to avoid.
+ * `CLIENT_MAX_OUTPUT_TOKENS` keys the resolved chain names to conservative
+ * floors (the weakest leaf), so this sizes batches to worst-case routing.
+ */
+export function maxBatchItems(): number {
+  const cap = CLIENT_MAX_OUTPUT_TOKENS[resolveClientForRole('describe')]
+  if (cap === undefined) return MAX_BATCH_ITEMS
+  const affordable = Math.floor((cap * BATCH_OUTPUT_SHARE) / SUMMARY_OUTPUT_TOKENS)
+  return Math.min(MAX_BATCH_ITEMS, Math.max(1, affordable))
+}
 
 /** Fraction of the describe client's context window a single batch's INPUT may
  *  occupy. Items are already individually capped at `maxResultForSummary`, so
@@ -58,18 +82,22 @@ interface CompactionTarget extends DescribeBatchItem {
 }
 
 /**
- * Split targets into batches of at most `MAX_BATCH_ITEMS` that also fit the
+ * Split targets into batches of at most `maxItems` that also fit the
  * describe client's input budget. An item too large to share a batch with
  * anything ends up alone, which routes it back to the single-item call.
  */
-function batchTargets(targets: CompactionTarget[], budgetTokens: number): CompactionTarget[][] {
+function batchTargets(
+  targets: CompactionTarget[],
+  budgetTokens: number,
+  maxItems: number,
+): CompactionTarget[][] {
   const batches: CompactionTarget[][] = []
   let current: CompactionTarget[] = []
   let currentTokens = 0
 
   for (const target of targets) {
     const cost = estimateTokens(target.result) + estimateTokens(target.toolArgs)
-    const full = current.length >= MAX_BATCH_ITEMS
+    const full = current.length >= maxItems
     const overBudget = current.length > 0 && currentTokens + cost > budgetTokens
     if (full || overBudget) {
       batches.push(current)
@@ -190,7 +218,9 @@ export async function compactBulkData(
       getContextWindow(resolveClientForRole('describe')) * BATCH_INPUT_WINDOW_SHARE,
     )
     // Batches run concurrently — they're independent calls on a fast model.
-    await Promise.allSettled(batchTargets(targets, budgetTokens).map(summarizeBatch))
+    await Promise.allSettled(
+      batchTargets(targets, budgetTokens, maxBatchItems()).map(summarizeBatch),
+    )
   }
 
   await onPersist()

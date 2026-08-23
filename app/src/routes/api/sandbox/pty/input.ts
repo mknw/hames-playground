@@ -13,27 +13,22 @@
  */
 import type { APIEvent } from '@solidjs/start/server'
 import { ptyManager } from '../../../../lib/sandbox/pty-manager.server'
-import { requireUserId, requireSessionOwner } from '../../../../lib/stash/http.server'
+import { withUser, requireSessionOwner } from '../../../../lib/stash/http.server'
 
 export async function POST(event: APIEvent) {
-  let userId: string
-  try {
-    userId = await requireUserId()
-  } catch (err) {
-    return new Response(err instanceof Error ? err.message : 'Unauthorized', { status: 401 })
-  }
+  return withUser(async (userId) => {
+    const body = (await event.request.json().catch(() => null)) as {
+      sessionId?: string
+      data?: string
+    } | null
+    if (!body || !body.sessionId || typeof body.data !== 'string') {
+      return new Response('sessionId and data (string) are required', { status: 400 })
+    }
 
-  const body = (await event.request.json().catch(() => null)) as {
-    sessionId?: string
-    data?: string
-  } | null
-  if (!body || !body.sessionId || typeof body.data !== 'string') {
-    return new Response('sessionId and data (string) are required', { status: 400 })
-  }
+    const denied = await requireSessionOwner(body.sessionId, userId)
+    if (denied) return denied
 
-  const denied = await requireSessionOwner(body.sessionId, userId)
-  if (denied) return denied
-
-  ptyManager.write(body.sessionId, body.data)
-  return new Response(null, { status: 204 })
+    ptyManager.write(body.sessionId, body.data)
+    return new Response(null, { status: 204 })
+  })
 }

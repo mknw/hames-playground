@@ -20,7 +20,7 @@
 import type { APIEvent } from '@solidjs/start/server'
 import { ptyManager } from '../../../../lib/sandbox/pty-manager.server'
 import { agentUsesSyncWorkspace } from '../../../../lib/harness-client/registry.server'
-import { requireUserId, claimSession } from '../../../../lib/stash/http.server'
+import { withUser, claimSession } from '../../../../lib/stash/http.server'
 
 export async function GET(event: APIEvent) {
   const url = new URL(event.request.url)
@@ -30,13 +30,15 @@ export async function GET(event: APIEvent) {
     return new Response('sessionId is required', { status: 400 })
   }
 
-  let userId: string
-  try {
-    userId = await requireUserId()
-  } catch (err) {
-    return new Response(err instanceof Error ? err.message : 'Unauthorized', { status: 401 })
-  }
+  return withUser((userId) => streamPty(event, sessionId, agentId, userId))
+}
 
+async function streamPty(
+  event: APIEvent,
+  sessionId: string,
+  agentId: string | null,
+  userId: string,
+): Promise<Response> {
   const denied = await claimSession(sessionId, userId)
   if (denied) return denied
 

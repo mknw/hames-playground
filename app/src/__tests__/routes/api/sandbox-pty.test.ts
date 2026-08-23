@@ -114,7 +114,7 @@ describe('GET /api/sandbox/pty/stream', () => {
     getAuthenticatedUser.mockRejectedValue(new Error('Authentication required'))
     const res = await stream.GET(get('http://x/api/sandbox/pty/stream?sessionId=s1'))
     expect(res.status).toBe(401)
-    expect(await res.text()).toBe('Authentication required')
+    expect(await res.json()).toEqual({ error: 'Authentication required' })
     expect(ensure).not.toHaveBeenCalled()
   })
 

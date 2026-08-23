@@ -59,8 +59,6 @@ export interface SupportPanelProps {
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void
   onClearGraph?: () => void
   onClearEvents?: () => void
-  /** Callback for Cypher write operations (node edits, relation creation) */
-  onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>
   /** Session ID for stash API calls */
   sessionId?: string
   /** The conversation's currently-selected agent — forwarded to the Tools
@@ -264,7 +262,6 @@ export const SupportPanel = (props: SupportPanelProps) => {
               onNodeClick={props.onNodeClick}
               onEdgeClick={props.onEdgeClick}
               onClearGraph={props.onClearGraph}
-              onCypherWrite={props.onCypherWrite}
               extraStyles={TOUCHED_NODE_STYLES}
               emptyMessage="No Neo4j graph data yet. Query your knowledge base to see results."
               emptyIcon="🗄️"
@@ -291,7 +288,6 @@ export const SupportPanel = (props: SupportPanelProps) => {
               highlightedIds={props.highlightedIds}
               onNodeClick={props.onNodeClick}
               onEdgeClick={props.onEdgeClick}
-              onCypherWrite={props.onCypherWrite}
             />
           </Tabs.Content>
 
@@ -384,7 +380,6 @@ interface GraphTabContentProps {
   onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void
   onClearGraph?: () => void
-  onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>
   emptyMessage: string
   emptyIcon: string
   extraStyles?: StylesheetJsonBlock[]
@@ -477,7 +472,6 @@ const GraphTabContent = (props: GraphTabContentProps) => {
             highlightedIds={props.highlightedIds}
             onNodeClick={props.onNodeClick}
             onEdgeClick={props.onEdgeClick}
-            onCypherWrite={props.onCypherWrite}
             extraStyles={props.extraStyles}
           />
         </Show>

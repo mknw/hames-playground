@@ -20,6 +20,7 @@ import { listTools } from '../harness-patterns/mcp-client.server'
 import { loadSession, saveSession, type SessionData } from '../harness-client/session.server'
 import { agentUsesCodeMode } from '../harness-client/registry.server'
 import { getAuthenticatedUser } from '../auth/server'
+import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
 import { CODE_MODE_DEFAULTS, type CodeModeToolsState } from './constants'
 import { getPresetTools } from './server-catalog.server'
 
@@ -29,12 +30,12 @@ import { getPresetTools } from './server-catalog.server'
 // would break `MINIMAL_TOOLS.includes(...)` in ToolsPanel.tsx.
 
 // ============================================================================
-// Auth helper (mirrors actions.server.ts:43)
+// Auth helper (mirrors actions.server.ts:58)
 // ============================================================================
 
 async function requireUser(): Promise<{ id: string }> {
-  if (import.meta.env.VITE_DEV_BYPASS_AUTH === 'true') {
-    return { id: 'dev-bypass-user' }
+  if (isBypassEnabled()) {
+    return { id: BYPASS_USER.id }
   }
   const u = await getAuthenticatedUser()
   return { id: u.id }

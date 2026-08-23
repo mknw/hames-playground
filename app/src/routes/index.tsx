@@ -12,7 +12,6 @@ import type { Message } from '~/components/ark-ui/ChatMessages'
 import { ChatSidebar, mergeThreadsWithPlaceholder } from '~/components/ark-ui/ChatSidebar'
 import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
 import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns'
-import { executeCypherWrite } from '~/lib/neo4j/write-action'
 import { mergeGraphElements } from '~/lib/graph-merge'
 import { isEdgeElement, isNodeElement } from '~/lib/harness-client/graph-extractor'
 import {
@@ -504,15 +503,6 @@ export default function Home() {
     refetchThreads()
   }
 
-  // Execute Cypher write from graph UI (node edit, relation create)
-  const handleCypherWrite = async (cypher: string, params?: Record<string, unknown>) => {
-    try {
-      await executeCypherWrite(cypher, params)
-    } catch (error) {
-      console.error('Cypher write failed:', error)
-    }
-  }
-
   // Handle data stash actions (hide/unhide/archive/unarchive). The panel only
   // ever shows the displayed session, so that is the buffer this patches.
   const handleStashAction = async (eventId: string, action: StashAction) => {
@@ -641,7 +631,6 @@ export default function Home() {
             unifiedContext={unifiedContext()}
             onClearGraph={() => clearGraph()}
             onClearEvents={() => clearEvents()}
-            onCypherWrite={handleCypherWrite}
             sessionId={selectedSessionId()}
             agentId={currentAgentId()}
             onStashAction={handleStashAction}

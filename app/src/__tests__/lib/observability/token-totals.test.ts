@@ -112,6 +112,7 @@ describe('foldTokenTotals', () => {
       ev({
         llmCall: {
           functionName: 'Router',
+          variables: {},
           usage: {
             inputTokens: 800,
             cachedInputTokens: 200,
@@ -139,6 +140,7 @@ describe('foldTokenTotals', () => {
       ev({
         llmCall: {
           functionName: 'Router',
+          variables: {},
           usage: {
             inputTokens: 10,
             cachedInputTokens: 0,
@@ -157,6 +159,7 @@ describe('foldTokenTotals', () => {
         metrics: metrics({ inputUncachedTokens: 7 }),
         llmCall: {
           functionName: 'Router',
+          variables: {},
           usage: {
             inputTokens: 999,
             cachedInputTokens: 0,

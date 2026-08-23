@@ -2,8 +2,13 @@
 
 Functional, composable framework for agentic tool execution.
 
+> **Licence:** this directory — and only this directory — is
+> [MIT](./LICENSE) (Copyright (c) 2026 Michael Accetto). It is the `hames`
+> library. The playground that surrounds it is licensed separately, under
+> PolyForm Noncommercial 1.0.0; see the repository root `LICENSE`.
+>
 > **Status:** this directory is the **testbed** for the harness-patterns
-> library. The kg-agent repo serves as both consumer and proving ground —
+> library. The hames playground serves as both consumer and proving ground —
 > the library is intended to be extracted as a standalone npm package once
 > the core API has been validated across enough use cases (the agents under
 > `harness-client/agents/`).

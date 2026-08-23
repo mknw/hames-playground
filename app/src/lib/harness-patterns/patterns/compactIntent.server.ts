@@ -20,8 +20,8 @@
  * classification — there is no routing decision, only the rewrite.
  *
  * Backward-compatible: agents that don't use it are unchanged. On any failure
- * it leaves `scope.data.intent` unset so the actor falls back to the raw user
- * message — never fatal.
+ * it CLEARS `scope.data.intent` so the actor falls back to the raw user message
+ * — never fatal, and never the previous turn's brief.
  */
 
 import { assertServerOnImport } from '../assert.server'
@@ -77,6 +77,16 @@ export function compactIntent<T extends CompactIntentData>(
     ...config,
   })
 
+  /** Drop an intent carried over from an earlier turn. Every exit path that
+   *  does NOT produce a fresh brief goes through this: `scope.data` survives
+   *  the turn boundary, so returning it untouched would hand the actor the
+   *  PREVIOUS turn's brief — and a sandbox actor then executes the wrong one
+   *  with real file side-effects. Mirrors `planner`'s `clearPlan`. */
+  const clearIntent = (scope: PatternScope<T>): PatternScope<T> => {
+    scope.data = { ...scope.data, intent: undefined }
+    return scope
+  }
+
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
     let collector: Collector | undefined
     let startTime: number | undefined
@@ -89,8 +99,8 @@ export function compactIntent<T extends CompactIntentData>(
       const currentMsg = [...allMessages].reverse().find((e) => e.type === 'user_message')
       const latest = currentMsg ? (currentMsg.data as UserMessageEventData).content : ''
 
-      // Nothing to rewrite — leave intent unset, actor falls back to raw input.
-      if (!latest) return scope
+      // Nothing to rewrite — clear intent, actor falls back to raw input.
+      if (!latest) return clearIntent(scope)
 
       // History = every message except the current one, mapped to {role, content}.
       const rawHistory = allMessages
@@ -155,7 +165,7 @@ export function compactIntent<T extends CompactIntentData>(
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
       // Best-effort: surface the prompt/variables drill-down for the failed
-      // BAML call. Intent stays unset → actor falls back to the raw message.
+      // BAML call. Intent is cleared → actor falls back to the raw message.
       const failedLlmCall =
         collector !== undefined && variables !== undefined && startTime !== undefined
           ? extractFailureLLMCallData(collector, 'CompactIntent', variables, startTime)
@@ -172,7 +182,7 @@ export function compactIntent<T extends CompactIntentData>(
         true,
         failedLlmCall,
       )
-      return scope
+      return clearIntent(scope)
     }
   }
 

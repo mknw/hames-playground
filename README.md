@@ -144,7 +144,7 @@ are for. Registered in
 | **General**             | `planner` → `simpleLoop` → `compactExecution`                                     | Pay for strategy once, up front, then hand the whole tool surface to one executor. The A/B counterpart to Search on cross-domain questions |
 | **Sandbox · Session**   | `compactIntent` → `withSandbox(actorCritic)` → `compactExecution`                 | A container keyed to the session, persistent across turns and shared with the interactive Shell — build incrementally, inspect files live  |
 | **Sandbox · Flavoured** | `router` → `routes(withSandbox(actorCritic))` → `compactExecution`                | One route per purpose-built flavour: base, image-processing, data, office                                                                  |
-| **Retriever**           | `router` → `routes(retriever \| withReferences(simpleLoop))` → `compactExecution` | Semantic retrieval over uploaded documents (Data Stash) as a peer route beside Neo4j and web                                                |
+| **Retriever**           | `router` → `withInjectionGuard(routes(retriever \| withReferences(simpleLoop)))` → `compactExecution` | Semantic retrieval over uploaded documents (Data Stash) as a peer route beside Neo4j and web. The guard covers both untrusted routes — `web` and `retriever`, whose chunks come from ingested files — while `neo4j` stays unguarded |
 | **Microsoft 365**       | `withInjectionGuard(simpleLoop)` → `compactExecution`                             | Per-user identity end to end — answers from the signed-in user's own mailbox, calendar and files via delegated Graph scopes                |
 
 `multi-source-research` (a worked `parallel` example) ships unregistered and

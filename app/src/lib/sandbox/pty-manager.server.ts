@@ -18,6 +18,11 @@
  *
  * A capped scrollback buffer is replayed to each new subscriber so a
  * re-mounted terminal tab redraws the current screen.
+ *
+ * Sessions are keyed by sessionId alone — this module does no authorization.
+ * Every caller must verify the requesting user owns the session BEFORE
+ * touching a PTY (the routes gate via `lib/stash/http.server.ts`:
+ * `claimSession` on stream/ensure, `requireSessionOwner` on input/resize).
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'

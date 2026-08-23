@@ -156,6 +156,14 @@ export interface SaveConversationInput {
  *     the background run's later status saves preserve it. Promotion is the
  *     only mutator of `kind` (see {@link promoteConversation}).
  *   - `status`          — always refreshed from the latest context.
+ *
+ * Owner-scoped like every other write in this module: the UPDATE fires only
+ * when the row already belongs to `input.userId`, so a save against someone
+ * else's conversation id silently no-ops instead of clobbering their context
+ * (the same wrong-user contract as {@link promoteConversation} et al.). The
+ * user-facing entry points never reach here with a foreign id — `loadSession`
+ * is user-scoped, so a foreign session just looks new — which makes this the
+ * backstop that keeps the resulting blind INSERT from becoming an UPDATE.
  */
 export async function saveConversation(input: SaveConversationInput): Promise<void> {
   await query(
@@ -166,7 +174,8 @@ export async function saveConversation(input: SaveConversationInput): Promise<vo
        context    = EXCLUDED.context,
        title      = COALESCE(conversations.title, EXCLUDED.title),
        status     = EXCLUDED.status,
-       updated_at = NOW()`,
+       updated_at = NOW()
+     WHERE conversations.user_id = EXCLUDED.user_id`,
     [
       input.id,
       input.userId,

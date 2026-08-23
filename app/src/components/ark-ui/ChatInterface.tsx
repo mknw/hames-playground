@@ -10,6 +10,9 @@
  * - Context event streaming for observability
  *
  * Architecture:
+ * - The streaming turn itself lives in `lib/turn-stream.ts` (#226 B2): this
+ *   component supplies the request and a `TurnSink` bound to the session
+ *   captured at submit time, and renders what comes back.
  * - Uses harness-client server actions
  * - Per-session state (messages, events, graph, context, progress, run state,
  *   abort controllers) is read from the `SessionRegistry` in context, not
@@ -29,24 +32,14 @@ import {
   rejectAction,
   promoteAction,
   loadConversation,
-  extractGraphFromResult,
   extractGraphElements,
   extractReferences,
   type OpenReferenceTarget,
 } from '~/lib/harness-client'
-// Imported from the module rather than the barrel: `replay.ts` is deliberately
-// dependency-free (no server-only imports), and the live stream handler wants
-// exactly that guarantee.
-import { errorBubble } from '~/lib/harness-client/replay'
 import { getSettings } from '~/lib/settings-store'
-import { parseChatStream, type DoneEventData } from '~/lib/sse-client'
+import { applyApprovalResult, runTurn, type TurnSink } from '~/lib/turn-stream'
 import type { GraphElement } from './SupportPanel'
-import type {
-  ContextEvent,
-  UnifiedContext,
-  ControllerActionEventData,
-  ErrorEventData,
-} from '~/lib/harness-patterns'
+import type { UnifiedContext } from '~/lib/harness-patterns'
 import {
   capReachedMessage,
   isAtConcurrencyCap,
@@ -320,188 +313,73 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     setPromotionDraft(null)
   }
 
+  /**
+   * The narrow set of effects a turn performs, all bound to the session
+   * captured at submit time. Both the streaming turn and the approval path
+   * write through this, which is what stops the two fanning out differently.
+   */
+  const sinkFor = (runSessionId: string): TurnSink => {
+    const progress = registry.progress(runSessionId)
+    return {
+      appendMessage: (message) => registry.appendMessage(runSessionId, message),
+      pushEvents: (events) => registry.appendEvents(runSessionId, events),
+      pushGraph: (elements) => pushGraph(runSessionId, elements),
+      setContext: (context) => {
+        // The cursor the approval path slices its event delta from.
+        prevEventCount = context.events?.length ?? prevEventCount
+        props.onContextUpdate?.(runSessionId, context)
+      },
+      ingestProgress: (event) => progress.ingest(event),
+      finishProgress: () => progress.finish(),
+      onStarted: () => props.onRunStarted?.(runSessionId),
+      onTitleUpdated: (sid, title) => props.onTitleUpdated?.(sid, title),
+      // Run state is a projection of the turn state: streaming means the
+      // composer is blocked and may name a tool; every terminal state releases it.
+      onState: (state) =>
+        registry.updateRunState(runSessionId, {
+          isProcessing: state.status === 'streaming',
+          runningTool: state.status === 'streaming' ? state.runningTool : null,
+        }),
+    }
+  }
+
   const runSend = async (content: string) => {
     // Snapshot the active sessionId at submit time. The user may switch
     // threads mid-stream; without this, late-arriving events would corrupt
     // whichever thread happens to be in view (#47).
     const runSessionId = props.sessionId
 
-    // Per-session progress controller — owned by the route registry so it
-    // survives the user navigating away to a different chat.
-    const progress = registry.progress(runSessionId)
-    progress.reset()
-    registry.updateRunState(runSessionId, { isProcessing: true, runningTool: null })
+    registry.progress(runSessionId).reset()
 
     // Add the user message to *this run's* buffer. No "still on this thread"
     // guard is needed any more: the buffer is addressed by session id, so
     // switching away can't misfile it into the thread now on screen (#105).
-    const userMessage: Message = {
+    registry.appendMessage(runSessionId, {
       id: Date.now().toString(),
       role: 'user',
       content,
       timestamp: new Date(),
-    }
-    registry.appendMessage(runSessionId, userMessage)
+    })
 
     const abortController = new AbortController()
     registry.registerAbort(runSessionId, abortController)
 
-    // How this run ended, reported once in `finally` so the route can mark
-    // the thread if the user has moved on. `aborted` stays unreported — that
-    // path is page teardown, not a result worth announcing.
-    let outcome: RunOutcome = 'done'
-    let aborted = false
-
     try {
-      // Stream events via SSE endpoint for real-time updates
-      const response = await fetch('/api/events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const { outcome, aborted } = await runTurn(
+        {
           sessionId: runSessionId,
           message: content,
           agentId: selectedAgent(),
           settings: getSettings(),
-        }),
-        signal: abortController.signal,
-      })
+          signal: abortController.signal,
+        },
+        sinkFor(runSessionId),
+      )
 
-      if (!response.ok) {
-        throw new Error(`Server error: ${response.status}`)
-      }
-
-      let finalResult: DoneEventData | null = null
-      let runAnnounced = false
-
-      // Typed SSE iteration — the parser handles frame buffering, malformed
-      // JSON, partial reads, and yields discriminated `ChatStreamEvent`s.
-      for await (const sseEvt of parseChatStream(response)) {
-        // First event of the stream: the server-side early persist has
-        // committed, so the sidebar can pick up the new row.
-        if (!runAnnounced) {
-          runAnnounced = true
-          props.onRunStarted?.(runSessionId)
-        }
-        if (sseEvt.event === 'done') {
-          finalResult = sseEvt.data as DoneEventData
-          continue
-        }
-        if (sseEvt.event === 'error') {
-          throw new Error((sseEvt.data as { error: string }).error)
-        }
-        if (sseEvt.event === 'title_updated') {
-          // Server pushed the LLM-generated title for this conversation —
-          // patch the sidebar's threads cache in place. Lands regardless of
-          // which thread the user is currently viewing.
-          const { sessionId: sid, title } = sseEvt.data
-          props.onTitleUpdated?.(sid, title)
-          continue
-        }
-        if (sseEvt.event !== 'message') continue // Forward-compat: ignore unknown event names
-
-        const evt = sseEvt.data as ContextEvent
-
-        // Progress is always routed into the captured run session's
-        // controller, even if the user has navigated away.
-        progress.ingest(evt)
-
-        // Surface the currently-running tool for the composer guard. A
-        // multi-call turn shows the batch size ("3 tools") instead of one name.
-        if (evt.type === 'controller_action') {
-          const data = evt.data as ControllerActionEventData
-          const toolName = data.action?.tool_name
-          const extraCalls = data.action?.additional_calls?.length ?? 0
-          if (toolName && toolName !== 'Return') {
-            registry.updateRunState(runSessionId, {
-              runningTool: extraCalls > 0 ? `${extraCalls + 1} tools` : toolName,
-            })
-          } else if (data.action?.is_final) {
-            registry.updateRunState(runSessionId, { runningTool: null })
-          }
-        }
-
-        // Inline error/warning bubbles belong to the run's own transcript, so
-        // they are filed by session id ahead of the view guard below — a
-        // backgrounded run that hits a recoverable error still shows it when
-        // the user switches back (#105).
-        if (evt.type === 'error') {
-          // Presentation lives in `errorBubble` so this and `replayMessages`
-          // cannot diverge — the bubble must look identical whether it was
-          // painted from the live stream or rebuilt after a reload.
-          const errorMsg: Message = {
-            id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            timestamp: new Date(),
-            patternId: evt.patternId,
-            ...errorBubble(evt.data as ErrorEventData),
-          }
-          registry.appendMessage(runSessionId, errorMsg)
-        }
-
-        // Panel state is per-session (SA-H8), so events go to the run's own
-        // buffer no matter which thread is on screen. This used to `continue`
-        // here for a backgrounded run — which both lost those events from the
-        // panels and, because the hydration effect skips a session that is
-        // still processing, left the previous thread's events in place when the
-        // user came back.
-        registry.appendEvents(runSessionId, [evt])
-
-        // Reactive graph update on tool_result events
-        if (evt.type === 'tool_result') pushGraph(runSessionId, extractGraphElements([evt]))
-      }
-
-      // Mark progress complete — bar fills, fades, and unmounts.
-      progress.finish()
-
-      // Update the event-count cursor and emit the final context into this
-      // run's own session (SA-H8) — no longer gated on it being on screen.
-      if (finalResult?.context) {
-        prevEventCount = finalResult.context.events?.length ?? 0
-        props.onContextUpdate?.(runSessionId, finalResult.context as UnifiedContext)
-      }
-
-      // Build assistant message from final result — only if there's a real
-      // response (not an error status with empty/stale response). Filed into
-      // the run's own buffer, so a turn that lands while the user is reading
-      // another chat is waiting for them when they switch back (#105).
-      const finalResponse = finalResult?.response ?? ''
-      if (finalResult?.status === 'error') outcome = 'error'
-      if (finalResponse && finalResult?.status !== 'error') {
-        const assistantMessage: Message = {
-          id: Date.now().toString(),
-          role: 'assistant',
-          content: finalResponse,
-          timestamp: new Date(),
-          // Retriever citations for this turn (inline superscripts + footer).
-          references: extractReferences(finalResult?.context?.events ?? []),
-          toolCall:
-            finalResult?.status === 'paused' &&
-            (finalResult.data as Record<string, unknown>).pendingAction
-              ? {
-                  type: 'neo4j',
-                  status: 'pending',
-                  tool: (
-                    (finalResult.data as Record<string, unknown>).pendingAction as {
-                      action: string
-                    }
-                  ).action,
-                  explanation: (
-                    (finalResult.data as Record<string, unknown>).pendingAction as {
-                      reason: string
-                    }
-                  ).reason,
-                  isReadOnly: false,
-                }
-              : undefined,
-        }
-        registry.appendMessage(runSessionId, assistantMessage)
-      }
-    } catch (error) {
-      // Suppress the noisy AbortError that fires on page-unload teardown.
-      aborted = error instanceof DOMException && error.name === 'AbortError'
-      if (aborted && stoppedSessions.delete(runSessionId)) {
-        // A deliberate Stop, not teardown. The server-side chain keeps running
-        // and its result is persisted, so say exactly that rather than
-        // pretending the turn never happened.
+      // A torn-down stream is either the user's Stop or page teardown, and the
+      // two want different transcripts: teardown stays silent, a deliberate
+      // cancel says what actually happens next.
+      if (aborted && stoppedSessions.has(runSessionId)) {
         registry.appendMessage(runSessionId, {
           id: `stop-${Date.now()}`,
           role: 'warning',
@@ -510,26 +388,14 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           timestamp: new Date(),
         })
       }
-      if (!aborted) {
-        outcome = 'error'
-        console.error('Error processing message:', error)
-        const errorMessage: Message = {
-          id: Date.now().toString(),
-          role: 'error',
-          content: error instanceof Error ? error.message : 'Unknown error',
-          timestamp: new Date(),
-        }
-        registry.appendMessage(runSessionId, errorMessage)
-      }
-      progress.finish()
+      if (!aborted) props.onRunSettled?.(runSessionId, outcome)
     } finally {
-      // Belt and braces: if a Stop raced the stream to completion no AbortError
-      // was thrown, and a stale flag here would put a spurious "stopped" bubble
+      // Belt and braces: if a Stop raced the stream to completion no abort was
+      // reported, and a stale flag here would put a spurious "stopped" bubble
       // on the NEXT teardown of this session.
       stoppedSessions.delete(runSessionId)
       registry.updateRunState(runSessionId, { isProcessing: false, runningTool: null })
       registry.unregisterAbort(runSessionId)
-      if (!aborted) props.onRunSettled?.(runSessionId, outcome)
     }
   }
 
@@ -540,20 +406,9 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       // Execute the approved operation
       const result = await approveAction(props.sessionId)
 
-      const sid = props.sessionId
-
-      // Extract graph elements from result and update visualization
-      pushGraph(sid, extractGraphFromResult(result))
-
-      // Emit only new context events (delta since last turn)
-      if (result.context?.events) {
-        const newEvents = result.context.events.slice(prevEventCount)
-        prevEventCount = result.context.events.length
-        registry.appendEvents(sid, newEvents)
-      }
-      if (result.context && props.onContextUpdate) {
-        props.onContextUpdate(sid, result.context)
-      }
+      // Same fan-out as the streaming turn, through the same sink — only the
+      // event slicing differs, because an approval resumes an existing context.
+      prevEventCount = applyApprovalResult(result, prevEventCount, sinkFor(props.sessionId))
 
       // Update the message with executed tool call
       setMessages(

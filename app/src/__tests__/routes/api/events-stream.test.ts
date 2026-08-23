@@ -1,12 +1,12 @@
 /**
  * POST /api/events — the SSE envelope around a harness turn.
  *
- * The turn itself is mocked; what this pins is the wire contract the client
- * parses: one `data:` frame per harness event (each stamped with the sessionId
- * it belongs to, #47), a `done` frame carrying the result, an optional
- * `title_updated` frame, and an `error` frame instead of a crash. Also the
- * post-stream background save, which runs after the response is complete and
- * is otherwise invisible.
+ * The turn itself is `runTurnAndPersist` and is mocked here (its own recipe is
+ * pinned by `lib/harness-client/turn.test.ts`); what this pins is the wire
+ * contract the client parses, and that the route hands the turn the hooks that
+ * produce it: one `data:` frame per harness event (each stamped with the
+ * sessionId it belongs to, #47), a `done` frame carrying the result, an optional
+ * `title_updated` frame, a close, and an `error` frame instead of a crash.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -16,41 +16,19 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServer: vi.fn(),
 }))
 
-type EmitFn = (evt: Record<string, unknown>) => void
-const processMessageStreaming =
-  vi.fn<
-    (
-      sessionId: string,
-      message: string,
-      agentId: string,
-      onEvent: EmitFn,
-      settings?: unknown,
-    ) => Promise<Record<string, unknown>>
-  >()
-vi.mock('../../../lib/harness-client/actions.server', () => ({
-  processMessageStreaming: (...a: unknown[]) =>
-    processMessageStreaming(...(a as [never, never, never, never, never])),
-}))
+type TurnHooks = {
+  onEvent?: (evt: Record<string, unknown>) => void
+  onResult?: (result: Record<string, unknown>) => void
+  onTitle?: (title: string) => void
+  onSettled?: () => void
+}
+type TurnRequest = Record<string, unknown> & TurnHooks
 
-const saveSession = vi.fn<
-  (sessionId: string, userId: string, agentId: string, serialized: unknown) => Promise<void>
->(async () => {})
-vi.mock('../../../lib/harness-client/session.server', () => ({
-  saveSession: (sessionId: string, userId: string, agentId: string, serialized: unknown) =>
-    saveSession(sessionId, userId, agentId, serialized),
-}))
-
-const compactBulkData = vi.fn(async (_ctx: unknown, persist: () => Promise<void>) => {
-  await persist()
-})
-vi.mock('../../../lib/harness-patterns', () => ({
-  compactBulkData: (...a: unknown[]) => compactBulkData(...(a as [unknown, () => Promise<void>])),
-  serializeContext: (ctx: unknown) => ({ serialized: ctx }),
-}))
-
-const runFirstTurnTitleGen = vi.fn<() => Promise<string | null>>(async () => null)
-vi.mock('../../../lib/harness-client/agents/title-generator.server', () => ({
-  runFirstTurnTitleGen: (...a: unknown[]) => runFirstTurnTitleGen(...(a as [])),
+/** Stands in for the real driver: emits two events, then the result, an
+ *  optional title, and settles — the same order `runTurnAndPersist` uses. */
+const runTurnAndPersist = vi.fn<(req: TurnRequest) => Promise<Record<string, unknown>>>()
+vi.mock('../../../lib/harness-client/turn.server', () => ({
+  runTurnAndPersist: (req: TurnRequest) => runTurnAndPersist(req),
 }))
 
 const getAuthenticatedUser = vi.fn<() => Promise<{ id: string }>>()
@@ -99,14 +77,19 @@ const RESULT = {
   serialized: 'serialized-blob',
 }
 
+let title: string | null = null
+
 beforeEach(() => {
   vi.clearAllMocks()
   bypass = false
+  title = null
   getAuthenticatedUser.mockResolvedValue({ id: 'user-1' })
-  runFirstTurnTitleGen.mockResolvedValue(null)
-  processMessageStreaming.mockImplementation(async (_sid, _msg, _agent, onEvent) => {
-    onEvent({ type: 'tool_call', ts: 1 })
-    onEvent({ type: 'tool_result', ts: 2 })
+  runTurnAndPersist.mockImplementation(async (req) => {
+    req.onEvent?.({ type: 'tool_call', ts: 1 })
+    req.onEvent?.({ type: 'tool_result', ts: 2 })
+    req.onResult?.(RESULT)
+    if (title) req.onTitle?.(title)
+    req.onSettled?.()
     return RESULT
   })
 })
@@ -119,22 +102,22 @@ describe('POST /api/events', () => {
     expect(getAuthenticatedUser).not.toHaveBeenCalled()
 
     expect((await POST(evt({ sessionId: 's1' }))).status).toBe(400)
-    expect(processMessageStreaming).not.toHaveBeenCalled()
+    expect(runTurnAndPersist).not.toHaveBeenCalled()
   })
 
-  it('401s without a session, and never starts the harness', async () => {
+  it('401s without a session, and never starts the turn', async () => {
     getAuthenticatedUser.mockRejectedValue(new Error('Authentication required'))
     const res = await POST(evt({ sessionId: 's1', message: 'hi' }))
     expect(res.status).toBe(401)
     expect(await res.json()).toEqual({ error: 'Authentication required' })
-    expect(processMessageStreaming).not.toHaveBeenCalled()
+    expect(runTurnAndPersist).not.toHaveBeenCalled()
   })
 
-  it('runs as the bypass user when dev-bypass is on', async () => {
+  it('runs the turn as the bypass user when dev-bypass is on', async () => {
     bypass = true
     await POST(evt({ sessionId: 's1', message: 'hi' })).then((r) => r.text())
     expect(getAuthenticatedUser).not.toHaveBeenCalled()
-    expect(saveSession).toHaveBeenCalledWith('s1', 'dev-bypass-user', 'search', expect.anything())
+    expect(runTurnAndPersist.mock.calls[0][0]).toMatchObject({ userId: 'dev-bypass-user' })
   })
 
   it('streams each harness event, stamped with the sessionId, then a done frame', async () => {
@@ -154,19 +137,31 @@ describe('POST /api/events', () => {
       duration_ms: 42,
       serialized: 'serialized-blob',
     })
-    expect(processMessageStreaming.mock.calls[0][4]).toEqual({ maxTurns: 3 })
+  })
+
+  it('drives one interactive turn, with the caller-supplied settings', async () => {
+    await POST(
+      evt({ sessionId: 's1', message: 'hi', agentId: 'neo4j', settings: { maxTurns: 3 } }),
+    ).then((r) => r.text())
+
+    expect(runTurnAndPersist).toHaveBeenCalledTimes(1)
+    expect(runTurnAndPersist.mock.calls[0][0]).toMatchObject({
+      mode: 'interactive',
+      sessionId: 's1',
+      userId: 'user-1',
+      agentId: 'neo4j',
+      message: 'hi',
+      settings: { maxTurns: 3 },
+    })
   })
 
   it('defaults the agent to "search" when none is named', async () => {
     await POST(evt({ sessionId: 's1', message: 'hi' })).then((r) => r.text())
-    expect(processMessageStreaming.mock.calls[0][2]).toBe('search')
-
-    await POST(evt({ sessionId: 's1', message: 'hi', agentId: 'neo4j' })).then((r) => r.text())
-    expect(processMessageStreaming.mock.calls[1][2]).toBe('neo4j')
+    expect(runTurnAndPersist.mock.calls[0][0]).toMatchObject({ agentId: 'search' })
   })
 
-  it('emits title_updated when the title generator resolves one', async () => {
-    runFirstTurnTitleGen.mockResolvedValue('Quarterly numbers')
+  it('emits title_updated when the turn generates one', async () => {
+    title = 'Quarterly numbers'
     const parsed = await frames(await POST(evt({ sessionId: 's1', message: 'hi' })))
 
     expect(parsed.at(-1)).toEqual({
@@ -175,57 +170,29 @@ describe('POST /api/events', () => {
     })
   })
 
-  it('closes cleanly when title generation fails — the heuristic title stands', async () => {
-    runFirstTurnTitleGen.mockRejectedValue(new Error('LLM down'))
+  it('closes the stream from onSettled, so nothing after it can reach the client', async () => {
+    // The turn's trailing summarization runs after this point; the response is
+    // already complete by then.
+    let closedBeforeReturn = false
+    runTurnAndPersist.mockImplementation(async (req) => {
+      req.onResult?.(RESULT)
+      req.onSettled?.()
+      closedBeforeReturn = true
+      return RESULT
+    })
+
     const parsed = await frames(await POST(evt({ sessionId: 's1', message: 'hi' })))
-
-    expect(parsed.map((f) => f.event)).toEqual(['message', 'message', 'done'])
+    expect(parsed.map((f) => f.event)).toEqual(['done'])
+    expect(closedBeforeReturn).toBe(true)
   })
 
-  it('persists the summarized turn after the stream closes', async () => {
-    await POST(evt({ sessionId: 's1', message: 'hi', agentId: 'neo4j' })).then((r) => r.text())
-
-    expect(compactBulkData).toHaveBeenCalledTimes(1)
-    expect(compactBulkData.mock.calls[0][0]).toEqual(RESULT.context)
-    expect(saveSession).toHaveBeenCalledWith('s1', 'user-1', 'neo4j', {
-      serialized: RESULT.context,
-    })
-  })
-
-  it('runs the background compaction inside the request and settings scopes', async () => {
-    // SA-M13: this call is deliberately made AFTER `controller.close()`, so it
-    // inherits neither ALS scope the request handler opened. Without them
-    // `getRequestSettings()` silently fell back to DEFAULT_SETTINGS and the
-    // user's `maxResultForSummary` was ignored by every background summary.
-    const { getRequestSettings } = await import('../../../lib/settings-context.server')
-    const { getRequestUserId, getRequestSessionId } =
-      await import('../../../lib/harness-client/request-user.server')
-
-    const seen: { max?: number; userId?: string | null; sessionId?: string | null } = {}
-    compactBulkData.mockImplementationOnce(async (_ctx, persist) => {
-      seen.max = getRequestSettings().maxResultForSummary
-      seen.userId = getRequestUserId()
-      seen.sessionId = getRequestSessionId()
-      await persist()
-    })
-
-    await POST(
-      evt({ sessionId: 's1', message: 'hi', settings: { maxResultForSummary: 12_345 } }),
-    ).then((r) => r.text())
-
-    expect(seen.max).toBe(12_345)
-    expect(seen.userId).toBe('user-1')
-    expect(seen.sessionId).toBe('s1')
-  })
-
-  it('emits an error frame — not a rejected response — when the harness throws', async () => {
-    processMessageStreaming.mockRejectedValue(new Error('gateway unreachable'))
+  it('emits an error frame — not a rejected response — when the turn throws', async () => {
+    runTurnAndPersist.mockRejectedValue(new Error('gateway unreachable'))
     const res = await POST(evt({ sessionId: 's1', message: 'hi' }))
 
     expect(res.status).toBe(200)
     expect(await frames(res)).toEqual([
       { event: 'error', data: { sessionId: 's1', error: 'gateway unreachable' } },
     ])
-    expect(saveSession).not.toHaveBeenCalled()
   })
 })

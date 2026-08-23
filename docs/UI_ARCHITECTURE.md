@@ -1038,7 +1038,9 @@ app/
 │       │   ├── queries.ts         # runManualCypher() (read-only), getNodeProperties()
 │       │   └── graph-edit.server.ts # createGraphNode()/linkGraphNodes()/setGraphNodeProperty() — authenticated, intent-shaped graph writes
 │       └── harness-client/        # Pre-built agent server actions
-│           ├── actions.server.ts  # processMessage(), processMessageStreaming(), listConversations(), loadConversation()
+│           ├── actions.server.ts  # processMessage(), approveAction(), listConversations(), loadConversation()
+│           ├── turn.server.ts     # runTurnAndPersist() — the one run-a-turn-and-persist flow (interactive | triggered | approval)
+│           ├── action-runner.server.ts # seedActionRow() + runAgentInBackground() — triggered runs, off the request path
 │           ├── session.server.ts  # In-process pattern cache + Postgres-backed serialized context (per-user)
 │           ├── registry.server.ts # Agent registry (6 examples)
 │           ├── graph-extractor.ts # ContextEvent → GraphElement[]

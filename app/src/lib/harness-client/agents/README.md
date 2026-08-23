@@ -438,9 +438,10 @@ the Shell; same VM. The `id` keys the attachment to the conversation in
 
 With `syncWorkspace: true` ([#89](https://github.com/mknw/harness-playground/issues/89))
 the workspace is **durable across sessions**, not just turns: stored documents
-are restored into `/work/in` on first boot and `/work/out` deliverables are
-promoted to the DataStash each turn — so an uploaded spreadsheet survives idle
-eviction, restart, and next-day reconnects. The layout contract + mechanism
+are restored into `/work/in` at each turn's entry (diff-wise — only what is
+missing) and `/work/out` deliverables are promoted to the DataStash each turn —
+so an uploaded spreadsheet survives idle eviction, restart, and next-day
+reconnects. The layout contract + mechanism
 live in [`docs/plan/sandbox.md → Durable workspaces`](../../../../docs/plan/sandbox.md#durable-workspaces-89).
 
 Composes any actor-style pattern with id-addressable attachment. Because this

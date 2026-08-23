@@ -65,7 +65,7 @@ For agents that opt in (e.g. **Sandbox · Session**), `/work` has a convention:
 
 | Path | Meaning |
 |------|---------|
-| `/work/in`  | Uploads + prior deliverables, restored from the DataStash on first boot. |
+| `/work/in`  | Uploads + prior deliverables, restored from the DataStash at each turn's entry (only what is missing). |
 | `/work/out` | Files the agent wants kept — promoted to the DataStash on each turn exit. |
 | `/work/*`   | Scratch, lost when the container recycles. |
 

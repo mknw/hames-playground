@@ -97,9 +97,10 @@ export class PtyManager {
     // #97 Gap 3: if the Shell is the first to boot the session container (the
     // agent hasn't run a turn yet) and the session uses durable workspaces,
     // hydrate /work/in from the Data Stash so the user sees prior files. The
-    // shared `isFirstBoot` flag coordinates with withSandbox's agent-side
-    // hydrate — whoever boots first hydrates; the other skips. Best-effort: a
-    // hydrate failure (e.g. gateway down) must never block opening the shell.
+    // shared `isFirstBoot` flag keeps this from duplicating the agent side's
+    // own per-turn hydrate; both are diff-wise, so a duplicate would be a
+    // no-op anyway (#206 §6.1). Best-effort: a hydrate failure (e.g. gateway
+    // down) must never block opening the shell.
     if (opts.syncWorkspace && attachment.isFirstBoot) {
       await hydrateWorkspace(attachment.transport, sessionId).catch(() => {})
       attachment.isFirstBoot = false

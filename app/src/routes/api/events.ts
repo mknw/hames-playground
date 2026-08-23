@@ -3,22 +3,17 @@
  *
  * Streams ContextEvents in real-time as they are committed during harness execution.
  * Enables reactive UI updates (e.g., graph visualization) without waiting for full completion.
+ *
+ * The turn itself belongs to `runTurnAndPersist` (`harness-client/turn.server.ts`)
+ * — the one implementation shared with the interactive server actions and the
+ * triggered runner (#226 C5). This route is only the wire: it authenticates,
+ * hands the turn its hooks, and turns each of them into an SSE frame.
  */
 import type { APIEvent } from '@solidjs/start/server'
-import { processMessageStreaming } from '../../lib/harness-client/actions.server'
-import { saveSession } from '../../lib/harness-client/session.server'
-import { compactBulkData, serializeContext } from '../../lib/harness-patterns'
-import { runFirstTurnTitleGen } from '../../lib/harness-client/agents/title-generator.server'
-import { runWithRequestContext } from '../../lib/harness-client/request-user.server'
-import { runWithSettings } from '../../lib/settings-context.server'
+import { runTurnAndPersist } from '../../lib/harness-client/turn.server'
 import { getAuthenticatedUser } from '../../lib/auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../../lib/auth/dev-bypass'
 import type { HarnessSettings } from '../../lib/settings'
-
-/** Hard cap on how long the SSE stream stays open after `done` waiting for
- *  the title agent to resolve. If the LLM exceeds this, we close the stream
- *  without a `title_updated` event — the heuristic title persists. */
-const TITLE_GEN_TIMEOUT_MS = 3000
 
 async function requireUserId(): Promise<string> {
   if (isBypassEnabled()) return BYPASS_USER.id
@@ -41,8 +36,9 @@ export async function POST(event: APIEvent) {
     })
   }
 
-  // Auth here so we have a userId for the post-response background save —
-  // the wrapped server action below also authenticates (defense in depth).
+  // This route resolves the user itself: `runTurnAndPersist` takes a `userId`
+  // and is deliberately not a `"use server"` RPC, so the authentication is
+  // here, at the only entry point.
   let userId: string
   try {
     userId = await requireUserId()
@@ -58,80 +54,48 @@ export async function POST(event: APIEvent) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      const send = (frame: string) => controller.enqueue(encoder.encode(frame))
       try {
-        const result = await processMessageStreaming(
+        await runTurnAndPersist({
+          mode: 'interactive',
           sessionId,
+          userId,
+          agentId: resolvedAgentId,
           message,
-          resolvedAgentId,
-          (evt) => {
-            // `sessionId` rides on every envelope so the client can route the
-            // event to the right per-session progress controller (#47). Events
-            // themselves don't carry sessionId in their typed shape — it's an
-            // envelope-only field.
-            const data = JSON.stringify({ ...evt, sessionId })
-            controller.enqueue(encoder.encode(`data: ${data}\n\n`))
-          },
           settings,
-        )
 
-        // Send final result as a named event
-        const doneData = JSON.stringify({
-          sessionId,
-          response: result.response,
-          data: result.data,
-          status: result.status,
-          duration_ms: result.duration_ms,
-          context: result.context,
-          serialized: result.serialized,
-        })
-        controller.enqueue(encoder.encode(`event: done\ndata: ${doneData}\n\n`))
+          // `sessionId` rides on every envelope so the client can route the
+          // event to the right per-session progress controller (#47). Events
+          // themselves don't carry sessionId in their typed shape — it's an
+          // envelope-only field.
+          onEvent: (evt) => send(`data: ${JSON.stringify({ ...evt, sessionId })}\n\n`),
 
-        // First-turn title generation — synchronous w.r.t. the stream so the
-        // result can ride out as a `title_updated` event before close. Hard
-        // 3s cap so a slow LLM never wedges the stream. Heuristic title
-        // (from `deriveTitle` / `saveConversation` COALESCE) persists if this
-        // path fails or times out — the next `listConversations()` returns it.
-        await Promise.race([
-          runFirstTurnTitleGen(result.context, sessionId, userId).then((title) => {
-            if (!title) return
-            const payload = JSON.stringify({ sessionId, title })
-            controller.enqueue(encoder.encode(`event: title_updated\ndata: ${payload}\n\n`))
-          }),
-          new Promise<void>((resolve) => setTimeout(resolve, TITLE_GEN_TIMEOUT_MS)),
-        ]).catch((err) => console.error('[title-gen] failed:', err))
-
-        controller.close()
-
-        // Fire-and-forget: summarize this turn's tool results in the background.
-        // Runs after the SSE stream is closed — user already has the response.
-        // Summaries are stored on tool_result events and persisted to session,
-        // so they appear as compact pointers on subsequent turns.
-        //
-        // Both scopes are re-established explicitly: this call is deliberately
-        // OUTSIDE the request-handler await chain (it runs after
-        // `controller.close()`), so it inherits neither the settings scope
-        // `processMessageStreaming` opened nor the request scope `runTurn`
-        // opened inside it. Without them `getRequestSettings()` fell back to
-        // DEFAULT_SETTINGS and silently ignored the user's
-        // `maxResultForSummary` (SA-M13), and any user-scoped work in the
-        // persist callback would resolve no user.
-        runWithRequestContext({ userId, sessionId }, () =>
-          runWithSettings(settings, () =>
-            compactBulkData(result.context, async () => {
-              await saveSession(
+          // The final result, as a named event.
+          onResult: (result) =>
+            send(
+              `event: done\ndata: ${JSON.stringify({
                 sessionId,
-                userId,
-                resolvedAgentId,
-                serializeContext(result.context),
-              )
-            }),
-          ),
-        ).catch((err) => console.error('[summarize] background summarization failed:', err))
+                response: result.response,
+                data: result.data,
+                status: result.status,
+                duration_ms: result.duration_ms,
+                context: result.context,
+                serialized: result.serialized,
+              })}\n\n`,
+            ),
+
+          // First-turn title, generated between `done` and close so it can
+          // still ride out on this stream.
+          onTitle: (title) =>
+            send(`event: title_updated\ndata: ${JSON.stringify({ sessionId, title })}\n\n`),
+
+          // Everything the client waits for has been sent. The turn's trailing
+          // summarization runs after this, with the user already served.
+          onSettled: () => controller.close(),
+        })
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
-        controller.enqueue(
-          encoder.encode(`event: error\ndata: ${JSON.stringify({ sessionId, error: msg })}\n\n`),
-        )
+        send(`event: error\ndata: ${JSON.stringify({ sessionId, error: msg })}\n\n`)
         controller.close()
       }
     },

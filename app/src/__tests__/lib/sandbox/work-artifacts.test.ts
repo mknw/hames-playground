@@ -2,7 +2,8 @@
  * work-artifacts tests — hydrate (store → /work/in) and promote
  * (/work/out → store), with the document store mocked and a simulated `/work`
  * transport. Verifies routing (which docs land where), the text/binary encoding
- * decision, and that promotion only stores files changed since the baseline.
+ * decision, that hydrate only writes what /work/in is missing (#206 §6.1), and
+ * that promotion only stores files changed since the baseline.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -156,6 +157,97 @@ describe('hydrateWorkspace', () => {
     expect(fs.has('/work/in/old.txt')).toBe(false)
     // getDocument never fetched the hidden doc.
     expect(vi.mocked(getDocument)).not.toHaveBeenCalledWith('s', 'd3', expect.anything())
+  })
+
+  // #206 §6.1 — hydrate is diff-wise, so `withSandbox` can run it on every turn
+  // instead of once per container boot. These four cases are the contract that
+  // makes per-turn hydration safe.
+  describe('diff-wise (#206 §6.1)', () => {
+    const meta = (id: string, filename: string, uploadedAt: number) => ({
+      id,
+      sessionId: 's',
+      filename,
+      mimeType: 'text/csv',
+      size: 3,
+      uploadedAt,
+    })
+    const doc = (id: string, filename: string, content: string) => ({
+      ...meta(id, filename, 1),
+      content,
+    })
+
+    it('writes a document stored SINCE the last hydrate (the turn-2 case)', async () => {
+      // /work/in already holds turn 1's hydrate; `fresh.csv` was ingested this
+      // turn. Under the old `isFirstBoot` gate the actor never saw it.
+      vi.mocked(listDocuments).mockResolvedValue([
+        meta('d1', 'old.csv', 1),
+        meta('d2', 'fresh.csv', 2),
+      ] as never)
+      vi.mocked(getDocument).mockImplementation(async (_s, id) =>
+        id === 'd2' ? (doc('d2', 'fresh.csv', 'new,rows') as never) : null,
+      )
+
+      const { transport, fs } = makeFsTransport()
+      fs.set('/work/in/old.csv', 'a,b')
+
+      const { written, skipped } = await hydrateWorkspace(transport, 's')
+
+      expect(written).toBe(1)
+      expect(skipped).toEqual([])
+      expect(fs.get('/work/in/fresh.csv')).toBe('new,rows')
+      // The one already present was not even fetched from the store.
+      expect(vi.mocked(getDocument)).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(getDocument)).toHaveBeenCalledWith('s', 'd2', undefined)
+    })
+
+    it('is a no-op when every document is already in /work/in', async () => {
+      vi.mocked(listDocuments).mockResolvedValue([meta('d1', 'data.csv', 1)] as never)
+
+      const { transport, fs } = makeFsTransport()
+      fs.set('/work/in/data.csv', 'a,b')
+
+      const { written, skipped } = await hydrateWorkspace(transport, 's')
+
+      expect(written).toBe(0)
+      expect(skipped).toEqual([])
+      expect(vi.mocked(getDocument)).not.toHaveBeenCalled()
+    })
+
+    it('does NOT clobber a file the agent wrote at a hydrate destination', async () => {
+      // Presence, not content hash, is the diff key precisely for this: a
+      // content diff would overwrite the agent's edit on the next turn.
+      vi.mocked(listDocuments).mockResolvedValue([meta('d1', 'data.csv', 1)] as never)
+      vi.mocked(getDocument).mockResolvedValue(doc('d1', 'data.csv', 'a,b') as never)
+
+      const { transport, fs } = makeFsTransport()
+      fs.set('/work/in/data.csv', 'a,b\n99,edited-in-vm')
+
+      const { written } = await hydrateWorkspace(transport, 's')
+
+      expect(written).toBe(0)
+      expect(fs.get('/work/in/data.csv')).toBe('a,b\n99,edited-in-vm')
+    })
+
+    it('lands the NEWEST document when two reduce to the same basename', async () => {
+      // Same filename uploaded twice: both are absent, so one write wins. It is
+      // the newer upload, not whichever the store listed last.
+      vi.mocked(listDocuments).mockResolvedValue([
+        meta('old', 'report.csv', 1),
+        meta('new', 'report.csv', 2),
+      ] as never)
+      vi.mocked(getDocument).mockImplementation(async (_s, id) =>
+        id === 'new'
+          ? (doc('new', 'report.csv', 'v2') as never)
+          : (doc('old', 'report.csv', 'v1') as never),
+      )
+
+      const { transport, fs } = makeFsTransport()
+
+      const { written } = await hydrateWorkspace(transport, 's')
+
+      expect(written).toBe(1)
+      expect(fs.get('/work/in/report.csv')).toBe('v2')
+    })
   })
 
   it('reports a doc whose body has gone missing between list and fetch (sf-L8)', async () => {

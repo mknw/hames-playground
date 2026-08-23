@@ -7,6 +7,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 
 const run = vi.fn()
 const close = vi.fn().mockResolvedValue(undefined)
@@ -20,13 +22,13 @@ vi.mock('../../../lib/neo4j/client', () => ({
   verifyConnection: () => verifyConnection(),
 }))
 
+import * as queries from '../../../lib/neo4j/queries'
 import {
   getSchema,
   getSchemaForAgent,
   getSimplifiedSchema,
   getNodeProperties,
   runManualCypher,
-  executeWriteCypher,
   resetNeo4jConnection,
   testNeo4jConnection,
 } from '../../../lib/neo4j/queries'
@@ -253,29 +255,25 @@ describe('runManualCypher', () => {
   })
 })
 
-describe('executeWriteCypher', () => {
-  it('runs writes that the manual guard would have refused', async () => {
-    run.mockResolvedValue(results([]))
-    const res = await executeWriteCypher('CREATE (n:Person {name: "Alice"})')
-    expect(res.success).toBe(true)
-    expect(res.graphUpdate).toEqual([])
-    expect(run).toHaveBeenCalledWith('CREATE (n:Person {name: "Alice"})')
+// Regression pin for #228: `executeWriteCypher(cypher)` was a `'use server'`
+// export here — browser-reachable, unauthenticated, and it ran whatever string
+// it was handed. It is gone; graph writes go through the intent-shaped,
+// authenticated ops in `graph-edit.server.ts` (pinned by graph-edit.test.ts).
+// Re-adding any raw-Cypher write RPC to this module fails these.
+describe('no arbitrary-Cypher write RPC (#228)', () => {
+  it('is not exported from the module or the barrel', async () => {
+    const barrel = await import('../../../lib/neo4j')
+    expect(Object.keys(queries)).not.toContain('executeWriteCypher')
+    expect(Object.keys(barrel)).not.toContain('executeWriteCypher')
   })
 
-  it('transforms returned nodes into graph elements', async () => {
-    run.mockResolvedValue(
-      results([record({ n: { identity: 2, labels: ['Person'], properties: { name: 'Bob' } } })]),
-    )
-    const res = await executeWriteCypher('CREATE (n:Person) RETURN n')
-    expect(res.graphUpdate?.[0].data.label).toBe('Bob')
-  })
-
-  it('returns the failure as data', async () => {
-    run.mockRejectedValue(new Error('constraint violation'))
-    expect(await executeWriteCypher('CREATE (n)')).toEqual({
-      success: false,
-      error: 'constraint violation',
-    })
+  it('runManualCypher is the only export that hands caller-supplied text to the driver', () => {
+    const source = readFileSync(path.resolve(process.cwd(), 'src/lib/neo4j/queries.ts'), 'utf8')
+    // Every other query in this file is a literal the module owns; only the
+    // read-only manual-query path takes its text from the caller.
+    expect(source.match(/session\.run\(cypher\b/g)).toHaveLength(1)
+    const afterManual = source.slice(source.indexOf('export async function runManualCypher'))
+    expect(afterManual).toContain('session.run(cypher)')
   })
 })
 

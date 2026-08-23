@@ -15,7 +15,6 @@ export {
   getSchema,
   getSimplifiedSchema,
   runManualCypher,
-  executeWriteCypher,
   resetNeo4jConnection,
   testNeo4jConnection,
   type SchemaResult,

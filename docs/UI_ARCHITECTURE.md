@@ -974,8 +974,8 @@ app/
 │       ├── turn-utils.ts           # splitIntoTurns(), extractTurnGraphElements()
 │       ├── turn-colors.ts         # TURN_COLORS palette, getTurnColor()
 │       ├── neo4j/
-│       │   ├── queries.ts         # runManualCypher(), getNodeProperties()
-│       │   └── write-action.ts    # executeCypherWrite() — parameterized Cypher writes from graph UI
+│       │   ├── queries.ts         # runManualCypher() (read-only), getNodeProperties()
+│       │   └── graph-edit.server.ts # createGraphNode()/linkGraphNodes()/setGraphNodeProperty() — authenticated, intent-shaped graph writes
 │       └── harness-client/        # Pre-built agent server actions
 │           ├── actions.server.ts  # processMessage(), processMessageStreaming(), listConversations(), loadConversation()
 │           ├── session.server.ts  # In-process pattern cache + Postgres-backed serialized context (per-user)

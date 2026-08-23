@@ -1487,6 +1487,26 @@ BAML Return → string (assistant response text)
 
 > **Error scoping**: The compactExecution reads error state from EventView, not from the data stash,
 > so errors expire with the view instead of being carried forward by hand.
+
+> **Raw LLM output on a failed call**: an `error` event whose failure is
+> attributable to an LLM call carries `ErrorEventData.kind: 'llm_call'` and the
+> full `ContextEvent.llmCall` — crucially `rawOutput`, the only record of what
+> the model actually said. Two families qualify and both must attach it:
+>
+> 1. **the call failed** (BamlValidationError, fallback exhausted, network).
+>    The adapters wrap the throw as `LLMCallError` carrying
+>    `extractFailureLLMCallData(collector, …)`, and the catching pattern
+>    re-attaches it. Any BAML call site that throws BARE loses the collector —
+>    that is what `wrapAsLLMCallError` is exported for.
+> 2. **the call succeeded and its CONTENT is the defect** — a tool name off the
+>    allowlist, `tool_args` that are unparseable or were cut off at the output
+>    cap. The pattern already holds that turn's `llmCall`; it must carry it onto
+>    the error event, because the error message quotes the args while only the
+>    raw response shows where the response went wrong.
+>
+> Without this the panel renders "Output not captured" over a response that WAS
+> captured, and the most common class of agent failure is undebuggable from the
+> UI (#225 owner review).
 > The read is bounded to the CURRENT TURN by default — `viewConfig.fromLastNTurns` when the
 > caller declared one, else 1. A pattern scope alone is not a turn scope: a loop keeps the
 > same `patternId` every turn and `ctx.events` persist across `continueSession`, so reading

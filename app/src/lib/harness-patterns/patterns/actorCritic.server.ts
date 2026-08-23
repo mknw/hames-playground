@@ -463,8 +463,19 @@ export function actorCritic<T extends ActorCriticData>(
                   'Actor proposed a tool not on the allowlist (and not matched by ' +
                   'dynamicToolPattern / dynamicToolAllowlist).',
                 iteration: attempt,
+                kind: 'llm_call' as const,
               } as ErrorEventData,
-              resolved.trackHistory,
+              // `true`, not `resolved.trackHistory`: actorCritic's default
+              // trackHistory is a content-event allowlist that omits 'error',
+              // so this event and the tool_args one below were dropped for
+              // every agent on default config — the two failures most in need
+              // of being seen were the two that were invisible. Every other
+              // error emission in this file and in simpleLoop already passes
+              // `true`, and 'error' is an ALWAYS_COMMIT type regardless.
+              true,
+              // The tool name the actor chose is the defect, so the response
+              // that named it is the evidence — carry it onto the event.
+              actorLlmCall,
             )
           }
           previousAttempts.push({
@@ -509,8 +520,12 @@ export function actorCritic<T extends ActorCriticData>(
                   'keys/values, unescaped newlines inside scripts. The actor will ' +
                   'see this in previousAttempts and (hopefully) retry with valid JSON.',
               iteration: attempt,
+              kind: 'llm_call' as const,
             } as ErrorEventData,
-            resolved.trackHistory,
+            true, // see the allowlist branch above
+            // `errMsg` quotes the args; only the raw response shows WHERE it
+            // went wrong (a cut-off heredoc, an unescaped newline in a script).
+            actorLlmCall,
           )
           previousAttempts.push({
             toolName: action.tool_name,

@@ -698,7 +698,10 @@ overwhelmingly common case must cost zero tokens and carry zero mangling risk.
 
 **Optional LLM screen (off by default).** `screen` takes an `InjectionScreen`;
 `createInjectionScreen()` (baml-adapters) is the BAML-backed one, on the cheap
-`DescribeAnthropic` client. The guard calls it **only for content the
+`DescribeAnthropic` client — in BOTH routing modes: the `screen` role is pinned
+in `clients.server.ts` (like the planner) and never follows `describe` onto the
+mixed `DescribeFallback` chain, whose first leaf is the weakest model in the
+repo (SA-M5). The guard calls it **only for content the
 deterministic layer passed clean** — i.e. gated on `findings.length === 0`, see
 the note above — so the two layers divide labour: regexes catch known phrasings,
 the screen catches novel ones. A verbatim span it quotes is neutralized like a

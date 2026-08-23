@@ -136,18 +136,25 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 }
 
 /**
- * Configured `max_tokens` per BAML client — MUST mirror `baml_src/clients.baml`.
+ * Configured `max_tokens` per BAML client — MUST mirror `baml_src/*.baml`.
  *
  * Used by the adapters' truncation detection: a response whose
  * `usage.outputTokens` reaches its client's cap was cut off mid-generation
- * (Anthropic reports exactly the cap on a max_tokens stop). A truncated
+ * (providers report exactly the cap on a max_tokens/length stop). A truncated
  * ControllerAction loses its trailing fields (`status`, `is_final`) or ends
  * mid-`tool_args` → BamlValidationError / invalid tool_args. Detection lets the
  * retry path tell the actor to produce a smaller response instead of blindly
  * regenerating the same oversized one (see `.harness-logs/baml-validation-sandbox.json`).
  *
- * Only clients with an explicit cap in clients.baml are listed; unknown clients
- * are treated as not-detectable (no false positives).
+ * COMPLETENESS INVARIANT (SA-C2): every leaf client declaring `max_tokens` in
+ * `baml_src/*.baml` must be listed here at the same value —
+ * `client-output-caps.test.ts` parses the .baml sources and asserts it. A
+ * missing entry does not error; it silently blinds truncation detection for
+ * that client, which is how mixed-chain (Groq/OpenRouter) truncations skipped
+ * the corrective retry and fell into the Groq escalation instead — whose next
+ * rung has a SMALLER cap, guaranteeing a second truncation. Clients declaring
+ * no cap (the OpenAI ones) are deliberately absent: unknown clients are
+ * treated as not-detectable, never a false positive.
  */
 export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   AnthropicSonnet5: 32_768,
@@ -159,6 +166,26 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   AnthropicSonnet46NoThink: 16_384,
   AnthropicHaiku45: 16_384,
   AnthropicOpus4: 4_096,
+  // Mixed-chain leaves (USE_MIXED_CHAINS=1). The collector reports the
+  // selected LEAF attempt's clientName — never the `*Fallback` chain name —
+  // so these are the names truncation detection actually sees in production.
+  GroqFast: 2_048,
+  GroqGPT120B: 4_096,
+  GroqQwen3_32b: 2_048,
+  OpenRouterMiniMax2_5: 4_096,
+  OpenRouterNemotron120B: 4_096,
+  OpenRouterNemotron3Nano30B: 4_096,
+  OpenRouterGemma4: 4_096,
+  // Local (local-client.baml — manual wiring only, not in any chain).
+  LocalGLM: 2_048,
+  // Strategy-chain FLOORS — the smallest cap of any leaf in the chain, the
+  // same conservative-floor pattern as the chain entries in
+  // MODEL_CONTEXT_WINDOWS above. Truncation detection never consults these
+  // (it sees leaf names); they exist for OUTPUT-side budgeting keyed by
+  // resolveClientForRole(), which returns chain names — compactBulkData
+  // derives its describe batch size here (SA-M6).
+  DescribeAnthropic: 16_384, // = AnthropicHaiku45, the chain's only leaf
+  DescribeFallback: 2_048, // = GroqFast; OpenAIGPT5 declares no cap
 }
 
 // ============================================================================

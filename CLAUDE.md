@@ -186,14 +186,14 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 
 **Default (Anthropic-only)** — declared in `baml_src/anthropic-only.baml`:
 
-| Client                 | Role                                                                                                                            |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `RouterAnthropic`      | Intent classification                                                                                                           |
-| `ControllerAnthropic`  | simpleLoop tool-loop controller — `*NoThink` models, and the backstop stays Sonnet-tier: no Haiku fallback on structured output |
-| `ActorAnthropic`       | actorCritic actor — the same models as the controller, with thinking left ON                                                    |
-| `PlannerAnthropic`     | planner (#27) upfront decomposition — one call per chain, thinking left ON (the reasoning IS the deliverable)                    |
-| `CriticAnthropic`      | Evaluation/critique                                                                                                             |
-| `SynthesizerAnthropic` | Response synthesis                                                                                                              |
+| Client                 | Role                                                                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `RouterAnthropic`      | Intent classification                                                                                                                   |
+| `ControllerAnthropic`  | simpleLoop tool-loop controller — `*NoThink` models, and the backstop stays Sonnet-tier: no Haiku fallback on structured output         |
+| `ActorAnthropic`       | actorCritic actor — the same models as the controller, with thinking left ON                                                            |
+| `PlannerAnthropic`     | planner (#27) upfront decomposition — one call per chain, thinking left ON (the reasoning IS the deliverable)                           |
+| `CriticAnthropic`      | Evaluation/critique                                                                                                                     |
+| `SynthesizerAnthropic` | Response synthesis                                                                                                                      |
 | `DescribeAnthropic`    | Lightweight tool result summarization (one batched call per ≤8 results, `compactBulkData`), titles, intent compaction (`compactIntent`) |
 
 **Extended thinking (#139):** these models think by default — no request asks for
@@ -206,11 +206,13 @@ critic and compactExecution keep thinking — unmeasured, and the corpus had no
 actor prompts. A thinking-only response with no text is retried once by the
 adapters.
 
-**Output caps + truncation recovery:** Anthropic client `max_tokens` are 32768 (Sonnet 5) / 16384 (Sonnet 4.6, Haiku 4.5) — mirrored in `CLIENT_MAX_OUTPUT_TOKENS` (`app/src/lib/settings.ts`); keep the two in sync. A controller response that hits its cap truncates mid-JSON (historically: `BamlValidationError: missing status/is_final` when a sandbox actor inlined a huge script into `tool_args`). The adapters detect cap-hits and do ONE corrective retry with truncation guidance appended to the per-call `context`; the loops emit truncation-specific feedback instead of generic "invalid JSON" when `tool_args` were cut off (`llmCallHitOutputCap`). Multi-call turns (`additional_calls`, see below) raise cap-hit risk — the prompts cap batches at 4 calls/turn for this reason.
+**Output caps + truncation recovery:** Anthropic client `max_tokens` are 32768 (Sonnet 5) / 16384 (Sonnet 4.6, Haiku 4.5); the mixed-chain Groq/OpenRouter leaves cap at 2048–4096. EVERY leaf declaring `max_tokens` in `baml_src/*.baml` must be mirrored in `CLIENT_MAX_OUTPUT_TOKENS` (`app/src/lib/settings.ts`) — a missing entry silently blinds truncation detection for that client (SA-C2); `client-output-caps.test.ts` enforces the mirror. A controller response that hits its cap truncates mid-JSON (historically: `BamlValidationError: missing status/is_final` when a sandbox actor inlined a huge script into `tool_args`). The adapters detect cap-hits and do ONE corrective retry with truncation guidance appended to the per-call `context`; the loops emit truncation-specific feedback instead of generic "invalid JSON" when `tool_args` were cut off (`llmCallHitOutputCap`). Multi-call turns (`additional_calls`, see below) raise cap-hit risk — the prompts cap batches at 4 calls/turn for this reason.
 
 **Multi-call turns:** both loop patterns accept `multiToolCalls: 'parallel' | 'sequential' | 'off'` (default `'parallel'`) — the controller batches several tool calls into one turn via `ControllerAction.additional_calls`, saving one controller round-trip per batched call. `'sequential'` runs in order with stop-on-failure (sandbox agents); `'off'` suppresses the prompt affordance but still executes un-advertised batches serially (code-mode). Full semantics: `app/src/lib/harness-patterns/README.md`.
 
 **Mixed-provider chains** (gated by `USE_MIXED_CHAINS=1`, see top of file) — `RouterFallback` / `ControllerFallback` / `CriticFallback` / `SynthesizerFallback` / `DescribeFallback`, each spreading its role across OpenRouter, Groq and OpenAI with an Anthropic backstop last. There is no `ActorFallback` and no `PlannerFallback`. **The planner opts out of mixed chains entirely** — `MIXED_CLIENT_BY_ROLE.planner` pins `PlannerAnthropic` in both modes. It used to borrow `ControllerFallback` as the same reason-over-a-tool-catalog workload, but that chain's Groq `gpt-oss-120b` is the client documented below to fail structured output on larger context, which is why both controllers carry a manual `GroqGPT120B` → `GroqFast` escalation. The planner has no such ladder, runs once per chain over the largest catalog in the repo (`tools.all`), and a throw there means the chain silently runs unplanned. Declared in `baml_src/clients.baml`.
+
+**The injection screen also opts out** — `MIXED_CLIENT_BY_ROLE.screen` pins `DescribeAnthropic` in both modes (SA-M5). It used to ride the `describe` role, which under mixed chains silently put prompt-injection screening on `DescribeFallback`'s first leaf (`GroqFast`, the weakest model in the repo): a screen must not be talked out of reporting by the content it reviews and must copy spans verbatim so the guard can neutralize them. Rationale on the map entry in `clients.server.ts`.
 
 Local inference (`LocalGLM` — GLM 4.7 Flash on localhost:8080) is defined in `baml_src/local-client.baml` and available for manual wiring but not used in any fallback chain.
 
@@ -253,6 +255,7 @@ UnoCSS attributify mode — always use attribute syntax:
 Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secondary,tertiary}`, `dark-border-{primary,secondary}`, `neon-{cyan,magenta,purple}`, `cyber-{600,700,800}`.
 
 **Icons** — `material-symbols` (+ `material-symbols-light`) is **the** icon set; they are the only two collections registered in `presetIcons` (`app/uno.config.ts`):
+
 - Use via `class="i-material-symbols-<icon-name>"` — icon classes are the one sanctioned `class=` exception, since `presetIcons` has no attributify form
 - Example: `<span class="i-material-symbols-database-outline" w="5" h="5" text="neon-cyan" aria-hidden="true" />`
 - Browse icons at [https://icones.js.org](https://icones.js.org) — filter by `material-symbols`

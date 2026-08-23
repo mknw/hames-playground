@@ -74,7 +74,8 @@ beforeEach(() => {
 
 describe('llmCallHitOutputCap', () => {
   it('detects a call that hit its configured cap', async () => {
-    const { llmCallHitOutputCap } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { llmCallHitOutputCap } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     expect(
       llmCallHitOutputCap({
         clientName: 'AnthropicSonnet5',
@@ -83,8 +84,39 @@ describe('llmCallHitOutputCap', () => {
     ).toBe(true)
   })
 
+  it('detects truncated Groq/OpenRouter leaves — dead in production before SA-C2', async () => {
+    const { llmCallHitOutputCap } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    // The mixed chains report the selected LEAF's clientName; these entries
+    // were missing from CLIENT_MAX_OUTPUT_TOKENS, so detection returned false
+    // for every production truncation.
+    for (const [clientName, cap] of [
+      ['GroqFast', 2_048],
+      ['GroqGPT120B', 4_096],
+      ['GroqQwen3_32b', 2_048],
+      ['OpenRouterMiniMax2_5', 4_096],
+      ['OpenRouterNemotron120B', 4_096],
+      ['OpenRouterNemotron3Nano30B', 4_096],
+      ['OpenRouterGemma4', 4_096],
+    ] as const) {
+      expect(
+        llmCallHitOutputCap({
+          clientName,
+          usage: { inputTokens: 1, outputTokens: cap, cachedInputTokens: 0, totalTokens: cap + 1 },
+        }),
+      ).toBe(true)
+      expect(
+        llmCallHitOutputCap({
+          clientName,
+          usage: { inputTokens: 1, outputTokens: cap - 1, cachedInputTokens: 0, totalTokens: cap },
+        }),
+      ).toBe(false)
+    }
+  })
+
   it('is false below the cap, for unknown clients, and without usage', async () => {
-    const { llmCallHitOutputCap } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { llmCallHitOutputCap } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     expect(
       llmCallHitOutputCap({
         clientName: 'AnthropicSonnet5',
@@ -94,7 +126,12 @@ describe('llmCallHitOutputCap', () => {
     expect(
       llmCallHitOutputCap({
         clientName: 'SomeUnknownClient',
-        usage: { inputTokens: 1, outputTokens: 999_999, cachedInputTokens: 0, totalTokens: 1_000_000 },
+        usage: {
+          inputTokens: 1,
+          outputTokens: 999_999,
+          cachedInputTokens: 0,
+          totalTokens: 1_000_000,
+        },
       }),
     ).toBe(false)
     expect(llmCallHitOutputCap({ clientName: 'AnthropicSonnet5' })).toBe(false)
@@ -104,20 +141,34 @@ describe('llmCallHitOutputCap', () => {
 
 describe('ActorController truncation retry (Anthropic-only path)', () => {
   it('retries ONCE with truncation guidance appended to context when the output hit the cap', async () => {
-    const { createActorControllerAdapter, TRUNCATION_RETRY_GUIDANCE } = await import(
-      '../../../lib/harness-patterns/baml-adapters.server'
-    )
+    const { createActorControllerAdapter, TRUNCATION_RETRY_GUIDANCE } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockActorController
-      .mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'missing status/is_final', 'missing status/is_final'))
+      .mockRejectedValueOnce(
+        new BamlValidationError(
+          'prompt',
+          'raw',
+          'missing status/is_final',
+          'missing status/is_final',
+        ),
+      )
       .mockResolvedValueOnce(mockFinalAction('Recovered'))
 
     const actor = createActorControllerAdapter({
       toolNames: ['sandbox_bash'],
       contextPrefix: 'You have a sandbox.',
     })
-    const result = await actor('do the thing', 'intent', [], [], fakeCollector(32_768, 'AnthropicSonnet5'), 1, 6)
+    const result = await actor(
+      'do the thing',
+      'intent',
+      [],
+      [],
+      fakeCollector(32_768, 'AnthropicSonnet5'),
+      1,
+      6,
+    )
 
     expect(result.action).toBeDefined()
     expect(mockActorController).toHaveBeenCalledTimes(2)
@@ -130,10 +181,13 @@ describe('ActorController truncation retry (Anthropic-only path)', () => {
   })
 
   it('does NOT retry when the parse failure was not a cap-hit (rethrows as LLMCallError)', async () => {
-    const { createActorControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { createActorControllerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
-    mockActorController.mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'bad output', 'bad output'))
+    mockActorController.mockRejectedValueOnce(
+      new BamlValidationError('prompt', 'raw', 'bad output', 'bad output'),
+    )
 
     const { LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
     const actor = createActorControllerAdapter({ toolNames: ['sandbox_bash'] })
@@ -144,12 +198,15 @@ describe('ActorController truncation retry (Anthropic-only path)', () => {
   })
 
   it('throws LLMCallError when the truncation retry also fails (exactly one retry)', async () => {
-    const { createActorControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { createActorControllerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockActorController
       .mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'truncated', 'truncated'))
-      .mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'truncated again', 'truncated again'))
+      .mockRejectedValueOnce(
+        new BamlValidationError('prompt', 'raw', 'truncated again', 'truncated again'),
+      )
 
     const { LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
     const actor = createActorControllerAdapter({ toolNames: ['sandbox_bash'] })
@@ -162,18 +219,23 @@ describe('ActorController truncation retry (Anthropic-only path)', () => {
 
 describe('LoopController truncation retry (Anthropic-only path)', () => {
   it('retries ONCE with truncation guidance appended to context', async () => {
-    const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } = await import(
-      '../../../lib/harness-patterns/baml-adapters.server'
-    )
+    const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController
-      .mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'missing fields', 'missing fields'))
+      .mockRejectedValueOnce(
+        new BamlValidationError('prompt', 'raw', 'missing fields', 'missing fields'),
+      )
       .mockResolvedValueOnce(mockFinalAction('Recovered'))
 
     const controller = createLoopControllerAdapter(['read_neo4j_cypher', 'Return'], 'Prefix.')
     const result = await controller(
-      'user message', 'intent', '[]', 0, undefined,
+      'user message',
+      'intent',
+      '[]',
+      0,
+      undefined,
       fakeCollector(16_384, 'AnthropicSonnet46'),
     )
 
@@ -185,15 +247,25 @@ describe('LoopController truncation retry (Anthropic-only path)', () => {
   })
 
   it('without a cap-hit, the Anthropic-only path still rethrows (no Groq escalation, no retry)', async () => {
-    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { createLoopControllerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
-    mockLoopController.mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'bad output', 'bad output'))
+    mockLoopController.mockRejectedValueOnce(
+      new BamlValidationError('prompt', 'raw', 'bad output', 'bad output'),
+    )
 
     const { LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
     const controller = createLoopControllerAdapter(['Return'])
     await expect(
-      controller('user message', 'intent', '[]', 0, undefined, fakeCollector(512, 'AnthropicSonnet46')),
+      controller(
+        'user message',
+        'intent',
+        '[]',
+        0,
+        undefined,
+        fakeCollector(512, 'AnthropicSonnet46'),
+      ),
     ).rejects.toBeInstanceOf(LLMCallError)
     expect(mockLoopController).toHaveBeenCalledTimes(1)
   })
@@ -203,9 +275,8 @@ describe('mixed-chains interaction', () => {
   it('truncation retry takes precedence over Groq escalation when the cap was hit', async () => {
     process.env.USE_MIXED_CHAINS = '1'
     try {
-      const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } = await import(
-        '../../../lib/harness-patterns/baml-adapters.server'
-      )
+      const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } =
+        await import('../../../lib/harness-patterns/baml-adapters.server')
       const { BamlValidationError } = await import('@boundaryml/baml')
 
       mockLoopController
@@ -214,7 +285,11 @@ describe('mixed-chains interaction', () => {
 
       const controller = createLoopControllerAdapter(['Return'])
       const result = await controller(
-        'user message', 'intent', '[]', 0, undefined,
+        'user message',
+        'intent',
+        '[]',
+        0,
+        undefined,
         fakeCollector(16_384, 'AnthropicSonnet46'),
       )
 
@@ -230,6 +305,44 @@ describe('mixed-chains interaction', () => {
       delete process.env.USE_MIXED_CHAINS
     }
   })
+
+  it('a truncated Groq leaf takes the corrective retry, NOT the smaller-cap escalation (SA-C2)', async () => {
+    process.env.USE_MIXED_CHAINS = '1'
+    try {
+      const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } =
+        await import('../../../lib/harness-patterns/baml-adapters.server')
+      const { BamlValidationError } = await import('@boundaryml/baml')
+
+      mockLoopController
+        .mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'truncated', 'truncated'))
+        .mockResolvedValueOnce(mockFinalAction('Recovered'))
+
+      const controller = createLoopControllerAdapter(['Return'])
+      // GroqGPT120B cut off at its 4 096 cap. Before SA-C2 this clientName had
+      // no CLIENT_MAX_OUTPUT_TOKENS entry, so collectorHitOutputCap() was
+      // false and the failure fell into the Groq escalation — whose next rung
+      // (GroqFast) caps output at 2 048, HALF the cap that just truncated.
+      const result = await controller(
+        'user message',
+        'intent',
+        '[]',
+        0,
+        undefined,
+        fakeCollector(4_096, 'GroqGPT120B'),
+      )
+
+      expect(result.action).toBeDefined()
+      expect(mockLoopController).toHaveBeenCalledTimes(2)
+      const retryContext = String(mockLoopController.mock.calls[1][4])
+      expect(retryContext).toContain(TRUNCATION_RETRY_GUIDANCE)
+      // Same chain on the retry — never a hop to the smaller-capped leaves.
+      const retryOpts = mockLoopController.mock.calls[1][7] as { client?: string } | undefined
+      expect(retryOpts?.client).not.toBe('GroqGPT120B')
+      expect(retryOpts?.client).not.toBe('GroqFast')
+    } finally {
+      delete process.env.USE_MIXED_CHAINS
+    }
+  })
 })
 
 /**
@@ -241,7 +354,8 @@ describe('mixed-chains interaction', () => {
  */
 describe('empty-completion retry', () => {
   it('LoopController retries ONCE with the context UNCHANGED', async () => {
-    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { createLoopControllerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController
@@ -262,14 +376,18 @@ describe('empty-completion retry', () => {
   })
 
   it('ActorController retries ONCE with the context UNCHANGED', async () => {
-    const { createActorControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { createActorControllerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockActorController
       .mockRejectedValueOnce(new BamlValidationError('prompt', '', 'missing=5', 'missing=5'))
       .mockResolvedValueOnce(mockFinalAction('Recovered'))
 
-    const actor = createActorControllerAdapter({ toolNames: ['sandbox_bash'], contextPrefix: 'You have a sandbox.' })
+    const actor = createActorControllerAdapter({
+      toolNames: ['sandbox_bash'],
+      contextPrefix: 'You have a sandbox.',
+    })
     const result = await actor('do the thing', 'intent', [], [], emptyCollector(), 1, 6)
 
     expect(result.action).toBeDefined()
@@ -279,7 +397,8 @@ describe('empty-completion retry', () => {
   })
 
   it('whitespace-only output counts as empty', async () => {
-    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { createLoopControllerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController
@@ -292,9 +411,8 @@ describe('empty-completion retry', () => {
   })
 
   it('a cap-hit still wins: truncation guidance, not a bare retry', async () => {
-    const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } = await import(
-      '../../../lib/harness-patterns/baml-adapters.server'
-    )
+    const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController
@@ -304,17 +422,13 @@ describe('empty-completion retry', () => {
     const controller = createLoopControllerAdapter(['Return'])
     // Empty raw response AND at the cap — a response cut off before any text
     // reached us is still truncation, and the model needs to know why.
-    await controller(
-      'user message', 'intent', '[]', 1, undefined,
-      emptyCollector(32_768, ''),
-    )
+    await controller('user message', 'intent', '[]', 1, undefined, emptyCollector(32_768, ''))
     expect(String(mockLoopController.mock.calls[1][4])).toContain(TRUNCATION_RETRY_GUIDANCE)
   })
 
   it('exactly one retry: a second empty response throws LLMCallError', async () => {
-    const { createLoopControllerAdapter, LLMCallError } = await import(
-      '../../../lib/harness-patterns/baml-adapters.server'
-    )
+    const { createLoopControllerAdapter, LLMCallError } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController
@@ -329,9 +443,8 @@ describe('empty-completion retry', () => {
   })
 
   it('a non-empty response that simply failed to parse is NOT retried', async () => {
-    const { createLoopControllerAdapter, LLMCallError } = await import(
-      '../../../lib/harness-patterns/baml-adapters.server'
-    )
+    const { createLoopControllerAdapter, LLMCallError } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController.mockRejectedValueOnce(
@@ -340,7 +453,14 @@ describe('empty-completion retry', () => {
 
     const controller = createLoopControllerAdapter(['Return'])
     await expect(
-      controller('user message', 'intent', '[]', 1, undefined, emptyCollector(500, 'Turn 2 action: …')),
+      controller(
+        'user message',
+        'intent',
+        '[]',
+        1,
+        undefined,
+        emptyCollector(500, 'Turn 2 action: …'),
+      ),
     ).rejects.toBeInstanceOf(LLMCallError)
     expect(mockLoopController).toHaveBeenCalledTimes(1)
   })

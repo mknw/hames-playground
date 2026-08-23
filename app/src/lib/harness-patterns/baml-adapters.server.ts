@@ -399,9 +399,12 @@ export function extractFailureLLMCallData(
 
 /**
  * Whether an LLM call's output was cut off at its client's `max_tokens` cap.
- * Anthropic reports `outputTokens` == the cap exactly on a max_tokens stop, so
- * `>= cap` is a precise signal, not a heuristic. Unknown clients (no entry in
- * CLIENT_MAX_OUTPUT_TOKENS) → false, never a false positive.
+ * Providers report `outputTokens` == the cap exactly on a cap stop (Anthropic's
+ * `max_tokens` stop_reason, the OpenAI-compatible `length` finish_reason on the
+ * Groq/OpenRouter leaves), so `>= cap` is a precise signal, not a heuristic.
+ * Unknown clients (no entry in CLIENT_MAX_OUTPUT_TOKENS) → false, never a
+ * false positive — which is why that map must stay complete (SA-C2): a missing
+ * leaf entry silently disables this detection for that client.
  *
  * Why it matters: a truncated ControllerAction either loses its trailing
  * required fields (`status`, `is_final`) → hard BamlValidationError, or ends
@@ -1430,7 +1433,11 @@ export async function describeToolResultsBatchOp(
  * The guard invokes it only for content its deterministic corpus passed clean,
  * so this costs one cheap `DescribeAnthropic` call per otherwise-clean untrusted
  * result — never one per tool call, and never on the default path (no agent gets
- * a screen it did not ask for).
+ * a screen it did not ask for). `DescribeAnthropic` in BOTH modes: the call
+ * goes through the `screen` role, which — like the planner — pins its Anthropic
+ * client under `USE_MIXED_CHAINS=1` instead of following `describe` onto
+ * `DescribeFallback`, whose first leaf is the weakest model in the repo
+ * (rationale on the role's map entry in clients.server.ts; SA-M5).
  *
  * `maxChars` bounds what is sent: a 2 MB page would blow the context window and
  * cost more than the protection is worth. The head of a document is where
@@ -1468,7 +1475,7 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     const body = head.replace(/(?:BEGIN|END)\s{1,4}UNTRUSTED\s{1,4}CONTENT[^\n]{0,40}/gi, '[fence]')
 
     const { b } = await import('../../../baml_client')
-    const opts = clientOverrideFor('describe')
+    const opts = clientOverrideFor('screen')
     const source = `${namespace}/${tool}`
     const verdict = opts
       ? await b.ScreenUntrustedContent(source, body, opts)

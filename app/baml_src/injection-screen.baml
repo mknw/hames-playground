@@ -8,7 +8,11 @@
 //
 // It runs ONLY on content the deterministic layer passed clean — its job is
 // novel phrasings the corpus does not know, not the ones it already catches.
-// Cheap DescribeAnthropic client (same chain as the background summarizer).
+// Cheap DescribeAnthropic client, in BOTH routing modes: the `screen` role is
+// pinned in clients.server.ts and does not follow `describe` onto the mixed
+// DescribeFallback chain, whose first leaf is the weakest model in the repo —
+// a screen must not be talked out of reporting and must copy spans verbatim
+// (SA-M5).
 //
 // The prompt is written defensively: the content under review is fenced and the
 // model is told, repeatedly, that everything inside the fence is DATA. A screen

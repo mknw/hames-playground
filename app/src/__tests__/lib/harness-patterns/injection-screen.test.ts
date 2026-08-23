@@ -223,13 +223,28 @@ describe('createInjectionScreen — client routing', () => {
     expect(mockScreen.mock.calls[0]).toHaveLength(2)
   })
 
-  it('passes the describe-role client override under USE_MIXED_CHAINS', async () => {
-    // The screen rides the cheap `describe` role, so it must follow that role's
-    // mixed-chain override rather than pinning a client of its own.
+  it('pins DescribeAnthropic under USE_MIXED_CHAINS — never the describe fallback (SA-M5)', async () => {
+    // The screen used to ride the `describe` role, which under mixed chains
+    // silently put prompt-injection screening on DescribeFallback's first leaf
+    // (GroqFast, the weakest model in the repo) while the guard's docs promised
+    // DescribeAnthropic. A screen must not be talked out of reporting by the
+    // content it reviews and must copy spans VERBATIM so the guard can locate
+    // and neutralize them — so the `screen` role pins the Anthropic client in
+    // both modes, like the planner.
     process.env.USE_MIXED_CHAINS = '1'
     const screen = await (await load())()
     await screen(CLEAN)
     expect(mockScreen.mock.calls[0]).toHaveLength(3)
-    expect(mockScreen.mock.calls[0][2]).toHaveProperty('client')
+    expect(mockScreen.mock.calls[0][2]).toEqual({ client: 'DescribeAnthropic' })
+  })
+
+  it('resolveClientForRole("screen") is DescribeAnthropic in BOTH modes', async () => {
+    const { resolveClientForRole } = await import('../../../lib/harness-patterns/clients.server')
+    expect(resolveClientForRole('screen')).toBe('DescribeAnthropic')
+    process.env.USE_MIXED_CHAINS = '1'
+    expect(resolveClientForRole('screen')).toBe('DescribeAnthropic')
+    // The role it split from DOES follow the mixed chains — the pin is the
+    // screen's own, not an accident of `describe` being pinned too.
+    expect(resolveClientForRole('describe')).toBe('DescribeFallback')
   })
 })

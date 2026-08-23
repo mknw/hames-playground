@@ -104,15 +104,14 @@ export async function fireRoutine(routine: RoutineRow): Promise<string | null> {
     // routine sits out a whole interval for a transient DB failure — and an
     // hourly routine that fails to seed at 09:00 next fires at 11:00 (sf-L1).
     // Roll the claim back so the next tick sees it as due again.
-    const released = await releaseRoutineClaim(
-      routine.id,
-      claimedAt,
-      routine.lastRunAt,
-    ).catch((relErr: unknown) => {
-      console.error(`[routines] could not roll back the claim for ${routine.id}:`, relErr)
-      return false
-    })
-    if (!released) {
+    const released = await releaseRoutineClaim(routine.id, claimedAt, routine.lastRunAt).catch(
+      (relErr: unknown) => {
+        console.error(`[routines] could not roll back the claim for ${routine.id}:`, relErr)
+        // Already explained by the error above — don't also blame a claimant.
+        return null
+      },
+    )
+    if (released === false) {
       console.warn(
         `[routines] claim for ${routine.id} was not rolled back (another claimant moved it) ` +
           '— this interval is skipped.',

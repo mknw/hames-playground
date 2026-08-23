@@ -40,7 +40,12 @@ import { errorBubble } from '~/lib/harness-client/replay'
 import { getSettings } from '~/lib/settings-store'
 import { parseChatStream, type DoneEventData } from '~/lib/sse-client'
 import type { GraphElement } from './SupportPanel'
-import type { ContextEvent, UnifiedContext, ControllerActionEventData, ErrorEventData } from '~/lib/harness-patterns'
+import type {
+  ContextEvent,
+  UnifiedContext,
+  ControllerActionEventData,
+  ErrorEventData,
+} from '~/lib/harness-patterns'
 import {
   capReachedMessage,
   isAtConcurrencyCap,
@@ -60,11 +65,16 @@ export interface ChatInterfaceProps {
   /** Session ID for server-side state (shared with SupportPanel for stash actions).
    *  When this changes, ChatInterface hydrates messages from persisted history. */
   sessionId: string
-  onGraphUpdate?: (elements: GraphElement[]) => void
-  onEventsUpdate?: (events: ContextEvent[]) => void
-  onContextUpdate?: (ctx: UnifiedContext) => void
-  /** Called before hydration so the parent can clear graph/event signals for the new thread. */
-  onResetForNewSession?: () => void
+  // Panel updates are addressed by session id (SA-H8), the same way chat
+  // buffers are (#105). A run that continues after the user switches threads
+  // keeps filling its OWN session's graph and event stream instead of either
+  // being dropped or leaking into whichever thread is on screen.
+  onGraphUpdate?: (sessionId: string, elements: GraphElement[]) => void
+  onEventsUpdate?: (sessionId: string, events: ContextEvent[]) => void
+  onContextUpdate?: (sessionId: string, ctx: UnifiedContext) => void
+  /** Called before hydration so the parent can clear that session's
+   *  graph/event signals before they are repopulated. */
+  onResetForNewSession?: (sessionId: string) => void
   /** Called when the user changes agent — parent should mint a fresh sessionId so
    *  the new agent gets its own conversation row rather than overwriting an existing one. */
   onAgentChangeRequestsNewSession?: () => void
@@ -86,14 +96,15 @@ export interface ChatInterfaceProps {
   updateRunState: (sessionId: string, patch: Partial<SessionRunState>) => void
   registerAbortController: (sessionId: string, ac: AbortController) => void
   unregisterAbortController: (sessionId: string) => void
+  /** Abort the in-flight SSE stream for a session. The route owns the
+   *  controller map, so it owns the abort; this is what the composer's Stop
+   *  control calls (SA-M11). */
+  abortSession?: (sessionId: string) => void
   /** Per-session chat buffer, owned by the route (#105). Reads/writes are
    *  always addressed by session id so a backgrounded run keeps filling its
    *  own thread while the user reads another one. */
   getMessages: (sessionId: string) => Message[]
-  setMessages: (
-    sessionId: string,
-    next: Message[] | ((prev: Message[]) => Message[]),
-  ) => void
+  setMessages: (sessionId: string, next: Message[] | ((prev: Message[]) => Message[])) => void
   /** How many sessions are streaming right now, across the whole route.
    *  Only the route can know this — used for the concurrency cap (#105). */
   runningCount: number
@@ -122,7 +133,8 @@ export interface ChatInterfaceProps {
 const WELCOME_MESSAGE: Message = {
   id: 'welcome',
   role: 'assistant',
-  content: 'Hello! I\'m your knowledge assistant. I can help you:\n\n- Query and explore your Knowledge Base\n- Create new observations\n- Analyze patterns and connections\n- Use additional tools\n\nSelect an agent from the dropdown above, then ask me anything!',
+  content:
+    "Hello! I'm your knowledge assistant. I can help you:\n\n- Query and explore your Knowledge Base\n- Create new observations\n- Analyze patterns and connections\n- Use additional tools\n\nSelect an agent from the dropdown above, then ask me anything!",
   timestamp: new Date(),
 }
 
@@ -162,6 +174,18 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const isProcessing = () => currentRunState().isProcessing
   const runningTool = () => currentRunState().runningTool
 
+  // Sessions the user explicitly stopped. `runSend`'s catch cannot otherwise
+  // tell a deliberate cancel from the page-unload abort, and the two want
+  // different transcripts: teardown stays silent, a cancel gets a bubble.
+  const stoppedSessions = new Set<string>()
+
+  const handleStop = () => {
+    const sid = props.sessionId
+    if (!currentRunState().isProcessing) return
+    stoppedSessions.add(sid)
+    props.abortSession?.(sid)
+  }
+
   // Concurrency cap (#105 slice 2). Multiple sessions may stream at once; at
   // the cap a send into an *idle* conversation is refused outright rather
   // than queued, and nothing already running is ever interrupted.
@@ -190,7 +214,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
 
     props.setMessages(sid, [])
     prevEventCount = 0
-    props.onResetForNewSession?.()
+    props.onResetForNewSession?.(sid)
 
     // Default to 'conversation' until the load resolves — a brand-new chat
     // (load rejects) must never gate its first send.
@@ -211,25 +235,25 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           // Spread, don't re-list: this map used to pick four fields, which
           // silently dropped the hint/patternId/turnInfo that error and warning
           // bubbles carry. `timestamp` is the only field needing conversion.
-          loaded.messages.map((m) => ({ ...m, timestamp: new Date(m.timestamp) }))
+          loaded.messages.map((m) => ({ ...m, timestamp: new Date(m.timestamp) })),
         )
-        if (!stillDisplayed()) return
-
-        // Replay events to parent so graph + observability repopulate.
+        // Replay events to parent so graph + observability repopulate. These
+        // are filed under `sid`, so a slow hydration that resolves after the
+        // user moved on lands in the right thread instead of the visible one.
         try {
           const ctx = JSON.parse(loaded.serialized) as UnifiedContext
           const events = ctx.events ?? []
           prevEventCount = events.length
           if (props.onEventsUpdate && events.length) {
-            props.onEventsUpdate(events)
+            props.onEventsUpdate(sid, events)
           }
           if (props.onGraphUpdate) {
             const toolEvents = events.filter((e) => e.type === 'tool_result')
             const els = extractGraphElements(toolEvents)
-            if (els.length) props.onGraphUpdate(els)
+            if (els.length) props.onGraphUpdate(sid, els)
           }
           if (props.onContextUpdate) {
-            props.onContextUpdate(ctx)
+            props.onContextUpdate(sid, ctx)
           }
           // Re-attach retriever citations to the latest assistant message so the
           // Sources footer + inline chips survive reload (best-effort — only the
@@ -322,7 +346,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       id: Date.now().toString(),
       role: 'user',
       content,
-      timestamp: new Date()
+      timestamp: new Date(),
     }
     props.setMessages(runSessionId, (prev) => [...prev, userMessage])
 
@@ -344,7 +368,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           sessionId: runSessionId,
           message: content,
           agentId: selectedAgent(),
-          settings: getSettings()
+          settings: getSettings(),
         }),
         signal: abortController.signal,
       })
@@ -420,21 +444,21 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           props.setMessages(runSessionId, (prev) => [...prev, errorMsg])
         }
 
-        // The remaining route-level state (events, graph) is single-instance
-        // and belongs to the actively-displayed session — drop events from a
-        // backgrounded stream rather than corrupt the panels. Server-side
-        // persistence catches those up on rehydrate.
-        if (runSessionId !== props.sessionId) continue
-
+        // Panel state is per-session (SA-H8), so events go to the run's own
+        // buffer no matter which thread is on screen. This used to `continue`
+        // here for a backgrounded run — which both lost those events from the
+        // panels and, because the hydration effect skips a session that is
+        // still processing, left the previous thread's events in place when the
+        // user came back.
         if (props.onEventsUpdate) {
-          props.onEventsUpdate([evt])
+          props.onEventsUpdate(runSessionId, [evt])
         }
 
         // Reactive graph update on tool_result events
         if (evt.type === 'tool_result' && props.onGraphUpdate) {
           const graphElements = extractGraphElements([evt])
           if (graphElements.length > 0) {
-            props.onGraphUpdate(graphElements)
+            props.onGraphUpdate(runSessionId, graphElements)
           }
         }
       }
@@ -442,13 +466,11 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       // Mark progress complete — bar fills, fades, and unmounts.
       progress.finish()
 
-      // Update event count cursor and emit final context — but only if the
-      // user is still looking at this thread.
+      // Update the event-count cursor and emit the final context into this
+      // run's own session (SA-H8) — no longer gated on it being on screen.
       if (finalResult?.context) {
         prevEventCount = finalResult.context.events?.length ?? 0
-        if (runSessionId === props.sessionId && props.onContextUpdate) {
-          props.onContextUpdate(finalResult.context as UnifiedContext)
-        }
+        props.onContextUpdate?.(runSessionId, finalResult.context as UnifiedContext)
       }
 
       // Build assistant message from final result — only if there's a real
@@ -465,19 +487,46 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           timestamp: new Date(),
           // Retriever citations for this turn (inline superscripts + footer).
           references: extractReferences(finalResult?.context?.events ?? []),
-          toolCall: finalResult?.status === 'paused' && (finalResult.data as Record<string, unknown>).pendingAction ? {
-            type: 'neo4j',
-            status: 'pending',
-            tool: ((finalResult.data as Record<string, unknown>).pendingAction as { action: string }).action,
-            explanation: ((finalResult.data as Record<string, unknown>).pendingAction as { reason: string }).reason,
-            isReadOnly: false
-          } : undefined
+          toolCall:
+            finalResult?.status === 'paused' &&
+            (finalResult.data as Record<string, unknown>).pendingAction
+              ? {
+                  type: 'neo4j',
+                  status: 'pending',
+                  tool: (
+                    (finalResult.data as Record<string, unknown>).pendingAction as {
+                      action: string
+                    }
+                  ).action,
+                  explanation: (
+                    (finalResult.data as Record<string, unknown>).pendingAction as {
+                      reason: string
+                    }
+                  ).reason,
+                  isReadOnly: false,
+                }
+              : undefined,
         }
         props.setMessages(runSessionId, (prev) => [...prev, assistantMessage])
       }
     } catch (error) {
       // Suppress the noisy AbortError that fires on page-unload teardown.
       aborted = error instanceof DOMException && error.name === 'AbortError'
+      if (aborted && stoppedSessions.delete(runSessionId)) {
+        // A deliberate Stop, not teardown. The server-side chain keeps running
+        // and its result is persisted, so say exactly that rather than
+        // pretending the turn never happened.
+        props.setMessages(runSessionId, (prev) => [
+          ...prev,
+          {
+            id: `stop-${Date.now()}`,
+            role: 'warning',
+            content: 'Stopped watching this response.',
+            hint: 'The agent finishes server-side — reopen this chat to see the result.',
+            timestamp: new Date(),
+          },
+        ])
+      }
       if (!aborted) {
         outcome = 'error'
         console.error('Error processing message:', error)
@@ -485,12 +534,16 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           id: Date.now().toString(),
           role: 'error',
           content: error instanceof Error ? error.message : 'Unknown error',
-          timestamp: new Date()
+          timestamp: new Date(),
         }
         props.setMessages(runSessionId, (prev) => [...prev, errorMessage])
       }
       progress.finish()
     } finally {
+      // Belt and braces: if a Stop raced the stream to completion no AbortError
+      // was thrown, and a stale flag here would put a spurious "stopped" bubble
+      // on the NEXT teardown of this session.
+      stoppedSessions.delete(runSessionId)
       props.updateRunState(runSessionId, { isProcessing: false, runningTool: null })
       props.unregisterAbortController(runSessionId)
       if (!aborted) props.onRunSettled?.(runSessionId, outcome)
@@ -504,60 +557,66 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       // Execute the approved operation
       const result = await approveAction(props.sessionId)
 
+      const sid = props.sessionId
+
       // Extract graph elements from result and update visualization
       const graphElements = extractGraphFromResult(result)
       if (graphElements.length > 0 && props.onGraphUpdate) {
-        props.onGraphUpdate(graphElements)
+        props.onGraphUpdate(sid, graphElements)
       }
 
       // Emit only new context events (delta since last turn)
       if (result.context?.events && props.onEventsUpdate) {
         const newEvents = result.context.events.slice(prevEventCount)
         prevEventCount = result.context.events.length
-        if (newEvents.length > 0) props.onEventsUpdate(newEvents)
+        if (newEvents.length > 0) props.onEventsUpdate(sid, newEvents)
       }
       if (result.context && props.onContextUpdate) {
-        props.onContextUpdate(result.context)
+        props.onContextUpdate(sid, result.context)
       }
 
       // Update the message with executed tool call
-      setMessages(messages().map(msg => {
-        if (msg.id === messageId && msg.toolCall) {
-          return {
-            ...msg,
-            toolCall: { ...msg.toolCall, status: 'executed' as const }
+      setMessages(
+        messages().map((msg) => {
+          if (msg.id === messageId && msg.toolCall) {
+            return {
+              ...msg,
+              toolCall: { ...msg.toolCall, status: 'executed' as const },
+            }
           }
-        }
-        return msg
-      }))
+          return msg
+        }),
+      )
 
       // Add success message
       const successMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
         content: result.response,
-        timestamp: new Date()
+        timestamp: new Date(),
       }
       setMessages([...messages(), successMessage])
     } catch (error) {
       console.error('Error executing write query:', error)
 
       // Update the message to mark tool call as error
-      setMessages(messages().map(msg => {
-        if (msg.id === messageId && msg.toolCall) {
-          return {
-            ...msg,
-            toolCall: { ...msg.toolCall, status: 'error' as const, error: String(error) }
+      setMessages(
+        messages().map((msg) => {
+          if (msg.id === messageId && msg.toolCall) {
+            return {
+              ...msg,
+              toolCall: { ...msg.toolCall, status: 'error' as const, error: String(error) },
+            }
           }
-        }
-        return msg
-      }))
+          return msg
+        }),
+      )
 
       const errorMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
         content: `Write operation failed:\n\n\`\`\`\n${error instanceof Error ? error.message : 'Unknown error'}\n\`\`\``,
-        timestamp: new Date()
+        timestamp: new Date(),
       }
       setMessages([...messages(), errorMessage])
     } finally {
@@ -571,22 +630,24 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       const result = await rejectAction(props.sessionId)
 
       // Update the message to show rejection in tool call
-      setMessages(messages().map(msg => {
-        if (msg.id === messageId && msg.toolCall) {
-          return {
-            ...msg,
-            toolCall: { ...msg.toolCall, status: 'error' as const, error: 'Rejected by user' }
+      setMessages(
+        messages().map((msg) => {
+          if (msg.id === messageId && msg.toolCall) {
+            return {
+              ...msg,
+              toolCall: { ...msg.toolCall, status: 'error' as const, error: 'Rejected by user' },
+            }
           }
-        }
-        return msg
-      }))
+          return msg
+        }),
+      )
 
       // Add rejection message from agent
       const responseMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
         content: result.response,
-        timestamp: new Date()
+        timestamp: new Date(),
       }
       setMessages([...messages(), responseMessage])
     } catch (error) {
@@ -594,57 +655,61 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     }
   }
 
-  // Composer guard banner — set when the active session has a tool in flight.
+  // Composer guard banner. Naming the running tool when there is one is the
+  // nicety; the load-bearing part is that this returns a string for the whole
+  // of `isProcessing()` (SA-M11) — `runningTool` is null in every gap between
+  // tool calls, and returning undefined there left the composer blocked with
+  // nothing on screen to explain it.
   const blockedMessage = () => {
+    if (!isProcessing()) return undefined
     const tool = runningTool()
-    if (!isProcessing() || !tool) return undefined
-    return `Waiting for \`${tool}\` to complete. Try later.`
+    return tool
+      ? `Waiting for \`${tool}\` to complete. Try later.`
+      : 'Working on your last message…'
   }
 
   return (
     <div flex="~ col" h="full" bg="dark-bg-secondary">
-        {/* Agent Selector Header */}
-        <div
-          flex="~ items-center gap-4"
-          border="b dark-border-primary"
-          px="4"
-          py="2"
-          bg="dark-bg-tertiary/50"
-        >
-          <span text="sm dark-text-secondary">Agent:</span>
-          <div w="64">
-            <AgentSelector
-              selectedAgent={selectedAgent()}
-              onAgentChange={handleAgentChange}
-              disabled={isProcessing()}
-            />
-          </div>
+      {/* Agent Selector Header */}
+      <div
+        flex="~ items-center gap-4"
+        border="b dark-border-primary"
+        px="4"
+        py="2"
+        bg="dark-bg-tertiary/50"
+      >
+        <span text="sm dark-text-secondary">Agent:</span>
+        <div w="64">
+          <AgentSelector
+            selectedAgent={selectedAgent()}
+            onAgentChange={handleAgentChange}
+            disabled={isProcessing()}
+          />
         </div>
+      </div>
 
-        {/* Messages — the live progress bar rides as a trailing slot so it
+      {/* Messages — the live progress bar rides as a trailing slot so it
             appears where the next assistant bubble will land, then animates
             out as that bubble takes its place. */}
-        <ChatMessages
-          messages={messages()}
-          onApproveWrite={handleApproveWrite}
-          onRejectWrite={handleRejectWrite}
-          graphEntityNames={props.graphEntityNames}
-          onHighlightEntities={props.onHighlightEntities}
-          onOpenReference={props.onOpenReference}
-          trailing={() => (
-            <LiveProgressBar
-              status={currentSnapshot().status}
-              current={currentSnapshot().currentTurn}
-              pathProjection={currentSnapshot().pathProjection}
-              maxProjection={currentSnapshot().maxProjection}
-              visible={
-                isProcessing() &&
-                !currentSnapshot().done &&
-                currentSnapshot().maxProjection > 0
-              }
-            />
-          )}
-        />
+      <ChatMessages
+        messages={messages()}
+        onApproveWrite={handleApproveWrite}
+        onRejectWrite={handleRejectWrite}
+        graphEntityNames={props.graphEntityNames}
+        onHighlightEntities={props.onHighlightEntities}
+        onOpenReference={props.onOpenReference}
+        trailing={() => (
+          <LiveProgressBar
+            status={currentSnapshot().status}
+            current={currentSnapshot().currentTurn}
+            pathProjection={currentSnapshot().pathProjection}
+            maxProjection={currentSnapshot().maxProjection}
+            visible={
+              isProcessing() && !currentSnapshot().done && currentSnapshot().maxProjection > 0
+            }
+          />
+        )}
+      />
 
       {/* Input */}
       <div border="t dark-border-primary" p="4" bg="dark-bg-secondary/80" backdrop-blur="sm">
@@ -658,6 +723,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
                 ? capReachedMessage(concurrencyCap())
                 : blockedMessage()
           }
+          isProcessing={isProcessing()}
+          onStop={props.abortSession ? handleStop : undefined}
           focusToken={props.focusInputToken}
         />
       </div>
@@ -687,13 +754,17 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
             style={{ 'max-width': '24rem', margin: '1rem' }}
           >
             <div flex="~" items="center" gap="2" m="b-2">
-              <span class="i-mdi-lightning-bolt-outline" style={{ width: '20px', height: '20px', color: '#22d3ee' }} />
-              <span text="sm dark-text-primary" font="medium">Turn this action into a conversation?</span>
+              <span
+                class="i-mdi-lightning-bolt-outline"
+                style={{ width: '20px', height: '20px', color: '#22d3ee' }}
+              />
+              <span text="sm dark-text-primary" font="medium">
+                Turn this action into a conversation?
+              </span>
             </div>
             <p text="xs dark-text-secondary" m="b-4" style={{ 'line-height': '1.5' }}>
-              Sending a message will promote this triggered action into a regular
-              conversation. If you cancel, the message won't be sent and it stays
-              an action.
+              Sending a message will promote this triggered action into a regular conversation. If
+              you cancel, the message won't be sent and it stays an action.
             </p>
             <div flex="~" gap="2" justify="end">
               <button

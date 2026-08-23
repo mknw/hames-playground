@@ -15,11 +15,11 @@ import type { GraphElement } from './types'
 const PATTERN_SOURCE_MAP: Record<string, GraphElement['source']> = {
   // Neo4j patterns
   'neo4j-query': 'neo4j',
-  'neo4j': 'neo4j',
-  'ontology': 'neo4j',
+  neo4j: 'neo4j',
+  ontology: 'neo4j',
 
   // Memory patterns
-  'memory': 'memory',
+  memory: 'memory',
   'memory-loop': 'memory',
   'session-memory': 'memory',
   'conversational-memory': 'memory',
@@ -51,12 +51,8 @@ function getSourceFromPattern(patternId: string): GraphElement['source'] {
 
 /** Check if a tool result contains Neo4j graph data */
 export function isNeo4jGraphResult(toolName: string, _result: unknown): boolean {
-  const neo4jTools = [
-    'read_neo4j_cypher',
-    'write_neo4j_cypher',
-    'get_neo4j_schema'
-  ]
-  return neo4jTools.some(t => toolName.includes(t))
+  const neo4jTools = ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema']
+  return neo4jTools.some((t) => toolName.includes(t))
 }
 
 /** Check if a tool result contains Memory graph data */
@@ -67,9 +63,9 @@ export function isMemoryGraphResult(toolName: string, _result: unknown): boolean
     'open_nodes',
     'create_entities',
     'create_relations',
-    'add_observations'
+    'add_observations',
   ]
-  return memoryTools.some(t => toolName.includes(t))
+  return memoryTools.some((t) => toolName.includes(t))
 }
 
 /** Enrichment payload produced by `enrichNeo4jResult()` — original rows plus
@@ -92,6 +88,83 @@ function looksLikeSchemaInfo(obj: Record<string, unknown>): boolean {
   return (obj.type === 'node' || obj.type === 'relationship') && 'count' in obj
 }
 
+// ============================================================================
+// Element Builders
+// ============================================================================
+
+/**
+ * Build a node element.
+ *
+ * Two invariants, both of which used to be violated at every construction site:
+ *
+ * 1. **`props` spreads FIRST, computed fields are pinned after** (SA-H9). The
+ *    old order (`{ id, label, type, ...props }`) let a record property called
+ *    `id` — perfectly legal in Neo4j — overwrite the id this function just
+ *    derived. Cytoscape then rejects the element and `cy.add()` throws inside a
+ *    `createEffect`, blanking the whole graph tab rather than dropping one node.
+ * 2. **`kind` is stamped explicitly, and so is Cytoscape's `group`** (SA-M12).
+ *    Node-vs-edge used to be inferred from the presence of a `source` key —
+ *    both by this app's four counting/highlighting sites and, because `group`
+ *    was omitted, by Cytoscape itself. A `(:Chunk {source: …, target: …})`
+ *    node — a real shape in this repo's own Data Stash schema — was therefore
+ *    classified as an edge and could take the graph down with
+ *    "can not create edge with nonexistant source". `group` settles it for
+ *    Cytoscape (an explicit group always wins over its inference) and
+ *    `data.kind` settles it for this app; property spreads no longer decide.
+ */
+function nodeElement(
+  id: string,
+  label: string,
+  type: string,
+  props: Record<string, unknown> | undefined,
+  source: GraphElement['source'],
+): GraphElement {
+  return {
+    group: 'nodes',
+    data: { ...(props ?? {}), id, label, type, kind: 'node' },
+    source,
+  }
+}
+
+/** Build an edge element. Same two invariants as {@link nodeElement}. */
+function edgeElement(
+  id: string,
+  edgeSource: string,
+  target: string,
+  label: string,
+  props: Record<string, unknown> | undefined,
+  source: GraphElement['source'],
+): GraphElement {
+  return {
+    group: 'edges',
+    data: { ...(props ?? {}), id, source: edgeSource, target, label, kind: 'edge' },
+    source,
+  }
+}
+
+/**
+ * True when an element is an edge. This is the ONE place the question is
+ * answered (SA-M12); counting, highlighting and styling all route through it.
+ *
+ * Reads `data.kind` first, then `group`, and only then falls back to the legacy
+ * "has both endpoints" shape — that last branch is what keeps graphs restored
+ * from a session persisted before `kind` existed classifying correctly.
+ */
+export function isEdgeElement(el: { group?: string; data?: Record<string, unknown> }): boolean {
+  const d = el.data
+  if (!d) return false
+  if (d.kind === 'edge') return true
+  if (d.kind === 'node') return false
+  if (el.group === 'edges') return true
+  if (el.group === 'nodes') return false
+  return d.source !== undefined && d.target !== undefined
+}
+
+/** Inverse of {@link isEdgeElement}, for elements that have a `data` bag. */
+export function isNodeElement(el: { group?: string; data?: Record<string, unknown> }): boolean {
+  return !!el.data && !isEdgeElement(el)
+}
+
 /** Parse Neo4j Cypher result into graph elements.
  *
  * Handles two formats:
@@ -109,7 +182,11 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
   // Handle stringified JSON (MCP may return text)
   let parsed = result
   if (typeof result === 'string') {
-    try { parsed = JSON.parse(result) } catch { return elements }
+    try {
+      parsed = JSON.parse(result)
+    } catch {
+      return elements
+    }
   }
 
   // Enrichment payload from onToolResult hook: original rows + 1-hop neighborhood.
@@ -122,8 +199,7 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
     const all = [...fromRows, ...fromNeighborhood]
     for (const el of all) {
       if (!el.data) continue
-      const isNode = el.data.source === undefined && el.data.target === undefined
-      if (isNode && el.data.id !== undefined && touched.has(String(el.data.id))) {
+      if (isNodeElement(el) && el.data.id !== undefined && touched.has(String(el.data.id))) {
         el.data.touched = true
       }
     }
@@ -142,10 +218,15 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
       if (!value) continue
 
       // MCP relationship format: [startNodeObj, "REL_TYPE", endNodeObj]
-      if (Array.isArray(value) && value.length === 3 &&
-          typeof value[1] === 'string' &&
-          value[0] && typeof value[0] === 'object' &&
-          value[2] && typeof value[2] === 'object') {
+      if (
+        Array.isArray(value) &&
+        value.length === 3 &&
+        typeof value[1] === 'string' &&
+        value[0] &&
+        typeof value[0] === 'object' &&
+        value[2] &&
+        typeof value[2] === 'object'
+      ) {
         const startNode = value[0] as Record<string, unknown>
         const relType = value[1] as string
         const endNode = value[2] as Record<string, unknown>
@@ -154,24 +235,12 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
         const endId = String(endNode.name ?? endNode.id ?? `node-${key}-end`)
 
         // Add start and end nodes
-        elements.push({
-          data: { id: startId, label: startId, type: 'Node', ...startNode },
-          source
-        })
-        elements.push({
-          data: { id: endId, label: endId, type: 'Node', ...endNode },
-          source
-        })
+        elements.push(nodeElement(startId, startId, 'Node', startNode, source))
+        elements.push(nodeElement(endId, endId, 'Node', endNode, source))
         // Add relationship edge
-        elements.push({
-          data: {
-            id: `${startId}-${relType}-${endId}`,
-            source: startId,
-            target: endId,
-            label: relType
-          },
-          source
-        })
+        elements.push(
+          edgeElement(`${startId}-${relType}-${endId}`, startId, endId, relType, undefined, source),
+        )
         continue
       }
 
@@ -185,10 +254,7 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
         const idSource = obj.name ?? obj.id ?? obj.title
         if (typeof idSource !== 'string' || idSource.length === 0) continue
         const id = idSource
-        elements.push({
-          data: { id, label: id, type: 'Node', ...obj },
-          source
-        })
+        elements.push(nodeElement(id, id, 'Node', obj, source))
         continue
       }
 
@@ -216,16 +282,9 @@ function parseMemoryResult(result: unknown, source: GraphElement['source']): Gra
       if (entity && typeof entity === 'object') {
         const e = entity as Record<string, unknown>
         const id = String(e.name ?? e.id ?? `entity-${elements.length}`)
-        elements.push({
-          data: {
-            id,
-            label: String(e.name ?? id),
-            type: String(e.entityType ?? 'Entity'),
-            observations: e.observations,
-            ...e
-          },
-          source
-        })
+        elements.push(
+          nodeElement(id, String(e.name ?? id), String(e.entityType ?? 'Entity'), e, source),
+        )
       }
     }
   }
@@ -236,16 +295,16 @@ function parseMemoryResult(result: unknown, source: GraphElement['source']): Gra
       if (relation && typeof relation === 'object') {
         const r = relation as Record<string, unknown>
         const id = `${r.from}-${r.relationType}-${r.to}`
-        elements.push({
-          data: {
+        elements.push(
+          edgeElement(
             id,
-            source: String(r.from),
-            target: String(r.to),
-            label: String(r.relationType ?? 'RELATES_TO'),
-            ...r
-          },
-          source
-        })
+            String(r.from),
+            String(r.to),
+            String(r.relationType ?? 'RELATES_TO'),
+            r,
+            source,
+          ),
+        )
       }
     }
   }
@@ -262,30 +321,30 @@ function extractGraphEntities(value: unknown, source: GraphElement['source']): G
   // Check if it's a Neo4j Node
   if (isNeo4jNode(value)) {
     const node = value as Neo4jNode
-    elements.push({
-      data: {
-        id: String(node.identity ?? node.elementId ?? `node-${Date.now()}`),
-        label: node.properties?.name ?? node.labels?.[0] ?? 'Node',
-        type: node.labels?.[0] ?? 'Node',
-        ...node.properties
-      },
-      source
-    })
+    elements.push(
+      nodeElement(
+        String(node.identity ?? node.elementId ?? `node-${Date.now()}`),
+        String(node.properties?.name ?? node.labels?.[0] ?? 'Node'),
+        node.labels?.[0] ?? 'Node',
+        node.properties,
+        source,
+      ),
+    )
   }
 
   // Check if it's a Neo4j Relationship
   if (isNeo4jRelationship(value)) {
     const rel = value as Neo4jRelationship
-    elements.push({
-      data: {
-        id: String(rel.identity ?? rel.elementId ?? `rel-${Date.now()}`),
-        source: String(rel.start ?? rel.startNodeElementId),
-        target: String(rel.end ?? rel.endNodeElementId),
-        label: rel.type ?? 'RELATES_TO',
-        ...rel.properties
-      },
-      source
-    })
+    elements.push(
+      edgeElement(
+        String(rel.identity ?? rel.elementId ?? `rel-${Date.now()}`),
+        String(rel.start ?? rel.startNodeElementId),
+        String(rel.end ?? rel.endNodeElementId),
+        rel.type ?? 'RELATES_TO',
+        rel.properties,
+        source,
+      ),
+    )
   }
 
   // Check if it's a Neo4j Path
@@ -344,18 +403,14 @@ function isNeo4jNode(value: unknown): value is Neo4jNode {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
   return (
-    ('identity' in v || 'elementId' in v) &&
-    (Array.isArray(v.labels) || v.properties !== undefined)
+    ('identity' in v || 'elementId' in v) && (Array.isArray(v.labels) || v.properties !== undefined)
   )
 }
 
 function isNeo4jRelationship(value: unknown): value is Neo4jRelationship {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
-  return (
-    ('identity' in v || 'elementId' in v) &&
-    ('type' in v || 'start' in v || 'end' in v)
-  )
+  return ('identity' in v || 'elementId' in v) && ('type' in v || 'start' in v || 'end' in v)
 }
 
 function isNeo4jPath(value: unknown): value is Neo4jPath {
@@ -370,7 +425,7 @@ function isNeo4jPath(value: unknown): value is Neo4jPath {
 
 function deduplicateElements(elements: GraphElement[]): GraphElement[] {
   const seen = new Set<string>()
-  return elements.filter(el => {
+  return elements.filter((el) => {
     const id = el.data?.id
     if (!id || seen.has(String(id))) return false
     seen.add(String(id))

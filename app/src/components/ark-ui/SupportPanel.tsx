@@ -5,17 +5,17 @@
  * Tabs: Neo4j Graph | Memory Graph | All (Turn Explorer) | Context manager | Data | Actions | Documents | Tools
  */
 
-import { Tabs } from '@ark-ui/solid/tabs';
-import { Show, createSignal, createMemo, createEffect, Suspense } from 'solid-js';
-import type { OpenReferenceTarget } from '~/lib/harness-client';
-import { GraphVisualization } from './GraphVisualization';
-import { ObservabilityPanel } from './ObservabilityPanel';
-import { DataStashPanel, type StashAction } from './DataStashPanel';
-import { ToolsPanel } from './ToolsPanel';
-import { TerminalPanel } from './TerminalPanel';
-import { AllGraphTabWrapper } from './AllGraphTab';
-import type { ElementDefinition, StylesheetJsonBlock } from 'cytoscape';
-import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns';
+import { Tabs } from '@ark-ui/solid/tabs'
+import { Show, createSignal, createMemo, createEffect, Suspense } from 'solid-js'
+import type { OpenReferenceTarget } from '~/lib/harness-client'
+import { GraphVisualization } from './GraphVisualization'
+import { ObservabilityPanel } from './ObservabilityPanel'
+import { DataStashPanel, type StashAction } from './DataStashPanel'
+import { ToolsPanel } from './ToolsPanel'
+import { TerminalPanel } from './TerminalPanel'
+import { AllGraphTabWrapper } from './AllGraphTab'
+import type { ElementDefinition, StylesheetJsonBlock } from 'cytoscape'
+import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns'
 
 /** Highlight nodes the agent's query actually touched (vs. surrounding context).
  *  The extractor sets `data.touched = true` on these — see `graph-extractor.ts`. */
@@ -30,48 +30,49 @@ const TOUCHED_NODE_STYLES: StylesheetJsonBlock[] = [
       'overlay-opacity': 0.3,
     },
   },
-];
+]
 
 // ============================================================================
 // Types
 // ============================================================================
 
 export interface PromptStat {
-  functionName: string;
-  tokens: { input: number; output: number };
-  latency: number;
-  timestamp: Date;
-  status: 'success' | 'error';
+  functionName: string
+  tokens: { input: number; output: number }
+  latency: number
+  timestamp: Date
+  status: 'success' | 'error'
 }
 
 // Re-export GraphElement from shared types
 export type { GraphElement } from '~/lib/harness-client/types'
 import type { GraphElement } from '~/lib/harness-client/types'
+import { isEdgeElement, isNodeElement } from '~/lib/harness-client/graph-extractor'
 
 export interface SupportPanelProps {
-  graphElements: GraphElement[];
-  highlightedIds?: string[];
-  promptStats?: PromptStat[];
-  contextEvents?: ContextEvent[];
-  unifiedContext?: UnifiedContext;
-  onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void;
-  onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void;
-  onClearGraph?: () => void;
-  onClearEvents?: () => void;
+  graphElements: GraphElement[]
+  highlightedIds?: string[]
+  promptStats?: PromptStat[]
+  contextEvents?: ContextEvent[]
+  unifiedContext?: UnifiedContext
+  onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void
+  onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void
+  onClearGraph?: () => void
+  onClearEvents?: () => void
   /** Callback for Cypher write operations (node edits, relation creation) */
-  onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>;
+  onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>
   /** Session ID for stash API calls */
-  sessionId?: string;
+  sessionId?: string
   /** The conversation's currently-selected agent — forwarded to the Tools
    *  panel so its code-mode gate tracks the live selection. */
-  agentId?: string;
+  agentId?: string
   /** Callback for data stash actions (hide/unhide/archive/unarchive) */
-  onStashAction?: (eventId: string, action: StashAction) => Promise<void>;
+  onStashAction?: (eventId: string, action: StashAction) => Promise<void>
   /** A citation clicked in the chat — switch to the Data Stash tab and open the
    *  inline viewer at this reference. */
-  pendingReference?: OpenReferenceTarget | null;
+  pendingReference?: OpenReferenceTarget | null
   /** Fired after a successful upload so the route can watch embedding status. */
-  onUploaded?: () => void;
+  onUploaded?: () => void
 }
 
 // ============================================================================
@@ -79,24 +80,22 @@ export interface SupportPanelProps {
 // ============================================================================
 
 export const SupportPanel = (props: SupportPanelProps) => {
-  const [selectedTab, setSelectedTab] = createSignal('stats');
+  const [selectedTab, setSelectedTab] = createSignal('stats')
 
   // A chat citation was clicked → surface the Data Stash tab so its inline
   // viewer (opened by DataStashPanel from the same `pendingReference`) is visible.
   createEffect(() => {
-    if (props.pendingReference) setSelectedTab('data');
-  });
+    if (props.pendingReference) setSelectedTab('data')
+  })
 
   // Filter graph elements by source
   const neo4jElements = createMemo(() =>
-    props.graphElements.filter(e =>
-      e.source === 'neo4j' || !e.source // Default to neo4j if source not specified
-    )
-  );
+    props.graphElements.filter(
+      (e) => e.source === 'neo4j' || !e.source, // Default to neo4j if source not specified
+    ),
+  )
 
-  const memoryElements = createMemo(() =>
-    props.graphElements.filter(e => e.source === 'memory')
-  );
+  const memoryElements = createMemo(() => props.graphElements.filter((e) => e.source === 'memory'))
 
   return (
     <div flex="~ col" h="full" bg="dark-bg-primary">
@@ -125,8 +124,8 @@ export const SupportPanel = (props: SupportPanelProps) => {
             transition="all"
             data-state={selectedTab() === 'neo4j-graph' ? 'active' : 'inactive'}
             style={{
-              "border-bottom-color": selectedTab() === 'neo4j-graph' ? '#00ffff' : 'transparent',
-              "color": selectedTab() === 'neo4j-graph' ? '#00ffff' : '#a1a1aa'
+              'border-bottom-color': selectedTab() === 'neo4j-graph' ? '#00ffff' : 'transparent',
+              color: selectedTab() === 'neo4j-graph' ? '#00ffff' : '#a1a1aa',
             }}
           >
             <span mr="1">🗄️</span>
@@ -142,8 +141,8 @@ export const SupportPanel = (props: SupportPanelProps) => {
             transition="all"
             data-state={selectedTab() === 'memory-graph' ? 'active' : 'inactive'}
             style={{
-              "border-bottom-color": selectedTab() === 'memory-graph' ? '#a855f7' : 'transparent',
-              "color": selectedTab() === 'memory-graph' ? '#a855f7' : '#a1a1aa'
+              'border-bottom-color': selectedTab() === 'memory-graph' ? '#a855f7' : 'transparent',
+              color: selectedTab() === 'memory-graph' ? '#a855f7' : '#a1a1aa',
             }}
           >
             <span mr="1">🧠</span>
@@ -159,8 +158,8 @@ export const SupportPanel = (props: SupportPanelProps) => {
             transition="all"
             data-state={selectedTab() === 'all-graph' ? 'active' : 'inactive'}
             style={{
-              "border-bottom-color": selectedTab() === 'all-graph' ? '#22c55e' : 'transparent',
-              "color": selectedTab() === 'all-graph' ? '#22c55e' : '#a1a1aa'
+              'border-bottom-color': selectedTab() === 'all-graph' ? '#22c55e' : 'transparent',
+              color: selectedTab() === 'all-graph' ? '#22c55e' : '#a1a1aa',
             }}
           >
             <span mr="1">🕸️</span>
@@ -176,8 +175,8 @@ export const SupportPanel = (props: SupportPanelProps) => {
             transition="all"
             data-state={selectedTab() === 'stats' ? 'active' : 'inactive'}
             style={{
-              "border-bottom-color": selectedTab() === 'stats' ? '#f59e0b' : 'transparent',
-              "color": selectedTab() === 'stats' ? '#f59e0b' : '#a1a1aa'
+              'border-bottom-color': selectedTab() === 'stats' ? '#f59e0b' : 'transparent',
+              color: selectedTab() === 'stats' ? '#f59e0b' : '#a1a1aa',
             }}
           >
             Context manager
@@ -192,8 +191,8 @@ export const SupportPanel = (props: SupportPanelProps) => {
             transition="all"
             data-state={selectedTab() === 'data' ? 'active' : 'inactive'}
             style={{
-              "border-bottom-color": selectedTab() === 'data' ? '#22d3ee' : 'transparent',
-              "color": selectedTab() === 'data' ? '#22d3ee' : '#a1a1aa'
+              'border-bottom-color': selectedTab() === 'data' ? '#22d3ee' : 'transparent',
+              color: selectedTab() === 'data' ? '#22d3ee' : '#a1a1aa',
             }}
           >
             Data
@@ -208,8 +207,8 @@ export const SupportPanel = (props: SupportPanelProps) => {
             transition="all"
             data-state={selectedTab() === 'tools' ? 'active' : 'inactive'}
             style={{
-              "border-bottom-color": selectedTab() === 'tools' ? '#ff6600' : 'transparent',
-              "color": selectedTab() === 'tools' ? '#ff6600' : '#a1a1aa'
+              'border-bottom-color': selectedTab() === 'tools' ? '#ff6600' : 'transparent',
+              color: selectedTab() === 'tools' ? '#ff6600' : '#a1a1aa',
             }}
           >
             Tools
@@ -224,8 +223,8 @@ export const SupportPanel = (props: SupportPanelProps) => {
             transition="all"
             data-state={selectedTab() === 'terminal' ? 'active' : 'inactive'}
             style={{
-              "border-bottom-color": selectedTab() === 'terminal' ? '#10b981' : 'transparent',
-              "color": selectedTab() === 'terminal' ? '#10b981' : '#a1a1aa'
+              'border-bottom-color': selectedTab() === 'terminal' ? '#10b981' : 'transparent',
+              color: selectedTab() === 'terminal' ? '#10b981' : '#a1a1aa',
             }}
           >
             <span mr="1">🖥️</span>
@@ -309,7 +308,13 @@ export const SupportPanel = (props: SupportPanelProps) => {
               (lazy) mount can't bubble to the empty-fallback root <Suspense>
               in app.tsx and flash the whole app white. */}
           <Tabs.Content value="data" h="full">
-            <Suspense fallback={<div p="4" text="sm dark-text-tertiary">Loading data…</div>}>
+            <Suspense
+              fallback={
+                <div p="4" text="sm dark-text-tertiary">
+                  Loading data…
+                </div>
+              }
+            >
               <DataStashPanel
                 events={props.contextEvents ?? []}
                 sessionId={props.sessionId ?? ''}
@@ -324,14 +329,24 @@ export const SupportPanel = (props: SupportPanelProps) => {
           {/* Tools Tab. Same local-Suspense guard (belt-and-braces with the
               panel's own internal boundary) against the tab-mount white flash. */}
           <Tabs.Content value="tools" h="full">
-            <Suspense fallback={<div p="4" text="sm dark-text-tertiary">Loading tools…</div>}>
+            <Suspense
+              fallback={
+                <div p="4" text="sm dark-text-tertiary">
+                  Loading tools…
+                </div>
+              }
+            >
               <ToolsPanel sessionId={props.sessionId} agentId={props.agentId} />
             </Suspense>
           </Tabs.Content>
 
           {/* Terminal Tab — read-only feed + interactive shell (#79) */}
           <Tabs.Content value="terminal" h="full">
-            <TerminalPanel events={props.contextEvents ?? []} sessionId={props.sessionId} agentId={props.agentId} />
+            <TerminalPanel
+              events={props.contextEvents ?? []}
+              sessionId={props.sessionId}
+              agentId={props.agentId}
+            />
           </Tabs.Content>
 
           {/* Actions Tab (Future) */}
@@ -356,40 +371,42 @@ export const SupportPanel = (props: SupportPanelProps) => {
         </div>
       </Tabs.Root>
     </div>
-  );
-};
+  )
+}
 
 // ============================================================================
 // Graph Tab Content Component
 // ============================================================================
 
 interface GraphTabContentProps {
-  elements: ElementDefinition[];
-  highlightedIds?: string[];
-  onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void;
-  onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void;
-  onClearGraph?: () => void;
-  onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>;
-  emptyMessage: string;
-  emptyIcon: string;
-  extraStyles?: StylesheetJsonBlock[];
+  elements: ElementDefinition[]
+  highlightedIds?: string[]
+  onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void
+  onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void
+  onClearGraph?: () => void
+  onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>
+  emptyMessage: string
+  emptyIcon: string
+  extraStyles?: StylesheetJsonBlock[]
 }
 
 const GraphTabContent = (props: GraphTabContentProps) => {
-  const [syncEnabled, setSyncEnabled] = createSignal(true);
-  const [frozenElements, setFrozenElements] = createSignal<ElementDefinition[]>([]);
+  const [syncEnabled, setSyncEnabled] = createSignal(true)
+  const [frozenElements, setFrozenElements] = createSignal<ElementDefinition[]>([])
 
-  const effectiveElements = () => syncEnabled() ? props.elements : frozenElements();
-  const nodeCount = () => effectiveElements().filter(e => !e.data?.source).length;
-  const edgeCount = () => effectiveElements().filter(e => e.data?.source).length;
+  const effectiveElements = () => (syncEnabled() ? props.elements : frozenElements())
+  // See SA-M12: `data.kind` is the discriminator, not the presence of a
+  // `source` key (which is also a legitimate node property).
+  const nodeCount = () => effectiveElements().filter(isNodeElement).length
+  const edgeCount = () => effectiveElements().filter(isEdgeElement).length
 
   const toggleSync = () => {
     if (syncEnabled()) {
       // Freezing: snapshot current elements
-      setFrozenElements([...props.elements]);
+      setFrozenElements([...props.elements])
     }
-    setSyncEnabled(!syncEnabled());
-  };
+    setSyncEnabled(!syncEnabled())
+  }
 
   return (
     <>
@@ -410,13 +427,19 @@ const GraphTabContent = (props: GraphTabContentProps) => {
             <button
               onClick={toggleSync}
               p="x-2 y-1"
-              text={syncEnabled() ? "xs cyan-400" : "xs amber-400"}
-              bg={syncEnabled() ? "cyan-600/10 hover:cyan-600/20" : "amber-600/10 hover:amber-600/20"}
-              border={syncEnabled() ? "1 cyan-500/30" : "1 amber-500/30"}
+              text={syncEnabled() ? 'xs cyan-400' : 'xs amber-400'}
+              bg={
+                syncEnabled() ? 'cyan-600/10 hover:cyan-600/20' : 'amber-600/10 hover:amber-600/20'
+              }
+              border={syncEnabled() ? '1 cyan-500/30' : '1 amber-500/30'}
               rounded="md"
               cursor="pointer"
               transition="all"
-              title={syncEnabled() ? "Pause graph sync with conversation" : "Resume graph sync with conversation"}
+              title={
+                syncEnabled()
+                  ? 'Pause graph sync with conversation'
+                  : 'Resume graph sync with conversation'
+              }
             >
               {syncEnabled() ? '⏸ Sync' : '▶ Sync'}
             </button>
@@ -460,18 +483,18 @@ const GraphTabContent = (props: GraphTabContentProps) => {
         </Show>
       </div>
     </>
-  );
-};
+  )
+}
 
 // ============================================================================
 // Placeholder Component
 // ============================================================================
 
 interface PlaceholderPanelProps {
-  icon: string;
-  title: string;
-  description: string;
-  phase: string;
+  icon: string
+  title: string
+  description: string
+  phase: string
 }
 
 const PlaceholderPanel = (props: PlaceholderPanelProps) => (
@@ -483,14 +506,9 @@ const PlaceholderPanel = (props: PlaceholderPanelProps) => (
         fill="none"
         stroke="currentColor"
         viewBox="0 0 24 24"
-        style={{"margin":"0 auto", "color":"#4f46e5", "opacity":"0.5"}}
+        style={{ margin: '0 auto', color: '#4f46e5', opacity: '0.5' }}
       >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d={props.icon}
-        />
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={props.icon} />
       </svg>
       <div text="lg dark-text-secondary" font="medium" m="t-4">
         {props.title}
@@ -503,4 +521,4 @@ const PlaceholderPanel = (props: PlaceholderPanelProps) => (
       </div>
     </div>
   </div>
-);
+)

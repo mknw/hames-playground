@@ -84,6 +84,27 @@ const turnColumn = (label: string) =>
 
 const viz = (container: HTMLElement) => container.querySelector('[data-testid="graph-viz"]')
 
+/** A memory-graph result the injection guard rewrote before it was rendered. */
+const guardedMemoryResult = (entities: string[]): ContextEvent => {
+  const base = memoryResult(entities)
+  return {
+    ...base,
+    data: {
+      ...(base.data as Record<string, unknown>),
+      sanitized: {
+        tool: 'read_graph',
+        namespace: 'memory',
+        findingCount: 2,
+        rules: ['instruction-override'],
+        neutralized: true,
+        spotlighted: false,
+        scanned: 512,
+        eventId: 'audit-1',
+      },
+    },
+  }
+}
+
 describe('AllGraphTab — empty states', () => {
   it('tells the user to interact with the agent when no turn has graph data', async () => {
     const { container } = render(() => (
@@ -112,6 +133,30 @@ describe('AllGraphTab — empty states', () => {
     // splitIntoTurns has no turn to attach them to, so they cannot be selected.
     const { container } = render(() => <AllGraphTabWrapper contextEvents={[memoryResult(['A'])]} />)
     expect(container.textContent).toContain('No graph data yet')
+  })
+})
+
+// SA-H10. The tooltip showed the post-guard result as if it were verbatim.
+describe('AllGraphTab — neutralized results', () => {
+  it('marks a rewritten tool result in the turn explorer', async () => {
+    const { container } = render(() => (
+      <AllGraphTabWrapper
+        contextEvents={[userMessage('what concepts exist?'), guardedMemoryResult(['Alpha'])]}
+      />
+    ))
+    await openExplorer(container)
+
+    const chips = [...document.querySelectorAll('[data-role="sanitized-chip"]')]
+    expect(chips).toHaveLength(1)
+    expect(chips[0].textContent).toContain('2 findings neutralized')
+  })
+
+  it('marks nothing for a result the guard did not touch', async () => {
+    const { container } = render(() => (
+      <AllGraphTabWrapper contextEvents={[userMessage('hi'), memoryResult(['Alpha'])]} />
+    ))
+    await openExplorer(container)
+    expect(document.querySelector('[data-role="sanitized-chip"]')).toBeNull()
   })
 })
 
@@ -197,6 +242,31 @@ describe('AllGraphTab — turn selection', () => {
     // Shared + Fresh, not Shared twice.
     expect(viz(container)!.getAttribute('data-count')).toBe('2')
     expect(container.textContent).toContain('2 nodes, 0 edges')
+  })
+
+  // SA-M12: the counts used to be "has a `source` key", so a node carrying a
+  // `source` property — `(:Chunk {source: 'report.pdf'})` is a real shape here —
+  // was counted as an edge.
+  it('counts a node with a source property as a node', async () => {
+    const chunkNode: ContextEvent = {
+      type: 'tool_result',
+      ts: ts++,
+      patternId: 'neo4j-query',
+      data: {
+        callId: 'c-chunk',
+        tool: 'read_neo4j_cypher',
+        success: true,
+        result: [{ c: { name: 'chunk-1', source: 'report.pdf' } }],
+      },
+    }
+    const { container } = render(() => (
+      <AllGraphTabWrapper contextEvents={[userMessage('the chunks?'), chunkNode]} />
+    ))
+    await openExplorer(container)
+    fireEvent.click(turnColumn('Turn 1'))
+    await tick()
+
+    expect(container.textContent).toContain('1 nodes, 0 edges')
   })
 
   it('selects and clears every graph-bearing turn from the explorer header', async () => {

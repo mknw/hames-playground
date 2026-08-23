@@ -271,7 +271,7 @@ describe('DataStashPanel — tool result chips', () => {
     expect(onStashAction).not.toHaveBeenCalled()
   })
 
-  it('shows the LLM summary in the tooltip, or a raw preview marked pending', async () => {
+  it('shows the LLM summary in the tooltip, or a raw preview when there is none', async () => {
     const events = [
       userMessage(),
       toolResult('web_search', { summary: 'three articles about graphs' }, 'ev-sum'),
@@ -281,8 +281,49 @@ describe('DataStashPanel — tool result chips', () => {
 
     expect(container.textContent).toContain('three articles about graphs')
     expect(container.textContent).toContain('{"entities":["a"]}')
-    // Only the summary-less chip advertises a pending summary.
-    expect(container.textContent.match(/Summary pending…/g)).toHaveLength(1)
+    // SA-M9: no "Summary pending…" caption. Summarization runs after the SSE
+    // stream closes and nothing re-delivers it to the open page, so the caption
+    // was permanent for the whole live session — it promised an update that
+    // could only arrive on the next load. The raw preview is the honest state.
+    expect(container.textContent).not.toContain('Summary pending')
+  })
+
+  // SA-H10. The preview shown here is the POST-guard text; nothing said so.
+  it('marks a chip whose result the injection guard rewrote', async () => {
+    const sanitized = {
+      tool: 'fetch',
+      namespace: 'web',
+      findingCount: 3,
+      rules: ['instruction-override'],
+      neutralized: true,
+      spotlighted: true,
+      scanned: 2048,
+      eventId: 'audit-1',
+    }
+    const events = [
+      userMessage(),
+      toolResult('web_search', { sanitized }, 'ev-guarded'),
+      toolResult('read_graph', {}, 'ev-clean'),
+    ]
+    const { container } = await renderPanel({ events })
+
+    const chips = [...container.querySelectorAll('[data-role="sanitized-chip"]')]
+    expect(chips).toHaveLength(1)
+    expect(chips[0].textContent).toContain('3 findings neutralized')
+    expect(chips[0].textContent).toContain('instruction-override')
+
+    // A visible marker on the gallery chip too, so it does not need a hover.
+    const shields = [...container.querySelectorAll('.i-material-symbols-shield-outline')].filter(
+      (el) => el.getAttribute('aria-label'),
+    )
+    expect(shields).toHaveLength(1)
+    expect(shields[0].getAttribute('aria-label')).toContain('injection guard')
+  })
+
+  it('marks nothing when no result was rewritten', async () => {
+    const events = [userMessage(), toolResult('web_search', {}, 'ev-clean')]
+    const { container } = await renderPanel({ events })
+    expect(container.querySelector('[data-role="sanitized-chip"]')).toBeNull()
   })
 })
 

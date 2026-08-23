@@ -12,11 +12,21 @@ function retrieverResult(references: RetrievalReference[]): ContextEvent {
     type: 'tool_result',
     ts: 1,
     patternId: 'retriever',
-    data: { tool: 'retriever', success: true, result: { query: 'q', backends: ['redis'], matches: [], references } },
+    data: {
+      tool: 'retriever',
+      success: true,
+      result: { query: 'q', backends: ['redis'], matches: [], references },
+    },
   } as unknown as ContextEvent
 }
 
-const ref = (docId: string, source: string, startOffset: number, endOffset: number, chunkIndex = 0): RetrievalReference => ({
+const ref = (
+  docId: string,
+  source: string,
+  startOffset: number,
+  endOffset: number,
+  chunkIndex = 0,
+): RetrievalReference => ({
   source,
   docId,
   chunkIndex,
@@ -28,7 +38,12 @@ describe('extractReferences', () => {
   it('returns [] when there is no retriever tool_result', () => {
     const events = [
       { type: 'user_message', ts: 1, patternId: 'h', data: { content: 'hi' } },
-      { type: 'tool_result', ts: 2, patternId: 'neo4j-query', data: { tool: 'read_neo4j_cypher', success: true, result: {} } },
+      {
+        type: 'tool_result',
+        ts: 2,
+        patternId: 'neo4j-query',
+        data: { tool: 'read_neo4j_cypher', success: true, result: {} },
+      },
     ] as unknown as ContextEvent[]
     expect(extractReferences(events)).toEqual([])
   })
@@ -38,22 +53,71 @@ describe('extractReferences', () => {
     expect(extractReferences([retrieverResult(refs)])).toEqual(refs)
   })
 
-  it('uses the MOST RECENT retriever result across turns', () => {
-    const older = retrieverResult([ref('d1', 'old.md', 0, 5)])
-    const newer = retrieverResult([ref('d2', 'new.md', 0, 5)])
-    const events = [older, { type: 'user_message', ts: 3, patternId: 'h', data: { content: 'q2' } }, newer] as unknown as ContextEvent[]
+  it('uses the most recent retriever result within the turn', () => {
+    const first = retrieverResult([ref('d1', 'first.md', 0, 5)])
+    const second = retrieverResult([ref('d2', 'second.md', 0, 5)])
+    const events = [
+      { type: 'user_message', ts: 1, patternId: 'h', data: { content: 'q' } },
+      first,
+      second,
+    ] as unknown as ContextEvent[]
+    expect(extractReferences(events)).toEqual([ref('d2', 'second.md', 0, 5)])
+  })
+
+  // SA-H7. The stream handed to this function is the ACCUMULATED one, so an
+  // unbounded backward scan let a turn that never touched the retriever inherit
+  // the previous turn's citations — fabricated, clickable provenance on an
+  // answer that was not derived from those documents.
+  it('stops at the last user_message rather than inheriting an older turn', () => {
+    const events = [
+      retrieverResult([ref('d1', 'old.md', 0, 5)]),
+      { type: 'user_message', ts: 3, patternId: 'h', data: { content: 'now query neo4j' } },
+      {
+        type: 'tool_result',
+        ts: 4,
+        patternId: 'neo4j-query',
+        data: { tool: 'read_neo4j_cypher', success: true, result: [] },
+      },
+    ] as unknown as ContextEvent[]
+    expect(extractReferences(events)).toEqual([])
+  })
+
+  it('still finds this turn\u2019s references when the turn did retrieve', () => {
+    const events = [
+      retrieverResult([ref('d1', 'old.md', 0, 5)]),
+      { type: 'user_message', ts: 3, patternId: 'h', data: { content: 'q2' } },
+      retrieverResult([ref('d2', 'new.md', 0, 5)]),
+    ] as unknown as ContextEvent[]
     expect(extractReferences(events)).toEqual([ref('d2', 'new.md', 0, 5)])
+  })
+
+  it('scans the whole stream when no user_message has been recorded yet', () => {
+    // Replay of a partial context, or an action-triggered run: the turn bound
+    // is absent, so everything present is "this turn".
+    expect(extractReferences([retrieverResult([ref('d1', 'a.md', 0, 5)])])).toEqual([
+      ref('d1', 'a.md', 0, 5),
+    ])
   })
 
   it('ignores non-retriever tool_results', () => {
     const events = [
-      { type: 'tool_result', ts: 1, patternId: 'web', data: { tool: 'search', success: true, result: { hits: [] } } },
+      {
+        type: 'tool_result',
+        ts: 1,
+        patternId: 'web',
+        data: { tool: 'search', success: true, result: { hits: [] } },
+      },
     ] as unknown as ContextEvent[]
     expect(extractReferences(events)).toEqual([])
   })
 
   it('tolerates a retriever result with no references field', () => {
-    const bad = { type: 'tool_result', ts: 1, patternId: 'retriever', data: { tool: 'retriever', success: true, result: { query: 'q' } } } as unknown as ContextEvent
+    const bad = {
+      type: 'tool_result',
+      ts: 1,
+      patternId: 'retriever',
+      data: { tool: 'retriever', success: true, result: { query: 'q' } },
+    } as unknown as ContextEvent
     expect(extractReferences([bad])).toEqual([])
   })
 })

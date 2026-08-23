@@ -150,7 +150,7 @@ The harness is the main deliverable. It's a composable pattern framework built o
 
 `neo4j`, `web`, `context7`, `filesystem`, `github`, `memory`, `redis`, `database`, `code` — plus any custom servers added to `configs/custom-catalog.yaml`. Tool grouping happens in `app/src/lib/harness-patterns/tools.server.ts` (`inferServer()` + `KNOWN_TOOL_SERVERS` lookup).
 
-Full API: [`app/src/lib/harness-patterns/README.md`](app/src/lib/harness-patterns/README.md) · Examples: [`app/src/lib/harness-client/examples/README.md`](app/src/lib/harness-client/examples/README.md) · Cross-pattern data flow walkthrough: [`docs/harness-patterns/withReferences-tutorial.md`](docs/harness-patterns/withReferences-tutorial.md).
+Full API: [`app/src/lib/harness-patterns/README.md`](app/src/lib/harness-patterns/README.md) · Examples: [`app/src/lib/harness-client/agents/README.md`](app/src/lib/harness-client/agents/README.md) · Cross-pattern data flow walkthrough: [`docs/harness-patterns/withReferences-tutorial.md`](docs/harness-patterns/withReferences-tutorial.md).
 
 ## Conversation Persistence
 
@@ -243,7 +243,7 @@ kg-agent/
 │   │   ├── components/       # UI components (Ark UI)
 │   │   └── lib/
 │   │       ├── harness-patterns/  # Composable pattern framework
-│   │       ├── harness-client/    # Server actions, registry, session, examples/
+│   │       ├── harness-client/    # Server actions, registry, session, agents/
 │   │       ├── db/                # Postgres pool + conversations repo
 │   │       ├── neo4j/             # neo4j-driver singleton + write actions
 │   │       └── auth/              # Entra OIDC (MSAL) + session store + helpers

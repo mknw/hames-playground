@@ -67,7 +67,7 @@ Records: [0001](adr/0001-anthropic-only-default-chains.md) Anthropic-only defaul
 Authoritative source-level docs (closer to the code):
 
 - [`app/src/lib/harness-patterns/README.md`](../app/src/lib/harness-patterns/README.md) — full framework API
-- [`app/src/lib/harness-client/examples/README.md`](../app/src/lib/harness-client/examples/README.md) — example implementations
+- [`app/src/lib/harness-client/agents/README.md`](../app/src/lib/harness-client/agents/README.md) — example implementations
 
 ### UI Frontend
 
@@ -206,7 +206,7 @@ kg-agent/
 │   ├── README.md                # UI quick start + index
 │   └── src/lib/
 │       ├── harness-patterns/    # Pattern framework (source + README.md)
-│       └── harness-client/      # Frontend integration layer (examples/README.md)
+│       └── harness-client/      # Frontend integration layer (agents/README.md)
 ├── configs/                     # MCP and catalog configurations
 ├── scripts/                     # Utility scripts
 ├── neo4j_dumps/                 # Graph data exports

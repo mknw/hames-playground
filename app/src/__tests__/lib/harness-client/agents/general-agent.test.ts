@@ -40,7 +40,7 @@ interface Pattern {
 }
 
 async function buildPatterns(sessionId = 'sess-1'): Promise<Pattern[]> {
-  const { generalAgent } = await import('../../../../lib/harness-client/examples/general.server')
+  const { generalAgent } = await import('../../../../lib/harness-client/agents/general.server')
   return (await generalAgent.createPatterns(sessionId)) as unknown as Pattern[]
 }
 

@@ -55,7 +55,7 @@ write engine for `pd.ExcelWriter` / `pl.DataFrame.write_excel`.
 `withSandbox(config)(pattern)` returns a `ConfiguredPattern`; `router(name→description)`
 + `routes(name→pattern)` compose them. A route can be a flavoured, sandboxed
 controller — so flavour selection lives entirely in the harness. The demonstrator
-([`examples/flavoured-sandbox.server.ts`](../app/src/lib/harness-client/examples/flavoured-sandbox.server.ts)):
+([`agents/flavoured-sandbox.server.ts`](../app/src/lib/harness-client/agents/flavoured-sandbox.server.ts)):
 
 ```ts
 // one ephemeral (base) + two persistent (data, image-processing) routes

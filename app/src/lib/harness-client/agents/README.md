@@ -56,7 +56,7 @@ compositions across all available MCP servers.
 The smallest legal harness composition — one pattern, one BAML call, ~20 LoC. Demonstrates that the library is appropriate for one-shot LLM jobs, not just multi-pattern agentic workflows. Used in production by `/api/events` post-stream to title new conversations as soon as the first response lands.
 
 ```typescript
-// app/src/lib/harness-client/examples/title-generator.server.ts
+// app/src/lib/harness-client/agents/title-generator.server.ts
 export const titleAgent = harness<TitleAgentData>(
   compactExecution<TitleAgentData>({
     patternId: 'title-gen',
@@ -81,7 +81,7 @@ export const titleAgent = harness<TitleAgentData>(
 serve, because a route can only be one namespace.
 
 ```typescript
-// app/src/lib/harness-client/examples/general.server.ts
+// app/src/lib/harness-client/agents/general.server.ts
 return [
   planner<SessionData>(tools.all, { patternId: 'plan', schema }),
   simpleLoop<SessionData>(createLoopControllerAdapter(tools.all), tools.all, {

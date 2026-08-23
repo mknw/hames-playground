@@ -38,28 +38,28 @@ function stubAgent(id: string): AgentConfig {
     createPatterns: async () => [],
   }
 }
-vi.mock('../../../lib/harness-client/examples/default.server', () => ({
+vi.mock('../../../lib/harness-client/agents/default.server', () => ({
   defaultAgent: stubAgent('default'),
 }))
-vi.mock('../../../lib/harness-client/examples/general.server', () => ({
+vi.mock('../../../lib/harness-client/agents/general.server', () => ({
   generalAgent: stubAgent('general'),
 }))
-vi.mock('../../../lib/harness-client/examples/code-mode.server', () => ({
+vi.mock('../../../lib/harness-client/agents/code-mode.server', () => ({
   codeModeAgent: stubAgent('code-mode'),
 }))
-vi.mock('../../../lib/harness-client/examples/multi-source-research.server', () => ({
+vi.mock('../../../lib/harness-client/agents/multi-source-research.server', () => ({
   multiSourceResearchAgent: stubAgent('multi-source-research'),
 }))
-vi.mock('../../../lib/harness-client/examples/sandbox-session.server', () => ({
+vi.mock('../../../lib/harness-client/agents/sandbox-session.server', () => ({
   sandboxSessionAgent: stubAgent('sandbox-session'),
 }))
-vi.mock('../../../lib/harness-client/examples/flavoured-sandbox.server', () => ({
+vi.mock('../../../lib/harness-client/agents/flavoured-sandbox.server', () => ({
   flavouredSandboxAgent: stubAgent('flavoured-sandbox'),
 }))
-vi.mock('../../../lib/harness-client/examples/retriever-agent.server', () => ({
+vi.mock('../../../lib/harness-client/agents/retriever-agent.server', () => ({
   retrieverAgent: stubAgent('retriever'),
 }))
-vi.mock('../../../lib/harness-client/examples/microsoft-365.server', () => ({
+vi.mock('../../../lib/harness-client/agents/microsoft-365.server', () => ({
   microsoft365Agent: stubAgent('microsoft-365'),
 }))
 

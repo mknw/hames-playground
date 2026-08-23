@@ -149,7 +149,7 @@ describe('code-mode agent — router → routes(chain(actorCritic, synth))', () 
   })
 
   it('runs the factory workflow and synthesizes from actor events only', async () => {
-    const { codeModeAgent } = await import('../../lib/harness-client/examples/code-mode.server')
+    const { codeModeAgent } = await import('../../lib/harness-client/agents/code-mode.server')
     const { harness } = await import('../../lib/harness-patterns/harness.server')
 
     const patterns = await codeModeAgent.createPatterns('test-session')
@@ -205,7 +205,7 @@ describe('code-mode agent — router → routes(chain(actorCritic, synth))', () 
       response: 'Hi! I orchestrate MCP tools via code-mode.',
     })
 
-    const { codeModeAgent } = await import('../../lib/harness-client/examples/code-mode.server')
+    const { codeModeAgent } = await import('../../lib/harness-client/agents/code-mode.server')
     const { harness } = await import('../../lib/harness-patterns/harness.server')
 
     const patterns = await codeModeAgent.createPatterns('test-session')
@@ -283,7 +283,7 @@ describe('code-mode agent — retry budget + per-conversation allowlist', () => 
       .mockResolvedValue(mockCriticResult({ is_sufficient: true }))
     synthesize.mockResolvedValue('All steps complete.')
 
-    const { codeModeAgent } = await import('../../lib/harness-client/examples/code-mode.server')
+    const { codeModeAgent } = await import('../../lib/harness-client/agents/code-mode.server')
     const { harness } = await import('../../lib/harness-patterns/harness.server')
 
     const patterns = await codeModeAgent.createPatterns('test-session')
@@ -327,7 +327,7 @@ describe('code-mode agent — retry budget + per-conversation allowlist', () => 
     )
     critic.mockResolvedValue(mockCriticResult({ is_sufficient: true }))
 
-    const { codeModeAgent } = await import('../../lib/harness-client/examples/code-mode.server')
+    const { codeModeAgent } = await import('../../lib/harness-client/agents/code-mode.server')
     const { harness } = await import('../../lib/harness-patterns/harness.server')
 
     const patterns = await codeModeAgent.createPatterns('test-session')

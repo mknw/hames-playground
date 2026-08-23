@@ -91,7 +91,7 @@ The Data Stash adapts to the agent's harness composition:
 
 **Safety net.** Docs uploaded *before* the agent was known (session not yet persisted) miss the gate. The redis backend runs `ensureSessionIngested` on its first search per session (idempotent via `ingestStatus`), so they still become searchable on first retrieval.
 
-**The pattern** (`harness-patterns/patterns/retriever.server.ts`) is framework-pure: it forms ONE query, fans it out to injected `RetrieverBackend`s concurrently (per-backend error isolation), merges hits closest-first capped at `k`, sets `scope.data.matches`, and emits a `tool_result` the compactExecution consumes. It's a low-latency alternative to a tool-calling `simpleLoop` — one embed + KNN instead of a >30s LLM loop. Typical wiring (see `harness-client/examples/retriever-agent.server.ts`):
+**The pattern** (`harness-patterns/patterns/retriever.server.ts`) is framework-pure: it forms ONE query, fans it out to injected `RetrieverBackend`s concurrently (per-backend error isolation), merges hits closest-first capped at `k`, sets `scope.data.matches`, and emits a `tool_result` the compactExecution consumes. It's a low-latency alternative to a tool-calling `simpleLoop` — one embed + KNN instead of a >30s LLM loop. Typical wiring (see `harness-client/agents/retriever-agent.server.ts`):
 
 ```ts
 router({ retriever, neo4j, web_search }),

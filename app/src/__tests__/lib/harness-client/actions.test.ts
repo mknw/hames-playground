@@ -122,7 +122,7 @@ vi.mock('../../../lib/settings-context.server', () => ({ runWithSettings }))
 
 // ── title generator (dynamically imported by the action) ────────────────────
 const runRegenerateTitle = vi.fn(async () => 'A better title')
-vi.mock('../../../lib/harness-client/examples/title-generator.server', () => ({
+vi.mock('../../../lib/harness-client/agents/title-generator.server', () => ({
   runRegenerateTitle,
 }))
 

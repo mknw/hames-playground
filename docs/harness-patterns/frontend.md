@@ -344,7 +344,7 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
 }
 ```
 
-JS-orchestration workflows (the kg-agent gateway's `code-mode` factory + generated tools) live in a separate agent — see [`code-mode.server.ts`](../../app/src/lib/harness-client/examples/code-mode.server.ts) and [`examples.md` § 11. Code Mode Agent](examples.md#11-code-mode-agent).
+JS-orchestration workflows (the kg-agent gateway's `code-mode` factory + generated tools) live in a separate agent — see [`code-mode.server.ts`](../../app/src/lib/harness-client/agents/code-mode.server.ts) and [`examples.md` § 11. Code Mode Agent](examples.md#11-code-mode-agent).
 
 ---
 

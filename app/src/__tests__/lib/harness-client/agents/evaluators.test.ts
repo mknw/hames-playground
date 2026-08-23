@@ -109,7 +109,7 @@ describe('Multi-Source Research judgeEvaluator', () => {
 
   it('should create parallel research with three sources', async () => {
     const { multiSourceResearchAgent } =
-      await import('../../../../lib/harness-client/examples/multi-source-research.server')
+      await import('../../../../lib/harness-client/agents/multi-source-research.server')
     const patterns = await multiSourceResearchAgent.createPatterns('test-session')
 
     const parallelPattern = patterns.find(
@@ -120,7 +120,7 @@ describe('Multi-Source Research judgeEvaluator', () => {
 
   it('should use quality judge for ranking', async () => {
     const { multiSourceResearchAgent } =
-      await import('../../../../lib/harness-client/examples/multi-source-research.server')
+      await import('../../../../lib/harness-client/agents/multi-source-research.server')
     const patterns = await multiSourceResearchAgent.createPatterns('test-session')
 
     const judgePattern = patterns.find(
@@ -131,7 +131,7 @@ describe('Multi-Source Research judgeEvaluator', () => {
 
   it('should have compactExecution for final response', async () => {
     const { multiSourceResearchAgent } =
-      await import('../../../../lib/harness-client/examples/multi-source-research.server')
+      await import('../../../../lib/harness-client/agents/multi-source-research.server')
     const patterns = await multiSourceResearchAgent.createPatterns('test-session')
 
     const synthPattern = patterns.find(

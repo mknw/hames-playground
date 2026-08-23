@@ -10,7 +10,7 @@
  * Write path:  Tools tab checkbox  → setCodeModeAllowedTools(sessionId, names)
  * Agent path:  createPatterns(sid) builds a toolNamesProvider closure that
  *              calls getCodeModeAllowedTools live per actor invocation
- *              (see harness-client/examples/code-mode.server.ts).
+ *              (see harness-client/agents/code-mode.server.ts).
  */
 'use server'
 

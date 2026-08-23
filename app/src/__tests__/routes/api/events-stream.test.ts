@@ -49,7 +49,7 @@ vi.mock('../../../lib/harness-patterns', () => ({
 }))
 
 const runFirstTurnTitleGen = vi.fn<() => Promise<string | null>>(async () => null)
-vi.mock('../../../lib/harness-client/examples/title-generator.server', () => ({
+vi.mock('../../../lib/harness-client/agents/title-generator.server', () => ({
   runFirstTurnTitleGen: (...a: unknown[]) => runFirstTurnTitleGen(...(a as [])),
 }))
 

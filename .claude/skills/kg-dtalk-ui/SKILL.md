@@ -74,7 +74,7 @@ short alias before assuming the value is wrong.
 ### `.ts` files are not scanned by default
 
 UnoCSS only extracts from `[jt]sx` and friends. Agent icon classes live as
-string literals in `src/lib/harness-client/examples/*.server.ts`, so those files
+string literals in `src/lib/harness-client/agents/*.server.ts`, so those files
 need **both** halves of the escape hatch: the `content.filesystem` glob in
 `uno.config.ts` **and** a literal `@unocss-include` comment in the file. Adding
 a new agent with an icon means adding that comment; the top of `uno.config.ts`

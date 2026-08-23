@@ -175,7 +175,7 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 
 ### Adding a New Agent
 
-1. Create `app/src/lib/harness-client/examples/<name>.server.ts` — export `AgentConfig` with `id`, `name`, `description`, `icon`, `servers[]`, `createPatterns`
+1. Create `app/src/lib/harness-client/agents/<name>.server.ts` — export `AgentConfig` with `id`, `name`, `description`, `icon`, `servers[]`, `createPatterns`
 2. Register in `app/src/lib/harness-client/registry.server.ts`
 
 ---

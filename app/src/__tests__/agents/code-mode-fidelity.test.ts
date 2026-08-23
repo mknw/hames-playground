@@ -148,7 +148,7 @@ describe('code-mode agent — synth fidelity + script-hygiene guidance', () => {
   })
 
   it('folds the output-shape / script-hygiene guidance into the actor context (Theme 3)', async () => {
-    const { codeModeAgent } = await import('../../lib/harness-client/examples/code-mode.server')
+    const { codeModeAgent } = await import('../../lib/harness-client/agents/code-mode.server')
     const { harness } = await import('../../lib/harness-patterns/harness.server')
 
     const patterns = await codeModeAgent.createPatterns('test-session')
@@ -166,7 +166,7 @@ describe('code-mode agent — synth fidelity + script-hygiene guidance', () => {
   })
 
   it("passes the real URLs (incl. the 403'd one) into the compactExecution turns (Theme 1)", async () => {
-    const { codeModeAgent } = await import('../../lib/harness-client/examples/code-mode.server')
+    const { codeModeAgent } = await import('../../lib/harness-client/agents/code-mode.server')
     const { harness } = await import('../../lib/harness-patterns/harness.server')
 
     const patterns = await codeModeAgent.createPatterns('test-session')

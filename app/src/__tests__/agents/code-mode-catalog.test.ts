@@ -51,7 +51,11 @@ vi.mock('../../../baml_client', () => ({
 
 vi.mock('@boundaryml/baml', () => {
   class MockCollector {
-    last = { rawLlmResponse: 'raw', usage: { inputTokens: 10, outputTokens: 5 }, calls: [{ httpRequest: { body: {} } }] }
+    last = {
+      rawLlmResponse: 'raw',
+      usage: { inputTokens: 10, outputTokens: 5 },
+      calls: [{ httpRequest: { body: {} } }],
+    }
     constructor(_name?: string) {}
   }
   class BamlValidationError extends Error {}
@@ -81,7 +85,12 @@ vi.mock('../../lib/harness-client/request-user.server', () => ({
 describe('code-mode agent — up-front ENABLED SERVERS catalog', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    router.mockResolvedValue({ intent: 'query neo4j', needs_tool: true, route: 'code_mode', response: '' })
+    router.mockResolvedValue({
+      intent: 'query neo4j',
+      needs_tool: true,
+      route: 'code_mode',
+      response: '',
+    })
     actorController.mockResolvedValue(
       mockAction({
         reasoning: 'Scope a code-mode tool to neo4j-cypher.',
@@ -98,7 +107,7 @@ describe('code-mode agent — up-front ENABLED SERVERS catalog', () => {
   })
 
   it('folds the enabled-servers catalog (real names) into the actor context', async () => {
-    const { codeModeAgent } = await import('../../lib/harness-client/examples/code-mode.server')
+    const { codeModeAgent } = await import('../../lib/harness-client/agents/code-mode.server')
     const { harness } = await import('../../lib/harness-patterns/harness.server')
 
     const patterns = await codeModeAgent.createPatterns('test-session')
@@ -118,7 +127,7 @@ describe('code-mode agent — up-front ENABLED SERVERS catalog', () => {
     // Exercises the real combinators (router → routes → chain) populating
     // `children` + the actorCritic loop's `dynamicToolPattern` marker. This is
     // what `agentUsesCodeMode` (registry) runs to keep the Tools panel active.
-    const { codeModeAgent } = await import('../../lib/harness-client/examples/code-mode.server')
+    const { codeModeAgent } = await import('../../lib/harness-client/agents/code-mode.server')
     const { usesCodeMode } = await import('../../lib/harness-patterns/pattern-capabilities')
 
     const patterns = await codeModeAgent.createPatterns('test-session')

@@ -375,7 +375,7 @@ export async function regenerateConversationTitle(sessionId: string): Promise<st
   const loaded = await loadSession(sessionId, user.id)
   if (!loaded) return null
   const { deserializeContext } = await import('../harness-patterns')
-  const { runRegenerateTitle } = await import('./examples/title-generator.server')
+  const { runRegenerateTitle } = await import('./agents/title-generator.server')
   const ctx = deserializeContext(loaded.serializedContext)
   return runRegenerateTitle(ctx, sessionId, user.id)
 }

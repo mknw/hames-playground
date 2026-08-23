@@ -6,7 +6,7 @@ Functional, composable framework for agentic tool execution.
 > library. The kg-agent repo serves as both consumer and proving ground —
 > the library is intended to be extracted as a standalone npm package once
 > the core API has been validated across enough use cases (the agents under
-> `harness-client/examples/`).
+> `harness-client/agents/`).
 >
 > Library boundary rules — keep them strict so extraction stays cheap:
 >
@@ -344,7 +344,7 @@ block into the controller prompt. Best for routes with a narrow tool surface whe
 LLM benefits from seeing the canonical query shape (e.g., parameterized Cypher with
 `MERGE` semantics, bulk `UNWIND` patterns, idiomatic `toLower()` substring search).
 Keep the list short (3-5) — the prompt grows with every shot and is sent on every turn.
-See `app/src/lib/harness-client/examples/neo4j-fewshots.server.ts` for a worked example
+See `app/src/lib/harness-client/agents/neo4j-fewshots.server.ts` for a worked example
 verified against the live Neo4j MCP.
 
 **Hooks: `onToolResult`** (closes #7). Called between `callTool()` and the
@@ -850,7 +850,7 @@ Each entry exit emits a `reference_attached` event with `{ candidates, selected,
 Either path records an `expansions[]` entry on the `LoopTurn`; the compact ref entry then renders `(expanded in turn N)` so the controller doesn't redundantly re-expand.
 
 ```typescript
-// Default agent migration (excerpt from examples/default.server.ts)
+// Default agent migration (excerpt from agents/default.server.ts)
 const routesPattern = routes<SessionData>({
   neo4j: withReferences(neo4jPattern, { scope: 'global' }),
   web_search: withReferences(webPattern, { scope: 'global' }),
@@ -1012,7 +1012,7 @@ soft hint (steps are not tool calls) — it does not clamp `maxTurns`.
 > one-of-N intent classification; planner is strategic decomposition before
 > execution. `chain(router(...), routes({ x: chain(planner(...), simpleLoop(...)) }))`
 > is valid. The `general` agent
-> (`harness-client/examples/general.server.ts`) demonstrates the flat
+> (`harness-client/agents/general.server.ts`) demonstrates the flat
 > planner → simpleLoop → compactExecution chain alongside the router-based `default`.
 
 ### `retriever(config)`

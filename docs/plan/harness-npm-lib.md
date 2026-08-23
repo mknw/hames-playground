@@ -107,7 +107,7 @@ publishes second would need the other already on the registry.
 
 The rest of the graph (below `harness-patterns`, once that cycle is broken)
 mirrors the import graph already `grep`-confirmed on this branch:
-`harness-client/examples/*` imports both `harness-patterns` and
+`harness-client/agents/*` imports both `harness-patterns` and
 `baml_client`; `sandbox/work-artifacts.server.ts` imports
 `document-store.server.ts` and `stash/upload-service.server.ts` — i.e.
 **sandbox already depends on stash**, so `harness-sandbox`'s `package.json`

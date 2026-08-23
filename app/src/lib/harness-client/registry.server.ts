@@ -235,14 +235,14 @@ export async function agentUsesSyncWorkspace(agentId: string, sessionId: string)
 // ============================================================================
 
 // Import and register all example agents
-import { defaultAgent } from './examples/default.server'
-import { generalAgent } from './examples/general.server'
-import { codeModeAgent } from './examples/code-mode.server'
-import { multiSourceResearchAgent } from './examples/multi-source-research.server'
-import { sandboxSessionAgent } from './examples/sandbox-session.server'
-import { flavouredSandboxAgent } from './examples/flavoured-sandbox.server'
-import { retrieverAgent } from './examples/retriever-agent.server'
-import { microsoft365Agent } from './examples/microsoft-365.server'
+import { defaultAgent } from './agents/default.server'
+import { generalAgent } from './agents/general.server'
+import { codeModeAgent } from './agents/code-mode.server'
+import { multiSourceResearchAgent } from './agents/multi-source-research.server'
+import { sandboxSessionAgent } from './agents/sandbox-session.server'
+import { flavouredSandboxAgent } from './agents/flavoured-sandbox.server'
+import { retrieverAgent } from './agents/retriever-agent.server'
+import { microsoft365Agent } from './agents/microsoft-365.server'
 
 // Register all agents
 registerAgent(defaultAgent)

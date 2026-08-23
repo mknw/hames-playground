@@ -43,7 +43,7 @@ beforeEach(() => {
 
 describe('getGraphSchema', () => {
   async function load() {
-    return import('../../../../lib/harness-client/examples/graph-schema.server')
+    return import('../../../../lib/harness-client/agents/graph-schema.server')
   }
 
   it('returns the schema as JSON when the tool succeeds', async () => {
@@ -72,11 +72,8 @@ describe('getGraphSchema', () => {
 // `createPatterns`, because the bug was not in a helper — it was in what the
 // agent did with the result.
 describe.each([
-  ['default', () => import('../../../../lib/harness-client/examples/default.server')],
-  [
-    'retriever-agent',
-    () => import('../../../../lib/harness-client/examples/retriever-agent.server'),
-  ],
+  ['default', () => import('../../../../lib/harness-client/agents/default.server')],
+  ['retriever-agent', () => import('../../../../lib/harness-client/agents/retriever-agent.server')],
 ])('%s agent — schema failure', (label, importAgent) => {
   async function build(sessionId: string): Promise<{ name: string }[]> {
     const mod = (await importAgent()) as Record<

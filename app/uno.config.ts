@@ -25,7 +25,7 @@ export default defineConfig({
   //     which rejects `.ts` paths unless that marker appears in the code.
   // Globs are relative to app/; entries are watched in dev.
   content: {
-    filesystem: ['src/lib/harness-client/examples/*.server.ts'],
+    filesystem: ['src/lib/harness-client/agents/*.server.ts'],
   },
   presets: [
     presetIcons({

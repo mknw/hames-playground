@@ -33,7 +33,7 @@ vi.mock('../../../../../baml_client', () => ({
 }))
 
 const { retrieverAgent } =
-  await import('../../../../lib/harness-client/examples/retriever-agent.server')
+  await import('../../../../lib/harness-client/agents/retriever-agent.server')
 const { harnessHasRedisRetriever, retriever, compactExecution } =
   await import('../../../../lib/harness-patterns')
 

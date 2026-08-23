@@ -66,7 +66,7 @@ beforeEach(() => vi.clearAllMocks())
 
 describe('agents that consume untrusted content are guarded', () => {
   it('default: the web route is guarded, the neo4j route is not', async () => {
-    const { defaultAgent } = await import('../../../../lib/harness-client/examples/default.server')
+    const { defaultAgent } = await import('../../../../lib/harness-client/agents/default.server')
     const patterns = (await defaultAgent.createPatterns('s')) as Pattern[]
 
     // The guard sits INSIDE routes, on the web route only — the chain itself is
@@ -85,7 +85,7 @@ describe('agents that consume untrusted content are guarded', () => {
 
   it('microsoft-365: the graph loop is guarded', async () => {
     const { microsoft365Agent } =
-      await import('../../../../lib/harness-client/examples/microsoft-365.server')
+      await import('../../../../lib/harness-client/agents/microsoft-365.server')
     const patterns = (await microsoft365Agent.createPatterns('s')) as Pattern[]
     const guard = guardOf(patterns)
     expect(guard).toBeDefined()
@@ -95,7 +95,7 @@ describe('agents that consume untrusted content are guarded', () => {
 
   it('multi-source-research: all three search branches are guarded at once', async () => {
     const { multiSourceResearchAgent } =
-      await import('../../../../lib/harness-client/examples/multi-source-research.server')
+      await import('../../../../lib/harness-client/agents/multi-source-research.server')
     const patterns = (await multiSourceResearchAgent.createPatterns('s')) as Pattern[]
     const guard = guardOf(patterns)
     expect(guard).toBeDefined()
@@ -111,7 +111,7 @@ describe('agents that consume untrusted content are guarded', () => {
 
   it('retriever: routes is guarded, covering both web and the stash', async () => {
     const { retrieverAgent } =
-      await import('../../../../lib/harness-client/examples/retriever-agent.server')
+      await import('../../../../lib/harness-client/agents/retriever-agent.server')
     const patterns = (await retrieverAgent.createPatterns('s')) as Pattern[]
     const guard = guardOf(patterns)
     expect(guard).toBeDefined()
@@ -127,7 +127,7 @@ describe('agents that consume untrusted content are guarded', () => {
 
 describe('agents deliberately NOT guarded (yet)', () => {
   it('general: left to the sibling general-agent lane (#206) to wire at its seam', async () => {
-    const { generalAgent } = await import('../../../../lib/harness-client/examples/general.server')
+    const { generalAgent } = await import('../../../../lib/harness-client/agents/general.server')
     const patterns = (await generalAgent.createPatterns('s')) as Pattern[]
     expect(guardOf(patterns)).toBeUndefined()
   })
@@ -136,8 +136,7 @@ describe('agents deliberately NOT guarded (yet)', () => {
     // Not a claim that code-mode is safe — a claim that this PR did not touch
     // it. Its threat model (a script the actor wrote, run against every tool)
     // is a different piece of work.
-    const { codeModeAgent } =
-      await import('../../../../lib/harness-client/examples/code-mode.server')
+    const { codeModeAgent } = await import('../../../../lib/harness-client/agents/code-mode.server')
     const patterns = (await codeModeAgent.createPatterns('s')) as Pattern[]
     expect(guardOf(patterns)).toBeUndefined()
   })

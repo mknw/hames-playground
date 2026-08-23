@@ -34,7 +34,7 @@ router → routes({
 }) → compactExecution
 ```
 
-See [`app/src/lib/harness-client/examples/default.server.ts`](../../app/src/lib/harness-client/examples/default.server.ts) for the source.
+See [`app/src/lib/harness-client/agents/default.server.ts`](../../app/src/lib/harness-client/agents/default.server.ts) for the source.
 
 ---
 

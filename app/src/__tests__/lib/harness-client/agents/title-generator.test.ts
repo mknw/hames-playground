@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 
-// `examples/title-generator.server.ts` imports `harness-patterns` (which
+// `agents/title-generator.server.ts` imports `harness-patterns` (which
 // asserts server-only on import) and `db/conversations.server` (which
 // needs a pg pool). Mock both before dynamic-importing the SUT.
 vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
@@ -24,9 +24,7 @@ vi.mock('../../../../../baml_client', () => ({
   },
 }))
 vi.mock('../../../../lib/harness-patterns', async () => {
-  const actual = await vi.importActual<Record<string, unknown>>(
-    '../../../../lib/harness-patterns',
-  )
+  const actual = await vi.importActual<Record<string, unknown>>('../../../../lib/harness-patterns')
   // Keep the real exports but stub out the `harness()` factory — the agent
   // would otherwise pull in MCP tools, settings-context, etc.
   return {
@@ -42,7 +40,7 @@ vi.mock('../../../../lib/harness-patterns', async () => {
   }
 })
 
-const sut = await import('../../../../lib/harness-client/examples/title-generator.server')
+const sut = await import('../../../../lib/harness-client/agents/title-generator.server')
 const { updateConversationTitle } = await import('../../../../lib/db/conversations.server')
 
 describe('sanitizeTitle', () => {
@@ -102,8 +100,20 @@ describe('runFirstTurnTitleGen', () => {
       sessionId: 's',
       createdAt: 0,
       events: [
-        { id: 'u1', type: 'user_message' as const, ts: 1, patternId: 'h', data: { content: 'first' } },
-        { id: 'u2', type: 'user_message' as const, ts: 2, patternId: 'h', data: { content: 'second' } },
+        {
+          id: 'u1',
+          type: 'user_message' as const,
+          ts: 1,
+          patternId: 'h',
+          data: { content: 'first' },
+        },
+        {
+          id: 'u2',
+          type: 'user_message' as const,
+          ts: 2,
+          patternId: 'h',
+          data: { content: 'second' },
+        },
       ],
       status: 'done' as const,
       input: 'second',
@@ -119,7 +129,13 @@ describe('runFirstTurnTitleGen', () => {
       sessionId: 's',
       createdAt: 0,
       events: [
-        { id: 'u1', type: 'user_message' as const, ts: 1, patternId: 'h', data: { content: 'first message' } },
+        {
+          id: 'u1',
+          type: 'user_message' as const,
+          ts: 1,
+          patternId: 'h',
+          data: { content: 'first message' },
+        },
       ],
       status: 'done' as const,
       input: 'first message',
@@ -128,7 +144,11 @@ describe('runFirstTurnTitleGen', () => {
     const result = await sut.runFirstTurnTitleGen(ctx, 'sess-1', 'user-1')
     // The mocked harness returns 'Mocked Agent Response' which sanitizes to itself.
     expect(result).toBe('Mocked Agent Response')
-    expect(updateConversationTitle).toHaveBeenCalledWith('sess-1', 'user-1', 'Mocked Agent Response')
+    expect(updateConversationTitle).toHaveBeenCalledWith(
+      'sess-1',
+      'user-1',
+      'Mocked Agent Response',
+    )
   })
 })
 
@@ -154,9 +174,27 @@ describe('runRegenerateTitle', () => {
       sessionId: 's',
       createdAt: 0,
       events: [
-        { id: 'u1', type: 'user_message' as const, ts: 1, patternId: 'h', data: { content: 'first' } },
-        { id: 'u2', type: 'user_message' as const, ts: 2, patternId: 'h', data: { content: 'latest' } },
-        { id: 'u3', type: 'user_message' as const, ts: 3, patternId: 'h', data: { content: 'newest' } },
+        {
+          id: 'u1',
+          type: 'user_message' as const,
+          ts: 1,
+          patternId: 'h',
+          data: { content: 'first' },
+        },
+        {
+          id: 'u2',
+          type: 'user_message' as const,
+          ts: 2,
+          patternId: 'h',
+          data: { content: 'latest' },
+        },
+        {
+          id: 'u3',
+          type: 'user_message' as const,
+          ts: 3,
+          patternId: 'h',
+          data: { content: 'newest' },
+        },
       ],
       status: 'done' as const,
       input: 'newest',
@@ -164,6 +202,10 @@ describe('runRegenerateTitle', () => {
     }
     const result = await sut.runRegenerateTitle(ctx, 'sess-x', 'user-x')
     expect(result).toBe('Mocked Agent Response')
-    expect(updateConversationTitle).toHaveBeenCalledWith('sess-x', 'user-x', 'Mocked Agent Response')
+    expect(updateConversationTitle).toHaveBeenCalledWith(
+      'sess-x',
+      'user-x',
+      'Mocked Agent Response',
+    )
   })
 })

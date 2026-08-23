@@ -6,62 +6,58 @@
   <img src="docs/harness-patterns/hames_dark-text-on-transparent-bg.png" alt="hames" width="380">
 </picture>
 
-### Application Lab for harness primitives
+### Lab-app for harness primitives.
 
-**MVP stage** · [What it is](#what-this-is) · [hames](#hames--the-primitives) · [Architecture](#architecture) · [Security](#security-disclaimer) · [Quickstart](#quickstart) · [Agents](#agents) · [Docs](#documentation)
+A laboratory for experimentation and testing of agentic harnesses created with **hames**.
+
+[![CI](https://img.shields.io/github/actions/workflow/status/mknw/hames-playground/ci.yml?branch=main&style=flat&label=CI)](https://github.com/mknw/hames-playground/actions/workflows/ci.yml)
+[![stage](https://img.shields.io/badge/stage-MVP-orange?style=flat)](#the-idea)
+[![playground licence: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/playground-PolyForm%20NC%201.0.0-blue?style=flat)](LICENSE)
+[![hames licence: MIT](https://img.shields.io/badge/hames-MIT-blue?style=flat)](app/src/lib/harness-patterns/LICENSE)
+
+[![SolidStart](https://img.shields.io/badge/SolidStart-1.x-2c4f7c?style=flat&logo=solid&logoColor=white)](https://start.solidjs.com)
+[![BAML](https://img.shields.io/badge/BAML-typed%20LLM%20calls-8b5cf6?style=flat)](https://docs.boundaryml.com)
+[![pnpm](https://img.shields.io/badge/pnpm-workspace-f69220?style=flat&logo=pnpm&logoColor=white)](https://pnpm.io)
+
+[The idea](#the-idea) · [Architecture](#architecture) · [Primitives](#hames--the-primitives) · [Agents](#agents) · [Quickstart](#quickstart) · [Docs](#documentation) · [License](#license)
 
 </div>
 
+> **⚠️ MVP stage — use at your own discretion.** These agents hold real tool
+> access, and nothing here has been hardened for a deployment you do not control.
+> Run it on localhost, against data you can afford to lose, with keys you can
+> rotate — and read the [License](#license) before you do anything else with it.
+
 ---
 
-## What this is
+## The idea
 
-**hames-playground** is the application lab for **hames** — a small set of
-composable primitives for building LLM agents. The primitives are the point;
-this repo is where they get proven against real work.
+Every agent framework eventually collides with the same wall: the transcript.
+It grows every turn, everything gets pasted into everything, and by turn five the
+model is reasoning over a pile of text nobody deliberately chose for it. `hames`
+starts from the other end. The run's history is the primary object, and what any
+one LLM call sees is a slice of it that somebody picked on purpose.
 
-The lab gives each primitive somewhere to be wrong in public: a SolidStart app
-with a chat surface, a live event timeline, an interactive graph, and a handful
-of agents that compose the primitives differently on purpose. If a pattern only
-looks right in a README, it shows up here.
+That object is the **`UnifiedContext`** — one append-only event log per session,
+where every pattern (a loop, a router, a planner, a guard) reads and appends, and
+where nothing else counts as state. Patterns write into an isolated scope first
+and commit only on completion, so a step that fails leaves no trace behind. A
+session _is_ its serialized log, which is why continuing a conversation and
+resuming after an approval gate are the same mechanism rather than two features.
 
-**Status: MVP.** The API still moves, the agents are showcases rather than
-products, and nothing here has been hardened for a public deployment — see
-[Security disclaimer](#security-disclaimer) before you run it anywhere but
-localhost.
+**Views and scopes** are how the slice gets picked. `EventView` is a small query
+API over the log — by pattern, by event type, by the last N user turns — so a
+synthesizer can be handed exactly the tool results of the route that just ran,
+and a router just the message history it needs to classify. `ViewConfig` declares
+that per pattern instead of at every call site, so detail from three turns ago
+expires by construction instead of by someone remembering to prune it.
 
-## hames — the primitives
-
-`hames` is a functional pattern framework for agentic tool execution. A pattern
-is a function of `(scope, view, tools)` that reads and appends to one
-**`UnifiedContext`** event log; patterns compose into an agent and stay
-independent in semantics, so one can be swapped without disturbing the others.
-
-|                        |                                                                       |
-| ---------------------- | --------------------------------------------------------------------- |
-| **Loops**              | `simpleLoop` · `actorCritic`                                          |
-| **Planning & routing** | `planner` · `router` · `routes` · `parallel`                          |
-| **Context**            | `withReferences` · `retriever` · `compactExecution` · `compactIntent` |
-| **Guards**             | `withInjectionGuard`                                                  |
-| **Composition**        | `chain` · `harness` · `continueSession` · `resumeHarness`             |
-
-BAML supplies typed LLM reasoning at each pattern's leaf; an MCP gateway
-supplies the tools. Neither is baked in — the library is being pulled towards a
-BAML-free core behind injected call interfaces
-([`docs/plan/harness-npm-lib.md`](docs/plan/harness-npm-lib.md)).
-
-📖 **[Read the hames README →](app/src/lib/harness-patterns/README.md)** — full
-API, `UnifiedContext` architecture, the `EventView` query API, and the
-event→BAML type mapping.
-
-One primitive worth a closer look: **`withReferences`** carries data across
-turns without re-fetching. The agent searches the web on one turn and writes the
-findings into Neo4j on the next — an LLM-driven selector attaches the relevant
-prior `tool_result` events at the new pattern's ingress, and the controller pulls
-the full payload through the synthetic `expandPreviousResult` tool. No
-re-fetching, no hallucinated content.
-→ [Walkthrough](docs/harness-patterns/withReferences-tutorial.md) ·
-[Design](docs/harness-patterns/with-references.md)
+The LLM leaf of every primitive is a **BAML** function, and that was the point of
+choosing BAML: prompts live in version-controlled `.baml` files with declared
+input and output types, so a controller returns a validated `ControllerAction`
+instead of a string you hope parses, model fallback chains sit next to the prompt
+they serve, and a parse failure arrives as a typed `error` event in the same log
+as everything else. Prompts as code — not string soup.
 
 ## Architecture
 
@@ -101,34 +97,59 @@ flowchart TB
 
 Events flow one way: every pattern appends to the `UnifiedContext` log, the UI
 streams that log over SSE, and `compactExecution` turns the accumulated events
-into the final answer. Session state is the serialized log, nothing else.
+into the final answer.
 
-## Security disclaimer
+## hames — the primitives
 
-**⚠️ This is MVP-stage software. Do not expose it to the internet without your own
-security review.**
+A pattern is a function of `(scope, view, tools)` over that one event log.
+Patterns stay independent in semantics, so one can be swapped without disturbing
+the others — which is the whole reason the lab can hold several agents that
+differ only in how they compose these:
 
-- **It runs LLM agents that hold real tool access.** Agents execute Cypher
-  against Neo4j, read and write the filesystem through MCP, shell out to
-  `docker run` for compute sandboxes, and — for the Microsoft 365 agent — act on
-  a signed-in user's own mailbox and files with delegated Graph scopes. Prompt
-  content reaches those tools.
-- **`'use server'` hardening is ongoing.** Several unauthenticated server-action
-  holes were closed in #227 / #229, but the work is not finished:
-  [#230](https://github.com/mknw/hames-playground/issues/230) is **open** —
-  `runManualCypher` still accepts raw Cypher behind a substring blacklist.
-- **Auth is off by default for development.** `app/.env.example` ships
-  `VITE_DEV_BYPASS_AUTH='true'`. A real deployment needs the Entra sign-in wired
-  and the bypass off ([`docs/deployment/entra-setup.md`](docs/deployment/entra-setup.md)).
-- **The compose stack publishes its databases on `0.0.0.0`.** Convenient on a
-  laptop, an internet-exposed database on a VM. Bind them to loopback first —
-  [`docs/deployment/azure-vm.md` §4](docs/deployment/azure-vm.md).
-- **Prompt injection is mitigated, not solved.** `withInjectionGuard` screens
-  tool results before they reach a controller (#207). Treat it as defence in
-  depth, not a boundary you can trust with real secrets.
+|                        |                                                                       |
+| ---------------------- | --------------------------------------------------------------------- |
+| **Loops**              | `simpleLoop` · `actorCritic`                                          |
+| **Planning & routing** | `planner` · `router` · `routes` · `parallel`                          |
+| **Context**            | `withReferences` · `retriever` · `compactExecution` · `compactIntent` |
+| **Guards**             | `withInjectionGuard`                                                  |
+| **Composition**        | `chain` · `harness` · `continueSession` · `resumeHarness`             |
 
-Run it on localhost, against data you can afford to lose, with API keys you can
-rotate.
+BAML supplies the typed reasoning at each leaf; an MCP gateway supplies the
+tools. Neither is baked in — the library is being pulled towards a BAML-free core
+behind injected call interfaces
+([`docs/plan/harness-npm-lib.md`](docs/plan/harness-npm-lib.md)).
+
+📖 **[Read the hames README →](app/src/lib/harness-patterns/README.md)** — full
+API, `UnifiedContext` architecture, the `EventView` query API, and the
+event→BAML type mapping.
+
+One primitive worth a closer look: **`withReferences`** carries data across turns
+without re-fetching. The agent searches the web on one turn and writes the
+findings into Neo4j on the next — an LLM-driven selector attaches the relevant
+prior `tool_result` events at the new pattern's ingress, and the controller pulls
+the full payload through the synthetic `expandPreviousResult` tool. No
+re-fetching, no hallucinated content.
+→ [Walkthrough](docs/harness-patterns/withReferences-tutorial.md) ·
+[Design](docs/harness-patterns/with-references.md)
+
+## Agents
+
+Each agent is a different composition of the same primitives — that is what they
+are for. Registered in
+[`app/src/lib/harness-client/registry.server.ts`](app/src/lib/harness-client/registry.server.ts).
+
+| Agent                   | Composition                                                                       | What it shows                                                                                                                              |
+| ----------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Search**              | `router` → `routes(withReferences(simpleLoop))` → `compactExecution`              | Classify into one namespace and dispatch — Neo4j or web search. The `web` route is injection-guarded, `neo4j` is not                       |
+| **General**             | `planner` → `simpleLoop` → `compactExecution`                                     | Pay for strategy once, up front, then hand the whole tool surface to one executor. The A/B counterpart to Search on cross-domain questions |
+| **Sandbox · Session**   | `compactIntent` → `withSandbox(actorCritic)` → `compactExecution`                 | A container keyed to the session, persistent across turns and shared with the interactive Shell — build incrementally, inspect files live  |
+| **Sandbox · Flavoured** | `router` → `routes(withSandbox(actorCritic))` → `compactExecution`                | One route per purpose-built flavour: base, image-processing, data, office                                                                  |
+| **Retriever**           | `router` → `routes(retriever \| withReferences(simpleLoop))` → `compactExecution` | Semantic retrieval over uploaded documents (Data Stash) as a peer route beside Neo4j and web                                                |
+| **Microsoft 365**       | `withInjectionGuard(simpleLoop)` → `compactExecution`                             | Per-user identity end to end — answers from the signed-in user's own mailbox, calendar and files via delegated Graph scopes                |
+
+`multi-source-research` (a worked `parallel` example) ships unregistered and
+untested — see its file header. Writing a new agent is two steps:
+[`app/src/lib/harness-client/agents/README.md`](app/src/lib/harness-client/agents/README.md).
 
 ## Quickstart
 
@@ -156,8 +177,8 @@ pnpm dev                          # http://localhost:3444
 ```
 
 The app runs natively on the host on purpose — that is the development loop, and
-step 1 deliberately does not start it. A container shape exists for
-deployment parity (`docker compose --profile app up -d`); see
+step 1 deliberately does not start it. A container shape exists for deployment
+parity (`docker compose --profile app up -d`); see
 [`docs/DOCKER_COMPOSE.md`](docs/DOCKER_COMPOSE.md#app-the-solidstart-app-197).
 
 **Every `pnpm` command runs from `app/`** — never npm/npx, never from the repo
@@ -170,24 +191,12 @@ root. Re-run `pnpm baml-generate` after editing anything under `app/baml_src/`.
 | MCP Gateway   | <http://localhost:8811/mcp>                              |
 | Postgres      | `localhost:5432` — `postgres` / `password`, db `kgagent` |
 
-## Agents
-
-Each agent is a different composition of the same primitives — that is what they
-are for. Registered in
-[`app/src/lib/harness-client/registry.server.ts`](app/src/lib/harness-client/registry.server.ts).
-
-| Agent                   | Composition                                                                       | What it shows                                                                                                                              |
-| ----------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Search**              | `router` → `routes(withReferences(simpleLoop))` → `compactExecution`              | Classify into one namespace and dispatch — Neo4j or web search. The `web` route is injection-guarded, `neo4j` is not                       |
-| **General**             | `planner` → `simpleLoop` → `compactExecution`                                     | Pay for strategy once, up front, then hand the whole tool surface to one executor. The A/B counterpart to Search on cross-domain questions |
-| **Sandbox · Session**   | `compactIntent` → `withSandbox(actorCritic)` → `compactExecution`                 | A container keyed to the session, persistent across turns and shared with the interactive Shell — build incrementally, inspect files live  |
-| **Sandbox · Flavoured** | `router` → `routes(withSandbox(actorCritic))` → `compactExecution`                | One route per purpose-built flavour: base, image-processing, data, office                                                                  |
-| **Retriever**           | `router` → `routes(retriever \| withReferences(simpleLoop))` → `compactExecution` | Semantic retrieval over uploaded documents (Data Stash) as a peer route beside Neo4j and web                                               |
-| **Microsoft 365**       | `withInjectionGuard(simpleLoop)` → `compactExecution`                             | Per-user identity end to end — answers from the signed-in user's own mailbox, calendar and files via delegated Graph scopes                |
-
-`multi-source-research` (a worked `parallel` example) ships unregistered and
-untested — see its file header. Writing a new agent is two steps:
-[`app/src/lib/harness-client/agents/README.md`](app/src/lib/harness-client/agents/README.md).
+Auth is bypassed for development (`VITE_DEV_BYPASS_AUTH='true'` in
+`app/.env.example`), the compose stack publishes its databases on `0.0.0.0`, and
+both need attention before this runs anywhere but a laptop —
+[`docs/deployment/azure-vm.md`](docs/deployment/azure-vm.md) and
+[`docs/deployment/entra-setup.md`](docs/deployment/entra-setup.md) cover the
+hardening.
 
 ## Documentation
 

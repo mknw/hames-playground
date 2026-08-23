@@ -274,13 +274,13 @@ A container is disposable; the workspace shouldn't be. The 5-minute-class idle w
 
 | Path | Role | Lifetime |
 |------|------|----------|
-| `/work/in` | Uploads + prior deliverables, **restored on first boot** of each session's container. | Durable (DataStash). Read-only by convention. |
+| `/work/in` | Uploads + prior deliverables, **restored at every turn's entry** (only what is missing). | Durable (DataStash). Read-only by convention. |
 | `/work/out` | Files the agent wants kept. **Promoted to the DataStash on every turn exit.** | Durable (DataStash). |
 | `/work` (elsewhere) | Scratch. | Ephemeral — gone when the container recycles. |
 
 **Mechanism** (`app/src/lib/sandbox/work-artifacts.server.ts` + `work-sync.server.ts`):
 
-- **Hydrate** — on first boot only (tracked by `Attachment.isFirstBoot`), `listDocuments(sessionId)` → write each into `/work/in`. Reused live attachments skip this, so a multi-turn session doesn't re-hydrate every turn.
+- **Hydrate** — at every turn's entry, diff-wise: `listDocuments(sessionId)` diffed against what `/work/in` already holds (one in-VM `find`) → write only the missing ones. A steady-state turn therefore costs a list plus a `find` and writes nothing, while a document ingested *this* turn still reaches the actor. It was gated on `Attachment.isFirstBoot` until [#206 §6.1](https://github.com/mknw/hames-playground/issues/206) — which made turn 1 work by accident of ordering and left every later turn, plus every turn after a Shell-first boot, unable to see a newly stored file. Presence, not content hash, is the diff key, so a file the agent wrote under `/work/in` is never clobbered.
 - **Promote** — snapshot `/work/out` (in-VM `sha256sum`) at turn entry, diff at exit, and `storeDocument` each new/changed file. Runs in a `finally`, so deliverables are saved even if the turn throws. Deletions are ignored (promotion never removes stored docs).
 - **Binary-faithful** — text files store verbatim; everything else (xlsx, pdf, images) moves as base64 staged through a `.b64` text file (the in-VM filesystem MCP is text-only) and is stored with `encoding: 'base64'`. See [DATA_STASH.md → Storage model](../DATA_STASH.md#storage-model-redis).
 

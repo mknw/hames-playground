@@ -1,9 +1,10 @@
 /**
  * work-artifacts — bridge the durable document store and a sandbox `/work` (#89).
  *
- *   hydrateWorkspace : on first boot, write the session's stored documents into
- *                      `/work/in` so the agent can operate on prior uploads /
- *                      earlier deliverables.
+ *   hydrateWorkspace : write the session's stored documents into `/work/in` so
+ *                      the agent can operate on prior uploads / earlier
+ *                      deliverables. Diff-wise, so it is safe to call on every
+ *                      turn (#206 §6.1).
  *   snapshotOutputs  : hash `/work/out` at turn entry (the promote baseline).
  *   promoteOutputs   : at turn exit, store files that are new/changed under
  *                      `/work/out` back into the document store (text verbatim,
@@ -53,10 +54,22 @@ export interface SkippedWorkFile {
 }
 
 /**
- * Write every (visible) stored document for the session into `/work/in`.
- * Returns the number of files written plus the ones that failed.
- * Hidden/archived docs are skipped (they're excluded from the agent's context
- * elsewhere too) and are NOT reported as failures.
+ * Write the session's (visible) stored documents into `/work/in`, skipping the
+ * ones already there. Returns the number of files written plus the ones that
+ * failed. Hidden/archived docs are skipped (they're excluded from the agent's
+ * context elsewhere too) and are NOT reported as failures.
+ *
+ * **Diff-wise, the exact mirror of {@link promoteOutputs}** (#206 §6.1): the
+ * destination set is diffed against what `/work/in` already holds, so the call
+ * is idempotent and cheap enough to run on every turn — one `listDocuments` and
+ * one in-VM `find` when nothing is missing, and a body fetch only per missing
+ * file. That is what makes a document ingested *this* turn reachable: hydrating
+ * once per container boot left every turn after the first (and every turn after
+ * a Shell-first boot) blind to it.
+ *
+ * Presence, not content, is the diff key — deliberately. `/work/in` is
+ * read-only by convention, but if the agent did write there, re-hydrating must
+ * not overwrite its work; a content-hash diff would.
  */
 export async function hydrateWorkspace(
   transport: McpTransport,
@@ -64,10 +77,21 @@ export async function hydrateWorkspace(
   callTool?: CallTool,
 ): Promise<{ written: number; skipped: SkippedWorkFile[] }> {
   const metas = await listDocuments(sessionId, callTool)
+  // Relative paths (basenames, for anything hydrate wrote) of what is already
+  // in /work/in. `listWorkFiles` hashes too; only the key set matters here.
+  const present = await listWorkFiles(transport, WORK_IN_DIR)
   let written = 0
   const skipped: SkippedWorkFile[] = []
-  for (const meta of metas) {
+  // Newest first, so when two documents reduce to the same basename (the same
+  // filename uploaded twice) the newer one is the one that lands, instead of
+  // whichever the store happened to list last.
+  const candidates = [...metas].sort((a, b) => b.uploadedAt - a.uploadedAt)
+  for (const meta of candidates) {
     if (meta.hidden || meta.archived) continue
+    const name = safeBasename(meta.filename)
+    // Already in the workspace (hydrated earlier, promoted from a previous
+    // turn's /work/out, or written by the agent) → leave it alone.
+    if (present.has(name)) continue
     const doc = await getDocument(sessionId, meta.id, callTool)
     if (!doc) {
       // The list said it existed and the read says it doesn't — a TTL expiry
@@ -77,9 +101,11 @@ export async function hydrateWorkspace(
       continue
     }
     const encoding = doc.encoding === 'base64' ? 'base64' : 'utf8'
-    const dest = `${WORK_IN_DIR}/${safeBasename(doc.filename)}`
     try {
-      await writeWorkFile(transport, dest, doc.content, encoding)
+      await writeWorkFile(transport, `${WORK_IN_DIR}/${name}`, doc.content, encoding)
+      // Claim the destination so a shadowed older document is not written over
+      // the one that just landed.
+      present.set(name, '')
       written++
     } catch (err) {
       // Best-effort: a single unwritable file shouldn't block the others — but

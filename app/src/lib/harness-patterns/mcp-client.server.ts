@@ -151,6 +151,101 @@ function isConnectionError(err: unknown): boolean {
   )
 }
 
+/**
+ * Verb prefixes that mark an MCP operation as a READ.
+ *
+ * Deliberately a small allowlist rather than a mutation denylist, because the
+ * default has to be "do not re-execute" (see {@link withReconnect}). A verb
+ * only belongs here if no tool in any catalogued server uses it for a write:
+ * `create`, `update`, `delete`, `write`, `set`, `add`, `push`, `merge`, `move`,
+ * `zip`, `unzip`, `publish` and friends are all absent on purpose, as is
+ * anything that executes code (`code-mode`, `mcp-exec`, shell tools).
+ *
+ * Matched against the leading `_`/`-`-separated token of the bare tool name, so
+ * `get_neo4j_schema`, `read_file`, `list_issues`, `search_code`,
+ * `get-library-docs` and `head_file` all qualify while `create_or_update_file`,
+ * `write_neo4j_cypher` and `zip_directory` do not.
+ */
+const READ_ONLY_VERBS = new Set([
+  'read',
+  'get',
+  'list',
+  'search',
+  'find',
+  'fetch',
+  'head',
+  'tail',
+  'describe',
+  'resolve',
+  'count',
+  'stat',
+  'inspect',
+  'calculate',
+])
+
+/**
+ * Whole tool names that are reads but do not start with a read verb. Redis and
+ * the memory graph account for all of them; anything not listed (and not
+ * verb-prefixed) is treated as potentially mutating.
+ *
+ * Note what is NOT here: `lpop`/`rpop` (they REMOVE the element they return),
+ * `subscribe`/`unsubscribe` (they mutate connection state), `expire` and
+ * `rename`. `scan_keys`/`scan_all_keys` are listed explicitly because `scan` is
+ * not an allowlisted verb prefix.
+ */
+const READ_ONLY_TOOLS = new Set([
+  // Redis reads
+  'exists',
+  'type',
+  'ttl',
+  'dbsize',
+  'info',
+  'keys',
+  'hget',
+  'hgetall',
+  'hexists',
+  'hkeys',
+  'hvals',
+  'hlen',
+  'lrange',
+  'llen',
+  'lindex',
+  'smembers',
+  'sismember',
+  'scard',
+  'zrange',
+  'zrangebyscore',
+  'zcard',
+  'zscore',
+  'xrange',
+  'xlen',
+  'scan_keys',
+  'scan_all_keys',
+  'json_get',
+  // Memory knowledge-graph reads
+  'open_nodes',
+  'read_graph',
+])
+
+/**
+ * Is this tool safe to RE-EXECUTE after a dropped transport?
+ *
+ * The question a reconnect actually asks is not "is this a read?" but "if the
+ * first attempt already ran on the server and only the response was lost, is
+ * running it again harmless?" — so the answer must be conservative and the
+ * default must be no. A name we do not recognise is treated as mutating.
+ *
+ * Exported for the tests that pin the classification.
+ */
+export function isReadOnlyTool(name: string): boolean {
+  // Gateway-prefixed names (`mcp__server__tool`) classify on the bare tool.
+  const bare = name.includes('__') ? name.split('__').pop() ?? name : name
+  const lower = bare.toLowerCase()
+  if (READ_ONLY_TOOLS.has(lower)) return true
+  const verb = lower.split(/[_-]/)[0]
+  return READ_ONLY_VERBS.has(verb)
+}
+
 /** Run an MCP operation on a leased connection, with a single reconnect
  *  attempt on connection errors. The first failure resets ONLY the leased
  *  connection; the second attempt builds a fresh transport for it. If that
@@ -160,8 +255,22 @@ function isConnectionError(err: unknown): boolean {
  *  Tool-level errors (the gateway responding with a structured failure) are
  *  not retried — only transport-level errors trigger reconnect.
  *
+ *  `retry` gates the re-execution, and defaults to FALSE (SA-H6). A transport
+ *  error is not evidence that the operation did not run: a write can reach the
+ *  gateway, execute against Neo4j / GitHub / Redis, and only then lose the
+ *  socket carrying its response. Retrying that silently duplicates it —
+ *  `write_neo4j_cypher` runs twice, `create_issue` files two issues. Only
+ *  operations whose repetition is provably harmless (`listTools`, and tool
+ *  calls {@link isReadOnlyTool} recognises) opt in.
+ *
+ *  The broken connection is reset either way, so the pool heals even when the
+ *  operation itself is surfaced as a failure rather than retried.
+ *
  *  The lease is released in `finally`, so it survives any throw. */
-async function withReconnect<T>(op: (c: Client) => Promise<T>): Promise<T> {
+async function withReconnect<T>(
+  op: (c: Client) => Promise<T>,
+  { retry = false, label }: { retry?: boolean; label?: string } = {},
+): Promise<T> {
   const conn = acquireConnection()
   try {
     try {
@@ -169,6 +278,18 @@ async function withReconnect<T>(op: (c: Client) => Promise<T>): Promise<T> {
     } catch (err) {
       if (!isConnectionError(err)) throw err
       await closeConnection(conn)
+      if (!retry) {
+        // Surfaced, not retried. The caller turns this into a failed
+        // ToolCallResult the controller can see and decide about — including
+        // "check whether it went through" — which is the only safe answer when
+        // the operation may or may not have executed.
+        console.warn(
+          `[mcp-client] transport error on ${label ?? 'operation'} — not retried ` +
+            `(it may already have executed on the server): ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        )
+        throw err
+      }
       return await op(await ensureConnected(conn))
     }
   } finally {
@@ -247,7 +368,11 @@ async function dispatchTool(name: string, args: Record<string, unknown>): Promis
   }
 
   try {
-    const result = await withReconnect((c) => c.callTool({ name, arguments: args }))
+    const result = await withReconnect((c) => c.callTool({ name, arguments: args }), {
+      // Only re-execute what is safe to run twice — see SA-H6 on withReconnect.
+      retry: isReadOnlyTool(name),
+      label: name,
+    })
 
     // Extract text content. Some MCP servers return ONE text block PER element
     // (Redis `smembers`/`lrange`, search-style tools); the previous `.find`
@@ -336,7 +461,10 @@ export async function listTools(): Promise<MCPToolDescription[]> {
     // their own caching), so this stays one live fetch per call — it just
     // rides whichever connection the lease hands out. Every connection talks
     // to the same gateway, so any of them yields the same catalog.
-    const { tools } = await withReconnect((c) => c.listTools())
+    const { tools } = await withReconnect((c) => c.listTools(), {
+      retry: true,
+      label: 'listTools',
+    })
     return [
       ...tools.map((t) => ({
         name: t.name,

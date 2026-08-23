@@ -496,7 +496,8 @@ describe('mcp-client', () => {
         return { content: [{ type: 'text', text: 'flaky-ok' }] }
       })
 
-      const flaky = callTool('flaky_tool', {})
+      // A READ tool: only those are re-executed after a transport error (SA-H6).
+      const flaky = callTool('get_flaky', {})
       const steady = callTool('steady', {})
 
       expect(await flaky).toEqual({ success: true, data: 'flaky-ok' })
@@ -514,12 +515,12 @@ describe('mcp-client', () => {
       expect(clientInstances[1].closed).toBe(false)
     })
 
-    it('retries a transport error exactly once on a rebuilt connection', async () => {
+    it('retries a transport error exactly once on a rebuilt connection (read-only tool)', async () => {
       mockCallTool.mockRejectedValue(new Error('fetch failed'))
 
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
 
-      const result = await callTool('test_tool', {})
+      const result = await callTool('read_neo4j_cypher', {})
 
       expect(result.success).toBe(false)
       expect(result.error).toBe('fetch failed')
@@ -527,6 +528,105 @@ describe('mcp-client', () => {
       // Exactly one reconnect: original closed, one replacement built.
       expect(clientInstances).toHaveLength(2)
       expect(clientInstances[0].closed).toBe(true)
+    })
+
+    // SA-H6. A transport error is not evidence that the call did not run: the
+    // request can reach the gateway, execute, and lose only the socket carrying
+    // the response. Re-running a WRITE in that state duplicates it.
+    describe('re-execution safety (SA-H6)', () => {
+      it('does NOT retry a mutating tool after a transport error', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        mockCallTool.mockRejectedValue(new Error('socket hang up'))
+
+        const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+        const result = await callTool('write_neo4j_cypher', {
+          query: 'CREATE (:Node {n: 1})',
+        })
+
+        // Surfaced as a failure the controller can see and decide about…
+        expect(result.success).toBe(false)
+        expect(result.error).toBe('socket hang up')
+        // …and executed exactly ONCE. This is the assertion that matters: a
+        // second call here is a second CREATE in the graph.
+        expect(mockCallTool).toHaveBeenCalledTimes(1)
+        // The broken connection is still reset, so the pool heals.
+        expect(clientInstances[0].closed).toBe(true)
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('write_neo4j_cypher'))
+        warn.mockRestore()
+      })
+
+      it('classifies reads and writes conservatively', async () => {
+        const { isReadOnlyTool } = await import(
+          '../../../lib/harness-patterns/mcp-client.server'
+        )
+
+        for (const name of [
+          'read_neo4j_cypher',
+          'get_neo4j_schema',
+          'list_issues',
+          'search_code',
+          'get-library-docs',
+          'resolve-library-id',
+          'head_file',
+          'tail_file',
+          'find_duplicate_files',
+          'fetch_content',
+          'json_get',
+          'smembers',
+          'hgetall',
+          'lrange',
+          'scan_keys',
+          'read_graph',
+          'open_nodes',
+          'mcp__gateway__read_file',
+        ]) {
+          expect(isReadOnlyTool(name), name).toBe(true)
+        }
+
+        // Everything else — including anything unrecognised — is treated as
+        // potentially mutating, which is what makes the default safe.
+        for (const name of [
+          'write_neo4j_cypher',
+          'create_issue',
+          'create_or_update_file',
+          'add_observations',
+          'delete_entities',
+          'push_files',
+          'merge_pull_request',
+          'set_vector_in_hash',
+          'hset',
+          'json_set',
+          'lpop',
+          'rpop',
+          'expire',
+          'rename',
+          'publish',
+          'subscribe',
+          'zip_directory',
+          'unzip_file',
+          'code-mode',
+          'mcp-exec',
+          'mcp-add',
+          'sandbox_bash',
+          'something_nobody_has_classified',
+        ]) {
+          expect(isReadOnlyTool(name), name).toBe(false)
+        }
+      })
+
+      it('still retries listTools, which is idempotent by construction', async () => {
+        mockListTools
+          .mockRejectedValueOnce(new Error('connection closed'))
+          .mockResolvedValueOnce({ tools: [{ name: 'later_tool', inputSchema: {} }] })
+
+        const { listTools } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+        const tools = await listTools()
+
+        expect(mockListTools).toHaveBeenCalledTimes(2)
+        expect(tools.map((t) => t.name)).toContain('later_tool')
+      })
     })
 
     it('never retries a tool-level error', async () => {
@@ -608,7 +708,7 @@ describe('mcp-client', () => {
         return { content: [{ type: 'text', text: 'late-ok' }] }
       })
 
-      const inflight = callTool('slow', {})
+      const inflight = callTool('get_slow', {})
       await Promise.resolve() // let the call take its lease and connect
 
       await closeMcpClient()

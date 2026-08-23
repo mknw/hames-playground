@@ -80,6 +80,11 @@ export async function POST(event: APIEvent) {
     ActionTrigger,
     "recordingDocId" | "recordingFilename" | "recordingMimeType"
   > = {};
+  // Tri-state, reported back in the 202 (sf-L9): `null` = no recording was
+  // submitted, `true`/`false` = one was and whether it made it to the stash.
+  // The caller is a device that just uploaded audio it may be about to delete;
+  // "we lost it" only reaching a server log is not good enough.
+  let recordingStored: boolean | null = null;
   const file = form.get("original_recording");
   if (
     file != null &&
@@ -103,8 +108,10 @@ export async function POST(event: APIEvent) {
         recordingFilename: filename,
         recordingMimeType: mimeType,
       };
+      recordingStored = true;
     } catch (err) {
       console.error(`[action] failed to store recording for ${runId}:`, err);
+      recordingStored = false;
     }
   }
 
@@ -128,6 +135,14 @@ export async function POST(event: APIEvent) {
   //    assumption; see INSTRUCTIONS.md).
   void runAgentInBackground(runId, userId, transcribedCommand, agentId, trigger);
 
-  // 7. 202 Accepted — run_id is the sessionId / conversation row id.
-  return json({ run_id: runId }, 202);
+  // 7. 202 Accepted — run_id is the sessionId / conversation row id. The run
+  //    starts either way; `recording_stored: false` says the audio did not
+  //    survive, so the caller can keep its own copy or retry the upload.
+  return json(
+    {
+      run_id: runId,
+      ...(recordingStored === null ? {} : { recording_stored: recordingStored }),
+    },
+    202,
+  );
 }

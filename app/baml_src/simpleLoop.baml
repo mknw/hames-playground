@@ -100,6 +100,25 @@ template_string LoopFewShots(few_shots: FewShot[]?) #"
 // The Return/expandPreviousResult exclusion lives here (not only in the field
 // description) because both are loop-control actions the executor handles as
 // singular turns — a batch containing them gets per-call errors at runtime.
+//
+// Each branch ends in ONE demonstrated action, and the demonstration is the
+// point of the branch as much as the prose is. In the capture behind #248
+// (`.harness-logs/baml-validation.json`, `sandbox-session-loop` attempt 3) the
+// model wanted exactly the batch this section advertises — write a script, then
+// run it — and, with the field described in prose but shown nowhere, INVENTED a
+// YAML `additional_calls:` bullet list to express it, taking the surrounding
+// brace-less few-shot form with it. The response was complete and correct at 372
+// output tokens against a 32768 cap, so neither retry trigger matched and the
+// throw ended the loop with attempts still in budget. A demonstration belongs
+// here rather than in `LoopFewShots` (which renders per-agent examples that know
+// nothing of the mode) or in an agent's few-shot config (which would put the
+// batch shape in front of agents whose mode is 'off'): this section is already
+// gated on `multi_call_mode`, so a demonstration inside it is mode-correct by
+// construction. It byte-matches the envelope everything else in the prompt
+// demands — one JSON object, `tool_args` a STRING whose content is JSON with
+// inner quotes escaped, `additional_calls` entries of tool_name/tool_args only —
+// because disagreeing demonstrations are this repo's most-paid-for defect class
+// (#144 twice, #159, #248); see the comment on LoopFewShots.
 template_string LoopMultiCalls(multi_call_mode: string?) #"
   {% if multi_call_mode == "parallel" %}
 
@@ -111,6 +130,9 @@ template_string LoopMultiCalls(multi_call_mode: string?) #"
   spending a turn on each. At most 4 calls per turn; keep each tool_args
   small. A failed call reports its error alongside the other results.
   Never use additional_calls on a "Return" or "expandPreviousResult" turn.
+  Two independent lookups batched into one turn — copy this SHAPE, not its
+  content (tool_args stays a JSON string with its inner quotes escaped):
+  {"reasoning": "The schema and the concept list do not depend on each other, so one turn covers both.", "tool_name": "get_neo4j_schema", "tool_args": "{}", "additional_calls": [{"tool_name": "read_neo4j_cypher", "tool_args": "{\"query\": \"MATCH (c:Concept) RETURN c.name LIMIT 20\"}"}], "status": "Reading the schema and listing concepts", "is_final": false}
   {% elif multi_call_mode == "sequential" %}
 
   MULTIPLE CALLS PER TURN:
@@ -122,6 +144,9 @@ template_string LoopMultiCalls(multi_call_mode: string?) #"
   from an earlier call's output. If a call fails, the rest of the batch is
   skipped. At most 4 calls per turn; keep each tool_args small.
   Never use additional_calls on a "Return" or "expandPreviousResult" turn.
+  A script written and then run in one turn — copy this SHAPE, not its content
+  (tool_args stays a JSON string with its inner quotes escaped):
+  {"reasoning": "Escaping a long script through the shell is fragile, so write it to a file and run that file in the same turn.", "tool_name": "sandbox_write", "tool_args": "{\"path\": \"/work/inspect.py\", \"content\": \"import openpyxl\\nprint('ok')\"}", "additional_calls": [{"tool_name": "sandbox_bash", "tool_args": "{\"command\": \"python3 /work/inspect.py\"}"}], "status": "Writing the script, then running it", "is_final": false}
   {% endif %}
 "#
 

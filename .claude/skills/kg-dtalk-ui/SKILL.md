@@ -343,7 +343,9 @@ stamps `target`/`rel` on every anchor in rendered assistant markdown. That is
 also why both attributes are deliberately absent from that file's
 `ALLOWED_ATTR` — a `target` written by the model is stripped first, so only the
 hook's own value can reach the DOM. Do not add a second markdown or `innerHTML`
-path that bypasses it.
+path that bypasses it — the gate below enforces that rather than only stating it,
+because a second path costs more than a link in the wrong tab: it renders model
+text with no sanitizer in front of it at all.
 
 What is **not** a link under this rule:
 
@@ -354,10 +356,20 @@ What is **not** a link under this rule:
 | Programmatic download anchors (`a.download = …`)                                                           | They hand the browser a file; they never navigate the current tab                       |
 
 `app/src/__tests__/links-new-tab.test.ts` is the gate, not a one-off sweep: it
-reads `src/` as text and fails on any JSX anchor, `document.createElement('a')`,
-`location.href`/`location.assign` or `window.open` that neither opens a new tab
-nor holds a documented exception in its `ALLOWLIST`. A new in-tab case means
-adding an entry there with a written reason — there is nowhere else to put it.
+reads `src/` as text and fails on any JSX anchor, `document.createElement('a')`
+(or `createElementNS`), `location.href`/`assign`/`replace` or `window.open` that
+neither opens a new tab nor holds a documented exception in its `ALLOWLIST`, and
+on any `innerHTML` write or `marked` call outside the one sanitized render path.
+A new in-tab case means adding an entry there with a written reason — there is
+nowhere else to put it.
+
+It is a text scanner, so it has a boundary, and the boundary is written out in
+that file's header rather than left to be discovered: an anchor with no literal
+`<a` (`<Dynamic component="a">`), a `createElement(tag)` whose tag is a
+variable, a `location` captured into a local first, and the non-link ways off
+the page (`<form action="https://…">`, `navigate()` given an external URL) all
+pass it. If you need one of those, the gate will not stop you and neither will
+it cover you.
 
 ---
 

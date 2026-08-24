@@ -420,14 +420,41 @@ export function llmCallHitOutputCap(
   return cap !== undefined && llmCall.usage.outputTokens >= cap
 }
 
-/** Collector-side variant for adapter catch blocks (pre-LLMCallData). */
-function collectorHitOutputCap(collector: Collector | undefined): boolean {
+/**
+ * Collector-side cap check for the adapter catch blocks (pre-LLMCallData), as a
+ * THREE-valued verdict: the response provably stopped at its client's cap
+ * (`hit`), provably finished under it (`under`), or cannot be judged at all
+ * (`unknown`).
+ *
+ * `unknown` is not a rounding error, it is a documented hole with a name.
+ * Truncation detection is only ever as complete as `CLIENT_MAX_OUTPUT_TOKENS`
+ * (SA-C2), and the OpenAI leaves deliberately declare no `max_tokens`, so they
+ * have no entry — `OpenAIGPT5` is leaf 4 of 5 in `ControllerFallback`, live
+ * whenever `USE_MIXED_CHAINS=1`, and `client-output-caps.test.ts` structurally
+ * cannot cover it (it asserts the mirror only for leaves that DO declare a cap).
+ * A collector with no `last`, no usage or no client name is equally unjudgeable.
+ *
+ * The two callers need opposite defaults, which is why this is not a boolean:
+ * `planParseRetry` may only append truncation guidance when it KNOWS the
+ * response was cut off, so `unknown` must not fire it; the envelope recovery may
+ * only proceed when it knows the response was NOT cut off, so `unknown` must
+ * decline. Both read as "no claim without evidence".
+ */
+function collectorCapVerdict(collector: Collector | undefined): 'hit' | 'under' | 'unknown' {
   const last = collector?.last
-  if (!last?.usage?.outputTokens) return false
-  const calls = (last.calls ?? []) as Array<{ selected?: boolean; clientName?: string }>
+  const outputTokens = last?.usage?.outputTokens
+  if (!outputTokens) return 'unknown'
+  const calls = (last?.calls ?? []) as Array<{ selected?: boolean; clientName?: string }>
   const call = calls.find((c) => c.selected) ?? calls[calls.length - 1]
   const cap = call?.clientName ? CLIENT_MAX_OUTPUT_TOKENS[call.clientName] : undefined
-  return cap !== undefined && (last.usage.outputTokens ?? 0) >= cap
+  if (cap === undefined) return 'unknown'
+  return outputTokens >= cap ? 'hit' : 'under'
+}
+
+/** Unchanged semantics for the truncation retry: only a PROVEN cap-hit counts,
+ *  so an unknown cap never invents a truncation to correct. */
+function collectorHitOutputCap(collector: Collector | undefined): boolean {
+  return collectorCapVerdict(collector) === 'hit'
 }
 
 /**
@@ -505,8 +532,8 @@ function planParseRetry(
  * gone), so it still reaches the truncation branch.
  *
  * Reads the raw text from the error first (`BamlValidationError.raw_output` is
- * exactly what BAML failed to coerce) and falls back to the collector, so the
- * recovery also works on the paths that run without one.
+ * exactly what BAML failed to coerce) and falls back to the collector's
+ * `rawLlmResponse` when the error carries none.
  *
  * Also tried on the truncation/empty retry's own failure: a retry that drifts to
  * the same wrong envelope has already cost the round-trip, and there is nothing
@@ -514,15 +541,31 @@ function planParseRetry(
  * mixed-chain Groq rungs — those exist because a client cannot do structured
  * output at all, which is a different problem from an envelope slip.
  *
- * DECLINES OUTRIGHT on a cap-hit, before it even looks at the text. A cut-off
- * response can still LOOK complete to a lexical scanner: `tool_args` opening
- * with a quote (`tool_args: "{\"path\":…`) is not an unbalanced bracket, and a
- * cut landing between two `additional_calls` items leaves every item that
- * survived perfectly readable — which would recover a SHORT batch and report it
- * as the model's own. `collectorHitOutputCap` is the same precise signal
- * `planParseRetry` uses (providers report `outputTokens` == the cap exactly), so
- * this hands truncation back to the branch that owns it rather than approximating
- * it. The captured failure this recovery exists for is 372/32768, untouched.
+ * DECLINES OUTRIGHT unless the collector PROVES the response finished under its
+ * client's output cap — before it even looks at the text. A cut-off response can
+ * still LOOK complete to a lexical scanner: `tool_args` opening with a quote
+ * (`tool_args: "{\"path\":…`) is not an unbalanced bracket, and a cut landing
+ * between two `additional_calls` items leaves every item that survived perfectly
+ * readable — which would recover a SHORT batch and report it as the model's own.
+ * `collectorCapVerdict` is the same precise signal `planParseRetry` uses
+ * (providers report `outputTokens` == the cap exactly), so this hands truncation
+ * back to the branch that owns it rather than approximating it.
+ *
+ * "Cannot tell" is deliberately treated as "was cut off" — the direction every
+ * other guard in this recovery declines in — because the permissive reading is
+ * what makes the short-batch harm reachable again. It costs exactly two paths
+ * and buys the property back whole. A caller passing NO collector gets no
+ * recovery (both loops build a fresh `Collector` per call, so this is the
+ * adapters' optional-parameter signature rather than a live path, but the guard
+ * is now real instead of a silent no-op). And a mixed-chain response from a
+ * client with no `CLIENT_MAX_OUTPUT_TOKENS` entry — the OpenAI leaves, i.e.
+ * `ControllerFallback`'s fourth rung under `USE_MIXED_CHAINS=1` — falls through
+ * to the pre-existing Groq escalation instead of being recovered. Declaring a
+ * cap for those leaves was the alternative and is worse: any number written here
+ * would be a guess wearing a measurement's clothes, and a wrong one re-opens the
+ * hole in the other direction. The captured failure this recovery exists for is
+ * 372/32768 on `AnthropicSonnet5`, and the Anthropic-only default chains are
+ * mirrored completely, so the dev and prod default paths are untouched.
  */
 function recoverActionFromEnvelope(
   error: unknown,
@@ -532,7 +575,7 @@ function recoverActionFromEnvelope(
   startTime: number,
 ): ControllerCallResult | null {
   if (!(error instanceof BamlValidationError)) return null
-  if (collectorHitOutputCap(collector)) return null
+  if (collectorCapVerdict(collector) !== 'under') return null
   const raw = error.raw_output || (collector?.last?.rawLlmResponse ?? '')
   const action = coerceControllerActionText(raw)
   if (!action) return null

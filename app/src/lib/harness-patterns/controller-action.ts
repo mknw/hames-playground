@@ -51,8 +51,11 @@ export function normalizeControllerAction(action: ControllerAction): ControllerA
  * of a line in the brace-less shape this module recovers.
  *
  * Anchored with `^` (no leading whitespace) and `[ \t]` around the colon so a
- * match can never straddle a newline: an indented `tool_name:` is a member of
- * an `additional_calls` list item, not a second top-level field.
+ * match can never straddle a newline. Column 0 is the ONLY position a top-level
+ * field is read from: an indented `tool_name:` is a member of an
+ * `additional_calls` list item — or something the model quoted — and either way
+ * it is not the envelope. What indentation does NOT do is make such a line
+ * harmless; see `SECOND_CANDIDATE_FIELD_LINE`.
  */
 const ACTION_FIELD_LINE =
   /^(reasoning|tool_name|tool_args|additional_calls|status|is_final)[ \t]*:[ \t]*/gm
@@ -77,21 +80,59 @@ function unquote(value: string): string {
 }
 
 /**
- * The fields whose SECOND top-level occurrence abandons the whole recovery.
+ * A call-deciding field line at ANY indentation, optionally behind a `- ` bullet.
  *
- * These three decide which tool runs with which arguments. A duplicate means
- * the text contains two candidate calls and nothing in the envelope says which
- * one the model meant — and the realistic way that happens is hostile: a tool
- * result echoed into `reasoning` carrying its own column-0 `tool_name:` /
- * `tool_args:` lines, i.e. the shape a prompt-injection payload takes. Taking
- * the first would let quoted content choose the call over the model's own
- * action, and this coercion runs UPSTREAM of `withInjectionGuard` (which
- * neutralises spans in tool results, not in the model's reasoning).
+ * `ACTION_FIELD_LINE` sees column 0 only, so on its own it counts column-0
+ * duplicates only — and whoever writes the echoed block controls the model's
+ * indentation as much as its own. Invert the layout (the echoed result at
+ * column 0, the model's real action indented under "Here is my action:") and
+ * there is exactly ONE column-0 candidate pair, the echoed one, with nothing
+ * left to compare it against.
  *
- * `reasoning`, `status` and `is_final` are left first-wins: none of them can
- * redirect a call, and `normalizeControllerAction` owns `is_final`'s default.
+ * So every match of this pattern that falls OUTSIDE the extent of a value the
+ * column-0 scan already consumed is a second candidate envelope, and the whole
+ * recovery is abandoned. INSIDE a consumed value the same line is the
+ * legitimate shape — the indented `- tool_name:` / `tool_args:` members of an
+ * `additional_calls` list — which is why the test is positional and not simply
+ * "no indented field lines".
+ *
+ * Only the three call-deciding fields are scanned: an indented `reasoning:` or
+ * `status:` is prose either way, and an indented `is_final:` sits at a position
+ * the envelope scan never reads, so it cannot terminate anything.
  */
-const SINGLE_OCCURRENCE_FIELDS = new Set(['tool_name', 'tool_args', 'additional_calls'])
+const SECOND_CANDIDATE_FIELD_LINE =
+  /^[ \t]+(?:-[ \t]*)?(?:tool_name|tool_args|additional_calls)[ \t]*:/gm
+
+/**
+ * The fields whose SECOND column-0 occurrence abandons the whole recovery.
+ *
+ * `tool_name` / `tool_args` / `additional_calls` decide which tool runs with
+ * which arguments; `is_final` decides whether the turn's tool runs AT ALL —
+ * `simpleLoop` breaks on `action.is_final` BEFORE executing the call, so an
+ * echoed `is_final: true` drops the model's own tool and exits the loop
+ * claiming finality (in actorCritic it is milder: `true` only triggers the
+ * critic, which owns exit). A duplicate of any of them means the text holds two
+ * candidate answers and nothing in the envelope says which one the model meant
+ * — and the realistic way that happens is hostile: a tool result echoed into
+ * `reasoning` carrying its own column-0 field lines, i.e. the shape a
+ * prompt-injection payload takes. Taking the first would let quoted content
+ * choose the call over the model's own action, and this coercion runs UPSTREAM
+ * of `withInjectionGuard` (which neutralises spans in tool results, not in the
+ * model's reasoning) — and upstream of nothing at all on the sandbox agents,
+ * which carry no guard on tool results and are the only ones where
+ * `sandbox_bash` is allowlisted.
+ *
+ * `normalizeControllerAction` is NOT a backstop for `is_final`: it fills an
+ * ABSENT value, so it cannot undo a wrong explicit one.
+ *
+ * `reasoning` and `status` stay first-wins. Neither can redirect a call or end
+ * a loop: `reasoning` is prose — and quoting a tool result into it is the
+ * normal, non-hostile case this recovery has to keep working for — while
+ * `status` is display-only, reaching the `controller_action` event and the UI
+ * and never a control-flow branch. A duplicated `status` mislabels a progress
+ * line, which is not worth discarding a correct action over.
+ */
+const SINGLE_OCCURRENCE_FIELDS = new Set(['tool_name', 'tool_args', 'additional_calls', 'is_final'])
 
 /**
  * Top-level `key: value` fields of a brace-less envelope — first occurrence wins,
@@ -108,9 +149,10 @@ const SINGLE_OCCURRENCE_FIELDS = new Set(['tool_name', 'tool_args', 'additional_
  * authoritative cap-hit check lives in `recoverActionFromEnvelope`, which
  * declines on `collectorHitOutputCap` before this function is ever reached.)
  *
- * Also returns null when one of `SINGLE_OCCURRENCE_FIELDS` appears twice at top
- * level — see that constant for why an ambiguous envelope must not be resolved
- * by position.
+ * Also returns null on either shape of ambiguity — one of
+ * `SINGLE_OCCURRENCE_FIELDS` twice at column 0, or a
+ * `SECOND_CANDIDATE_FIELD_LINE` match outside every consumed value. See those
+ * two constants for why an ambiguous envelope must not be resolved by position.
  */
 function scanEnvelopeFields(text: string): Map<string, string> | null {
   const marks: Array<{ key: string; start: number; valueStart: number }> = []
@@ -121,6 +163,9 @@ function scanEnvelopeFields(text: string): Map<string, string> | null {
   }
 
   const fields = new Map<string, string>()
+  /** `[start, end)` of every value the scan took — the only stretches of text
+   *  where an indented field line is a list member rather than a rival. */
+  const consumed: Array<[number, number]> = []
   let consumedTo = 0
   for (let i = 0; i < marks.length; i++) {
     const mark = marks[i]
@@ -134,8 +179,19 @@ function scanEnvelopeFields(text: string): Map<string, string> | null {
     } else {
       fields.set(mark.key, text.slice(mark.valueStart, end).trim())
     }
+    consumed.push([mark.valueStart, end])
     consumedTo = end
   }
+
+  // A call-deciding field line anywhere else — indented before the envelope,
+  // indented after it, or in the gap a bracket-matched literal left behind — is
+  // a second candidate that the position of the first cannot settle.
+  const second = new RegExp(SECOND_CANDIDATE_FIELD_LINE.source, 'gm')
+  while ((m = second.exec(text)) !== null) {
+    const at = m.index
+    if (!consumed.some(([start, end]) => at >= start && at < end)) return null
+  }
+
   return fields
 }
 
@@ -156,6 +212,21 @@ function normalizeToolArgs(raw: string): string {
   } catch {
     return value
   }
+}
+
+/**
+ * Whether an `additional_calls` entry's `tool_args` is something the model
+ * actually wrote.
+ *
+ * Absent, `null`, an empty string and the non-object scalars are all equally
+ * unreadable: stringifying them hands the loop `""`, `"false"` or `"0"` as a
+ * call's arguments — an invented value wearing the model's name, which is the
+ * one thing this module exists to refuse. `{}` is NOT in that set: an
+ * explicitly empty object is a real argument list for a no-parameter tool.
+ */
+function readableToolArgs(value: unknown): boolean {
+  if (typeof value === 'string') return value.trim() !== ''
+  return typeof value === 'object' && value !== null
 }
 
 /**
@@ -182,12 +253,14 @@ function parseAdditionalCalls(raw: string): ToolCallRequest[] | null {
       const parsed = JSON.parse(value) as unknown[]
       const calls = parsed.map((entry) => {
         const e = entry as { tool_name?: unknown; tool_args?: unknown }
-        // BOTH fields must be there. An entry with a name and no args is as
-        // unreadable as one with args and no name: defaulting it to `{}` would
-        // INVENT an argument the model never wrote and run the tool bare — the
-        // one thing "declines anything partly readable" exists to prevent.
+        // BOTH fields must be there, and `tool_args` must be READABLE. An entry
+        // with a name and no usable args is as unreadable as one with args and
+        // no name: defaulting it to `{}` — or stringifying an empty string, a
+        // `false` or a `0` — would INVENT an argument the model never wrote and
+        // run the tool on it, the one thing "declines anything partly readable"
+        // exists to prevent.
         if (typeof e?.tool_name !== 'string' || !e.tool_name) return null
-        if (e.tool_args === undefined || e.tool_args === null) return null
+        if (!readableToolArgs(e.tool_args)) return null
         return {
           tool_name: e.tool_name,
           tool_args: typeof e.tool_args === 'string' ? e.tool_args : JSON.stringify(e.tool_args),
@@ -215,6 +288,7 @@ function parseAdditionalCalls(raw: string): ToolCallRequest[] | null {
     const argsAt = item.search(/(?:^|\n)[ \t]*tool_args[ \t]*:[ \t]*/m)
     if (argsAt < 0) return null
     const argsValue = item.slice(argsAt).replace(/^[\s\S]*?tool_args[ \t]*:[ \t]*/, '')
+    if (!readableToolArgs(argsValue)) return null // `tool_args:` with nothing after it
     calls.push({ tool_name: toolName, tool_args: normalizeToolArgs(argsValue) })
   }
   return calls
@@ -250,11 +324,25 @@ function parseAdditionalCalls(raw: string): ToolCallRequest[] | null {
  * over its punctuation is never the right answer.
  *
  * Deliberately NOT a general "parse anything" pass. It returns null unless:
- *  - `tool_name` and `tool_args` both appear as top-level fields, and
- *  - neither they nor `additional_calls` appear TWICE at top level (an echoed
- *    tool result must never get to choose the call — `SINGLE_OCCURRENCE_FIELDS`), and
+ *  - `tool_name` and `tool_args` both appear as top-level fields at COLUMN 0, and
+ *  - none of `tool_name` / `tool_args` / `additional_calls` / `is_final` appears
+ *    twice there (`SINGLE_OCCURRENCE_FIELDS`), and
+ *  - no call-deciding field line appears anywhere ELSE in the text, at any
+ *    indentation, outside the values already consumed
+ *    (`SECOND_CANDIDATE_FIELD_LINE`) — an echoed tool result must never get to
+ *    choose the call, whichever of the two blocks happens to be indented, and
  *  - `tool_name` looks like a tool name rather than prose, and
- *  - a present `additional_calls` parses COMPLETELY.
+ *  - a present `additional_calls` parses COMPLETELY, every entry with a usable
+ *    `tool_args`.
+ *
+ * A cleanly indented envelope with NO column-0 fields therefore declines rather
+ * than recovering, and that is the deliberate half of the rule above: reading
+ * fields from an arbitrary indentation is exactly what makes an echoed block
+ * indistinguishable from the model's own, so "an echo never chooses the call"
+ * and "a uniformly indented envelope recovers too" cannot both hold. No capture
+ * has produced a uniformly indented envelope; a model that writes one gets the
+ * ordinary parse failure and whatever retry the caller owns — a round-trip,
+ * not a wrong call.
  * An unterminated `{`/`[` value also declines, but that is a lexical signal, not
  * the truncation guard: a cut can land after a closing brace (mid-`additional_calls`)
  * or inside a QUOTED `tool_args`, and neither is unbalanced. Truncation is owned

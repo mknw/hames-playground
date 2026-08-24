@@ -39,6 +39,10 @@ export interface GraphVisualizationProps {
   layout?: 'cose' | 'cola' | 'dagre' | 'circle' | 'grid' | 'breadthfirst'
   /** Additional Cytoscape stylesheets appended after base styles (e.g. per-turn colors) */
   extraStyles?: StylesheetJsonBlock[]
+  /** Emoji for the built-in empty-graph state, in place of the default glyph. */
+  emptyIcon?: string
+  /** Per-tab copy for the built-in empty-graph state. */
+  emptyMessage?: string
 }
 
 // ============================================================================
@@ -492,6 +496,39 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
   // Manual Cypher Handler
   // ========================================
 
+  /**
+   * Put manual-query results on the canvas.
+   *
+   * `props.elements` belongs to the conversation, and nothing in the app owns
+   * `onElementsChange` — so without this a successful manual query was a silent
+   * no-op: the envelope came back fine and the canvas stayed empty (#237
+   * follow-up). Additive, and it leaves existing positions alone, exactly like
+   * the `props.elements` effect above.
+   */
+  const renderQueryResult = (elements: ElementDefinition[]) => {
+    const graph = cy
+    if (!graph) return
+
+    const firstLoad = graph.elements().empty()
+    const fresh = elements.filter((el) => graph.getElementById(String(el.data?.id ?? '')).empty())
+    const added = fresh.length > 0 ? addElements(fresh) : null
+
+    graph.resize()
+    const layoutOpts = getLayoutOptions(selectedLayout())
+    if (firstLoad) {
+      graph.layout(layoutOpts).run()
+      graph.fit(undefined, 50)
+    } else if (added) {
+      // Lay out only what arrived, so the rest of the graph does not jump.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(layoutOpts as any).fit = false
+      added.layout(layoutOpts).run()
+    }
+
+    setNodeCount(graph.nodes().length)
+    setEdgeCount(graph.edges().length)
+  }
+
   const handleRunCypher = async () => {
     const query = cypherInput().trim()
     if (!query) return
@@ -503,6 +540,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
       const result = await runManualCypher(query)
 
       if (result.success && result.graphUpdate) {
+        renderQueryResult(result.graphUpdate)
         // Notify parent of graph update
         props.onElementsChange?.(result.graphUpdate)
 
@@ -1067,27 +1105,38 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
               justify: 'center',
             } as Record<string, string>)}
           >
-            <div text="center">
-              <svg
-                width="96"
-                height="96"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                style={{ margin: '0 auto', color: '#4f46e5', opacity: '0.3' }}
+            <div text="center" max-w="sm" p="x-6">
+              <Show
+                when={props.emptyIcon}
+                fallback={
+                  <svg
+                    width="96"
+                    height="96"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    style={{ margin: '0 auto', color: '#4f46e5', opacity: '0.3' }}
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"
+                    />
+                  </svg>
+                }
               >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"
-                />
-              </svg>
+                <div text="5xl">{props.emptyIcon}</div>
+              </Show>
               <div text="xl ui-text-secondary" font="medium" m="t-4">
                 No Graph Data
               </div>
               <div text="sm ui-text-tertiary" m="t-2">
-                Ask a question to visualize the knowledge graph
+                {props.emptyMessage ?? 'Ask a question to visualize the knowledge graph'}
+              </div>
+              <div text="xs ui-text-tertiary" m="t-3">
+                Or open <strong text="ui-accent">Manual Cypher Query</strong> above to query Neo4j
+                directly.
               </div>
             </div>
           </div>

@@ -419,27 +419,20 @@ const GraphTabContent = (props: GraphTabContentProps) => {
         </div>
       </Show>
 
-      {/* Graph or Empty State */}
+      {/* Graph — mounted even with nothing in it, so the manual Cypher box is
+          reachable before any chat interaction has populated the graph (#237
+          follow-up). GraphVisualization owns the empty state; the per-tab copy
+          that used to live in a fallback here is passed into it. */}
       <div flex="1" overflow="hidden">
-        <Show
-          when={effectiveElements().length > 0}
-          fallback={
-            <div flex="~ col" items="center" justify="center" h="full" text="center">
-              <span text="4xl mb-4">{props.emptyIcon}</span>
-              <span text="sm ui-text-secondary" max-w="xs">
-                {props.emptyMessage}
-              </span>
-            </div>
-          }
-        >
-          <GraphVisualization
-            elements={effectiveElements()}
-            highlightedIds={props.highlightedIds}
-            onNodeClick={props.onNodeClick}
-            onEdgeClick={props.onEdgeClick}
-            extraStyles={props.extraStyles}
-          />
-        </Show>
+        <GraphVisualization
+          elements={effectiveElements()}
+          highlightedIds={props.highlightedIds}
+          onNodeClick={props.onNodeClick}
+          onEdgeClick={props.onEdgeClick}
+          extraStyles={props.extraStyles}
+          emptyIcon={props.emptyIcon}
+          emptyMessage={props.emptyMessage}
+        />
       </div>
     </>
   )

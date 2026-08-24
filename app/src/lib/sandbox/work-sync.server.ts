@@ -2,11 +2,11 @@
  * work-sync — move files between the host and a sandbox VM's `/work` (#89).
  *
  * The durable workspace lives in the document store (Redis); `/work` is
- * ephemeral scratch. On first boot we *hydrate* the session's documents into
- * `/work/in`; on each turn's exit we *promote* new/changed files under
- * `/work/out` back to the store. This module owns only the file movement +
- * change detection over an `McpTransport`; the lifecycle wiring (when to call
- * it) lives in `with-sandbox.server.ts`.
+ * ephemeral scratch. On each turn's entry we *hydrate* the session's documents
+ * into `/work/in` (only the ones not already there); on each turn's exit we
+ * *promote* new/changed files under `/work/out` back to the store. This module
+ * owns only the file movement + change detection over an `McpTransport`; the
+ * lifecycle wiring (when to call it) lives in `with-sandbox.server.ts`.
  *
  * Transport constraints (see `docker-backend.server.ts` / `rootfs/mcp-shell`):
  *   - `sandbox_read` / `sandbox_write` are TEXT-only (rust-mcp-filesystem).
@@ -50,7 +50,7 @@ async function bash(transport: McpTransport, command: string): Promise<BashOutco
   return {
     ok: res.success && code === 0,
     stdout: d.stdout ?? '',
-    stderr: d.stderr ?? (res.success ? '' : res.error ?? ''),
+    stderr: d.stderr ?? (res.success ? '' : (res.error ?? '')),
     code,
   }
 }

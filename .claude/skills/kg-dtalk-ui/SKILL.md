@@ -324,7 +324,8 @@ title on the left, controls on the right, one hairline under it.
 ```
 
 - `p="4"` instead of `p="2 3"` for a full-width page-level header
-  (`ObservabilityPanel.tsx:703`); `p="2 3"` for a panel strip.
+  (`observability/EventDetail.tsx`, the drill-down overlays); `p="2 3"` for a
+  panel strip.
 - `bg="ui-bg-tertiary"` when the header must separate from a
   `ui-bg-secondary` body; omit `bg` when the panel is already tertiary.
 - The bottom hairline is always `border="b ui-border-primary"`. Never a

@@ -550,11 +550,37 @@ describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
   it('does NOT stamp the marker for syncWorkspace without an id (a no-op at runtime)', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const wrapped = withSandbox({ backend, syncWorkspace: true })(inner)
     expect(
       (wrapped.config as { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace,
     ).toBeUndefined()
     expect(wrapped.config).toEqual(inner.config)
+    warn.mockRestore()
+  })
+
+  // …but it must not be a SILENT no-op. Asking for a durable workspace and
+  // getting none is how the flavoured-sandbox agent's multi-turn failure
+  // presented (#243 follow-up): the route ran in a container where /work/in
+  // never existed and the actor burned its retries on ENOENT.
+  it('warns that syncWorkspace was ignored when no id was given', () => {
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    withSandbox({ backend, syncWorkspace: true })(inner)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('syncWorkspace')
+    expect(warn.mock.calls[0][0]).toContain('requires an `id`')
+    warn.mockRestore()
+  })
+
+  it('does not warn when syncWorkspace comes with an id', () => {
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner)
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 })
 
@@ -574,7 +600,12 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
     artifacts.promoteOutputs.mockClear().mockResolvedValue({ promoted: [], skipped: [] })
   })
 
-  it('hydrates /work/in on the first boot only, and promotes outputs every turn', async () => {
+  // #206 §6.1. Hydrate used to be gated on `att.isFirstBoot`, so turn 1 worked
+  // only because `acquire` ingests before the container has ever booted: a
+  // document stored during turn 2 never reached /work/in and the actor's
+  // `sandbox_list /work/in` could not see it. `hydrateWorkspace` is diff-wise,
+  // so running it every turn is idempotent (see work-artifacts.test.ts).
+  it('hydrates /work/in on EVERY turn, not just the first boot (#206 §6.1)', async () => {
     const kit = buildKit()
     const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
       fakePattern(async (scope) => scope),
@@ -583,12 +614,32 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
     await wrap.fn(fakeScope({}), fakeView)
     await wrap.fn(fakeScope({}), fakeView)
 
-    // Restore-from-store happens once per container, not once per turn...
-    expect(artifacts.hydrateWorkspace).toHaveBeenCalledTimes(1)
+    // Turn 2 reuses the parked attachment (isFirstBoot is false by then) and
+    // still hydrates, so a doc ingested that turn lands in /work/in...
+    expect(artifacts.hydrateWorkspace).toHaveBeenCalledTimes(2)
     expect(artifacts.hydrateWorkspace).toHaveBeenCalledWith(expect.anything(), 'sess-1')
-    // ...while the out-dir diff brackets every turn.
+    // ...and the out-dir diff still brackets every turn.
     expect(artifacts.snapshotOutputs).toHaveBeenCalledTimes(2)
     expect(artifacts.promoteOutputs).toHaveBeenCalledTimes(2)
+  })
+
+  // The Shell-first case (#97 Gap 3): the user opened the Terminal, so the
+  // container is already booted and `isFirstBoot` already spent by the time the
+  // agent runs its FIRST turn. Under the old gate that turn hydrated nothing.
+  it('hydrates on a turn that reuses a container the Shell already booted', async () => {
+    const kit = buildKit()
+    const runtime: RuntimeConfig = { memoryMB: 512, timeoutSec: 30, egress: 'mcp-only' }
+    const shellAtt = await kit.attachments.acquire('sess-1', 'base', runtime)
+    shellAtt.isFirstBoot = false // the Shell hydrated and flipped the flag
+    kit.attachments.release(shellAtt)
+    artifacts.hydrateWorkspace.mockClear()
+
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async (scope) => scope),
+    )
+    await wrap.fn(fakeScope({}), fakeView)
+
+    expect(artifacts.hydrateWorkspace).toHaveBeenCalledTimes(1)
   })
 
   it('promotes only what the turn produced, by diffing against the pre-turn snapshot', async () => {

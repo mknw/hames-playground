@@ -6,21 +6,34 @@
  * Flavour selection lives entirely in the harness — the routed controller is
  * flavour-agnostic.
  *
- * Routes:
- *   - basic            → EPHEMERAL `base` box (anonymous pool: a reset,
- *                        fresh-state VM each turn). Quick shell / general work.
- *   - image_processing → PERSISTENT `image-processing` box (Pillow, OpenCV,
- *                        imagemagick).
- *   - data             → PERSISTENT `data` box (pandas/numpy/polars/pyarrow,
+ * Routes (all four `base`-derived, all PERSISTENT + workspace-synced):
+ *   - basic            → `base` box. Quick shell / general work.
+ *   - image_processing → `image-processing` box (Pillow, OpenCV, imagemagick).
+ *   - data             → `data` box (pandas/numpy/polars/pyarrow,
  *                        matplotlib/seaborn, excel backends, reportlab/pypdf).
- *   - office           → PERSISTENT `office` box (python-docx, openpyxl +
- *                        xlsxwriter, PyMuPDF) for editing docx/xlsx/pdf files.
+ *   - office           → `office` box (python-docx, openpyxl + xlsxwriter,
+ *                        PyMuPDF) for editing docx/xlsx/pdf files.
  *
- * The two persistent routes use a **flavour-scoped attachment id**
- * (`${sessionId}:${rootfs}`) so they get separate containers, while `sessionId`
- * (the Data Stash key) is shared — so /work hydrate/promote is common across
- * flavours, only in-VM scratch differs. This shows multiple persistent flavours
- * in one session working today, without the deferred flavour-in-identity change.
+ * **Every route gets `id: ${sessionId}:${rootfs}` + `sessionId` + `syncWorkspace`
+ * — one durable session workspace, N flavour containers.** The flavour-scoped
+ * attachment id gives each flavour its own container; the shared `sessionId`
+ * (the Data Stash key) makes /work hydrate/promote common across them, so only
+ * in-VM scratch differs.
+ *
+ * That uniformity is the fix for the multi-turn failure #243 left standing:
+ * `basic` used to be the odd one out — an anonymous-pool (ephemeral) box with
+ * no `id`, and `syncWorkspace` is a no-op without one. So a turn the router
+ * sent to `basic` ran in a container where `/work/in` did not exist at all,
+ * and a file ingested on an earlier `data` turn was invisible ("ingest the
+ * spreadsheet" → `data`, then "list the files in /work/in" → `basic` →
+ * "No such file or directory" → max retries exceeded). Per-turn flavour
+ * choice is the point of this agent, so the workspace — not the routing —
+ * is what had to become session-wide.
+ *
+ * The corollary the actors are told about (WORKSPACE_NOTE): a later turn may
+ * land in a *different* flavour container, so anything worth keeping goes to
+ * /work/out (promoted to the Data Stash, restored into every flavour's
+ * /work/in), never to bare /work.
  *
  * NOTE: the interactive Shell terminal attaches to the base `sessionId`
  * container (PtyManager keys on sessionId, rootfs 'base'), NOT these flavoured
@@ -45,7 +58,10 @@ import type { FewShot } from '../../../../baml_client/types'
 
 const WORKSPACE_NOTE = `
 Files under /work/in are restored inputs; write deliverables the user should keep
-to /work/out (saved to the Data Stash and restored next time). /work is scratch.
+to /work/out (saved to the Data Stash and restored next time). /work is scratch:
+a later turn may run in a DIFFERENT sandbox flavour, and only /work/in and
+/work/out follow the conversation — never leave something you need again in bare
+/work.
 Python notes: for multi-line Python, WRITE a .py file (sandbox_write) and run it,
 or use a quoted heredoc (python3 - <<'PY' ... PY) — never nest escaped quotes in
 python3 -c. Python runs with PYTHONSAFEPATH=1 (cwd is not on sys.path); to import
@@ -53,9 +69,11 @@ your own helper modules from /work, run with PYTHONPATH=/work.
 `.trim()
 
 const BASIC_GUIDANCE = `
-You have an EPHEMERAL Linux sandbox — a fresh box each turn, no state persists.
-Use sandbox_bash / sandbox_write / sandbox_read for quick shell work and small
-scripts (Python 3 is available). Don't rely on files from previous turns.
+You have a PERSISTENT plain Linux sandbox. Use sandbox_bash / sandbox_write /
+sandbox_read for shell work and small scripts (Python 3 is available, but with
+NO third-party packages — no pandas, no Pillow; say so rather than improvising
+if a task needs them).
+${WORKSPACE_NOTE}
 `.trim()
 
 const IMAGE_GUIDANCE = `
@@ -135,15 +153,20 @@ function sandboxLoop(patternId: string, guidance: string) {
 }
 
 async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
-  // Ephemeral: no id (anonymous pool) → a reset (fresh-state) VM each turn.
+  // Every route below is persistent + flavour-scoped id → its own container,
+  // while `sessionId` (the Data Stash key) stays the conversation id, so /work
+  // hydrate/promote is shared across flavours. `basic` is NOT the exception it
+  // used to be: as an anonymous-pool sandbox it had no `id`, so `syncWorkspace`
+  // was a no-op and /work/in never existed there — the multi-turn failure #243
+  // left standing (see the module docstring).
   const basic = withSandbox({
+    id: `${sessionId}:base`,
+    sessionId,
     rootfs: 'base',
     egress: 'mcp-only',
-    sessionId,
+    syncWorkspace: true,
   })(sandboxLoop('flavour-basic-loop', BASIC_GUIDANCE))
 
-  // Persistent + flavour-scoped id → its own container, distinct from `data`.
-  // sessionId stays the conversation id, so /work is shared across flavours.
   const image = withSandbox({
     id: `${sessionId}:image-processing`,
     sessionId,
@@ -170,7 +193,9 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
 
   const routerPattern = router<SessionData>(
     {
-      basic: 'Quick one-off shell / general Linux work in a throwaway box',
+      basic:
+        'Plain shell / general Linux work — listing or inspecting the workspace, file ' +
+        'management, small scripts with no third-party Python packages',
       image_processing:
         'Image manipulation — Pillow, OpenCV (cv2), imagemagick (resize, convert, analyze images)',
       data: 'Data ANALYSIS — pandas/numpy/polars over datasets (incl. xlsx/csv), matplotlib/seaborn plots, reports',
@@ -203,7 +228,7 @@ export const flavouredSandboxAgent: AgentConfig = {
   id: 'flavoured-sandbox',
   name: 'Sandbox · Flavoured (router)',
   description:
-    'Routes each turn to a purpose-built sandbox flavour — base (ephemeral), image-processing, or data.',
+    'Routes each turn to a purpose-built sandbox flavour — base, image-processing, data or office — over one shared session workspace.',
   icon: 'i-material-symbols-stack-star-outline',
   accent: 'orange',
   servers: [],

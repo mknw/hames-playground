@@ -9,10 +9,12 @@ Quick reference for the SolidJS frontend structure, configuration, and patterns.
 ## 1. Package Management & Core Dependencies
 
 ### Package Manager
+
 - **pnpm** - Fast, disk space efficient package manager
 - Node.js >= 22 required
 
 ### Core Stack
+
 ```json
 {
   "framework": "@solidjs/start ^1.2.0",
@@ -25,9 +27,11 @@ Quick reference for the SolidJS frontend structure, configuration, and patterns.
 ```
 
 ### ESLint Configuration
+
 **File:** `app/eslint.config.ts`
 
 Key rules:
+
 ```typescript
 {
   "prefer-const": "warn",
@@ -47,30 +51,34 @@ Key rules:
 ## 2. UnoCSS Configuration
 
 ### Setup Files
+
 - **Config:** `app/uno.config.ts`
 - **TypeScript Shim:** `app/src/shims.d.ts`
 
 ### Configuration
+
 ```typescript
 defineConfig({
   presets: [
-    presetAttributify(),    // Enables attribute-based styling
-    presetWind4(),          // Tailwind v4-like utilities
-    presetWebFonts({        // Google Fonts
+    presetAttributify(), // Enables attribute-based styling
+    presetWind4(), // Tailwind v4-like utilities
+    presetWebFonts({
+      // Google Fonts
       fonts: {
-        sans: 'Inter',
-        serif: 'Roboto Slab',
-        mono: 'Fira Code'
-      }
-    })
+        sans: "Inter",
+        serif: "Roboto Slab",
+        mono: "Fira Code",
+      },
+    }),
   ],
   transformers: [
-    transformerAttributifyJsx()  // JSX/TSX support
-  ]
-})
+    transformerAttributifyJsx(), // JSX/TSX support
+  ],
+});
 ```
 
 ### Attributify Syntax
+
 Enables attribute-based styling instead of `class`:
 
 ```tsx
@@ -91,12 +99,13 @@ Enables attribute-based styling instead of `class`:
 ```
 
 ### TypeScript Shim
+
 **File:** `app/src/shims.d.ts`
 
 ```typescript
-import type { AttributifyAttributes } from '@unocss/preset-attributify'
+import type { AttributifyAttributes } from "@unocss/preset-attributify";
 
-declare module 'solid-js' {
+declare module "solid-js" {
   namespace JSX {
     interface HTMLAttributes<T> extends AttributifyAttributes {
       // Add custom utility types here if needed
@@ -112,6 +121,7 @@ declare module 'solid-js' {
 ## 3. Authentication
 
 ### Architecture Overview
+
 **Identity source:** Microsoft Entra ID via a direct MSAL (`@azure/msal-node`)
 OpenID Connect **auth-code flow** — the code→token exchange runs server-side
 (replaced Stack Auth in #119; chosen over federating into Stack because
@@ -123,11 +133,12 @@ OpenID Connect **auth-code flow** — the code→token exchange runs server-side
 **Email allowlist:** still gates access (`app/src/lib/auth/allowList.ts`).
 
 ### Sign-in flow (server-side OIDC)
-| Route | Does |
-|-------|------|
-| `GET /api/auth/login` | generate PKCE + state + nonce (stashed in a short-lived **signed** handshake cookie) → 302 to Entra authorize |
+
+| Route                    | Does                                                                                                                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/auth/login`    | generate PKCE + state + nonce (stashed in a short-lived **signed** handshake cookie) → 302 to Entra authorize                                                      |
 | `GET /api/auth/callback` | validate `state` vs the handshake cookie, redeem the code, enforce the allowlist, upsert `users`, create an `auth_sessions` row, set the `kg_session` cookie → `/` |
-| `GET /api/auth/logout` | delete the session row (server-side revocation), clear the cookie, 302 to Entra sign-out |
+| `GET /api/auth/logout`   | delete the session row (server-side revocation), clear the cookie, 302 to Entra sign-out                                                                           |
 
 Config lives in `app/src/lib/auth/entra-config.server.ts` (env: `AZURE_TENANT_ID`,
 `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AUTH_SESSION_SECRET`; see
@@ -136,6 +147,7 @@ lets `/api/auth/login` fail soft (503) when the tenant config is absent, so
 dev-bypass stays a zero-config path.
 
 ### Session store
+
 **File:** `app/src/lib/auth/session-store.server.ts` — Postgres `auth_sessions`
 (opaque cookie id → row: `user_id` = Entra `oid`, email, display name,
 `home_account_id`, 8h expiry). Every sign-in also upserts `users`
@@ -147,6 +159,7 @@ and per-user in `user_tokens` so runs without a live session can still act for
 the user. See [MICROSOFT_GRAPH.md](MICROSOFT_GRAPH.md).
 
 ### Server Validation
+
 **File:** `app/src/lib/auth/server.ts`
 
 ```typescript
@@ -156,10 +169,11 @@ const user = await getAuthenticatedUser();
 // → Throws if: not authenticated or email not in allowlist
 
 // Non-throwing variant for the client AuthProvider resource:
-const maybeUser = await getSessionUser();   // → AuthUser | null
+const maybeUser = await getSessionUser(); // → AuthUser | null
 ```
 
 ### AuthProvider Component
+
 **File:** `app/src/components/AuthProvider.tsx`
 
 Provides app-wide auth context:
@@ -170,6 +184,7 @@ const { user, loading, refetch, signOut } = useAuth();
 ```
 
 **Redirect Logic:**
+
 1. Authenticated user on `/auth/*` → redirect to `/`
 2. Unauthenticated user on protected route → redirect to `/auth/signin`
 3. `signOut()` → full navigation to `/api/auth/logout`
@@ -222,44 +237,47 @@ remains tracked on #42.
 ## 4. User Avatar & Actions
 
 ### UserMenu Component
+
 **File:** `app/src/components/ark-ui/UserMenu.tsx`
 
 Integration via `useAuth()`:
 
 ```tsx
-import { useAuth } from '~/components/AuthProvider'
+import { useAuth } from "~/components/AuthProvider";
 
-const { user, signOut } = useAuth()
+const { user, signOut } = useAuth();
 
 // Available user data (AuthUser):
-user().profileImageUrl  // Avatar URL (nullable; unused by the Entra flow today)
-user().displayName      // Display name (nullable)
-user().email            // Email address
+user().profileImageUrl; // Avatar URL (nullable; unused by the Entra flow today)
+user().displayName; // Display name (nullable)
+user().email; // Email address
 
 // Sign out action:
-await signOut()  // → full navigation to /api/auth/logout (revokes session)
+await signOut(); // → full navigation to /api/auth/logout (revokes session)
 ```
 
 **Component Structure:**
+
 - **Ark UI Avatar:** Shows profile image or initials fallback
 - **Ark UI Menu:** Dropdown with Profile Settings & Sign Out
 - **Positioning:** Added to Nav via `<li class="ml-auto">`
 - **Visibility:** Only shown when `user()` exists
 
 **Usage in Nav:**
+
 ```tsx
 // app/src/components/Nav.tsx
-import { UserMenu } from "~/components/ark-ui/UserMenu"
+import { UserMenu } from "~/components/ark-ui/UserMenu";
 
 <nav class="bg-sky-800">
   <ul class="...">
     <li>Home</li>
     <li>About</li>
     <li class="ml-auto">
-      <UserMenu />  {/* Auto-hides when logged out */}
+      <UserMenu /> {/* Auto-hides when logged out */}
     </li>
   </ul>
-</nav>
+</nav>;
 ```
 
 ---
@@ -289,30 +307,37 @@ Collapsible      60% default       40% default
 ```
 
 ### Main Page Component
+
 **File:** `app/src/routes/index.tsx`
 
+Since #226 B1 the route _composes_: per-session state lives in
+`lib/session-registry.ts` (provided through `SessionRegistryContext`), the
+conversation list in `lib/thread-list-store.ts`, and the route owns only view
+state — which conversation is on screen, what the panels therefore show.
+
 ```tsx
-<Splitter.Root orientation="horizontal" defaultSize={[60, 40]}>
-  <Splitter.Panel id="chat">
-    <ChatInterface
-      onGraphUpdate={accumulateGraphElements}
-      onEventsUpdate={accumulateEvents}
-      onContextUpdate={setUnifiedContext}
-    />
-  </Splitter.Panel>
+<SessionRegistryContext.Provider value={registry}>
+  <Splitter.Root orientation="horizontal" defaultSize={[60, 40]}>
+    <Splitter.Panel id="chat">
+      <ChatInterface
+        sessionId={selectedSessionId()}
+        onContextUpdate={handleContextUpdate}
+      />
+    </Splitter.Panel>
 
-  <Splitter.ResizeTrigger id="chat:support" />
+    <Splitter.ResizeTrigger id="chat:support" />
 
-  <Splitter.Panel id="support">
-    <SupportPanel
-      graphElements={graphElements()}
-      contextEvents={contextEvents()}
-      unifiedContext={unifiedContext()}
-      onClearGraph={clearGraph}
-      onClearEvents={clearEvents}
-    />
-  </Splitter.Panel>
-</Splitter.Root>
+    <Splitter.Panel id="support">
+      <SupportPanel
+        graphElements={graphElements()}
+        contextEvents={contextEvents()}
+        unifiedContext={unifiedContext()}
+        onClearGraph={clearGraph}
+        onClearEvents={() => registry.clearEvents(selectedSessionId())}
+      />
+    </Splitter.Panel>
+  </Splitter.Root>
+</SessionRegistryContext.Provider>
 ```
 
 ### Chat Interface Components
@@ -320,8 +345,10 @@ Collapsible      60% default       40% default
 **Location:** All in `app/src/components/ark-ui/`
 
 #### 1. ChatInterface.tsx
+
 Chat area for the selected conversation (the sidebar is a **sibling**, owned by
 the route so thread selection can swap the `sessionId` prop):
+
 ```tsx
 // routes/index.tsx
 <div flex="~">
@@ -332,28 +359,32 @@ the route so thread selection can swap the `sessionId` prop):
 // ChatInterface renders:
 <AgentSelector /> + <ChatMessages /> + <ChatInput />
 ```
-Since #105, `ChatInterface` holds **no message state of its own** — it reads and
-writes the route's per-session buffers via `getMessages`/`setMessages`, always
-addressing the *run's* session id, so a backgrounded run keeps filling its own
-thread.
+
+Since #105, `ChatInterface` holds **no message state of its own**, and since
+#226 B1 it does not receive accessors for it either: it reads and writes the
+`SessionRegistry` from context, always addressing the _run's_ session id, so a
+backgrounded run keeps filling its own thread.
 
 #### 2. ChatSidebar.tsx
-**Props:** `collapsed: boolean`, `onToggle: () => void`, `threads`, `selectedId`, `onSelectThread`, `onNewChat`, `onTitleRegenerated`, `onDeleteThreads` (#71), plus the #105 registries: `getRunState`, `getProgress`, `getCompletion`
+
+**Props:** `collapsed: boolean`, `onToggle: () => void`, `threads`, `selectedId`, `onSelectThread`, `onNewChat`, `onTitleRegenerated`, `onDeleteThreads` (#71). Live run state, progress and completion marks come from the `SessionRegistry` in context (#226 B1), not from props.
+
 - Width: `3rem` (collapsed) → `16rem` (expanded)
 - Smooth inline style transition
-- Thread history with relative timestamps, **ordered by creation (newest first)** — deliberately *not* `updated_at`, which every turn-save bumps and which made the list reshuffle under concurrent runs (#105)
+- Thread history with relative timestamps, **ordered by creation (newest first)** — deliberately _not_ `updated_at`, which every turn-save bumps and which made the list reshuffle under concurrent runs (#105)
 - Settings gear icon (opens `SettingsPanel` FloatingPanel) + New Chat button in footer
 - **Agent icon per row (#60):** `listConversations()` pre-resolves each row's `agentIcon` from the registry, so the sidebar needs no registry import. Pure `threadIcon()` rule: placeholders show nothing (the real icon lands with the run-start refetch); rows whose agent was removed fall back to a generic robot.
-- **Agent accent colours:** colour encodes an agent *family*, not an individual agent — `lib/agent-palette.ts` holds five far-apart hues (indigo general · amber code · orange sandbox · violet knowledge · blue integrations) plus a zinc fallback, and the glyph shape separates agents inside a family. Each `AgentConfig` picks a token (`accent: 'orange'`) beside its `icon`; `listConversations()` pre-resolves `agentAccent` exactly like `agentIcon`, so the **token** travels the wire and `accentColor()` maps it to hex client-side (a light theme can remap later; unknown tokens fall back to zinc, and the resolver uses `hasOwnProperty` so a wire value of `'toString'` can't resolve off the prototype). Cyan/green/red are **reserved for run status** and never assigned — agent colour lives on the glyph, status colour on the border/dot/badge, so the two read independently. Expanded rows are muted at rest and light up on row hover or while selected; the collapsed rail is **always** accented, since with no title visible the colour is the only thing separating one 32px button from the next.
-  - *How the hover is wired:* the states live in an `.agent-glyph` preflight rule and the per-row colour arrives as an inline `--agent-accent` custom property. UnoCSS variants would work too — `group-hover:text-[#fb923c]` and `data-[lit=true]:text-[#fb923c]` both emit correctly (verified in built output) — but only from *literal* class strings, so it needs a token→class map restating every hex next to the palette that already holds them. The custom property keeps one source of truth for the hexes and lets a new family be added with a single palette line; the cost is one hand-written preflight rule. A tradeoff, not a constraint.
+- **Agent accent colours:** colour encodes an agent _family_, not an individual agent — `lib/agent-palette.ts` holds five far-apart hues (indigo general · amber code · orange sandbox · violet knowledge · blue integrations) plus a zinc fallback, and the glyph shape separates agents inside a family. Each `AgentConfig` picks a token (`accent: 'orange'`) beside its `icon`; `listConversations()` pre-resolves `agentAccent` exactly like `agentIcon`, so the **token** travels the wire and `accentColor()` maps it to hex client-side (a light theme can remap later; unknown tokens fall back to zinc, and the resolver uses `hasOwnProperty` so a wire value of `'toString'` can't resolve off the prototype). Cyan/green/red are **reserved for run status** and never assigned — agent colour lives on the glyph, status colour on the border/dot/badge, so the two read independently. Expanded rows are muted at rest and light up on row hover or while selected; the collapsed rail is **always** accented, since with no title visible the colour is the only thing separating one 32px button from the next.
+  - _How the hover is wired:_ the states live in an `.agent-glyph` preflight rule and the per-row colour arrives as an inline `--agent-accent` custom property. UnoCSS variants would work too — `group-hover:text-[#fb923c]` and `data-[lit=true]:text-[#fb923c]` both emit correctly (verified in built output) — but only from _literal_ class strings, so it needs a token→class map restating every hex next to the palette that already holds them. The custom property keeps one source of truth for the hexes and lets a new family be added with a single palette line; the cost is one hand-written preflight rule. A tradeoff, not a constraint.
 - **Collapsed icon rail (#60):** collapsing no longer hides everything — a 3rem rail shows one agent-icon button per thread (tooltip = title, click to switch, selected highlight) plus a compact "+" new-chat button. Run state compresses to a 6px corner dot (`railDot`: pulsing cyan while live — live outranks a completion mark — completion color until opened). The rail ignores the kind filter: that control is invisible while collapsed, and a hidden control silently subsetting the list would confuse. Delete/select/Settings stay expanded-only.
 - **Delete (#71):** hover-reveal trash per row (regenerate ↻ shifted to `right:2rem` to make room). **Hidden — not disabled — for placeholders and running rows** (`canDeleteRow`): deleting mid-run would be resurrected by the run's end-save upsert, so the affordance isn't offered; mid-run cancel is #105 PR 3. Confirm is an Ark `Dialog` (Escape + focus trap free) with single-line copy from `deleteConfirmCopy`. The sidebar owns the confirm UX; `onDeleteThreads` on the route owns the mutation — `deleteConversationsBulk` (atomic `DELETE … = ANY($1) … RETURNING id`), cache patched once from the returned ids, per-id registry cleanup (buffers, progress, completion marks + timers, abort controllers, run states), and rerouting to the newest remaining thread (or a fresh chat) when the open conversation died.
-- **Select mode (#71):** checklist toggle beside "Chat History" — row clicks toggle selection, styled `role="checkbox"` spans lead each row (rows are `<button>`s; a real `<input>` would nest interactives), hover actions collapse, and an action bar offers Select all/Clear (label via `allEligibleSelected`), destructive "Delete selected (N)", Cancel. Select-all covers the *visible* (filtered) eligible threads and counts skipped running rows for the confirm copy; selections persist across filter switches (a set of ids). Run state is re-checked at confirm time — newly-running rows move to the skip count. Exit paths: Cancel, Esc, successful bulk delete, sidebar collapse. Keyboard is the codebase's first document-level keydown (scoped to select mode, `onCleanup`ed): Esc exits, Cmd/Ctrl-A toggles select-all — bypassed while the dialog is open and when focus sits in an input/textarea/contentEditable so the composer keeps native select-all.
-- **Optimistic "+ New Chat" placeholder (#44):** Clicking *+ New Chat* immediately prepends a placeholder row keyed by the new `selectedSessionId` (`title: null`, `isPlaceholder: true`). Once the real row lands in the `threadsResource`, the merger (`mergeThreadsWithPlaceholder`) drops the placeholder by id. Purely client-side; switching to an existing thread clears it. Since #105's early persist, the real row already appears on the *first SSE event* of the first run (derived title), so the placeholder only covers the pre-send moment.
-- **Per-row live progress (#105):** while a conversation's run streams *in this browser*, the timestamp line gives way to the run's current status text + a 3px progress strip (`RowProgress`) fed by the same route-owned `ChainProgressController` as the in-chat bar (fill math shared via `progressPercent`; indeterminate shimmer until the chain projection seeds). Badges (`StatusBadge` via `rowIndicator`) are **action-rows only** — POST actions have no client stream, so their persisted `status` is their freshest signal.
+- **Select mode (#71):** checklist toggle beside "Chat History" — row clicks toggle selection, styled `role="checkbox"` spans lead each row (rows are `<button>`s; a real `<input>` would nest interactives), hover actions collapse, and an action bar offers Select all/Clear (label via `allEligibleSelected`), destructive "Delete selected (N)", Cancel. Select-all covers the _visible_ (filtered) eligible threads and counts skipped running rows for the confirm copy; selections persist across filter switches (a set of ids). Run state is re-checked at confirm time — newly-running rows move to the skip count. Exit paths: Cancel, Esc, successful bulk delete, sidebar collapse. Keyboard is the codebase's first document-level keydown (scoped to select mode, `onCleanup`ed): Esc exits, Cmd/Ctrl-A toggles select-all — bypassed while the dialog is open and when focus sits in an input/textarea/contentEditable so the composer keeps native select-all.
+- **Optimistic "+ New Chat" placeholder (#44):** Clicking _+ New Chat_ immediately prepends a placeholder row keyed by the new `selectedSessionId` (`title: null`, `isPlaceholder: true`). Once the real row lands in the `threadsResource`, the merger (`mergeThreadsWithPlaceholder`) drops the placeholder by id. Purely client-side; switching to an existing thread clears it. Since #105's early persist, the real row already appears on the _first SSE event_ of the first run (derived title), so the placeholder only covers the pre-send moment.
+- **Per-row live progress (#105):** while a conversation's run streams _in this browser_, the timestamp line gives way to the run's current status text + a 3px progress strip (`RowProgress`) fed by the same route-owned `ChainProgressController` as the in-chat bar (fill math shared via `progressPercent`; indeterminate shimmer until the chain projection seeds). Badges (`StatusBadge` via `rowIndicator`) are **action-rows only** — POST actions have no client stream, so their persisted `status` is their freshest signal.
 - **Completion marks (#105):** a run that settles while another thread is in view flashes its row (green done / red error) then holds an accent border (`completionBorderColor`, inline `border-color` — see the attributify trap below) until the thread is opened. Runs that settle in the viewed thread mark nothing.
 
 #### 3. ChatMessages.tsx
+
 - **ScrollArea.Root** - Custom scrollable message container
 - **Features:**
   - Auto-scroll to latest message
@@ -368,34 +399,38 @@ thread.
   - **CSS:** `.graph-entity` styles in `uno.config.ts` (dashed underline, cyan glow on hover/toggle)
 
 #### 4. ChatInput.tsx
+
 - **Field.Textarea** with `autoresize` prop
 - **Keyboard shortcuts:**
   - Enter → Send message
   - Shift+Enter → New line
 - **Submit guard (#47):** When `disabled` is true, the textarea **stays editable** so the user's draft survives, but Enter no-ops. If `blockedMessage` is provided, an inline banner ("Waiting for `<tool>` to complete. Try later.") renders above the input — driven by the currently-running tool from the active session's `controller_action` events.
-- **Concurrency cap (#105):** with `maxConcurrentRuns` sessions already streaming (default 3, Settings → Concurrency), sending into an *idle* conversation is refused — composer disabled, banner "max N reached — wait for a session to stop". Client-side policy (`isAtConcurrencyCap` in `lib/run-registry.ts`); nothing running is ever interrupted, and the session that is itself streaming keeps the tool banner rather than the cap message.
+- **Concurrency cap (#105):** with `maxConcurrentRuns` sessions already streaming (default 3, Settings → Concurrency), sending into an _idle_ conversation is refused — composer disabled, banner "max N reached — wait for a session to stop". Client-side policy (`isAtConcurrencyCap` in `lib/run-registry.ts`); nothing running is ever interrupted, and the session that is itself streaming keeps the tool banner rather than the cap message.
 - **Styling:** Neon cyan border on focus
 
 #### 5. AgentSelector.tsx
+
 **Props:** `selectedAgent: string`, `onAgentChange: (id: string) => void`, `disabled: boolean`
+
 - Dropdown listing registered agents (search, general, sandbox-session, flavoured-sandbox, retriever, microsoft-365)
 - Agent icons are **iconify classes** on `AgentConfig.icon` (material-symbols set), rendered as `<span class={icon}>` with inline sizing — see the icon-scanning gotcha in §6a
 - Clearing the session on agent switch
 
 #### 6. SupportPanel.tsx
+
 Tabbed right panel. **Context manager is the default tab.** Uses `lazyMount` + `unmountOnExit` so inactive tabs don't hold Cytoscape instances in memory.
 
-| Tab | Content |
-|-----|---------|
-| Neo4j | Graph visualization for Neo4j query results (accumulated, live sync) |
-| Memory | Graph visualization for Memory MCP entities |
-| All (Turn Explorer) | Turn-based graph explorer — select specific turns, color-coded |
-| **Context manager** *(default)* | Event timeline + LLM call detail |
-| Data | Data Stash — two collapsible groups: **Your Uploads** (drag-drop/picker + document chips) and **Agent Findings** (tool-result icons by turn), each with hide/archive/delete. See [DATA_STASH.md](DATA_STASH.md) for the upload→chunk→embed→search pipeline. |
+| Tab                             | Content                                                                                                                                                                                                                                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Neo4j                           | Graph visualization for Neo4j query results (accumulated, live sync)                                                                                                                                                                                        |
+| Memory                          | Graph visualization for Memory MCP entities                                                                                                                                                                                                                 |
+| All (Turn Explorer)             | Turn-based graph explorer — select specific turns, color-coded                                                                                                                                                                                              |
+| **Context manager** _(default)_ | Event timeline + LLM call detail                                                                                                                                                                                                                            |
+| Data                            | Data Stash — two collapsible groups: **Your Uploads** (drag-drop/picker + document chips) and **Agent Findings** (tool-result icons by turn), each with hide/archive/delete. See [DATA_STASH.md](DATA_STASH.md) for the upload→chunk→embed→search pipeline. |
 
 **Conversation Sync toggle:** The Neo4j and Memory graph tabs have a ⏸/▶ "Sync" button (cyan when live, amber when paused). Implemented in `GraphTabContent` via a `syncEnabled` signal. When paused, the current element list is snapshotted into `frozenElements` and passed to `GraphVisualization` instead of live `props.elements`. Resuming restores the live feed.
 
-**Touched-node highlight (Neo4j tab only):** When an agent runs a Neo4j query, the `enrichNeo4jResult` hook (`onToolResult` on `simpleLoop`) attaches a 1-hop neighborhood plus a `_touched` list to the tool result. The extractor tags nodes whose name is in that list with `data.touched = true`, and the Neo4j tab passes a static `TOUCHED_NODE_STYLES` block (`node[touched]` selector → magenta fill/border + glow) as `extraStyles` to `GraphVisualization`. The result: nodes the agent's query *actually targeted* render in magenta, while neighborhood-context nodes render in the default cyan. The Memory tab does not receive this stylesheet.
+**Touched-node highlight (Neo4j tab only):** When an agent runs a Neo4j query, the `enrichNeo4jResult` hook (`onToolResult` on `simpleLoop`) attaches a 1-hop neighborhood plus a `_touched` list to the tool result. The extractor tags nodes whose name is in that list with `data.touched = true`, and the Neo4j tab passes a static `TOUCHED_NODE_STYLES` block (`node[touched]` selector → magenta fill/border + glow) as `extraStyles` to `GraphVisualization`. The result: nodes the agent's query _actually targeted_ render in magenta, while neighborhood-context nodes render in the default cyan. The Memory tab does not receive this stylesheet.
 
 **Touched-flag refresh across turns** (`app/src/lib/graph-merge.ts`): `index.tsx` accumulates elements via `mergeGraphElements(prev, fresh)` rather than ad-hoc dedup. When a fresh batch carries any element with `touched: true`, the merger first strips the flag from all prior elements, then re-applies it to elements in the new batch — so the magenta highlight tracks the most recent enriched query and doesn't linger on nodes from earlier topics. When the fresh batch carries no `touched` flags (e.g., a non-enriched tool, or a count-only query), prior `touched` flags are preserved.
 
@@ -411,6 +446,7 @@ The All tab does not use the accumulated `graphElements` signal. Instead, it der
 7. A color legend overlay in the bottom-right corner shows the turn-color mapping
 
 #### 7. GraphVisualization.tsx
+
 Cytoscape.js graph component with dark futuristic theme.
 
 **Rendering lifecycle:** With `unmountOnExit` on `Tabs.Root`, Cytoscape instances are fully created/destroyed when switching tabs. A `ResizeObserver` on `containerRef` drives a `visible()` signal to defer layout until the container has non-zero dimensions. The observer callback guards against a detached `containerRef` and defers `setVisible` + `cy.resize()` to `requestAnimationFrame` so that a notify-during-layout firing after the tab unmounts doesn't surface as the `ResizeObserver loop completed with undelivered notifications` warning (issue #38). The component-scoped `resizeObserver` and `resizeRafId` are torn down explicitly in `onCleanup` alongside `cy.destroy()`.
@@ -418,6 +454,7 @@ Cytoscape.js graph component with dark futuristic theme.
 **Base styles** are extracted to a module-level `BASE_STYLES` constant. The `extraStyles` prop appends additional stylesheets (e.g. per-turn color rules) — a reactive `createEffect` re-applies `cy.style([...BASE_STYLES, ...extraStyles])` when they change.
 
 **Features:**
+
 - Incremental graph updates (additive, preserves positions)
 - Collapsible Display Controls panel: node size, edge width, font size, edge labels toggle
 - Node properties panel on click (inline `data` + `properties` merged)
@@ -428,6 +465,7 @@ Cytoscape.js graph component with dark futuristic theme.
 - `extraStyles` prop for dynamic Cytoscape stylesheet injection (used by AllGraphTab for turn colors)
 
 **Props:**
+
 ```typescript
 {
   elements: ElementDefinition[]
@@ -440,12 +478,15 @@ Cytoscape.js graph component with dark futuristic theme.
 ```
 
 #### 8. ObservabilityPanel.tsx
+
 Displays the full agent event timeline:
+
 - Events are merged into `TimelineItem[]` via `buildTimelineItems()`: `tool_call` + `tool_result` pairs sharing the same `callId` appear as a single merged row
 - Click any row → detail overlay with args / result / LLM call data
-- **LLM call detail** (events with `llmCall`): two-tab layout — **Prompt** | **Output**. The Prompt tab uses an Ark UI Accordion with three sections: *Template* (Jinja source with `{{ vars }}` and `{% if %}` / `{% for %}` blocks, sourced from `baml_src/`), *Variables* (function inputs), *Rendered messages* (HTTP body parsed into role/content bubbles via `ParsedPromptView`). Sourced from `LLMCallData` in `baml-adapters.server.ts` — `httpRequest.body` is read via `body.text()` because BAML returns an `HttpBody` class instance, not a plain object.
+- **LLM call detail** (events with `llmCall`): two-tab layout — **Prompt** | **Output**. The Prompt tab uses an Ark UI Accordion with three sections: _Template_ (Jinja source with `{{ vars }}` and `{% if %}` / `{% for %}` blocks, sourced from `baml_src/`), _Variables_ (function inputs), _Rendered messages_ (HTTP body parsed into role/content bubbles via `ParsedPromptView`). Sourced from `LLMCallData` in `baml-adapters.server.ts` — `httpRequest.body` is read via `body.text()` because BAML returns an `HttpBody` class instance, not a plain object.
 - **Save button** (floating, bottom-right): calls `showSaveFilePicker()` to save the full `UnifiedContext` as a named JSON file; falls back to `<a download>` on browsers without File System Access API
 - Requires `context?: UnifiedContext` prop threaded down from `index.tsx` → `SupportPanel` → `ObservabilityPanel`
+- **Split across files** (#226 B5): `ObservabilityPanel.tsx` is the composition root and the only public export. The pure projections live in `app/src/lib/observability/` — `projection.ts` (`buildTimelineItems()`, `getEventPreview()`, `getEventLane()`), `prompt-parse.ts` (`parsePromptBody()`, `flattenContent()`, `formatParamValue()`), `token-totals.ts` (`foldTokenTotals()`, `fmtTok()`, `fmtUsd()`) and `event-styles.ts` (icon/colour tables, `getPatternColor()`) — and the rendering in `components/ark-ui/observability/` (`SummaryBar`, `TimelineRows`, `EventDetail`, `LLMCallTabs`, `PromptView`)
 
 ### Theme System
 
@@ -495,6 +536,7 @@ Displays the full agent event timeline:
 ```
 
 **UnoCSS Shortcuts:**
+
 - `glass-panel` - Semi-transparent panel with backdrop blur
 - `neon-border` - Cyan border with glow effect
 - `cyber-button` - Cyber-themed button with glow on hover
@@ -502,33 +544,35 @@ Displays the full agent event timeline:
 ### Component Data Flow
 
 ```
-index.tsx (top-level state)
-    ├─ graphElements: Signal<GraphElement[]>     ← accumulated via mergeGraphElements (dedup + touched-flag refresh)
-    ├─ contextEvents: Signal<ContextEvent[]>     ← accumulated per turn
-    ├─ unifiedContext: Signal<UnifiedContext?>   ← latest full session context
-    ├─ highlightedIds: Signal<string[]>          ← newly added graph node IDs
+index.tsx (view state only)
+    ├─ selectedSessionId / placeholderSessionId / sidebarCollapsed
+    ├─ highlightedIds: Signal<string[]>          ← ids from the latest graph batch, cleared on switch
     ├─ graphEntityNames: Memo<Map<string, string[]>>  ← name → element IDs (for chat linking)
     │
-    ├─ per-session registries (#47/#105 — survive thread switches):
-    │   ├─ messagesBySession: Map<sid, Signal<Message[]>>   ← chat buffers (incl. the in-flight turn)
-    │   ├─ progressBySession: Map<sid, ChainProgressController>
-    │   ├─ runStates: Signal<Record<sid, SessionRunState>>  ← { isProcessing, runningTool }
-    │   ├─ completions: Signal<Record<sid, CompletionMark>> ← flash → accent border, cleared on open
-    │   ├─ abortControllers: Map<sid, AbortController>      ← aborted on unload only
-    │   └─ runningCount: Memo<number>                       ← drives the concurrency cap
+    ├─ SessionRegistry (lib/session-registry.ts, via SessionRegistryContext) —
+    │  per-conversation state that survives thread switches (#47/#105/SA-H8):
+    │   ├─ messages(sid)   ← chat buffers (incl. the in-flight turn)
+    │   ├─ events(sid) / graph(sid) / context(sid)   ← the panels' per-session projections
+    │   ├─ progress(sid): ChainProgressController
+    │   ├─ runState(sid): { isProcessing, runningTool } + runningCount()
+    │   ├─ completion(sid): flash → accent border, cleared on open
+    │   ├─ abort/registerAbort/abortAll             ← aborted on unload or explicit Stop
+    │   └─ dispose(ids) / pruneIdle(keep)           ← the ONE forget rule, the ONE prune rule
     │
-    ├─> ChatInterface (sessionId + registry accessors — messages live in the ROUTE, not here)
+    ├─ ThreadListStore (lib/thread-list-store.ts) — the conversation list:
+    │   └─ threads / refetch / applyTitle / markPromoted / remove / placeholder
+    │
+    ├─> ChatInterface (sessionId + a few route callbacks; state comes from context)
     │       ├─ selectedAgent: Signal<string>
-    │       │   Props: graphEntityNames, onHighlightEntities, getMessages/setMessages,
-    │       │          getProgress, getRunState/updateRunState, runningCount,
-    │       │          onRunStarted, onRunSettled
+    │       │   Props: graphEntityNames, onHighlightEntities, onContextUpdate,
+    │       │          onRunStarted, onRunSettled, onTitleUpdated, onPromoted
     │       │
     │       ├─> AgentSelector (selectedAgent, onAgentChange, disabled)
     │       ├─> ChatMessages (messages, graphEntityNames, onHighlightEntities, onApproveWrite, onRejectWrite)
     │       │       └─ annotateEntities() — wraps entity names in interactive spans post-render
     │       └─> ChatInput (onSend, disabled, blockedMessage)
     │
-    ├─> ChatSidebar (threads, selectedId, getRunState, getProgress, getCompletion, onDeleteThreads)
+    ├─> ChatSidebar (threads, selectedId, onDeleteThreads — run state from the registry)
     │       ├─ RowProgress — per-row status + strip off the same progress controllers
     │       ├─ collapsed icon rail (#60) + select mode / delete confirm (#71)
     │       └─ Dialog (Ark) — delete confirmation
@@ -555,40 +599,42 @@ index.tsx (top-level state)
 ```
 
 ### Message Type
+
 ```typescript
 interface Message {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  timestamp: Date
-  toolCall?: {                          // Present when status === 'paused' (approval gate)
-    type: string
-    status: 'pending' | 'executed' | 'error'
-    tool: string
-    explanation?: string
-    isReadOnly: boolean
-    error?: string
-  }
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: Date;
+  toolCall?: {
+    // Present when status === 'paused' (approval gate)
+    type: string;
+    status: "pending" | "executed" | "error";
+    tool: string;
+    explanation?: string;
+    isReadOnly: boolean;
+    error?: string;
+  };
 }
 ```
 
 ### Metrics dashboard route (#132)
 
 A second page — `routes/dashboard.tsx`, reached from the monitoring icon in the
-nav (the old "Home"/"About" text links are gone; the chat *is* `/`). It shows
+nav (the old "Home"/"About" text links are gone; the chat _is_ `/`). It shows
 token, cache and cost aggregates across everything the signed-in user has run.
 
-| Layer | File | Role |
-|-------|------|------|
-| Fold | `lib/metrics/aggregate.ts` | Pure, client-safe folds over `ContextEvent[]`: `getEventMetrics` (the single accessor for step accounting), `foldEvents`, `aggregateByPattern`, `aggregateByConversation`, `buildDashboard` |
-| Action | `lib/metrics/dashboard.server.ts` | `getMetricsDashboard(topN)` — `requireUser()`, load, fold, return aggregates only (raw events never cross the wire) |
-| Query | `lib/db/conversations.server.ts` | `listConversationEvents(userId)` projects `context -> 'events'` in SQL (same 200-row ceiling as the sidebar list) |
-| Page | `routes/dashboard.tsx` | Global cards + input-composition bar, per-pattern table, top-N conversations. No chart library — bars are divs |
+| Layer  | File                              | Role                                                                                                                                                                                        |
+| ------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fold   | `lib/metrics/aggregate.ts`        | Pure, client-safe folds over `ContextEvent[]`: `getEventMetrics` (the single accessor for step accounting), `foldEvents`, `aggregateByPattern`, `aggregateByConversation`, `buildDashboard` |
+| Action | `lib/metrics/dashboard.server.ts` | `getMetricsDashboard(topN)` — `requireUser()`, load, fold, return aggregates only (raw events never cross the wire)                                                                         |
+| Query  | `lib/db/conversations.server.ts`  | `listConversationEvents(userId)` projects `context -> 'events'` in SQL (same 200-row ceiling as the sidebar list)                                                                           |
+| Page   | `routes/dashboard.tsx`            | Global cards + input-composition bar, per-pattern table, top-N conversations. No chart library — bars are divs                                                                              |
 
 Numbers come from `event.metrics` (#122 / PR #130) and **only** from there:
 `llmCall.usage` has no cache-write bucket and no cost, so folding it in would
 understate spend while looking complete. LLM steps predating the attribute are
-counted as *unmetered* and called out in the UI rather than silently dropped.
+counted as _unmetered_ and called out in the UI rather than silently dropped.
 
 ---
 
@@ -598,15 +644,15 @@ Conversations are persisted to Postgres so they survive process restarts and lis
 
 ### Layers
 
-| Layer | File | Role |
-|-------|------|------|
-| Pool | `lib/db/client.server.ts` | Lazy `pg.Pool` singleton, runs `CREATE TABLE IF NOT EXISTS` once per process |
-| Repo | `lib/db/conversations.server.ts` | Typed CRUD: `loadConversation`, `saveConversation`, `listConversations`, `deleteConversation`, `deriveTitle` |
-| Session | `lib/harness-client/session.server.ts` | In-process pattern cache (non-serializable BAML clients) + Postgres-backed serialized context, scoped by `userId` |
-| Actions | `lib/harness-client/actions.server.ts` | `listConversations()`, `loadConversation()` server actions for the sidebar; auth-gated |
-| Sidebar | `components/ark-ui/ChatSidebar.tsx` | Real thread list + "+ New Chat", selected-thread highlight, per-row + bulk delete (#71) |
-| Page | `routes/index.tsx` | `selectedSessionId` signal; threads resource refetched after each turn AND on run start / settle (#105). **Always read via `threads.latest`** — see *Rendering gotchas* in §6a |
-| Hydration | `components/ark-ui/ChatInterface.tsx` | `createEffect` on `props.sessionId` replays events into graph + observability. **Skipped while that session's run is in flight** (the live buffer is the only copy of the un-persisted turn); reads run state untracked so a finishing run doesn't re-trigger it |
+| Layer     | File                                   | Role                                                                                                                                                                                                                                                             |
+| --------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pool      | `lib/db/client.server.ts`              | Lazy `pg.Pool` singleton, runs `CREATE TABLE IF NOT EXISTS` once per process                                                                                                                                                                                     |
+| Repo      | `lib/db/conversations.server.ts`       | Typed CRUD: `loadConversation`, `saveConversation`, `listConversations`, `deleteConversation`, `deriveTitle`                                                                                                                                                     |
+| Session   | `lib/harness-client/session.server.ts` | In-process pattern cache (non-serializable BAML clients) + Postgres-backed serialized context, scoped by `userId`                                                                                                                                                |
+| Actions   | `lib/harness-client/actions.server.ts` | `listConversations()`, `loadConversation()` server actions for the sidebar; auth-gated                                                                                                                                                                           |
+| Sidebar   | `components/ark-ui/ChatSidebar.tsx`    | Real thread list + "+ New Chat", selected-thread highlight, per-row + bulk delete (#71)                                                                                                                                                                          |
+| Page      | `routes/index.tsx`                     | `selectedSessionId` signal; threads resource refetched after each turn AND on run start / settle (#105). **Always read via `threads.latest`** — see _Rendering gotchas_ in §6a                                                                                   |
+| Hydration | `components/ark-ui/ChatInterface.tsx`  | `createEffect` on `props.sessionId` replays events into graph + observability. **Skipped while that session's run is in flight** (the live buffer is the only copy of the un-persisted turn); reads run state untracked so a finishing run doesn't re-trigger it |
 
 ### Row lifecycle (#105)
 
@@ -636,7 +682,7 @@ Once the first turn completes, a minimal one-pattern harness agent in `lib/harne
 
 ### Auth
 
-Every public action and the `/api/events` / `/api/stash` routes authenticate via the Entra session (`getAuthenticatedUser()` → `getCurrentUser()`, §3) and scope session ops by `user.id` (the Entra `oid`). In dev with the bypass enabled (`isBypassEnabled()` from `lib/auth/dev-bypass.ts`), the user id falls back to `BYPASS_USER.id` (`'dev-bypass-user'`) — the same literal the client-side `AuthProvider` mock user uses, so `useAuth().user().id` matches the `conversations.user_id` rows. See §3 *Dev Bypass* for the gate and the production guard.
+Every public action and the `/api/events` / `/api/stash` routes authenticate via the Entra session (`getAuthenticatedUser()` → `getCurrentUser()`, §3) and scope session ops by `user.id` (the Entra `oid`). In dev with the bypass enabled (`isBypassEnabled()` from `lib/auth/dev-bypass.ts`), the user id falls back to `BYPASS_USER.id` (`'dev-bypass-user'`) — the same literal the client-side `AuthProvider` mock user uses, so `useAuth().user().id` matches the `conversations.user_id` rows. See §3 _Dev Bypass_ for the gate and the production guard.
 
 ---
 
@@ -650,15 +696,22 @@ progress readout, and completion mark.
 
 ### State location
 
-`routes/index.tsx` owns the per-session registries:
+`lib/session-registry.ts` owns the per-session slots; the route creates one and
+provides it through `SessionRegistryContext` (#226 B1).
 
-| Registry | Shape | Purpose |
-|----------|-------|---------|
-| `messagesBySession` | `Map<sessionId, Signal<Message[]>>` | Chat buffers, **including the in-flight turn** (not persisted until run end — hoisting it here is what makes switch-back non-destructive, #105). Idle buffers are pruned on thread switch; a *running* session's buffer is irreplaceable. |
-| `progressBySession` | `Map<sessionId, ChainProgressController>` | One progress controller per session. Lazily created on first read. Feeds the in-chat bar AND the sidebar's `RowProgress` strip. |
-| `runStates` signal | `Record<sessionId, SessionRunState>` | Reactive `{ isProcessing, runningTool }` per session — composer guard, sidebar live gate, `runningCount`. |
-| `completions` signal | `Record<sessionId, CompletionMark>` | Flash → accent border for runs that settle while another thread is in view. Cleared when the thread is opened. |
-| `abortControllers` | `Map<sessionId, AbortController>` | One in-flight SSE stream per session. Aborted only on page unload (not on chat switch). |
+| Slot                     | Read                                   | Purpose                                                                                                                                                                                                                                                   |
+| ------------------------ | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| messages                 | `messages(sid)`                        | Chat buffers, **including the in-flight turn** (not persisted until run end — hoisting it out of the component is what makes switch-back non-destructive, #105). Idle buffers are pruned on thread switch; a _running_ session's buffer is irreplaceable. |
+| events / graph / context | `events(sid)` etc.                     | The observability timeline, the graph and the last `UnifiedContext`, per conversation (SA-H8).                                                                                                                                                            |
+| progress                 | `progress(sid)`                        | One `ChainProgressController` per session, lazily created. Feeds the in-chat bar AND the sidebar's `RowProgress` strip.                                                                                                                                   |
+| run state                | `runState(sid)`, `runningCount()`      | `{ isProcessing, runningTool }` per session — composer guard, sidebar live gate, concurrency cap.                                                                                                                                                         |
+| completion               | `completion(sid)`                      | Flash → accent border for runs that settle while another thread is in view. Cleared when the thread is opened.                                                                                                                                            |
+| abort                    | `registerAbort` / `abort` / `abortAll` | One in-flight SSE stream per session. Torn down by an explicit Stop or on page unload — never on a chat switch.                                                                                                                                           |
+
+Two lifecycle rules sit over them and are the reason the module exists:
+`dispose(ids)` is the single place a conversation is forgotten, `pruneIdle(keep)`
+the single prune rule (it spares `keep` and anything still running, and never
+drops a progress controller).
 
 Shared shapes + the pure cap policy (`countRunning`, `isAtConcurrencyCap`,
 `capReachedMessage`) live in `lib/run-registry.ts`.
@@ -668,10 +721,10 @@ submit time — all run writes are keyed on that captured id, not the live prop.
 
 ### Event routing
 
-- **Progress is always routed** into `getProgress(runSessionId)` regardless of which chat the user is viewing.
-- **Messages** (user bubble, inline error/warning bubbles, final assistant message) are filed into `setMessages(runSessionId, …)` unconditionally — a backgrounded run fills its own thread's buffer; the view just renders the selected session's buffer.
-- **Tool name** is extracted from `controller_action.action.tool_name` and pushed via `updateRunState(runSessionId, { runningTool })`; a multi-call turn (`action.additional_calls`) shows the batch size instead (e.g. `"3 tools"`). When `is_final` is true the field clears.
-- **Graph, events panel, context** remain single-instance route state and are dropped when `runSessionId !== props.sessionId`; the persisted row surfaces them on the next hydration.
+- **Progress is always routed** into `registry.progress(runSessionId)` regardless of which chat the user is viewing.
+- **Messages** (user bubble, inline error/warning bubbles, final assistant message) are filed into `registry.appendMessage(runSessionId, …)` unconditionally — a backgrounded run fills its own thread's buffer; the view just renders the selected session's buffer.
+- **Tool name** is extracted from `controller_action.action.tool_name` and pushed via `registry.updateRunState(runSessionId, { runningTool })`; a multi-call turn (`action.additional_calls`) shows the batch size instead (e.g. `"3 tools"`). When `is_final` is true the field clears.
+- **Graph, events panel and context** are per-session too (SA-H8): they go to `runSessionId`'s slots whatever is on screen. Only the _highlight_ is view state — it moves only when the batch landed in the displayed conversation.
 - **Run boundary callbacks:** `onRunStarted` (first SSE event → threads refetch; the early-persisted row appears) and `onRunSettled(sid, 'done' | 'error')` (threads refetch + completion mark; not fired on abort).
 
 ### Concurrency cap
@@ -680,7 +733,7 @@ submit time — all run writes are keyed on that captured id, not the live prop.
 client-side policy — the server takes no part. At the cap, a send into an
 idle conversation is refused ("max N reached — wait for a session to stop");
 the already-running session is never "at cap" for its own account (it keeps
-the tool banner), and a non-positive/non-finite cap means *no cap* so bad
+the tool banner), and a non-positive/non-finite cap means _no cap_ so bad
 localStorage can't lock the composer. Nothing running is ever interrupted —
 mid-run cancellation is #105 PR 3, unbuilt.
 
@@ -694,19 +747,19 @@ mid-run cancellation is #105 PR 3, unbuilt.
 
 ### Lifecycle
 
-| Event | Behavior |
-|-------|----------|
-| Submit on a non-running chat | Cap check first. Then `getProgress(sid).reset()`; `updateRunState(sid, { isProcessing: true })`; SSE opens; per-session `AbortController` registered. Server-side, `runTurn` persists the row before running (see §6 *Row lifecycle*). |
-| First SSE event | `onRunStarted` → `refetchThreads()` — the new row appears with derived title, status line, and progress strip. |
-| Switch chats mid-stream | Nothing aborts. The hydration effect loads the target thread; the running thread's buffer/controller keep accumulating; its sidebar row keeps its strip. |
-| Switch back to the running chat | The buffer + controller are still live — user bubble, inline errors, and bar all restore. Hydration is skipped (`isProcessing`, read untracked). |
-| Stream completes | `progress.finish()`; run state cleared; `AbortController` unregistered; `onRunSettled` → refetch + (if backgrounded) completion mark: flash, then accent border until opened. |
-| Tab close / `beforeunload` | Route iterates `abortControllers.values()` and aborts each → no zombie fetches in DevTools. |
+| Event                           | Behavior                                                                                                                                                                                                                                              |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Submit on a non-running chat    | Cap check first. Then `registry.progress(sid).reset()`; `registry.updateRunState(sid, { isProcessing: true })`; SSE opens; per-session `AbortController` registered. Server-side, `runTurn` persists the row before running (see §6 _Row lifecycle_). |
+| First SSE event                 | `onRunStarted` → `refetchThreads()` — the new row appears with derived title, status line, and progress strip.                                                                                                                                        |
+| Switch chats mid-stream         | Nothing aborts. The hydration effect loads the target thread; the running thread's buffer/controller keep accumulating; its sidebar row keeps its strip.                                                                                              |
+| Switch back to the running chat | The buffer + controller are still live — user bubble, inline errors, and bar all restore. Hydration is skipped (`isProcessing`, read untracked).                                                                                                      |
+| Stream completes                | `progress.finish()`; run state cleared; `AbortController` unregistered; `onRunSettled` → refetch + (if backgrounded) completion mark: flash, then accent border until opened.                                                                         |
+| Tab close / `beforeunload`      | Route calls `registry.abortAll()` → no zombie fetches in DevTools.                                                                                                                                                                                    |
 
 ### Rendering gotchas (all verified against built output)
 
 1. **Attributify extractor:** UnoCSS's `presetAttributify` emits `[attr~="…"]`
-   selectors only for values found as *literal text* in source. Values that
+   selectors only for values found as _literal text_ in source. Values that
    exist only inside dynamic expressions (`border={fn()}`) — and some literal
    fractions (`m="t-1.5"`) — are silently dropped from the built sheet. Rule:
    dynamic styling uses inline `style={{…}}`. Known pre-existing casualty:
@@ -735,11 +788,12 @@ mid-run cancellation is #105 PR 3, unbuilt.
    overrides the UA's `[hidden]{display:none}`, resurrecting the element.
    Compounding it, `position` is not an attributify rule at all
    (`position: "fixed"` in a props cast silently does nothing), so the
-   resurrected overlay is *static and in-flow*: a phantom full-height flex
+   resurrected overlay is _static and in-flow_: a phantom full-height flex
    item that starved the sidebar's `flex:1` thread list to zero height
    (found via computed styles in a live browser; the built CSS was fine).
    Rule: give `Dialog.Root` `lazyMount unmountOnExit`, and position
    Backdrop/Positioner with inline `style`.
+
 ---
 
 ## 6b. LLM-Generated Conversation Titles
@@ -748,17 +802,18 @@ Once the first user turn completes, a minimal harness agent generates a 3–5 wo
 
 ### Why a harness agent for one BAML call?
 
-The `harness-patterns/` library is the testbed for an eventual standalone npm package. Its current example catalog (`harness-client/agents/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, `guardrail`, and a full ontology-builder pipeline — but had no *minimum-rung* example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
+The `harness-patterns/` library is the testbed for an eventual standalone npm package. Its current example catalog (`harness-client/agents/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, `guardrail`, and a full ontology-builder pipeline — but had no _minimum-rung_ example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
 
 ```ts
 // app/src/lib/harness-client/agents/title-generator.server.ts
 export const titleAgent = harness<TitleAgentData>(
   compactExecution<TitleAgentData>({
-    patternId: 'title-gen',
-    mode: 'message',
-    synthesize: async ({ userMessage }) => sanitizeTitle(await b.GenerateConversationTitle(userMessage)) ?? '',
+    patternId: "title-gen",
+    mode: "message",
+    synthesize: async ({ userMessage }) =>
+      sanitizeTitle(await b.GenerateConversationTitle(userMessage)) ?? "",
   }),
-)
+);
 ```
 
 One pattern (`compactExecution`), one BAML call, no tools, no router. `mode: 'message'` makes the compactExecution a thin shell around the custom `synthesize` fn: it pulls the latest `user_message` from the view and feeds it as the function's input.
@@ -769,10 +824,10 @@ One pattern (`compactExecution`), one BAML call, no tools, no router. `mode: 'me
 
 ### When it runs
 
-| Trigger | Path |
-|---------|------|
-| **First turn of a conversation** | `api/events.ts` calls `runFirstTurnTitleGen(ctx, sessionId, userId)` after the SSE `done` frame, before close. Hard 3s timeout. |
-| **On-demand from the sidebar** | Hover-reveal `↻` icon on each row → calls the `regenerateConversationTitle(sessionId)` server action → loads context → calls `runRegenerateTitle()` (no first-turn gate, uses the latest user message). |
+| Trigger                          | Path                                                                                                                                                                                                    |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **First turn of a conversation** | `api/events.ts` calls `runFirstTurnTitleGen(ctx, sessionId, userId)` after the SSE `done` frame, before close. Hard 3s timeout.                                                                         |
+| **On-demand from the sidebar**   | Hover-reveal `↻` icon on each row → calls the `regenerateConversationTitle(sessionId)` server action → loads context → calls `runRegenerateTitle()` (no first-turn gate, uses the latest user message). |
 
 `runFirstTurnTitleGen` is the one with the gate: it skips when `ctx.events.filter(e => e.type === 'user_message').length !== 1`. Titles stay stable across turns; users learn to recognize them.
 
@@ -793,15 +848,17 @@ POST /api/events
 Server-side (`api/events.ts:78-95`):
 
 ```ts
-controller.enqueue(`event: done\ndata: ${doneData}\n\n`)
+controller.enqueue(`event: done\ndata: ${doneData}\n\n`);
 await Promise.race([
-  runFirstTurnTitleGen(result.context, sessionId, userId).then(title => {
-    if (!title) return
-    controller.enqueue(`event: title_updated\ndata: ${JSON.stringify({ sessionId, title })}\n\n`)
+  runFirstTurnTitleGen(result.context, sessionId, userId).then((title) => {
+    if (!title) return;
+    controller.enqueue(
+      `event: title_updated\ndata: ${JSON.stringify({ sessionId, title })}\n\n`,
+    );
   }),
-  new Promise(resolve => setTimeout(resolve, 3000)),
-]).catch(err => console.error('[title-gen] failed:', err))
-controller.close()
+  new Promise((resolve) => setTimeout(resolve, 3000)),
+]).catch((err) => console.error("[title-gen] failed:", err));
+controller.close();
 ```
 
 Client-side: the typed SSE parser yields `{ event: 'title_updated', data: { sessionId, title } }` and `ChatInterface` invokes `props.onTitleUpdated?.(sessionId, title)`. `routes/index.tsx` patches the threads cache via `mutateThreads()` — no `listConversations()` round-trip.
@@ -836,10 +893,10 @@ Wraps the `/api/events` response body and yields a discriminated union over even
 
 ```ts
 type ChatStreamEvent =
-  | { event: 'message';       data: ContextEvent & { sessionId?: string } }
-  | { event: 'done';          data: DoneEventData }
-  | { event: 'error';         data: { sessionId?: string; error: string } }
-  | { event: 'title_updated'; data: TitleUpdatedEventData }
+  | { event: "message"; data: ContextEvent & { sessionId?: string } }
+  | { event: "done"; data: DoneEventData }
+  | { event: "error"; data: { sessionId?: string; error: string } }
+  | { event: "title_updated"; data: TitleUpdatedEventData };
 ```
 
 `ChatInterface.handleSendMessage` consumes it with `for await … switch (evt.event)`. Adding a new event type is a one-line union extension; TS surfaces every consumer that doesn't handle it. Frame buffering, partial reads, malformed JSON, multi-line `data:` payloads, and comment lines (`: keepalive`) are all handled inside the parser. Unknown event names still come through at runtime (so a future server-side addition doesn't crash an older client) but aren't part of the static type — consumers should treat them as no-ops via `default` branch.
@@ -849,9 +906,11 @@ type ChatStreamEvent =
 ## 7. UnoCSS Limitations & Workarounds
 
 ### SVG Elements
+
 **UnoCSS attributify does NOT work on `<svg>` elements.**
 
 Use standard SVG attributes:
+
 ```tsx
 // ❌ WRONG - Causes TypeScript errors
 <svg w="16" h="16" m="auto">
@@ -861,6 +920,7 @@ Use standard SVG attributes:
 ```
 
 **Attributes to convert:**
+
 - `w="..."` → `width="..."`
 - `h="..."` → `height="..."`
 - `m="..."` → `style="margin: ..."`
@@ -868,6 +928,7 @@ Use standard SVG attributes:
 - `transform="..."` → Use inline style with dynamic values
 
 **Event handlers:** Wrap reactive values in functions for SolidJS
+
 ```tsx
 // ❌ WRONG
 onClick={props.onToggle}
@@ -928,6 +989,7 @@ app/
 │   │       ├── AllGraphTab.tsx        # Turn-based graph explorer (FloatingPanel + color-coded)
 │   │       ├── SettingsPanel.tsx      # Harness settings FloatingPanel (sliders, number inputs)
 │   │       ├── ObservabilityPanel.tsx # Event timeline + tool-pair merging + Save button
+│   │       ├── observability/         # Panel internals: SummaryBar, TimelineRows, EventDetail, LLMCallTabs, PromptView
 │   │       ├── EventDetailOverlay.tsx # Event detail modal
 │   │       ├── ToolCallDisplay.tsx    # Tool call status display (approval gate)
 │   │       ├── AgentSelector.tsx      # Agent selection dropdown
@@ -967,11 +1029,18 @@ app/
 │       ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
 │       ├── turn-utils.ts           # splitIntoTurns(), extractTurnGraphElements()
 │       ├── turn-colors.ts         # TURN_COLORS palette, getTurnColor()
+│       ├── observability/         # Pure event-stream projections behind the timeline
+│       │   ├── projection.ts      # buildTimelineItems(), getEventPreview(), getEventLane()
+│       │   ├── prompt-parse.ts    # parsePromptBody(), flattenContent(), formatParamValue()
+│       │   ├── token-totals.ts    # foldTokenTotals(), fmtTok(), fmtUsd()
+│       │   └── event-styles.ts    # eventIcons/eventColors tables, getPatternColor()
 │       ├── neo4j/
 │       │   ├── queries.ts         # runManualCypher() (read-only), getNodeProperties()
 │       │   └── graph-edit.server.ts # createGraphNode()/linkGraphNodes()/setGraphNodeProperty() — authenticated, intent-shaped graph writes
 │       └── harness-client/        # Pre-built agent server actions
-│           ├── actions.server.ts  # processMessage(), processMessageStreaming(), listConversations(), loadConversation()
+│           ├── actions.server.ts  # processMessage(), approveAction(), listConversations(), loadConversation()
+│           ├── turn.server.ts     # runTurnAndPersist() — the one run-a-turn-and-persist flow (interactive | triggered | approval)
+│           ├── action-runner.server.ts # seedActionRow() + runAgentInBackground() — triggered runs, off the request path
 │           ├── session.server.ts  # In-process pattern cache + Postgres-backed serialized context (per-user)
 │           ├── registry.server.ts # Agent registry (6 examples)
 │           ├── graph-extractor.ts # ContextEvent → GraphElement[]
@@ -985,28 +1054,31 @@ app/
 ## MCP Tools Available
 
 ### Context7
+
 - `resolve-library-id` - Search for library documentation
 - `get-library-docs` - Fetch up-to-date docs for a library
 
 **Example:**
+
 ```typescript
 // 1. Find library ID
-const results = await resolveLibraryId({ libraryName: "solidjs" })
+const results = await resolveLibraryId({ libraryName: "solidjs" });
 // → Returns: /solidjs/solid, /solidjs/solid-start, etc.
 
 // 2. Get documentation
 const docs = await getLibraryDocs({
   context7CompatibleLibraryID: "/solidjs/solid",
   topic: "signals and reactivity",
-  tokens: 3000
-})
+  tokens: 3000,
+});
 ```
 
 ### Ark UI
+
 - `list_components` - List all available Ark UI components
 - `get_component_props` - Get props for a specific component
 - `list_examples` - List examples for a component
 - `get_example` - Get specific example code
 - `styling_guide` - Get data attributes for styling
 
-**Frameworks:** ~react, vue, svelte,~ *solid*
+**Frameworks:** ~~react, vue, svelte,~~ _solid_

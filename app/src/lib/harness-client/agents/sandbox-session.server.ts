@@ -113,8 +113,9 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     rootfs: 'base',
     egress: 'mcp-only',
     // Durable workspace (#89): hydrate the conversation's stored documents into
-    // /work/in on first boot, promote /work/out deliverables back to the Data
-    // Stash each turn — so uploads/outputs survive idle eviction and reconnects.
+    // /work/in at each turn's entry (diff-wise), promote /work/out deliverables
+    // back to the Data Stash each turn — so uploads/outputs survive idle
+    // eviction and reconnects.
     syncWorkspace: true,
   })(loop)
 

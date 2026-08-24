@@ -17,16 +17,16 @@
  *   1. Route authenticates + parses multipart, stores the recording in the
  *      Data Stash, then calls `seedActionRow` to insert the observable row.
  *   2. Route calls `runAgentInBackground` WITHOUT awaiting and returns 202.
- *   3. This module runs the harness to completion and persists the result.
+ *   3. This module runs the turn to completion and persists the result, on the
+ *      shared `runTurnAndPersist` implementation (`turn.server.ts`).
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
-import { harness, createContext, serializeContext } from '../harness-patterns'
-import { getOrBuildPatterns, saveSession, type SessionData } from './session.server'
-import { runWithRequestContext } from './request-user.server'
+import { createContext, serializeContext } from '../harness-patterns'
+import { type SessionData } from './session.server'
+import { runTurnAndPersist } from './turn.server'
 import {
   saveConversation as dbSaveConversation,
-  setConversationStatus as dbSetConversationStatus,
   type ConversationSource,
 } from '../db/conversations.server'
 
@@ -94,18 +94,17 @@ export async function seedActionRow(
  * Run an agent to completion for a triggered action (POST endpoint or
  * routine), off the request path. The caller inserts the row (via
  * {@link seedActionRow}) and calls this WITHOUT awaiting, so the HTTP response
- * is already sent — a routine has no response at all. On completion the
- * serialized context + lifted status are persisted; on an unexpected throw the
- * row is flipped to `error` so it never sticks on `running`.
+ * is already sent — a routine has no response at all.
  *
- * Always a fresh first run — it never `continueSession`s the seeded
- * placeholder (which would duplicate the user_message). Wrapped in
- * `runWithRequestContext` so pattern closures resolve the owner and the
- * conversation (the `runId` *is* this run's sessionId — the route uses it as
- * both the conversation id and the Data Stash session key); settings fall back
- * to `DEFAULT_SETTINGS` (no request-scoped settings off the request path). The
- * harness itself never throws (it catches internally and returns an `error`
- * status), so the catch here only guards pattern-construction failures.
+ * The run itself is `runTurnAndPersist` in `triggered` mode — the same
+ * implementation the interactive path uses (#226 C5), which is what keeps the
+ * two from drifting again. `triggered` is what makes it always a fresh first
+ * run (never a `continueSession` of the seeded placeholder, which would
+ * duplicate the user_message), skip title generation (the trigger's
+ * `short_description` is the title), and take its settings from the defaults —
+ * there is no request-scoped settings payload off the request path. Everything
+ * else, including the post-answer `compactBulkData` pass and flipping a failed
+ * row out of 'running', is shared.
  */
 export async function runAgentInBackground(
   runId: string,
@@ -114,28 +113,17 @@ export async function runAgentInBackground(
   agentId: string,
   trigger: ActionTrigger,
 ): Promise<void> {
-  try {
-    await runWithRequestContext({ userId, sessionId: runId }, async () => {
-      const patterns = await getOrBuildPatterns(runId, agentId)
-      const agent = harness(...patterns)
-      const result = await agent(message, runId, {
-        trigger,
-      } as Partial<SessionData>)
-      await saveSession(runId, userId, agentId, result.serialized)
-    })
-  } catch (err) {
-    console.error(`[action] background run failed for ${runId}:`, err)
-    // The seeded row exists with status='running'; flip it so the UI doesn't
-    // spin forever. Best-effort, but its OWN failure is now reported: the old
-    // comment claimed "already logged above", which was about the run, not
-    // about this write — and if this write is what failed, the row keeps
-    // spinning forever with nothing to say why (sf-M3).
-    await dbSetConversationStatus(runId, userId, 'error').catch((statusErr: unknown) => {
-      console.error(
-        `[action] could not flip ${runId} to status='error' — the row will keep showing as ` +
-          'running:',
-        statusErr,
-      )
-    })
-  }
+  await runTurnAndPersist({
+    mode: 'triggered',
+    sessionId: runId,
+    userId,
+    agentId,
+    message,
+    data: { trigger } as Partial<SessionData>,
+  }).catch(() => {
+    // Nobody awaits this, so the rejection stops here — and it is not lost:
+    // `runTurnAndPersist` logs the failure, flips the seeded row off 'running'
+    // so the UI does not spin forever, and logs that too when the flip itself
+    // is what failed (sf-M3).
+  })
 }

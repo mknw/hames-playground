@@ -42,10 +42,12 @@ export interface Attachment {
   lastUsedAt: number
   /**
    * True until the workspace has been hydrated into this (fresh) container.
-   * Set `true` on first boot; the `withSandbox` wrapper hydrates `/work` from
-   * the document store once and flips it to `false` so subsequent same-session
-   * turns (which reuse this live attachment) don't re-hydrate (#89). A reconnect
-   * after idle eviction boots a fresh container → new attachment → `true` again.
+   * Set `true` on first boot and flipped to `false` by whichever side hydrates
+   * first — the `withSandbox` wrapper on a turn, or the Shell on a Shell-first
+   * boot (#89, #97 Gap 3). It is the *Shell's* gate: the agent side hydrates
+   * every turn now and only needs the flag to spare the Shell a redundant pass
+   * (#206 §6.1). A reconnect after idle eviction boots a fresh container → new
+   * attachment → `true` again.
    */
   isFirstBoot: boolean
 }
@@ -88,9 +90,10 @@ export class AttachmentTable {
       // under us between turns — host crash, external `docker rm`, OOM-kill.
       // Reusing its dead transport would fail every tool call and wedge the
       // session until idle-evict. On a non-healthy verdict, tear the stale
-      // entry down and fall through to a fresh boot; the new attachment is
-      // `isFirstBoot=true`, so the `withSandbox` syncWorkspace path re-hydrates
-      // /work transparently (#89). Costs ~1 `docker inspect` per reuse.
+      // entry down and fall through to a fresh boot; the fresh container's
+      // /work/in is empty, so the `withSandbox` syncWorkspace path re-hydrates
+      // it transparently on that turn's entry (#89, #206 §6.1). Costs ~1
+      // `docker inspect` per reuse.
       const health = await this.backend
         .health(existing.vm)
         .catch((): HealthStatus => ({ state: 'gone' }))

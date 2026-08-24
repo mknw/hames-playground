@@ -12,6 +12,7 @@
  * scrollback on reconnect, so the shell's cwd/env/processes persist.
  */
 import { onMount, onCleanup, createSignal } from 'solid-js'
+import { ptyStreamUrl, resizePty, sendPtyInput } from '~/lib/api-client'
 
 export interface InteractiveTerminalProps {
   sessionId: string
@@ -69,30 +70,16 @@ export const InteractiveTerminal = (props: InteractiveTerminalProps) => {
       } catch {
         /* ignore */
       }
-      fetch('/api/sandbox/pty/resize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, cols: term.cols, rows: term.rows }),
-      }).catch(() => {})
+      resizePty(sessionId, term.cols, term.rows).catch(() => {})
     }
 
     // Keystrokes (and pasted control sequences) up.
     const dataSub = term.onData((data) => {
-      fetch('/api/sandbox/pty/input', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, data }),
-      }).catch(() => {})
+      sendPtyInput(sessionId, data).catch(() => {})
     })
 
-    // PTY output down. Each frame is a JSON-encoded raw byte string. Forward
-    // the agent id so the server can hydrate /work for durable-workspace agents
-    // when this Shell is the first to boot the container (#97 Gap 3).
-    const agentId = props.agentId
-    const streamUrl =
-      `/api/sandbox/pty/stream?sessionId=${encodeURIComponent(sessionId)}` +
-      (agentId ? `&agentId=${encodeURIComponent(agentId)}` : '')
-    const es = new EventSource(streamUrl)
+    // PTY output down. Each frame is a JSON-encoded raw byte string.
+    const es = new EventSource(ptyStreamUrl(sessionId, props.agentId))
     es.onopen = () => {
       setState('connected')
       postResize()

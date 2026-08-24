@@ -68,9 +68,10 @@ export interface WithSandboxConfig {
   attachments?: AttachmentTable
   /**
    * Durable workspace sync (#89). When true (id-addressable path only), the
-   * session's stored documents are hydrated into `/work/in` on first boot and
-   * new/changed files under `/work/out` are promoted back to the document store
-   * on each turn's exit. Off by default — opt in per agent (Sandbox · Session
+   * session's stored documents are hydrated into `/work/in` at each turn's
+   * entry (diff-wise — only what is missing, #206 §6.1) and new/changed files
+   * under `/work/out` are promoted back to the document store on each turn's
+   * exit. Off by default — opt in per agent (Sandbox · Session
    * does). Requires the MCP gateway (document store lives in Redis).
    */
   syncWorkspace?: boolean
@@ -217,9 +218,22 @@ export function withSandbox(config?: WithSandboxConfig) {
     const fresh = config?.fresh === true
     const syncWorkspace = config?.syncWorkspace === true
     // Durable-workspace sync only runs on the id-addressable path (hydrate on
-    // first boot, promote on exit — see runWithIdAttachment). The capability
+    // entry, promote on exit — see runWithIdAttachment). The capability
     // marker below reflects that reality: syncWorkspace without an id is a no-op.
     const willSyncWorkspace = syncWorkspace && id !== undefined
+    // …and a no-op is exactly what the caller did NOT ask for. Asking for a
+    // durable workspace and silently getting none is how #243's follow-up bug
+    // presented: a route with no `id` ran in a container where /work/in never
+    // existed, so a file ingested on another turn was invisible and the actor
+    // burned its retries on `ls: cannot access '/work/in'`. Config error, not a
+    // runtime one — say so at wrap time rather than leaving it to a log trace.
+    if (syncWorkspace && id === undefined) {
+      console.warn(
+        `[sandbox] withSandbox({ syncWorkspace: true }) ignored for pattern "${pattern.name}": ` +
+          'it requires an `id` (the anonymous-pool and `{ fresh }` paths have no durable ' +
+          'workspace). Pass `id` — e.g. `${sessionId}:${rootfs}` — to hydrate /work/in.',
+      )
+    }
 
     const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
       const settings = getRequestSettings()
@@ -393,29 +407,36 @@ async function runWithIdAttachment<T>(
       return await runWithSandbox(att.transport, () => pattern.fn(scope, view))
     }
     return await runWithSandbox(att.transport, async () => {
-      // First boot of a fresh container → restore the session's stored
-      // documents into /work/in. Reused live attachments skip this (#89).
-      if (att.isFirstBoot) {
-        try {
-          const { skipped } = await hydrateWorkspace(att.transport, sessionId)
-          if (skipped.length > 0) {
-            reportWorkspaceFailure(
-              scope,
-              'hydrate',
-              sessionId,
-              new Error(
-                `${skipped.length} file(s) not restored: ` +
-                  skipped.map((f) => `${f.filename} (${f.error})`).join(', '),
-              ),
-            )
-          }
-        } catch (err) {
-          // Non-fatal: the turn still runs, but the agent cannot see prior
-          // uploads or earlier deliverables, so say which turn was blind.
-          reportWorkspaceFailure(scope, 'hydrate', sessionId, err)
+      // Restore the session's stored documents into /work/in — EVERY turn, not
+      // just on a fresh container (#206 §6.1). `hydrateWorkspace` diffs against
+      // what /work/in already holds (the mirror of the snapshot/promote pair
+      // below), so a steady-state turn costs one document list plus one in-VM
+      // `find` and writes nothing. Gating this on `att.isFirstBoot` made turn 1
+      // work only by accident of ordering — a document ingested during turn 2,
+      // or before the container booted for a Shell the user opened first, never
+      // reached the actor.
+      try {
+        const { skipped } = await hydrateWorkspace(att.transport, sessionId)
+        if (skipped.length > 0) {
+          reportWorkspaceFailure(
+            scope,
+            'hydrate',
+            sessionId,
+            new Error(
+              `${skipped.length} file(s) not restored: ` +
+                skipped.map((f) => `${f.filename} (${f.error})`).join(', '),
+            ),
+          )
         }
-        att.isFirstBoot = false
+      } catch (err) {
+        // Non-fatal: the turn still runs, but the agent cannot see prior
+        // uploads or earlier deliverables, so say which turn was blind.
+        reportWorkspaceFailure(scope, 'hydrate', sessionId, err)
       }
+      // The Shell's own first-boot hydrate (#97 Gap 3) would now be redundant
+      // for this container — the flag still coordinates the two, it just no
+      // longer gates the agent side.
+      att.isFirstBoot = false
       // Promote only what THIS turn produces: snapshot /work/out before the
       // turn, diff after. In `finally` so deliverables are saved even if the
       // pattern throws.

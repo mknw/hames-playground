@@ -120,6 +120,9 @@ importers:
       prettier:
         specifier: ^3.9.6
         version: 3.9.6
+      seroval:
+        specifier: ~1.5.0
+        version: 1.5.2
       solid-devtools:
         specifier: ^0.34.5
         version: 0.34.5(solid-js@1.9.12)(vite@6.4.2(@types/node@24.12.2)(jiti@2.6.1)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))

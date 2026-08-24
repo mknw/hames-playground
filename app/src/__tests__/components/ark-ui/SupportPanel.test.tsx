@@ -24,8 +24,12 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
 }))
 
 vi.mock('../../../components/ark-ui/GraphVisualization', () => ({
-  GraphVisualization: (props: { elements: unknown[] }) => (
-    <div data-testid="graph-viz" data-count={props.elements.length} />
+  GraphVisualization: (props: { elements: unknown[]; emptyMessage?: string }) => (
+    <div
+      data-testid="graph-viz"
+      data-count={props.elements.length}
+      data-empty-message={props.emptyMessage}
+    />
   ),
 }))
 
@@ -151,15 +155,23 @@ describe('SupportPanel — per-source graph split', () => {
     )
   })
 
-  it('shows the per-tab empty message when that source has nothing', async () => {
+  // #237 follow-up: the graph used to be swapped out for a plain empty-state
+  // div, which took the manual Cypher box (it lives inside GraphVisualization)
+  // with it — so there was no way to query before a chat turn had populated the
+  // graph. It stays mounted now, and owns the empty state; the per-tab copy is
+  // handed to it rather than rendered here.
+  it('keeps the graph mounted with nothing in it, and passes the per-tab empty copy', async () => {
     const { container } = render(() => <SupportPanel graphElements={[node('a', 'neo4j')]} />)
 
     await clickTab(container, 'Memory')
-    expect(container.textContent).toContain('No memory graph data yet')
-    expect(container.querySelector('[data-testid="graph-viz"]')).toBeNull()
+    const memoryViz = container.querySelector('[data-testid="graph-viz"]')!
+    expect(memoryViz.getAttribute('data-count')).toBe('0')
+    expect(memoryViz.getAttribute('data-empty-message')).toContain('No memory graph data yet')
 
     await clickTab(container, 'Neo4j')
-    expect(container.textContent).not.toContain('No Neo4j graph data yet')
+    const neo4jViz = container.querySelector('[data-testid="graph-viz"]')!
+    expect(neo4jViz.getAttribute('data-count')).toBe('1')
+    expect(neo4jViz.getAttribute('data-empty-message')).toContain('No Neo4j graph data yet')
   })
 })
 

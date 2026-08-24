@@ -35,9 +35,10 @@ Forward-looking design docs. Live item-tracking stays on the GitHub project boar
 
 How agents are briefed and what they are held to. Procedures themselves live in `.claude/skills/` (see [plan/skills-adoption.md](plan/skills-adoption.md)).
 
-| Document                                       | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [agents/AGENT-BRIEF.md](agents/AGENT-BRIEF.md) | **The dispatch spec template** — the body of an Orca worker dispatch or of an agent-ready GitHub issue. Behavioural contracts and complete acceptance criteria, never file paths or line numbers (a brief outlives the tree it was written against), plus explicit out-of-scope. Carries this repo's **standing acceptance criteria**: CI gate, coverage floors (once #165 lands), prettier on changed files, conventional commits, no attribution trailers, `pnpm`-only from `app/` |
+| Document                                                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [agents/sensitive-domain-brief.md](agents/sensitive-domain-brief.md) | **Read by sub-agents, not by coordinators.** A pointer-based brief: a dispatch carries only the path plus a neutral scope phrase, and the lane self-selects against the brief's own map. Exists so a coordinator can hand off work in areas whose context is expensive to restate in its own visible text. Also carries the handling rules and deliverable contract for work in those areas. Companion to the `kg-lane-dispatch` skill, which owns the hand-off line itself          |
+| [agents/AGENT-BRIEF.md](agents/AGENT-BRIEF.md)                       | **The dispatch spec template** — the body of an Orca worker dispatch or of an agent-ready GitHub issue. Behavioural contracts and complete acceptance criteria, never file paths or line numbers (a brief outlives the tree it was written against), plus explicit out-of-scope. Carries this repo's **standing acceptance criteria**: CI gate, coverage floors (once #165 lands), prettier on changed files, conventional commits, no attribution trailers, `pnpm`-only from `app/` |
 
 ## Decision Records (`docs/adr/`)
 
@@ -177,7 +178,8 @@ kg-agent/
 │   ├── graph-api-notes.md       # What Graph actually returns: ids, quirks, deprecations
 │   ├── sandbox-flavours.md      # Rootfs flavours (#78): image-processing/data/office
 │   ├── agents/
-│   │   └── AGENT-BRIEF.md       # Dispatch spec template + standing acceptance criteria
+│   │   ├── AGENT-BRIEF.md       # Dispatch spec template + standing acceptance criteria
+│   │   └── sensitive-domain-brief.md  # Sub-agent-only brief; coordinators hand over the path
 │   ├── adr/                     # Architecture decision records
 │   │   ├── README.md            # The mechanism + the index table (statuses live here)
 │   │   └── NNNN-<slug>.md       # One decision each, 1–3 sentences + optional sections

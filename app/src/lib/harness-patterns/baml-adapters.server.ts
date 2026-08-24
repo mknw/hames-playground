@@ -40,7 +40,6 @@ import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
 import { clientOverrideFor } from './clients.server'
 import { CLIENT_MAX_OUTPUT_TOKENS, estimateLlmCostUsd } from '../settings'
-import { coerceControllerActionText } from './controller-action'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 
 assertServerOnImport()
@@ -486,70 +485,6 @@ function planParseRetry(
   return null
 }
 
-/**
- * Recover a complete action from a response whose ENVELOPE was wrong.
- *
- * Third distinct recoverable-parse cause after truncation and the empty
- * completion, and the only one where the model was not actually wrong about the
- * work: it wrote every required field, as brace-less `key: value` lines instead
- * of a JSON object (captured live in `.harness-logs/baml-validation.json` —
- * `sandbox-session-loop`, `ActorController`, 372 output tokens against a 32768
- * cap, so neither truncation nor an empty completion, and neither existing
- * trigger matched). `coerceControllerActionText` owns the shape and the guards;
- * see its docstring for the evidence and for why it refuses to guess.
- *
- * Preferred over a retry wherever it succeeds: the action is already correct, so
- * a retry would spend a round-trip re-deriving it — and, on the prompt that
- * produced the drift, plausibly drift again. Ordered BEFORE `planParseRetry` for
- * that reason; a truncated response cannot be coerced (its trailing fields are
- * gone), so it still reaches the truncation branch.
- *
- * Reads the raw text from the error first (`BamlValidationError.raw_output` is
- * exactly what BAML failed to coerce) and falls back to the collector, so the
- * recovery also works on the paths that run without one.
- *
- * Also tried on the truncation/empty retry's own failure: a retry that drifts to
- * the same wrong envelope has already cost the round-trip, and there is nothing
- * left to gain by discarding a complete action a second time. Not tried on the
- * mixed-chain Groq rungs — those exist because a client cannot do structured
- * output at all, which is a different problem from an envelope slip.
- *
- * DECLINES OUTRIGHT on a cap-hit, before it even looks at the text. A cut-off
- * response can still LOOK complete to a lexical scanner: `tool_args` opening
- * with a quote (`tool_args: "{\"path\":…`) is not an unbalanced bracket, and a
- * cut landing between two `additional_calls` items leaves every item that
- * survived perfectly readable — which would recover a SHORT batch and report it
- * as the model's own. `collectorHitOutputCap` is the same precise signal
- * `planParseRetry` uses (providers report `outputTokens` == the cap exactly), so
- * this hands truncation back to the branch that owns it rather than approximating
- * it. The captured failure this recovery exists for is 372/32768, untouched.
- */
-function recoverActionFromEnvelope(
-  error: unknown,
-  collector: Collector | undefined,
-  functionName: string,
-  variables: Record<string, unknown>,
-  startTime: number,
-): ControllerCallResult | null {
-  if (!(error instanceof BamlValidationError)) return null
-  if (collectorHitOutputCap(collector)) return null
-  const raw = error.raw_output || (collector?.last?.rawLlmResponse ?? '')
-  const action = coerceControllerActionText(raw)
-  if (!action) return null
-  console.warn(
-    `[baml] ${functionName} returned its action as brace-less \`key: value\` lines instead of ` +
-      'a JSON object; every required field was present, so it was coerced rather than discarded. ' +
-      'Recurring drift here means a prompt is demonstrating the wrong envelope (the few-shot ' +
-      'sections in actorCritic.baml / simpleLoop.baml render the JSON object shape on purpose).',
-  )
-  return {
-    action,
-    llmCall: collector
-      ? extractLLMCallData(collector, functionName, variables, startTime, action)
-      : undefined,
-  }
-}
-
 /** Error thrown by BAML adapters when an LLM call fails after all in-adapter
  *  fallbacks have been exhausted. Carries the captured prompt/variables/HTTP
  *  bodies so the catching pattern can attach them to the emitted `error`
@@ -829,17 +764,6 @@ export function createLoopControllerAdapter(
             returnStyle,
           )
     } catch (e) {
-      // The model wrote every required field but not the JSON envelope: coerce
-      // and continue — no retry can improve on an action that is already
-      // correct. See `recoverActionFromEnvelope` for the evidence and ordering.
-      const coerced = recoverActionFromEnvelope(
-        e,
-        collector,
-        'LoopController',
-        variables,
-        startTime,
-      )
-      if (coerced) return coerced
       // Recoverable parse failures (any chain, incl. Anthropic-only): the parse
       // failed because the response was cut off, or because there was no
       // response at all — not because the model can't do structured output.
@@ -882,16 +806,6 @@ export function createLoopControllerAdapter(
             : undefined
           return { action, llmCall }
         } catch (eRetry) {
-          // The retry drifted too: the same coercion applies, and a second
-          // round-trip has already been spent.
-          const recovered = recoverActionFromEnvelope(
-            eRetry,
-            collector,
-            'LoopController',
-            variables,
-            startTime,
-          )
-          if (recovered) return recovered
           throw wrapAsLLMCallError(eRetry, 'LoopController', variables, startTime, collector)
         }
       }
@@ -1277,17 +1191,6 @@ export function createActorControllerAdapter(
             multiCallMode,
           )
     } catch (e) {
-      // Wrong envelope, right action: coerce and continue. This is the path the
-      // captured `sandbox-session-loop` failure took, and it must run before
-      // the truncation branch below — see `recoverActionFromEnvelope`.
-      const coerced = recoverActionFromEnvelope(
-        e,
-        collector,
-        'ActorController',
-        variables,
-        startTime,
-      )
-      if (coerced) return coerced
       // Truncated or empty response: one retry, guidance only when there is
       // something to correct — see createLoopControllerAdapter for rationale.
       const plan = planParseRetry(e, collector)
@@ -1325,16 +1228,6 @@ export function createActorControllerAdapter(
             : undefined
           return { action, llmCall }
         } catch (eRetry) {
-          // The retry drifted too: the same coercion applies, and a second
-          // round-trip has already been spent.
-          const recovered = recoverActionFromEnvelope(
-            eRetry,
-            collector,
-            'ActorController',
-            variables,
-            startTime,
-          )
-          if (recovered) return recovered
           throw wrapAsLLMCallError(eRetry, 'ActorController', variables, startTime, collector)
         }
       }

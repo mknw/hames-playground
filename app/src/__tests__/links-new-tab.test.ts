@@ -183,6 +183,13 @@ function anchorOpeningTags(source: string): string[] {
 }
 
 /**
+ * A line that opens a new top-level statement. Only consulted at module scope;
+ * see {@link enclosingBlock}.
+ */
+const TOP_LEVEL_STATEMENT =
+  /^(?:export|import|declare|abstract|async|function|class|const|let|var|interface|type|enum)\b/
+
+/**
  * The statement block the offset `index` sits in: its own line, plus every
  * following line indented at least as deep.
  *
@@ -191,6 +198,13 @@ function anchorOpeningTags(source: string): string[] {
  * brace count is thrown off by a `{` or `}` inside a string or a comment — and
  * thrown off in *both* directions, so it can silently widen the window as
  * easily as narrow it.
+ *
+ * At module scope that walk has nothing to stop it: there is no dedent below
+ * indent 0, so the block runs to the end of the file and the exemption window
+ * becomes *wider* than the 600-byte one it replaced — a hole, not a window.
+ * The next top-level statement closes it instead. This only ever shortens a
+ * block, so it can turn an exempt anchor back into an offender but never the
+ * reverse.
  */
 function enclosingBlock(source: string, index: number): string {
   const lines = source.split('\n')
@@ -200,6 +214,7 @@ function enclosingBlock(source: string, index: number): string {
   const block = [lines[start]]
   for (let i = start + 1; i < lines.length; i++) {
     if (lines[i].trim() !== '' && indentOf(lines[i]) < base) break
+    if (base === 0 && indentOf(lines[i]) === 0 && TOP_LEVEL_STATEMENT.test(lines[i])) break
     block.push(lines[i])
   }
   return block.join('\n')
@@ -228,20 +243,34 @@ const sources = new Map(sourceFiles().map((file) => [repoPath(file), readFileSyn
  */
 const ANCHOR_FACTORY = /document\.createElement(?:NS)?\(\s*(?:[^,)]+,\s*)?['"`]a['"`]\s*\)/gi
 
-/** Assignments and calls that take the current tab somewhere else. */
+/**
+ * Assignments and calls that take the current tab somewhere else.
+ *
+ * `=(?!=)` rather than `=[^=]`: prettier at `printWidth: 100` breaks a long
+ * assignment immediately after the `=`, so requiring a character *after* it
+ * makes the formatter able to disarm this shape — the fail-open direction, on
+ * the shape the rule most plainly forbids. Matched over the whole file for the
+ * same reason, so a statement spanning lines is still one match.
+ */
 const NAVIGATES_AWAY =
-  /location\.(?:href\s*=[^=]|assign\(|replace\()|window\.location\s*=[^=]|window\.open\(/
+  /location\.(?:href\s*=(?!=)|assign\(|replace\()|window\.location\s*=(?!=)|window\.open\(/g
 
 /**
  * Markup reaching the DOM, and the markdown renderer that feeds it.
  *
  * Writes only (`innerHTML=`, not a bare mention), so the prose in this module's
- * and `sanitize-html`'s own doc comments is not an offender. Reaching a sink
- * through a computed property (`el['innerHTML'] = …`) is another of the header's
- * blind spots.
+ * and `sanitize-html`'s own doc comments is not an offender — but an append
+ * (`innerHTML +=`) is a write too, and appending unsanitized markup re-opens
+ * the content boundary exactly as assigning it does. Reaching a sink through a
+ * computed property (`el['innerHTML'] = …`) is another of the header's blind
+ * spots.
+ *
+ * `parseInline` is a first-class render entry point in marked, not a helper:
+ * it emits HTML from model markdown the same way `parse` does.
  */
-const HTML_SINK = /\b(?:inner|outer)HTML\s*=[^=]|\binsertAdjacentHTML\s*\(|\bdocument\.write\s*\(/g
-const MARKED_CALL = /\bmarked(?:\.parse)?\s*\(/g
+const HTML_SINK =
+  /\b(?:inner|outer)HTML\s*\+?=(?!=)|\binsertAdjacentHTML\s*\(|\bdocument\.write\s*\(/g
+const MARKED_CALL = /\bmarked(?:\.parse(?:Inline)?)?\s*\(/g
 
 describe('every link the app renders opens in a new tab', () => {
   it('finds the anchors it is supposed to be guarding', () => {
@@ -294,11 +323,13 @@ describe('every link the app renders opens in a new tab', () => {
   it('does not navigate the current tab away except where allowed', () => {
     const offenders: string[] = []
     for (const [file, source] of sources) {
-      source.split('\n').forEach((line, index) => {
-        if (!NAVIGATES_AWAY.test(line)) return
-        if (allowed(file, line)) return
-        offenders.push(`${file}:${index + 1}: ${line.trim()}`)
-      })
+      for (const match of source.matchAll(NAVIGATES_AWAY)) {
+        const start = source.lastIndexOf('\n', match.index) + 1
+        const end = source.indexOf('\n', match.index)
+        const line = source.slice(start, end === -1 ? undefined : end)
+        if (allowed(file, line)) continue
+        offenders.push(`${file}:${source.slice(0, start).split('\n').length}: ${line.trim()}`)
+      }
     }
     expect(offenders).toEqual([])
   })
@@ -344,5 +375,71 @@ describe('every link the app renders opens in a new tab', () => {
   it('states a reason for every exception', () => {
     for (const entry of [...ALLOWLIST, ...HTML_SINKS])
       expect(entry.reason.length).toBeGreaterThan(30)
+  })
+})
+
+/**
+ * The shapes above are checked against `src/` as it stands, so they pass for
+ * two different reasons: the app is clean, or the scanner is blind. These pin
+ * the second apart from the first — each fixture is a shape an independent
+ * reviewer proved the scanner walked past while its header claimed it. They
+ * live here rather than as scratch files under `src/` so the next edit to a
+ * pattern above cannot silently re-open the gap, and `src/__tests__` is not
+ * scanned, so the fixtures are inert.
+ *
+ * Each case carries its counterpart: the shape that must match, and the
+ * near-miss that must not, so widening a pattern to pass one of these cannot
+ * quietly turn a comparison into an offender.
+ */
+describe('the shapes the scanner advertises', () => {
+  it('reads an innerHTML append as a write', () => {
+    expect('el.innerHTML += html'.match(HTML_SINK)).not.toBeNull()
+    expect('if (el.innerHTML === html) return'.match(HTML_SINK)).toBeNull()
+  })
+
+  it('reads marked.parseInline as a render entry point', () => {
+    expect('return marked.parseInline(md) as string'.match(MARKED_CALL)).not.toBeNull()
+    expect('marked.setOptions({ gfm: true })'.match(MARKED_CALL)).toBeNull()
+  })
+
+  it('catches a navigation prettier has wrapped after the `=`', () => {
+    const wrapped = "  window.location.href =\n    BASE + '/redirect/' + encodeURIComponent(id)\n"
+    expect(wrapped.match(NAVIGATES_AWAY)).not.toBeNull()
+    // …and on the first line alone, because a pattern that needs a character
+    // after the `=` is disarmed by the line break rather than by the code.
+    expect(wrapped.split('\n')[0].match(NAVIGATES_AWAY)).not.toBeNull()
+    expect('if (window.location.href === url) return'.match(NAVIGATES_AWAY)).toBeNull()
+  })
+
+  it('stops a module-scope block at the next top-level statement', () => {
+    // The offender and the helper that excuses it are both named `a`, so the
+    // identifier binding cannot help — only the block extent can.
+    const moduleScope = [
+      "const a = document.createElement('a')",
+      "a.href = 'https://evil.test/in-tab'",
+      'a.click()',
+      '',
+      'export function save(blob: Blob, name: string) {',
+      "  const a = document.createElement('a')",
+      '  a.download = name',
+      '  a.click()',
+      '}',
+    ].join('\n')
+    const at = (source: string) => enclosingBlock(source, source.indexOf('document.createElement'))
+    expect(at(moduleScope)).not.toContain('a.download')
+
+    // …and the dedent still closes a nested block at its own end, so the fix
+    // above narrows module scope only and leaves every real call site whole.
+    const nested = [
+      'export function save(blob: Blob, name: string) {',
+      "  const a = document.createElement('a')",
+      '  a.href = URL.createObjectURL(blob)',
+      '  a.download = name',
+      '  a.click()',
+      '}',
+      'export const unrelated = 1',
+    ].join('\n')
+    expect(at(nested)).toContain('a.download')
+    expect(at(nested)).not.toContain('unrelated')
   })
 })

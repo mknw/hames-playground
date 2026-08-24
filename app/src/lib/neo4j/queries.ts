@@ -21,6 +21,7 @@
 import neo4j from 'neo4j-driver'
 import { getNeo4jDriver, resetDriver, verifyConnection } from './client'
 import { transformNeo4jToCytoscape, parseNeo4jResults } from '../graph/transform'
+import { toPlainNeo4jValue } from './plain'
 import { getAuthenticatedUser } from '../auth/server'
 import { isBypassEnabled } from '../auth/dev-bypass'
 
@@ -270,7 +271,10 @@ export async function getNodeProperties(elementId: string): Promise<NodeProperti
     const record = result.records[0]
     return {
       success: true,
-      properties: record.get('props') as Record<string, unknown>,
+      // Plain projection, not the driver's own values: an int property is an
+      // `Integer` instance, which the RPC serializer cannot encode (see
+      // `plain.ts`).
+      properties: toPlainNeo4jValue(record.get('props')) as Record<string, unknown>,
       labels: record.get('labels') as string[],
     }
   } catch (error) {
@@ -325,14 +329,22 @@ export async function runManualCypher(cypher: string): Promise<CypherResult> {
     // write that slipped past WRITE_CLAUSE is refused by the server.
     const result = await session.executeRead((tx) => tx.run(cypher))
 
+    // Plain-project the rows *before* anything else touches them: both what
+    // goes back over the RPC and what the Cytoscape projection embeds
+    // (`data.properties`, `data.neo4jId`) would otherwise carry driver class
+    // instances, which the serializer refuses mid-stream (see `plain.ts`).
+    const rows = result.records.map(
+      (r) => toPlainNeo4jValue(r.toObject()) as Record<string, unknown>,
+    )
+
     // Parse and transform results for Cytoscape
-    const parsed = parseNeo4jResults({ records: result.records })
+    const parsed = parseNeo4jResults({ records: rows })
     const graphData = transformNeo4jToCytoscape(parsed.nodes || [], parsed.relationships || [])
 
     return {
       success: true,
       graphUpdate: graphData,
-      raw: result.records.map((r) => r.toObject()),
+      raw: rows,
     }
   } catch (error) {
     console.error('Manual Cypher query failed:', error)

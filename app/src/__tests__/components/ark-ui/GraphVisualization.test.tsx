@@ -27,6 +27,7 @@ interface FakeCollection {
   ids: string[]
   map: <T>(fn: (el: { id: () => string }) => T) => T[]
   nonempty: () => boolean
+  empty: () => boolean
   union: (other: FakeCollection) => FakeCollection
   remove: () => void
   removeClass: () => void
@@ -61,6 +62,7 @@ const collection = (ids: string[]): FakeCollection => ({
   ids,
   map: <T,>(fn: (el: { id: () => string }) => T) => ids.map((id) => fn({ id: () => id })),
   nonempty: () => ids.length > 0,
+  empty: () => ids.length === 0,
   union: (other: FakeCollection) => collection([...ids, ...other.ids]),
   remove: () => {
     nodeIds = []
@@ -120,6 +122,7 @@ class FakeCore {
     return {
       data: (key: string, value: unknown) => dataWrites.push([id, key, value]),
       nonempty: () => nodeIds.includes(id) || edgeIds.includes(id),
+      empty: () => !nodeIds.includes(id) && !edgeIds.includes(id),
     }
   }
   layout(opts: { name: string }) {
@@ -262,6 +265,31 @@ describe('GraphVisualization — mounting and elements', () => {
     expect(container.textContent).toContain('No Graph Data')
     expect(container.textContent).toContain('0 nodes')
     expect(container.textContent).toContain('0 edges')
+  })
+
+  // #237 follow-up: the panel is now mounted with an empty graph, so the empty
+  // state carries the caller's per-tab copy and points at the manual Cypher box
+  // — which is the only thing a user can do before any chat turn.
+  it('renders the caller-supplied empty copy and points at the manual query box', async () => {
+    const { container } = render(() => (
+      <GraphVisualization
+        elements={[]}
+        emptyIcon="🗄️"
+        emptyMessage="No Neo4j graph data yet. Query your knowledge base to see results."
+      />
+    ))
+    await tick()
+
+    expect(container.textContent).toContain('No Neo4j graph data yet')
+    expect(container.textContent).toContain('🗄️')
+    expect(container.textContent).toContain('Manual Cypher Query')
+  })
+
+  it('falls back to the default empty copy when the caller supplies none', async () => {
+    const { container } = render(() => <GraphVisualization elements={[]} />)
+    await tick()
+
+    expect(container.textContent).toContain('Ask a question to visualize the knowledge graph')
   })
 
   it('holds off loading elements until the container has a size', async () => {
@@ -459,6 +487,61 @@ describe('GraphVisualization — manual Cypher', () => {
     expect(onElementsChange).toHaveBeenCalledWith(graphUpdate)
     expect(box.value, 'the box clears after a successful run').toBe('')
     expect(container.textContent).toContain('1 recent')
+  })
+
+  // #237 follow-up: `onElementsChange` has no caller in the app, so forwarding
+  // the result was the *only* thing a successful query did — the canvas stayed
+  // empty and the run looked like a no-op. The result is rendered here now.
+  it('renders the result onto the canvas, not only through the callback', async () => {
+    runManualCypher.mockResolvedValue({ success: true, graphUpdate: nodes(['x', 'y']) })
+    const { container } = render(() => <GraphVisualization elements={[]} />)
+    await becomeVisible()
+    expect(added).toHaveLength(0)
+
+    const box = container.querySelector('textarea')!
+    box.value = 'MATCH (n) RETURN n'
+    box.dispatchEvent(new Event('input', { bubbles: true }))
+    button(container, 'Run Query').click()
+    await tick()
+
+    expect(added.map((el) => (el as ElementDefinition).data!.id)).toEqual(['x', 'y'])
+    expect(container.textContent).toContain('2 nodes')
+    // First content on an empty canvas: lay everything out and frame it.
+    expect(layoutRuns.at(-1)).toMatchObject({ scope: 'core' })
+    expect(fit).toHaveBeenCalled()
+  })
+
+  it('adds a second query onto the graph without re-framing what is already there', async () => {
+    runManualCypher.mockResolvedValue({ success: true, graphUpdate: nodes(['x']) })
+    const { container } = render(() => <GraphVisualization elements={nodes(['seed'])} />)
+    await becomeVisible()
+    fit.mockClear()
+
+    const box = container.querySelector('textarea')!
+    box.value = 'MATCH (n) RETURN n'
+    box.dispatchEvent(new Event('input', { bubbles: true }))
+    button(container, 'Run Query').click()
+    await tick()
+
+    expect(container.textContent).toContain('2 nodes')
+    expect(layoutRuns.at(-1)).toMatchObject({ scope: 'elements', opts: { fit: false } })
+    expect(fit).not.toHaveBeenCalled()
+  })
+
+  it('skips ids the graph already holds', async () => {
+    runManualCypher.mockResolvedValue({ success: true, graphUpdate: nodes(['seed', 'x']) })
+    const { container } = render(() => <GraphVisualization elements={nodes(['seed'])} />)
+    await becomeVisible()
+    added.length = 0
+
+    const box = container.querySelector('textarea')!
+    box.value = 'MATCH (n) RETURN n'
+    box.dispatchEvent(new Event('input', { bubbles: true }))
+    button(container, 'Run Query').click()
+    await tick()
+
+    expect(added.map((el) => (el as ElementDefinition).data!.id)).toEqual(['x'])
+    expect(container.textContent).toContain('2 nodes')
   })
 
   it('replays a query from the history', async () => {

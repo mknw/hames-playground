@@ -192,7 +192,7 @@ describe('ChatSidebar — expanded list', () => {
     const { container } = render(() => <ChatSidebar {...baseProps()} selectedId="b" />)
     // Selection is carried by the attributify border, which the extractor only
     // emits for the literal value — assert the literal, not a computed style.
-    expect(rows(container)[1].getAttribute('border')).toContain('neon-cyan/40')
+    expect(rows(container)[1].getAttribute('border')).toContain('ui-accent/40')
     expect(rows(container)[0].getAttribute('border')).toContain('transparent')
   })
 

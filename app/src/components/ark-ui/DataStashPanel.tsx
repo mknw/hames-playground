@@ -84,7 +84,7 @@ function getToolColor(tool: string): string {
   if (t.includes('github') || t.includes('git')) return '#94a3b8' // slate
   if (t.includes('file') || t.includes('filesystem')) return '#34d399' // emerald
   if (t.includes('code') || t.includes('script')) return '#f472b6' // pink
-  return '#71717a' // zinc default
+  return 'var(--ui-text-tertiary)' // zinc default
 }
 
 /**
@@ -171,24 +171,24 @@ const CollapsibleSection = (props: {
   const [open, setOpen] = createSignal(props.defaultOpen ?? true)
 
   return (
-    <div border="b dark-border-primary">
+    <div border="b ui-border-primary">
       <button
         onClick={() => setOpen(!open())}
         w="full"
         flex="~"
         items="center"
         p="x-3 y-2"
-        bg="dark-bg-secondary hover:dark-bg-tertiary"
+        bg="ui-bg-secondary hover:ui-bg-tertiary"
         cursor="pointer"
         border="none"
-        text="sm dark-text-secondary"
+        text="sm ui-text-secondary"
         gap="2"
       >
         <span text="xs" style={{ 'font-family': 'monospace' }}>
           {open() ? '▼' : '▶'}
         </span>
         <span font="medium">{props.title}</span>
-        <span text="xs dark-text-tertiary" font="mono">
+        <span text="xs ui-text-tertiary" font="mono">
           ({props.count})
         </span>
       </button>
@@ -264,10 +264,8 @@ const StashIcon = (props: {
             w="16"
             cursor="pointer"
             rounded="lg"
-            bg={menuOpen() ? 'dark-bg-tertiary' : 'transparent hover:dark-bg-secondary'}
-            border={
-              menuOpen() ? '1 dark-border-secondary' : '1 transparent hover:dark-border-primary'
-            }
+            bg={menuOpen() ? 'ui-bg-tertiary' : 'transparent hover:ui-bg-secondary'}
+            border={menuOpen() ? '1 ui-border-secondary' : '1 transparent hover:ui-border-primary'}
             transition="all"
             opacity={props.isGrayed ? '35' : loading() ? '50' : '100'}
             onClick={() => setMenuOpen(!menuOpen())}
@@ -288,7 +286,7 @@ const StashIcon = (props: {
               style={{
                 'font-family': '"Fira Code", ui-monospace, monospace',
                 'font-size': '9px',
-                color: props.isGrayed ? '#52525b' : '#71717a',
+                color: props.isGrayed ? '#52525b' : 'var(--ui-text-tertiary)',
                 'text-align': 'center',
                 'word-break': 'break-all',
                 'line-height': '1.2',
@@ -326,20 +324,20 @@ const StashIcon = (props: {
 
         <Tooltip.Positioner>
           <Tooltip.Content
-            bg="dark-bg-tertiary"
-            border="1 dark-border-secondary"
+            bg="ui-bg-tertiary"
+            border="1 ui-border-secondary"
             rounded="md"
             p="3"
             shadow="lg"
             style={{ 'max-width': '280px', 'z-index': '50' }}
           >
             {/* Tool name + ref */}
-            <div text="xs dark-text-secondary" font="mono" m="b-2">
+            <div text="xs ui-text-secondary" font="mono" m="b-2">
               {d().tool} · {props.item.event.id}
             </div>
             {/* Summary or raw preview */}
             <div
-              text="xs dark-text-primary"
+              text="xs ui-text-primary"
               style={{
                 'line-height': '1.5',
                 'white-space': 'pre-wrap',
@@ -369,8 +367,8 @@ const StashIcon = (props: {
             left: '50%',
             transform: 'translateX(-50%)',
             'z-index': '100',
-            background: '#1a1a24',
-            border: '1px solid #2a2a3a',
+            background: 'var(--ui-bg-tertiary)',
+            border: '1px solid var(--ui-border-primary)',
             'border-radius': '6px',
             padding: '4px',
             'min-width': '100px',
@@ -390,17 +388,17 @@ const StashIcon = (props: {
                   border: 'none',
                   'border-radius': '4px',
                   'font-size': '11px',
-                  color: '#a1a1aa',
+                  color: 'var(--ui-text-secondary)',
                   cursor: 'pointer',
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = '#22222f')}
+                onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--ui-bg-hover)')}
                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
               >
                 {btn.label}
               </button>
             )}
           </For>
-          <div style={{ height: '1px', background: '#2a2a3a', margin: '2px 0' }} />
+          <div style={{ height: '1px', background: 'var(--ui-border-primary)', margin: '2px 0' }} />
           <button
             onClick={() => setMenuOpen(false)}
             style={{
@@ -556,15 +554,15 @@ const DocChip = (props: {
         rounded="lg"
         bg={
           props.active
-            ? 'dark-bg-tertiary'
+            ? 'ui-bg-tertiary'
             : menuOpen()
-              ? 'dark-bg-tertiary'
-              : 'transparent hover:dark-bg-secondary'
+              ? 'ui-bg-tertiary'
+              : 'transparent hover:ui-bg-secondary'
         }
         border={
           props.active || menuOpen()
-            ? '1 dark-border-secondary'
-            : '1 transparent hover:dark-border-primary'
+            ? '1 ui-border-secondary'
+            : '1 transparent hover:ui-border-primary'
         }
         transition="all"
         opacity={grayed() ? '35' : loading() ? '50' : '100'}
@@ -607,7 +605,7 @@ const DocChip = (props: {
                 right: '-7px',
                 width: '13px',
                 height: '13px',
-                color: '#f87171',
+                color: 'var(--ui-danger)',
               }}
             />
           </Show>
@@ -616,7 +614,7 @@ const DocChip = (props: {
           style={{
             'font-family': '"Fira Code", ui-monospace, monospace',
             'font-size': '9px',
-            color: grayed() ? '#52525b' : '#a1a1aa',
+            color: grayed() ? '#52525b' : 'var(--ui-text-secondary)',
             'text-align': 'center',
             'word-break': 'break-all',
             'line-height': '1.2',
@@ -632,7 +630,7 @@ const DocChip = (props: {
           </span>
         </Show>
         <Show when={status() === 'failed'}>
-          <span style={{ 'font-size': '8px', color: '#f87171', 'line-height': '1.1' }}>
+          <span style={{ 'font-size': '8px', color: 'var(--ui-danger)', 'line-height': '1.1' }}>
             index failed
           </span>
         </Show>
@@ -646,8 +644,8 @@ const DocChip = (props: {
             left: '50%',
             transform: 'translateX(-50%)',
             'z-index': '100',
-            background: '#1a1a24',
-            border: '1px solid #2a2a3a',
+            background: 'var(--ui-bg-tertiary)',
+            border: '1px solid var(--ui-border-primary)',
             'border-radius': '6px',
             padding: '4px',
             'min-width': '100px',
@@ -673,7 +671,7 @@ const DocChip = (props: {
                 color: '#22d3ee',
                 cursor: 'pointer',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#22222f')}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--ui-bg-hover)')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
             >
               {playing() ? 'Hide player' : 'Play'}
@@ -692,10 +690,10 @@ const DocChip = (props: {
                   border: 'none',
                   'border-radius': '4px',
                   'font-size': '11px',
-                  color: btn.action === 'delete' ? '#f87171' : '#a1a1aa',
+                  color: btn.action === 'delete' ? 'var(--ui-danger)' : 'var(--ui-text-secondary)',
                   cursor: 'pointer',
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = '#22222f')}
+                onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--ui-bg-hover)')}
                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
               >
                 {btn.label}
@@ -829,8 +827,8 @@ const FileViewer = (props: {
 
   return (
     <div
-      border="t dark-border-primary"
-      bg="dark-bg-secondary"
+      border="t ui-border-primary"
+      bg="ui-bg-secondary"
       flex="~ col"
       style={{ 'max-height': '340px' }}
     >
@@ -839,15 +837,15 @@ const FileViewer = (props: {
         items="center"
         gap="2"
         p="x-3 y-2"
-        bg="dark-bg-tertiary"
-        border="b dark-border-primary"
+        bg="ui-bg-tertiary"
+        border="b ui-border-primary"
       >
         <span
           class={getDocIcon(props.doc.mimeType, props.doc.filename)}
           style={{ width: '14px', height: '14px', color: '#34d399', 'flex-shrink': '0' }}
         />
         <span
-          text="xs dark-text-secondary"
+          text="xs ui-text-secondary"
           font="mono"
           style={{ flex: '1', 'word-break': 'break-all' }}
         >
@@ -872,7 +870,7 @@ const FileViewer = (props: {
                 background: 'transparent',
                 border: 'none',
                 cursor: current() === 0 ? 'default' : 'pointer',
-                color: current() === 0 ? '#3f3f46' : '#a1a1aa',
+                color: current() === 0 ? '#3f3f46' : 'var(--ui-text-secondary)',
                 'font-size': '13px',
                 'line-height': '1',
                 padding: '0 2px',
@@ -880,7 +878,7 @@ const FileViewer = (props: {
             >
               ‹
             </button>
-            <span text="xs dark-text-tertiary" font="mono">
+            <span text="xs ui-text-tertiary" font="mono">
               {current() + 1}/{total()}
             </span>
             <button
@@ -891,7 +889,7 @@ const FileViewer = (props: {
                 background: 'transparent',
                 border: 'none',
                 cursor: current() === total() - 1 ? 'default' : 'pointer',
-                color: current() === total() - 1 ? '#3f3f46' : '#a1a1aa',
+                color: current() === total() - 1 ? '#3f3f46' : 'var(--ui-text-secondary)',
                 'font-size': '13px',
                 'line-height': '1',
                 padding: '0 2px',
@@ -908,7 +906,7 @@ const FileViewer = (props: {
             background: 'transparent',
             border: 'none',
             cursor: 'pointer',
-            color: '#71717a',
+            color: 'var(--ui-text-tertiary)',
             'font-size': '13px',
             'line-height': '1',
             padding: '2px 4px',
@@ -926,7 +924,7 @@ const FileViewer = (props: {
         }}
       >
         <Show when={loading()}>
-          <div p="3" flex="~" items="center" gap="2" text="xs dark-text-tertiary">
+          <div p="3" flex="~" items="center" gap="2" text="xs ui-text-tertiary">
             <span
               class="i-material-symbols-progress-activity"
               style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }}
@@ -1033,8 +1031,8 @@ const UploadZone = (props: {
         p="4"
         rounded="lg"
         cursor="pointer"
-        border={dragOver() ? '2 dashed neon-cyan/60' : '2 dashed dark-border-primary'}
-        bg={dragOver() ? 'cyber-800/40' : 'transparent hover:dark-bg-secondary'}
+        border={dragOver() ? '2 dashed ui-accent/60' : '2 dashed ui-border-primary'}
+        bg={dragOver() ? 'cyber-800/40' : 'transparent hover:ui-bg-secondary'}
         transition="all"
       >
         <span
@@ -1046,14 +1044,14 @@ const UploadZone = (props: {
           style={{
             width: '24px',
             height: '24px',
-            color: dragOver() ? '#22d3ee' : '#71717a',
+            color: dragOver() ? '#22d3ee' : 'var(--ui-text-tertiary)',
             ...(props.uploading ? { animation: 'spin 1s linear infinite' } : {}),
           }}
         />
-        <span text="xs dark-text-secondary">
+        <span text="xs ui-text-secondary">
           {props.uploading ? 'Uploading…' : 'Drop a file or click to upload'}
         </span>
-        <span text="xs dark-text-tertiary">Text, Markdown, JSON, CSV</span>
+        <span text="xs ui-text-tertiary">Text, Markdown, JSON, CSV</span>
         <input
           ref={inputRef}
           type="file"
@@ -1319,24 +1317,24 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   const totalCount = createMemo(() => toolCount() + docs().length)
 
   return (
-    <div flex="~ col" h="full" overflow="auto" bg="dark-bg-primary">
+    <div flex="~ col" h="full" overflow="auto" bg="ui-bg-primary">
       {/* Header */}
       <div
         p="x-3 y-2"
-        bg="dark-bg-tertiary"
-        border="b dark-border-primary"
+        bg="ui-bg-tertiary"
+        border="b ui-border-primary"
         flex="~"
         items="center"
         gap="3"
       >
         <span
           class="i-material-symbols-inventory-2-outline"
-          style={{ width: '16px', height: '16px', color: '#71717a' }}
+          style={{ width: '16px', height: '16px', color: 'var(--ui-text-tertiary)' }}
         />
-        <span text="sm dark-text-primary" font="medium">
+        <span text="sm ui-text-primary" font="medium">
           Data Stash
         </span>
-        <span text="xs dark-text-tertiary" font="mono">
+        <span text="xs ui-text-tertiary" font="mono">
           {totalCount()} items
         </span>
       </div>
@@ -1374,7 +1372,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
         </Show>
         {/* Cold-load only — never blocks the drop zone (background refresh). */}
         <Show when={loading() && docs().length === 0}>
-          <div flex="~" items="center" gap="2" p="x-3 y-2" text="xs dark-text-tertiary">
+          <div flex="~" items="center" gap="2" p="x-3 y-2" text="xs ui-text-tertiary">
             <span
               class="i-material-symbols-progress-activity"
               style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }}
@@ -1387,7 +1385,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       {/* ── Agent Findings ── tool results the agent produced (neo4j, web, …). */}
       <CollapsibleSection title="Agent Findings" count={toolCount()} defaultOpen={true}>
         <Show when={toolCount() === 0}>
-          <div flex="~ col" items="center" justify="center" p="6" text="dark-text-tertiary" gap="2">
+          <div flex="~ col" items="center" justify="center" p="6" text="ui-text-tertiary" gap="2">
             <span
               class="i-material-symbols-experiment-outline"
               style={{ width: '28px', height: '28px', color: '#3f3f46', opacity: '0.6' }}
@@ -1400,10 +1398,10 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
         <Show when={partitioned().current.length > 0}>
           <div>
             <div p="x-3 y-2" flex="~" items="center" gap="2">
-              <span text="xs dark-text-tertiary" font="medium">
+              <span text="xs ui-text-tertiary" font="medium">
                 Current Turn
               </span>
-              <span text="xs dark-text-tertiary" font="mono">
+              <span text="xs ui-text-tertiary" font="mono">
                 ({partitioned().current.length})
               </span>
             </div>

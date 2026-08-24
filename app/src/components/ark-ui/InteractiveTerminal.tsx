@@ -128,14 +128,7 @@ export const InteractiveTerminal = (props: InteractiveTerminalProps) => {
 
   return (
     <div flex="~ col" h="full" bg="black" style={{ position: 'relative' }}>
-      <div
-        flex="~"
-        items="center"
-        gap="2"
-        p="1 3"
-        bg="dark-bg-tertiary"
-        border="b dark-border-primary"
-      >
+      <div flex="~" items="center" gap="2" p="1 3" bg="ui-bg-tertiary" border="b ui-border-primary">
         <span
           style={{
             width: '8px',
@@ -145,7 +138,7 @@ export const InteractiveTerminal = (props: InteractiveTerminalProps) => {
               state() === 'connected' ? '#10b981' : state() === 'closed' ? '#ef4444' : '#f59e0b',
           }}
         />
-        <span text="2xs dark-text-secondary" font="mono">
+        <span text="2xs ui-text-secondary" font="mono">
           {state() === 'connected'
             ? 'sandbox shell · /work · mcp-only'
             : state() === 'closed'

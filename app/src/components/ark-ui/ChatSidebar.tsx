@@ -301,7 +301,7 @@ const RowProgress = (props: { snapshot: ChainProgressSnapshot }) => {
     // m="t-1" and gap="1", not t-1.5: verified against the built sheet —
     // the extractor drops [m~=t-1.5] while these both emit.
     <div m="t-1" flex="~ col" gap="1">
-      <div text="xs dark-text-tertiary" truncate>
+      <div text="xs ui-text-tertiary" truncate>
         {props.snapshot.status ?? 'Starting…'}
       </div>
       <div
@@ -408,7 +408,7 @@ const StatusBadge = (props: { indicator: RowIndicator }) => (
         class="i-material-symbols-bolt-outline"
         w="3.5"
         h="3.5"
-        text="dark-text-tertiary"
+        text="ui-text-tertiary"
         style={{ 'flex-shrink': 0 }}
       />
     </Match>
@@ -562,16 +562,16 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
     <div
       flex="~ col"
       h="full"
-      bg="dark-bg-primary"
-      border="r dark-border-primary"
+      bg="ui-bg-primary"
+      border="r ui-border-primary"
       transition="width"
       style={{ width: props.collapsed ? '3rem' : '16rem' }}
     >
       {/* Header with Toggle */}
-      <div p="4" border="b dark-border-primary" flex="~" items="center" justify="between">
+      <div p="4" border="b ui-border-primary" flex="~" items="center" justify="between">
         {!props.collapsed && (
           <div flex="~" items="center" gap="2">
-            <span text="sm dark-text-primary" font="medium">
+            <span text="sm ui-text-primary" font="medium">
               Chat History
             </span>
             {/* Select-mode toggle (#71) */}
@@ -581,7 +581,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
               aria-pressed={selectionMode() ? 'true' : 'false'}
               p="1"
               rounded="md"
-              hover="bg-dark-bg-hover"
+              hover="bg-ui-bg-hover"
               transition="colors"
             >
               <span
@@ -591,7 +591,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                   width: '16px',
                   height: '16px',
                   display: 'block',
-                  color: selectionMode() ? '#22d3ee' : '#71717a',
+                  color: selectionMode() ? '#22d3ee' : 'var(--ui-text-tertiary)',
                 }}
               />
             </button>
@@ -601,9 +601,9 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
           onClick={() => props.onToggle()}
           p="2"
           rounded="md"
-          hover="bg-dark-bg-hover"
+          hover="bg-ui-bg-hover"
           transition="colors"
-          text="neon-cyan"
+          text="ui-accent"
           flex="shrink-0"
           title={props.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
@@ -623,7 +623,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
           while collapsed, and a hidden control silently subsetting the list
           would confuse. Selected/live state uses inline styles — the
           attributify extractor drops dynamic values (see rowFlashClass
-          notes), and `border="1 neon-cyan/40"` is a known dead selector. */}
+          notes), and `border="1 ui-accent/40"` is a known dead selector. */}
       {props.collapsed && (
         <>
           <div flex="1" overflow="y-auto" p="y-2">
@@ -656,7 +656,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                       background: isSelected() ? 'rgba(67, 56, 202, 0.3)' : 'transparent',
                       cursor: 'pointer',
                     }}
-                    hover="bg-dark-bg-hover"
+                    hover="bg-ui-bg-hover"
                   >
                     {/* Always accented here, unlike the expanded rows: with
                         no title to read, colour is the only thing telling
@@ -695,7 +695,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
             </For>
           </div>
           {/* Compact new-chat button — Settings stays expanded-only. */}
-          <div p="y-3" border="t dark-border-primary" flex="~" justify="center">
+          <div p="y-3" border="t ui-border-primary" flex="~" justify="center">
             <button
               onClick={() => props.onNewChat()}
               title="New chat"
@@ -735,9 +735,9 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                     flex="1"
                     p="y-1"
                     rounded="md"
-                    text={active() ? 'xs neon-cyan' : 'xs dark-text-tertiary'}
-                    bg={active() ? 'cyber-700/30' : 'transparent hover:dark-bg-hover'}
-                    border={active() ? '1 neon-cyan/40' : '1 transparent'}
+                    text={active() ? 'xs ui-accent' : 'xs ui-text-tertiary'}
+                    bg={active() ? 'cyber-700/30' : 'transparent hover:ui-bg-hover'}
+                    border={active() ? '1 ui-accent/40' : '1 transparent'}
                     transition="all"
                     font="medium"
                     aria-pressed={active() ? 'true' : 'false'}
@@ -756,9 +756,9 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                 onClick={toggleSelectAllVisible}
                 p="x-2 y-1"
                 rounded="md"
-                text="xs dark-text-secondary"
-                bg="transparent hover:dark-bg-hover"
-                border="1 dark-border-secondary"
+                text="xs ui-text-secondary"
+                bg="transparent hover:ui-bg-hover"
+                border="1 ui-border-secondary"
                 transition="all"
               >
                 {allEligibleSelected(visibleThreads(), selectedIds(), isRunning)
@@ -783,9 +783,9 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                 onClick={exitSelectMode}
                 p="x-2 y-1"
                 rounded="md"
-                text="xs dark-text-secondary"
-                bg="transparent hover:dark-bg-hover"
-                border="1 dark-border-secondary"
+                text="xs ui-text-secondary"
+                bg="transparent hover:ui-bg-hover"
+                border="1 ui-border-secondary"
                 transition="all"
               >
                 Cancel
@@ -796,7 +796,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
             <Show
               when={visibleThreads().length > 0}
               fallback={
-                <div p="4" text="xs dark-text-tertiary">
+                <div p="4" text="xs ui-text-tertiary">
                   {filter() === 'action'
                     ? 'No actions yet. Trigger one via POST /api/agents/:id.'
                     : 'No conversations yet. Send a message to start.'}
@@ -832,10 +832,10 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         p="3"
                         rounded="md"
                         bg={isSelected() ? 'cyber-700/30' : ''}
-                        hover="bg-dark-bg-hover"
+                        hover="bg-ui-bg-hover"
                         transition="all"
                         border={
-                          isSelected() ? '1 neon-cyan/40' : '1 transparent hover:neon-cyan/30'
+                          isSelected() ? '1 ui-accent/40' : '1 transparent hover:ui-accent/30'
                         }
                         cursor="pointer"
                         data-placeholder={thread.isPlaceholder ? '' : undefined}
@@ -880,7 +880,9 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                                 width: '16px',
                                 height: '16px',
                                 'flex-shrink': 0,
-                                color: selectedIds().has(thread.id) ? '#22d3ee' : '#71717a',
+                                color: selectedIds().has(thread.id)
+                                  ? '#22d3ee'
+                                  : 'var(--ui-text-tertiary)',
                                 opacity: canDeleteRow({
                                   isPlaceholder: thread.isPlaceholder,
                                   isProcessing: live(),
@@ -915,9 +917,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                           <StatusBadge indicator={indicator()} />
                           <div
                             text={
-                              thread.isPlaceholder
-                                ? 'sm dark-text-tertiary'
-                                : 'sm dark-text-primary'
+                              thread.isPlaceholder ? 'sm ui-text-tertiary' : 'sm ui-text-primary'
                             }
                             font={thread.isPlaceholder ? 'normal italic' : 'medium'}
                             truncate
@@ -935,7 +935,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         <Show
                           when={live() && props.getProgress}
                           fallback={
-                            <div text="xs dark-text-tertiary" m="t-1">
+                            <div text="xs ui-text-tertiary" m="t-1">
                               {formatTimestamp(thread.updatedAt)}
                             </div>
                           }
@@ -969,7 +969,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                               'border-radius': '0.375rem',
                               cursor: 'pointer',
                             }}
-                            text="xs dark-text-tertiary hover:red-400"
+                            text="xs ui-text-tertiary hover:red-400"
                             transition="opacity"
                             class="opacity-0 group-hover:opacity-100"
                           >
@@ -1000,7 +1000,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                               opacity: isRegenerating() ? 1 : undefined,
                               'pointer-events': isRegenerating() ? 'none' : 'auto',
                             }}
-                            text="xs dark-text-tertiary hover:neon-cyan"
+                            text="xs ui-text-tertiary hover:ui-accent"
                             transition="opacity"
                             class={
                               isRegenerating() ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
@@ -1032,7 +1032,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
           </div>
 
           {/* Footer: Settings + New Chat */}
-          <div p="4" border="t dark-border-primary" flex="~" gap="2" items="center">
+          <div p="4" border="t ui-border-primary" flex="~" gap="2" items="center">
             <SettingsPanel />
             <button
               onClick={() => props.onNewChat()}
@@ -1087,8 +1087,8 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
           }}
         >
           <Dialog.Content
-            bg="dark-bg-secondary"
-            border="1 dark-border-primary"
+            bg="ui-bg-secondary"
+            border="1 ui-border-primary"
             rounded="lg"
             shadow="2xl"
             p="5"
@@ -1099,7 +1099,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
               {(target) => (
                 <>
                   <Dialog.Title
-                    text="sm dark-text-primary"
+                    text="sm ui-text-primary"
                     font="medium"
                     flex="~"
                     items="center"
@@ -1108,12 +1108,17 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                     <span
                       class="i-material-symbols-delete-outline"
                       aria-hidden="true"
-                      style={{ width: '18px', height: '18px', color: '#f87171', 'flex-shrink': 0 }}
+                      style={{
+                        width: '18px',
+                        height: '18px',
+                        color: 'var(--ui-danger)',
+                        'flex-shrink': 0,
+                      }}
                     />
                     {target().kind === 'single' ? 'Delete conversation' : 'Delete conversations'}
                   </Dialog.Title>
                   <Dialog.Description
-                    text="xs dark-text-secondary"
+                    text="xs ui-text-secondary"
                     m="t-2 b-4"
                     style={{ 'line-height': '1.5' }}
                   >
@@ -1125,9 +1130,9 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                       disabled={deleting()}
                       p="x-3 y-1.5"
                       rounded="md"
-                      text="xs dark-text-secondary"
-                      bg="transparent hover:dark-bg-hover"
-                      border="1 dark-border-secondary"
+                      text="xs ui-text-secondary"
+                      bg="transparent hover:ui-bg-hover"
+                      border="1 ui-border-secondary"
                       transition="all"
                     >
                       Cancel

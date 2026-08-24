@@ -672,16 +672,16 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   }
 
   return (
-    <div flex="~ col" h="full" bg="dark-bg-secondary">
+    <div flex="~ col" h="full" bg="ui-bg-secondary">
       {/* Agent Selector Header */}
       <div
         flex="~ items-center gap-4"
-        border="b dark-border-primary"
+        border="b ui-border-primary"
         px="4"
         py="2"
-        bg="dark-bg-tertiary/50"
+        bg="ui-bg-tertiary/50"
       >
-        <span text="sm dark-text-secondary">Agent:</span>
+        <span text="sm ui-text-secondary">Agent:</span>
         <div w="64">
           <AgentSelector
             selectedAgent={selectedAgent()}
@@ -715,7 +715,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       />
 
       {/* Input */}
-      <div border="t dark-border-primary" p="4" bg="dark-bg-secondary/80" backdrop-blur="sm">
+      <div border="t ui-border-primary" p="4" bg="ui-bg-secondary/80" backdrop-blur="sm">
         <ChatInput
           onSend={handleSendMessage}
           disabled={isProcessing() || atCap() || !!props.embeddingSources}
@@ -749,8 +749,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            bg="dark-bg-secondary"
-            border="1 neon-cyan/30"
+            bg="ui-bg-secondary"
+            border="1 ui-accent/30"
             rounded="lg"
             p="5"
             shadow="2xl"
@@ -761,11 +761,11 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
                 class="i-material-symbols-bolt-outline"
                 style={{ width: '20px', height: '20px', color: '#22d3ee' }}
               />
-              <span text="sm dark-text-primary" font="medium">
+              <span text="sm ui-text-primary" font="medium">
                 Turn this action into a conversation?
               </span>
             </div>
-            <p text="xs dark-text-secondary" m="b-4" style={{ 'line-height': '1.5' }}>
+            <p text="xs ui-text-secondary" m="b-4" style={{ 'line-height': '1.5' }}>
               Sending a message will promote this triggered action into a regular conversation. If
               you cancel, the message won't be sent and it stays an action.
             </p>
@@ -775,9 +775,9 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
                 disabled={promoting()}
                 p="x-3 y-1.5"
                 rounded="md"
-                text="xs dark-text-secondary"
-                bg="transparent hover:dark-bg-hover"
-                border="1 dark-border-secondary"
+                text="xs ui-text-secondary"
+                bg="transparent hover:ui-bg-hover"
+                border="1 ui-border-secondary"
                 transition="all"
               >
                 Cancel

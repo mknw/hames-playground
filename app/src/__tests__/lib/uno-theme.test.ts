@@ -27,13 +27,21 @@ async function palette(selector: ':root' | ':root.light'): Promise<Record<string
   // The preflight is emitted verbatim, so match its block and read the pairs.
   const block = new RegExp(`${selector.replace('.', '\\.')}\\s*\\{([^}]*)\\}`).exec(css)
   expect(block, `no ${selector} block in the generated CSS`).not.toBeNull()
+  // Comments first: a prose mention of `--ui-something:` reads as a
+  // declaration whose value runs to the next `;`, which swallows the real
+  // declaration after it. That failure is silent — the token just goes
+  // missing from one palette — so it is stripped rather than tolerated.
+  const declarations = block![1].replace(/\/\*[\s\S]*?\*\//g, '')
   return Object.fromEntries(
-    [...block![1].matchAll(/(--ui-[\w-]+)\s*:\s*([^;]+);/g)].map(([, k, v]) => [k, v.trim()]),
+    [...declarations.matchAll(/(--ui-[\w-]+)\s*:\s*([^;]+);/g)].map(([, k, v]) => [k, v.trim()]),
   )
 }
 
 // The roles that existed as fixed hexes before the theme, and the value each
-// one had. `uno.config.ts` still declares them under `theme.colors.dark`.
+// one had. Half are still declared under `theme.colors.dark` / `neon`; the
+// rest were literals inside the hand-written CSS in the second preflight.
+// Every entry here is load-bearing: it is the proof that migrating the app to
+// `ui-*` changed nothing about how it renders in dark.
 const INHERITED_DARK_VALUES: Record<string, string> = {
   '--ui-bg-primary': '#0a0a0f',
   '--ui-bg-secondary': '#12121a',
@@ -45,8 +53,23 @@ const INHERITED_DARK_VALUES: Record<string, string> = {
   '--ui-text-primary': '#e4e4e7',
   '--ui-text-secondary': '#a1a1aa',
   '--ui-text-tertiary': '#71717a',
-  // The brand accent, previously written as `neon-cyan`.
+  // The brand accent and the success tone, previously `neon-cyan` /
+  // `neon-green`.
   '--ui-accent': '#00ffff',
+  '--ui-success': '#39ff14',
+  // Literals lifted out of `.prose-chat`, `.think-*`, `.agent-glyph` and
+  // `.graph-entity`, which are CSS rather than utilities and so could not
+  // carry a token at all before.
+  '--ui-accent-soft': 'rgba(0, 255, 255, 0.1)',
+  '--ui-accent-glow': 'rgba(0, 255, 255, 0.15)',
+  '--ui-accent-strong': 'rgba(0, 255, 255, 0.2)',
+  '--ui-accent-line': 'rgba(0, 255, 255, 0.4)',
+  '--ui-overlay-wash': 'rgba(255, 255, 255, 0.03)',
+  '--ui-overlay-raise': 'rgba(255, 255, 255, 0.06)',
+  '--ui-overlay-line': 'rgba(255, 255, 255, 0.06)',
+  '--ui-overlay-hairline': 'rgba(255, 255, 255, 0.05)',
+  '--ui-overlay-sunken': 'rgba(0, 0, 0, 0.15)',
+  '--ui-code-bg': '#0a0a0f',
 }
 
 describe('ui-* token palette', () => {
@@ -91,6 +114,8 @@ describe('ui-* utilities', () => {
     ['text-ui-text-tertiary', '--ui-text-tertiary'],
     ['text-ui-accent', '--ui-accent'],
     ['text-ui-danger', '--ui-danger'],
+    ['text-ui-success', '--ui-success'],
+    ['bg-ui-success', '--ui-success'],
     ['bg-ui-danger/10', '--ui-danger'],
   ] as const
 

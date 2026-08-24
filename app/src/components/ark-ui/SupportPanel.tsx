@@ -95,7 +95,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
   const memoryElements = createMemo(() => props.graphElements.filter((e) => e.source === 'memory'))
 
   return (
-    <div flex="~ col" h="full" bg="dark-bg-primary">
+    <div flex="~ col" h="full" bg="ui-bg-primary">
       <Tabs.Root
         value={selectedTab()}
         onValueChange={(details) => setSelectedTab(details.value)}
@@ -105,24 +105,20 @@ export const SupportPanel = (props: SupportPanelProps) => {
         h="full"
       >
         {/* Tab List */}
-        <Tabs.List
-          bg="dark-bg-secondary"
-          border="b dark-border-primary"
-          flex="~ wrap"
-          p="x-2"
-          gap="1"
-        >
+        <Tabs.List bg="ui-bg-secondary" border="b ui-border-primary" flex="~ wrap" p="x-2" gap="1">
           <Tabs.Trigger
             value="neo4j-graph"
             p="x-3 y-2"
-            text="sm dark-text-primary"
+            text="sm ui-text-primary"
             cursor="pointer"
             border="b-2 transparent"
             transition="all"
             data-state={selectedTab() === 'neo4j-graph' ? 'active' : 'inactive'}
             style={{
-              'border-bottom-color': selectedTab() === 'neo4j-graph' ? '#00ffff' : 'transparent',
-              color: selectedTab() === 'neo4j-graph' ? '#00ffff' : '#a1a1aa',
+              'border-bottom-color':
+                selectedTab() === 'neo4j-graph' ? 'var(--ui-accent)' : 'transparent',
+              color:
+                selectedTab() === 'neo4j-graph' ? 'var(--ui-accent)' : 'var(--ui-text-secondary)',
             }}
           >
             <span mr="1">🗄️</span>
@@ -132,14 +128,14 @@ export const SupportPanel = (props: SupportPanelProps) => {
           <Tabs.Trigger
             value="memory-graph"
             p="x-3 y-2"
-            text="sm dark-text-primary"
+            text="sm ui-text-primary"
             cursor="pointer"
             border="b-2 transparent"
             transition="all"
             data-state={selectedTab() === 'memory-graph' ? 'active' : 'inactive'}
             style={{
               'border-bottom-color': selectedTab() === 'memory-graph' ? '#a855f7' : 'transparent',
-              color: selectedTab() === 'memory-graph' ? '#a855f7' : '#a1a1aa',
+              color: selectedTab() === 'memory-graph' ? '#a855f7' : 'var(--ui-text-secondary)',
             }}
           >
             <span mr="1">🧠</span>
@@ -149,14 +145,14 @@ export const SupportPanel = (props: SupportPanelProps) => {
           <Tabs.Trigger
             value="all-graph"
             p="x-3 y-2"
-            text="sm dark-text-primary"
+            text="sm ui-text-primary"
             cursor="pointer"
             border="b-2 transparent"
             transition="all"
             data-state={selectedTab() === 'all-graph' ? 'active' : 'inactive'}
             style={{
               'border-bottom-color': selectedTab() === 'all-graph' ? '#22c55e' : 'transparent',
-              color: selectedTab() === 'all-graph' ? '#22c55e' : '#a1a1aa',
+              color: selectedTab() === 'all-graph' ? '#22c55e' : 'var(--ui-text-secondary)',
             }}
           >
             <span mr="1">🕸️</span>
@@ -166,14 +162,14 @@ export const SupportPanel = (props: SupportPanelProps) => {
           <Tabs.Trigger
             value="stats"
             p="x-3 y-2"
-            text="sm dark-text-primary"
+            text="sm ui-text-primary"
             cursor="pointer"
             border="b-2 transparent"
             transition="all"
             data-state={selectedTab() === 'stats' ? 'active' : 'inactive'}
             style={{
               'border-bottom-color': selectedTab() === 'stats' ? '#f59e0b' : 'transparent',
-              color: selectedTab() === 'stats' ? '#f59e0b' : '#a1a1aa',
+              color: selectedTab() === 'stats' ? '#f59e0b' : 'var(--ui-text-secondary)',
             }}
           >
             Context manager
@@ -182,14 +178,14 @@ export const SupportPanel = (props: SupportPanelProps) => {
           <Tabs.Trigger
             value="data"
             p="x-3 y-2"
-            text="sm dark-text-primary"
+            text="sm ui-text-primary"
             cursor="pointer"
             border="b-2 transparent"
             transition="all"
             data-state={selectedTab() === 'data' ? 'active' : 'inactive'}
             style={{
               'border-bottom-color': selectedTab() === 'data' ? '#22d3ee' : 'transparent',
-              color: selectedTab() === 'data' ? '#22d3ee' : '#a1a1aa',
+              color: selectedTab() === 'data' ? '#22d3ee' : 'var(--ui-text-secondary)',
             }}
           >
             Data
@@ -198,14 +194,14 @@ export const SupportPanel = (props: SupportPanelProps) => {
           <Tabs.Trigger
             value="terminal"
             p="x-3 y-2"
-            text="sm dark-text-primary"
+            text="sm ui-text-primary"
             cursor="pointer"
             border="b-2 transparent"
             transition="all"
             data-state={selectedTab() === 'terminal' ? 'active' : 'inactive'}
             style={{
               'border-bottom-color': selectedTab() === 'terminal' ? '#10b981' : 'transparent',
-              color: selectedTab() === 'terminal' ? '#10b981' : '#a1a1aa',
+              color: selectedTab() === 'terminal' ? '#10b981' : 'var(--ui-text-secondary)',
             }}
           >
             <span mr="1">🖥️</span>
@@ -215,7 +211,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
           <Tabs.Trigger
             value="actions"
             p="x-3 y-2"
-            text="sm dark-text-tertiary"
+            text="sm ui-text-tertiary"
             cursor="not-allowed"
             opacity="50"
             disabled
@@ -226,7 +222,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
           <Tabs.Trigger
             value="docs"
             p="x-3 y-2"
-            text="sm dark-text-tertiary"
+            text="sm ui-text-tertiary"
             cursor="not-allowed"
             opacity="50"
             disabled
@@ -289,7 +285,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
           <Tabs.Content value="data" h="full">
             <Suspense
               fallback={
-                <div p="4" text="sm dark-text-tertiary">
+                <div p="4" text="sm ui-text-tertiary">
                   Loading data…
                 </div>
               }
@@ -381,10 +377,10 @@ const GraphTabContent = (props: GraphTabContentProps) => {
           items="center"
           justify="between"
           p="2 3"
-          bg="dark-bg-tertiary"
-          border="b dark-border-primary"
+          bg="ui-bg-tertiary"
+          border="b ui-border-primary"
         >
-          <div text="xs dark-text-secondary">
+          <div text="xs ui-text-secondary">
             {nodeCount()} nodes, {edgeCount()} edges
           </div>
           <div flex="~" items="center" gap="2">
@@ -430,7 +426,7 @@ const GraphTabContent = (props: GraphTabContentProps) => {
           fallback={
             <div flex="~ col" items="center" justify="center" h="full" text="center">
               <span text="4xl mb-4">{props.emptyIcon}</span>
-              <span text="sm dark-text-secondary" max-w="xs">
+              <span text="sm ui-text-secondary" max-w="xs">
                 {props.emptyMessage}
               </span>
             </div>
@@ -461,7 +457,7 @@ interface PlaceholderPanelProps {
 }
 
 const PlaceholderPanel = (props: PlaceholderPanelProps) => (
-  <div flex="~" items="center" justify="center" h="full" bg="dark-bg-primary">
+  <div flex="~" items="center" justify="center" h="full" bg="ui-bg-primary">
     <div text="center">
       <svg
         width="64"
@@ -473,13 +469,13 @@ const PlaceholderPanel = (props: PlaceholderPanelProps) => (
       >
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={props.icon} />
       </svg>
-      <div text="lg dark-text-secondary" font="medium" m="t-4">
+      <div text="lg ui-text-secondary" font="medium" m="t-4">
         {props.title}
       </div>
-      <div text="sm dark-text-tertiary" m="t-2" max-w="sm">
+      <div text="sm ui-text-tertiary" m="t-2" max-w="sm">
         {props.description}
       </div>
-      <div text="xs dark-text-tertiary" m="t-4">
+      <div text="xs ui-text-tertiary" m="t-4">
         Coming in {props.phase}
       </div>
     </div>

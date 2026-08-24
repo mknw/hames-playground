@@ -623,11 +623,11 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
   // ========================================
 
   return (
-    <div flex="~ col" h="full" w="full" bg="dark-bg-primary" position="relative">
+    <div flex="~ col" h="full" w="full" bg="ui-bg-primary" position="relative">
       {/* Toolbar */}
       <div
-        bg="dark-bg-secondary"
-        border="b dark-border-primary"
+        bg="ui-bg-secondary"
+        border="b ui-border-primary"
         p="2"
         flex="~"
         items="center"
@@ -636,13 +636,13 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
       >
         {/* Layout selector */}
         <div flex="~" items="center" gap="1">
-          <span text="xs dark-text-tertiary">Layout:</span>
+          <span text="xs ui-text-tertiary">Layout:</span>
           <select
             value={selectedLayout()}
             onChange={(e) => applyLayout(e.currentTarget.value as LayoutName)}
-            bg="dark-bg-tertiary"
-            text="xs dark-text-primary"
-            border="1 dark-border-secondary"
+            bg="ui-bg-tertiary"
+            text="xs ui-text-primary"
+            border="1 ui-border-secondary"
             rounded="md"
             p="x-2 y-1"
             cursor="pointer"
@@ -655,7 +655,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
         </div>
 
         {/* Stats */}
-        <div flex="~ 1" items="center" gap="4" justify="end" text="xs dark-text-tertiary">
+        <div flex="~ 1" items="center" gap="4" justify="end" text="xs ui-text-tertiary">
           <span>{nodeCount()} nodes</span>
           <span>{edgeCount()} edges</span>
           {/* Elements Cytoscape refused. Glyph + wording, not colour alone
@@ -678,9 +678,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
         <button
           onClick={() => cy?.fit(undefined, 50)}
           p="x-3 y-1"
-          text="xs dark-text-primary"
-          bg="dark-bg-tertiary hover:dark-bg-hover"
-          border="1 dark-border-secondary"
+          text="xs ui-text-primary"
+          bg="ui-bg-tertiary hover:ui-bg-hover"
+          border="1 ui-border-secondary"
           rounded="md"
           cursor="pointer"
           transition="colors"
@@ -691,9 +691,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
         <button
           onClick={() => cy?.zoom(cy.zoom() * 1.2)}
           p="x-3 y-1"
-          text="xs dark-text-primary"
-          bg="dark-bg-tertiary hover:dark-bg-hover"
-          border="1 dark-border-secondary"
+          text="xs ui-text-primary"
+          bg="ui-bg-tertiary hover:ui-bg-hover"
+          border="1 ui-border-secondary"
           rounded="md"
           cursor="pointer"
           transition="colors"
@@ -704,9 +704,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
         <button
           onClick={() => cy?.zoom(cy.zoom() * 0.8)}
           p="x-3 y-1"
-          text="xs dark-text-primary"
-          bg="dark-bg-tertiary hover:dark-bg-hover"
-          border="1 dark-border-secondary"
+          text="xs ui-text-primary"
+          bg="ui-bg-tertiary hover:ui-bg-hover"
+          border="1 ui-border-secondary"
           rounded="md"
           cursor="pointer"
           transition="colors"
@@ -719,12 +719,12 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
           onClick={() => setShowCreateNode(!showCreateNode())}
           p="x-3 y-1"
           text="xs"
-          bg={showCreateNode() ? 'neon-cyan/30' : 'dark-bg-tertiary hover:dark-bg-hover'}
-          border={showCreateNode() ? '1 neon-cyan/50' : '1 dark-border-secondary'}
+          bg={showCreateNode() ? 'ui-accent/30' : 'ui-bg-tertiary hover:ui-bg-hover'}
+          border={showCreateNode() ? '1 ui-accent/50' : '1 ui-border-secondary'}
           rounded="md"
           cursor="pointer"
           transition="colors"
-          style={{ color: showCreateNode() ? '#00ffff' : '#e4e4e7' }}
+          style={{ color: showCreateNode() ? 'var(--ui-accent)' : 'var(--ui-text-primary)' }}
         >
           + Node
         </button>
@@ -732,51 +732,51 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
 
       {/* Create Node Form */}
       <Show when={showCreateNode()}>
-        <div bg="dark-bg-secondary" border="b dark-border-primary" p="3" flex="~ col" gap="2">
-          <div text="xs dark-text-secondary" font="medium">
+        <div bg="ui-bg-secondary" border="b ui-border-primary" p="3" flex="~ col" gap="2">
+          <div text="xs ui-text-secondary" font="medium">
             Create Node
           </div>
           <div flex="~" gap="2">
             <div flex="~ col 1" gap="1">
-              <label text="xs dark-text-tertiary">Name *</label>
+              <label text="xs ui-text-tertiary">Name *</label>
               <input
                 value={newNodeName()}
                 onInput={(e) => setNewNodeName(e.currentTarget.value)}
                 placeholder="e.g. GraphQL"
                 p="x-2 y-1.5"
-                bg="dark-bg-tertiary"
-                text="xs dark-text-primary"
-                border="1 dark-border-secondary focus:neon-cyan/50"
+                bg="ui-bg-tertiary"
+                text="xs ui-text-primary"
+                border="1 ui-border-secondary focus:ui-accent/50"
                 rounded="md"
                 outline="none"
               />
             </div>
             <div flex="~ col" gap="1">
-              <label text="xs dark-text-tertiary">Label</label>
+              <label text="xs ui-text-tertiary">Label</label>
               <input
                 value={newNodeLabel()}
                 onInput={(e) => setNewNodeLabel(e.currentTarget.value)}
                 placeholder="e.g. Concept"
                 p="x-2 y-1.5"
                 w="28"
-                bg="dark-bg-tertiary"
-                text="xs dark-text-primary"
-                border="1 dark-border-secondary focus:neon-cyan/50"
+                bg="ui-bg-tertiary"
+                text="xs ui-text-primary"
+                border="1 ui-border-secondary focus:ui-accent/50"
                 rounded="md"
                 outline="none"
               />
             </div>
           </div>
           <div flex="~ col" gap="1">
-            <label text="xs dark-text-tertiary">Description</label>
+            <label text="xs ui-text-tertiary">Description</label>
             <input
               value={newNodeDescription()}
               onInput={(e) => setNewNodeDescription(e.currentTarget.value)}
               placeholder="Optional description"
               p="x-2 y-1.5"
-              bg="dark-bg-tertiary"
-              text="xs dark-text-primary"
-              border="1 dark-border-secondary focus:neon-cyan/50"
+              bg="ui-bg-tertiary"
+              text="xs ui-text-primary"
+              border="1 ui-border-secondary focus:ui-accent/50"
               rounded="md"
               outline="none"
             />
@@ -787,21 +787,21 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
               disabled={!newNodeName().trim()}
               p="x-3 y-1.5"
               text="xs"
-              bg="neon-cyan/20 hover:neon-cyan/30 disabled:opacity-40"
-              border="1 neon-cyan/50"
+              bg="ui-accent/20 hover:ui-accent/30 disabled:opacity-40"
+              border="1 ui-accent/50"
               rounded="md"
               cursor="pointer disabled:cursor-not-allowed"
               transition="all"
-              style={{ color: '#00ffff' }}
+              style={{ color: 'var(--ui-accent)' }}
             >
               Create
             </button>
             <button
               onClick={() => setShowCreateNode(false)}
               p="x-3 y-1.5"
-              text="xs dark-text-tertiary"
-              bg="dark-bg-tertiary hover:dark-bg-hover"
-              border="1 dark-border-secondary"
+              text="xs ui-text-tertiary"
+              bg="ui-bg-tertiary hover:ui-bg-hover"
+              border="1 ui-border-secondary"
               rounded="md"
               cursor="pointer"
             >
@@ -816,15 +816,15 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
         <Collapsible.Trigger
           w="full"
           p="2"
-          bg="dark-bg-secondary"
-          border="b dark-border-primary"
-          text="xs dark-text-secondary"
+          bg="ui-bg-secondary"
+          border="b ui-border-primary"
+          text="xs ui-text-secondary"
           cursor="pointer"
           flex="~"
           items="center"
           gap="2"
           transition="colors"
-          hover:bg="dark-bg-hover"
+          hover:bg="ui-bg-hover"
         >
           <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
@@ -836,11 +836,11 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
           </svg>
           <span>Manual Cypher Query</span>
           <Show when={queryHistory().length > 0}>
-            <span text="dark-text-tertiary">({queryHistory().length} recent)</span>
+            <span text="ui-text-tertiary">({queryHistory().length} recent)</span>
           </Show>
         </Collapsible.Trigger>
 
-        <Collapsible.Content bg="dark-bg-secondary" border="b dark-border-primary" p="3">
+        <Collapsible.Content bg="ui-bg-secondary" border="b ui-border-primary" p="3">
           {/* Query Input */}
           <div flex="~ col" gap="2">
             <textarea
@@ -851,11 +851,11 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
               rows="3"
               w="full"
               p="3"
-              bg="dark-bg-tertiary"
-              text="sm dark-text-primary font-mono"
-              border="1 dark-border-secondary"
+              bg="ui-bg-tertiary"
+              text="sm ui-text-primary font-mono"
+              border="1 ui-border-secondary"
               rounded="md"
-              outline="none focus:border-neon-cyan/50"
+              outline="none focus:border-ui-accent/50"
               resize="y"
               disabled={isExecuting()}
             />
@@ -865,9 +865,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                 onClick={handleRunCypher}
                 disabled={!cypherInput().trim() || isExecuting()}
                 p="x-4 y-2"
-                text="sm dark-text-primary"
-                bg="neon-cyan/20 hover:neon-cyan/30 disabled:opacity-50"
-                border="1 neon-cyan/50"
+                text="sm ui-text-primary"
+                bg="ui-accent/20 hover:ui-accent/30 disabled:opacity-50"
+                border="1 ui-accent/50"
                 rounded="md"
                 cursor="pointer disabled:cursor-not-allowed"
                 transition="all"
@@ -881,7 +881,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                 </Show>
               </button>
 
-              <span text="xs dark-text-tertiary">Cmd/Ctrl + Enter</span>
+              <span text="xs ui-text-tertiary">Cmd/Ctrl + Enter</span>
             </div>
 
             {/* Error Display */}
@@ -899,7 +899,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
             {/* Query History */}
             <Show when={queryHistory().length > 0}>
               <div m="t-2">
-                <div text="xs dark-text-tertiary" m="b-1">
+                <div text="xs ui-text-tertiary" m="b-1">
                   Recent queries:
                 </div>
                 <div flex="~ wrap" gap="1">
@@ -908,9 +908,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                       <button
                         onClick={() => setCypherInput(query)}
                         p="x-2 y-1"
-                        text="xs dark-text-secondary font-mono"
-                        bg="dark-bg-tertiary hover:dark-bg-hover"
-                        border="1 dark-border-secondary"
+                        text="xs ui-text-secondary font-mono"
+                        bg="ui-bg-tertiary hover:ui-bg-hover"
+                        border="1 ui-border-secondary"
                         rounded="sm"
                         cursor="pointer"
                         transition="colors"
@@ -934,15 +934,15 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
         <Collapsible.Trigger
           w="full"
           p="2"
-          bg="dark-bg-secondary"
-          border="b dark-border-primary"
-          text="xs dark-text-secondary"
+          bg="ui-bg-secondary"
+          border="b ui-border-primary"
+          text="xs ui-text-secondary"
           cursor="pointer"
           flex="~"
           items="center"
           gap="2"
           transition="colors"
-          hover:bg="dark-bg-hover"
+          hover:bg="ui-bg-hover"
         >
           <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
@@ -955,11 +955,11 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
           <span>Display Controls</span>
         </Collapsible.Trigger>
 
-        <Collapsible.Content bg="dark-bg-secondary" border="b dark-border-primary" p="3">
+        <Collapsible.Content bg="ui-bg-secondary" border="b ui-border-primary" p="3">
           <div flex="~ col" gap="3">
             {/* Node Diameter */}
             <div flex="~" items="center" gap="3">
-              <label text="xs dark-text-tertiary" w="24" flex="shrink-0">
+              <label text="xs ui-text-tertiary" w="24" flex="shrink-0">
                 Node Size
               </label>
               <input
@@ -971,14 +971,14 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                 flex="1"
                 cursor="pointer"
               />
-              <span text="xs dark-text-tertiary" w="8" text-align="right">
+              <span text="xs ui-text-tertiary" w="8" text-align="right">
                 {nodeDiameter()}
               </span>
             </div>
 
             {/* Edge Thickness */}
             <div flex="~" items="center" gap="3">
-              <label text="xs dark-text-tertiary" w="24" flex="shrink-0">
+              <label text="xs ui-text-tertiary" w="24" flex="shrink-0">
                 Edge Width
               </label>
               <input
@@ -991,14 +991,14 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                 flex="1"
                 cursor="pointer"
               />
-              <span text="xs dark-text-tertiary" w="8" text-align="right">
+              <span text="xs ui-text-tertiary" w="8" text-align="right">
                 {edgeThickness()}
               </span>
             </div>
 
             {/* Font Size */}
             <div flex="~" items="center" gap="3">
-              <label text="xs dark-text-tertiary" w="24" flex="shrink-0">
+              <label text="xs ui-text-tertiary" w="24" flex="shrink-0">
                 Font Size
               </label>
               <input
@@ -1010,14 +1010,14 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                 flex="1"
                 cursor="pointer"
               />
-              <span text="xs dark-text-tertiary" w="8" text-align="right">
+              <span text="xs ui-text-tertiary" w="8" text-align="right">
                 {fontSize()}
               </span>
             </div>
 
             {/* Show Edge Labels */}
             <div flex="~" items="center" gap="3">
-              <label text="xs dark-text-tertiary" w="24" flex="shrink-0">
+              <label text="xs ui-text-tertiary" w="24" flex="shrink-0">
                 Edge Labels
               </label>
               <input
@@ -1045,11 +1045,11 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
               flex: '~',
               items: 'center',
               justify: 'center',
-              bg: 'dark-bg-primary',
+              bg: 'ui-bg-primary',
               z: '20',
             } as Record<string, string>)}
           >
-            <span text="dark-text-tertiary">Loading graph...</span>
+            <span text="ui-text-tertiary">Loading graph...</span>
           </div>
         </Show>
 
@@ -1083,10 +1083,10 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                   d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"
                 />
               </svg>
-              <div text="xl dark-text-secondary" font="medium" m="t-4">
+              <div text="xl ui-text-secondary" font="medium" m="t-4">
                 No Graph Data
               </div>
-              <div text="sm dark-text-tertiary" m="t-2">
+              <div text="sm ui-text-tertiary" m="t-2">
                 Ask a question to visualize the knowledge graph
               </div>
             </div>
@@ -1142,8 +1142,8 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                 top: `${Math.max(20, Math.min(node().position.y, (containerRef?.clientHeight || 400) - 200))}px`,
                 transform: 'translateY(-50%)',
               }}
-              bg="dark-bg-secondary"
-              border="1 dark-border-primary"
+              bg="ui-bg-secondary"
+              border="1 ui-border-primary"
               rounded="lg"
               p="4"
               min-w="64"
@@ -1156,7 +1156,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
               {/* Header */}
               <div flex="~" justify="between" items="start" m="b-3" gap="2">
                 <div>
-                  <div text="sm dark-text-primary" font="semibold">
+                  <div text="sm ui-text-primary" font="semibold">
                     {node().label}
                   </div>
                   <Show when={node().labels.length > 0}>
@@ -1164,9 +1164,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                       <For each={node().labels}>
                         {(lbl) => (
                           <span
-                            text="xs neon-cyan"
-                            bg="neon-cyan/15"
-                            border="1 neon-cyan/30"
+                            text="xs ui-accent"
+                            bg="ui-accent/15"
+                            border="1 ui-accent/30"
                             rounded="full"
                             p="x-2 y-0.5"
                           >
@@ -1183,8 +1183,8 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                     setEditingField(null)
                   }}
                   p="1"
-                  text="dark-text-tertiary hover:dark-text-primary"
-                  bg="transparent hover:dark-bg-hover"
+                  text="ui-text-tertiary hover:ui-text-primary"
+                  bg="transparent hover:ui-bg-hover"
                   rounded="md"
                   cursor="pointer"
                   transition="colors"
@@ -1205,7 +1205,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                 when={node().properties && Object.keys(node().properties!).length > 0}
                 fallback={
                   <div>
-                    <div text="xs dark-text-tertiary" m="b-2">
+                    <div text="xs ui-text-tertiary" m="b-2">
                       No properties loaded
                     </div>
                     <button
@@ -1213,9 +1213,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                       disabled={isLoadingProps()}
                       p="x-3 y-2"
                       w="full"
-                      text="xs dark-text-primary"
-                      bg="neon-cyan/20 hover:neon-cyan/30 disabled:opacity-50"
-                      border="1 neon-cyan/50"
+                      text="xs ui-text-primary"
+                      bg="ui-accent/20 hover:ui-accent/30 disabled:opacity-50"
+                      border="1 ui-accent/50"
                       rounded="md"
                       cursor="pointer disabled:cursor-wait"
                       transition="all"
@@ -1229,15 +1229,15 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                 <div text="xs" max-h="48" overflow="y-auto" space="y-2">
                   <For each={Object.entries(node().properties!)}>
                     {([key, value]) => (
-                      <div border="b dark-border-secondary" p="b-2">
+                      <div border="b ui-border-secondary" p="b-2">
                         <div flex="~" justify="between" items="center">
-                          <div text="dark-text-tertiary" font="medium">
+                          <div text="ui-text-tertiary" font="medium">
                             {key}
                           </div>
                           <Show when={typeof value === 'string'}>
                             <button
                               onClick={() => setEditingField({ key, value: String(value) })}
-                              text="dark-text-tertiary hover:neon-cyan"
+                              text="ui-text-tertiary hover:ui-accent"
                               bg="transparent"
                               cursor="pointer"
                               p="0.5"
@@ -1263,7 +1263,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                         <Show
                           when={editingField()?.key === key}
                           fallback={
-                            <div text="dark-text-primary" style={{ 'word-break': 'break-word' }}>
+                            <div text="ui-text-primary" style={{ 'word-break': 'break-word' }}>
                               {typeof value === 'object'
                                 ? JSON.stringify(value, null, 2)
                                 : String(value)}
@@ -1279,9 +1279,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                               rows="2"
                               w="full"
                               p="2"
-                              bg="dark-bg-tertiary"
-                              text="xs dark-text-primary"
-                              border="1 neon-cyan/30"
+                              bg="ui-bg-tertiary"
+                              text="xs ui-text-primary"
+                              border="1 ui-accent/30"
                               rounded="md"
                               outline="none"
                               resize="y"
@@ -1303,9 +1303,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                                   setEditingField(null)
                                 }}
                                 p="x-2 y-1"
-                                text="xs neon-cyan"
-                                bg="neon-cyan/20 hover:neon-cyan/30"
-                                border="1 neon-cyan/50"
+                                text="xs ui-accent"
+                                bg="ui-accent/20 hover:ui-accent/30"
+                                border="1 ui-accent/50"
                                 rounded="md"
                                 cursor="pointer"
                               >
@@ -1314,9 +1314,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                               <button
                                 onClick={() => setEditingField(null)}
                                 p="x-2 y-1"
-                                text="xs dark-text-tertiary"
-                                bg="dark-bg-tertiary hover:dark-bg-hover"
-                                border="1 dark-border-secondary"
+                                text="xs ui-text-tertiary"
+                                bg="ui-bg-tertiary hover:ui-bg-hover"
+                                border="1 ui-border-secondary"
                                 rounded="md"
                                 cursor="pointer"
                               >
@@ -1332,7 +1332,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
               </Show>
 
               {/* Actions footer */}
-              <div m="t-3" p="t-2" border="t dark-border-secondary" space="y-2">
+              <div m="t-3" p="t-2" border="t ui-border-secondary" space="y-2">
                 {/* Create relation button */}
                 <button
                   onClick={() => {
@@ -1364,7 +1364,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                 </button>
 
                 {/* Node ID */}
-                <div text="xs dark-text-tertiary" font="mono">
+                <div text="xs ui-text-tertiary" font="mono">
                   ID: {node().id.length > 20 ? node().id.substring(0, 20) + '...' : node().id}
                 </div>
               </div>

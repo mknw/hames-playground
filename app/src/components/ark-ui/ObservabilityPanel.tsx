@@ -251,18 +251,18 @@ const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void }) => 
   const tokenTotals = createMemo(() => foldTokenTotals(props.events))
 
   return (
-    <div p="3" bg="dark-bg-tertiary" border="b dark-border-primary" flex="~ wrap" gap="4">
+    <div p="3" bg="ui-bg-tertiary" border="b ui-border-primary" flex="~ wrap" gap="4">
       <div flex="~" items="center" gap="2">
-        <span text="xs dark-text-tertiary">Events:</span>
-        <span text="sm dark-text-primary" font="mono">
+        <span text="xs ui-text-tertiary">Events:</span>
+        <span text="sm ui-text-primary" font="mono">
           {metrics().totalEvents}
         </span>
       </div>
 
       <div flex="~" items="center" gap="2">
-        <span text="xs dark-text-tertiary">Success:</span>
+        <span text="xs ui-text-tertiary">Success:</span>
         <span
-          text={`sm ${metrics().successRate >= 0.9 ? 'neon-green' : metrics().successRate >= 0.5 ? 'neon-yellow' : 'red-500'}`}
+          text={`sm ${metrics().successRate >= 0.9 ? 'ui-success' : metrics().successRate >= 0.5 ? 'neon-yellow' : 'red-500'}`}
           font="mono"
         >
           {Math.round(metrics().successRate * 100)}%
@@ -271,7 +271,7 @@ const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void }) => 
 
       <Show when={metrics().errorCount > 0}>
         <div flex="~" items="center" gap="2">
-          <span text="xs dark-text-tertiary">Errors:</span>
+          <span text="xs ui-text-tertiary">Errors:</span>
           <span text="sm red-400" font="mono">
             {metrics().errorCount}
           </span>
@@ -281,8 +281,8 @@ const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void }) => 
       {/* Session-level token/cost accounting (#122) — fold over event.metrics */}
       <Show when={tokenTotals().llmCalls > 0}>
         <div flex="~" items="center" gap="2" title="Input tokens: fresh / cache-read / cache-write">
-          <span text="xs dark-text-tertiary">In:</span>
-          <span text="sm neon-green" font="mono">
+          <span text="xs ui-text-tertiary">In:</span>
+          <span text="sm ui-success" font="mono">
             {fmtTok(tokenTotals().inputUncached)}
           </span>
           <Show when={tokenTotals().cacheRead > 0 || tokenTotals().cacheWrite > 0}>
@@ -295,8 +295,8 @@ const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void }) => 
           </Show>
         </div>
         <div flex="~" items="center" gap="2">
-          <span text="xs dark-text-tertiary">Out:</span>
-          <span text="sm neon-cyan" font="mono">
+          <span text="xs ui-text-tertiary">Out:</span>
+          <span text="sm ui-accent" font="mono">
             {fmtTok(tokenTotals().output)}
           </span>
         </div>
@@ -307,7 +307,7 @@ const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void }) => 
             gap="2"
             title="Share of input tokens served from cache (0.1× rate)"
           >
-            <span text="xs dark-text-tertiary">Cached:</span>
+            <span text="xs ui-text-tertiary">Cached:</span>
             <span text="sm violet-400" font="mono">
               {Math.round(tokenTotals().cachedPct * 100)}%
             </span>
@@ -320,12 +320,12 @@ const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void }) => 
             gap="2"
             title={`Estimated from per-call rates at call time; ${tokenTotals().costKnownCalls}/${tokenTotals().llmCalls} calls priced. Without caching: ${fmtUsd(tokenTotals().noCacheUsd)}`}
           >
-            <span text="xs dark-text-tertiary">Cost:</span>
-            <span text="sm dark-text-primary" font="mono">
+            <span text="xs ui-text-tertiary">Cost:</span>
+            <span text="sm ui-text-primary" font="mono">
               {fmtUsd(tokenTotals().costUsd)}
             </span>
             <Show when={tokenTotals().savedPct > 0.005}>
-              <span text="xs neon-green" font="mono">
+              <span text="xs ui-success" font="mono">
                 −{Math.round(tokenTotals().savedPct * 100)}%
               </span>
             </Show>
@@ -338,7 +338,7 @@ const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void }) => 
             gap="2"
             title="Physical API calls exceeded LLM steps — retries/fallbacks burned extra spend (already included in the totals)"
           >
-            <span text="xs dark-text-tertiary">Retries:</span>
+            <span text="xs ui-text-tertiary">Retries:</span>
             <span text="sm amber-400" font="mono">
               +{tokenTotals().attempts - tokenTotals().llmCalls}
             </span>
@@ -447,8 +447,8 @@ const EventRow = (props: {
       gap="1"
       p="2 3"
       cursor="pointer"
-      bg={props.expanded ? 'dark-bg-tertiary' : 'transparent hover:dark-bg-hover'}
-      border={props.expanded ? '1 neon-cyan/30' : 'none'}
+      bg={props.expanded ? 'ui-bg-tertiary' : 'transparent hover:ui-bg-hover'}
+      border={props.expanded ? '1 ui-accent/30' : 'none'}
       rounded="md"
       transition="all"
       onClick={props.onExpand}
@@ -472,7 +472,7 @@ const EventRow = (props: {
 
       {/* Pattern ID */}
       <Show when={patternId && patternId !== 'harness'}>
-        <div text="xs dark-text-tertiary" font="mono">
+        <div text="xs ui-text-tertiary" font="mono">
           {patternId}
         </div>
       </Show>
@@ -480,7 +480,7 @@ const EventRow = (props: {
       {/* Preview */}
       <Show when={preview}>
         <div
-          text="xs dark-text-secondary"
+          text="xs ui-text-secondary"
           max-w="120px"
           overflow="hidden"
           style={{ 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
@@ -495,11 +495,11 @@ const EventRow = (props: {
     <div
       flex="~"
       min-h="70px"
-      border="b dark-border-secondary/30"
+      border="b ui-border-secondary/30"
       style={{ 'background-color': props.bgTint ?? 'transparent' }}
     >
       {/* Interface Lane (left) */}
-      <div w="1/2" flex="~" justify="center" items="center" border="r dark-border-secondary/30">
+      <div w="1/2" flex="~" justify="center" items="center" border="r ui-border-secondary/30">
         <Show when={lane === 'interface'}>
           <NodeContent />
         </Show>
@@ -522,8 +522,8 @@ const EventRow = (props: {
 const LaneHeaders = () => (
   <div
     flex="~"
-    border="b dark-border-primary"
-    bg="dark-bg-secondary"
+    border="b ui-border-primary"
+    bg="ui-bg-secondary"
     style={{ position: 'sticky', top: '0', 'z-index': '10' }}
   >
     {/* Interface Lane Header */}
@@ -534,18 +534,18 @@ const LaneHeaders = () => (
       items="center"
       justify="center"
       gap="2"
-      border="r dark-border-secondary"
+      border="r ui-border-secondary"
     >
       <div w="2" h="2" rounded="full" bg="cyber-500" />
-      <span text="xs dark-text-primary" font="medium">
+      <span text="xs ui-text-primary" font="medium">
         Interface
       </span>
     </div>
 
     {/* Tools Lane Header */}
     <div w="1/2" p="2" flex="~" items="center" justify="center" gap="2">
-      <div w="2" h="2" rounded="full" bg="neon-cyan" />
-      <span text="xs dark-text-primary" font="medium">
+      <div w="2" h="2" rounded="full" bg="ui-accent" />
+      <span text="xs ui-text-primary" font="medium">
         Tools
       </span>
     </div>
@@ -569,10 +569,10 @@ const EmptyState = () => (
     >
       <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
     </svg>
-    <div text="sm dark-text-secondary" m="t-3">
+    <div text="sm ui-text-secondary" m="t-3">
       No events yet
     </div>
-    <div text="xs dark-text-tertiary" m="t-1">
+    <div text="xs ui-text-tertiary" m="t-1">
       Send a message to see the timeline
     </div>
   </div>
@@ -653,11 +653,11 @@ const ToolPairRow = (props: {
     <div
       flex="~"
       min-h="70px"
-      border="b dark-border-secondary/30"
+      border="b ui-border-secondary/30"
       style={{ 'background-color': props.bgTint ?? 'transparent' }}
     >
       {/* Interface Lane (left) - empty for tool pairs */}
-      <div w="1/2" flex="~" justify="center" items="center" border="r dark-border-secondary/30" />
+      <div w="1/2" flex="~" justify="center" items="center" border="r ui-border-secondary/30" />
 
       {/* Tools Lane (right) */}
       <div w="1/2" flex="~" justify="center" items="center">
@@ -667,8 +667,8 @@ const ToolPairRow = (props: {
           gap="1"
           p="2 3"
           cursor="pointer"
-          bg={props.expanded ? 'dark-bg-tertiary' : 'transparent hover:dark-bg-hover'}
-          border={props.expanded ? '1 neon-cyan/30' : 'none'}
+          bg={props.expanded ? 'ui-bg-tertiary' : 'transparent hover:ui-bg-hover'}
+          border={props.expanded ? '1 ui-accent/30' : 'none'}
           rounded="md"
           transition="all"
           onClick={props.onExpand}
@@ -687,12 +687,12 @@ const ToolPairRow = (props: {
             tool call
           </div>
           <Show when={props.call.patternId && props.call.patternId !== 'harness'}>
-            <div text="xs dark-text-tertiary" font="mono">
+            <div text="xs ui-text-tertiary" font="mono">
               {props.call.patternId}
             </div>
           </Show>
           <div
-            text="xs dark-text-secondary"
+            text="xs ui-text-secondary"
             max-w="120px"
             overflow="hidden"
             style={{ 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
@@ -735,20 +735,20 @@ const ToolPairDetail = (props: {
       }}
     >
       {/* Header */}
-      <div flex="~" items="center" justify="between" p="4" border="b dark-border-primary">
+      <div flex="~" items="center" justify="between" p="4" border="b ui-border-primary">
         <div flex="~ col" gap="1">
           <div flex="~" items="center" gap="2">
             <span text="lg">🔧</span>
-            <span text="sm dark-text-primary" font="medium">
+            <span text="sm ui-text-primary" font="medium">
               tool call
             </span>
             <Show when={props.call.llmCall}>
-              <span text="xs neon-cyan" bg="neon-cyan/10" p="x-1.5 y-0.5" rounded="sm" font="mono">
+              <span text="xs ui-accent" bg="ui-accent/10" p="x-1.5 y-0.5" rounded="sm" font="mono">
                 LLM
               </span>
             </Show>
           </div>
-          <div flex="~" gap="3" text="xs dark-text-tertiary">
+          <div flex="~" gap="3" text="xs ui-text-tertiary">
             <span>{props.call.patternId}</span>
             <span>{new Date(props.call.ts).toLocaleTimeString()}</span>
           </div>
@@ -756,8 +756,8 @@ const ToolPairDetail = (props: {
         <button
           onClick={props.onClose}
           p="2"
-          text="dark-text-secondary"
-          bg="dark-bg-hover hover:dark-bg-tertiary"
+          text="ui-text-secondary"
+          bg="ui-bg-hover hover:ui-bg-tertiary"
           rounded="md"
           cursor="pointer"
         >
@@ -774,22 +774,22 @@ const ToolPairDetail = (props: {
 
         {/* Tool name */}
         <div m="b-3">
-          <div text="xs dark-text-tertiary" m="b-1">
+          <div text="xs ui-text-tertiary" m="b-1">
             Tool
           </div>
-          <div text="sm neon-cyan" font="mono">
+          <div text="sm ui-accent" font="mono">
             {callData().tool}
           </div>
         </div>
 
         {/* Arguments */}
         <div m="b-3">
-          <div text="xs dark-text-tertiary" m="b-1">
+          <div text="xs ui-text-tertiary" m="b-1">
             Arguments
           </div>
           <pre
-            text="xs dark-text-primary"
-            bg="dark-bg-tertiary"
+            text="xs ui-text-primary"
+            bg="ui-bg-tertiary"
             p="3"
             rounded="md"
             overflow="auto"
@@ -802,10 +802,10 @@ const ToolPairDetail = (props: {
         {/* Result */}
         <Show when={resultData()}>
           <div m="b-3">
-            <div text="xs dark-text-tertiary" m="b-1">
+            <div text="xs ui-text-tertiary" m="b-1">
               Status
             </div>
-            <div text={`sm ${resultData()!.success ? 'neon-green' : 'red-400'}`} font="medium">
+            <div text={`sm ${resultData()!.success ? 'ui-success' : 'red-400'}`} font="medium">
               {resultData()!.success ? 'Success' : `Error: ${resultData()!.error}`}
             </div>
           </div>
@@ -818,12 +818,12 @@ const ToolPairDetail = (props: {
                 </div>
               )}
             </Show>
-            <div text="xs dark-text-tertiary" m="b-1">
+            <div text="xs ui-text-tertiary" m="b-1">
               Result
             </div>
             <pre
-              text="xs dark-text-primary"
-              bg="dark-bg-tertiary"
+              text="xs ui-text-primary"
+              bg="ui-bg-tertiary"
               p="3"
               rounded="md"
               overflow="auto"
@@ -845,20 +845,20 @@ const ToolPairDetail = (props: {
 const ToolCallDetail = (props: { data: ToolCallEventData }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Tool
       </div>
-      <div text="sm neon-cyan" font="mono">
+      <div text="sm ui-accent" font="mono">
         {props.data.tool}
       </div>
     </div>
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Arguments
       </div>
       <pre
-        text="xs dark-text-primary"
-        bg="dark-bg-tertiary"
+        text="xs ui-text-primary"
+        bg="ui-bg-tertiary"
         p="3"
         rounded="md"
         overflow="auto"
@@ -876,18 +876,18 @@ const ToolResultDetail = (props: {
 }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Tool
       </div>
-      <div text="sm neon-cyan" font="mono">
+      <div text="sm ui-accent" font="mono">
         {props.data.tool}
       </div>
     </div>
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Status
       </div>
-      <div text={`sm ${props.data.success ? 'neon-green' : 'red-400'}`} font="medium">
+      <div text={`sm ${props.data.success ? 'ui-success' : 'red-400'}`} font="medium">
         {props.data.success ? 'Success' : `Error: ${props.data.error}`}
       </div>
     </div>
@@ -900,12 +900,12 @@ const ToolResultDetail = (props: {
           </div>
         )}
       </Show>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Result
       </div>
       <pre
-        text="xs dark-text-primary"
-        bg="dark-bg-tertiary"
+        text="xs ui-text-primary"
+        bg="ui-bg-tertiary"
         p="3"
         rounded="md"
         overflow="auto"
@@ -920,28 +920,28 @@ const ToolResultDetail = (props: {
 const ActionDetail = (props: { data: ControllerActionEventData }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Tool
       </div>
-      <div text="sm neon-cyan" font="mono">
+      <div text="sm ui-accent" font="mono">
         {props.data.action.tool_name}
       </div>
     </div>
     <Show when={props.data.action.reasoning}>
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           Reasoning
         </div>
-        <div text="sm dark-text-primary">{props.data.action.reasoning}</div>
+        <div text="sm ui-text-primary">{props.data.action.reasoning}</div>
       </div>
     </Show>
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Arguments
       </div>
       <pre
-        text="xs dark-text-primary"
-        bg="dark-bg-tertiary"
+        text="xs ui-text-primary"
+        bg="ui-bg-tertiary"
         p="3"
         rounded="md"
         overflow="auto"
@@ -952,19 +952,19 @@ const ActionDetail = (props: { data: ControllerActionEventData }) => (
     </div>
     <Show when={props.data.action.additional_calls?.length}>
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           Additional calls (same turn)
         </div>
         <div flex="~ col" gap="2">
           <For each={props.data.action.additional_calls ?? []}>
             {(call) => (
               <div>
-                <div text="sm neon-cyan" font="mono">
+                <div text="sm ui-accent" font="mono">
                   {call.tool_name}
                 </div>
                 <pre
-                  text="xs dark-text-primary"
-                  bg="dark-bg-tertiary"
+                  text="xs ui-text-primary"
+                  bg="ui-bg-tertiary"
                   p="2"
                   rounded="md"
                   overflow="auto"
@@ -980,17 +980,17 @@ const ActionDetail = (props: { data: ControllerActionEventData }) => (
     </Show>
     <div flex="~" gap="4">
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           Final
         </div>
-        <div text="sm dark-text-primary">{props.data.action.is_final ? 'Yes' : 'No'}</div>
+        <div text="sm ui-text-primary">{props.data.action.is_final ? 'Yes' : 'No'}</div>
       </div>
       <Show when={props.data.action.status}>
         <div>
-          <div text="xs dark-text-tertiary" m="b-1">
+          <div text="xs ui-text-tertiary" m="b-1">
             Status
           </div>
-          <div text="sm dark-text-primary">{props.data.action.status}</div>
+          <div text="sm ui-text-primary">{props.data.action.status}</div>
         </div>
       </Show>
     </div>
@@ -1000,7 +1000,7 @@ const ActionDetail = (props: { data: ControllerActionEventData }) => (
 const ErrorDetail = (props: { data: ErrorEventData }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Error
       </div>
       <div
@@ -1018,7 +1018,7 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
     <div flex="~ wrap" gap="4">
       <Show when={props.data.severity}>
         <div>
-          <div text="xs dark-text-tertiary" m="b-1">
+          <div text="xs ui-text-tertiary" m="b-1">
             Severity
           </div>
           <div
@@ -1031,20 +1031,20 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
       </Show>
       <Show when={props.data.turn !== undefined}>
         <div>
-          <div text="xs dark-text-tertiary" m="b-1">
+          <div text="xs ui-text-tertiary" m="b-1">
             Turn
           </div>
-          <div text="sm dark-text-primary" font="mono">
+          <div text="sm ui-text-primary" font="mono">
             {props.data.turn}
           </div>
         </div>
       </Show>
       <Show when={props.data.iteration !== undefined}>
         <div>
-          <div text="xs dark-text-tertiary" m="b-1">
+          <div text="xs ui-text-tertiary" m="b-1">
             Iteration
           </div>
-          <div text="sm dark-text-primary" font="mono">
+          <div text="sm ui-text-primary" font="mono">
             {props.data.iteration}
           </div>
         </div>
@@ -1052,10 +1052,10 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
     </div>
     <Show when={props.data.hint}>
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           Hint
         </div>
-        <div text="sm dark-text-secondary" style={{ 'white-space': 'pre-wrap' }}>
+        <div text="sm ui-text-secondary" style={{ 'white-space': 'pre-wrap' }}>
           {props.data.hint}
         </div>
       </div>
@@ -1066,20 +1066,20 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
 const MessageDetail = (props: { data: { content: string }; role: 'user' | 'assistant' }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Role
       </div>
-      <div text="sm dark-text-primary" font="medium">
+      <div text="sm ui-text-primary" font="medium">
         {props.role}
       </div>
     </div>
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Content
       </div>
       <div
-        text="sm dark-text-primary"
-        bg="dark-bg-tertiary"
+        text="sm ui-text-primary"
+        bg="ui-bg-tertiary"
         p="3"
         rounded="md"
         style={{ 'white-space': 'pre-wrap' }}
@@ -1104,7 +1104,7 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
   <div flex="~ col" gap="3">
     <div flex="~" gap="6">
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           Source
         </div>
         <div text="sm orange-400" font="mono">
@@ -1112,46 +1112,46 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
         </div>
       </div>
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           Scanned
         </div>
-        <div text="sm dark-text-primary" font="mono">
+        <div text="sm ui-text-primary" font="mono">
           {props.data.scanned.toLocaleString()} chars
         </div>
       </div>
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           Spotlighted
         </div>
-        <div text="sm dark-text-primary">{props.data.spotlighted ? 'yes' : 'no'}</div>
+        <div text="sm ui-text-primary">{props.data.spotlighted ? 'yes' : 'no'}</div>
       </div>
     </div>
 
     <Show when={props.data.screenReason}>
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           LLM screen
         </div>
-        <div text="sm dark-text-primary">{props.data.screenReason}</div>
+        <div text="sm ui-text-primary">{props.data.screenReason}</div>
       </div>
     </Show>
 
     <div>
-      <div text="xs dark-text-tertiary" m="b-2">
+      <div text="xs ui-text-tertiary" m="b-2">
         {props.data.findings.length} finding(s) — original text shown verbatim, never sent to a
         model
       </div>
       <div flex="~ col" gap="2">
         <For each={props.data.findings}>
           {(f) => (
-            <div bg="dark-bg-tertiary" p="3" rounded="md" flex="~ col" gap="1">
+            <div bg="ui-bg-tertiary" p="3" rounded="md" flex="~ col" gap="1">
               <div flex="~" items="center" gap="2">
                 <span text="xs orange-400" font="mono">
                   {f.rule}
                 </span>
-                <span text="xs dark-text-tertiary">{f.layer}</span>
+                <span text="xs ui-text-tertiary">{f.layer}</span>
               </div>
-              <div text="xs dark-text-secondary">{f.description}</div>
+              <div text="xs ui-text-secondary">{f.description}</div>
               <div
                 text="xs red-300"
                 font="mono"
@@ -1159,7 +1159,7 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
               >
                 {f.match}
               </div>
-              <div text="xs neon-green" font="mono">
+              <div text="xs ui-success" font="mono">
                 → {f.replacement || '(removed)'}
               </div>
             </div>
@@ -1172,12 +1172,12 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
 
 const GenericDetail = (props: { data: unknown }) => (
   <div>
-    <div text="xs dark-text-tertiary" m="b-2">
+    <div text="xs ui-text-tertiary" m="b-2">
       Data
     </div>
     <pre
-      text="xs dark-text-primary"
-      bg="dark-bg-tertiary"
+      text="xs ui-text-primary"
+      bg="ui-bg-tertiary"
       p="3"
       rounded="md"
       overflow="auto"
@@ -1194,8 +1194,8 @@ const GenericDetail = (props: { data: unknown }) => (
 
 const CodeBlock = (props: { content: string | undefined; placeholder?: string }) => (
   <pre
-    text="xs dark-text-primary"
-    bg="dark-bg-tertiary"
+    text="xs ui-text-primary"
+    bg="ui-bg-tertiary"
     p="3"
     rounded="md"
     overflow="auto"
@@ -1309,7 +1309,7 @@ const PromptMessage = (props: { msg: ParsedMessage }) => {
   const color = () => roleColors[props.msg.role] ?? '#94a3b8'
 
   return (
-    <div border="1 dark-border-secondary/40" rounded="md" overflow="hidden">
+    <div border="1 ui-border-secondary/40" rounded="md" overflow="hidden">
       {/* Role badge */}
       <div
         p="x-3 y-1.5"
@@ -1317,7 +1317,7 @@ const PromptMessage = (props: { msg: ParsedMessage }) => {
         items="center"
         gap="2"
         style={{ 'border-bottom': '1px solid rgba(148,163,184,0.15)' }}
-        bg="dark-bg-tertiary"
+        bg="ui-bg-tertiary"
       >
         <div w="2" h="2" rounded="full" style={{ 'background-color': color() }} />
         <span text="xs" font="mono medium" style={{ color: color() }}>
@@ -1326,7 +1326,7 @@ const PromptMessage = (props: { msg: ParsedMessage }) => {
       </div>
       {/* Content */}
       <pre
-        text="xs dark-text-primary"
+        text="xs ui-text-primary"
         p="3"
         m="0"
         overflow="auto"
@@ -1355,15 +1355,15 @@ const ParsedPromptView = (props: { rawInput: string }) => {
               flex="~ wrap"
               gap="4"
               items="center"
-              bg="dark-bg-tertiary"
+              bg="ui-bg-tertiary"
               p="2 3"
               rounded="md"
               text="xs"
             >
               <Show when={p().model}>
                 <div flex="~ col" gap="0.5">
-                  <span text="dark-text-tertiary">Model</span>
-                  <span text="dark-text-primary" font="mono">
+                  <span text="ui-text-tertiary">Model</span>
+                  <span text="ui-text-primary" font="mono">
                     {p().model}
                   </span>
                 </div>
@@ -1375,12 +1375,12 @@ const ParsedPromptView = (props: { rawInput: string }) => {
               >
                 {([key, val]) => (
                   <div flex="~ col" gap="0.5" max-w="full" min-w="0">
-                    <span text="dark-text-tertiary">{key}</span>
+                    <span text="ui-text-tertiary">{key}</span>
                     {/* Wrapped and capped: `tools` and `metadata` are objects
                         that used to render as one unbroken line and push the
                         model name off screen (SA-H11). */}
                     <span
-                      text="dark-text-primary"
+                      text="ui-text-primary"
                       font="mono"
                       max-w="[28rem]"
                       title={
@@ -1398,7 +1398,7 @@ const ParsedPromptView = (props: { rawInput: string }) => {
 
           {/* Messages */}
           <div flex="~ col" gap="2">
-            <div text="xs dark-text-tertiary">
+            <div text="xs ui-text-tertiary">
               {p().messages.length} message{p().messages.length !== 1 ? 's' : ''}
             </div>
             <For each={p().messages}>{(msg) => <PromptMessage msg={msg} />}</For>
@@ -1419,9 +1419,9 @@ const TabButton = (props: { active: boolean; label: string; onClick: () => void 
   <button
     onClick={props.onClick}
     p="x-3 y-1.5"
-    text={`xs ${props.active ? 'neon-cyan' : 'dark-text-secondary hover:dark-text-primary'}`}
-    bg={props.active ? 'neon-cyan/10' : 'transparent hover:dark-bg-hover'}
-    border={props.active ? '1 neon-cyan/30' : '1 transparent'}
+    text={`xs ${props.active ? 'ui-accent' : 'ui-text-secondary hover:ui-text-primary'}`}
+    bg={props.active ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
+    border={props.active ? '1 ui-accent/30' : '1 transparent'}
     rounded="md"
     cursor="pointer"
     transition="all"
@@ -1432,40 +1432,40 @@ const TabButton = (props: { active: boolean; label: string; onClick: () => void 
 )
 
 const UsageStats = (props: { llmCall: LLMCallData }) => (
-  <div bg="dark-bg-tertiary" p="3" rounded="md" m="b-3">
+  <div bg="ui-bg-tertiary" p="3" rounded="md" m="b-3">
     <div flex="~ wrap" gap="4" items="center">
       {/* Function & Provider */}
       <div flex="~ col" gap="0.5">
-        <span text="xs dark-text-tertiary">Function</span>
-        <span text="sm neon-cyan" font="mono">
+        <span text="xs ui-text-tertiary">Function</span>
+        <span text="sm ui-accent" font="mono">
           {props.llmCall.functionName}
         </span>
       </div>
       <Show when={props.llmCall.provider}>
         <div flex="~ col" gap="0.5">
-          <span text="xs dark-text-tertiary">Provider</span>
-          <span text="sm dark-text-primary" font="mono">
+          <span text="xs ui-text-tertiary">Provider</span>
+          <span text="sm ui-text-primary" font="mono">
             {props.llmCall.provider}
           </span>
         </div>
       </Show>
       <Show when={props.llmCall.clientName}>
         <div flex="~ col" gap="0.5">
-          <span text="xs dark-text-tertiary">Client</span>
-          <span text="sm dark-text-primary" font="mono">
+          <span text="xs ui-text-tertiary">Client</span>
+          <span text="sm ui-text-primary" font="mono">
             {props.llmCall.clientName}
           </span>
         </div>
       </Show>
 
       {/* Separator */}
-      <div w="px" h="8" bg="dark-border-secondary" />
+      <div w="px" h="8" bg="ui-border-secondary" />
 
       {/* Token stats — selected exchange (full breakdown, #122) */}
       <Show when={props.llmCall.usage}>
         <div flex="~ col" gap="0.5" title="Input tokens billed at the full base rate">
-          <span text="xs dark-text-tertiary">Input (fresh)</span>
-          <span text="sm neon-green" font="mono">
+          <span text="xs ui-text-tertiary">Input (fresh)</span>
+          <span text="sm ui-success" font="mono">
             {props.llmCall.usage!.inputTokens.toLocaleString()}
           </span>
         </div>
@@ -1475,7 +1475,7 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
             gap="0.5"
             title="Input tokens read from cache — billed at 0.1× the base rate"
           >
-            <span text="xs dark-text-tertiary">Cache read</span>
+            <span text="xs ui-text-tertiary">Cache read</span>
             <span text="sm violet-400" font="mono">
               {props.llmCall.usage!.cachedInputTokens.toLocaleString()}
             </span>
@@ -1487,15 +1487,15 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
             gap="0.5"
             title="Input tokens written to cache — billed at 1.25× the base rate"
           >
-            <span text="xs dark-text-tertiary">Cache write</span>
+            <span text="xs ui-text-tertiary">Cache write</span>
             <span text="sm amber-400" font="mono">
               {props.llmCall.usage!.cacheCreationInputTokens!.toLocaleString()}
             </span>
           </div>
         </Show>
         <div flex="~ col" gap="0.5">
-          <span text="xs dark-text-tertiary">Output</span>
-          <span text="sm neon-cyan" font="mono">
+          <span text="xs ui-text-tertiary">Output</span>
+          <span text="sm ui-accent" font="mono">
             {props.llmCall.usage!.outputTokens.toLocaleString()}
           </span>
         </div>
@@ -1504,7 +1504,7 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
           gap="0.5"
           title="All tokens processed: fresh + cache read + cache write + output"
         >
-          <span text="xs dark-text-tertiary">Total</span>
+          <span text="xs ui-text-tertiary">Total</span>
           <span text="sm amber-400" font="mono">
             {props.llmCall.usage!.totalTokens.toLocaleString()}
           </span>
@@ -1519,7 +1519,7 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
             gap="0.5"
             title="This step needed multiple API calls (truncation retry / fallback chain); tokens and cost below include all of them"
           >
-            <span text="xs dark-text-tertiary">Attempts</span>
+            <span text="xs ui-text-tertiary">Attempts</span>
             <span text="sm red-400" font="mono">
               {props.llmCall.metrics!.attempts}
             </span>
@@ -1531,8 +1531,8 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
             gap="0.5"
             title={`At $${props.llmCall.metrics!.rates?.inPerMTok}/$${props.llmCall.metrics!.rates?.outPerMTok} per MTok; uncached this call would be ${fmtUsd(props.llmCall.metrics!.noCacheUsd ?? props.llmCall.metrics!.costUsd!)}`}
           >
-            <span text="xs dark-text-tertiary">Cost (step)</span>
-            <span text="sm dark-text-primary" font="mono">
+            <span text="xs ui-text-tertiary">Cost (step)</span>
+            <span text="sm ui-text-primary" font="mono">
               {fmtUsd(props.llmCall.metrics!.costUsd!)}
             </span>
           </div>
@@ -1542,8 +1542,8 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
       {/* Duration */}
       <Show when={props.llmCall.durationMs}>
         <div flex="~ col" gap="0.5">
-          <span text="xs dark-text-tertiary">Duration</span>
-          <span text="sm dark-text-primary" font="mono">
+          <span text="xs ui-text-tertiary">Duration</span>
+          <span text="sm ui-text-primary" font="mono">
             {props.llmCall.durationMs}ms
           </span>
         </div>
@@ -1561,7 +1561,7 @@ const PromptAccordionItem = (props: {
 }) => (
   <Accordion.Item
     value={props.value}
-    border="1 dark-border-secondary/40"
+    border="1 ui-border-secondary/40"
     rounded="md"
     overflow="hidden"
   >
@@ -1572,27 +1572,27 @@ const PromptAccordionItem = (props: {
       items="center"
       justify="between"
       gap="3"
-      bg="dark-bg-tertiary hover:dark-bg-hover"
+      bg="ui-bg-tertiary hover:ui-bg-hover"
       cursor="pointer"
       text="left"
       style={{ border: 'none' }}
     >
       <div flex="~" items="center" gap="2">
-        <span text="xs neon-cyan" font="mono medium">
+        <span text="xs ui-accent" font="mono medium">
           {props.label}
         </span>
         <Show when={props.hint}>
-          <span text="xs dark-text-tertiary">{props.hint}</span>
+          <span text="xs ui-text-tertiary">{props.hint}</span>
         </Show>
       </div>
       <Accordion.ItemIndicator
-        text="xs dark-text-secondary"
+        text="xs ui-text-secondary"
         style={{ transition: 'transform 150ms', 'transform-origin': 'center' }}
       >
         ▼
       </Accordion.ItemIndicator>
     </Accordion.ItemTrigger>
-    <Accordion.ItemContent p="3" bg="dark-bg-secondary">
+    <Accordion.ItemContent p="3" bg="ui-bg-secondary">
       {props.children}
     </Accordion.ItemContent>
   </Accordion.Item>
@@ -1620,7 +1620,7 @@ const PromptAccordion = (props: { llmCall: LLMCallData }) => {
         <Show
           when={hasTemplate()}
           fallback={
-            <div text="xs dark-text-tertiary">
+            <div text="xs ui-text-tertiary">
               BAML prompt template not captured. Run <code>pnpm baml-generate</code> or verify the
               function name <code>{props.llmCall.functionName}</code> exists in{' '}
               <code>baml_src/</code>.
@@ -1638,7 +1638,7 @@ const PromptAccordion = (props: { llmCall: LLMCallData }) => {
       >
         <Show
           when={variableKeys().length > 0}
-          fallback={<div text="xs dark-text-tertiary">No variables passed to this function.</div>}
+          fallback={<div text="xs ui-text-tertiary">No variables passed to this function.</div>}
         >
           <CodeBlock content={JSON.stringify(props.llmCall.variables, null, 2)} />
         </Show>
@@ -1652,7 +1652,7 @@ const PromptAccordion = (props: { llmCall: LLMCallData }) => {
         <Show
           when={hasMessages()}
           fallback={
-            <div text="xs dark-text-tertiary">
+            <div text="xs ui-text-tertiary">
               HTTP request body not captured by the BAML collector.
             </div>
           }
@@ -1688,7 +1688,7 @@ const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
   const [activeTab, setActiveTab] = createSignal<LLMTab>(unparsed() ? 'output' : 'prompt')
 
   return (
-    <div border="b dark-border-primary" m="b-4" p="b-4">
+    <div border="b ui-border-primary" m="b-4" p="b-4">
       {/* Usage stats bar */}
       <UsageStats llmCall={props.llmCall} />
 
@@ -1722,7 +1722,7 @@ const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
             <div flex="~ col" gap="3">
               <Show when={parsedText() !== undefined}>
                 <div>
-                  <div text="xs dark-text-tertiary" m="b-1">
+                  <div text="xs ui-text-tertiary" m="b-1">
                     Parsed output
                   </div>
                   <CodeBlock content={parsedText()} />
@@ -1730,7 +1730,7 @@ const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
               </Show>
               <Show when={rawOutput() !== undefined}>
                 <div>
-                  <div text={`xs ${unparsed() ? 'amber-400' : 'dark-text-tertiary'}`} m="b-1">
+                  <div text={`xs ${unparsed() ? 'amber-400' : 'ui-text-tertiary'}`} m="b-1">
                     {unparsed() ? 'Raw response — BAML could not parse this' : 'Raw response'}
                   </div>
                   <CodeBlock content={rawOutput()} />
@@ -1788,20 +1788,20 @@ const EventDetailPanel = (props: {
       }}
     >
       {/* Header */}
-      <div flex="~" items="center" justify="between" p="4" border="b dark-border-primary">
+      <div flex="~" items="center" justify="between" p="4" border="b ui-border-primary">
         <div flex="~ col" gap="1">
           <div flex="~" items="center" gap="2">
             <span text="lg">{eventIcons[type]}</span>
-            <span text="sm dark-text-primary" font="medium">
+            <span text="sm ui-text-primary" font="medium">
               {type.replace(/_/g, ' ')}
             </span>
             <Show when={llmCall}>
-              <span text="xs neon-cyan" bg="neon-cyan/10" p="x-1.5 y-0.5" rounded="sm" font="mono">
+              <span text="xs ui-accent" bg="ui-accent/10" p="x-1.5 y-0.5" rounded="sm" font="mono">
                 LLM
               </span>
             </Show>
           </div>
-          <div flex="~" gap="3" text="xs dark-text-tertiary">
+          <div flex="~" gap="3" text="xs ui-text-tertiary">
             <span>{patternId}</span>
             <span>{new Date(ts).toLocaleTimeString()}</span>
           </div>
@@ -1809,8 +1809,8 @@ const EventDetailPanel = (props: {
         <button
           onClick={props.onClose}
           p="2"
-          text="dark-text-secondary"
-          bg="dark-bg-hover hover:dark-bg-tertiary"
+          text="ui-text-secondary"
+          bg="ui-bg-hover hover:ui-bg-tertiary"
           rounded="md"
           cursor="pointer"
         >
@@ -1982,7 +1982,7 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
   const hasEvents = () => timelineItems().length > 0
 
   return (
-    <div flex="~ col" h="full" bg="dark-bg-primary" overflow="hidden" position="relative">
+    <div flex="~ col" h="full" bg="ui-bg-primary" overflow="hidden" position="relative">
       {/* Summary Bar */}
       <SummaryBar events={props.events} onClear={props.onClear} />
 
@@ -2032,8 +2032,8 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
             onClick={handleSave}
             style={{ position: 'absolute', bottom: '1rem', right: '1rem', 'z-index': '20' }}
             p="2.5"
-            bg="dark-bg-tertiary hover:dark-bg-hover"
-            border="1 dark-border-primary hover:neon-cyan/40"
+            bg="ui-bg-tertiary hover:ui-bg-hover"
+            border="1 ui-border-primary hover:ui-accent/40"
             rounded="lg"
             cursor="pointer"
             transition="all"
@@ -2057,11 +2057,11 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
           </Tooltip.Trigger>
           <Tooltip.Positioner>
             <Tooltip.Content
-              bg="dark-bg-tertiary"
-              border="1 dark-border-primary"
+              bg="ui-bg-tertiary"
+              border="1 ui-border-primary"
               rounded="md"
               p="x-2 y-1"
-              text="xs dark-text-primary"
+              text="xs ui-text-primary"
               shadow="md"
             >
               Save session

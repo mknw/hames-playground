@@ -550,11 +550,37 @@ describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
   it('does NOT stamp the marker for syncWorkspace without an id (a no-op at runtime)', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const wrapped = withSandbox({ backend, syncWorkspace: true })(inner)
     expect(
       (wrapped.config as { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace,
     ).toBeUndefined()
     expect(wrapped.config).toEqual(inner.config)
+    warn.mockRestore()
+  })
+
+  // …but it must not be a SILENT no-op. Asking for a durable workspace and
+  // getting none is how the flavoured-sandbox agent's multi-turn failure
+  // presented (#243 follow-up): the route ran in a container where /work/in
+  // never existed and the actor burned its retries on ENOENT.
+  it('warns that syncWorkspace was ignored when no id was given', () => {
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    withSandbox({ backend, syncWorkspace: true })(inner)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('syncWorkspace')
+    expect(warn.mock.calls[0][0]).toContain('requires an `id`')
+    warn.mockRestore()
+  })
+
+  it('does not warn when syncWorkspace comes with an id', () => {
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner)
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 })
 

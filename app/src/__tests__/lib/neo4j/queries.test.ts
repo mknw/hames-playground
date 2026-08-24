@@ -14,6 +14,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import neo4j from 'neo4j-driver'
+// The serializer SolidStart runs over a `'use server'` return value.
+import { serializeAsync, deserialize } from 'seroval'
 
 const run = vi.fn()
 const close = vi.fn().mockResolvedValue(undefined)
@@ -383,6 +386,79 @@ describe('runManualCypher', () => {
     const res = await runManualCypher('MATCH (n RETURN n')
     expect(res).toEqual({ success: false, error: 'SyntaxError: bad cypher' })
     expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  // #237 follow-up: `MATCH (n) RETURN n LIMIT 5` used to fail in the browser
+  // with `Malformed server function stream header` while a query returning
+  // scalars worked. The envelope carried driver class instances (`Node`,
+  // `Integer`), which seroval — the serializer SolidStart runs over a
+  // `'use server'` result — refuses *after* the headers are on the wire, so the
+  // client sees a truncated stream instead of an error. Both halves of the
+  // envelope are projected now (`lib/neo4j/plain.ts`).
+  it('returns an envelope the RPC serializer accepts for a node-returning query', async () => {
+    const alice = new neo4j.types.Node(
+      neo4j.int(1),
+      ['Person'],
+      { name: 'Alice', age: neo4j.int(30) },
+      '4:db:1',
+    )
+    const bob = new neo4j.types.Node(neo4j.int(2), ['Person'], { name: 'Bob' }, '4:db:2')
+    const knows = new neo4j.types.Relationship(
+      neo4j.int(9),
+      neo4j.int(1),
+      neo4j.int(2),
+      'KNOWS',
+      {},
+      '5:db:9',
+      '4:db:1',
+      '4:db:2',
+    )
+    run.mockResolvedValue(results([record({ n: alice, m: bob, r: knows })]))
+
+    const res = await runManualCypher('MATCH (n)-[r]->(m) RETURN n, r, m')
+
+    expect(res.success).toBe(true)
+    // The raw rows, and the Cytoscape elements built from them, both survive.
+    expect(deserialize(await serializeAsync(res))).toEqual(res)
+    expect(res.raw).toEqual([
+      {
+        n: {
+          elementId: '4:db:1',
+          identity: 1,
+          labels: ['Person'],
+          properties: { name: 'Alice', age: 30 },
+        },
+        m: { elementId: '4:db:2', identity: 2, labels: ['Person'], properties: { name: 'Bob' } },
+        r: {
+          elementId: '5:db:9',
+          identity: 9,
+          type: 'KNOWS',
+          start: 1,
+          end: 2,
+          startNodeElementId: '4:db:1',
+          endNodeElementId: '4:db:2',
+          properties: {},
+        },
+      },
+    ])
+    // `data.neo4jId` used to be an `Integer` instance — the same defect one
+    // layer down, inside `graphUpdate`.
+    expect(res.graphUpdate).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ data: expect.objectContaining({ id: '4:db:1', neo4jId: 1 }) }),
+      ]),
+    )
+  })
+
+  it('projects an int node property in the properties panel too', async () => {
+    run.mockResolvedValue(
+      results([record({ props: { hits: neo4j.int(12) }, labels: ['Dataset'] })]),
+    )
+
+    const res = await getNodeProperties('4:db:1')
+
+    expect(res.properties).toEqual({ hits: 12 })
+    expect(deserialize(await serializeAsync(res))).toEqual(res)
   })
 })
 

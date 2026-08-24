@@ -1,16 +1,21 @@
 ---
 name: kg-lane-dispatch
-description: Dispatch contract for handing work to a lane, worker, or subagent in this repo — the pointer line every dispatch carries, why findings land in a GitHub issue or PR rather than in a reply, and what the coordinator relays back. Use before dispatching any Orca worker or Agent-tool subagent, and when writing a task spec for one.
+description: This repo's hand-off contract — the pointer line every dispatch carries, findings landing as a GitHub issue or PR comment, and the URL + verdict + gates report-back. Use when writing a task spec or handing work to a lane, worker, or subagent in THIS repo. How to split work, pick an agent type or model, or run a coordinator loop is `dispatching-work`; Orca worker mechanics are `orchestration`.
 ---
 
 # kg-lane-dispatch — how work leaves the coordinator
 
 Three rules. They hold for every dispatch, whatever the task.
 
-The standing acceptance criteria each piece of work is held to live in
-[`docs/agents/AGENT-BRIEF.md`](../../docs/agents/AGENT-BRIEF.md); the issue-tracker
-workflow lives in [`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md).
-This skill covers only what those two do not: the shape of the hand-off itself.
+This skill is only the repo contract — it routes everything generic elsewhere:
+coordination doctrine (how to split the work, which executor and model take a
+piece, supervision, the review gate before merge) is the `dispatching-work`
+skill; Orca's command surface and message mechanics are the `orchestration`
+skill. Within this repo, the standing acceptance criteria each piece of work is
+held to live in [`docs/agents/AGENT-BRIEF.md`](../../docs/agents/AGENT-BRIEF.md);
+the issue-tracker workflow lives in
+[`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md).
+This skill covers only what none of those do: the shape of the hand-off itself.
 
 ## 1. Point, don't restate
 

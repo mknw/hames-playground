@@ -67,6 +67,22 @@ The OWNER reviews this personally: post your findings as the comment, and report
 only the URL, a one-line verdict, and gate results.
 ```
 
+### A lane speaks exactly three times' worth of message types
+
+`ask`, `escalation`, `worker_done` — and `worker_done` exactly once, at the end.
+
+**Never `--type heartbeat`.** It is a real Orca message type with a `--phase` field,
+so a lane narrating its progress reaches for it naturally, and each one wakes the
+coordinator for a check-and-ack round-trip that carries no decision. Spell the ban out:
+"no periodic status messages" reads to a lane as a style note about prose, and it
+keeps sending typed pings.
+
+Progress is already visible without them — `worker-show` and `terminal read` inspect a
+lane on demand, and the coordinator's `check --wait --types worker_done,escalation,question`
+blocks until something actionable arrives. A lane that wants to report mid-flight
+either has a question (`ask`) or is blocked (`escalation`); if it is neither, the work
+is not finished and there is nothing to say yet.
+
 ## Worked dispatch spec
 
 ```
@@ -78,8 +94,21 @@ Read docs/agents/sensitive-domain-brief.md and apply it if your scope falls with
 
 Deliverable: post your findings as a comment on <PR #N | a new issue titled "...">.
 The OWNER reviews this personally: report back only the URL, a one-line verdict, and
-gate results. Do not merge. Communicate via ask / escalation / worker_done only.
+gate results. Do not merge. Send only ask / escalation / worker_done messages — never
+--type heartbeat, and worker_done exactly once, at the end.
 ```
 
-`Do not merge` and the no-periodic-pings clause stay explicit in every spec — both are
+`Do not merge` and the message-type line stay explicit in every spec — both are
 guardrails a lane otherwise talks itself past.
+
+## Writing the spec safely
+
+Pass a long spec through a **file**, not an inline shell string:
+
+```bash
+orca orchestration task-create --task-title "..." --spec "$(cat spec.txt)"
+```
+
+A spec quoting code will contain backticks, and inside double quotes the shell executes
+them as command substitution — silently deleting those terms from the spec that reaches
+the lane. Writing the spec to a file first and interpolating it once keeps it intact.

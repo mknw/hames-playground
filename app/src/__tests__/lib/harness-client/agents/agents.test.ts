@@ -294,6 +294,28 @@ describe('Agent Harnesses', () => {
         harnessUsesSyncWorkspace(patterns as Parameters<typeof harnessUsesSyncWorkspace>[0]),
       ).toBe(true)
     })
+
+    // #243 follow-up. `harnessUsesSyncWorkspace` above is an ANY check, so it
+    // stayed true while `basic` — the one route with no attachment id, hence no
+    // durable workspace at all — silently ran in a container without /work/in.
+    // A turn the router sent there could not see a file ingested on another
+    // flavour's turn (.harness-logs/243.json). The invariant is per-route:
+    // EVERY flavour shares the session workspace.
+    it('gives EVERY flavour route the durable session workspace, not just some', async () => {
+      const { flavouredSandboxAgent } =
+        await import('../../../../lib/harness-client/agents/flavoured-sandbox.server')
+      const patterns = await flavouredSandboxAgent.createPatterns('test-session')
+
+      const routesPattern = patterns.find((p) => p.name.startsWith('routes('))!
+      expect(routesPattern.children).toBeDefined()
+      expect(routesPattern.children!.length).toBe(4)
+      for (const route of routesPattern.children!) {
+        expect(route.name).toContain('withSandbox')
+        // The marker `withSandbox` stamps only when `id` + `syncWorkspace` are
+        // BOTH set — i.e. only when hydrate/promote will actually run.
+        expect((route.config as { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace).toBe(true)
+      }
+    })
   })
 
   describe('multiSourceResearchAgent', () => {

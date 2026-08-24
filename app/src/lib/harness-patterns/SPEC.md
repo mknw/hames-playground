@@ -417,6 +417,13 @@ LLM call + tool call) into ONE controller call. Three modes:
   an un-advertised batch can still arrive; it is tolerated and executed
   serially, never punished.
 
+Each advertised mode also DEMONSTRATES one batched action in its own branch of
+`LoopMultiCalls`/`ActorMultiCalls` — parallel shows independent lookups,
+sequential the write-then-run chain — in the same JSON envelope the turn log and
+`ctx.output_format` ask for. #248 was a model that wanted the affordance and,
+finding it described but never shown, invented a YAML `additional_calls:` list
+for it. `'off'` renders no branch, so it shows nothing either.
+
 The whole batch records as ONE `LoopTurn` (so `maxTurns` counts turns, not
 calls): the assistant history replays `additional_calls` exactly as emitted,
 and `tool_result.result` is an index-keyed map — `{"1": {tool, result}, "2":

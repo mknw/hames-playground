@@ -596,3 +596,167 @@ describe('the critic feedback channel', () => {
     expect(loop).toContain('Use \\"Return\\" when you have enough information.')
   })
 })
+
+/**
+ * The multi-call batch — the fourth instance of "disagreeing demonstrations are
+ * defects", and the one where nothing disagreed because nothing demonstrated.
+ *
+ * `additional_calls` was described in prose by `LoopMultiCalls`/`ActorMultiCalls`
+ * and in `ctx.output_format`, and shown nowhere. The capture behind #248
+ * (`.harness-logs/baml-validation.json`, `sandbox-session-loop` attempt 3 — a
+ * `sequential` sandbox agent) is a model reaching for exactly the batch the
+ * section advertises, write-then-run, and INVENTING a YAML `additional_calls:`
+ * bullet list to say it in — dragging the whole envelope brace-less along with
+ * it. 372 output tokens against a 32768 cap, so neither the empty-response nor
+ * the truncation retry matched, and the throw ended the loop with three attempts
+ * still in budget.
+ *
+ * Each mode branch now ends in ONE demonstrated action. These assertions are the
+ * guard: the demonstration must PARSE as a complete ControllerAction (including
+ * `additional_calls` entries whose `tool_args` parse as JSON in their own right),
+ * it must match its mode's semantics, and it must be absent entirely when the
+ * mode is null — the branch is what gates it, so an agent with `off` sees nothing.
+ */
+describe('the multi-call batch demonstration', () => {
+  /** The MULTIPLE CALLS section, from its heading to the end of its block. The
+   *  loop renders it into the agent-static tier-1 user message, the actor into
+   *  the static system head; either way it is one block, which keeps these
+   *  assertions clear of `ctx.output_format`'s own `tool_args: string` line. */
+  function multiCallSection(body: Body): string | null {
+    const HEAD = 'MULTIPLE CALLS PER TURN'
+    const block = textBlocks(body).find((t) => t.includes(HEAD))
+    return block ? block.slice(block.indexOf(HEAD)) : null
+  }
+
+  async function loopSection(mode: string | null): Promise<string | null> {
+    const req = await b.request.LoopController('x', 'x', TOOLS, [] as never, null, null, null, mode)
+    return multiCallSection(req.body.json() as Body)
+  }
+
+  async function actorSection(mode: string | null): Promise<string | null> {
+    const req = await b.request.ActorController(
+      'x',
+      'x',
+      TOOLS,
+      [] as never,
+      null,
+      null,
+      1,
+      3,
+      mode,
+    )
+    return multiCallSection(req.body.json() as Body)
+  }
+
+  /** Parses the demonstrated action out of a rendered section — as JSON, never
+   *  by substring match, so a shape the model could not copy fails here first. */
+  function demonstratedAction(section: string | null): {
+    reasoning: string
+    tool_name: string
+    tool_args: string
+    additional_calls: Array<{ tool_name: string; tool_args: string }>
+    status?: string
+    is_final?: boolean
+  } {
+    expect(section, 'the rendered prompt has no MULTIPLE CALLS section').toBeTruthy()
+    const line = (section as string)
+      .split('\n')
+      .map((l) => l.trim())
+      .find((l) => l.startsWith('{'))
+    expect(line, 'no JSON-object demonstration found in the MULTIPLE CALLS section').toBeTruthy()
+    return JSON.parse(line as string)
+  }
+
+  const RENDER = {
+    LoopController: loopSection,
+    ActorController: actorSection,
+  } as const
+
+  for (const [fn, render] of Object.entries(RENDER)) {
+    for (const mode of ['parallel', 'sequential'] as const) {
+      it(`${fn}/${mode}: the demonstration parses as a complete batched action`, async () => {
+        const action = demonstratedAction(await render(mode))
+
+        // The envelope every other demonstration in these prompts renders.
+        expect(Object.keys(action).sort()).toEqual(
+          ['reasoning', 'tool_name', 'tool_args', 'additional_calls', 'status', 'is_final'].sort(),
+        )
+        expect(typeof action.reasoning).toBe('string')
+        expect(typeof action.tool_name).toBe('string')
+        expect(typeof action.status).toBe('string')
+        // A batch is never the terminal action: the loop breaks before pushing a
+        // final one, and the actor's own spine says a script merely written is
+        // not done.
+        expect(action.is_final).toBe(false)
+
+        // `tool_args` is a STRING whose CONTENT is JSON — the encoding the turn
+        // log and the few-shots use. Bare, it would demonstrate a second,
+        // incompatible encoding of one field in one prompt (#144).
+        expect(typeof action.tool_args).toBe('string')
+        expect(JSON.parse(action.tool_args)).toBeTypeOf('object')
+
+        // Every additional call carries tool_name/tool_args and nothing else,
+        // with tool_args under the same contract as the top-level one.
+        expect(Array.isArray(action.additional_calls)).toBe(true)
+        expect(action.additional_calls.length).toBeGreaterThan(0)
+        for (const call of action.additional_calls) {
+          expect(Object.keys(call).sort()).toEqual(['tool_args', 'tool_name'])
+          expect(typeof call.tool_name).toBe('string')
+          expect(typeof call.tool_args).toBe('string')
+          expect(JSON.parse(call.tool_args)).toBeTypeOf('object')
+        }
+        // Consistent with the cap the same section states two lines above it.
+        expect(1 + action.additional_calls.length).toBeLessThanOrEqual(4)
+      })
+
+      it(`${fn}/${mode}: the section shows no brace-less field lines`, async () => {
+        const section = (await render(mode)) as string
+        expect(section).toBeTruthy()
+        // The captured shape, in every part it was written in: labelled action
+        // fields, plus the invented YAML list and its bullets.
+        expect(section).not.toMatch(/^\s*reasoning: /m)
+        expect(section).not.toMatch(/^\s*tool_name: /m)
+        expect(section).not.toMatch(/^\s*tool_args: /m)
+        expect(section).not.toMatch(/^\s*additional_calls:/m)
+        expect(section).not.toMatch(/^\s*-\s+tool_name: /m)
+        expect(section).not.toMatch(/^\s*is_final: /m)
+      })
+    }
+
+    it(`${fn}: no demonstration at all when the mode is null`, async () => {
+      // 'off' renders the section empty, so the batch shape never reaches an
+      // agent that cannot use it — which is why the demonstration belongs in
+      // this mode-gated section rather than in the few-shots.
+      expect(await render(null)).toBeNull()
+    })
+
+    it(`${fn}/parallel: the demonstrated calls are independent lookups`, async () => {
+      const action = demonstratedAction(await render('parallel'))
+      const names = [action.tool_name, ...action.additional_calls.map((c) => c.tool_name)]
+      // Concurrent execution means no call may depend on another's side effects,
+      // so a mutating tool has no business in this branch's example.
+      for (const name of names) expect(name).not.toMatch(/write|edit|bash|command/)
+      // …and no later call may name a value the first call produces.
+      const firstArgs = Object.values(JSON.parse(action.tool_args) as Record<string, unknown>)
+      for (const call of action.additional_calls) {
+        for (const value of firstArgs) {
+          if (typeof value === 'string' && value.length > 2) {
+            expect(call.tool_args).not.toContain(value)
+          }
+        }
+      }
+    })
+
+    it(`${fn}/sequential: the demonstrated calls chain through a side effect`, async () => {
+      const action = demonstratedAction(await render('sequential'))
+      // The captured case, verbatim in shape: write a file, then run that file.
+      // A later call sees earlier calls' side effects but never their output, so
+      // the dependency has to be on the PATH, not on a result.
+      const written = JSON.parse(action.tool_args) as { path?: string; content?: string }
+      expect(written.path, 'the first sequential call should write a file').toBeTruthy()
+      expect(written.content).toBeTruthy()
+      const follow = action.additional_calls.map((c) => c.tool_args).join(' ')
+      expect(follow).toContain(written.path as string)
+    })
+  }
+})

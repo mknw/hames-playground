@@ -37,33 +37,64 @@ describe('estimateLlmCostUsd', () => {
   it('prices the cache buckets at their multipliers', async () => {
     const { estimateLlmCostUsd } = await import('../../../lib/settings')
     const est = estimateLlmCostUsd(
-      { inputUncachedTokens: 1_000_000, inputCacheReadTokens: 1_000_000, inputCacheWriteTokens: 1_000_000, outputTokens: 1_000_000 },
+      {
+        inputUncachedTokens: 1_000_000,
+        inputCacheReadTokens: 1_000_000,
+        inputCacheWriteTokens: 1_000_000,
+        outputTokens: 1_000_000,
+      },
       'AnthropicSonnet5',
     )
     // Sonnet 5 intro: $2 in / $10 out per MTok
     expect(est).toBeDefined()
-    expect(est!.costUsd).toBeCloseTo(2 + 2 * 0.1 + 2 * 1.25 + 10, 6)   // 14.7
-    expect(est!.noCacheUsd).toBeCloseTo(3 * 2 + 10, 6)                  // 16.0
+    expect(est!.costUsd).toBeCloseTo(2 + 2 * 0.1 + 2 * 1.25 + 10, 6) // 14.7
+    expect(est!.noCacheUsd).toBeCloseTo(3 * 2 + 10, 6) // 16.0
     expect(est!.rates).toEqual({ inPerMTok: 2.0, outPerMTok: 10.0 })
   })
 
   it('returns undefined for clients without a pricing entry', async () => {
     const { estimateLlmCostUsd } = await import('../../../lib/settings')
-    expect(estimateLlmCostUsd(
-      { inputUncachedTokens: 100, inputCacheReadTokens: 0, inputCacheWriteTokens: 0, outputTokens: 10 },
-      'GroqFast',
-    )).toBeUndefined()
+    expect(
+      estimateLlmCostUsd(
+        {
+          inputUncachedTokens: 100,
+          inputCacheReadTokens: 0,
+          inputCacheWriteTokens: 0,
+          outputTokens: 10,
+        },
+        'AClientWithNoPricingEntry',
+      ),
+    ).toBeUndefined()
   })
 })
 
 describe('computeEventMetrics', () => {
   it('sums the true bill across a truncated attempt and its retry', async () => {
-    const { computeEventMetrics } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { computeEventMetrics } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     // Log 1: the truncated call — full input billed, 32k output burned.
     // Log 2: the corrective retry that produced the visible action.
     const collector = fakeCollector([
-      { calls: [apiCall('AnthropicSonnet5', { input_tokens: 200, cache_read_input_tokens: 5000, cache_creation_input_tokens: 500, output_tokens: 32_768 })] },
-      { calls: [apiCall('AnthropicSonnet5', { input_tokens: 250, cache_read_input_tokens: 5500, cache_creation_input_tokens: 300, output_tokens: 900 })] },
+      {
+        calls: [
+          apiCall('AnthropicSonnet5', {
+            input_tokens: 200,
+            cache_read_input_tokens: 5000,
+            cache_creation_input_tokens: 500,
+            output_tokens: 32_768,
+          }),
+        ],
+      },
+      {
+        calls: [
+          apiCall('AnthropicSonnet5', {
+            input_tokens: 250,
+            cache_read_input_tokens: 5500,
+            cache_creation_input_tokens: 300,
+            output_tokens: 900,
+          }),
+        ],
+      },
     ])
     const m = computeEventMetrics(collector as never)
     expect(m).toBeDefined()
@@ -80,7 +111,8 @@ describe('computeEventMetrics', () => {
   })
 
   it('sums multiple attempts WITHIN one log (client fallback)', async () => {
-    const { computeEventMetrics } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { computeEventMetrics } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const collector = fakeCollector([
       {
         calls: [
@@ -98,9 +130,10 @@ describe('computeEventMetrics', () => {
   })
 
   it('omits cost (not zero) when any token-bearing attempt is unpriced', async () => {
-    const { computeEventMetrics } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { computeEventMetrics } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const collector = fakeCollector([
-      { calls: [apiCall('GroqGPT120B', { input_tokens: 400, output_tokens: 200 })] },
+      { calls: [apiCall('AClientWithNoPricingEntry', { input_tokens: 400, output_tokens: 200 })] },
       { calls: [apiCall('AnthropicSonnet5', { input_tokens: 100, output_tokens: 50 })] },
     ])
     const m = computeEventMetrics(collector as never)
@@ -111,9 +144,17 @@ describe('computeEventMetrics', () => {
   })
 
   it('falls back to Collector usage when a call has no readable response body', async () => {
-    const { computeEventMetrics } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { computeEventMetrics } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const collector = fakeCollector([
-      { calls: [{ clientName: 'AnthropicSonnet5', usage: { inputTokens: 120, outputTokens: 40, cachedInputTokens: 30 } }] },
+      {
+        calls: [
+          {
+            clientName: 'AnthropicSonnet5',
+            usage: { inputTokens: 120, outputTokens: 40, cachedInputTokens: 30 },
+          },
+        ],
+      },
     ])
     const m = computeEventMetrics(collector as never)
     expect(m!.attempts).toBe(1)
@@ -124,8 +165,13 @@ describe('computeEventMetrics', () => {
   })
 
   it('returns undefined when no attempt produced usage (pre-flight failure)', async () => {
-    const { computeEventMetrics } = await import('../../../lib/harness-patterns/baml-adapters.server')
-    expect(computeEventMetrics(fakeCollector([{ calls: [{ clientName: 'AnthropicSonnet5' }] }]) as never)).toBeUndefined()
+    const { computeEventMetrics } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    expect(
+      computeEventMetrics(
+        fakeCollector([{ calls: [{ clientName: 'AnthropicSonnet5' }] }]) as never,
+      ),
+    ).toBeUndefined()
     expect(computeEventMetrics(undefined)).toBeUndefined()
   })
 })
@@ -134,15 +180,30 @@ describe('createEvent lifts metrics onto the event', () => {
   it('event.metrics mirrors llmCall.metrics; absent when the call has none', async () => {
     const { createEvent } = await import('../../../lib/harness-patterns/context.server')
     const metrics = {
-      inputUncachedTokens: 100, inputCacheReadTokens: 5000, inputCacheWriteTokens: 300,
-      outputTokens: 250, attempts: 1, costUsd: 0.001, noCacheUsd: 0.002,
+      inputUncachedTokens: 100,
+      inputCacheReadTokens: 5000,
+      inputCacheWriteTokens: 300,
+      outputTokens: 250,
+      attempts: 1,
+      costUsd: 0.001,
+      noCacheUsd: 0.002,
       rates: { inPerMTok: 2, outPerMTok: 10 },
     }
-    const withMetrics = createEvent('controller_action', 'p1', { a: 1 }, { functionName: 'LoopController', variables: {}, metrics })
+    const withMetrics = createEvent(
+      'controller_action',
+      'p1',
+      { a: 1 },
+      { functionName: 'LoopController', variables: {}, metrics },
+    )
     expect(withMetrics.metrics).toEqual(metrics)
     expect(withMetrics.llmCall?.metrics).toEqual(metrics)
 
-    const without = createEvent('controller_action', 'p1', { a: 1 }, { functionName: 'LoopController', variables: {} })
+    const without = createEvent(
+      'controller_action',
+      'p1',
+      { a: 1 },
+      { functionName: 'LoopController', variables: {} },
+    )
     expect(without.metrics).toBeUndefined()
 
     const nonLlm = createEvent('tool_result', 'p1', { tool: 'x' })

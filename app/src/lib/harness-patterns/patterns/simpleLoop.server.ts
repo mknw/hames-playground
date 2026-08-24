@@ -242,7 +242,7 @@ export function simpleLoop<T extends SimpleLoopData>(
     try {
       for (let turn = 0; turn < maxTurns; turn++) {
         // Trim oldest turns if they would overflow the controller's context window
-        // (the client this call will actually use, not the hardcoded Fallback).
+        // (the client this call will actually use, not a hardcoded chain name).
         const contextWindow = getContextWindow(resolveClientForRole('controller'))
         // ~500 chars base prompt overhead (template, schema, intent, etc.)
         const trimmedTurns = trimToFit(turns, (t) => JSON.stringify(t), 500, contextWindow)

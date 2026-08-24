@@ -26,13 +26,13 @@ disposition plus an ADR is a net context saving over a paragraph of prose in
 
 ## Index
 
-| ADR                                                  | Title                                                                       | Status   | Date       |
-| ---------------------------------------------------- | --------------------------------------------------------------------------- | -------- | ---------- |
-| [0001](0001-anthropic-only-default-chains.md)        | Anthropic-only client chains are the default; `USE_MIXED_CHAINS=1` opts out | accepted | 2026-05-19 |
-| [0002](0002-controller-nothink-clients.md)           | The simpleLoop controller runs on the `*NoThink` clients                    | accepted | 2026-07-29 |
-| [0003](0003-redis-stack-amd64.md)                    | The `redis` service is redis-stack, pinned `linux/amd64` on Apple Silicon   | accepted | 2026-06-21 |
-| [0004](0004-server-only-suffix-boundary.md)          | `.server.ts` + `assertServerOnImport()` is the server/client boundary       | accepted | 2025-12-18 |
-| [0005](0005-harness-patterns-replaces-baml-agent.md) | harness-patterns replaces `lib/baml-agent/`, which is not to be recreated   | accepted | 2026-01-18 |
+| ADR                                                  | Title                                                                       | Status                  | Date       |
+| ---------------------------------------------------- | --------------------------------------------------------------------------- | ----------------------- | ---------- |
+| [0001](0001-anthropic-only-default-chains.md)        | Anthropic-only client chains are the default; `USE_MIXED_CHAINS=1` opts out | deprecated (2026-08-24) | 2026-05-19 |
+| [0002](0002-controller-nothink-clients.md)           | The simpleLoop controller runs on the `*NoThink` clients                    | accepted                | 2026-07-29 |
+| [0003](0003-redis-stack-amd64.md)                    | The `redis` service is redis-stack, pinned `linux/amd64` on Apple Silicon   | accepted                | 2026-06-21 |
+| [0004](0004-server-only-suffix-boundary.md)          | `.server.ts` + `assertServerOnImport()` is the server/client boundary       | accepted                | 2025-12-18 |
+| [0005](0005-harness-patterns-replaces-baml-agent.md) | harness-patterns replaces `lib/baml-agent/`, which is not to be recreated   | accepted                | 2026-01-18 |
 
 This table is **the only place statuses are aggregated**. A file whose status
 changes updates both the file and this row in the same commit.

@@ -47,25 +47,38 @@
 //    expansions). See LoopPriorResults / LoopTurnLog for the details.
 
 // --- Section: few-shot examples (cached tier-1; empty when unset) -----------
-// Field labels deliberately match ControllerAction's field NAMES (reasoning /
-// tool_name / tool_args) rather than inventing a third vocabulary (the earlier
-// `Tool:` / `Args:` against the turn log's `Call:` / `Args:` against the schema's
-// `tool_name` / `tool_args`). Kept as a labelled list rather than a JSON object:
-// these live inside a user message and carry no status/is_final, so rendering
-// them as objects would demonstrate an ACTION MISSING REQUIRED FIELDS — the very
-// shape the turn log is careful not to model.
+// Rendered as the SAME JSON object the turn log (below) and `ctx.output_format`
+// ask for — field names, encoding and envelope all one vocabulary.
+//
+// It was a labelled `key: value` list until the sandbox-session failure captured
+// in `.harness-logs/baml-validation.json`: the actor wrote a complete, correct
+// action as brace-less lines — `reasoning:` / `tool_name:` / `tool_args:`, plus a
+// YAML-ish `additional_calls:` bullet list it invented, since the labelled form
+// demonstrated no such field — at 372 output tokens against a 32768 cap. BAML's
+// jsonish parser cannot recover a brace-less block; it found the embedded
+// `tool_args` objects instead and tried each as a ControllerAction ("Failed to
+// find any ControllerAction ... in 3 items", each `missing=3`), and the throw
+// aborted the actorCritic loop with three attempts still in budget. Copying an
+// example's punctuation is the model doing what an example is for.
+//
+// The old form's justification — "carries no status/is_final, so an object would
+// demonstrate an ACTION MISSING REQUIRED FIELDS" — expired when both fields
+// became OPTIONAL (#144 `status`, #159 `is_final`). `is_final: false` is rendered
+// explicitly because it is the documented default and the field models drop most
+// (see types.baml); `status` is legitimately absent, exactly as the terminal
+// Return turn's is.
 //
 // `tojson` on the VALUES, not just matching labels: `tool_args` is a string whose
 // CONTENT is JSON, so every quote inside it must be escaped. Rendered bare, a
 // few-shot showed `tool_args: {"query":"MATCH ..."}` while the assistant turn log
-// (below) showed `"tool_args": "{\"query\": \"MATCH ...\"}"` — two demonstrations
-// of one field in two incompatible encodings. Observed live: an action that
-// opened in the escaped form and closed in the bare one
-// (`"{\"query\": \"MATCH ... LIMIT 20"}"` — three escapes, then a naked quote),
-// which terminated the string early and failed BAML with status/is_final
-// "missing" at 495 output tokens against a 32768 cap. The escaping is unavoidable
-// while tool_args is typed `string` (BAML has no JSON type, and the tool set is
-// only known at runtime); what IS avoidable is disagreeing about it.
+// showed `"tool_args": "{\"query\": \"MATCH ...\"}"` — two demonstrations of one
+// field in two incompatible encodings. Observed live: an action that opened in the
+// escaped form and closed in the bare one (`"{\"query\": \"MATCH ... LIMIT 20"}"`
+// — three escapes, then a naked quote), which terminated the string early and
+// failed BAML with status/is_final "missing" at 495 output tokens against a 32768
+// cap. The escaping is unavoidable while tool_args is typed `string` (BAML has no
+// JSON type, and the tool set is only known at runtime); what IS avoidable is
+// disagreeing about it.
 template_string LoopFewShots(few_shots: FewShot[]?) #"
   {% if few_shots and few_shots|length > 0 %}
 
@@ -73,9 +86,7 @@ template_string LoopFewShots(few_shots: FewShot[]?) #"
   EXAMPLES (illustrative — adapt to the actual request, do not copy verbatim):
   {% for ex in few_shots %}
   - User: {{ ex.user }}
-    reasoning: {{ ex.reasoning | tojson }}
-    tool_name: {{ ex.tool | tojson }}
-    tool_args: {{ ex.args | tojson }}
+    {"reasoning": {{ ex.reasoning | tojson }}, "tool_name": {{ ex.tool | tojson }}, "tool_args": {{ ex.args | tojson }}, "is_final": false}
   {% endfor %}
   {% endif %}
 "#

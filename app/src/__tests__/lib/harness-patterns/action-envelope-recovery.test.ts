@@ -387,6 +387,37 @@ The first sec`
     expect(mockActorController).toHaveBeenCalledTimes(2)
     expect(String(mockActorController.mock.calls[1][4])).toContain(TRUNCATION_RETRY_GUIDANCE)
   })
+
+  it('recovers when the truncation RETRY drifts to the wrong envelope', async () => {
+    const { createActorControllerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { BamlValidationError } = await import('@boundaryml/baml')
+
+    // Call 1 was genuinely cut off, so the corrective retry fires; call 2 comes
+    // back complete but brace-less. Before this, the second failure threw and
+    // the loop died anyway — having paid for both round-trips.
+    const cutOff = String.raw`reasoning: writing the report
+tool_name: sandbox_write
+tool_args: {"path":"/work/out/report.md","content":"# Report\n\nThe first sec`
+    mockActorController
+      .mockRejectedValueOnce(new BamlValidationError('prompt', cutOff, 'missing=3', 'missing=3'))
+      .mockRejectedValueOnce(
+        new BamlValidationError('prompt', CAPTURED_RAW, 'missing=3', 'missing=3'),
+      )
+
+    const actor = createActorControllerAdapter({ toolNames: ['sandbox_write', 'sandbox_bash'] })
+    const cappedCollector = {
+      last: {
+        usage: { inputTokens: 554, outputTokens: 32_768, cachedInputTokens: 0 },
+        calls: [{ selected: true, provider: 'anthropic', clientName: 'AnthropicSonnet5' }],
+        rawLlmResponse: cutOff,
+      },
+    } as unknown as Collector
+
+    const { action } = await actor('x', 'x', [], [], cappedCollector, 1, 6)
+    expect(action.tool_name).toBe('sandbox_write')
+    expect(mockActorController).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('LoopController recovers the same way', () => {

@@ -28,10 +28,18 @@
 // ============================================================================
 
 // --- Section: few-shot examples (blank-line entries, ----fenced) ------------
+// Rendered as the SAME JSON object the attempt log below and `ctx.output_format`
+// ask for. This prompt is where the brace-less-envelope failure was CAPTURED
+// (`.harness-logs/baml-validation.json`, `sandbox-session-loop` attempt 3 of 6):
+// the actor copied this section's old `key: value` shape line for line, invented
+// a YAML `additional_calls:` list to go with it, and the loop died on a response
+// whose every field was correct. Full account on LoopFewShots in simpleLoop.baml,
+// including why "an object would demonstrate a MISSING REQUIRED FIELD" stopped
+// being true once `status` (#144) and `is_final` (#159) became optional.
+//
 // Values rendered with `tojson` so the encoding of `tool_args` matches the
 // attempt log below (which also uses `tojson`): it is a string whose content is
-// JSON, so its inner quotes are escaped. See LoopFewShots in simpleLoop.baml for
-// the failure a bare rendering produced.
+// JSON, so its inner quotes are escaped.
 template_string ActorFewShots(few_shots: FewShot[]?) #"
   {% if few_shots and few_shots|length > 0 %}
 
@@ -40,9 +48,7 @@ template_string ActorFewShots(few_shots: FewShot[]?) #"
   {% for ex in few_shots %}
 
   - User: {{ ex.user }}
-    reasoning: {{ ex.reasoning | tojson }}
-    tool_name: {{ ex.tool | tojson }}
-    tool_args: {{ ex.args | tojson }}
+    {"reasoning": {{ ex.reasoning | tojson }}, "tool_name": {{ ex.tool | tojson }}, "tool_args": {{ ex.args | tojson }}, "is_final": false}
   {% endfor %}
 
   ---

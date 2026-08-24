@@ -26,8 +26,12 @@
  * skipped, so `["a]b"]` closes at the right place. Single quotes are NOT
  * treated as delimiters — apostrophes in bare text are far more common in LLM
  * output than a bracket inside a single-quoted string.
+ *
+ * Exported for `controller-action.ts`, which needs the same "where does this
+ * literal end" answer to find the extent of a `tool_args:` value embedded in a
+ * brace-less action envelope. One scanner, one set of escape rules.
  */
-function scanLiteral(s: string, start: number): number {
+export function scanLiteral(s: string, start: number): number {
   const expected: string[] = []
   let inString = false
   for (let i = start; i < s.length; i++) {

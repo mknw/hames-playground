@@ -105,6 +105,27 @@ function allText(body: Body): string {
   return JSON.stringify(body)
 }
 
+/** Every rendered text block, system and messages alike, unescaped. */
+function textBlocks(body: Body): string[] {
+  const out: string[] = []
+  for (const s of (body.system ?? []) as Array<{ text?: string }>) if (s?.text) out.push(s.text)
+  for (const m of body.messages) {
+    const blocks = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : m.content
+    for (const blk of blocks) if (blk.text) out.push(blk.text)
+  }
+  return out
+}
+
+/** The EXAMPLES section, from its heading to the end of the block it lives in.
+ *  The actor renders it into the static system head; the loop renders it into
+ *  the agent-static tier-1 user message. Either way it is ONE block, which is
+ *  what makes it separable from `ctx.output_format`. */
+function examplesSection(body: Body): string {
+  const block = textBlocks(body).find((t) => t.includes('EXAMPLES (illustrative'))
+  expect(block, 'the rendered prompt has no EXAMPLES section').toBeTruthy()
+  return (block as string).slice((block as string).indexOf('EXAMPLES (illustrative'))
+}
+
 describe('controller history renders as ControllerAction JSON', () => {
   it('LoopController: every assistant turn parses as a complete action', async () => {
     const req = await b.request.LoopController(
@@ -205,16 +226,23 @@ describe('controller history renders as ControllerAction JSON', () => {
     }
   })
 
-  it('few-shots encode tool_args the same way the history does', async () => {
-    // `tool_args` is a string whose CONTENT is JSON, so its inner quotes are
-    // escaped. Rendered bare, a few-shot demonstrated `tool_args: {"query":...}`
-    // while the assistant turn log demonstrated `"tool_args": "{\"query\":...}"`
-    // — one field, two incompatible encodings, both in the same prompt. Live
-    // failure: an action that opened escaped and closed bare
-    // (`"{\"query\": \"MATCH ... LIMIT 20"}"`), terminating the string early and
-    // failing BAML with status/is_final "missing" at 495 output tokens against a
-    // 32768 cap — neither truncation nor an empty completion, so no retry branch
-    // caught it and the loop lost two good turns of results.
+  it('few-shots demonstrate the same JSON envelope the history does', async () => {
+    // The example's SHAPE, not just its field names. A few-shot rendered as
+    // brace-less `reasoning:` / `tool_name:` / `tool_args:` lines got copied
+    // line for line into a response: complete, correct, and unparseable
+    // (`.harness-logs/baml-validation.json` — `sandbox-session-loop`, 372 output
+    // tokens against a 32768 cap, so neither truncation nor an empty
+    // completion). The model also invented a YAML `additional_calls:` bullet
+    // list, a field the old form demonstrated nowhere. BAML's jsonish parser
+    // found the embedded `tool_args` objects instead and tried each as a
+    // ControllerAction — "in 3 items", each `missing=3` — and the throw killed
+    // the loop with three attempts still in budget.
+    //
+    // `tool_args` is a string whose CONTENT is JSON, so its inner quotes stay
+    // escaped inside the envelope: the earlier bare rendering demonstrated
+    // `tool_args: {"query":...}` against the turn log's
+    // `"tool_args": "{\"query\":...}"` — one field, two incompatible encodings
+    // in one prompt. Both properties are asserted here by PARSING the example.
     const args =
       '{"query":"MATCH (c:Concept) WHERE toLower(c.name) CONTAINS toLower($n)","params":{"n":"graph"}}'
     const fewShot = {
@@ -232,12 +260,29 @@ describe('controller history renders as ControllerAction JSON', () => {
     ).body.json() as Body
 
     for (const body of [loop, actor]) {
-      const text = allText(body)
-      // The example is present as a QUOTED, ESCAPED string — the exact form the
-      // model must reproduce. `allText` is itself JSON, hence the doubling.
-      expect(text).toContain(`tool_args: ${JSON.stringify(JSON.stringify(args)).slice(1, -1)}`)
-      // ...and never as a bare object, which is what taught the wrong encoding.
-      expect(text).not.toContain('tool_args: {')
+      // Scoped to the EXAMPLES section: it sits in the system block for the
+      // actor and in the tier-1 user block for the loop, and `ctx.output_format`
+      // — which legitimately renders `reasoning: string` as a schema line — is
+      // always a different block, so the negative assertions below stay honest.
+      const section = examplesSection(body)
+      const line = section
+        .split('\n')
+        .map((l) => l.trim())
+        .find((l) => l.startsWith('{'))
+      expect(line, 'no JSON-object example found in the rendered prompt').toBeTruthy()
+
+      const parsed = JSON.parse(line as string) as Record<string, unknown>
+      // A COMPLETE action: `status` is optional (#144) and legitimately absent,
+      // exactly as it is on the terminal Return turn.
+      expect(parsed.reasoning).toBe('substring search')
+      expect(parsed.tool_name).toBe('search')
+      expect(parsed.tool_args).toBe(args) // quoted + escaped, byte-for-byte
+      expect(parsed.is_final).toBe(false)
+
+      // The brace-less form must not come back in any of its three fields.
+      expect(section).not.toMatch(/^\s*reasoning: /m)
+      expect(section).not.toMatch(/^\s*tool_name: /m)
+      expect(section).not.toMatch(/^\s*tool_args: /m)
     }
   })
 

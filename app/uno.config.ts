@@ -400,8 +400,14 @@ export default defineConfig({
            (a dynamic utility class would never be extracted) and only the
            rest/hover *states* live here. Falls back to the muted tone when
            the property is absent. The collapsed rail sets its colour inline
-           instead — there the accent is always on. */
-        .agent-glyph {
+           instead — there the accent is always on.
+
+           span-qualified: the icon utility on the same element carries
+           color: inherit at the same (0,1,0) specificity, later in the
+           sheet — an unqualified .agent-glyph loses the tie and the glyph
+           inherits the document default (black; nothing above it sets a
+           colour), invisible on the dark ground. */
+        span.agent-glyph {
           color: var(--ui-text-tertiary);
           transition: color 0.15s ease;
         }

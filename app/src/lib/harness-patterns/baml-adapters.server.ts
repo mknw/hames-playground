@@ -513,6 +513,16 @@ function planParseRetry(
  * left to gain by discarding a complete action a second time. Not tried on the
  * mixed-chain Groq rungs — those exist because a client cannot do structured
  * output at all, which is a different problem from an envelope slip.
+ *
+ * DECLINES OUTRIGHT on a cap-hit, before it even looks at the text. A cut-off
+ * response can still LOOK complete to a lexical scanner: `tool_args` opening
+ * with a quote (`tool_args: "{\"path\":…`) is not an unbalanced bracket, and a
+ * cut landing between two `additional_calls` items leaves every item that
+ * survived perfectly readable — which would recover a SHORT batch and report it
+ * as the model's own. `collectorHitOutputCap` is the same precise signal
+ * `planParseRetry` uses (providers report `outputTokens` == the cap exactly), so
+ * this hands truncation back to the branch that owns it rather than approximating
+ * it. The captured failure this recovery exists for is 372/32768, untouched.
  */
 function recoverActionFromEnvelope(
   error: unknown,
@@ -522,6 +532,7 @@ function recoverActionFromEnvelope(
   startTime: number,
 ): ControllerCallResult | null {
   if (!(error instanceof BamlValidationError)) return null
+  if (collectorHitOutputCap(collector)) return null
   const raw = error.raw_output || (collector?.last?.rawLlmResponse ?? '')
   const action = coerceControllerActionText(raw)
   if (!action) return null

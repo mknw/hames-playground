@@ -77,19 +77,40 @@ function unquote(value: string): string {
 }
 
 /**
- * Top-level `key: value` fields of a brace-less envelope, first occurrence wins.
+ * The fields whose SECOND top-level occurrence abandons the whole recovery.
+ *
+ * These three decide which tool runs with which arguments. A duplicate means
+ * the text contains two candidate calls and nothing in the envelope says which
+ * one the model meant — and the realistic way that happens is hostile: a tool
+ * result echoed into `reasoning` carrying its own column-0 `tool_name:` /
+ * `tool_args:` lines, i.e. the shape a prompt-injection payload takes. Taking
+ * the first would let quoted content choose the call over the model's own
+ * action, and this coercion runs UPSTREAM of `withInjectionGuard` (which
+ * neutralises spans in tool results, not in the model's reasoning).
+ *
+ * `reasoning`, `status` and `is_final` are left first-wins: none of them can
+ * redirect a call, and `normalizeControllerAction` owns `is_final`'s default.
+ */
+const SINGLE_OCCURRENCE_FIELDS = new Set(['tool_name', 'tool_args', 'additional_calls'])
+
+/**
+ * Top-level `key: value` fields of a brace-less envelope — first occurrence wins,
+ * except where a duplicate makes the action ambiguous (see below).
  *
  * A field's value runs to the start of the next top-level field, EXCEPT when it
  * opens a `{`/`[` literal — then it runs to that literal's matching bracket
  * (`scanLiteral`), so a `tool_args` object containing a `status:` line inside a
  * string cannot be mistaken for the next field.
  *
- * Returns null when a value opens a literal that never closes. That is the
- * signature of a response CUT OFF at the output cap, and it is the one case
- * where recovering "most of" the action would be actively harmful: the payload
- * is incomplete, so the right owner is the truncation retry, which tells the
- * model to respond smaller. Recovering here would hand the loop a half-written
- * script to execute instead.
+ * Returns null when a value opens a literal that never closes — the payload is
+ * incomplete, so recovering "most of" the action would hand the loop a
+ * half-written script to execute. (This is a lexical signal only; the
+ * authoritative cap-hit check lives in `recoverActionFromEnvelope`, which
+ * declines on `collectorHitOutputCap` before this function is ever reached.)
+ *
+ * Also returns null when one of `SINGLE_OCCURRENCE_FIELDS` appears twice at top
+ * level — see that constant for why an ambiguous envelope must not be resolved
+ * by position.
  */
 function scanEnvelopeFields(text: string): Map<string, string> | null {
   const marks: Array<{ key: string; start: number; valueStart: number }> = []
@@ -108,7 +129,11 @@ function scanEnvelopeFields(text: string): Map<string, string> | null {
     const literalEnd = opensLiteral ? scanLiteral(text, mark.valueStart) : -1
     if (opensLiteral && literalEnd < 0) return null // unterminated → truncated
     const end = literalEnd > 0 ? literalEnd : (marks[i + 1]?.start ?? text.length)
-    if (!fields.has(mark.key)) fields.set(mark.key, text.slice(mark.valueStart, end).trim())
+    if (fields.has(mark.key)) {
+      if (SINGLE_OCCURRENCE_FIELDS.has(mark.key)) return null // ambiguous → decline
+    } else {
+      fields.set(mark.key, text.slice(mark.valueStart, end).trim())
+    }
     consumedTo = end
   }
   return fields
@@ -157,13 +182,16 @@ function parseAdditionalCalls(raw: string): ToolCallRequest[] | null {
       const parsed = JSON.parse(value) as unknown[]
       const calls = parsed.map((entry) => {
         const e = entry as { tool_name?: unknown; tool_args?: unknown }
-        return typeof e?.tool_name === 'string' && e.tool_name
-          ? {
-              tool_name: e.tool_name,
-              tool_args:
-                typeof e.tool_args === 'string' ? e.tool_args : JSON.stringify(e.tool_args ?? {}),
-            }
-          : null
+        // BOTH fields must be there. An entry with a name and no args is as
+        // unreadable as one with args and no name: defaulting it to `{}` would
+        // INVENT an argument the model never wrote and run the tool bare — the
+        // one thing "declines anything partly readable" exists to prevent.
+        if (typeof e?.tool_name !== 'string' || !e.tool_name) return null
+        if (e.tool_args === undefined || e.tool_args === null) return null
+        return {
+          tool_name: e.tool_name,
+          tool_args: typeof e.tool_args === 'string' ? e.tool_args : JSON.stringify(e.tool_args),
+        }
       })
       return calls.every((c): c is ToolCallRequest => c !== null) ? calls : null
     } catch {
@@ -223,11 +251,16 @@ function parseAdditionalCalls(raw: string): ToolCallRequest[] | null {
  *
  * Deliberately NOT a general "parse anything" pass. It returns null unless:
  *  - `tool_name` and `tool_args` both appear as top-level fields, and
+ *  - neither they nor `additional_calls` appear TWICE at top level (an echoed
+ *    tool result must never get to choose the call — `SINGLE_OCCURRENCE_FIELDS`), and
  *  - `tool_name` looks like a tool name rather than prose, and
  *  - a present `additional_calls` parses COMPLETELY.
- * A truncated response is declined outright — an unterminated `{`/`[` value is
- * its signature — which keeps it on the existing truncation-retry path where it
- * belongs.
+ * An unterminated `{`/`[` value also declines, but that is a lexical signal, not
+ * the truncation guard: a cut can land after a closing brace (mid-`additional_calls`)
+ * or inside a QUOTED `tool_args`, and neither is unbalanced. Truncation is owned
+ * by the caller — `recoverActionFromEnvelope` declines on `collectorHitOutputCap`
+ * before this function runs, so a genuine cap-hit is never coerced and stays on
+ * the truncation-retry path where it belongs.
  *
  * `reasoning` defaults to `''` — the same default `ActorAttemptLog` and the
  * adapters' own `Attempt` assembly already use for it. `is_final` is left absent

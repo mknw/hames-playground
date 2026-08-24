@@ -322,7 +322,46 @@ chat HTML.
 
 ---
 
-## 6. What this skill does not do
+## 6. Links open in a new tab
+
+**Standing rule (owner decision, 2026-08-24): every link in the app opens in a
+new tab. The app must never navigate away to follow a link.**
+
+Both halves, always:
+
+```tsx
+<a href={url} target="_blank" rel="noopener noreferrer">
+```
+
+`rel` is not decoration. `target="_blank"` on its own hands the opened page a
+live `window.opener` back into the app, and a good share of these hrefs come out
+of model output.
+
+Links produced from **data** rather than written by hand are already covered:
+the DOMPurify hook in [`app/src/lib/sanitize-html.ts`](../../../app/src/lib/sanitize-html.ts)
+stamps `target`/`rel` on every anchor in rendered assistant markdown. That is
+also why both attributes are deliberately absent from that file's
+`ALLOWED_ATTR` — a `target` written by the model is stripped first, so only the
+hook's own value can reach the DOM. Do not add a second markdown or `innerHTML`
+path that bypasses it.
+
+What is **not** a link under this rule:
+
+| Stays in-tab                                                                                               | Why                                                                                     |
+| ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Router navigation — `<A>`, `navigate()`, and the same-origin plain `<a href="/…">` solid-router intercepts | In-app navigation between the app's own routes; not a link                              |
+| The app's own auth endpoints (`/api/auth/login`, `/api/auth/logout`)                                       | The OAuth callback and the sign-out both have to land in the tab the user is looking at |
+| Programmatic download anchors (`a.download = …`)                                                           | They hand the browser a file; they never navigate the current tab                       |
+
+`app/src/__tests__/links-new-tab.test.ts` is the gate, not a one-off sweep: it
+reads `src/` as text and fails on any JSX anchor, `document.createElement('a')`,
+`location.href`/`location.assign` or `window.open` that neither opens a new tab
+nor holds a documented exception in its `ALLOWLIST`. A new in-tab case means
+adding an entry there with a written reason — there is nowhere else to put it.
+
+---
+
+## 7. What this skill does not do
 
 - It does not restate tokens. `app/uno.config.ts` owns them.
 - It does not migrate existing code. The hex-instead-of-token sites and the

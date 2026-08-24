@@ -121,6 +121,36 @@ describe('sanitizeMarkdownHtml', () => {
     expect(out).toContain('<hr>')
   })
 
+  // Standing UI rule (2026-08-24): the app never navigates away to follow a
+  // link, so the sanitizer — the one chokepoint every rendered assistant
+  // message passes through — stamps the target and rel itself. See the
+  // repo-wide guard in `src/__tests__/links-new-tab.test.ts` for the JSX half.
+  it('points every rendered link at a new tab', () => {
+    const out = sanitizeMarkdownHtml('<p><a href="https://example.test/doc">link</a></p>')
+
+    expect(out).toContain('target="_blank"')
+    expect(out).toContain('rel="noopener noreferrer"')
+    expect(out).toContain('href="https://example.test/doc"')
+  })
+
+  it('replaces a target and rel written by the model with its own', () => {
+    const out = sanitizeMarkdownHtml(
+      '<a href="https://example.test/doc" target="_self" rel="opener">link</a>',
+    )
+
+    expect(out).not.toContain('_self')
+    expect(out).not.toContain('rel="opener"')
+    expect(out).toContain('target="_blank"')
+    expect(out).toContain('rel="noopener noreferrer"')
+  })
+
+  it('leaves an anchor with no href alone', () => {
+    const out = sanitizeMarkdownHtml('<a>bare</a>')
+
+    expect(out).toContain('bare')
+    expect(out).not.toContain('target=')
+  })
+
   // The annotator markup is NOT expected to survive a round trip any more —
   // it is never fed back through. This pins that, so nobody restores the
   // allowlist entries to "fix" it.

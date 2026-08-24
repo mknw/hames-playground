@@ -1,12 +1,11 @@
-// Anthropic-only client variants for development iteration.
+// The role chains every BAML function declares. Anthropic is the only
+// provider: the mixed-provider chains this file used to be an opt-out FROM
+// (RouterFallback / ControllerFallback / … across Groq, OpenRouter and OpenAI,
+// gated on `USE_MIXED_CHAINS=1`) were removed 2026-08-24 — their combined rate
+// limits made dev iteration on actorCritic / multi-turn scenarios too noisy to
+// debug against, and one provider is also one processor to paper. See ADR-0001.
 //
-// Used when `USE_ANTHROPIC_ONLY=1` is set — see `harness-patterns/clients.server.ts`.
-// Production code paths use the per-use-case fallback chains in clients.baml
-// (RouterFallback / ControllerFallback / CriticFallback / SynthesizerFallback /
-// DescribeFallback) which span multiple providers.
-//
-// Purpose: avoid Groq / OpenRouter / OpenAI rate-limit interference while
-// iterating on actorCritic / multi-turn / hallucination scenarios.
+// Leaf clients: `clients.baml`. Role → chain map: `harness-patterns/clients.server.ts`.
 
 client<llm> RouterAnthropic {
   provider fallback

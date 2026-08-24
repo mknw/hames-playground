@@ -12,8 +12,8 @@
  * (`document-store` / `document-ingest` / `vector-store`) is already
  * parameterised on an injectable `CallTool`, so swapping the implementation
  * needs no change to the tested ingest/search logic. `stashCallTool()` picks
- * this adapter vs the gateway from `STASH_DIRECT_REDIS` — mirroring the
- * `USE_MIXED_CHAINS` toggle. The GLOBAL `defaultCallTool` is untouched, so
+ * this adapter vs the gateway from `STASH_DIRECT_REDIS`, read per call. The
+ * GLOBAL `defaultCallTool` is untouched, so
  * agentic MCP tool use still goes through the gateway.
  *
  * Same instance, same schema: the gateway's redis-mcp and this client both hit
@@ -279,8 +279,8 @@ export const directCallTool: CallTool = makeDirectCallTool()
 
 /**
  * The `CallTool` the Data Stash layer should default to: the direct client when
- * `STASH_DIRECT_REDIS=1`, else the MCP gateway. Read per-call (like
- * `clientOverrideFor`) so a test/env change needs no re-import. Only the Data
+ * `STASH_DIRECT_REDIS=1`, else the MCP gateway. Read per-call, so a test/env
+ * change needs no re-import. Only the Data
  * Stash modules call this — agentic MCP tools keep using `defaultCallTool`.
  */
 export function stashCallTool(): CallTool {

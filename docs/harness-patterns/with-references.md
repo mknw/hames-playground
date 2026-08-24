@@ -11,39 +11,41 @@ Cross-pattern data flow is currently implicit, ad-hoc, and underspecified.
 
 **Concrete failure** (debugging session 2026-04-30, agent `default` — since renamed `search`):
 
-| Turn | User input | Route | What the controller saw |
-|---|---|---|---|
-| 3 | "search the web for postgres 18 release info" | web-search | (full web results) |
-| 4 | "add this info to the graph" | neo4j-query | `priorResults: []`, `intent: "Add this info to the graph"` |
+| Turn | User input                                    | Route       | What the controller saw                                    |
+| ---- | --------------------------------------------- | ----------- | ---------------------------------------------------------- |
+| 3    | "search the web for postgres 18 release info" | web-search  | (full web results)                                         |
+| 4    | "add this info to the graph"                  | neo4j-query | `priorResults: []`, `intent: "Add this info to the graph"` |
 
 Turn 4's `neo4j-query` controller had no access to the postgres-18 data from turn 3. It received only "Add this info" as a user message — with no actual content. It spent 5 turns probing the schema and looking for related nodes, never attempted a write, hit `maxTurns` (silently — separate fix), and the compactExecution ended up summarizing turn 3's web results instead of describing the (non-existent) graph mutations.
 
 **Root cause:** there is no mechanism to recognize that data produced by an earlier pattern is relevant to the current one.
 
-The framework currently has *three* partial answers to this, each addressing one slice:
+The framework currently has _three_ partial answers to this, each addressing one slice:
 
-| | Mechanism | Direction | Decision-maker |
-|---|---|---|---|
-| #19 | `expand_data` synthetic tool | Within one loop's execution | Controller LLM mid-loop |
-| #26 | Router pushes `references[]` | Across pattern boundaries | Router LLM at dispatch |
-| #29 | `priorTurnsScope: 'self'` | Across pattern boundaries | Static (patternId equality) |
+|     | Mechanism                    | Direction                   | Decision-maker              |
+| --- | ---------------------------- | --------------------------- | --------------------------- |
+| #19 | `expand_data` synthetic tool | Within one loop's execution | Controller LLM mid-loop     |
+| #26 | Router pushes `references[]` | Across pattern boundaries   | Router LLM at dispatch      |
+| #29 | `priorTurnsScope: 'self'`    | Across pattern boundaries   | Static (patternId equality) |
 
-These are three *policies* for the same underlying question: **which prior data should this pattern see, expressed in what form, and who decides?**
+These are three _policies_ for the same underlying question: **which prior data should this pattern see, expressed in what form, and who decides?**
 
 ## 2. Goals / non-goals
 
 ### Goals
+
 - Replace #26 and #29 with one declarative wrapper.
 - Keep #19 as the inner-loop counterpart (controller can opt to expand any compact ref mid-loop).
 - Zero changes to existing controller BAML signatures.
-- Operate at *pattern ingress*; egress is already covered by event tracking + `compactBulkData`.
+- Operate at _pattern ingress_; egress is already covered by event tracking + `compactBulkData`.
 - Observable: every selection decision should leave a trace in `ctx.events`.
 
 ### Non-goals
+
 - Producer-side declaration of refs (no `publishRefs` on patterns; everything in `ctx.events` is implicitly available).
 - Mid-loop relevance recomputation (selection happens once per pattern entry; refresh happens at the next pattern's entry).
 - Egress filtering or summarization (already in place).
-- Determining *which* model writes summaries (handled by existing `compactBulkData` / `DescribeFallback`).
+- Determining _which_ model writes summaries (handled by existing `compactBulkData` / the `describe` role).
 
 ## 3. Reference taxonomy
 
@@ -63,7 +65,7 @@ Two distinct kinds of cross-pattern data flow:
 ```
 
 - **External (ingress)** — `withReferences` decides which compact refs to attach when a pattern is entered. Output: a `priorResults` array merged into the controller's BAML input.
-- **Internal (mid-loop)** — `expand_data` (#19) lets the controller, *during* its reasoning, pull the full body of any compact ref it received. Multiple ref_ids per call. Token-budget management is the controller's responsibility (with hard cap from the wrapper).
+- **Internal (mid-loop)** — `expand_data` (#19) lets the controller, _during_ its reasoning, pull the full body of any compact ref it received. Multiple ref_ids per call. Token-budget management is the controller's responsibility (with hard cap from the wrapper).
 
 These compose: `withReferences` attaches **summaries**; the loop optionally expands selected refs to **full content** (or full-but-trimmed) via `expand_data`.
 
@@ -92,35 +94,41 @@ The adapter layer (`baml-adapters.server.ts`) merges `scope.data.attachedRefs` i
 ## 5. API
 
 ```typescript
-import type { PriorResult, EventView } from '../types'
+import type { PriorResult, EventView } from "../types";
 
 export interface WithReferencesConfig extends PatternConfig {
   /** Which patterns' tool_results are eligible. Default: 'global' */
-  scope?: 'self' | 'global'
+  scope?: "self" | "global";
 
   /** Explicit patternId allow-list. Overrides scope when set. */
-  source?: string | string[]
+  source?: string | string[];
 
   /** Cap on attached refs. Default: 5 */
-  maxRefs?: number
+  maxRefs?: number;
 
   /** Override default LLM-driven selector */
-  selector?: SelectorFn
+  selector?: SelectorFn;
 }
 
 export type SelectorFn = (input: {
-  intent: string
-  recentMessages: Array<{ role: 'user' | 'assistant', content: string }>
-  candidates: Array<{ ref_id: string, tool: string, summary: string, tool_args?: string, ts: number }>
+  intent: string;
+  recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
+  candidates: Array<{
+    ref_id: string;
+    tool: string;
+    summary: string;
+    tool_args?: string;
+    ts: number;
+  }>;
 }) => Promise<{
-  selected: Array<{ ref_id: string, reason: string }>
-  reasoning: string
-}>
+  selected: Array<{ ref_id: string; reason: string }>;
+  reasoning: string;
+}>;
 
 export function withReferences<T>(
   pattern: ConfiguredPattern<T>,
-  config?: WithReferencesConfig
-): ConfiguredPattern<T>
+  config?: WithReferencesConfig,
+): ConfiguredPattern<T>;
 ```
 
 ### Default selector
@@ -149,7 +157,7 @@ function ReferenceSelector(
   recent_messages: Message[],
   candidates: ReferenceCandidate[],
 ) -> ReferenceSelectorResult {
-  client DescribeFallback
+  client DescribeAnthropic
   prompt #"
     {{ _.role("system") }}
     Select prior tool results that are relevant to the user's current intent.
@@ -190,10 +198,10 @@ New `EventType`: `'reference_attached'`. Payload:
 
 ```typescript
 interface ReferenceAttachedEventData {
-  candidates: Array<{ ref_id: string, tool: string, summary: string }>
-  selected:   Array<{ ref_id: string, reason: string }>
-  reasoning:  string  // The selector's overall justification
-  skipped?:   'empty' | 'single' | 'cached'  // When the selector wasn't called
+  candidates: Array<{ ref_id: string; tool: string; summary: string }>;
+  selected: Array<{ ref_id: string; reason: string }>;
+  reasoning: string; // The selector's overall justification
+  skipped?: "empty" | "single" | "cached"; // When the selector wasn't called
 }
 ```
 
@@ -201,11 +209,11 @@ UI integration: the observability panel shows attachments as their own row (simi
 
 ## 7. Skip optimizations
 
-| Condition | Behavior |
-|---|---|
-| Empty eligible stash | Skip entirely; track `reference_attached` with `skipped='empty'`, `selected=[]` |
-| Single eligible candidate | Attach unconditionally; track with `skipped='single'`, `selected=[that one]` |
-| Cache hit on `(intent_hash, stash_snapshot_hash)` | Reuse last decision; track with `skipped='cached'` |
+| Condition                                         | Behavior                                                                        |
+| ------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Empty eligible stash                              | Skip entirely; track `reference_attached` with `skipped='empty'`, `selected=[]` |
+| Single eligible candidate                         | Attach unconditionally; track with `skipped='single'`, `selected=[that one]`    |
+| Cache hit on `(intent_hash, stash_snapshot_hash)` | Reuse last decision; track with `skipped='cached'`                              |
 
 `stash_snapshot_hash` = hash of `(eligible_ref_ids.sorted, ref_summaries)`. Both are stable within a turn and slow-changing across turns, so cache hit rate is high.
 
@@ -215,11 +223,12 @@ UI integration: the observability panel shows attachments as their own row (simi
 // baml-adapters.server.ts (sketch)
 
 // In createLoopControllerAdapter:
-const attachedRefs = (scope.data.attachedRefs as PriorResult[] | undefined) ?? []
+const attachedRefs =
+  (scope.data.attachedRefs as PriorResult[] | undefined) ?? [];
 const mergedPriorResults = dedupByRefId([
   ...attachedRefs,
-  ...priorResultsFromExistingPath
-])
+  ...priorResultsFromExistingPath,
+]);
 ```
 
 Dedup by `ref_id` — if `withReferences` and the existing `priorTurnCount` mechanism both surface the same event, count it once.
@@ -228,13 +237,13 @@ Dedup by `ref_id` — if `withReferences` and the existing `priorTurnCount` mech
 
 A `app/src/__tests__/lib/harness-patterns/with-references-eval.test.ts` file with manually-curated cases:
 
-| Case | Stash | Intent | Expected selection |
-|---|---|---|---|
-| **postgres-18** (the trigger case) | web-search returned full postgres-18 release content | "Add this info to the graph" | postgres-18 ref **must be selected** |
-| **stale on-topic** | neo4j query result from 5 turns ago about a different schema area | "list all Person nodes" | Could be either; not a hard requirement |
-| **conversational unrelated** | Several tool results from earlier in session | "thanks!" | **Empty selection** (hard floor) |
-| **multiple relevant** | 3 web searches on the same topic | "summarize what we found" | All 3 selected (within budget) |
-| **scope=self** | Mix of neo4j and web results, wrapper on neo4j-query | (anything) | Only neo4j-tagged candidates eligible regardless of selection |
+| Case                               | Stash                                                             | Intent                       | Expected selection                                            |
+| ---------------------------------- | ----------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------- |
+| **postgres-18** (the trigger case) | web-search returned full postgres-18 release content              | "Add this info to the graph" | postgres-18 ref **must be selected**                          |
+| **stale on-topic**                 | neo4j query result from 5 turns ago about a different schema area | "list all Person nodes"      | Could be either; not a hard requirement                       |
+| **conversational unrelated**       | Several tool results from earlier in session                      | "thanks!"                    | **Empty selection** (hard floor)                              |
+| **multiple relevant**              | 3 web searches on the same topic                                  | "summarize what we found"    | All 3 selected (within budget)                                |
+| **scope=self**                     | Mix of neo4j and web results, wrapper on neo4j-query              | (anything)                   | Only neo4j-tagged candidates eligible regardless of selection |
 
 Each case stubs the LLM (or runs against the real fallback model with a recorded fixture) and asserts the `selected` array matches expectations.
 
@@ -255,7 +264,7 @@ Each case stubs the LLM (or runs against the real fallback model with a recorded
 - **Token budget source**: ride on existing `MODEL_CONTEXT_WINDOWS` (deduct from inner pattern's budget), or take an explicit `maxTokens` config? Lean: derive from inner pattern's BAML client window minus a fixed reserve.
 - **`expand_data` budget enforcement**: when the loop expands multiple refs in one call, who enforces the cap? Lean: wrapper sets a residual budget on `scope.data.expansionBudget`; `simpleLoop` consumes per call. Out of scope for v1; track as follow-up. (Note: multi-ref expansion is one `expandPreviousResult` call with `ref:<a>,<b>` — distinct from multi-call turns (`additional_calls`), which explicitly exclude `expandPreviousResult`.)
 - **Composition with `parallel`**: each branch enters separately. Should each branch get its own selector call, or share one? Lean: per-branch (different intents may apply).
-- **Cache invalidation**: `(intent_hash, stash_snapshot_hash)` is per-session. What about *across* sessions (e.g., long-lived agent)? Lean: session-scoped only.
+- **Cache invalidation**: `(intent_hash, stash_snapshot_hash)` is per-session. What about _across_ sessions (e.g., long-lived agent)? Lean: session-scoped only.
 
 ## 12. Alternatives considered
 
@@ -263,12 +272,12 @@ Each case stubs the LLM (or runs against the real fallback model with a recorded
 
 ```typescript
 withReferences(pattern, {
-  policy: 'auto-llm' | 'pushed-by-upstream' | 'self-scoped' | 'declared',
+  policy: "auto-llm" | "pushed-by-upstream" | "self-scoped" | "declared",
   // ... different fields per policy
-})
+});
 ```
 
-Rejected: forces every consumer to learn four mechanisms, even for trivial cases. The taxonomy of policies is *implementer's* mental model, not consumer's.
+Rejected: forces every consumer to learn four mechanisms, even for trivial cases. The taxonomy of policies is _implementer's_ mental model, not consumer's.
 
 ### B. Producer-side declaration (rejected)
 
@@ -278,7 +287,7 @@ simpleLoop(controller, tools, {
 })
 ```
 
-Rejected: pollutes every pattern with a new field. UnifiedContext already has every event; making patterns redundantly *publish* refs adds API surface for no gain.
+Rejected: pollutes every pattern with a new field. UnifiedContext already has every event; making patterns redundantly _publish_ refs adds API surface for no gain.
 
 ### C. Per-pattern config flags (rejected — current state)
 

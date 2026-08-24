@@ -21,7 +21,7 @@
  *     hyphens)
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -213,38 +213,25 @@ describe('createInjectionScreen — client routing', () => {
     vi.clearAllMocks()
     mockScreen.mockResolvedValue({ injection_detected: false, reason: 'ok', spans: [] })
   })
-  afterEach(() => {
-    delete process.env.USE_MIXED_CHAINS
-  })
 
-  it('calls BAML with no options on the default Anthropic-only path', async () => {
+  it("passes no client override — it runs on injection-screen.baml's declared client", async () => {
+    // The screen used to ride the `describe` role, and under the removed mixed
+    // chains that silently put prompt-injection screening on the weakest model
+    // in the repo while the guard's docs promised DescribeAnthropic. A screen
+    // must not be talked out of reporting by the content it reviews and must
+    // copy spans VERBATIM so the guard can locate and neutralize them, so it
+    // keeps its OWN role: nothing may re-point it by re-pointing `describe`.
     const screen = await (await load())()
     await screen(CLEAN)
     expect(mockScreen.mock.calls[0]).toHaveLength(2)
   })
 
-  it('pins DescribeAnthropic under USE_MIXED_CHAINS — never the describe fallback (SA-M5)', async () => {
-    // The screen used to ride the `describe` role, which under mixed chains
-    // silently put prompt-injection screening on DescribeFallback's first leaf
-    // (GroqFast, the weakest model in the repo) while the guard's docs promised
-    // DescribeAnthropic. A screen must not be talked out of reporting by the
-    // content it reviews and must copy spans VERBATIM so the guard can locate
-    // and neutralize them — so the `screen` role pins the Anthropic client in
-    // both modes, like the planner.
-    process.env.USE_MIXED_CHAINS = '1'
-    const screen = await (await load())()
-    await screen(CLEAN)
-    expect(mockScreen.mock.calls[0]).toHaveLength(3)
-    expect(mockScreen.mock.calls[0][2]).toEqual({ client: 'DescribeAnthropic' })
-  })
-
-  it('resolveClientForRole("screen") is DescribeAnthropic in BOTH modes', async () => {
+  it('resolveClientForRole("screen") is DescribeAnthropic, and is its own role (SA-M5)', async () => {
     const { resolveClientForRole } = await import('../../../lib/harness-patterns/clients.server')
     expect(resolveClientForRole('screen')).toBe('DescribeAnthropic')
-    process.env.USE_MIXED_CHAINS = '1'
-    expect(resolveClientForRole('screen')).toBe('DescribeAnthropic')
-    // The role it split from DOES follow the mixed chains — the pin is the
-    // screen's own, not an accident of `describe` being pinned too.
-    expect(resolveClientForRole('describe')).toBe('DescribeFallback')
+    // Distinct role from `describe`: re-pointing summarization at a cheaper
+    // client must not drag the screen along with it. Same value today — the
+    // separation, not the value, is what this pins.
+    expect(resolveClientForRole('describe')).toBe('DescribeAnthropic')
   })
 })

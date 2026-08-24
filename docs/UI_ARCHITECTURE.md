@@ -678,7 +678,7 @@ The first 60 chars of the first `user_message` becomes the conversation title. O
 
 ### LLM-generated titles (§6b)
 
-Once the first turn completes, a minimal one-pattern harness agent in `lib/harness-client/agents/title-generator.server.ts` calls a single BAML function (`GenerateConversationTitle`, using the `DescribeFallback` chain) and writes the result via `updateConversationTitle()`. The result is pushed to the client over the existing `/api/events` SSE stream as an `event: title_updated` frame before the stream closes (capped at 3s so a slow LLM never wedges the response). The client patches the threads cache in-place — no refetch. See §6b for the full architecture.
+Once the first turn completes, a minimal one-pattern harness agent in `lib/harness-client/agents/title-generator.server.ts` calls a single BAML function (`GenerateConversationTitle`, using the `DescribeAnthropic` chain) and writes the result via `updateConversationTitle()`. The result is pushed to the client over the existing `/api/events` SSE stream as an `event: title_updated` frame before the stream closes (capped at 3s so a slow LLM never wedges the response). The client patches the threads cache in-place — no refetch. See §6b for the full architecture.
 
 ### Auth
 
@@ -820,7 +820,7 @@ One pattern (`compactExecution`), one BAML call, no tools, no router. `mode: 'me
 
 ### The BAML function
 
-`app/baml_src/title.baml` — `GenerateConversationTitle(user_message: string) -> string`, wired to `DescribeFallback` (`[GroqFast, OpenRouterGemma4, OpenAIGPT5, AnthropicHaiku45]`). Reuses the same lightweight client chain the background tool-result summarizer uses; both are "tiny async post-process" jobs.
+`app/baml_src/title.baml` — `GenerateConversationTitle(user_message: string) -> string`, wired to `DescribeAnthropic` (`[AnthropicHaiku45]`). Reuses the same lightweight client chain the background tool-result summarizer uses; both are "tiny async post-process" jobs.
 
 ### When it runs
 

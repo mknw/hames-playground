@@ -25,7 +25,7 @@ import { trackEvent, resolveConfig } from '../context.server'
 import { Collector } from '@boundaryml/baml'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { extractFailureLLMCallData, warnIfCollectorEmpty } from '../baml-adapters.server'
-import { clientOverrideFor, resolveClientForRole } from '../clients.server'
+import { resolveClientForRole } from '../clients.server'
 
 assertServerOnImport()
 
@@ -91,10 +91,10 @@ async function defaultSynthesize(
   }
 
   // Trim oldest turns if they would overflow the compactExecution's context window
-  // Trim against the window of the client this call will ACTUALLY use
-  // (Anthropic 200K by default, the mixed-chain floor under USE_MIXED_CHAINS).
-  // Hardcoding 'SynthesizerFallback' here trimmed against a 16K default and
-  // dropped real tool results (see .harness-logs/neo4j-no-results.json).
+  // Trim against the window of the client this call will ACTUALLY use.
+  // Hardcoding a chain name here ('SynthesizerFallback') missed the map, fell
+  // through to a 16K default, and dropped real tool results before the LLM saw
+  // them (see .harness-logs/neo4j-no-results.json).
   const contextWindow = getContextWindow(resolveClientForRole('compactExecution'))
   const trimmedTurns = trimToFit(turns, (t) => JSON.stringify(t), 500, contextWindow)
 
@@ -106,13 +106,9 @@ async function defaultSynthesize(
     errorMessage: input.errorMessage,
   }
 
-  // Call with or without collector, including error context.
-  // Anthropic override applied when `USE_ANTHROPIC_ONLY=1` — routes through
-  // `SynthesizerAnthropic` (Sonnet 4.6 → Haiku 4.5).
-  const synthOpts = {
-    ...(collector ? { collector } : {}),
-    ...clientOverrideFor('compactExecution'),
-  }
+  // Call with or without collector, including error context. `Synthesize`
+  // declares `SynthesizerAnthropic` (Sonnet 5 → Haiku 4.5).
+  const synthOpts = collector ? { collector } : {}
   const hasSynthOpts = Object.keys(synthOpts).length > 0
   const content = hasSynthOpts
     ? await b.Synthesize(

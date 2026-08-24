@@ -145,12 +145,10 @@ Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/rese
 
 | Variable                                              | Purpose                                                                                                                                    |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GROQ_API_KEY`                                        | Groq LLM inference (GroqFast, GroqGPT120B, GroqQwen3_32b)                                                                                  |
-| `OPENROUTER_API_KEY`                                  | OpenRouter models (Nemotron, Gemma4, MiniMax) + the `openrouter` embedding provider                                                        |
+| `OPENROUTER_API_KEY`                                  | The `openrouter` Data Stash embedding provider only — no BAML chain uses it                                                                |
 | `EMBEDDINGS_PROVIDER`                                 | Data Stash embedding provider: `local` (default) or `openrouter` (see [DATA_STASH.md](DATA_STASH.md))                                      |
 | `EMBEDDINGS_LOCAL_URL` / `EMBEDDINGS_LOCAL_MODEL`     | Override the local embedder URL (`http://localhost:8090/v1`) / model (`Qwen3-Embedding-0.6B`)                                              |
-| `OPENAI_API_KEY`                                      | OpenAI models (GPT-5, GPT-5 Mini, GPT-5 Nano)                                                                                              |
-| `ANTHROPIC_API_KEY`                                   | Anthropic models (Sonnet 5, Sonnet 4.6, Haiku 4.5) — the default chains; **required**                                                      |
+| `ANTHROPIC_API_KEY`                                   | Anthropic models (Sonnet 5, Sonnet 4.6, Haiku 4.5) — every BAML chain; **required**, and the only LLM provider key                         |
 | `AZURE_TENANT_ID`                                     | Entra tenant (directory) GUID — the OIDC authority (#119)                                                                                  |
 | `AZURE_CLIENT_ID`                                     | Entra app registration (client) id                                                                                                         |
 | `AZURE_CLIENT_SECRET`                                 | Entra client secret (server-side; resolves sign-in server-side, see `lib/auth/entra.server.ts`)                                            |

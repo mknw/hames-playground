@@ -656,13 +656,13 @@ describe('compactExecution execution', () => {
 //
 // .harness-logs/neo4j-no-results.json — two read_neo4j_cypher turns returned
 // ~58KB/~65KB of rows, then the loop's `Return`. The synth trimmed against
-// `getContextWindow('SynthesizerFallback')`, which wasn't in
+// `getContextWindow('SynthesizerFallback')`, a chain name that wasn't in
 // MODEL_CONTEXT_WINDOWS → 16K default → budget ~12K tokens, so trimToFit
 // dropped BOTH data turns and kept only the `Return` (result: null). The synth
 // then truthfully reported "returned null". Fix: trim against the client the
-// call actually uses (resolveClientForRole('compactExecution') → SynthesizerAnthropic =
-// 200K by default), so the data reaches the synth. b.Synthesize is mocked — no
-// real LLM call / tokens.
+// call actually uses (resolveClientForRole('compactExecution') →
+// SynthesizerAnthropic = 200K), so the data reaches the synth. b.Synthesize is
+// mocked — no real LLM call / tokens.
 // ---------------------------------------------------------------------------
 describe('compactExecution — context-window trimming regression', () => {
   beforeEach(() => {
@@ -781,27 +781,31 @@ describe('compactExecution — context-window trimming regression', () => {
     expect(turnsJson).toContain('NODE_SCHEMA_DEG12')
   })
 
-  it('resolves the trim window from the real client, not the missing Fallback key', async () => {
+  it('resolves the trim window from the real client, and every role name is in the map', async () => {
     const { getContextWindow } =
       await import('../../../../lib/harness-patterns/token-budget.server')
     const { resolveClientForRole } = await import('../../../../lib/harness-patterns/clients.server')
 
-    // The keys that were missing (→ 16K default → over-trim).
+    // The key that was missing (→ 16K default → over-trim).
     expect(getContextWindow('SynthesizerAnthropic')).toBe(200_000)
-    expect(getContextWindow('SynthesizerFallback')).toBe(32_768)
 
-    // Default (Anthropic-only) → declared client; not the Fallback label.
     expect(resolveClientForRole('compactExecution')).toBe('SynthesizerAnthropic')
     expect(resolveClientForRole('controller')).toBe('ControllerAnthropic')
 
-    // Under mixed chains → the Fallback client.
-    const prev = process.env.USE_MIXED_CHAINS
-    process.env.USE_MIXED_CHAINS = '1'
-    try {
-      expect(resolveClientForRole('compactExecution')).toBe('SynthesizerFallback')
-    } finally {
-      if (prev === undefined) delete process.env.USE_MIXED_CHAINS
-      else process.env.USE_MIXED_CHAINS = prev
+    // The regression was a resolved name with NO entry silently defaulting to
+    // 16K. Pin every role, so re-pointing one at a client the map doesn't know
+    // fails here instead of over-trimming in production.
+    const roles = [
+      'controller',
+      'planner',
+      'critic',
+      'compactExecution',
+      'router',
+      'describe',
+      'screen',
+    ] as const
+    for (const role of roles) {
+      expect(getContextWindow(resolveClientForRole(role))).toBe(200_000)
     }
   })
 })

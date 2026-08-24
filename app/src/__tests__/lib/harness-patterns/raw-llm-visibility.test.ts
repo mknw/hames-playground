@@ -114,7 +114,6 @@ const runPattern = async (
 
 beforeEach(async () => {
   vi.clearAllMocks()
-  delete process.env.USE_MIXED_CHAINS
   const actual = await vi.importActual<
     typeof import('../../../lib/harness-patterns/routing.server')
   >('../../../lib/harness-patterns/routing.server')

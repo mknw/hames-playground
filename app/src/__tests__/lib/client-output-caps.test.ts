@@ -3,16 +3,15 @@
  *
  * The map in settings.ts feeds the adapters' truncation detection
  * (`llmCallHitOutputCap` / `collectorHitOutputCap`): a client missing from it
- * does not error — detection just returns false for that client, the corrective
- * retry never fires, and on the mixed chains the failure falls through to the
- * Groq escalation whose next rung has a SMALLER output cap. That is how the
- * seven Groq/OpenRouter leaves stayed undetectable in production while the
- * docstring claimed the map was complete. This test parses the .baml sources
- * so the invariant can never silently drift again:
+ * does not error — detection just returns false for that client and the
+ * corrective retry never fires. That is how seven now-removed Groq/OpenRouter
+ * leaves stayed undetectable in production while the docstring claimed the map
+ * was complete. This test parses the .baml sources so the invariant can never
+ * silently drift again:
  *
  *   1. every leaf client declaring `max_tokens` has an entry AT THE SAME VALUE;
  *   2. every strategy-chain NAME that settings.ts chooses to list (the
- *      output-budgeting floors, e.g. DescribeFallback for compactBulkData's
+ *      output-budgeting floors, e.g. DescribeAnthropic for compactBulkData's
  *      batch sizing — SA-M6) equals the smallest cap among its leaves.
  */
 
@@ -68,10 +67,11 @@ const byName = new Map(clients.map((c) => [c.name, c]))
 
 describe('CLIENT_MAX_OUTPUT_TOKENS mirrors baml_src (SA-C2)', () => {
   it('the parser actually found the client blocks (guard against regex rot)', () => {
-    // 15 capped leaves at the time of writing; a rewrite that finds almost
-    // nothing must fail here, not silently pass the completeness check below.
-    expect(clients.filter((c) => c.maxTokens !== undefined).length).toBeGreaterThanOrEqual(10)
-    expect(clients.filter((c) => c.strategy !== undefined).length).toBeGreaterThanOrEqual(5)
+    // 7 capped leaves and 7 role chains at the time of writing; a rewrite that
+    // finds almost nothing must fail here, not silently pass the completeness
+    // check below.
+    expect(clients.filter((c) => c.maxTokens !== undefined).length).toBeGreaterThanOrEqual(7)
+    expect(clients.filter((c) => c.strategy !== undefined).length).toBeGreaterThanOrEqual(7)
   })
 
   it('EVERY leaf client declaring max_tokens has an entry at the same value', () => {

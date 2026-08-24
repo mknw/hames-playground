@@ -143,10 +143,11 @@ describe('the observation: a mail result is guarded for its permalink, not for i
   })
 
   it('documents current behavior: the same rule stays silent on the SHORT ItemID our fixtures use', () => {
-    // Why no existing test caught it. `injection-guard.test.ts` and the privacy
-    // fixtures both use a 16-char stand-in ItemID, which is below the `{64,}`
-    // floor — so the corpus looked clean on mail-shaped data in CI while
-    // firing on all of it in production.
+    // Why no existing test caught it. No guard suite contains an Outlook
+    // permalink at all; the mail-shaped fixtures that do —
+    // `__tests__/lib/privacy/fixtures.ts` — use a short stand-in ItemID well
+    // below the `{64,}` floor. So the corpus looked clean on mail-shaped data
+    // in CI while firing on all of it in production.
     const short = 'https://outlook.office365.com/owa/?ItemID=AAMkAGI2THVSAAA%3D'
     expect(rulesFor(short)).toEqual([])
   })
@@ -938,10 +939,12 @@ describe('token cost of the fence on a typical mail batch', () => {
     // One finding per message, every one of them the webLink false positive.
     expect(report.findings.map((f) => f.rule)).toEqual(Array(10).fill('exfil-data-url'))
 
-    // The fence banner is ~180 characters and lands once per flagged leaf, so a
-    // 10-mail batch pays ~10x that plus the defang backticks. Bounds rather
-    // than an exact number, so ordinary wording changes to the banner do not
-    // fail this test — but a change in ORDER of magnitude does.
+    // A fence costs 182 chars of banner + 23 of footer + its two newlines
+    // (4 chars once JSON-escaped) = ~209 chars per flagged leaf, and lands
+    // once per flagged leaf — so a 10-mail batch pays 10 x 209 + the 20
+    // defang backticks = 2,110. Bounds rather than an exact number are
+    // asserted, so ordinary wording changes to the banner do not fail this
+    // test — but a change in ORDER of magnitude does.
     expect(added).toBeGreaterThan(1800)
     expect(added).toBeLessThan(2600)
     expect(asTokens(added)).toBeGreaterThan(450)
@@ -949,7 +952,7 @@ describe('token cost of the fence on a typical mail batch', () => {
     expect(added / before).toBeGreaterThan(0.35)
 
     // Recorded so the PR can quote it: at the time of writing,
-    //   raw 4283 chars → 6393 chars (+2110, ~+528 tokens, +49%)
+    //   raw 4065 chars → 6175 chars (+2110, ~+528 tokens, +51.9%)
     // per 10-mail result, repeated on every `graph_mail_recent` call.
     expect(before).toBeGreaterThan(3500)
   })
@@ -958,10 +961,11 @@ describe('token cost of the fence on a typical mail batch', () => {
     const batch = mailBatch()
     const before = JSON.stringify(batch).length
     const after = JSON.stringify(sanitizeUntrusted(batch, CTX, { spotlight: 'always' }).data).length
-    // Every string leaf gets a banner — 7 leaves x 10 messages + the top-level
-    // scalars — so the fence dominates the payload. ~3.4x at the time of
-    // writing (4283 → 14753). This is the cost the strictest mode carries, and
-    // the reason 'on-detection' is the default.
+    // Every STRING leaf gets a banner — 5 per message x 10 messages = 50
+    // fences. `isRead` / `hasAttachments` and the top-level `unreadOnly` are
+    // booleans, so they get none. At ~209 chars per fence that dominates the
+    // payload: ~3.6x at the time of writing (4065 → 14535). This is the cost
+    // the strictest mode carries, and the reason 'on-detection' is the default.
     expect(after / before).toBeGreaterThan(2.5)
   })
 

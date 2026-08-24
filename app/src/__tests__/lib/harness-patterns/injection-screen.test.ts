@@ -22,6 +22,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -226,12 +228,31 @@ describe('createInjectionScreen — client routing', () => {
     expect(mockScreen.mock.calls[0]).toHaveLength(2)
   })
 
-  it('resolveClientForRole("screen") is DescribeAnthropic, and is its own role (SA-M5)', async () => {
+  it("resolveClientForRole('screen') is DescribeAnthropic, and tracks the .baml declaration (SA-M5)", async () => {
     const { resolveClientForRole } = await import('../../../lib/harness-patterns/clients.server')
+    // The dangerous change is the screen ending up on a cheap model, so pin the
+    // value. Do NOT pin it by asserting `screen` and `describe` resolve alike:
+    // that fires on the BENIGN change — re-pointing summarization, which is
+    // exactly what having a separate `screen` role exists to allow — and the
+    // obvious way to make it green again is to edit both roles together, i.e.
+    // to re-couple what the separation protects.
     expect(resolveClientForRole('screen')).toBe('DescribeAnthropic')
-    // Distinct role from `describe`: re-pointing summarization at a cheaper
-    // client must not drag the screen along with it. Same value today — the
-    // separation, not the value, is what this pins.
-    expect(resolveClientForRole('describe')).toBe('DescribeAnthropic')
+
+    // The call passes no `client` override (test above), so the client that
+    // actually runs the screen is the one DECLARED in injection-screen.baml;
+    // the role map only reports it to callers that need the model behind the
+    // call (context window, output cap). Pin the map against that declaration:
+    // the map's docstring says "keep in sync with the `client X` lines in
+    // baml_src/*.baml", and nothing else enforces it.
+    const declared = readFileSync(
+      path.resolve(process.cwd(), 'baml_src/injection-screen.baml'),
+      'utf8',
+    )
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('//'))
+      .join('\n')
+      .match(/^\s*client\s+(\w+)\s*$/m)?.[1]
+    expect(declared).toBeDefined()
+    expect(resolveClientForRole('screen')).toBe(declared)
   })
 })

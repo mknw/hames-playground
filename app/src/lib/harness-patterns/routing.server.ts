@@ -53,7 +53,7 @@ export async function routeMessageOp(
   // `router.baml` declares `RouterAnthropic` (Haiku 4.5 primary, Sonnet 4.6
   // backstop).
   const routerOpts = collector ? { collector } : {}
-  const hasRouterOpts = Object.keys(routerOpts).length > 0
+  const hasRouterOpts = collector !== undefined
   const variables = { message, routes, history }
   // Wrap like every other adapter does: the router is the FIRST LLM call of a
   // turn, so a parse failure here aborts routing before any tool runs. Bare,

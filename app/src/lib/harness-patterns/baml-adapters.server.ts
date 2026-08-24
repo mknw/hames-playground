@@ -116,9 +116,10 @@ export type CriticFnWithLLMData = (
  * generated functions take their arguments POSITIONALLY, so appending a
  * parameter to a BAML function signature and then running new adapter code
  * against an old client shifts every later argument by one slot and pushes the
- * `__baml_options__` object — which carries the collector — off the end. The calls still succeed, so
- * nothing in the logs or the UI hints at it: issue #154 lost ~18 hours of
- * prompt/output/metrics/cost data exactly this way before anyone noticed.
+ * `__baml_options__` object — which carries the collector — off the end. The
+ * calls still succeed, so nothing in the logs or the UI hints at it: issue #154
+ * lost ~18 hours of prompt/output/metrics/cost data exactly this way before
+ * anyone noticed.
  *
  * Remedy when this fires: `pnpm baml-generate`.
  *
@@ -723,7 +724,7 @@ export function createLoopControllerAdapter(
     // or an empty completion propagates: there is no second provider to
     // escalate to, and Anthropic models rarely fail structured output anyway.
     const baseOpts = collector ? { collector } : {}
-    const hasBaseOpts = Object.keys(baseOpts).length > 0
+    const hasBaseOpts = collector !== undefined
     let action: ControllerAction
     try {
       action = hasBaseOpts
@@ -907,7 +908,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData 
     // whole failure policy: this call runs ONCE per chain, over the largest
     // tool catalog in the repo, and a throw here means the chain runs unplanned.
     const baseOpts = collector ? { collector } : {}
-    const hasBaseOpts = Object.keys(baseOpts).length > 0
+    const hasBaseOpts = collector !== undefined
     let plan: PlanResult
     try {
       plan = hasBaseOpts
@@ -1101,7 +1102,7 @@ export function createActorControllerAdapter(
     // wrapped as `LLMCallError` so the observability panel keeps the captured
     // prompt/variables drill-down.
     const baseOpts = collector ? { collector } : {}
-    const hasBaseOpts = Object.keys(baseOpts).length > 0
+    const hasBaseOpts = collector !== undefined
     let action: ControllerAction
     try {
       action = hasBaseOpts
@@ -1219,7 +1220,7 @@ export function createCriticAdapter(): CriticFnWithLLMData {
 
     // Call with or without collector — `critic.baml` declares `CriticAnthropic`.
     const criticOpts = collector ? { collector } : {}
-    const hasCriticOpts = Object.keys(criticOpts).length > 0
+    const hasCriticOpts = collector !== undefined
     let result: CriticResult
     try {
       result = hasCriticOpts

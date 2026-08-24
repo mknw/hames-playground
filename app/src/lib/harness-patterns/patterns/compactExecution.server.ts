@@ -109,7 +109,7 @@ async function defaultSynthesize(
   // Call with or without collector, including error context. `Synthesize`
   // declares `SynthesizerAnthropic` (Sonnet 5 → Haiku 4.5).
   const synthOpts = collector ? { collector } : {}
-  const hasSynthOpts = Object.keys(synthOpts).length > 0
+  const hasSynthOpts = collector !== undefined
   const content = hasSynthOpts
     ? await b.Synthesize(
         input.userMessage,

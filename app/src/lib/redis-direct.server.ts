@@ -13,8 +13,8 @@
  * parameterised on an injectable `CallTool`, so swapping the implementation
  * needs no change to the tested ingest/search logic. `stashCallTool()` picks
  * this adapter vs the gateway from `STASH_DIRECT_REDIS`, read per call. The
- * GLOBAL `defaultCallTool` is untouched, so
- * agentic MCP tool use still goes through the gateway.
+ * GLOBAL `defaultCallTool` is untouched, so agentic MCP tool use still goes
+ * through the gateway.
  *
  * Same instance, same schema: the gateway's redis-mcp and this client both hit
  * the one redis-stack (`localhost:6379`, published by docker-compose), and the
@@ -280,8 +280,8 @@ export const directCallTool: CallTool = makeDirectCallTool()
 /**
  * The `CallTool` the Data Stash layer should default to: the direct client when
  * `STASH_DIRECT_REDIS=1`, else the MCP gateway. Read per-call, so a test/env
- * change needs no re-import. Only the Data
- * Stash modules call this — agentic MCP tools keep using `defaultCallTool`.
+ * change needs no re-import. Only the Data Stash modules call this — agentic
+ * MCP tools keep using `defaultCallTool`.
  */
 export function stashCallTool(): CallTool {
   return process.env.STASH_DIRECT_REDIS === '1' ? directCallTool : gatewayCallTool

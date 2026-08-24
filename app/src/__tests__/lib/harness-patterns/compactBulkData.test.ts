@@ -393,7 +393,9 @@ describe('compactBulkData', () => {
     // per-item fallback for each. So the batch size derives from the resolved
     // client's cap: floor((2048 × 0.5) / 200) = 5. Driven here by lowering the
     // floor itself rather than by a routing flag, so the derivation stays
-    // pinned whatever the describe chain is next pointed at.
+    // pinned whatever the describe chain is next pointed at. That floor is
+    // shared module state, restored in the `finally` below: keep this test out
+    // of any `describe.concurrent`.
     const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
     const realCap = CLIENT_MAX_OUTPUT_TOKENS.DescribeAnthropic
     CLIENT_MAX_OUTPUT_TOKENS.DescribeAnthropic = 2_048

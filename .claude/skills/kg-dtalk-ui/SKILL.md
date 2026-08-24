@@ -14,9 +14,10 @@ The UI is `app/` — SolidStart routes and components, Ark UI headless primitive
 UnoCSS with attributify mode, Cytoscape.js for graphs.
 
 **This skill is recipes and rules. It is not a token cache.** The token list —
-every `dark-bg-*`, `dark-text-*`, `dark-border-*`, `neon-*`, `cyber-*` value —
-lives in [`app/uno.config.ts`](../../../app/uno.config.ts) under `theme.colors`, and
-that file is the only place it is written down. Read it when you need a value.
+every `ui-*` role, and the fixed `neon-*` / `cyber-*` / `dark-*` values behind
+the graph palettes — lives in
+[`app/uno.config.ts`](../../../app/uno.config.ts) under `theme.colors` and its
+first preflight, and that file is the only place it is written down. Read it when you need a value.
 Restating it here would be a cache of a one-file lookup, and it would go stale.
 
 Two reference files carry the long checklists:
@@ -35,7 +36,7 @@ Two reference files carry the long checklists:
 Every utility goes in an attribute. Never `class=`.
 
 ```tsx
-<div flex="~ col" gap="2" p="4" bg="dark-bg-secondary" text="sm dark-text-secondary">
+<div flex="~ col" gap="2" p="4" bg="ui-bg-secondary" text="sm ui-text-secondary">
 ```
 
 ### The three exceptions, and nothing else
@@ -84,22 +85,30 @@ explains why both are required.
 
 ---
 
-## 2. Two palettes, one dark by default
+## 2. One themed palette, and a fixed one for data
 
 There are two colour families in `uno.config.ts` and the difference between
 them is the whole theming story:
 
-| Family                                                           | Shape         | Theme-aware?                            |
-| ---------------------------------------------------------------- | ------------- | --------------------------------------- |
-| `dark-bg-*`, `dark-text-*`, `dark-border-*`, `neon-*`, `cyber-*` | fixed hexes   | **no** — the same colour in either mode |
-| `ui-bg-*`, `ui-text-*`, `ui-border-*`, `ui-accent`, `ui-danger`  | `var(--ui-…)` | **yes**                                 |
+| Family                                                                        | Shape         | Theme-aware?                            |
+| ----------------------------------------------------------------------------- | ------------- | --------------------------------------- |
+| `ui-bg-*`, `ui-text-*`, `ui-border-*`, `ui-accent`, `ui-danger`, `ui-success` | `var(--ui-…)` | **yes** — this is the interface palette |
+| `dark-bg-*`, `dark-text-*`, `dark-border-*`, `neon-*`, `cyber-*`              | fixed hexes   | **no** — the same colour in either mode |
 
-`ui-*` names **the same roles** as `dark-*`, and its dark values are the
-`dark-*` hexes byte for byte (`ui-accent`'s is `neon-cyan`). So a component
-joins the theme by a rename — `bg="dark-bg-secondary"` →
-`bg="ui-bg-secondary"` — with no visual change in dark and no second branch to
-maintain. `src/__tests__/lib/uno-theme.test.ts` asserts that equality, so the
-rename stays safe.
+**Write `ui-*`.** The fixed family is not a second option for chrome; what is
+left of it is _data_ colour — the Cytoscape node/edge styles, the per-turn and
+per-agent graph palettes in `lib/turn-colors.ts` and `lib/agent-palette.ts`,
+xterm's terminal theme. None of those can read a CSS variable, which is the
+only reason they are still hexes. `cyber-{600,700,800}` (indigo) is the one
+chrome exception, kept fixed because it reads on both grounds.
+
+`ui-*` names the same roles the `dark-*` family did, and its dark values are
+those hexes byte for byte (`ui-accent` = `neon-cyan`, `ui-success` =
+`neon-green`). That is what made the app-wide migration a rename with no
+visual change in dark. `src/__tests__/lib/uno-theme.test.ts` asserts the
+equality per token; `src/__tests__/lib/theme-migration.test.ts` fails if a
+`dark-*` or `neon-cyan`/`neon-green` token reappears under `src/components`
+or `src/routes`.
 
 ### How the switch works (#226 B8)
 
@@ -111,14 +120,27 @@ rename stays safe.
    off). `light` is a positive marker on purpose: a document with neither
    class — the server-rendered one — is dark, so there is no flash.
 3. `THEME_BOOT_SCRIPT` from the same module is inlined in the head by
-   `entry-server.tsx` and applies the stored choice before first paint.
+   `entry-server.tsx` and resolves the theme before first paint.
 4. `ThemeSwitcher` in `Nav` is the only writer of `localStorage.theme`.
 
-**Dark is the default and the OS `prefers-color-scheme` is deliberately
-ignored** — only the auth pages and `Nav` are on `ui-*` so far, so honouring a
-light OS setting would hand an unasked-for light sign-in page to someone whose
-app is still dark. `resolveTheme()` is the one place to change that once the
-app's screens have migrated.
+**Choice and theme are different things.** The switcher offers three settings
+— `light`, `dark`, `system` — and `system` is the default and what an absent
+key means. It follows `prefers-color-scheme` live, through a `matchMedia`
+listener that exists _only_ while `system` is selected; an explicit
+`light`/`dark` is stored and ignores the OS. Only those two strings are ever
+written, so picking `system` back removes the key rather than storing a third
+value.
+
+### Hand-written CSS reaches the palette too
+
+The second preflight (`.prose-chat`, `.think-*`, `.graph-entity`,
+`.agent-glyph`) is CSS, not utilities, so it cannot carry a token as an
+attribute — it uses `var(--ui-…)` directly. Two token groups exist for it and
+have no utility form: `--ui-accent-{soft,glow,strong,line}` (tints of the
+accent) and `--ui-overlay-{wash,raise,line,hairline,sunken}` (neutral washes,
+white-on-dark and **black**-on-light — that inversion is why they are
+variables). An inline `style={{}}` can use them as well, and does where a
+component sets colour imperatively.
 
 ### Still do not write `dark:` variants
 
@@ -128,14 +150,14 @@ reason: a per-component light branch doubles the surface of every recipe.
 modes, it needs a `ui-*` token — add the variable to both blocks of the
 palette preflight, not a `dark:` utility to the component.
 
-Practical consequence for contrast: a `dark-*`/`neon-*` surface is checked
-against `#0a0a0f` / `#12121a` / `#1a1a24` only. A `ui-*` surface has to clear
-4.5:1 in **both** palettes — that is why `ui-accent` is not `#00ffff` in light
-mode.
+Practical consequence for contrast: a `ui-*` surface has to clear 4.5:1 in
+**both** palettes — that is why `ui-accent` is `#0e7490` in light rather than
+`#00ffff`. A colour written as a literal is only ever checked against the dark
+ground, which is the failure this palette exists to prevent.
 
-Migrated so far: `Nav`, `AuthProvider`'s loading screen, `routes/auth/*`,
-`routes/[...404]`. Everything else is still fixed dark, by design — retheming
-the app is its own piece of work.
+**Not on the theme yet**, and each is a visible seam in light mode: the
+Cytoscape canvas, `UserMenu`'s dropdown (white in both modes), the retriever
+citation chips (`.doc-ref*`) and the sidebar completion-flash keyframes.
 
 ---
 
@@ -149,7 +171,7 @@ the only two collections registered in `presetIcons` in `uno.config.ts`.
   class="i-material-symbols-database-outline"
   w="5"
   h="5"
-  text="neon-cyan"
+  text="ui-accent"
   aria-hidden="true"
 />
 ```
@@ -160,7 +182,7 @@ the only two collections registered in `presetIcons` in `uno.config.ts`.
   empty span — treat any that reappears as a live bug, not as precedent.
 - Browse names at [icones.js.org](https://icones.js.org), filtered to
   `material-symbols`.
-- Size and colour the glyph with attributify (`w="5" h="5" text="neon-cyan"`),
+- Size and colour the glyph with attributify (`w="5" h="5" text="ui-accent"`),
   not with an inline `style` object. Inline `style` on an icon is only correct
   when the colour is genuinely dynamic — see §4.
 
@@ -172,26 +194,30 @@ icon that is the button's only content means the **button** needs an
 
 ## 4. Colour: token before hex
 
-**If a value has a token, use the token.** These hexes are hand-written in
-`app/src` where a token already exists. Counts are literal occurrences measured
-across `app/src` on this branch (`grep -rhoE '#[0-9a-fA-F]{6}' src`), tests and
-comments included — re-run it rather than trusting the number:
+**If a value has a token, use the token** — and since #226 B8's follow-up that
+matters more than it used to: a literal cannot flip with the theme, so a hex
+where a `ui-*` role exists is a light-mode bug waiting to be filed, not a style
+nit. The app-wide sweep already replaced the palette hexes that were reachable;
+what is left, and the reason each survives:
 
-| Hex       | Uses | Token it should have been |
-| --------- | ---- | ------------------------- |
-| `#a1a1aa` | 18   | `dark-text-secondary`     |
-| `#00ffff` | 15   | `neon-cyan`               |
-| `#71717a` | 11   | `dark-text-tertiary`      |
-| `#4f46e5` | 8    | `cyber-600`               |
-| `#ff00ff` | 7    | `neon-magenta`            |
-| `#e4e4e7` | 3    | `dark-text-primary`       |
-| `#2a2a3a` | 3    | `dark-border-primary`     |
-| `#0a0a0f` | 3    | `dark-bg-primary`         |
-| `#22222f` | 3    | `dark-bg-hover`           |
-| `#1a1a24` | 2    | `dark-bg-tertiary`        |
+| Hex       | Uses | Where, and why it is still a literal                                        |
+| --------- | ---- | --------------------------------------------------------------------------- |
+| `#22d3ee` | 17   | citation chips + Data Stash accents — **no token yet**, see the table below |
+| `#00ffff` | 11   | Cytoscape node/edge styles — the canvas cannot read `var()`                 |
+| `#f59e0b` | 10   | warning role — **no token yet**                                             |
+| `#52525b` | 10   | disabled/grayed affordances — **no token yet**                              |
+| `#ff00ff` | 7    | `neon-magenta`, graph data colour                                           |
+| `#4f46e5` | 7    | `cyber-600`, and indigo is fixed on purpose                                 |
+| `#0a0a0f` | 5    | Cytoscape label backgrounds, xterm's theme                                  |
 
-**The one legitimate reason to write a hex inline** is a value the build cannot
-see: a per-row accent resolved at runtime. `src/lib/agent-palette.ts` documents
+Counts are literal occurrences (`grep -rhoE '#[0-9a-fA-F]{6}' src`), tests and
+comments included — re-run it rather than trusting the number.
+
+**The two legitimate reasons to write a hex inline** are a value the build
+cannot see — a per-row accent resolved at runtime — and a consumer that does
+not parse CSS at all (Cytoscape's style object, xterm's `theme`). Everywhere
+else, an inline `style` can hold `var(--ui-text-secondary)` just as easily as
+a hex, and several components now do. `src/lib/agent-palette.ts` documents
 this deliberately — its values are applied through inline `style` or a CSS
 custom property (`--agent-accent`) precisely because a dynamic utility class
 would never be extracted. That module is the pattern to copy for anything
@@ -201,10 +227,11 @@ per-entity; do not invent a second one.
 
 > ⚠️ **This table is a proposal awaiting one-time confirmation from the repo
 > owner.** It was derived by measuring which hex is spent on which role across
-> `app/src`; it is not derivable from `uno.config.ts`. #226 B8 has since added
-> exactly two of these roles as theme-aware tokens — `ui-accent` (the brand
-> cyan) and `ui-danger` (error) — because the themed surfaces needed them.
-> **The rest of the table still has no token.** Until it is confirmed, treat it as
+> `app/src`; it is not derivable from `uno.config.ts`. #226 B8 and its follow-up
+> have since added three of these roles as theme-aware tokens — `ui-accent`
+> (the brand cyan), `ui-danger` (error) and `ui-success` — because the themed
+> surfaces needed them. **The rest of the table still has no token, and every
+> one of them is a hex that does not flip in light mode.** Until it is confirmed, treat it as
 > documentation of current practice, not as a rule to enforce — and do not add
 > tokens to `uno.config.ts` on its authority.
 
@@ -277,18 +304,18 @@ title on the left, controls on the right, one hairline under it.
   items="center"
   justify="between"
   p="2 3"
-  bg="dark-bg-tertiary"
-  border="b dark-border-primary"
+  bg="ui-bg-tertiary"
+  border="b ui-border-primary"
 >
   <div flex="~" items="center" gap="2">
     <span
       class="i-material-symbols-terminal"
       w="4"
       h="4"
-      text="neon-cyan"
+      text="ui-accent"
       aria-hidden="true"
     />
-    <span text="xs dark-text-secondary">…title…</span>
+    <span text="xs ui-text-secondary">…title…</span>
   </div>
   <div flex="~" items="center" gap="1">
     {/* controls */}
@@ -298,11 +325,12 @@ title on the left, controls on the right, one hairline under it.
 
 - `p="4"` instead of `p="2 3"` for a full-width page-level header
   (`ObservabilityPanel.tsx:703`); `p="2 3"` for a panel strip.
-- `bg="dark-bg-tertiary"` when the header must separate from a
-  `dark-bg-secondary` body; omit `bg` when the panel is already tertiary.
-- The bottom hairline is always `border="b dark-border-primary"`. Never a
-  hand-written `rgba(255,255,255,0.06)` in a component — that value belongs to
-  the preflight CSS only.
+- `bg="ui-bg-tertiary"` when the header must separate from a
+  `ui-bg-secondary` body; omit `bg` when the panel is already tertiary.
+- The bottom hairline is always `border="b ui-border-primary"`. Never a
+  hand-written `rgba(255,255,255,0.06)` — white-at-low-alpha lightens a dark
+  surface and does nothing at all to a white one. Even the preflight CSS uses
+  `var(--ui-overlay-line)` for it now.
 
 ### R3 — Icon button
 
@@ -314,8 +342,8 @@ Eighteen ghost buttons share the transparent/hover-fill pattern.
   title="New chat"
   aria-label="New chat"
   w="8" h="8" flex="~" items="center" justify="center"
-  bg="transparent hover:dark-bg-hover"
-  border="1 dark-border-secondary"
+  bg="transparent hover:ui-bg-hover"
+  border="1 ui-border-secondary"
   rounded="md"
   transition="all"
 >
@@ -343,8 +371,8 @@ namespace, a document reference.
 
 ```tsx
 <span
-  text="xs neon-cyan"
-  bg="neon-cyan/10"
+  text="xs ui-accent"
+  bg="ui-accent/10"
   p="x-1.5 y-0.5"
   rounded="sm"
   font="mono"
@@ -355,8 +383,10 @@ namespace, a document reference.
 
 The shape is fixed — `x-1.5 y-0.5`, `rounded="sm"`, `font="mono"`, `text="xs"`
 — and **only the hue varies**, always as the `/10` tint of the same colour used
-for the text. In use today: `neon-cyan`, `neon-orange`, `neon-magenta`,
-`red-500`. A chip whose text colour and background tint disagree is a bug.
+for the text. In use today: `ui-accent`, `ui-success`, `neon-orange`,
+`neon-magenta`, `red-500`. A chip whose text colour and background tint
+disagree is a bug, and one whose hue is a `neon-*` will be unreadable in light
+mode — reach for a `ui-*` role first.
 
 The chat-message equivalent is the `doc-ref-chip` preflight class; do not
 re-implement it in attributify, and do not use this recipe inside sanitised

@@ -31,8 +31,9 @@ import {
  * The document is already correct before this mounts — the boot script in
  * `entry-server.tsx` applied the same rule pre-paint — so `onMount` is
  * bringing the component in step with the document, not the other way round.
- * It re-applies anyway because that is also the only write path the OS
- * listener has, and one path is easier to trust than two.
+ * It goes through `show()` anyway rather than reading the class back: that is
+ * the same call the OS listener makes, so mount and an OS flip cannot end up
+ * disagreeing about what the document says.
  */
 
 const GLYPH: Record<ThemeChoice, string> = {

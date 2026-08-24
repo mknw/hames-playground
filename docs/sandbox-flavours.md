@@ -58,8 +58,11 @@ controller — so flavour selection lives entirely in the harness. The demonstra
 ([`agents/flavoured-sandbox.server.ts`](../app/src/lib/harness-client/agents/flavoured-sandbox.server.ts)):
 
 ```ts
-// one ephemeral (base) + two persistent (data, image-processing) routes
-const basic = withSandbox({ rootfs: 'base', egress: 'mcp-only', sessionId })(loop)          // ephemeral (anon pool)
+// N flavour containers, ONE session workspace: every route is id-addressable
+// (`${sessionId}:${rootfs}`) and workspace-synced, so /work/in holds the
+// session's files whichever flavour the router picks for a turn.
+const basic = withSandbox({ id: `${sessionId}:base`, sessionId,
+                            rootfs: 'base', egress: 'mcp-only', syncWorkspace: true })(loop)
 const image = withSandbox({ id: `${sessionId}:image-processing`, sessionId,
                             rootfs: 'image-processing', egress: 'mcp-only', syncWorkspace: true })(loop)
 const data  = withSandbox({ id: `${sessionId}:data`, sessionId,
@@ -72,18 +75,32 @@ return [
 ]
 ```
 
+> **Why the `basic` route is not the ephemeral one any more (#243 follow-up).**
+> It used to be `withSandbox({ rootfs: 'base', sessionId })` — the anonymous-pool
+> path, a reset box per turn. But `syncWorkspace` only runs on the id-addressable
+> path, so that route had **no `/work/in` at all**. Because the flavour is chosen
+> **per turn**, a session could ingest a spreadsheet on a `data` turn and then be
+> routed to `basic` for "list the files in /work/in", landing in a container where
+> the directory had never been created: `No such file or directory (os error 2)`,
+> six retries, run failed (`.harness-logs/243.json`). Per-turn flavour choice is
+> the whole point of this recipe, so it is the **workspace** that has to be
+> session-wide, not the routing. Ephemerality is still available (below) — it is
+> just incompatible with a durable workspace, and a router that can switch
+> flavours mid-conversation needs the workspace more than it needs the reset.
+
 ```mermaid
 flowchart TD
     U["User turn"] --> R{"router · classify intent"}
-    R -->|"quick shell / general"| BR["basic route<br/>withSandbox(rootfs 'base') · ephemeral (anon pool)"]
+    R -->|"plain shell / workspace"| BR["basic route<br/>withSandbox(id 'SID:base', rootfs 'base') · persistent"]
     R -->|"image manipulation"| IR["image route<br/>withSandbox(id 'SID:image-processing', rootfs 'image-processing') · persistent"]
     R -->|"data / plots / office"| DR["data route<br/>withSandbox(id 'SID:data', rootfs 'data') · persistent"]
 
-    BR --> BC[("base container<br/>reset each turn")]
+    BR --> BC[("base container")]
     IR --> IC[("image-processing container")]
     DR --> DC[("data container")]
 
-    IC -. "hydrate /work/in · promote /work/out" .-> DS[("Data Stash · Redis<br/>shared /work across flavours")]
+    BC -. "hydrate /work/in · promote /work/out" .-> DS[("Data Stash · Redis<br/>ONE /work per session,<br/>shared across flavours")]
+    IC -. "hydrate / promote" .-> DS
     DC -. "hydrate / promote" .-> DS
 ```
 
@@ -108,6 +125,17 @@ flavour) while keeping `sessionId` (the Data Stash key) the conversation id — 
 `/work` hydrate/promote is shared across the flavoured containers, only in-VM
 scratch differs. `id` and `sessionId` are *separate* `withSandbox` params, so this
 works today (the demonstrator does exactly this).
+
+**But the two choices are not free of each other where a router is involved.**
+`syncWorkspace` runs only on the id-addressable path, so *ephemeral* means "no
+`/work/in`, no promoted deliverables" — not merely "no in-VM scratch". Mixing an
+ephemeral route into a set of workspace-synced ones gives a session whose
+workspace **exists or not depending on which flavour the router happened to pick
+this turn**, which is the #243 follow-up bug. Rule of thumb: in a multi-flavour
+router, either every route is workspace-synced, or none is. An ephemeral sandbox
+belongs in an agent (or a route) where no turn is expected to build on a prior
+one. `withSandbox` now warns when `syncWorkspace` is passed without an `id`,
+rather than ignoring it silently.
 
 ## Deferred (→ [#116](https://github.com/mknw/harness-playground/issues/116))
 

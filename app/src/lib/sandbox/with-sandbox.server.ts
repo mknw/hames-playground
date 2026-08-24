@@ -221,6 +221,19 @@ export function withSandbox(config?: WithSandboxConfig) {
     // entry, promote on exit — see runWithIdAttachment). The capability
     // marker below reflects that reality: syncWorkspace without an id is a no-op.
     const willSyncWorkspace = syncWorkspace && id !== undefined
+    // …and a no-op is exactly what the caller did NOT ask for. Asking for a
+    // durable workspace and silently getting none is how #243's follow-up bug
+    // presented: a route with no `id` ran in a container where /work/in never
+    // existed, so a file ingested on another turn was invisible and the actor
+    // burned its retries on `ls: cannot access '/work/in'`. Config error, not a
+    // runtime one — say so at wrap time rather than leaving it to a log trace.
+    if (syncWorkspace && id === undefined) {
+      console.warn(
+        `[sandbox] withSandbox({ syncWorkspace: true }) ignored for pattern "${pattern.name}": ` +
+          'it requires an `id` (the anonymous-pool and `{ fresh }` paths have no durable ' +
+          'workspace). Pass `id` — e.g. `${sessionId}:${rootfs}` — to hydrate /work/in.',
+      )
+    }
 
     const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
       const settings = getRequestSettings()

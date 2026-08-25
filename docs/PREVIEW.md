@@ -246,18 +246,24 @@ backup carrying both the ciphertext and its key protects nothing.
 Run all of it yourself before inviting anyone, from a browser that has never
 seen the host.
 
-| #   | Step                                                                                                       | Pass looks like                                                                                               |
-| --- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| 1   | `curl -sI http://<APP_DOMAIN>/`                                                                            | `301` to `https://` — Caddy's automatic redirect                                                              |
-| 2   | `curl -s https://<APP_DOMAIN>/api/health`                                                                  | `{"status":"ok","uptimeSeconds":…}` over a **valid** certificate (no `-k`)                                    |
-| 3   | Open `https://<APP_DOMAIN>/` in a private window                                                           | redirected to `/auth/signin`, no session                                                                      |
-| 4   | Click **Sign in with Microsoft**, use your `@dtsc.be` account                                              | Entra prompt → back to `/` signed in. A redirect-URI mismatch shows as an Entra error page, not an app error  |
-| 5   | Sign in with an account **outside** the allow-list (a personal MS account, or temporarily narrow the list) | lands on `/auth/access-denied` with no session. **Do not skip this** — it is the only test of the gate itself |
-| 6   | Send a message in a chat and wait for a full answer                                                        | tokens stream in; the turn completes. Failure here is usually `ANTHROPIC_API_KEY`                             |
-| 7   | Ask something that touches the graph, then open the graph panel                                            | nodes render. Failure here is usually the Neo4j password (§10)                                                |
-| 8   | Upload a document in the Data Stash panel                                                                  | it appears and can be downloaded. Semantic **search** over it is expected to be unavailable — see §11         |
-| 9   | Sign out                                                                                                   | back at `/auth/signin`, and the session is gone (revisiting `/` does not restore it)                          |
-| 10  | `docker compose logs app \| grep -i "dev-bypass\|warn"`                                                    | no dev-bypass warning                                                                                         |
+| #   | Step                                                                                                       | Pass looks like                                                                                                                                                         |
+| --- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `curl -sI http://<APP_DOMAIN>/`                                                                            | `301` to `https://` — Caddy's automatic redirect                                                                                                                        |
+| 2   | `curl -s https://<APP_DOMAIN>/api/health`                                                                  | `{"status":"ok","uptimeSeconds":…}` over a **valid** certificate (no `-k`)                                                                                              |
+| 3   | Open `https://<APP_DOMAIN>/` **in a browser**, private window                                              | lands on `/auth/signin`, no session. Use a browser, not `curl`: the redirect is client-side, so `curl /` returns `200 text/html` — that is the SSR shell, not a session |
+| 4   | Click **Sign in with Microsoft**, use your `@dtsc.be` account                                              | Entra prompt → back to `/` signed in. A redirect-URI mismatch shows as an Entra error page, not an app error                                                            |
+| 5   | Sign in with an account **outside** the allow-list (a personal MS account, or temporarily narrow the list) | lands on `/auth/access-denied` with no session. **Do not skip this** — it is the only test of the gate itself                                                           |
+| 6   | Send a message in a chat and wait for a full answer                                                        | tokens stream in; the turn completes. Failure here is usually `ANTHROPIC_API_KEY`                                                                                       |
+| 7   | Ask something that touches the graph, then open the graph panel                                            | nodes render. Failure here is usually the Neo4j password (§10)                                                                                                          |
+| 8   | Upload a document in the Data Stash panel                                                                  | it appears and can be downloaded. Semantic **search** over it is expected to be unavailable — see §11                                                                   |
+| 9   | Sign out                                                                                                   | back at `/auth/signin`, and the session is gone (revisiting `/` does not restore it)                                                                                    |
+| 10  | `docker compose logs app \| grep -i "dev-bypass\|warn"`                                                    | no dev-bypass warning                                                                                                                                                   |
+
+> **`curl https://<APP_DOMAIN>/` answering `200` with HTML is not evidence that
+> anything is unprotected.** Every route serves the same SolidStart shell; the
+> gate is on the server actions behind it (`'use server'` modules each carry
+> their own authenticated-and-allow-listed check) and on the session cookie.
+> Step 5 is the test of the gate. Step 3 only confirms the app renders.
 
 Then, before you consider the deployment done, run **§9's backup and its restore
 drill once**. A backup nobody has restored is a hypothesis.
@@ -324,12 +330,21 @@ sleep 30
 docker exec neo4j-restorecheck cypher-shell -u neo4j -p restorecheck 'MATCH (n) RETURN count(n);'
 docker rm -f neo4j-restorecheck && docker volume rm neo4j_restorecheck
 
-# 3. Redis — start a throwaway instance on the snapshot.
-docker run --rm -d --name redis-restorecheck -v "$PWD/$BK":/seed redis/redis-stack:7.4.0-v8 \
-  sh -c 'cp /seed/redis.rdb /data/dump.rdb && redis-server --dir /data --dbfilename dump.rdb'
-sleep 5 && docker exec redis-restorecheck redis-cli DBSIZE
-docker rm -f redis-restorecheck
+# 3. Redis — seed a scratch volume, then let redis-stack start on it normally.
+docker volume create redis_restorecheck
+docker run --rm -v redis_restorecheck:/data -v "$PWD/$BK":/seed alpine \
+  cp /seed/redis.rdb /data/dump.rdb
+docker run -d --name redis-restorecheck -v redis_restorecheck:/data redis/redis-stack:7.4.0-v8
+sleep 10 && docker exec redis-restorecheck redis-cli DBSIZE
+docker rm -f redis-restorecheck && docker volume rm redis_restorecheck
 ```
+
+> **The Redis step must start the redis-stack image with its own entrypoint** —
+> seed the volume and let it boot, rather than overriding the command with a
+> bare `redis-server`. The snapshot carries RediSearch AUX data, and a Redis
+> without the modules loaded refuses it outright: `The RDB file contains AUX
+module data I can't load: no matching module 'scdtype00'`, then exits 1. This
+> is not theoretical — it is what the first draft of this command did.
 
 Restoring **onto the live stack** is the same commands without the scratch names,
 with `docker compose stop app` first so nothing writes underneath you.
@@ -430,18 +445,41 @@ before that first row changes, the welcome note must not promise encryption.
 Written against `origin/main` and rehearsed as far as a laptop allows. What that
 means concretely:
 
-**Verified by execution** — the merged production configuration
-(`docker compose config`: every data-tier port on `127.0.0.1`, both passwords
-substituted, `app/.env` correctly ignored, n8n parked, no Arm redis override);
-fail-closed substitution (a missing `POSTGRES_PASSWORD` aborts the bring-up
-rather than silently using `password`); the single-command path via the root
-`.env`; the app image building and booting behind Caddy over TLS; and the backup
-script's Postgres, Redis and Neo4j paths, the last of those including a full
-dump → load → query round-trip that returned the seeded node.
+**Verified by execution on a laptop**
 
-**Not verified, and only a real VM can** — the ACME certificate issuance against
-a public name (locally Caddy issued from its internal CA), the Entra sign-in and
-the allow-list rejection (no tenant reachable from a laptop), an end-to-end chat
-turn against a real `ANTHROPIC_API_KEY`, the cron entry, and every claim about
-Azure NSG behaviour. Treat §5 and steps 4–7 of §8 as the parts to walk through
-slowly.
+- The merged production configuration (`docker compose config`): every data-tier
+  port on `127.0.0.1`, both passwords substituted into the services _and_ into
+  the app's `DATABASE_URL`, a stray `app/.env` correctly contributing nothing,
+  n8n parked, and no Arm redis override loaded.
+- Fail-closed substitution: removing `POSTGRES_PASSWORD` aborts with
+  `required variable POSTGRES_PASSWORD is missing a value` rather than silently
+  falling back to the base file's `password`.
+- The single-command path — `COMPOSE_FILE` + `COMPOSE_PROFILES` in the root
+  `.env` making a bare `docker compose` address the right seven services, with
+  the app's runtime variables arriving from that same file.
+- The image building through this compose path, booting, and passing its
+  healthcheck.
+- Caddy in front of it: HTTPS `200` on `/api/health` over HTTP/2, `80 → 443`
+  redirect, the response headers, HTTP/3 advertised. The certificate came from
+  Caddy's **internal CA** (the site name was `localhost`), so ACME itself is
+  untested.
+- The backup script end to end against a live stack — `pg_dump` +
+  `pg_restore --list` verification, the Redis `SAVE` + copy + magic-header check,
+  the manifest, and rotation.
+- The Neo4j path, separately, against a throwaway instance: stop → dump →
+  **load into a fresh volume → start → query**, and the seeded node came back.
+  This is also where §9's Redis restore command was corrected: the first draft
+  started a bare `redis-server`, which refuses the snapshot outright because it
+  carries RediSearch AUX data.
+
+**Not verified, and only a real VM can**
+
+ACME issuance against a public name; the Entra sign-in and the allow-list
+rejection (no tenant is reachable from a laptop); an end-to-end chat turn
+against a real `ANTHROPIC_API_KEY`; the cron entry; and every claim about Azure
+NSG behaviour. Treat §5 and steps 4–7 of §8 as the parts to walk through slowly.
+
+One local result that is **not** a finding about the VM: running redis-stack
+natively on Apple Silicon dies with `Illegal instruction` on the RediSearch
+module. That is the arm64 defect `docker-compose.override.yml` exists for, it
+reproduces with or without these changes, and it is why §1 says x86.

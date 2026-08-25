@@ -50,3 +50,8 @@ n8n_data/
 # Working memory — Claude session notes
 SCRATCHPAD.md
 docker-compose.override.yml
+
+# Database backups written by scripts/backup-preview.sh. Every file under here
+# is a full copy of the conversation store, the graph, or the Data Stash — one
+# accidental `git add -A` on the VM would publish them.
+backups/

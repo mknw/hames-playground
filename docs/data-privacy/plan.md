@@ -81,6 +81,31 @@ Two things follow that _are_ in our control:
   materially changes the risk picture, and is a contract setting rather than a
   code one.
 
+**Update (2026-08-25) — a self-hosted route now exists, opt-in and not default.**
+`USE_VERDA_INFERENCE=1` re-points the controller / actor / critic / synthesizer
+roles at the company's own Qwen deployment on a Verda (DataCrunch) GPU
+(`baml_src/verda-client.baml`). Read against the paragraph above: no
+configuration still sends a prompt to Groq, OpenRouter or OpenAI, and the new
+route moves prompts _off_ a third-country processor rather than onto one, so it
+cuts the exposure this finding is about rather than widening it. Three caveats
+belong in the same breath, because each is the kind of thing this doc exists to
+stop being assumed:
+
+- The flag is **not** a "no prompt leaves the building" switch. `router`,
+  `describe`, `screen` and `planner` stay on Anthropic while it is on, and
+  `describe` is the role handed `tool_result` content verbatim — i.e. exactly
+  the mail and file bodies "The part that changes the risk profile" is about.
+  Whether those roles should follow is an open owner decision, and the role map
+  in `clients.server.ts` is where it would be made.
+- The **infrastructure** is company-controlled, which is a claim about hosting,
+  not a completed Art. 28 / Chapter V analysis: DataCrunch is still a hosting
+  provider with its own contract, location and sub-processors, and this doc has
+  not looked at any of them.
+- The client asks for **no prompt caching** (no `allowed_role_metadata`, so the
+  templates' `cache_control` breakpoints are dropped) — nothing in a request
+  asks anything to retain a prompt. The deployment's own vLLM prefix cache is a
+  server flag outside this repo and is not covered by that statement.
+
 ### 2. No storage limitation (Art. 5(1)(e))
 
 `conversations` has no TTL and no deletion policy, while Data Stash documents

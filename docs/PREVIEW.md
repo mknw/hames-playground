@@ -54,8 +54,8 @@ x86/amd64.**
   in-flight runs. That is a known limit (#105, #78), not a misconfiguration.
 
 **Enable the disk encryption offered at VM creation.** Until the conversation
-store is encrypted by the app (§9), disk encryption is the _only_ thing standing
-between a detached disk and every stored conversation.
+store is encrypted by the app (see §"What is not true yet"), disk encryption is
+the _only_ thing standing between a detached disk and every stored conversation.
 
 ## 2. Firewall — network security group
 
@@ -254,7 +254,7 @@ seen the host.
 | 4   | Click **Sign in with Microsoft**, use your `@dtsc.be` account                                              | Entra prompt → back to `/` signed in. A redirect-URI mismatch shows as an Entra error page, not an app error                                                            |
 | 5   | Sign in with an account **outside** the allow-list (a personal MS account, or temporarily narrow the list) | lands on `/auth/access-denied` with no session. **Do not skip this** — it is the only test of the gate itself                                                           |
 | 6   | Send a message in a chat and wait for a full answer                                                        | tokens stream in; the turn completes. Failure here is usually `ANTHROPIC_API_KEY`                                                                                       |
-| 7   | Ask something that touches the graph, then open the graph panel                                            | nodes render. Failure here is usually the Neo4j password (§10)                                                                                                          |
+| 7   | Ask something that touches the graph, then open the graph panel                                            | nodes render. Failure here is usually the Neo4j password (§11)                                                                                                          |
 | 8   | Upload a document in the Data Stash panel                                                                  | it appears and can be downloaded. Semantic **search** over it is expected to be unavailable — see §11                                                                   |
 | 9   | Sign out                                                                                                   | back at `/auth/signin`, and the session is gone (revisiting `/` does not restore it)                                                                                    |
 | 10  | `docker compose logs app \| grep -i "dev-bypass\|warn"`                                                    | no dev-bypass warning                                                                                                                                                   |

@@ -38,7 +38,7 @@ export const AgentSelector = (props: AgentSelectorProps) => {
   const selectedAgentInfo = () => {
     const list = agents()
     if (!list) return null
-    return list.find(a => a.id === props.selectedAgent) || list[0]
+    return list.find((a) => a.id === props.selectedAgent) || list[0]
   }
 
   const handleSelect = (agentId: string) => {
@@ -57,14 +57,17 @@ export const AgentSelector = (props: AgentSelectorProps) => {
         w="full"
         px="3"
         py="2"
-        bg="dark-bg-tertiary hover:dark-bg-primary"
-        border="~ dark-border-primary rounded-lg"
-        text="sm dark-text-primary"
+        bg="ui-bg-tertiary hover:ui-bg-primary"
+        border="~ ui-border-primary rounded-lg"
+        text="sm ui-text-primary"
         cursor={props.disabled ? 'not-allowed' : 'pointer'}
         opacity={props.disabled ? '50' : '100'}
         transition="all"
       >
-        <Show when={selectedAgentInfo()} fallback={<span text="dark-text-secondary">Loading agents...</span>}>
+        <Show
+          when={selectedAgentInfo()}
+          fallback={<span text="ui-text-secondary">Loading agents...</span>}
+        >
           {(info) => (
             <>
               {/* Iconify class from the registry — needs class= + inline
@@ -80,13 +83,19 @@ export const AgentSelector = (props: AgentSelectorProps) => {
                   'flex-shrink': 0,
                 }}
               />
-              <span flex="1" text="left">{info().name}</span>
+              <span flex="1" text="left">
+                {info().name}
+              </span>
               <svg
                 viewBox="0 0 20 20"
                 fill="currentColor"
                 class={`h-4 w-4 transform transition-transform ${isOpen() ? 'rotate-180' : ''}`}
               >
-                <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                <path
+                  fill-rule="evenodd"
+                  d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                  clip-rule="evenodd"
+                />
               </svg>
             </>
           )}
@@ -95,11 +104,9 @@ export const AgentSelector = (props: AgentSelectorProps) => {
 
       {/* Dropdown Menu */}
       <Show when={isOpen()}>
-        <div
-          class="mt-1 border border-dark-border-primary rounded-lg bg-dark-bg-tertiary max-h-80 w-full shadow-lg left-0 top-full absolute z-50 overflow-auto"
-        >
+        <div class="mt-1 border border-ui-border-primary rounded-lg bg-ui-bg-tertiary max-h-80 w-full shadow-lg left-0 top-full absolute z-50 overflow-auto">
           <Show when={agents.loading}>
-            <div p="4" text="center dark-text-secondary">
+            <div p="4" text="center ui-text-secondary">
               Loading...
             </div>
           </Show>
@@ -115,8 +122,8 @@ export const AgentSelector = (props: AgentSelectorProps) => {
                   px="3"
                   py="2"
                   text="left"
-                  bg={agent.id === props.selectedAgent ? 'neon-cyan/10' : 'hover:dark-bg-primary'}
-                  border={agent.id === props.selectedAgent ? 'l-2 neon-cyan' : 'l-2 transparent'}
+                  bg={agent.id === props.selectedAgent ? 'ui-accent/10' : 'hover:ui-bg-primary'}
+                  border={agent.id === props.selectedAgent ? 'l-2 ui-accent' : 'l-2 transparent'}
                   transition="all"
                 >
                   <span
@@ -131,18 +138,18 @@ export const AgentSelector = (props: AgentSelectorProps) => {
                     }}
                   />
                   <div flex="~ col" overflow="hidden">
-                    <span text="sm dark-text-primary font-medium" truncate>
+                    <span text="sm ui-text-primary font-medium" truncate>
                       {agent.name}
                     </span>
-                    <span text="xs dark-text-secondary" line-clamp="2">
+                    <span text="xs ui-text-secondary" line-clamp="2">
                       {agent.description}
                     </span>
                     <div flex="~ wrap gap-1" mt="1">
                       <For each={agent.servers.slice(0, 3)}>
                         {(server) => (
                           <span
-                            text="2xs dark-text-tertiary"
-                            bg="dark-bg-primary"
+                            text="2xs ui-text-tertiary"
+                            bg="ui-bg-primary"
                             px="1.5"
                             py="0.5"
                             rounded="full"
@@ -152,7 +159,7 @@ export const AgentSelector = (props: AgentSelectorProps) => {
                         )}
                       </For>
                       <Show when={agent.servers.length > 3}>
-                        <span text="2xs dark-text-tertiary">+{agent.servers.length - 3}</span>
+                        <span text="2xs ui-text-tertiary">+{agent.servers.length - 3}</span>
                       </Show>
                     </div>
                   </div>
@@ -165,10 +172,7 @@ export const AgentSelector = (props: AgentSelectorProps) => {
 
       {/* Backdrop to close dropdown */}
       <Show when={isOpen()}>
-        <div
-          class="inset-0 fixed z-40"
-          onClick={() => setIsOpen(false)}
-        />
+        <div class="inset-0 fixed z-40" onClick={() => setIsOpen(false)} />
       </Show>
     </div>
   )

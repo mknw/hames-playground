@@ -1,30 +1,46 @@
 import { A } from '@solidjs/router'
 
+/**
+ * The catch-all. Grouped with the auth pages because it is the same kind of
+ * page — no state of its own, one job: hand the user their next action. It was
+ * on the same off-palette light utilities and moves onto the `ui-*` theme
+ * tokens with them (#226 B8). The SolidJS starter's outbound link is gone; a
+ * 404 in this app should point back into this app.
+ */
 export default function NotFound() {
   return (
-    <main class="text-gray-700 mx-auto p-4 text-center">
-      <h1 class="max-6-xs text-6xl text-sky-700 font-thin my-16 uppercase">Not Found</h1>
-      <p class="mt-8">
-        Visit{' '}
-        <a
-          href="https://solidjs.com"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="text-sky-600 hover:underline"
-        >
-          solidjs.com
-        </a>{' '}
-        to learn how to build Solid apps.
-      </p>
-      <p class="my-4">
-        <A href="/" class="text-sky-600 hover:underline">
+    <main
+      flex="~ col"
+      items="center"
+      justify="center"
+      gap="4"
+      p="8"
+      min-h="70vh"
+      text="center"
+      bg="ui-bg-primary"
+    >
+      <span
+        class="i-material-symbols-explore-off-outline"
+        w="10"
+        h="10"
+        text="ui-text-tertiary"
+        aria-hidden="true"
+      />
+      <h1 text="3xl ui-text-primary" font="light" tracking="wide" uppercase>
+        Not Found
+      </h1>
+      <p text="sm ui-text-secondary">That page does not exist.</p>
+      <div flex="~" items="center" gap="3">
+        <A href="/" text="sm ui-accent" hover="underline">
           Chat
         </A>
-        {' - '}
-        <A href="/dashboard" class="text-sky-600 hover:underline">
+        <span text="xs ui-text-tertiary" aria-hidden="true">
+          ·
+        </span>
+        <A href="/dashboard" text="sm ui-accent" hover="underline">
           Metrics
         </A>
-      </p>
+      </div>
     </main>
   )
 }

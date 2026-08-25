@@ -97,17 +97,160 @@ export default defineConfig({
           tertiary: '#71717a',
         },
       },
+      // Theme-aware semantic palette (#226 B8). These are the SAME roles as
+      // `dark.*` above, but each value is a CSS variable rather than a hex, so
+      // the palette flips at the `:root` level (see the first preflight below)
+      // and a component never needs a `dark:` / light branch of its own.
+      //
+      // The dark values of these variables are byte-identical to the `dark.*`
+      // hexes, `ui-accent`'s is `neon-cyan` and `ui-success`'s is `neon-green`
+      // — so migrating a component is a rename (`dark-bg-primary` →
+      // `ui-bg-primary`) with no visual change at all in dark mode.
+      // `uno-theme.test.ts` asserts that equality so it cannot silently drift.
+      //
+      // `dark.*` and the unmapped `neon.*` entries above are kept because the
+      // graph canvas and the per-turn palettes still need fixed hexes: those
+      // are data colours, not chrome, and Cytoscape reads values rather than
+      // classes.
+      ui: {
+        bg: {
+          primary: 'var(--ui-bg-primary)',
+          secondary: 'var(--ui-bg-secondary)',
+          tertiary: 'var(--ui-bg-tertiary)',
+          hover: 'var(--ui-bg-hover)',
+        },
+        border: {
+          primary: 'var(--ui-border-primary)',
+          secondary: 'var(--ui-border-secondary)',
+          accent: 'var(--ui-border-accent)',
+        },
+        text: {
+          primary: 'var(--ui-text-primary)',
+          secondary: 'var(--ui-text-secondary)',
+          tertiary: 'var(--ui-text-tertiary)',
+        },
+        // Brand accent and the two status colours the themed surfaces need.
+        accent: 'var(--ui-accent)',
+        danger: 'var(--ui-danger)',
+        success: 'var(--ui-success)',
+      },
     },
   },
   shortcuts: {
     // Futuristic UI shortcuts
-    'glass-panel': 'bg-dark-bg-secondary/50 backdrop-blur-lg border border-dark-border-primary',
+    'glass-panel': 'bg-ui-bg-secondary/50 backdrop-blur-lg border border-ui-border-primary',
     'neon-border': 'border-2 border-neon-cyan shadow-[0_0_10px_rgba(0,255,255,0.5)]',
     'cyber-button':
       'bg-cyber-700 hover:bg-cyber-600 text-white font-medium px-4 py-2 rounded-md transition-all duration-200 hover:shadow-[0_0_15px_rgba(79,70,229,0.5)]',
   },
-  // Custom CSS for markdown rendering
   preflights: [
+    // Theme palette (#226 B8). `<html>` carries `dark` (UnoCSS's own dark
+    // variant hook) or `light`; nothing at all means dark, so a server-
+    // rendered page paints dark before hydration and never flashes. The
+    // `light` class is a POSITIVE marker for exactly that reason — keying
+    // light off `:root:not(.dark)` would make the pre-hydration document
+    // light. `:root.light` also outranks `:root` on specificity, so the
+    // override wins wherever UnoCSS chooses to emit the two blocks.
+    //
+    // Everything under `--ui-*` is theme-aware; `cyber-*` (indigo) is left
+    // fixed because it reads on both grounds, and the surviving `neon-*` /
+    // `dark-*` hexes are graph-canvas data colours. A screen joins the theme
+    // by moving to the `ui-*` tokens — no `dark:` variant, no light branch.
+    //
+    // The second preflight below is hand-written CSS rather than utilities,
+    // so it cannot express a token as an attribute. It reaches the same
+    // palette through `var(--ui-…)` directly, which is why the tint and
+    // overlay variables exist: a literal `rgba(255,255,255,0.06)` lightens a
+    // dark surface and does nothing at all to a white one.
+    {
+      getCSS: () => `
+        /* The document's own ground. Nothing painted it before, so any gap
+           a page left uncovered fell through to the browser's white — visible
+           on the 404, and on overscroll. Dark is the app's ground either way,
+           so this cannot change a surface that was already covered. */
+        html {
+          background-color: var(--ui-bg-primary);
+        }
+        :root {
+          --ui-bg-primary: #0a0a0f;
+          --ui-bg-secondary: #12121a;
+          --ui-bg-tertiary: #1a1a24;
+          --ui-bg-hover: #22222f;
+          --ui-border-primary: #2a2a3a;
+          --ui-border-secondary: #3a3a4a;
+          --ui-border-accent: #4a4a5a;
+          --ui-text-primary: #e4e4e7;
+          --ui-text-secondary: #a1a1aa;
+          --ui-text-tertiary: #71717a;
+          --ui-accent: #00ffff;
+          --ui-danger: #f87171;
+          --ui-success: #39ff14;
+
+          /* Tints of the accent. Written out per theme rather than mixed
+             from --ui-accent at use time: these are the exact rgba() the
+             hand-written CSS below carried as literals, so the dark render
+             is unchanged to the byte. */
+          --ui-accent-soft: rgba(0, 255, 255, 0.1);
+          --ui-accent-glow: rgba(0, 255, 255, 0.15);
+          --ui-accent-strong: rgba(0, 255, 255, 0.2);
+          --ui-accent-line: rgba(0, 255, 255, 0.4);
+
+          /* Neutral washes over whatever surface they sit on. In dark they
+             lighten (white at low alpha); in light they have to darken, and
+             that inversion is the whole reason they are variables. */
+          --ui-overlay-wash: rgba(255, 255, 255, 0.03);
+          --ui-overlay-raise: rgba(255, 255, 255, 0.06);
+          --ui-overlay-line: rgba(255, 255, 255, 0.06);
+          --ui-overlay-hairline: rgba(255, 255, 255, 0.05);
+          --ui-overlay-sunken: rgba(0, 0, 0, 0.15);
+
+          /* Code blocks sit *below* the message surface, which is why this
+             is not the tertiary background — in dark it goes darker than the
+             page ground rather than lighter. */
+          --ui-code-bg: #0a0a0f;
+        }
+        :root.light {
+          /* Contrast-checked against the light grounds below: every text
+             token clears 4.5:1 on both #ffffff and #f5f6f8. Cyan and red
+             are darkened because the neon versions are unreadable on white. */
+          --ui-bg-primary: #f5f6f8;
+          --ui-bg-secondary: #ffffff;
+          --ui-bg-tertiary: #eceef2;
+          --ui-bg-hover: #e2e5ea;
+          --ui-border-primary: #d9dde4;
+          --ui-border-secondary: #c3c9d2;
+          --ui-border-accent: #a7aeba;
+          --ui-text-primary: #14161a;
+          --ui-text-secondary: #4a4f57;
+          --ui-text-tertiary: #6b7079;
+          --ui-accent: #0e7490;
+          --ui-danger: #b91c1c;
+          --ui-success: #15803d;
+
+          --ui-accent-soft: rgba(14, 116, 144, 0.1);
+          --ui-accent-glow: rgba(14, 116, 144, 0.15);
+          --ui-accent-strong: rgba(14, 116, 144, 0.22);
+          --ui-accent-line: rgba(14, 116, 144, 0.5);
+
+          /* Black, not white: a wash has to darken a light surface to read
+             as one. The alphas are a little higher than their dark twins
+             because black-on-near-white separates less than white-on-black. */
+          --ui-overlay-wash: rgba(0, 0, 0, 0.03);
+          --ui-overlay-raise: rgba(0, 0, 0, 0.06);
+          --ui-overlay-line: rgba(0, 0, 0, 0.09);
+          --ui-overlay-hairline: rgba(0, 0, 0, 0.07);
+          --ui-overlay-sunken: rgba(0, 0, 0, 0.04);
+
+          --ui-code-bg: #f1f3f6;
+          /* Native controls, scrollbars and form widgets follow the theme.
+             Deliberately not declared on the dark default: the dark app is
+             on the browser default today and this change keeps it there. */
+          color-scheme: light;
+        }
+      `,
+    },
+    // Hand-written CSS classes: markdown rendering, chat affordances, the
+    // sidebar animations. Listed as exceptions in the kg-dtalk-ui skill.
     {
       getCSS: () => `
         .prose-chat {
@@ -124,19 +267,19 @@ export default defineConfig({
           margin-bottom: 0;
         }
         .prose-chat code {
-          background: rgba(0,255,255,0.1);
+          background: var(--ui-accent-soft);
           padding: 0.2em 0.4em;
           border-radius: 4px;
           font-family: 'Fira Code', monospace;
           font-size: 0.9em;
         }
         .prose-chat pre {
-          background: #0a0a0f;
+          background: var(--ui-code-bg);
           padding: 1em;
           border-radius: 8px;
           overflow-x: auto;
           margin: 0.75em 0;
-          border: 1px solid #2a2a3a;
+          border: 1px solid var(--ui-border-primary);
         }
         .prose-chat pre code {
           background: transparent;
@@ -151,21 +294,21 @@ export default defineConfig({
           margin: 0.25em 0;
         }
         .prose-chat strong {
-          color: #00ffff;
+          color: var(--ui-accent);
           font-weight: 600;
         }
         .prose-chat em {
           font-style: italic;
         }
         .prose-chat a {
-          color: #00ffff;
+          color: var(--ui-accent);
           text-decoration: underline;
         }
         .prose-chat blockquote {
           border-left: 3px solid #4f46e5;
           padding-left: 1em;
           margin: 0.75em 0;
-          color: #a1a1aa;
+          color: var(--ui-text-secondary);
         }
         .prose-chat h1, .prose-chat h2, .prose-chat h3 {
           font-weight: 600;
@@ -178,7 +321,7 @@ export default defineConfig({
         /* Thinking/reasoning collapsible */
         .think-root {
           margin: -12px -12px 8px -12px;
-          border-bottom: 1px solid rgba(255,255,255,0.06);
+          border-bottom: 1px solid var(--ui-overlay-line);
           border-radius: 8px 8px 0 0;
           overflow: hidden;
         }
@@ -188,16 +331,16 @@ export default defineConfig({
           gap: 6px;
           width: 100%;
           padding: 4px 8px;
-          background: rgba(255,255,255,0.03);
+          background: var(--ui-overlay-wash);
           cursor: pointer;
           font-size: 0.75rem;
-          color: #71717a;
+          color: var(--ui-text-tertiary);
           border: none;
           text-align: left;
           transition: background 0.15s ease;
         }
         .think-trigger:hover {
-          background: rgba(255,255,255,0.06);
+          background: var(--ui-overlay-raise);
         }
         .think-preview {
           overflow: hidden;
@@ -219,8 +362,8 @@ export default defineConfig({
         }
         .think-body {
           padding: 8px 10px;
-          background: rgba(0,0,0,0.15);
-          border-top: 1px solid rgba(255,255,255,0.05);
+          background: var(--ui-overlay-sunken);
+          border-top: 1px solid var(--ui-overlay-hairline);
           font-size: 0.8rem;
           opacity: 0.6;
         }
@@ -257,14 +400,20 @@ export default defineConfig({
            (a dynamic utility class would never be extracted) and only the
            rest/hover *states* live here. Falls back to the muted tone when
            the property is absent. The collapsed rail sets its colour inline
-           instead — there the accent is always on. */
-        .agent-glyph {
-          color: #71717a;
+           instead — there the accent is always on.
+
+           span-qualified: the icon utility on the same element carries
+           color: inherit at the same (0,1,0) specificity, later in the
+           sheet — an unqualified .agent-glyph loses the tie and the glyph
+           inherits the document default (black; nothing above it sets a
+           colour), invisible on the dark ground. */
+        span.agent-glyph {
+          color: var(--ui-text-tertiary);
           transition: color 0.15s ease;
         }
         .group:hover .agent-glyph,
         .agent-glyph[data-lit="true"] {
-          color: var(--agent-accent, #71717a);
+          color: var(--agent-accent, var(--ui-text-tertiary));
         }
 
         /* Sidebar mini progress strip, indeterminate mode (#105) — shown
@@ -289,20 +438,20 @@ export default defineConfig({
         /* Graph entity interactive spans in chat messages */
         .graph-entity {
           cursor: pointer;
-          border-bottom: 1px dashed rgba(0,255,255,0.4);
+          border-bottom: 1px dashed var(--ui-accent-line);
           transition: all 0.15s ease;
           border-radius: 2px;
           padding: 0 2px;
         }
         .graph-entity:hover {
-          background: rgba(0,255,255,0.15);
-          border-bottom-color: #00ffff;
-          color: #00ffff;
+          background: var(--ui-accent-glow);
+          border-bottom-color: var(--ui-accent);
+          color: var(--ui-accent);
         }
         .graph-entity.toggled {
-          background: rgba(0,255,255,0.2);
-          border-bottom: 1px solid #00ffff;
-          color: #00ffff;
+          background: var(--ui-accent-strong);
+          border-bottom: 1px solid var(--ui-accent);
+          color: var(--ui-accent);
         }
         /* Retriever citations: inline filename superscript + sources footer */
         .doc-ref {

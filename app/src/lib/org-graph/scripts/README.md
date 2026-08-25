@@ -1,0 +1,67 @@
+# Org-graph scripts
+
+Live-tenant, live-database entry points for the organisational graph. They
+complement the hermetic vitest suites under `app/src/__tests__/lib/org-graph/`
+and `.../lib/privacy/org-roster.test.ts` — those mock `fetch` and the Neo4j
+driver, so they never touch the tenant. These scripts talk to the real thing.
+
+There is no UI and no `'use server'` RPC for any of this on purpose: a function
+that wipes a graph or reads the whole directory must not be browser-reachable.
+See the header of `../schema.server.ts`.
+
+## Prerequisites
+
+- Neo4j up: `docker compose up -d` from the repo root.
+- `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` in `app/.env`,
+  with the **`User.Read.All` application permission** admin-consented on the app
+  registration. Client credentials, not a delegated sign-in — the roster is the
+  whole tenant, so there is no user whose delegated view would be right.
+
+Run from `app/`. The `--env-file=.env` flag is how these pick up `.env` without
+a `dotenv` import (same convention as `../../sandbox/scripts/`).
+
+## The three scripts
+
+| File                    | Touches       | Destructive        |
+| ----------------------- | ------------- | ------------------ |
+| `setup-org-graph.ts`    | Neo4j schema  | only with `--wipe` |
+| `ingest-roster.ts`      | Graph → Neo4j | no (upsert)        |
+| `smoke-pseudonymise.ts` | Neo4j (read)  | no                 |
+
+```sh
+# idempotent: creates missing constraints, deletes nothing
+pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/setup-org-graph.ts
+
+# the ONE-SHOT migration — prompts for the confirmation phrase
+pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/setup-org-graph.ts --wipe
+
+pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/ingest-roster.ts
+pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/smoke-pseudonymise.ts
+```
+
+`--wipe` was authorised once, for the migration to an organisational-only graph.
+The wipe lives behind a required confirmation **argument** (not a flag, not an
+env var) so it can never become a side effect of ordinary setup — re-read
+`wipeAndApplyOrgGraphSchema` before reaching for it again.
+
+## Output is redacted
+
+Every script prints counts, property names and reason codes only. Where an
+identity has to be shown at all — `smoke-pseudonymise.ts` has to prove a
+_specific_ real name was replaced — it goes through `mask()` in `_redact.ts`,
+which keeps the shape (`J·· V·· D····`) and drops the person. Assertions run on
+the unmasked strings in memory. That is what makes these transcripts safe to
+paste into a PR; it is output hygiene, not a security control.
+
+## What "passing" looks like
+
+- `setup-org-graph.ts`: all ontology constraints present, no leftovers. Without
+  `--wipe`, pre-ontology data is reported as drift and **left alone** — that is
+  the guarantee, not a failure.
+- `ingest-roster.ts`: `written + rejected rows == fetched`, constraints
+  complete, non-conformance `none`. A non-zero `incomplete` tally is expected —
+  it is the ontology's soft tier reporting how much of the directory the tenant
+  has filled in (`docs/org-graph.md`).
+- `smoke-pseudonymise.ts`: `all assertions passed`. Case 1 is _meant_ to show a
+  leak — it reproduces the payload-only limitation against real data, which is
+  the baseline case 2 improves on.

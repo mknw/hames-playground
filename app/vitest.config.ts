@@ -37,6 +37,15 @@ export default defineConfig({
         // Manual smoke-test scripts (run by hand against a live sandbox),
         // not unit-testable — recommendation from the sandbox coverage lane.
         'src/lib/sandbox/scripts/smoke-*.ts',
+        // Same reason: run by hand against the live tenant and the live Neo4j.
+        // The logic they drive is covered by the hermetic suites under
+        // src/__tests__/lib/org-graph/; only the CLI wrapper is here. Named
+        // one by one rather than globbed, so `_redact.ts` beside them — pure,
+        // and the thing that keeps real names out of a pasted transcript —
+        // stays in the report and keeps needing its tests.
+        'src/lib/org-graph/scripts/setup-org-graph.ts',
+        'src/lib/org-graph/scripts/ingest-roster.ts',
+        'src/lib/org-graph/scripts/smoke-pseudonymise.ts',
       ],
       // Backstop floors, not aspirations. Measured on 2026-08-16 against the
       // scope above (post smoke-script exclude) and set 2pp below the

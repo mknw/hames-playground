@@ -193,10 +193,38 @@ export async function graphFetch(
   } = {},
 ): Promise<unknown> {
   const token = await getUserGraphToken(userId, init.scopes ?? DEFAULT_GRAPH_SCOPES)
+  const res = await sendGraphRequest(token, path, init)
+
+  if (res.status === 401 || res.status === 403) {
+    // Entra rejected the delegated token — treat as re-auth/consent needed.
+    // The body can echo request detail, so it is deliberately not surfaced.
+    throw new GraphAuthRequiredError(
+      `Microsoft Graph denied the request (${res.status}) — the account may lack consent for this scope.`,
+      userId,
+      res.status,
+    )
+  }
+  return decodeGraphResponse(res, path, init)
+}
+
+/** Options both {@link graphFetch} and {@link graphAppFetch} accept. */
+interface GraphRequestInit {
+  method?: string
+  scopes?: readonly string[]
+  body?: unknown
+  headers?: Record<string, string>
+  responseType?: 'json' | 'base64'
+}
+
+/**
+ * Issue the HTTP request. The credential is attached **here**, in the one place
+ * both the delegated and the app-only path share, so neither can drift into
+ * letting a caller supply or override `Authorization`.
+ */
+function sendGraphRequest(token: string, path: string, init: GraphRequestInit): Promise<Response> {
   const url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`
   const wantsBytes = init.responseType === 'base64'
-
-  const res = await fetch(url, {
+  return fetch(url, {
     method: init.method ?? 'GET',
     headers: {
       ...init.headers,
@@ -211,22 +239,130 @@ export async function graphFetch(
     },
     ...(init.body ? { body: JSON.stringify(init.body) } : {}),
   })
+}
 
-  if (res.status === 401 || res.status === 403) {
-    // Entra rejected the delegated token — treat as re-auth/consent needed.
-    // The body can echo request detail, so it is deliberately not surfaced.
-    throw new GraphAuthRequiredError(
-      `Microsoft Graph denied the request (${res.status}) — the account may lack consent for this scope.`,
-      userId,
-      res.status,
-    )
-  }
+/** Shared non-auth response handling: throw on any other error status, then
+ *  decode per `responseType`. */
+async function decodeGraphResponse(
+  res: Response,
+  path: string,
+  init: GraphRequestInit,
+): Promise<unknown> {
   if (!res.ok) {
     throw new Error(
       `[graph] ${init.method ?? 'GET'} ${path} failed: ${res.status} ${res.statusText}`,
     )
   }
   if (res.status === 204) return null
-  if (wantsBytes) return Buffer.from(await res.arrayBuffer()).toString('base64')
+  if (init.responseType === 'base64') {
+    return Buffer.from(await res.arrayBuffer()).toString('base64')
+  }
   return res.json()
+}
+
+// ============================================================================
+// App-only (client-credentials) access — the directory read, and nothing else
+// ============================================================================
+
+/**
+ * The `.default` scope of the Graph resource. Client credentials cannot request
+ * individual permissions: Entra issues whatever **application** roles the app
+ * registration has been granted admin consent for, and `.default` is how you
+ * ask for exactly that set. Which roles those are is therefore a tenant fact,
+ * not a code fact — see {@link graphAppFetch}'s note on the blast radius.
+ */
+export const GRAPH_APP_SCOPE = 'https://graph.microsoft.com/.default'
+
+/**
+ * Raised when Graph refuses an **app-only** call. Deliberately not
+ * {@link GraphAuthRequiredError}: no user can sign in to fix this. A 403 here
+ * means the app registration lacks the application permission, which is an
+ * admin-consent change in the tenant, and telling a user to "sign in again"
+ * would be actively misleading.
+ */
+export class GraphAppPermissionError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+    this.name = 'GraphAppPermissionError'
+  }
+}
+
+/** Cached app token — one per process, refreshed a minute before expiry. */
+let appToken: { value: string; expiresAt: number } | null = null
+
+/** How early to treat a cached app token as spent, in ms. */
+const APP_TOKEN_SKEW_MS = 60_000
+
+/**
+ * Acquire an **app-only** Graph token via the client-credentials grant.
+ *
+ * This token carries no user identity, so nothing Entra does constrains it to
+ * one person's data: it is bounded solely by the application permissions the
+ * tenant granted. That is why there is exactly one caller shape for it in this
+ * repo — the directory roster read — and why it is a separate function from
+ * {@link getUserGraphToken} rather than a flag on it. A flag would have made
+ * "act as the app" one boolean away from every existing per-user call site,
+ * which is the opposite of #107 principle 1 (`graph-token.server.ts` header).
+ *
+ * MSAL's own app-token cache lives on the client instance, and a fresh
+ * `ConfidentialClientApplication` per call would defeat it, so the token is
+ * memoized here instead.
+ */
+export async function getAppGraphToken(): Promise<string> {
+  const now = Date.now()
+  if (appToken && appToken.expiresAt - APP_TOKEN_SKEW_MS > now) return appToken.value
+
+  const cfg = buildEntraConfig()
+  const cca = new ConfidentialClientApplication(msalConfiguration(cfg))
+  const result = await cca.acquireTokenByClientCredential({ scopes: [GRAPH_APP_SCOPE] })
+  if (!result?.accessToken) {
+    throw new GraphAppPermissionError(
+      'Entra returned no app-only access token for the client-credentials grant.',
+      401,
+    )
+  }
+  appToken = {
+    value: result.accessToken,
+    // `expiresOn` is nullable on the MSAL type; an hour is the documented
+    // default and erring short only costs one extra token request.
+    expiresAt: result.expiresOn?.getTime() ?? now + 3_600_000,
+  }
+  return result.accessToken
+}
+
+/** Drop the memoized app token. For tests, and for a credential rotation. */
+export function resetAppGraphToken(): void {
+  appToken = null
+}
+
+/**
+ * Call Microsoft Graph **as the application**, not as a user.
+ *
+ * Use this only where acting as a user is impossible in principle — the
+ * directory roster is read for the whole tenant, so there is no user whose
+ * delegated view would be correct. Everything else must go through
+ * {@link graphFetch}, so Entra keeps enforcing per-user scope.
+ *
+ * A 401/403 raises {@link GraphAppPermissionError} rather than the
+ * re-authenticate error, because an app-only denial is a tenant-consent fact.
+ */
+export async function graphAppFetch(
+  path: string,
+  init: Omit<GraphRequestInit, 'scopes'> = {},
+): Promise<unknown> {
+  const token = await getAppGraphToken()
+  const res = await sendGraphRequest(token, path, init)
+
+  if (res.status === 401 || res.status === 403) {
+    // The body echoes the request, so it is deliberately not surfaced.
+    throw new GraphAppPermissionError(
+      `Microsoft Graph denied an app-only request (${res.status}) — the app ` +
+        `registration is missing the application permission this path needs.`,
+      res.status,
+    )
+  }
+  return decodeGraphResponse(res, path, init)
 }

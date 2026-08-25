@@ -40,6 +40,7 @@ import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
 import { CLIENT_MAX_OUTPUT_TOKENS, estimateLlmCostUsd } from '../settings'
 import { clientOverrideFor } from './clients.server'
+import { notifyLlmUsage } from './llm-usage-observer.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 
 assertServerOnImport()
@@ -163,6 +164,11 @@ export function extractLLMCallData(
   }
   const llmCall = buildLLMCallDataFromLog(last, functionName, variables, startTime, parsedOutput)
   llmCall.metrics = computeEventMetrics(collector)
+  notifyLlmUsage({
+    functionName,
+    clientName: llmCall.clientName,
+    metrics: llmCall.metrics,
+  })
   return llmCall
 }
 
@@ -382,6 +388,11 @@ export function extractFailureLLMCallData(
     // Failed steps still spent tokens (e.g. a truncated 32k-output response
     // before the retry also failed) — account for them.
     llmCall.metrics = computeEventMetrics(collector)
+    notifyLlmUsage({
+      functionName,
+      clientName: llmCall.clientName,
+      metrics: llmCall.metrics,
+    })
     return llmCall
   }
   return {

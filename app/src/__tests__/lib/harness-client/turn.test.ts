@@ -98,6 +98,42 @@ vi.mock('../../../lib/settings-context.server', async () => {
   }
 })
 
+// ── inference tier scope: the real ALS, with the calls recorded ─────────────
+// The per-user switch acts here and nowhere else, so the turn runner is where
+// "the user's preference actually steers the run" is provable.
+const tierScopes: string[] = []
+vi.mock('../../../lib/harness-patterns/clients.server', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../../lib/harness-patterns/clients.server')
+  >('../../../lib/harness-patterns/clients.server')
+  return {
+    ...actual,
+    runWithInferenceTier: (tier: 'verda' | 'anthropic', fn: () => Promise<unknown>) => {
+      tierScopes.push(tier)
+      return actual.runWithInferenceTier(tier, fn)
+    },
+  }
+})
+
+const resolveInferenceTier = vi.fn<(userId: string) => Promise<'verda' | 'anthropic'>>(
+  async () => 'anthropic',
+)
+vi.mock('../../../lib/db/user-prefs.server', () => ({
+  resolveInferenceTier: (userId: string) => resolveInferenceTier(userId),
+}))
+
+const beginVerdaTurn = vi.fn()
+const endVerdaTurn = vi.fn()
+vi.mock('../../../lib/inference/verda-activity.server', () => ({
+  beginVerdaTurn: () => beginVerdaTurn(),
+  endVerdaTurn: () => endVerdaTurn(),
+}))
+
+const recordTurn = vi.fn()
+vi.mock('../../../lib/metrics/usage-recorder.server', () => ({
+  recordTurn: (tier: string) => recordTurn(tier),
+}))
+
 // ── session.server (pattern cache + persistence) ────────────────────────────
 type Loaded = { serializedContext: string; agentId: string; kind: string; status: string } | null
 const loadSession = vi.fn<(id: string, userId: string) => Promise<Loaded>>(async () => null)
@@ -149,6 +185,14 @@ beforeEach(() => {
   vi.clearAllMocks()
   seenScopes.length = 0
   settingsScopes.length = 0
+  tierScopes.length = 0
+  // The real `runWithInferenceTier` is used (only the recording is a wrapper),
+  // and it refuses the `verda` position unless the endpoint is configured —
+  // fail-closed, by design. Fakes: nothing here opens a socket, and the
+  // endpoint only has to satisfy the shape check.
+  process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
+  process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  resolveInferenceTier.mockResolvedValue('anthropic')
   loadSession.mockResolvedValue(null)
   runFirstTurnTitleGen.mockResolvedValue(null)
   logged = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -159,6 +203,8 @@ afterEach(async () => {
   // middle of the next test.
   await flush()
   logged.mockRestore()
+  delete process.env.VERDA_INFERENCE_ENDPOINT
+  delete process.env.VERDA_INFERENCE_API_KEY
 })
 
 function interactive(over: Record<string, unknown> = {}) {
@@ -554,5 +600,106 @@ describe('approval turns', () => {
     // Nothing ran, so nothing is mid-flight to flip or seed.
     expect(dbSetConversationStatus).not.toHaveBeenCalled()
     expect(dbSaveConversation).not.toHaveBeenCalled()
+  })
+})
+
+describe('the inference-tier scope — the per-user switch, plumbed', () => {
+  it('opens the scope with the tier the user actually chose', async () => {
+    resolveInferenceTier.mockResolvedValue('verda')
+
+    await runTurnAndPersist(interactive())
+
+    expect(resolveInferenceTier).toHaveBeenCalledWith('user-1')
+    expect(tierScopes).toEqual(['verda'])
+  })
+
+  it('opens the anthropic position too, rather than skipping the scope', async () => {
+    // The scope must be entered in BOTH positions: a run with no scope falls
+    // back to the deployment default, so "skip it when the user picked
+    // Anthropic" would silently ignore an opt-out on a Verda-default host.
+    resolveInferenceTier.mockResolvedValue('anthropic')
+
+    await runTurnAndPersist(interactive())
+
+    expect(tierScopes).toEqual(['anthropic'])
+  })
+
+  it('resolves the preference of the run’s OWNER, not of any caller', async () => {
+    // The tier is looked up from the turn's `userId` — the id the entry point
+    // authenticated — which is what stops one user's setting steering another
+    // user's triggered run.
+    await runTurnAndPersist(interactive({ userId: 'user-7' }))
+
+    expect(resolveInferenceTier).toHaveBeenCalledWith('user-7')
+  })
+
+  it('covers every mode, so no entry point runs untiered', async () => {
+    await runTurnAndPersist(interactive())
+    await runTurnAndPersist({
+      mode: 'triggered',
+      sessionId: 'sess-t',
+      userId: 'user-1',
+      agentId: 'search',
+      message: 'go',
+    })
+    loadSession.mockResolvedValue({ ...STORED, status: 'paused' })
+    await runTurnAndPersist({
+      mode: 'approval',
+      sessionId: 'sess-1',
+      userId: 'user-1',
+      approved: true,
+    })
+
+    expect(tierScopes).toHaveLength(3)
+  })
+
+  it('runs the turn anyway when the preference cannot be read', async () => {
+    // A Postgres blip must cost the user their *preference*, not their answer.
+    resolveInferenceTier.mockRejectedValue(new Error('postgres is down'))
+
+    const result = await runTurnAndPersist(interactive())
+
+    expect(result.response).toBe('fresh:hello world, this is long')
+    expect(tierScopes).toEqual(['anthropic']) // the deployment default
+    expect(logged).toHaveBeenCalled()
+  })
+})
+
+describe('what the header learns from a turn', () => {
+  it('counts the turn against its tier', async () => {
+    resolveInferenceTier.mockResolvedValue('verda')
+
+    await runTurnAndPersist(interactive())
+
+    expect(recordTurn).toHaveBeenCalledWith('verda')
+  })
+
+  it('brackets a Verda turn with the in-flight gauge', async () => {
+    resolveInferenceTier.mockResolvedValue('verda')
+
+    await runTurnAndPersist(interactive())
+
+    expect(beginVerdaTurn).toHaveBeenCalledTimes(1)
+    expect(endVerdaTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it('releases the gauge even when the turn throws', async () => {
+    // Without the `finally`, one failed turn pins the header to "answering"
+    // for the life of the process.
+    resolveInferenceTier.mockResolvedValue('verda')
+    getOrBuildPatterns.mockRejectedValueOnce(new Error('gateway down'))
+
+    await expect(runTurnAndPersist(interactive())).rejects.toThrow('gateway down')
+
+    expect(beginVerdaTurn).toHaveBeenCalledTimes(1)
+    expect(endVerdaTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not touch the gauge for an Anthropic turn', async () => {
+    await runTurnAndPersist(interactive())
+
+    expect(beginVerdaTurn).not.toHaveBeenCalled()
+    expect(endVerdaTurn).not.toHaveBeenCalled()
+    expect(recordTurn).toHaveBeenCalledWith('anthropic')
   })
 })

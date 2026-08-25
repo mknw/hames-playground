@@ -3,8 +3,8 @@
  *
  * SolidStart imports this module once when the server handler graph loads,
  * before any request is served, which makes it the natural place to arm
- * process-wide background work. Today that's exactly one thing: the routine
- * scheduler (#131).
+ * process-wide background work. Two things today: the routine scheduler (#131)
+ * and the LLM-usage recorder behind the preview header's global counters.
  *
  * There are no request/response handlers here on purpose — the arming is the
  * module's import side effect, so it costs nothing per request. If a real
@@ -14,9 +14,12 @@
 
 import { createMiddleware } from '@solidjs/start/middleware'
 import { startRoutineScheduler } from './lib/routines/scheduler.server'
+import { installUsageRecorder } from './lib/metrics/usage-recorder.server'
 
-// Idempotent and HMR-safe (the armed timer is parked on a globalThis symbol),
-// so a dev-server module reload doesn't stack a second timer.
+// Both are idempotent and HMR-safe (the armed timer / install flag are parked
+// on globalThis symbols), so a dev-server module reload doesn't stack a second
+// timer or a second usage listener that would double-count every LLM call.
 startRoutineScheduler()
+installUsageRecorder()
 
 export default createMiddleware({})

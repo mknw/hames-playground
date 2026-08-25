@@ -1,11 +1,14 @@
 import { useLocation } from '@solidjs/router'
 import { UserMenu } from '~/components/ark-ui/UserMenu'
 import { ThemeSwitcher } from '~/components/ark-ui/ThemeSwitcher'
+import { PreviewHeaderStrip } from '~/components/ark-ui/PreviewHeaderStrip'
 
 /**
  * Top bar. The old "Home"/"About" text links are gone (#132) — the chat is the
  * root route and the SolidStart demo page it linked to no longer exists. What
- * remains is a row of icon controls: metrics dashboard, theme, user.
+ * remains is the preview status strip on the left (inference tier, self-hosted
+ * warm state, global counters) and a row of icon controls on the right: metrics
+ * dashboard, theme, user.
  */
 export default function Nav() {
   const location = useLocation()
@@ -14,6 +17,9 @@ export default function Nav() {
   return (
     <nav bg="dark-bg-secondary" border="b dark-border-primary">
       <ul text="dark-text-primary" p="3" container flex items-center>
+        <li flex items-center>
+          <PreviewHeaderStrip />
+        </li>
         <li flex items-center gap-3 m="l-auto">
           <a
             href={onDashboard() ? '/' : '/dashboard'}

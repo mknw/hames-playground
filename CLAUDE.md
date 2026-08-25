@@ -19,9 +19,14 @@ Project-level guidance for Claude Code in this repository.
 
 Every BAML call (Router / LoopController / ActorController / Critic / Synthesize / ResultDescribe) routes through the chains in `baml_src/anthropic-only.baml`. The mixed-provider chains and `USE_MIXED_CHAINS` were removed 2026-08-24 (ADR-0001) — their cross-provider rate limits made dev iteration too noisy, and one provider is also one processor to paper. `LocalGLM` in `baml_src/local-client.baml` stays for manual wiring; it is in no chain.
 
-One opt-in flag re-points part of that: `USE_VERDA_INFERENCE=1` sends the controller / actor / critic / synthesizer roles to the company's own deployment (see "Self-hosted inference" below). Unset — the default everywhere — it changes nothing.
+Two things re-point part of that, and both move exactly the roles in `VERDA_CLIENT_BY_ROLE` — controller / actor / critic / synthesizer — never `router` / `describe` / `screen` / `planner`:
 
-Which client a role runs on: `app/src/lib/harness-patterns/clients.server.ts` (`resolveClientForRole` / `clientOverrideFor`) — the one place to re-point a role at a different chain.
+- `USE_VERDA_INFERENCE=1` is the **deployment default**: the tier every run takes when nothing else says otherwise. Unset, it changes nothing.
+- **Per-user, per-run**: `runWithInferenceTier(tier, fn)` opens an AsyncLocalStorage scope (same shape as `runWithSettings`), and `runTurnAndPersist` opens one per turn from the user's stored preference (`user_prefs.inference_tier`, `app/src/lib/db/user-prefs.server.ts`). That is what the header switch drives. The preview default when a user has never chosen is **verda if the endpoint is configured**, else anthropic — a `verda` scope with no endpoint throws rather than falling through to Anthropic, so defaulting an unconfigured deployment there would break every turn.
+
+Both act through the SAME seam: a per-call `client` override spread into the BAML options bag. Re-pointing the chains in `baml_src/` is not the mechanism and must not become it — that class of edit moves whole roles at once, and `screen` must stay on `DescribeAnthropic` in every tier position (SA-M5).
+
+Which client a role runs on: `app/src/lib/harness-patterns/clients.server.ts` (`resolveClientForRole` / `clientOverrideFor` / `activeInferenceTier`) — the one place to re-point a role at a different chain.
 
 Docker services (Neo4j, MCP Gateway, Redis) come up with `docker compose up -d` from the repo root.
 

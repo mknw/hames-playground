@@ -24,13 +24,20 @@
  * Confidential compute is the point — those prompts stay on infrastructure the
  * company controls. Three properties are deliberate:
  *
- * - **All-or-nothing.** The flag routes every mapped role for the whole
- *   process. There is no per-call, per-agent or sampling variant, because the
- *   endpoint scales to zero and billing follows activity: one warm box for a
- *   session is cheaper than a cold start per stray call.
- * - **Unset changes nothing.** `clientOverrideFor()` returns `undefined`, no
- *   options bag gains a `client` key, and every function runs the Anthropic
- *   chain it declares. The default posture is untouched.
+ * - **All-or-nothing per RUN.** A tier decision routes every mapped role for
+ *   the whole turn — there is still no per-call, per-agent or sampling
+ *   variant, because the endpoint scales to zero and billing follows activity:
+ *   one warm box for a session is cheaper than a cold start per stray call.
+ *   What changed for the preview (2026-08-25) is the *granularity of the
+ *   decision*, not its scope: `runWithInferenceTier()` below opens an
+ *   AsyncLocalStorage scope so one user's turn can run on a different tier
+ *   than another's, while everything inside that turn stays on one tier.
+ *   `USE_VERDA_INFERENCE` remains the process default for anything running
+ *   outside such a scope.
+ * - **Unset changes nothing.** With no flag and no scope, `clientOverrideFor()`
+ *   returns `undefined`, no options bag gains a `client` key, and every
+ *   function runs the Anthropic chain it declares. The default posture is
+ *   untouched.
  * - **Misconfiguration fails closed, loudly.** A flag that is on with a
  *   missing or malformed endpoint throws at module load rather than falling
  *   back to Anthropic: a silent fallback would send confidential prompts to
@@ -43,6 +50,7 @@
  * decision; see the note on the map itself.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { assertServerOnImport } from './assert.server'
 
 assertServerOnImport()
@@ -111,11 +119,83 @@ const VERDA_CLIENT_BY_ROLE: Partial<Record<BamlRole, string>> = {
   compactExecution: 'VerdaQwen', // Synthesize
 }
 
-/** `USE_VERDA_INFERENCE=1` — the one switch that moves traffic to the
- *  self-hosted deployment. Read per call rather than cached at module load so
- *  a test (and a script that sets it before importing a pattern) sees it. */
+/**
+ * Which inference tier a run is on.
+ *
+ * `'verda'` is the self-hosted deployment (`VERDA_CLIENT_BY_ROLE` above);
+ * `'anthropic'` is "no override at all", i.e. every function runs the chain it
+ * declares. Named rather than boolean because it reaches the browser — a
+ * header control shows the user which one their chats are on, and a label is
+ * what a preview user can act on.
+ */
+export type InferenceTier = 'verda' | 'anthropic'
+
+/** `USE_VERDA_INFERENCE=1` — the DEPLOYMENT default: the tier every run takes
+ *  when no per-run scope says otherwise. Read per call rather than cached at
+ *  module load so a test (and a script that sets it before importing a
+ *  pattern) sees it. */
 export function verdaInferenceEnabled(): boolean {
   return process.env.USE_VERDA_INFERENCE === '1'
+}
+
+/**
+ * Whether the self-hosted endpoint is configured well enough to be *offered*.
+ *
+ * The non-throwing sibling of `assertVerdaConfigured()`, and the two are not
+ * interchangeable: this one answers "may a user pick this tier?" (a header
+ * control, a preference default), while the assert answers "this run says it
+ * is on Verda — is that reachable?" and stops the run when it is not. Reaching
+ * for this one where the assert belongs is how the fail-closed posture below
+ * would quietly become a fall-through to Anthropic.
+ */
+export function verdaConfigured(): boolean {
+  try {
+    assertVerdaConfigured()
+    return true
+  } catch {
+    return false
+  }
+}
+
+const tierStore = new AsyncLocalStorage<InferenceTier>()
+
+/**
+ * Run `fn` with `tier` as the active inference tier for everything inside it.
+ *
+ * This is the per-user switch's only mechanism. A tier is a property of the
+ * RUN, not of a call site, so it rides an AsyncLocalStorage scope exactly like
+ * `settings-context.server.ts` and `injection-guard-scope.server.ts` do: the
+ * turn runner opens one scope and every adapter deep inside the call graph
+ * picks it up through `clientOverrideFor()` without a single signature change.
+ *
+ * FAIL CLOSED on `'verda'`: a scope that names the self-hosted tier while the
+ * endpoint is unset throws HERE, before any prompt is built. The alternative —
+ * shrug and let BAML fall through to the declared Anthropic chain — is the one
+ * failure this whole route exists to prevent, and it is no less dangerous for
+ * having come from a user's preference row rather than from an env var.
+ */
+export function runWithInferenceTier<T>(tier: InferenceTier, fn: () => Promise<T>): Promise<T> {
+  if (tier === 'verda') {
+    // Rejected, not thrown synchronously: this function's whole contract is
+    // "hand me a callback, get a promise", and a caller that only wrote
+    // `.catch()` would otherwise take the throw on the stack instead. `fn` is
+    // deliberately never invoked — the check is before any prompt is built.
+    try {
+      assertVerdaConfigured()
+    } catch (err) {
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)))
+    }
+  }
+  return tierStore.run(tier, fn)
+}
+
+/**
+ * The tier in force right now: the enclosing `runWithInferenceTier` scope, or
+ * the deployment default when there is no scope (a script, a background job,
+ * anything off the turn path).
+ */
+export function activeInferenceTier(): InferenceTier {
+  return tierStore.getStore() ?? (verdaInferenceEnabled() ? 'verda' : 'anthropic')
 }
 
 /**
@@ -163,9 +243,13 @@ export function assertVerdaConfigured(): void {
 if (verdaInferenceEnabled()) assertVerdaConfigured()
 
 /**
- * `{ client: 'VerdaQwen' }` for a Verda-routed role while
- * `USE_VERDA_INFERENCE=1`, otherwise `undefined` — letting the BAML function
- * fall through to the Anthropic chain it declares.
+ * `{ client: 'VerdaQwen' }` for a Verda-routed role while the active tier is
+ * `'verda'` (a `runWithInferenceTier` scope, or `USE_VERDA_INFERENCE=1` as the
+ * deployment default), otherwise `undefined` — letting the BAML function fall
+ * through to the Anthropic chain it declares.
+ *
+ * Read at CALL time, not at scope entry, which is what makes one turn's tier
+ * cover every adapter inside it without threading a parameter anywhere.
  *
  * Spread the result into the BAML call's options bag, and branch on whether
  * the bag ended up empty rather than on `collector`:
@@ -178,7 +262,7 @@ if (verdaInferenceEnabled()) assertVerdaConfigured()
  * the branch (#154).
  */
 export function clientOverrideFor(role: BamlRole): { client: string } | undefined {
-  if (!verdaInferenceEnabled()) return undefined
+  if (activeInferenceTier() !== 'verda') return undefined
   const client = VERDA_CLIENT_BY_ROLE[role]
   return client ? { client } : undefined
 }

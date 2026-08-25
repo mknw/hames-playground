@@ -22,6 +22,16 @@ vi.mock('@solidjs/router', () => ({
   }),
 }))
 
+// The bar renders the preview strip, whose server action would otherwise be
+// imported for real here. In a build, `'use server'` leaves the client with an
+// RPC stub; under vitest the module is loaded as written, so the whole
+// auth/DB/harness import graph comes with it. Stubbed to a never-resolving
+// promise so the strip renders nothing and this file stays about the nav.
+vi.mock('~/lib/harness-client/preview-header.server', () => ({
+  getPreviewHeaderState: () => new Promise(() => {}),
+  setPreviewInferenceTier: () => new Promise(() => {}),
+}))
+
 // The bar renders UserMenu, whose auth context is exercised elsewhere.
 vi.mock('~/components/AuthProvider', () => ({
   useAuth: () => ({

@@ -14,6 +14,32 @@ The chat model on port 8080 (GLM-4.7-Flash, `pnpm dev:llama`) is not served from
 here: it lives in llama.cpp's own cache, and `app/package.json` points at it
 directly.
 
+## Running either model on a REMOTE endpoint instead
+
+Neither model is pinned to this machine. Both speak the OpenAI-compatible wire
+format and both are addressed by URL, so pointing them at a hosted endpoint is
+**env-vars-only** — no code change, no rebuild, no `pnpm baml-generate`. Set the
+pair for whichever you are moving (values go in `app/.env`, documented in
+[`app/.env.example`](../app/.env.example)):
+
+| Model                               | URL                    | Optional bearer token      |
+| ----------------------------------- | ---------------------- | -------------------------- |
+| small summarizer (`LocalQwenSmall`) | `SMALL_LLM_BASE_URL`   | `SMALL_LLM_API_KEY`        |
+| embedder (Data Stash)               | `EMBEDDINGS_LOCAL_URL` | `EMBEDDINGS_LOCAL_API_KEY` |
+
+- **Include the `/v1` suffix** in both URLs. `/chat/completions` and
+  `/embeddings` are appended verbatim, so a bare host 404s on every call.
+- **The keys are optional.** llama-server authenticates nothing; leave them
+  unset locally. When set they are sent as `Authorization: Bearer <key>`.
+- `SMALL_LLM_*` has **no in-code default** — a BAML option takes a bare `env.X`
+  reference, so the localhost value has to come from the env file. That is
+  inert today: `LocalQwenSmall` is in no chain until the describe role is
+  re-pointed at it (see `app/baml_src/local-client.baml`).
+- **The embedding model must not change with the host.** Vectors are only
+  comparable inside one model's space, so a remote embedder has to serve the
+  _same_ Qwen3-Embedding-0.6B or the existing index is invalidated — see
+  [`docs/DATA_STASH.md`](../docs/DATA_STASH.md).
+
 ## Notes
 
 - **The embedding GGUF used to live in `~/Code/h9s/models/`.** It was moved here

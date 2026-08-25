@@ -19,11 +19,20 @@ MODELS_DIR ?= models
 EMBED_MODEL ?= Qwen3-Embedding-0.6B-Q8_0.gguf
 EMBED_PORT ?= 8090
 
+# Bind address. llama-server already defaults to 127.0.0.1, so the flag changes
+# nothing on the default path — but an explicit --host OVERRIDES LLAMA_ARG_HOST,
+# so hardcoding it would remove the only knob the containerized path has:
+# docker-compose.yaml points the app at host.docker.internal:8090, which a
+# loopback-bound server never answers. `make embed EMBED_HOST=0.0.0.0`.
+EMBED_HOST ?= 127.0.0.1
+
 # The describe/summarization model. The file is NOT in the repo yet — drop a
 # Qwen3.5-4B-class GGUF into models/ under this name, or override it:
 #   make llm-small LLM_SMALL_MODEL=<file>.gguf
 LLM_SMALL_MODEL ?= Qwen3.5-4B-Instruct-Q8_0.gguf
 LLM_SMALL_PORT ?= 8095
+# Bind address — see EMBED_HOST above.
+LLM_SMALL_HOST ?= 127.0.0.1
 
 # A missing GGUF must fail here, loudly, rather than as a half-started server or
 # a connection-refused three layers up in the harness. One message, both targets.
@@ -35,12 +44,19 @@ endef
 # the server on inputs above a few hundred tokens. Qwen3 supports up to 32k.
 embed:
 	$(call require_model,$(MODELS_DIR)/$(EMBED_MODEL))
-	llama-server --embedding -m $(MODELS_DIR)/$(EMBED_MODEL) --host 127.0.0.1 --port $(EMBED_PORT) --ctx-size 8192
+	llama-server --embedding -m $(MODELS_DIR)/$(EMBED_MODEL) --host $(EMBED_HOST) --port $(EMBED_PORT) --ctx-size 8192
 
-# --ctx-size 32768: compactBulkData batches up to 8 tool results of
-# maxResultChars each (~16k tokens) into one describe call, so 32k leaves
-# headroom. Keep it in step with MODEL_CONTEXT_WINDOWS.LocalQwenSmall in
-# app/src/lib/settings.ts. No --parallel: one slot gets the whole window.
+# --ctx-size 32768: generous headroom, not a fitted number. compactBulkData
+# truncates each tool result at `maxResultForSummary` (3000 chars, settings.ts)
+# and derives the batch from the describe OUTPUT cap — `maxBatchItems()` returns
+# floor(2048 * 0.5 / 200) = 5 at LocalQwenSmall's max_tokens 2048, not the
+# ceiling of 8 — so the real worst case is ~5 x 3000 chars, about 3.7k tokens.
+# Note the behaviour that 2048 cap carries: it re-imposes the batch-of-5 floor
+# compactBulkData.server.ts records from the removed mixed chains, so a turn's
+# tool results cost more describe calls here than on Haiku's 16384.
+# Keep this number in step with MODEL_CONTEXT_WINDOWS.LocalQwenSmall in
+# app/src/lib/settings.ts — client-context-windows.test.ts parses this line and
+# fails if the two drift. No --parallel: one slot gets the whole window.
 llm-small:
 	$(call require_model,$(MODELS_DIR)/$(LLM_SMALL_MODEL))
-	llama-server -m $(MODELS_DIR)/$(LLM_SMALL_MODEL) --host 127.0.0.1 --port $(LLM_SMALL_PORT) --ctx-size 32768
+	llama-server -m $(MODELS_DIR)/$(LLM_SMALL_MODEL) --host $(LLM_SMALL_HOST) --port $(LLM_SMALL_PORT) --ctx-size 32768

@@ -47,16 +47,36 @@ client<llm> VerdaQwen {
     // without it every call 404s on `<root>/chat/completions`.
     base_url env.VERDA_INFERENCE_ENDPOINT
     api_key env.VERDA_INFERENCE_API_KEY
-    // ⚠️ PLACEHOLDER — the one line in this repo that still needs a real value.
-    // vLLM serves the model under the id `GET /v1/models` reports (the HF path
-    // it was started with, unless `--served-model-name` overrode it), and the
-    // deployment was unreachable when this landed: every authenticated request
-    // was held open with no response, while an invalid bearer got a fast 404
-    // from the gateway. Rather than commit a model string nobody has seen,
-    // this stays an obviously-wrong constant, and `smoke-verda.ts` refuses to
-    // run while it is here — so the first person to exercise the route gets
-    // told to fill it in instead of debugging a 400 from vLLM.
-    model "REPLACE_WITH_ID_FROM_V1_MODELS"
+    // The id `GET /v1/models` reports, i.e. the HF path vLLM was started with
+    // (no `--served-model-name` override on this deployment). Read live on
+    // 2026-08-25 and pinned here; exactly one model is served, and vLLM 400s a
+    // request naming any other id.
+    model "Qwen/Qwen3.8-27B-FP8"
+    // THINKING OFF, AND THIS IS NOT A TUNING KNOB. Qwen3.8 is a thinking
+    // model: its chat template opens a reasoning block unless the template is
+    // told not to, and this deployment runs vLLM with no reasoning parser, so
+    // the reasoning is NOT split into `reasoning_content` — it lands in
+    // `content`, in front of the answer, with a stray `</think>` between them.
+    // Measured live against the same one-line prompt:
+    //   without → content 'We need to respond to user: ... </think>\n\n{"ok": true}'
+    //   with    → content '{"ok": true}'   (23 prompt tokens, not 63)
+    // Two consequences for a structured-output client. The prose ahead of the
+    // envelope is what BAML has to parse, and at controller size the reasoning
+    // eats the `max_tokens` budget the action envelope needs — the exact
+    // truncation failure `llmCallHitOutputCap` exists to recover from, except
+    // here it would fire on every call. So this is a correctness setting.
+    //
+    // HOW IT REACHES THE WIRE: `openai-generic` forwards every option it does
+    // not recognise into the request body verbatim, so this map is emitted as
+    // the top-level `chat_template_kwargs` field vLLM reads. Nothing in
+    // `clients.server.ts` or the adapters passes it — declaring it on the
+    // client is what makes it unconditional, i.e. it cannot be forgotten at a
+    // call site the way a per-call option could. `verda-body-shape.test.ts`
+    // renders a real request offline and pins the field, because a silent typo
+    // here degrades to "the model thinks out loud again" rather than an error.
+    chat_template_kwargs {
+      enable_thinking false
+    }
     // Mirror in CLIENT_MAX_OUTPUT_TOKENS (settings.ts) — enforced by
     // client-output-caps.test.ts. Matches the Sonnet 4.6 / Haiku 4.5 cap: the
     // controller envelope needs room for a large `tool_args`, and it is also

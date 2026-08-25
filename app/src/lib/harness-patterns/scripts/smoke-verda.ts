@@ -3,11 +3,14 @@
  *
  * CI cannot run this — the endpoint is company-internal and reachable only
  * from a machine holding `VERDA_INFERENCE_API_KEY`. The hermetic half of the
- * proof (which roles move, what happens when the flag is off, what happens
- * when the env is wrong) lives in
- * `src/__tests__/lib/harness-patterns/clients-verda.test.ts`. This script is
- * the other half: that the box actually answers, and that what it answers
- * PARSES into the structured types the patterns depend on.
+ * proof lives in two files: which roles move (and what happens when the flag is
+ * off or the env is wrong) in `clients-verda.test.ts`, and what the request body
+ * carries in `verda-body-shape.test.ts`, both under
+ * `src/__tests__/lib/harness-patterns/`. This script is the other half: that the
+ * box actually answers, and that what it answers PARSES into the structured
+ * types the patterns depend on.
+ *
+ * Its sibling `smoke-verda-load.ts` measures the same route under load.
  *
  * Run from `app/`:
  *
@@ -49,10 +52,6 @@ import { assertVerdaConfigured, clientOverrideFor, verdaInferenceEnabled } from 
 
 const EXPECTED_CLIENT = 'VerdaQwen'
 
-/** The stand-in `verda-client.baml` shipped with, because the deployment was
- *  unreachable when this route landed and the served id could not be read. */
-const MODEL_PLACEHOLDER = 'REPLACE_WITH_ID_FROM_V1_MODELS'
-
 /** A catalog small enough to read in the transcript, real enough to choose from. */
 const TOOLS: ToolDescription[] = [
   {
@@ -71,7 +70,19 @@ const TOOLS: ToolDescription[] = [
   },
 ]
 
-function preflight(): void {
+/** The ids `GET /v1/models` reports. A plain fetch, not a BAML call: this runs
+ *  before the first billed completion and only needs the served id list. */
+async function servedModelIds(): Promise<string[]> {
+  const base = process.env.VERDA_INFERENCE_ENDPOINT ?? ''
+  const res = await fetch(`${base}/models`, {
+    headers: { Authorization: `Bearer ${process.env.VERDA_INFERENCE_API_KEY ?? ''}` },
+  })
+  if (!res.ok) throw new Error(`GET ${base}/models → ${res.status} ${res.statusText}`)
+  const body = (await res.json()) as { data?: Array<{ id?: string }> }
+  return (body.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === 'string')
+}
+
+async function preflight(): Promise<void> {
   if (!verdaInferenceEnabled()) {
     throw new Error(
       'USE_VERDA_INFERENCE is not set to 1, so this run would route to Anthropic and prove ' +
@@ -83,15 +94,19 @@ function preflight(): void {
   // Same check the module performs at load; called explicitly so the failure
   // reads as a preflight rather than an import-time stack trace.
   assertVerdaConfigured()
-  // The one value that could not be probed. Caught here rather than at the
-  // provider, where it surfaces as a 400 about an unknown model.
+  // The model id is pinned in the client (read live from `GET /v1/models` on
+  // 2026-08-25). Re-checked here rather than trusted, because the deployment —
+  // not this repo — decides what it serves: a redeploy under a different id, or
+  // a `--served-model-name`, turns every call into a 400 that reads like a
+  // client bug. Cheap, and it runs before anything is billed.
   const client = readFileSync(path.resolve(process.cwd(), 'baml_src/verda-client.baml'), 'utf8')
-  if (client.includes(`model "${MODEL_PLACEHOLDER}"`)) {
+  const pinned = /model "([^"]+)"/.exec(client)?.[1]
+  const served = await servedModelIds()
+  if (!pinned || !served.includes(pinned)) {
     throw new Error(
-      'baml_src/verda-client.baml still carries the placeholder model id. Read the served id:\n' +
-        '  curl -H "Authorization: Bearer $VERDA_INFERENCE_API_KEY" ' +
-        '"$VERDA_INFERENCE_ENDPOINT/models"\n' +
-        "put its `id` in the client's `model` option, run `pnpm baml-generate`, and re-run this.",
+      `baml_src/verda-client.baml pins model ${JSON.stringify(pinned)}, but the endpoint ` +
+        `serves ${served.map((m) => JSON.stringify(m)).join(', ') || '(nothing)'}. ` +
+        'Put the served id in the client, run `pnpm baml-generate`, and re-run this.',
     )
   }
   const override = clientOverrideFor('controller')
@@ -194,7 +209,7 @@ async function controller(): Promise<void> {
 
 async function main(): Promise<void> {
   console.log('🔒 Verda (self-hosted) smoke — confidential-compute route')
-  preflight()
+  await preflight()
   console.log('   flag on, env configured, controller role → VerdaQwen')
   console.log('   NOTE: a cold start can take minutes on the first call.')
   await critic()

@@ -7,6 +7,7 @@
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { ensureEncryptionReady, type QueryRunner } from './migrate-encryption.server'
 import pg from 'pg'
 
 assertServerOnImport()
@@ -76,8 +77,25 @@ const SCHEMA_SQL = `
     ON session_claims (expires_at);
 `
 
+/**
+ * A runner that talks to the pool directly, bypassing {@link query}.
+ *
+ * The backfill and the key check run *inside* `initSchema`, and `query()` awaits
+ * the schema-init promise before touching the pool — so routing them through it
+ * would make the init promise wait on itself.
+ */
+const directRunner: QueryRunner = (text, params) =>
+  getPool().query(text, params as never[]) as never
+
 async function initSchema(): Promise<void> {
   await getPool().query(SCHEMA_SQL)
+  // At-rest encryption (see crypto.server.ts): verify the key against what is
+  // already stored, then backfill any rows written before encryption existed.
+  // Deliberately part of schema-ensure rather than a separate script — a
+  // migration an operator can forget leaves a table half in plaintext. This
+  // throws (and so fails every query in the process) when encrypted rows exist
+  // without a key; that is the intended loud failure, not a bug to soften.
+  await ensureEncryptionReady(directRunner)
   console.log('[db] schema ready')
 }
 

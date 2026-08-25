@@ -10,30 +10,41 @@
  *
  * Schema bootstraps idempotently on first use (mirrors
  * `session-store.server.ts`), so no shared migration file is touched.
+ *
+ * `email` and `display_name` are encrypted at rest (`db/crypto.server.ts`).
+ * `id` (the Entra `oid`) stays plaintext because every other table joins on
+ * it, and `tid` because a tenant id identifies the organisation, not a person.
+ * Nothing queries this table by email, so encrypting it costs no lookup.
  */
-import { assertServerOnImport } from "../harness-patterns/assert.server";
-import { query } from "../db/client.server";
+import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { query } from '../db/client.server'
+import {
+  decryptField,
+  decryptFieldOrNull,
+  encryptField,
+  encryptFieldOrNull,
+} from '../db/crypto.server'
 
-assertServerOnImport();
+assertServerOnImport()
 
 export interface UserRecord {
   /** Entra `oid` — the stable per-user id everything keys on. */
-  id: string;
-  email: string;
-  displayName: string | null;
+  id: string
+  email: string
+  displayName: string | null
   /** Entra tenant id (`tid` claim). */
-  tenantId: string | null;
-  firstLogin: Date;
-  lastLogin: Date;
+  tenantId: string | null
+  firstLogin: Date
+  lastLogin: Date
 }
 
 interface DbRow {
-  id: string;
-  email: string;
-  display_name: string | null;
-  tid: string | null;
-  first_login: Date;
-  last_login: Date;
+  id: string
+  email: string
+  display_name: string | null
+  tid: string | null
+  first_login: Date
+  last_login: Date
 }
 
 const SCHEMA_SQL = `
@@ -45,30 +56,30 @@ const SCHEMA_SQL = `
     first_login   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_login    TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
-`;
+`
 
-let _schemaReady: Promise<void> | null = null;
+let _schemaReady: Promise<void> | null = null
 function ensureSchema(): Promise<void> {
   if (!_schemaReady) {
     _schemaReady = query(SCHEMA_SQL)
       .then(() => undefined)
       .catch((err) => {
-        _schemaReady = null; // allow retry on next call
-        throw err;
-      });
+        _schemaReady = null // allow retry on next call
+        throw err
+      })
   }
-  return _schemaReady;
+  return _schemaReady
 }
 
 function toRecord(row: DbRow): UserRecord {
   return {
     id: row.id,
-    email: row.email,
-    displayName: row.display_name,
+    email: decryptField(row.email, 'users.email'),
+    displayName: decryptFieldOrNull(row.display_name, 'users.display_name'),
     tenantId: row.tid,
     firstLogin: row.first_login,
     lastLogin: row.last_login,
-  };
+  }
 }
 
 /**
@@ -77,12 +88,12 @@ function toRecord(row: DbRow): UserRecord {
  * `first_login` is never touched after the initial insert.
  */
 export async function upsertUser(user: {
-  id: string;
-  email: string;
-  displayName: string | null;
-  tenantId: string | null;
+  id: string
+  email: string
+  displayName: string | null
+  tenantId: string | null
 }): Promise<void> {
-  await ensureSchema();
+  await ensureSchema()
   await query(
     `INSERT INTO users (id, email, display_name, tid)
      VALUES ($1, $2, $3, $4)
@@ -91,27 +102,27 @@ export async function upsertUser(user: {
        display_name = EXCLUDED.display_name,
        tid          = EXCLUDED.tid,
        last_login   = NOW()`,
-    [user.id, user.email, user.displayName, user.tenantId],
-  );
+    [user.id, encryptField(user.email), encryptFieldOrNull(user.displayName), user.tenantId],
+  )
 }
 
 /** Load a user by oid, or null when they have never signed in. */
 export async function getUser(id: string): Promise<UserRecord | null> {
-  await ensureSchema();
+  await ensureSchema()
   const { rows } = await query<DbRow>(
     `SELECT id, email, display_name, tid, first_login, last_login
        FROM users WHERE id = $1`,
     [id],
-  );
-  return rows[0] ? toRecord(rows[0]) : null;
+  )
+  return rows[0] ? toRecord(rows[0]) : null
 }
 
 /** All known users, most recently active first (admin listing). */
 export async function listUsers(): Promise<UserRecord[]> {
-  await ensureSchema();
+  await ensureSchema()
   const { rows } = await query<DbRow>(
     `SELECT id, email, display_name, tid, first_login, last_login
        FROM users ORDER BY last_login DESC`,
-  );
-  return rows.map(toRecord);
+  )
+  return rows.map(toRecord)
 }

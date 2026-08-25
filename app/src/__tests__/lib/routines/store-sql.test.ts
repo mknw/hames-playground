@@ -31,6 +31,7 @@ const {
   listRoutines,
   updateRoutine,
 } = await import('../../../lib/db/routines.server')
+const { looksEncrypted } = await import('../../../lib/db/crypto.server')
 
 const NOW = new Date('2026-08-16T00:00:00Z')
 
@@ -79,14 +80,19 @@ describe('createRoutine', () => {
     })
     const { text, params } = lastCall()
     expect(text).toContain('INSERT INTO routines')
-    expect(params.slice(0, 6)).toEqual([
+    expect(params.slice(0, 5)).toEqual([
       'r1',
       'u1',
       'search',
       'interval',
       JSON.stringify({ intervalSeconds: 3600 }),
-      'go',
     ])
+    // `input` is user-typed content, so it goes to the column encrypted
+    // (lib/db/crypto.server.ts) — the plaintext must never appear in the
+    // parameter list. `trigger_kind` and the config blob stay readable because
+    // the scheduler filters on them in SQL.
+    expect(looksEncrypted(params[5])).toBe(true)
+    expect(params[5]).not.toBe('go')
     // enabled defaults to true.
     expect(params[7]).toBe(true)
   })

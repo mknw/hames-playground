@@ -11,10 +11,26 @@
  * `auth/session-store.server.ts` rather than being appended to
  * `db/client.server.ts`'s conversations bootstrap: a new domain owns its own
  * DDL, and `query()` still runs the shared init first.
+ *
+ * `input` and `label` are encrypted at rest (`db/crypto.server.ts`) — `input`
+ * is the prompt the user typed and `label` is their own words for the routine
+ * (it also becomes the run's conversation title). `trigger_kind` and
+ * `trigger_config` stay plaintext: the kind is the scheduler's SQL filter and
+ * its index, and every config the registry defines today holds only scheduling
+ * parameters (`intervalSeconds`). A future trigger kind that carries user
+ * content in its config would need its own entry in `ENCRYPTED_TABLES`.
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { query } from './client.server'
+import {
+  DataDecryptionError,
+  MissingDataEncryptionKeyError,
+  decryptField,
+  decryptFieldOrNull,
+  encryptField,
+  encryptFieldOrNull,
+} from './crypto.server'
 import {
   parseTrigger,
   serializeTrigger,
@@ -124,8 +140,8 @@ function toRoutine(row: DbRow): RoutineRow {
     userId: row.user_id,
     agentId: row.agent_id,
     trigger: parseTrigger(row.trigger_kind, row.trigger_config),
-    input: row.input,
-    label: row.label,
+    input: decryptField(row.input, 'routines.input'),
+    label: decryptFieldOrNull(row.label, 'routines.label'),
     enabled: row.enabled,
     lastRunAt: row.last_run_at,
     createdAt: row.created_at,
@@ -137,6 +153,12 @@ function toRoutine(row: DbRow): RoutineRow {
  * Map rows, dropping (and logging) any whose trigger this build can't parse.
  * That's an unknown `trigger_kind` written by a newer deploy, or a config blob
  * that no longer validates — neither should take down a whole listing.
+ *
+ * A decryption failure is explicitly NOT in that category and is rethrown. The
+ * `catch` was written when the only thing `toRoutine` could throw was a trigger
+ * parse error; letting it also absorb a `DataDecryptionError` would turn a
+ * wrong-key incident into a silently shorter list, which is exactly the
+ * failure mode at-rest encryption must not introduce.
  */
 function toRoutines(rows: DbRow[]): RoutineRow[] {
   const out: RoutineRow[] = []
@@ -144,6 +166,8 @@ function toRoutines(rows: DbRow[]): RoutineRow[] {
     try {
       out.push(toRoutine(row))
     } catch (err) {
+      if (err instanceof DataDecryptionError || err instanceof MissingDataEncryptionKeyError)
+        throw err
       console.warn(
         `[routines] skipping routine ${row.id} with unreadable trigger ` + `'${row.trigger_kind}':`,
         err instanceof Error ? err.message : err,
@@ -170,8 +194,8 @@ export async function createRoutine(input: CreateRoutineInput): Promise<RoutineR
       input.agentId,
       input.trigger.kind,
       JSON.stringify(serializeTrigger(input.trigger)),
-      input.input,
-      input.label ?? null,
+      encryptField(input.input),
+      encryptFieldOrNull(input.label),
       input.enabled ?? true,
     ],
   )
@@ -218,8 +242,8 @@ export async function updateRoutine(
   }
 
   if (patch.enabled !== undefined) push('enabled', patch.enabled)
-  if (patch.input !== undefined) push('input', patch.input)
-  if (patch.label !== undefined) push('label', patch.label)
+  if (patch.input !== undefined) push('input', encryptField(patch.input))
+  if (patch.label !== undefined) push('label', encryptFieldOrNull(patch.label))
   if (patch.trigger !== undefined) {
     push('trigger_kind', patch.trigger.kind)
     params.push(JSON.stringify(serializeTrigger(patch.trigger)))

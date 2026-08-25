@@ -57,6 +57,11 @@ embed:
 # Keep this number in step with MODEL_CONTEXT_WINDOWS.LocalQwenSmall in
 # app/src/lib/settings.ts — client-context-windows.test.ts parses this line and
 # fails if the two drift. No --parallel: one slot gets the whole window.
+# --chat-template-kwargs disables Qwen3.5's thinking mode server-side. Without
+# it the model spends the ENTIRE completion budget in reasoning_content and
+# returns empty content at describe-sized caps (verified live 2026-08-25;
+# --reasoning-budget 0 does NOT prevent it). Same stance as the measured
+# no-thinking describe/controller finding in CLAUDE.md.
 llm-small:
 	$(call require_model,$(MODELS_DIR)/$(LLM_SMALL_MODEL))
-	llama-server -m $(MODELS_DIR)/$(LLM_SMALL_MODEL) --host $(LLM_SMALL_HOST) --port $(LLM_SMALL_PORT) --ctx-size 32768
+	llama-server -m $(MODELS_DIR)/$(LLM_SMALL_MODEL) --host $(LLM_SMALL_HOST) --port $(LLM_SMALL_PORT) --ctx-size 32768 --chat-template-kwargs '{"enable_thinking":false}'

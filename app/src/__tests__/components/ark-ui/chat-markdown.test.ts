@@ -107,6 +107,36 @@ describe('renderAssistantMarkdown — markup carried in model output', () => {
   })
 })
 
+describe('renderAssistantMarkdown — links open in a new tab', () => {
+  // The standing UI rule reaches the chat through the sanitizer hook, so this
+  // asserts it end to end: a plain markdown link comes out of the pipeline
+  // ready to open elsewhere, with the `window.opener` hole closed. The
+  // repo-wide guard for hand-written anchors is `src/__tests__/links-new-tab.test.ts`.
+  it('stamps target and rel on a markdown link', () => {
+    const link = mount(
+      renderAssistantMarkdown('See [the docs](https://example.test/docs).', noEntities, []),
+    ).querySelector('a')
+
+    expect(link).not.toBeNull()
+    expect(link!.getAttribute('target')).toBe('_blank')
+    expect(link!.getAttribute('rel')).toBe('noopener noreferrer')
+    expect(link!.getAttribute('href')).toBe('https://example.test/docs')
+  })
+
+  it('stamps them on a raw anchor carried in the model output too', () => {
+    const link = mount(
+      renderAssistantMarkdown(
+        'From the mail body: <a href="https://example.test/x" target="_self">x</a>',
+        noEntities,
+        [],
+      ),
+    ).querySelector('a')
+
+    expect(link!.getAttribute('target')).toBe('_blank')
+    expect(link!.getAttribute('rel')).toBe('noopener noreferrer')
+  })
+})
+
 describe('renderAssistantMarkdown — annotation spans', () => {
   it('annotates known entity names and keeps the span hooks', () => {
     const entities = new Map<string, string[]>([['Acme Corp', ['n1', 'n2']]])

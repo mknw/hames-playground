@@ -355,21 +355,31 @@ What is **not** a link under this rule:
 | The app's own auth endpoints (`/api/auth/login`, `/api/auth/logout`)                                       | The OAuth callback and the sign-out both have to land in the tab the user is looking at |
 | Programmatic download anchors (`a.download = …`)                                                           | They hand the browser a file; they never navigate the current tab                       |
 
-`app/src/__tests__/links-new-tab.test.ts` is the gate, not a one-off sweep: it
-reads `src/` as text and fails on any JSX anchor, `document.createElement('a')`
-(or `createElementNS`), `location.href`/`assign`/`replace` or `window.open` that
-neither opens a new tab nor holds a documented exception in its `ALLOWLIST`, and
-on any `innerHTML` write or `marked` call outside the one sanitized render path.
-A new in-tab case means adding an entry there with a written reason — there is
+The **enforcement of record** for the data half is that hook. It runs on the
+node, so it holds for hrefs nobody anticipated; three independent review rounds
+attacked it from model output and none got a link through.
+
+`app/src/__tests__/links-new-tab.test.ts` covers the hand-written half, and it
+is a **lint, not a proof**. It reads `src/` as text, so it catches the literal
+shapes it has been taught — JSX anchors, `document.createElement('a')` /
+`createElementNS`, `location.href`/`assign`/`replace`, `window.location =`,
+`window.open`, and an enumerated set of markup sinks (`innerHTML`/`outerHTML`
+write or append, `insertAdjacentHTML`, `document.write`/`writeln`,
+`createContextualFragment`, `parseFromString`, `setHTMLUnsafe`, `marked`) —
+that neither open a new tab nor hold a documented exception in its `ALLOWLIST`.
+A new in-tab case means adding an entry there with a written reason; there is
 nowhere else to put it.
 
-It is a text scanner, so it has a boundary, and the boundary is written out in
-that file's header rather than left to be discovered: an anchor with no literal
-`<a` (`<Dynamic component="a">`), a `createElement(tag)` whose tag is a
-variable, a `location` captured into a local first, and the non-link ways off
-the page (`<form action="https://…">`, `navigate()` given an external URL) all
-pass it. If you need one of those, the gate will not stop you and neither will
-it cover you.
+**A green run means no _known_ shape is unguarded. It does not mean no link in
+the app opens in-tab.** Anything reached by indirection (a tag, a sink or a
+`location` held in a variable or a computed property), an anchor obtained by
+query rather than created, anything rendered through a component boundary, a
+markup sink outside that enumeration, and the non-link ways off the page
+(`<form action="https://…">`, `navigate()` given an external URL) all pass it.
+The families are written out in that file's header, which is the authority —
+three review rounds each found more shapes inside the set an earlier version of
+it claimed, so treat the list as maintained rather than complete. If you need
+one of those, the gate will not stop you and neither will it cover you.
 
 ---
 

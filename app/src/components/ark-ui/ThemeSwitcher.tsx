@@ -1,83 +1,159 @@
-import { createSignal, createEffect, onMount } from 'solid-js'
+import { Menu } from '@ark-ui/solid/menu'
+import { createSignal, For, onCleanup, onMount } from 'solid-js'
+import {
+  applyTheme,
+  applyThemeChoice,
+  readThemeChoice,
+  resolveTheme,
+  THEME_CHOICES,
+  watchSystemTheme,
+  type Theme,
+  type ThemeChoice,
+} from '~/lib/theme'
+
+/**
+ * The light / dark / system control (#226 B8). The palette it switches lives
+ * in `uno.config.ts` as `--ui-*` variables and the rule in `lib/theme.ts` —
+ * this component is only the control.
+ *
+ * It is a menu rather than a cycling button because there are three settings:
+ * a button that cycles cannot say what the other two are, and `system` in
+ * particular is invisible until you land on it. Ark's `Menu` carries the
+ * radio semantics (`menuitemradio` + checked state) for free, and it is the
+ * same primitive as the user menu sitting next to it in the bar.
+ *
+ * Two signals, and they are not the same thing: `choice` is what the user
+ * picked and what is persisted; `theme` is what the document is rendering.
+ * They differ exactly when the choice is `system`, which is why the trigger
+ * glyph reads `theme` (what you are looking at) and the checkmark reads
+ * `choice` (what you asked for).
+ *
+ * The document is already correct before this mounts — the boot script in
+ * `entry-server.tsx` applied the same rule pre-paint — so `onMount` is
+ * bringing the component in step with the document, not the other way round.
+ * It goes through `show()` anyway rather than reading the class back: that is
+ * the same call the OS listener makes, so mount and an OS flip cannot end up
+ * disagreeing about what the document says.
+ */
+
+const GLYPH: Record<ThemeChoice, string> = {
+  light: 'i-material-symbols-light-mode',
+  dark: 'i-material-symbols-dark-mode',
+  system: 'i-material-symbols-computer-outline',
+}
+
+const LABEL: Record<ThemeChoice, string> = {
+  light: 'Light',
+  dark: 'Dark',
+  system: 'System',
+}
 
 export const ThemeSwitcher = () => {
-  const [isDark, setIsDark] = createSignal(true) // Default to dark theme
+  const [choice, setChoice] = createSignal<ThemeChoice>('system')
+  const [theme, setTheme] = createSignal<Theme>('dark')
 
-  // Initialize theme from localStorage or default to dark
+  /** Repaint the document and keep the glyph in step. */
+  const show = (next: Theme) => {
+    setTheme(next)
+    applyTheme(next)
+  }
+
+  /**
+   * The OS listener exists only while the choice is `system`. Re-subscribing
+   * on every change is what makes an explicit `light`/`dark` immune to an OS
+   * flip, rather than merely ignoring the event.
+   */
+  let unwatch = () => {}
+  const watchIfSystem = (next: ThemeChoice) => {
+    unwatch()
+    unwatch = next === 'system' ? watchSystemTheme(show) : () => {}
+  }
+
   onMount(() => {
-    const savedTheme = localStorage.getItem('theme')
-    const prefersDark = savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
-    setIsDark(prefersDark)
-    updateTheme(prefersDark)
+    const stored = readThemeChoice()
+    setChoice(stored)
+    show(resolveTheme(stored))
+    watchIfSystem(stored)
   })
+  onCleanup(() => unwatch())
 
-  // Update theme when toggled
-  createEffect(() => {
-    updateTheme(isDark())
-  })
-
-  const updateTheme = (dark: boolean) => {
-    if (dark) {
-      document.documentElement.classList.add('dark')
-      localStorage.setItem('theme', 'dark')
-    } else {
-      document.documentElement.classList.remove('dark')
-      localStorage.setItem('theme', 'light')
-    }
+  const select = (next: ThemeChoice) => {
+    setChoice(next)
+    setTheme(applyThemeChoice(next))
+    watchIfSystem(next)
   }
 
-  const toggleTheme = () => {
-    setIsDark(!isDark())
-  }
+  // The trigger says what is rendered; the menu says what was chosen.
+  const triggerLabel = () => `Theme: ${LABEL[choice()]}`
 
   return (
-    <button
-      onClick={toggleTheme}
-      flex="~"
-      items="center"
-      justify="center"
-      w="10"
-      h="10"
-      rounded="full"
-      bg="cyber-800/20 hover:cyber-700/30"
-      border="1 cyber-700/50"
-      transition="all"
-      cursor="pointer"
-      title={isDark() ? 'Switch to light mode' : 'Switch to dark mode'}
-    >
-      {isDark() ? (
-        <svg
-          width="20"
-          height="20"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          style={{"color":"#00ffff"}}
+    <Menu.Root positioning={{ placement: 'bottom-end' }}>
+      <Menu.Trigger
+        flex="~"
+        items="center"
+        justify="center"
+        w="10"
+        h="10"
+        rounded="full"
+        bg="cyber-800/20 hover:cyber-700/30"
+        border="1 cyber-700/50"
+        transition="all"
+        cursor="pointer"
+        title={triggerLabel()}
+        aria-label={triggerLabel()}
+      >
+        {/* The glyph shows the mode you are in — under `system` that is
+            whichever one the OS resolved to, which is the honest answer. */}
+        <span class={GLYPH[theme()]} w="5" h="5" text="ui-accent" aria-hidden="true" />
+      </Menu.Trigger>
+
+      <Menu.Positioner>
+        <Menu.Content
+          bg="ui-bg-secondary"
+          border="1 ui-border-primary"
+          rounded="lg"
+          shadow="lg"
+          p="y-1"
+          min-w="40"
+          z="50"
         >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
-          />
-        </svg>
-      ) : (
-        <svg
-          width="20"
-          height="20"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          style={{"color":"#4f46e5"}}
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
-          />
-        </svg>
-      )}
-    </button>
+          <Menu.RadioItemGroup
+            value={choice()}
+            onValueChange={(details) => select(details.value as ThemeChoice)}
+          >
+            <For each={THEME_CHOICES}>
+              {(option) => (
+                <Menu.RadioItem
+                  value={option}
+                  flex="~"
+                  items="center"
+                  gap="2"
+                  p="x-3 y-2"
+                  text="sm ui-text-primary"
+                  bg="hover:ui-bg-hover"
+                  cursor="pointer"
+                  transition="colors"
+                >
+                  <span class={GLYPH[option]} w="4" h="4" text="ui-accent" aria-hidden="true" />
+                  <Menu.ItemText flex="1">{LABEL[option]}</Menu.ItemText>
+                  {/* `flex` is load-bearing: an icon span is `display:inline`
+                      until something blockifies it, and an inline box ignores
+                      width and height — the glyph collapses to nothing. */}
+                  <Menu.ItemIndicator flex="~">
+                    <span
+                      class="i-material-symbols-check-small"
+                      w="4"
+                      h="4"
+                      text="ui-accent"
+                      aria-hidden="true"
+                    />
+                  </Menu.ItemIndicator>
+                </Menu.RadioItem>
+              )}
+            </For>
+          </Menu.RadioItemGroup>
+        </Menu.Content>
+      </Menu.Positioner>
+    </Menu.Root>
   )
 }

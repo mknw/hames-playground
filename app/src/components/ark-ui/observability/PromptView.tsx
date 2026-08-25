@@ -17,8 +17,8 @@ import {
 
 export const CodeBlock = (props: { content: string | undefined; placeholder?: string }) => (
   <pre
-    text="xs dark-text-primary"
-    bg="dark-bg-tertiary"
+    text="xs ui-text-primary"
+    bg="ui-bg-tertiary"
     p="3"
     rounded="md"
     overflow="auto"
@@ -44,7 +44,7 @@ const PromptMessage = (props: { msg: ParsedMessage }) => {
   const color = () => roleColors[props.msg.role] ?? '#94a3b8'
 
   return (
-    <div border="1 dark-border-secondary/40" rounded="md" overflow="hidden">
+    <div border="1 ui-border-secondary/40" rounded="md" overflow="hidden">
       {/* Role badge */}
       <div
         p="x-3 y-1.5"
@@ -52,7 +52,7 @@ const PromptMessage = (props: { msg: ParsedMessage }) => {
         items="center"
         gap="2"
         style={{ 'border-bottom': '1px solid rgba(148,163,184,0.15)' }}
-        bg="dark-bg-tertiary"
+        bg="ui-bg-tertiary"
       >
         <div w="2" h="2" rounded="full" style={{ 'background-color': color() }} />
         <span text="xs" font="mono medium" style={{ color: color() }}>
@@ -61,7 +61,7 @@ const PromptMessage = (props: { msg: ParsedMessage }) => {
       </div>
       {/* Content */}
       <pre
-        text="xs dark-text-primary"
+        text="xs ui-text-primary"
         p="3"
         m="0"
         overflow="auto"
@@ -90,15 +90,15 @@ export const ParsedPromptView = (props: { rawInput: string }) => {
               flex="~ wrap"
               gap="4"
               items="center"
-              bg="dark-bg-tertiary"
+              bg="ui-bg-tertiary"
               p="2 3"
               rounded="md"
               text="xs"
             >
               <Show when={p().model}>
                 <div flex="~ col" gap="0.5">
-                  <span text="dark-text-tertiary">Model</span>
-                  <span text="dark-text-primary" font="mono">
+                  <span text="ui-text-tertiary">Model</span>
+                  <span text="ui-text-primary" font="mono">
                     {p().model}
                   </span>
                 </div>
@@ -110,12 +110,12 @@ export const ParsedPromptView = (props: { rawInput: string }) => {
               >
                 {([key, val]) => (
                   <div flex="~ col" gap="0.5" max-w="full" min-w="0">
-                    <span text="dark-text-tertiary">{key}</span>
+                    <span text="ui-text-tertiary">{key}</span>
                     {/* Wrapped and capped: `tools` and `metadata` are objects
                         that used to render as one unbroken line and push the
                         model name off screen (SA-H11). */}
                     <span
-                      text="dark-text-primary"
+                      text="ui-text-primary"
                       font="mono"
                       max-w="[28rem]"
                       title={
@@ -133,7 +133,7 @@ export const ParsedPromptView = (props: { rawInput: string }) => {
 
           {/* Messages */}
           <div flex="~ col" gap="2">
-            <div text="xs dark-text-tertiary">
+            <div text="xs ui-text-tertiary">
               {p().messages.length} message{p().messages.length !== 1 ? 's' : ''}
             </div>
             <For each={p().messages}>{(msg) => <PromptMessage msg={msg} />}</For>

@@ -298,7 +298,7 @@ export default function Home() {
           <Splitter.ResizeTrigger
             id="chat:support"
             w="2"
-            bg="dark-border-primary hover:neon-cyan/50"
+            bg="ui-border-primary hover:ui-accent/50"
             cursor="col-resize"
             transition="all"
             shadow="hover:[0_0_10px_rgba(0,255,255,0.3)]"

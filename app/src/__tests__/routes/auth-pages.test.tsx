@@ -3,8 +3,13 @@
  * access-denied and the 404. Each one exists to hand the user their next
  * action, so what is asserted here is that action — where the links point,
  * and the one conditional bit of copy sign-in shows after a failed round-trip.
+ *
+ * Since #226 B8 they are also the app's first themed surfaces, so the last
+ * block guards the two properties that made them a finding: no raw `class=`
+ * utilities, and the page ground on a theme-aware token.
  */
 
+import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
 import { render } from '@solidjs/testing-library'
 import { MemoryRouter, Route, createMemoryHistory } from '@solidjs/router'
@@ -64,5 +69,36 @@ describe('404 page', () => {
     const { container, findByText } = renderRoute(NotFound, '/nope')
     await findByText('Not Found')
     expect(hrefs(container)).toEqual(expect.arrayContaining(['/', '/dashboard']))
+  })
+})
+
+/**
+ * B8's finding was a syntax one before it was a visual one: these were the
+ * only non-icon `class=` attributes in the app. A regression here is invisible
+ * — a stray `class="bg-white"` renders perfectly — so it is checked in source.
+ */
+describe('house design language', () => {
+  const sources = [
+    'src/routes/auth/signin.tsx',
+    'src/routes/auth/access-denied.tsx',
+    'src/routes/[...404].tsx',
+    'src/components/AuthProvider.tsx',
+  ]
+
+  it.each(sources)('%s uses class= only for icon glyphs', (file) => {
+    const source = readFileSync(file, 'utf8')
+    const nonIcon = [...source.matchAll(/class="([^"]*)"/g)]
+      .map((m) => m[1])
+      .filter((value) => !/^i-material-symbols(-light)?-[\w-]+$/.test(value))
+
+    expect(nonIcon).toEqual([])
+  })
+
+  it.each(sources)('%s grounds itself on a theme-aware token', (file) => {
+    const source = readFileSync(file, 'utf8')
+    // A page still on `bg-gray-50` / `bg-dark-bg-*` would not follow the
+    // switcher, which is the whole point of the fix.
+    expect(source).toMatch(/bg="ui-bg-/)
+    expect(source).not.toMatch(/bg="[^"]*\bdark-bg-/)
   })
 })

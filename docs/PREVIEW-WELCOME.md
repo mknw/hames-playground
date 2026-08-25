@@ -106,7 +106,9 @@ directly and immediately.
 
 It will break sometimes. It is one server with no redundancy, so if it is
 restarted mid-answer, that answer is lost — reload and ask again. It is backed
-up nightly. Expect short interruptions with no notice, and expect the preview to
-be reset or reshaped based on what you tell us.
+up nightly, which means a bad day could cost up to a day of conversations, so do
+not treat it as the only copy of anything. Expect short interruptions with no
+notice — including a couple of minutes each night while the backup runs — and
+expect the preview to be reset or reshaped based on what you tell us.
 
 Thank you for trying it.

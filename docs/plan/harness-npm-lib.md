@@ -439,9 +439,13 @@ owner has committed to running: **Anthropic + a generic custom-endpoint
 client** (the owner is deploying a Qwen4.8-27B model on a Verda PRO RTX 6000
 box and will consume it through the custom-endpoint client). The
 mixed-provider fallback chains (`clients.baml`'s `RouterFallback` /
-`ControllerFallback` / etc., spread across Groq/OpenRouter/OpenAI) are
-legacy/dev-iteration constructs — see §6 — and are **not part of the
-published package**. They stay `app/`-only tooling behind `USE_MIXED_CHAINS`.
+`ControllerFallback` / etc., spread across Groq/OpenRouter/OpenAI) were
+legacy/dev-iteration constructs and are **not part of the published package**
+— **update 2026-08-24:** they and the `USE_MIXED_CHAINS` flag were deleted
+from the repo outright (ADR-0001), so this scope decision is now trivially
+satisfied. The role → client seam they were resolved through
+(`resolveClientForRole` in `clients.server.ts`) survives, and is where the
+custom-endpoint client slots in.
 
 ### 4.5 Private vs. public, and registry choice
 
@@ -530,18 +534,17 @@ if desired.
 
 ---
 
-## 6. Interaction with `USE_MIXED_CHAINS` and other existing app-level toggles
+## 6. Interaction with client routing and other existing app-level toggles
 
-Worth stating explicitly since `CLAUDE.md`'s build/commands section leads with
-it: `USE_MIXED_CHAINS=1 pnpm dev:exposed` and the Anthropic-only default are
-both **app-level** concerns (`clients.server.ts` lives in `app/` today, and
-moves into `harness-baml` per §1.4/§1.5) and are unaffected by this migration
-in either dev or production — they select which BAML client chain a pattern
-is bound to, which is orthogonal to which package the pattern _code_ is
-loaded from. Per §4.4, the mixed-provider chains never ship in the published
-`harness-baml` package at all: they are dev-iteration tooling that stays
-behind the `USE_MIXED_CHAINS` flag in `app/`, not part of the v1 client
-surface (Anthropic + custom-endpoint) an external consumer gets.
+**Update 2026-08-24:** this section was written around `USE_MIXED_CHAINS`,
+which no longer exists — the flag and the mixed-provider chains were removed
+(ADR-0001). What it was making the case for still holds and generalises:
+client routing is an **app-level** concern (`clients.server.ts` lives in
+`app/` today, and moves into `harness-baml` per §1.4/§1.5), unaffected by this
+migration in either dev or production, because it selects which BAML client
+chain a pattern is bound to — orthogonal to which package the pattern _code_
+is loaded from. The v1 client surface an external consumer gets stays
+Anthropic + custom-endpoint (§4.4).
 
 ---
 

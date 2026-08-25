@@ -55,13 +55,13 @@ const BATCH_OUTPUT_SHARE = 0.5
 /**
  * Batch size the OUTPUT side actually affords, derived from the output cap of
  * whatever client the `describe` role resolves to right now (SA-M6). The fixed
- * ceiling alone was sized against the Anthropic cap only: under
- * `USE_MIXED_CHAINS=1` the describe chain's weakest leaf (GroqFast) caps output
- * at 2 048 tokens, so a full 8-item batch could truncate, silently drop its
- * tail summaries, and send every dropped item down the per-item fallback —
- * N+1 calls, exactly the cost batching exists to avoid.
- * `CLIENT_MAX_OUTPUT_TOKENS` keys the resolved chain names to conservative
- * floors (the weakest leaf), so this sizes batches to worst-case routing.
+ * ceiling alone was sized against one client's cap: a chain whose weakest leaf
+ * caps output low (the removed mixed chains bottomed out at 2 048 tokens) would
+ * truncate a full 8-item batch, silently drop its tail summaries, and send
+ * every dropped item down the per-item fallback — N+1 calls, exactly the cost
+ * batching exists to avoid. `CLIENT_MAX_OUTPUT_TOKENS` keys the resolved chain
+ * names to conservative floors (the weakest leaf), so this sizes batches to
+ * worst-case routing whatever the chain becomes.
  */
 export function maxBatchItems(): number {
   const cap = CLIENT_MAX_OUTPUT_TOKENS[resolveClientForRole('describe')]

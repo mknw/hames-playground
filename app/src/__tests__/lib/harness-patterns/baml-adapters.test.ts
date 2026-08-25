@@ -4,22 +4,9 @@
  * Tests for controller and critic adapters that bridge patterns with BAML.
  */
 
-import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockFinalAction, mockCriticResult } from '../../mocks/baml'
 import { mockListTools } from '../../mocks/mcp'
-
-// These tests target the production mixed-provider fallback chain in
-// `baml_src/clients.baml` (RouterFallback / ControllerFallback / etc.) and
-// assert behavior like "fall back to GroqGPT120B on BamlValidationError".
-// The runtime default is Anthropic-only routing (see `clients.server.ts`),
-// which short-circuits the manual Groq fallback — so the tests must opt
-// back into the mixed chain explicitly.
-beforeAll(() => {
-  process.env.USE_MIXED_CHAINS = '1'
-})
-afterAll(() => {
-  delete process.env.USE_MIXED_CHAINS
-})
 
 // Mock server-only imports
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
@@ -273,18 +260,19 @@ describe('createPlannerAdapter', () => {
     expect(result.toolCount).toBe(2)
   })
 
-  it('stays on PlannerAnthropic even under USE_MIXED_CHAINS (#27 review)', async () => {
-    // The whole file runs with USE_MIXED_CHAINS=1. The controllers swap to
-    // ControllerFallback here — the planner must NOT: that chain's Groq
-    // gpt-oss-120b is the documented structured-output failure, and unlike the
-    // controllers the planner carries no Groq→Groq escalation to survive it.
+  it("passes no client override — the planner runs on planner.baml's declared client", async () => {
+    // Nothing swaps the planner's client at runtime any more (the
+    // USE_MIXED_CHAINS override that used to pin it here is gone), so the
+    // options bag must carry the collector and NOTHING else. A stray
+    // `client` here would silently route the largest prompt in the repo
+    // somewhere planner.baml never declared.
     const { createPlannerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
     await createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent')
 
-    const opts = mockPlanner.mock.calls[0][4] as { client?: string }
-    expect(opts.client).toBe('PlannerAnthropic')
+    const opts = mockPlanner.mock.calls[0][4] as { client?: string } | undefined
+    expect(opts?.client).toBeUndefined()
   })
 })
 
@@ -482,8 +470,8 @@ describe('extractLLMCallData', () => {
         calls: [
           {
             httpRequest: { body: '{"messages":[{"role":"user","content":"test"}]}' },
-            provider: 'groq',
-            clientName: 'GroqFast',
+            provider: 'anthropic',
+            clientName: 'AnthropicHaiku45',
           },
         ],
       },
@@ -511,8 +499,8 @@ describe('extractLLMCallData', () => {
       cachedInputTokens: 50,
       totalTokens: 230,
     })
-    expect(result!.provider).toBe('groq')
-    expect(result!.clientName).toBe('GroqFast')
+    expect(result!.provider).toBe('anthropic')
+    expect(result!.clientName).toBe('AnthropicHaiku45')
     expect(result!.durationMs).toBeGreaterThanOrEqual(0)
   })
 
@@ -615,8 +603,8 @@ describe('extractLLMCallData', () => {
           {
             httpRequest: { body: httpBody },
             selected: true,
-            provider: 'openrouter',
-            clientName: 'OpenRouterNemotron120B',
+            provider: 'anthropic',
+            clientName: 'AnthropicSonnet5',
           },
         ],
       },
@@ -627,8 +615,8 @@ describe('extractLLMCallData', () => {
     expect(result).toBeDefined()
     expect(result!.rawInput).toBe(bodyText)
     expect(result!.rawInput).not.toBe('{}')
-    expect(result!.provider).toBe('openrouter')
-    expect(result!.clientName).toBe('OpenRouterNemotron120B')
+    expect(result!.provider).toBe('anthropic')
+    expect(result!.clientName).toBe('AnthropicSonnet5')
   })
 
   it('should prefer the selected call when fallbacks produce multiple entries', async () => {
@@ -645,14 +633,14 @@ describe('extractLLMCallData', () => {
           {
             httpRequest: { body: failedBody },
             selected: false,
-            provider: 'groq',
-            clientName: 'GroqFast',
+            provider: 'anthropic',
+            clientName: 'AnthropicSonnet5NoThink',
           },
           {
             httpRequest: { body: goodBody },
             selected: true,
-            provider: 'openai',
-            clientName: 'OpenAIGPT5',
+            provider: 'anthropic',
+            clientName: 'AnthropicSonnet46NoThink',
           },
         ],
       },
@@ -661,7 +649,7 @@ describe('extractLLMCallData', () => {
     const result = extractLLMCallData(collector as never, 'LoopController', {}, Date.now())
 
     expect(result!.rawInput).toBe('GOOD_BODY')
-    expect(result!.clientName).toBe('OpenAIGPT5')
+    expect(result!.clientName).toBe('AnthropicSonnet46NoThink')
   })
 
   it('should populate promptTemplate with the Jinja template (placeholders intact)', async () => {
@@ -713,14 +701,13 @@ describe('describeToolResultOp', () => {
     )
 
     expect(result).toBe('Found 3 nodes in the graph.')
-    // 5th arg is the BAML options override (`{ client: 'DescribeFallback' }`)
-    // added under USE_MIXED_CHAINS=1 — see `clientOverrideFor`.
+    // No trailing options bag: describe carries no collector and no client
+    // override, so `ResultDescribe` is called with its data params only.
     expect(mockResultDescribe).toHaveBeenCalledWith(
       'read_neo4j_cypher',
       '{"query":"MATCH (n) RETURN n"}',
       'Need to list nodes',
       '[{name:"A"},{name:"B"},{name:"C"}]',
-      expect.objectContaining({ client: 'DescribeFallback' }),
     )
   })
 
@@ -760,14 +747,10 @@ describe('describeToolResultsBatchOp', () => {
     expect(byId.get('1')).toBe('Found A.')
     expect(byId.get('2')).toBe('Fetched B.')
     // `toolArgs` is renamed to the BAML class's snake_case `tool_args`
-    expect(mockResultDescribeBatch).toHaveBeenCalledWith(
-      [
-        { id: '1', tool: 'search', tool_args: '{"q":"a"}', reasoning: 'find a', result: 'A' },
-        { id: '2', tool: 'fetch', tool_args: '{"url":"b"}', reasoning: '', result: 'B' },
-      ],
-      // 2nd arg is the client override added under USE_MIXED_CHAINS=1
-      expect.objectContaining({ client: 'DescribeFallback' }),
-    )
+    expect(mockResultDescribeBatch).toHaveBeenCalledWith([
+      { id: '1', tool: 'search', tool_args: '{"q":"a"}', reasoning: 'find a', result: 'A' },
+      { id: '2', tool: 'fetch', tool_args: '{"url":"b"}', reasoning: '', result: 'B' },
+    ])
   })
 
   it('omits ids the model dropped or answered blank', async () => {
@@ -823,59 +806,47 @@ describe('describeToolResultsBatchOp', () => {
   })
 })
 
-describe('LoopController BamlValidationError fallback', () => {
+describe('LoopController error propagation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('should fall back to GroqGPT120B on BamlValidationError', async () => {
+  it('propagates a BamlValidationError in ONE call — no second-provider escalation', async () => {
+    // There is no manual GroqGPT120B → GroqFast ladder any more: Anthropic is
+    // the only provider, so a genuine structured-output failure is VISIBLE
+    // rather than papered over by a re-invoke on a weaker model. (The
+    // truncation / empty-completion retry is a different path and still fires
+    // — see truncation-retry.test.ts.)
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
-    // First call throws BamlValidationError, second call (GroqGPT120B) succeeds
-    mockLoopController
-      .mockRejectedValueOnce(
-        new BamlValidationError('Invalid JSON output', 'raw output', 'msg', 'detailed'),
-      )
-      .mockResolvedValueOnce(mockFinalAction('Recovered'))
+    mockLoopController.mockRejectedValue(
+      new BamlValidationError('Invalid JSON output', 'raw output', 'msg', 'detailed'),
+    )
 
     const controller = createLoopControllerAdapter(['Return'])
-    const result = await controller('user message', 'intent', '[]', 0)
 
-    expect(result.action).toBeDefined()
-    expect(result.action.is_final).toBe(true)
-    expect(mockLoopController).toHaveBeenCalledTimes(2)
-    // Second call should use GroqGPT120B client override. The options object
-    // rides LAST, after the data params — read it off the END rather than a
-    // fixed slot, so appending a trailing param (return_style, #149) doesn't
-    // silently shift this assertion onto a data argument.
-    const secondCall = mockLoopController.mock.calls[1]
-    expect(secondCall[secondCall.length - 1]).toEqual(
-      expect.objectContaining({ client: 'GroqGPT120B' }),
-    )
+    await expect(controller('user message', 'intent', '[]', 0)).rejects.toThrow()
+    expect(mockLoopController).toHaveBeenCalledTimes(1)
   })
 
-  it('should fall back to GroqFast when both primary and GroqGPT120B fail', async () => {
+  it('passes no client override on the primary call', async () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
-    const { BamlValidationError } = await import('@boundaryml/baml')
+    mockLoopController.mockResolvedValue(mockFinalAction('ok'))
+    const { Collector } = await import('@boundaryml/baml')
+    const collector = new Collector('test')
 
-    // All three calls fail with BamlValidationError until GroqFast succeeds
-    mockLoopController
-      .mockRejectedValueOnce(new BamlValidationError('Invalid JSON', 'raw1', 'msg', 'detailed'))
-      .mockRejectedValueOnce(new BamlValidationError('Still invalid', 'raw2', 'msg', 'detailed'))
-      .mockResolvedValueOnce(mockFinalAction('Final recovery'))
+    await createLoopControllerAdapter(['Return'])('msg', 'intent', '[]', 0, undefined, collector)
 
-    const controller = createLoopControllerAdapter(['Return'])
-    const result = await controller('user message', 'intent', '[]', 0)
-
-    expect(result.action).toBeDefined()
-    expect(result.action.is_final).toBe(true)
-    expect(mockLoopController).toHaveBeenCalledTimes(3)
-    // Third call should use GroqFast client override. Same last-argument read.
-    const thirdCall = mockLoopController.mock.calls[2]
-    expect(thirdCall[thirdCall.length - 1]).toEqual(expect.objectContaining({ client: 'GroqFast' }))
+    // The options bag rides LAST, after the data params — read it off the END
+    // rather than a fixed slot, so appending a trailing param (return_style,
+    // #149) doesn't silently shift this assertion onto a data argument.
+    const call = mockLoopController.mock.calls[0]
+    const opts = call[call.length - 1] as { client?: string; collector?: unknown }
+    expect(opts.collector).toBe(collector)
+    expect(opts.client).toBeUndefined()
   })
 
   it('should propagate non-BamlValidationError errors', async () => {
@@ -888,23 +859,6 @@ describe('LoopController BamlValidationError fallback', () => {
 
     await expect(controller('user message', 'intent', '[]', 0)).rejects.toThrow('Network timeout')
     expect(mockLoopController).toHaveBeenCalledTimes(1)
-  })
-
-  it('should propagate non-BamlValidationError from GroqGPT120B fallback', async () => {
-    const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
-    const { BamlValidationError } = await import('@boundaryml/baml')
-
-    mockLoopController
-      .mockRejectedValueOnce(new BamlValidationError('Invalid JSON', 'raw', 'msg', 'detailed'))
-      .mockRejectedValueOnce(new Error('GroqGPT120B network error'))
-
-    const controller = createLoopControllerAdapter(['Return'])
-
-    await expect(controller('user message', 'intent', '[]', 0)).rejects.toThrow(
-      'GroqGPT120B network error',
-    )
-    expect(mockLoopController).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -1083,8 +1037,8 @@ describe('LLMCallError — failed LLM call capture', () => {
           calls: [
             {
               httpRequest: { body: httpBody },
-              provider: 'groq',
-              clientName: 'GroqGPT120B',
+              provider: 'anthropic',
+              clientName: 'AnthropicSonnet5NoThink',
             },
           ],
         }
@@ -1119,8 +1073,8 @@ describe('LLMCallError — failed LLM call capture', () => {
     expect(err.llmCall.rawInput).toBe('{"messages":[{"role":"user","content":"INTENT: do thing"}]}')
     // rawOutput captured (the malformed response) — equivalent to httpResponse
     expect(err.llmCall.rawOutput).toBe('malformed-json-from-llm')
-    expect(err.llmCall.provider).toBe('groq')
-    expect(err.llmCall.clientName).toBe('GroqGPT120B')
+    expect(err.llmCall.provider).toBe('anthropic')
+    expect(err.llmCall.clientName).toBe('AnthropicSonnet5NoThink')
     // The original error is preserved as cause
     expect(err.cause).toBeInstanceOf(Error)
   })
@@ -1155,43 +1109,18 @@ describe('LLMCallError — failed LLM call capture', () => {
     expect(err.llmCall.rawOutput).toBeUndefined()
   })
 
-  it('does NOT throw LLMCallError when a recovered fallback attempt succeeds', async () => {
-    // The fallback chain only emits a propagating error on the final
-    // failure. When attempt 1 fails with BamlValidationError but attempt
-    // 2 (GroqGPT120B) succeeds, the adapter returns the success — no
-    // LLMCallError is thrown and the recovered attempts don't surface
-    // as red error events in the panel.
+  it('wraps a structured-output failure as LLMCallError on the FIRST attempt', async () => {
+    // With no second provider to escalate to, a BamlValidationError that is
+    // neither a truncation nor an empty completion is wrapped and propagated
+    // immediately — the panel gets the prompt/variables drill-down and the
+    // failure stays visible instead of being retried on a weaker model.
     const { createLoopControllerAdapter, LLMCallError } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
-    mockLoopController
-      .mockRejectedValueOnce(new BamlValidationError('Invalid JSON', 'raw', 'msg', 'detailed'))
-      .mockResolvedValueOnce(mockFinalAction('Recovered on attempt 2'))
-
-    const controller = createLoopControllerAdapter(['Return'])
-
-    // Should NOT throw: the recovered attempt produces a normal return.
-    const result = await controller('user message', 'intent', '[]', 0)
-    expect(result.action).toBeDefined()
-    expect(result.action.is_final).toBe(true)
-    // And just to assert the type: an LLMCallError did not slip through
-    expect(result instanceof LLMCallError).toBe(false)
-  })
-
-  it('throws LLMCallError when ALL fallbacks (primary + GroqGPT120B + GroqFast) fail', async () => {
-    // Only the final, propagating failure should produce an LLMCallError.
-    // Here every fallback throws BamlValidationError, so the adapter
-    // exhausts the chain and the propagating error from the last attempt
-    // is wrapped.
-    const { createLoopControllerAdapter, LLMCallError } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
-    const { BamlValidationError } = await import('@boundaryml/baml')
-
-    mockLoopController
-      .mockRejectedValueOnce(new BamlValidationError('attempt 1 invalid', 'r1', 'm1', 'd1'))
-      .mockRejectedValueOnce(new BamlValidationError('attempt 2 invalid', 'r2', 'm2', 'd2'))
-      .mockRejectedValueOnce(new BamlValidationError('attempt 3 invalid', 'r3', 'm3', 'd3'))
+    mockLoopController.mockRejectedValue(
+      new BamlValidationError('attempt 1 invalid', 'r1', 'm1', 'd1'),
+    )
 
     const controller = createLoopControllerAdapter(['Return'])
 
@@ -1207,8 +1136,7 @@ describe('LLMCallError — failed LLM call capture', () => {
     // .prompt / .raw_output instead), so we just assert the wrapper class
     // and the call count rather than asserting on message content.
     expect((caught as InstanceType<typeof LLMCallError>).cause).toBeDefined()
-    // All three attempts ran
-    expect(mockLoopController).toHaveBeenCalledTimes(3)
+    expect(mockLoopController).toHaveBeenCalledTimes(1)
   })
 
   it('throws LLMCallError from ActorController on BAML failure', async () => {
@@ -1286,7 +1214,9 @@ describe('extractFailureLLMCallData', () => {
     const collector = {
       last: {
         rawLlmResponse: 'partial-or-malformed',
-        calls: [{ httpRequest: { body: httpBody }, provider: 'openai', clientName: 'OpenAIGPT5' }],
+        calls: [
+          { httpRequest: { body: httpBody }, provider: 'anthropic', clientName: 'AnthropicOpus4' },
+        ],
       },
     }
 
@@ -1300,8 +1230,8 @@ describe('extractFailureLLMCallData', () => {
     expect(result.functionName).toBe('Synthesize')
     expect(result.rawInput).toBe(bodyText)
     expect(result.rawOutput).toBe('partial-or-malformed')
-    expect(result.provider).toBe('openai')
-    expect(result.clientName).toBe('OpenAIGPT5')
+    expect(result.provider).toBe('anthropic')
+    expect(result.clientName).toBe('AnthropicOpus4')
     // parsedOutput is intentionally omitted on failures
     expect(result.parsedOutput).toBeUndefined()
   })

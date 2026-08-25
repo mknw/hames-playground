@@ -28,10 +28,18 @@
 // ============================================================================
 
 // --- Section: few-shot examples (blank-line entries, ----fenced) ------------
+// Rendered as the SAME JSON object the attempt log below and `ctx.output_format`
+// ask for. This prompt is where the brace-less-envelope failure was CAPTURED
+// (`.harness-logs/baml-validation.json`, `sandbox-session-loop` attempt 3 of 6):
+// the actor copied this section's old `key: value` shape line for line, invented
+// a YAML `additional_calls:` list to go with it, and the loop died on a response
+// whose every field was correct. Full account on LoopFewShots in simpleLoop.baml,
+// including why "an object would demonstrate a MISSING REQUIRED FIELD" stopped
+// being true once `status` (#144) and `is_final` (#159) became optional.
+//
 // Values rendered with `tojson` so the encoding of `tool_args` matches the
 // attempt log below (which also uses `tojson`): it is a string whose content is
-// JSON, so its inner quotes are escaped. See LoopFewShots in simpleLoop.baml for
-// the failure a bare rendering produced.
+// JSON, so its inner quotes are escaped.
 template_string ActorFewShots(few_shots: FewShot[]?) #"
   {% if few_shots and few_shots|length > 0 %}
 
@@ -40,9 +48,7 @@ template_string ActorFewShots(few_shots: FewShot[]?) #"
   {% for ex in few_shots %}
 
   - User: {{ ex.user }}
-    reasoning: {{ ex.reasoning | tojson }}
-    tool_name: {{ ex.tool | tojson }}
-    tool_args: {{ ex.args | tojson }}
+    {"reasoning": {{ ex.reasoning | tojson }}, "tool_name": {{ ex.tool | tojson }}, "tool_args": {{ ex.args | tojson }}, "is_final": false}
   {% endfor %}
 
   ---
@@ -55,6 +61,26 @@ template_string ActorFewShots(few_shots: FewShot[]?) #"
 // actor), and is_final may legitimately accompany a batch (the critic still
 // verifies before the loop exits). Mode is agent-static (pattern config), so
 // the section sits in the static system head inside the call-1 marker's prefix.
+//
+// Each branch ends in ONE demonstrated action, and THIS prompt is where the
+// missing demonstration was captured (#248 — the `sandbox-session-loop` attempt
+// 3 in `.harness-logs/baml-validation.json`, a `sequential` sandbox agent). The
+// actor wanted precisely the batch the sequential branch advertises — write a
+// script, then run it, because escaping the script through `bash -lc` had just
+// failed — and, with `additional_calls` described in prose but shown nowhere,
+// INVENTED a YAML `additional_calls:` bullet list for it and rendered the whole
+// envelope brace-less to match the few-shot form beside it. Complete, correct,
+// 372 output tokens against a 32768 cap, so neither the empty-response nor the
+// truncation retry matched, and the throw ended the loop with three attempts
+// still in budget. The demonstration lives here rather than in `ActorFewShots`
+// (per-agent examples that know nothing of the mode) or in an agent's few-shot
+// config (which would show the batch shape to agents whose mode is 'off'): the
+// section is already gated on `multi_call_mode`, so a demonstration inside it is
+// mode-correct by construction. It byte-matches the envelope the attempt log and
+// `ctx.output_format` ask for — one JSON object, `tool_args` a STRING whose
+// content is JSON with inner quotes escaped, `additional_calls` entries of
+// tool_name/tool_args only — because a demonstration that disagrees with the
+// contract is this repo's most-paid-for defect class (#144 twice, #159, #248).
 template_string ActorMultiCalls(multi_call_mode: string?) #"
   {% if multi_call_mode == "parallel" %}
 
@@ -65,6 +91,9 @@ template_string ActorMultiCalls(multi_call_mode: string?) #"
   call's result or side effects. Prefer batching independent lookups over
   spending an attempt on each. At most 4 calls per attempt; keep each
   tool_args small. A failed call reports its error alongside the other results.
+  Two independent lookups batched into one attempt — copy this SHAPE, not its
+  content (tool_args stays a JSON string with its inner quotes escaped):
+  {"reasoning": "The schema and the concept list do not depend on each other, so one attempt covers both.", "tool_name": "get_neo4j_schema", "tool_args": "{}", "additional_calls": [{"tool_name": "read_neo4j_cypher", "tool_args": "{\"query\": \"MATCH (c:Concept) RETURN c.name LIMIT 20\"}"}], "status": "Reading the schema and listing concepts", "is_final": false}
   {% elif multi_call_mode == "sequential" %}
 
   MULTIPLE CALLS PER TURN:
@@ -75,6 +104,9 @@ template_string ActorMultiCalls(multi_call_mode: string?) #"
   whole attempt completes — never derive a later call's arguments from an
   earlier call's output. If a call fails, the rest of the batch is skipped.
   At most 4 calls per attempt; keep each tool_args small.
+  A script written and then run in one attempt — copy this SHAPE, not its
+  content (tool_args stays a JSON string with its inner quotes escaped):
+  {"reasoning": "Escaping a long script through the shell is fragile, so write it to a file and run that file in the same attempt.", "tool_name": "sandbox_write", "tool_args": "{\"path\": \"/work/inspect.py\", \"content\": \"import openpyxl\\nprint('ok')\"}", "additional_calls": [{"tool_name": "sandbox_bash", "tool_args": "{\"command\": \"python3 /work/inspect.py\"}"}], "status": "Writing the script, then running it", "is_final": false}
   {% endif %}
 "#
 

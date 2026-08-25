@@ -166,11 +166,15 @@ class ControllerAction {
   //
   // The omission is structural, not a one-off: the field is only ever
   // DEMONSTRATED as false. `LoopTurnLog` renders a literal `false` (the loop
-  // breaks before pushing a final action) and few-shots carry no action fields
-  // at all, so a turn-0 call with empty `turns` and no few-shots — exactly the
-  // failing shape — has `ctx.output_format` as its only description of the
-  // field. A field whose sole demonstrated value is the default is the field a
-  // model drops.
+  // breaks before pushing a final action); the few-shots did not render action
+  // fields at all when #159 was written, so a turn-0 call with empty `turns` and
+  // no few-shots — exactly the failing shape — had `ctx.output_format` as its
+  // only description of the field. A field whose sole demonstrated value is the
+  // default is the field a model drops. (`ActorFewShots` / `LoopFewShots` now
+  // render the whole JSON envelope, `is_final: false` included — the fourth
+  // instance of this class was the ENVELOPE, not a field. So a few-shotted call
+  // does see the field demonstrated; the reasoning above still stands for the
+  // agents that pass none, and `false` remains the default either way.)
   //
   // False is the safe default in both patterns, so absence can never end a loop
   // early or claim finality: simpleLoop exits on `is_final || tool_name ===

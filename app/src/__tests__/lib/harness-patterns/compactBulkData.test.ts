@@ -386,14 +386,19 @@ describe('compactBulkData', () => {
     }
   })
 
-  it('sizes batches to the mixed chain weakest leaf output cap (SA-M6)', async () => {
-    // Under USE_MIXED_CHAINS=1 the describe role resolves to DescribeFallback,
-    // whose weakest leaf (GroqFast) caps output at 2 048 tokens. A fixed
-    // 8-item batch (~1.6K tokens of summaries plus JSON scaffolding) could
-    // truncate there, drop its tail summaries, and pay the per-item fallback
-    // for each — so the batch size derives from the resolved client's cap:
-    // floor((2048 × 0.5) / 200) = 5.
-    process.env.USE_MIXED_CHAINS = '1'
+  it('sizes batches to the resolved describe client output cap (SA-M6)', async () => {
+    // A fixed 8-item batch (~1.6K tokens of summaries plus JSON scaffolding)
+    // truncates on any chain whose floor is low — the removed mixed describe
+    // chain bottomed out at 2 048 — dropping its tail summaries and paying the
+    // per-item fallback for each. So the batch size derives from the resolved
+    // client's cap: floor((2048 × 0.5) / 200) = 5. Driven here by lowering the
+    // floor itself rather than by a routing flag, so the derivation stays
+    // pinned whatever the describe chain is next pointed at. That floor is
+    // shared module state, restored in the `finally` below: keep this test out
+    // of any `describe.concurrent`.
+    const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
+    const realCap = CLIENT_MAX_OUTPUT_TOKENS.DescribeAnthropic
+    CLIENT_MAX_OUTPUT_TOKENS.DescribeAnthropic = 2_048
     try {
       const { compactBulkData, maxBatchItems } =
         await import('../../../lib/harness-patterns/compactBulkData.server')
@@ -414,7 +419,7 @@ describe('compactBulkData', () => {
       const sizes = mockDescribeBatch.mock.calls.map((c) => (c[0] as unknown[]).length)
       expect(sizes).toEqual([5, 2])
     } finally {
-      delete process.env.USE_MIXED_CHAINS
+      CLIENT_MAX_OUTPUT_TOKENS.DescribeAnthropic = realCap
     }
   })
 

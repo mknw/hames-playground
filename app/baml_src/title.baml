@@ -1,5 +1,5 @@
 // GenerateConversationTitle — ultra-short conversation titles for the sidebar.
-// Reuses the DescribeFallback client chain (Groq → Gemma → OpenAI → Haiku)
+// Reuses the DescribeAnthropic client chain (Haiku 4.5)
 // — same lightweight chain used by the background tool-result summarizer
 // since both are "tiny async post-process" jobs with identical cost shapes.
 //

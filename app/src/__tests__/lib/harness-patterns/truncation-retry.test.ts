@@ -67,9 +67,6 @@ function emptyCollector(outputTokens = 689, rawLlmResponse = ''): Collector {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  // Anthropic-only default routing (no client override) — the truncation retry
-  // must work exactly where the old Groq-only escalation did not.
-  delete process.env.USE_MIXED_CHAINS
 })
 
 describe('llmCallHitOutputCap', () => {
@@ -84,20 +81,22 @@ describe('llmCallHitOutputCap', () => {
     ).toBe(true)
   })
 
-  it('detects truncated Groq/OpenRouter leaves — dead in production before SA-C2', async () => {
+  it('detects the cap on EVERY capped leaf, at the boundary (SA-C2)', async () => {
     const { llmCallHitOutputCap } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
-    // The mixed chains report the selected LEAF's clientName; these entries
-    // were missing from CLIENT_MAX_OUTPUT_TOKENS, so detection returned false
-    // for every production truncation.
+    // The collector reports the selected LEAF's clientName, never the chain's,
+    // so each leaf needs its own CLIENT_MAX_OUTPUT_TOKENS entry. Seven
+    // Groq/OpenRouter leaves were missing theirs and every production
+    // truncation went undetected; those clients are gone, the invariant is not
+    // (client-output-caps.test.ts pins the map against baml_src).
     for (const [clientName, cap] of [
-      ['GroqFast', 2_048],
-      ['GroqGPT120B', 4_096],
-      ['GroqQwen3_32b', 2_048],
-      ['OpenRouterMiniMax2_5', 4_096],
-      ['OpenRouterNemotron120B', 4_096],
-      ['OpenRouterNemotron3Nano30B', 4_096],
-      ['OpenRouterGemma4', 4_096],
+      ['AnthropicSonnet5', 32_768],
+      ['AnthropicSonnet5NoThink', 32_768],
+      ['AnthropicSonnet46', 16_384],
+      ['AnthropicSonnet46NoThink', 16_384],
+      ['AnthropicHaiku45', 16_384],
+      ['AnthropicOpus4', 4_096],
+      ['LocalGLM', 2_048],
     ] as const) {
       expect(
         llmCallHitOutputCap({
@@ -246,7 +245,7 @@ describe('LoopController truncation retry (Anthropic-only path)', () => {
     expect(retryContext).toContain(TRUNCATION_RETRY_GUIDANCE)
   })
 
-  it('without a cap-hit, the Anthropic-only path still rethrows (no Groq escalation, no retry)', async () => {
+  it('without a cap-hit, a parse failure rethrows — no retry, no escalation', async () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
@@ -271,77 +270,36 @@ describe('LoopController truncation retry (Anthropic-only path)', () => {
   })
 })
 
-describe('mixed-chains interaction', () => {
-  it('truncation retry takes precedence over Groq escalation when the cap was hit', async () => {
-    process.env.USE_MIXED_CHAINS = '1'
-    try {
-      const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } =
-        await import('../../../lib/harness-patterns/baml-adapters.server')
-      const { BamlValidationError } = await import('@boundaryml/baml')
+describe('the retry stays on the declared chain', () => {
+  it('appends guidance to the SAME call — it never swaps the client', async () => {
+    const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { BamlValidationError } = await import('@boundaryml/baml')
 
-      mockLoopController
-        .mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'truncated', 'truncated'))
-        .mockResolvedValueOnce(mockFinalAction('Recovered'))
+    mockLoopController
+      .mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'truncated', 'truncated'))
+      .mockResolvedValueOnce(mockFinalAction('Recovered'))
 
-      const controller = createLoopControllerAdapter(['Return'])
-      const result = await controller(
-        'user message',
-        'intent',
-        '[]',
-        0,
-        undefined,
-        fakeCollector(16_384, 'AnthropicSonnet46'),
-      )
+    const controller = createLoopControllerAdapter(['Return'])
+    const result = await controller(
+      'user message',
+      'intent',
+      '[]',
+      0,
+      undefined,
+      fakeCollector(16_384, 'AnthropicSonnet46'),
+    )
 
-      expect(result.action).toBeDefined()
-      expect(mockLoopController).toHaveBeenCalledTimes(2)
-      // The retry keeps the SAME chain with corrective context — it must not
-      // hop to the Groq client (that path is for structured-output failures,
-      // not transport truncation).
-      const retryOpts = mockLoopController.mock.calls[1][7] as Record<string, unknown> | undefined
-      expect(retryOpts && (retryOpts as { client?: string }).client).not.toBe('GroqGPT120B')
-      expect(String(mockLoopController.mock.calls[1][4])).toContain(TRUNCATION_RETRY_GUIDANCE)
-    } finally {
-      delete process.env.USE_MIXED_CHAINS
-    }
-  })
-
-  it('a truncated Groq leaf takes the corrective retry, NOT the smaller-cap escalation (SA-C2)', async () => {
-    process.env.USE_MIXED_CHAINS = '1'
-    try {
-      const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } =
-        await import('../../../lib/harness-patterns/baml-adapters.server')
-      const { BamlValidationError } = await import('@boundaryml/baml')
-
-      mockLoopController
-        .mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'truncated', 'truncated'))
-        .mockResolvedValueOnce(mockFinalAction('Recovered'))
-
-      const controller = createLoopControllerAdapter(['Return'])
-      // GroqGPT120B cut off at its 4 096 cap. Before SA-C2 this clientName had
-      // no CLIENT_MAX_OUTPUT_TOKENS entry, so collectorHitOutputCap() was
-      // false and the failure fell into the Groq escalation — whose next rung
-      // (GroqFast) caps output at 2 048, HALF the cap that just truncated.
-      const result = await controller(
-        'user message',
-        'intent',
-        '[]',
-        0,
-        undefined,
-        fakeCollector(4_096, 'GroqGPT120B'),
-      )
-
-      expect(result.action).toBeDefined()
-      expect(mockLoopController).toHaveBeenCalledTimes(2)
-      const retryContext = String(mockLoopController.mock.calls[1][4])
-      expect(retryContext).toContain(TRUNCATION_RETRY_GUIDANCE)
-      // Same chain on the retry — never a hop to the smaller-capped leaves.
-      const retryOpts = mockLoopController.mock.calls[1][7] as { client?: string } | undefined
-      expect(retryOpts?.client).not.toBe('GroqGPT120B')
-      expect(retryOpts?.client).not.toBe('GroqFast')
-    } finally {
-      delete process.env.USE_MIXED_CHAINS
-    }
+    expect(result.action).toBeDefined()
+    expect(mockLoopController).toHaveBeenCalledTimes(2)
+    // A truncation is a transport failure, not a model-capability one: the
+    // remedy is a smaller response on the same client. The old ladder hopped
+    // to a leaf with HALF the cap that had just truncated — nothing may
+    // reintroduce a client swap on this path.
+    const retryCall = mockLoopController.mock.calls[1]
+    const retryOpts = retryCall[retryCall.length - 1] as { client?: string } | undefined
+    expect(retryOpts?.client).toBeUndefined()
+    expect(String(retryCall[4])).toContain(TRUNCATION_RETRY_GUIDANCE)
   })
 })
 

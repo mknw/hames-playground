@@ -417,6 +417,13 @@ LLM call + tool call) into ONE controller call. Three modes:
   an un-advertised batch can still arrive; it is tolerated and executed
   serially, never punished.
 
+Each advertised mode also DEMONSTRATES one batched action in its own branch of
+`LoopMultiCalls`/`ActorMultiCalls` — parallel shows independent lookups,
+sequential the write-then-run chain — in the same JSON envelope the turn log and
+`ctx.output_format` ask for. #248 was a model that wanted the affordance and,
+finding it described but never shown, invented a YAML `additional_calls:` list
+for it. `'off'` renders no branch, so it shows nothing either.
+
 The whole batch records as ONE `LoopTurn` (so `maxTurns` counts turns, not
 calls): the assistant history replays `additional_calls` exactly as emitted,
 and `tool_result.result` is an index-keyed map — `{"1": {tool, result}, "2":
@@ -707,10 +714,10 @@ overwhelmingly common case must cost zero tokens and carry zero mangling risk.
 
 **Optional LLM screen (off by default).** `screen` takes an `InjectionScreen`;
 `createInjectionScreen()` (baml-adapters) is the BAML-backed one, on the cheap
-`DescribeAnthropic` client — in BOTH routing modes: the `screen` role is pinned
-in `clients.server.ts` (like the planner) and never follows `describe` onto the
-mixed `DescribeFallback` chain, whose first leaf is the weakest model in the
-repo (SA-M5). The guard calls it **only for content the
+`DescribeAnthropic` client. It has its OWN `screen` role in
+`clients.server.ts` rather than riding `describe`, so re-pointing summarization
+at a cheaper model can never silently re-point prompt-injection screening with
+it (SA-M5). The guard calls it **only for content the
 deterministic layer passed clean** — i.e. gated on `findings.length === 0`, see
 the note above — so the two layers divide labour: regexes catch known phrasings,
 the screen catches novel ones. A verbatim span it quotes is neutralized like a

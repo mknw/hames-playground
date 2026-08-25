@@ -43,7 +43,7 @@ These are three *policies* for the same underlying question: **which prior data 
 - Producer-side declaration of refs (no `publishRefs` on patterns; everything in `ctx.events` is implicitly available).
 - Mid-loop relevance recomputation (selection happens once per pattern entry; refresh happens at the next pattern's entry).
 - Egress filtering or summarization (already in place).
-- Determining *which* model writes summaries (handled by existing `compactBulkData` / `DescribeFallback`).
+- Determining *which* model writes summaries (handled by existing `compactBulkData` / the `describe` role).
 
 ## 3. Reference taxonomy
 
@@ -149,7 +149,7 @@ function ReferenceSelector(
   recent_messages: Message[],
   candidates: ReferenceCandidate[],
 ) -> ReferenceSelectorResult {
-  client DescribeFallback
+  client DescribeAnthropic
   prompt #"
     {{ _.role("system") }}
     Select prior tool results that are relevant to the user's current intent.

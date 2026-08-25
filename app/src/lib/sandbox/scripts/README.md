@@ -30,10 +30,10 @@ that the SDK mocks gloss over.
 
 ## The two scripts
 
-| File | Driven by | Cost | Typical runtime |
-|---|---|---|---|
-| `smoke-scripted.ts` | hand-scripted actor + critic, **runs twice to prove pool hit** | none | ~1.5s (1 cold boot + 1 pool hit + 1 reset) |
-| `smoke-llm.ts` | real Anthropic via BAML adapters | a few cents | ~4–5s (2× Anthropic calls) |
+| File                | Driven by                                                      | Cost        | Typical runtime                            |
+| ------------------- | -------------------------------------------------------------- | ----------- | ------------------------------------------ |
+| `smoke-scripted.ts` | hand-scripted actor + critic, **runs twice to prove pool hit** | none        | ~1.5s (1 cold boot + 1 pool hit + 1 reset) |
+| `smoke-llm.ts`      | real Anthropic via BAML adapters                               | a few cents | ~4–5s (2× Anthropic calls)                 |
 
 Run from `app/`:
 
@@ -42,11 +42,9 @@ pnpm dlx tsx src/lib/sandbox/scripts/smoke-scripted.ts
 pnpm dlx tsx --env-file=.env src/lib/sandbox/scripts/smoke-llm.ts
 ```
 
-`smoke-llm.ts` needs `ANTHROPIC_API_KEY` (the Anthropic-default chain — see
-`CLAUDE.md` → "Client routing"). Set `USE_MIXED_CHAINS=1` to swap in the
-mixed Groq / OpenRouter / OpenAI chain instead; corresponding keys then
-required. The `--env-file=.env` flag lets the script pick up the repo's
-`.env` without a separate `dotenv` import.
+`smoke-llm.ts` needs `ANTHROPIC_API_KEY` — the only provider key the app needs
+(see `CLAUDE.md` → "Client routing"). The `--env-file=.env` flag lets the script
+pick up the repo's `.env` without a separate `dotenv` import.
 
 Each script's file header documents its own actor/critic logic, the
 expected event log, and any quirks. Read those before extending.
@@ -54,6 +52,7 @@ expected event log, and any quirks. Read those before extending.
 ## What "passing" looks like
 
 Both scripts print:
+
 1. A header — the sentence + the expected count.
 2. A boot/run note.
 3. The event log — one line per `controller_action`, `tool_result`, and

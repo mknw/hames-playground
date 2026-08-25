@@ -174,7 +174,6 @@ function toPriorResults(refs: ReferenceCandidate[]): PriorResult[] {
 
 const defaultSelector: SelectorFn = async (input) => {
   const { b } = await import('../../../../baml_client')
-  const { clientOverrideFor } = await import('../clients.server')
   const { warnIfCollectorEmpty, wrapAsLLMCallError } = await import('../baml-adapters.server')
   const now = Date.now()
   const collector = new Collector('reference-selector')
@@ -191,7 +190,7 @@ const defaultSelector: SelectorFn = async (input) => {
       input.intent,
       input.recentMessages.map((m) => ({ role: m.role, content: m.content })),
       candidates,
-      { collector, ...clientOverrideFor('describe') },
+      { collector },
     )
   } catch (e) {
     // Non-fatal upstream (the wrapper falls back to attaching nothing), but the

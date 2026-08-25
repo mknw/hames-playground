@@ -15,17 +15,11 @@ Project-level guidance for Claude Code in this repository.
 
 - **`pnpm dev:exposed`** binds 0.0.0.0 — required for anything in Docker (Playwright MCP, the gateway) to reach the dev server.
 
-### Client routing: Anthropic-default, mixed-chains opt-in
+### Client routing: Anthropic only
 
-Every BAML call (Router / LoopController / ActorController / Critic / Synthesize / ResultDescribe) routes through the Anthropic-only fallback chains in `baml_src/anthropic-only.baml` by default. Cross-provider rate limits (Groq + OpenRouter + OpenAI) interfered too much during dev iteration, so Anthropic-only is the dev default.
+Every BAML call (Router / LoopController / ActorController / Critic / Synthesize / ResultDescribe) routes through the chains in `baml_src/anthropic-only.baml`. There is no second routing mode and no routing env var: the mixed-provider chains and `USE_MIXED_CHAINS` were removed 2026-08-24 (ADR-0001) — their cross-provider rate limits made dev iteration too noisy, and one provider is also one processor to paper. `LocalGLM` in `baml_src/local-client.baml` stays for manual wiring; it is in no chain.
 
-To use the **mixed-provider production chains** (RouterFallback / ControllerFallback / etc. in `baml_src/clients.baml`):
-
-```bash
-USE_MIXED_CHAINS=1 pnpm dev:exposed
-```
-
-This unsets the override and lets each BAML function fall back to its declared chain. Production deployments and occasional mixed-chain testing both use this. See `app/src/lib/harness-patterns/clients.server.ts` for the toggle.
+Which client a role runs on: `app/src/lib/harness-patterns/clients.server.ts` (`resolveClientForRole`) — the one place to re-point a role at a different chain.
 
 Docker services (Neo4j, MCP Gateway, Redis) come up with `docker compose up -d` from the repo root.
 
@@ -182,9 +176,9 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 
 ## BAML Clients
 
-**The chains themselves live in `baml_src/`** — `anthropic-only.baml` for the default, `clients.baml` for the mixed-provider ones — and are one lookup away. What is _not_ in those files is why each client is shaped the way it is, so that is what this section carries.
+**The chains themselves live in `baml_src/`** — the role chains in `anthropic-only.baml`, the leaf clients in `clients.baml` — and are one lookup away. What is _not_ in those files is why each client is shaped the way it is, so that is what this section carries.
 
-**Default (Anthropic-only)** — declared in `baml_src/anthropic-only.baml`:
+**The chains** — declared in `baml_src/anthropic-only.baml`:
 
 | Client                 | Role                                                                                                                                    |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
@@ -206,19 +200,19 @@ critic and compactExecution keep thinking — unmeasured, and the corpus had no
 actor prompts. A thinking-only response with no text is retried once by the
 adapters.
 
-**Output caps + truncation recovery:** Anthropic client `max_tokens` are 32768 (Sonnet 5) / 16384 (Sonnet 4.6, Haiku 4.5); the mixed-chain Groq/OpenRouter leaves cap at 2048–4096. EVERY leaf declaring `max_tokens` in `baml_src/*.baml` must be mirrored in `CLIENT_MAX_OUTPUT_TOKENS` (`app/src/lib/settings.ts`) — a missing entry silently blinds truncation detection for that client (SA-C2); `client-output-caps.test.ts` enforces the mirror. A controller response that hits its cap truncates mid-JSON (historically: `BamlValidationError: missing status/is_final` when a sandbox actor inlined a huge script into `tool_args`). The adapters detect cap-hits and do ONE corrective retry with truncation guidance appended to the per-call `context`; the loops emit truncation-specific feedback instead of generic "invalid JSON" when `tool_args` were cut off (`llmCallHitOutputCap`). Multi-call turns (`additional_calls`, see below) raise cap-hit risk — the prompts cap batches at 4 calls/turn for this reason.
+**Output caps + truncation recovery:** client `max_tokens` are 32768 (Sonnet 5) / 16384 (Sonnet 4.6, Haiku 4.5) / 4096 (Opus 4.1). EVERY leaf declaring `max_tokens` in `baml_src/*.baml` must be mirrored in `CLIENT_MAX_OUTPUT_TOKENS` (`app/src/lib/settings.ts`) — a missing entry silently blinds truncation detection for that client (SA-C2); `client-output-caps.test.ts` enforces the mirror. A controller response that hits its cap truncates mid-JSON (historically: `BamlValidationError: missing status/is_final` when a sandbox actor inlined a huge script into `tool_args`). The adapters detect cap-hits and do ONE corrective retry with truncation guidance appended to the per-call `context`; the loops emit truncation-specific feedback instead of generic "invalid JSON" when `tool_args` were cut off (`llmCallHitOutputCap`). Multi-call turns (`additional_calls`, see below) raise cap-hit risk — the prompts cap batches at 4 calls/turn for this reason.
 
-**Multi-call turns:** both loop patterns accept `multiToolCalls: 'parallel' | 'sequential' | 'off'` (default `'parallel'`) — the controller batches several tool calls into one turn via `ControllerAction.additional_calls`, saving one controller round-trip per batched call. `'sequential'` runs in order with stop-on-failure (sandbox agents); `'off'` suppresses the prompt affordance but still executes un-advertised batches serially (no agent uses it today). Full semantics: `app/src/lib/harness-patterns/SPEC.md`.
+**One envelope, demonstrated everywhere:** `ActorFewShots` / `LoopFewShots` render each example as the same JSON object `ctx.output_format` and the turn log ask for, and the mode-gated `LoopMultiCalls` / `ActorMultiCalls` branches demonstrate a batch — the fourth instance of "disagreeing demonstrations are defects" (see the comment on `LoopFewShots` for the captured failure: a sandbox actor copied the old brace-less `key: value` few-shot shape into a complete, correct, unparseable action). A brace-less envelope is NOT recovered in the adapters: it fails the parse and takes whatever retry the caller owns, which costs a round-trip where a misread of free-form lines would run the wrong tool call.
 
-**Mixed-provider chains** (gated by `USE_MIXED_CHAINS=1`, see top of file) — `RouterFallback` / `ControllerFallback` / `CriticFallback` / `SynthesizerFallback` / `DescribeFallback`, each spreading its role across OpenRouter, Groq and OpenAI with an Anthropic backstop last. There is no `ActorFallback` and no `PlannerFallback`. **The planner opts out of mixed chains entirely** — `MIXED_CLIENT_BY_ROLE.planner` pins `PlannerAnthropic` in both modes. It used to borrow `ControllerFallback` as the same reason-over-a-tool-catalog workload, but that chain's Groq `gpt-oss-120b` is the client documented below to fail structured output on larger context, which is why both controllers carry a manual `GroqGPT120B` → `GroqFast` escalation. The planner has no such ladder, runs once per chain over the largest catalog in the repo (`tools.all`), and a throw there means the chain silently runs unplanned. Declared in `baml_src/clients.baml`.
+**Multi-call turns:** both loop patterns accept `multiToolCalls: 'parallel' | 'sequential' | 'off'` (default `'parallel'`) — the controller batches several tool calls into one turn via `ControllerAction.additional_calls`, saving one controller round-trip per batched call. Each advertised mode both describes AND demonstrates one batched action in its own branch of `LoopMultiCalls`/`ActorMultiCalls` (parallel: independent lookups; sequential: write-then-run), in the same JSON envelope everything else in the prompt uses — #248 was a model reaching for a field described but never shown, and inventing a YAML `additional_calls:` list for it. `'sequential'` runs in order with stop-on-failure (sandbox agents); `'off'` renders no branch, so it suppresses the demonstration along with the rest of the affordance, but still executes un-advertised batches serially (no agent uses it today). Full semantics: `app/src/lib/harness-patterns/SPEC.md`.
 
-**The injection screen also opts out** — `MIXED_CLIENT_BY_ROLE.screen` pins `DescribeAnthropic` in both modes (SA-M5). It used to ride the `describe` role, which under mixed chains silently put prompt-injection screening on `DescribeFallback`'s first leaf (`GroqFast`, the weakest model in the repo): a screen must not be talked out of reporting by the content it reviews and must copy spans verbatim so the guard can neutralize them. Rationale on the map entry in `clients.server.ts`.
+**The injection screen has its own role** — `screen` resolves to `DescribeAnthropic` rather than riding `describe` (SA-M5). Same client today; the separation is what matters, because re-pointing summarization at a cheaper model must never drag prompt-injection screening along with it — a screen must not be talked out of reporting by the content it reviews, and must copy spans verbatim so the guard can neutralize them. Rationale on the map entry in `clients.server.ts`.
 
-Local inference (`LocalGLM` — GLM 4.7 Flash on localhost:8080) is defined in `baml_src/local-client.baml` and available for manual wiring but not used in any fallback chain.
+Local inference (`LocalGLM` — GLM 4.7 Flash on localhost:8080) is defined in `baml_src/local-client.baml` and available for manual wiring but not used in any chain.
 
-Required env vars: `ANTHROPIC_API_KEY` (always). With `USE_MIXED_CHAINS=1` also: `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`.
+Required env var: `ANTHROPIC_API_KEY`. (`OPENROUTER_API_KEY` is unrelated to routing — it belongs to the optional `openrouter` embedding provider; see `docs/DATA_STASH.md`.)
 
-**Known limitation (mixed-chains only):** Groq `gpt-oss-120b` fails structured output (`BamlValidationError`) on turn 2+ with larger context. `baml-adapters.server.ts` catches this manually and retries with `GroqGPT120B` then `GroqFast`. Anthropic-only runs propagate the validation error instead. Errors are tracked as events; compactExecution reads them via `view.hasErrors()` (scoped by ViewConfig, so they expire naturally across turns).
+**Structured-output failures propagate.** There is no second provider to escalate to, so a `BamlValidationError` that is neither a truncation nor an empty completion surfaces instead of being retried on a weaker model. Errors are tracked as events; compactExecution reads them via `view.hasErrors()` (scoped by ViewConfig, so they expire naturally across turns).
 
 ---
 

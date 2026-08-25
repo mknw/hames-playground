@@ -1,5 +1,5 @@
 // ResultDescribe — lightweight tool result summarizer
-// Uses a small/fast model (DescribeFallback) to keep token cost low.
+// Uses a small/fast model (DescribeAnthropic → Haiku 4.5) to keep token cost low.
 // Called non-blocking after the response has been provided to the user.
 
 function ResultDescribe(

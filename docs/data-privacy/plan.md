@@ -15,8 +15,9 @@ thing either of them will ask for.
 ## Scope and roles
 
 DTSC is the **controller**; the data subjects are DTSC employees using the
-assistant. Anthropic (and, under `USE_MIXED_CHAINS=1`, Groq / OpenRouter /
-OpenAI) are **processors**. The app is internal-only and reached through Entra
+assistant. Anthropic is the **processor** (it is now the only LLM provider —
+the Groq / OpenRouter / OpenAI chains and their `USE_MIXED_CHAINS` switch were
+removed 2026-08-24; see finding 1). The app is internal-only and reached through Entra
 SSO, so every record is tied to a named employee — there is no anonymous use and
 no pseudonymisation anywhere in the stack.
 
@@ -26,14 +27,14 @@ no pseudonymisation anywhere in the stack.
 
 Measured on the live dev database, 2026-08-15.
 
-| Store | Contents | Retention | Rows now |
-|---|---|---|---|
-| Postgres `conversations` | `context` JSONB — the **full event stream**: `user_message`, `assistant_message`, `tool_call`, `tool_result` | **none** | 28 |
-| Postgres `users` | Entra `oid`, email, display name, tenant id, first/last login | none | 1 |
-| Postgres `auth_sessions` | oid, email, display name, 8h expiry | lazy, per-id only | 22 |
-| Postgres `user_tokens` | MSAL cache, **AES-256-GCM encrypted**, fails closed | deleted on logout | 1 |
-| Redis Data Stash | uploaded and Microsoft 365-ingested documents, chunks, embeddings | **7 days** (`DEFAULT_TTL_SECONDS`) | — |
-| Neo4j | graph content | none | — |
+| Store                    | Contents                                                                                                     | Retention                          | Rows now |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------ | ---------------------------------- | -------- |
+| Postgres `conversations` | `context` JSONB — the **full event stream**: `user_message`, `assistant_message`, `tool_call`, `tool_result` | **none**                           | 28       |
+| Postgres `users`         | Entra `oid`, email, display name, tenant id, first/last login                                                | none                               | 1        |
+| Postgres `auth_sessions` | oid, email, display name, 8h expiry                                                                          | lazy, per-id only                  | 22       |
+| Postgres `user_tokens`   | MSAL cache, **AES-256-GCM encrypted**, fails closed                                                          | deleted on logout                  | 1        |
+| Redis Data Stash         | uploaded and Microsoft 365-ingested documents, chunks, embeddings                                            | **7 days** (`DEFAULT_TTL_SECONDS`) | —        |
+| Neo4j                    | graph content                                                                                                | none                               | —        |
 
 Conversation data spans 2026-07-27 → 2026-08-15. Nothing has ever been deleted
 by a retention process, because none exists.
@@ -58,9 +59,9 @@ single most important finding in this document.
 ### 1. Third-country transfers and processor agreements — the largest exposure
 
 Every conversation, including the embedded mail and file content described
-above, is sent to **Anthropic's API**. With `USE_MIXED_CHAINS=1`, also Groq,
-OpenRouter and OpenAI. MCP tool servers (web fetch/search, GitHub, Context7)
-receive whatever is passed to them.
+above, is sent to **Anthropic's API** — and, since 2026-08-24, to no other LLM
+provider. MCP tool servers (web fetch/search, GitHub, Context7) receive whatever
+is passed to them.
 
 Each is a processor under **Art. 28** (needs a data processing agreement) and,
 being US-based, a **Chapter V transfer** (needs EU–US Data Privacy Framework
@@ -68,11 +69,14 @@ certification or Standard Contractual Clauses, plus a transfer impact
 assessment). Which DPAs DTSC holds, and each vendor's current DPF status, must
 be checked — this cannot be determined from the codebase.
 
-Two things follow that *are* in our control:
+Two things follow that _are_ in our control:
 
-- **Anthropic-only by default is a compliance asset**: one processor to paper
-  rather than four. `USE_MIXED_CHAINS` is effectively a compliance switch and
-  should be documented as one so nobody enables it in production casually.
+- **Anthropic-only is a compliance asset**: one processor to paper rather than
+  four. It is no longer a default that a switch could undo — the mixed-provider
+  chains and the `USE_MIXED_CHAINS` env flag were deleted outright on
+  2026-08-24, so there is no configuration that sends a prompt to Groq,
+  OpenRouter or OpenAI. Re-introducing one is an Art. 28 / Chapter V decision,
+  not a config change.
 - Whether **zero-retention / no-training-on-inputs** terms apply to the account
   materially changes the risk picture, and is a contract setting rather than a
   code one.
@@ -145,8 +149,8 @@ Against that:
 ### Belgium-specific
 
 - **CAO/CCT nr. 81** (26 April 2002) governs monitoring of employees' electronic
-  online communications. This is not monitoring software, but it *stores
-  employees' communications content* in an employer-administered system, so if
+  online communications. This is not monitoring software, but it _stores
+  employees' communications content_ in an employer-administered system, so if
   that data could ever be consulted about an individual, its purpose-limitation
   and prior-information rules engage. An explicit written commitment that the
   data will not be used for individual performance monitoring is cheap and worth
@@ -177,15 +181,15 @@ explicit out-of-scope commitment now, while it is free, is worthwhile.
 Ordered by a mix of risk and cost. Items 1–3 and 5 are independent of the legal
 questions and can start immediately; only item 4 blocks on someone else.
 
-| # | Action | Depends on |
-|---|---|---|
-| 1 | **ROPA + employee privacy notice.** One page each. Draftable from the data map above; the parts needing DTSC input are legal basis and retention period. | DTSC input on two fields |
-| 2 | **Decide and enforce a retention period for `conversations`.** A dated sweep is a small amount of code; the number is a business decision. Resolves the asymmetry with the stash's 7 days. | retention decision |
-| 3 | **Arm the session sweep** (issue #129 already scopes it — the 21 stale rows are the evidence), and **encrypt or exclude Graph-derived `tool_result` content**. The `user_tokens` encryption pattern already exists to copy. | — |
-| 4 | **Confirm DPAs and the transfer mechanism** for Anthropic, and for the mixed-chain providers if they will ever run in production. Gates production rollout more than any code here. | counsel |
-| 5 | **Postgres backups, with the encryption key escrowed separately.** Now doubly justified: Art. 32(1)(c) as well as ops. | — |
-| 6 | **Before rollout:** works council information, and the CAO 81 purpose statement. | HR / works council |
-| 7 | Drop the dead `auth_sessions.token_cache` column. | — |
+| #   | Action                                                                                                                                                                                                                      | Depends on               |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| 1   | **ROPA + employee privacy notice.** One page each. Draftable from the data map above; the parts needing DTSC input are legal basis and retention period.                                                                    | DTSC input on two fields |
+| 2   | **Decide and enforce a retention period for `conversations`.** A dated sweep is a small amount of code; the number is a business decision. Resolves the asymmetry with the stash's 7 days.                                  | retention decision       |
+| 3   | **Arm the session sweep** (issue #129 already scopes it — the 21 stale rows are the evidence), and **encrypt or exclude Graph-derived `tool_result` content**. The `user_tokens` encryption pattern already exists to copy. | —                        |
+| 4   | **Confirm DPAs and the transfer mechanism** for Anthropic — now the only LLM processor. Gates production rollout more than any code here.                                                                                   | counsel                  |
+| 5   | **Postgres backups, with the encryption key escrowed separately.** Now doubly justified: Art. 32(1)(c) as well as ops.                                                                                                      | —                        |
+| 6   | **Before rollout:** works council information, and the CAO 81 purpose statement.                                                                                                                                            | HR / works council       |
+| 7   | Drop the dead `auth_sessions.token_cache` column.                                                                                                                                                                           | —                        |
 
 ## Related
 

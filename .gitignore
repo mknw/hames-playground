@@ -50,3 +50,8 @@ n8n_data/
 # Working memory — Claude session notes
 SCRATCHPAD.md
 docker-compose.override.yml
+
+# Local model weights (GGUF) — hundreds of MB each, never committed.
+# models/README.md documents what belongs here and stays tracked.
+models/*
+!models/README.md

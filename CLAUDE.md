@@ -7,17 +7,12 @@ Project-level guidance for Claude Code in this repository.
 **Every `pnpm` command runs from `app/`** — never npm/npx, never from the repo root. The script list itself is a one-file lookup in `app/package.json`; what is not in that file:
 
 - **`pnpm baml-generate` after any edit under `baml_src/`.** `baml_client/` is generated and gitignored; a stale or missing one surfaces as ~270 phantom test failures, not as a BAML error. Never hand-edit it.
-- **Two llama-servers, two ports, and mixing them up is the trap.** `pnpm dev:llama` starts the local _chat_ model (GLM-4.7-Flash) on **8080**. The Data Stash _embedding_ server is a different model on **8090**, started by hand:
-
-  ```bash
-  llama-server --embedding -m models/Qwen3-Embedding-0.6B-Q8_0.gguf --port 8090 --ctx-size 8192
-  ```
-
+- **Three llama-servers, three ports, and mixing them up is the trap.** `pnpm dev:llama` starts the local _chat_ model (GLM-4.7-Flash) on **8080**. The other two are `make` targets at the repo root, each running in the foreground: `make embed` serves the Data Stash _embedding_ model on **8090**, `make llm-small` serves the small summarizer (`LocalQwenSmall`, the designated describe-role model) on **8095**. Their GGUF weights live gitignored in `models/` — [`models/README.md`](models/README.md) says which file goes where, and a missing one fails the target outright instead of leaving a dead port.
 - **`pnpm dev:exposed`** binds 0.0.0.0 — required for anything in Docker (Playwright MCP, the gateway) to reach the dev server.
 
 ### Client routing: Anthropic only
 
-Every BAML call (Router / LoopController / ActorController / Critic / Synthesize / ResultDescribe) routes through the chains in `baml_src/anthropic-only.baml`. There is no second routing mode and no routing env var: the mixed-provider chains and `USE_MIXED_CHAINS` were removed 2026-08-24 (ADR-0001) — their cross-provider rate limits made dev iteration too noisy, and one provider is also one processor to paper. `LocalGLM` in `baml_src/local-client.baml` stays for manual wiring; it is in no chain.
+Every BAML call (Router / LoopController / ActorController / Critic / Synthesize / ResultDescribe) routes through the chains in `baml_src/anthropic-only.baml`. There is no second routing mode and no routing env var: the mixed-provider chains and `USE_MIXED_CHAINS` were removed 2026-08-24 (ADR-0001) — their cross-provider rate limits made dev iteration too noisy, and one provider is also one processor to paper. `baml_src/local-client.baml` holds the two local clients — `LocalGLM` for manual wiring, and `LocalQwenSmall` (the `make llm-small` server) as the describe role's designated owned-inference replacement. Neither is in a chain yet.
 
 Which client a role runs on: `app/src/lib/harness-patterns/clients.server.ts` (`resolveClientForRole`) — the one place to re-point a role at a different chain.
 

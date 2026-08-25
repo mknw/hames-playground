@@ -94,6 +94,8 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   AnthropicSonnet5NoThink: 1_000_000, // #139
   // Local (local-client.baml, not used in chains)
   LocalGLM: 16_384,
+  // = the `--ctx-size` `make llm-small` serves it with; keep the two in step.
+  LocalQwenSmall: 32_768,
   // Strategy-level chain clients — the names patterns actually pass to
   // getContextWindow() (via resolveClientForRole). Without these the lookup
   // fell through to the 16_384 default and over-trimmed prompts, dropping real
@@ -140,6 +142,7 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   AnthropicOpus4: 4_096,
   // Local (local-client.baml — manual wiring only, not in any chain).
   LocalGLM: 2_048,
+  LocalQwenSmall: 2_048,
   // Strategy-chain FLOORS — the smallest cap of any leaf in the chain, the
   // same conservative-floor pattern as the chain entries in
   // MODEL_CONTEXT_WINDOWS above. Truncation detection never consults these

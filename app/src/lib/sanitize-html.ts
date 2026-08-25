@@ -69,6 +69,10 @@ const ALLOWED_TAGS = [
  * an answer came from. The annotators in `ChatMessages` run *after* this
  * function and emit those attributes themselves, so nothing genuine is lost:
  * every surviving citation is now one this code put there.
+ *
+ * `target` and `rel` are absent for the same reason: {@link forceLinkTargetBlank}
+ * sets them below, after DOMPurify has stripped whatever the model wrote, so the
+ * only values that reach the DOM are this code's.
  */
 const ALLOWED_ATTR = [
   'href',
@@ -106,6 +110,30 @@ function filterClassAttribute(node: Element): void {
   else node.setAttribute('class', kept.join(' '))
 }
 
+/**
+ * Point every rendered link at a new tab.
+ *
+ * House rule: the app never navigates away to follow a link. Chat markdown is
+ * the one place links are produced from data rather than written by hand, so
+ * the rule is enforced at this chokepoint instead of at each call site — every
+ * assistant message passes through here, including the ones re-rendered from
+ * persisted history.
+ *
+ * `rel` is not cosmetic: `target="_blank"` alone hands the opened page a live
+ * `window.opener` back into the app, and these hrefs come from model output.
+ */
+function forceLinkTargetBlank(node: Element): void {
+  if (node.nodeName !== 'A' || !node.hasAttribute('href')) return
+  node.setAttribute('target', '_blank')
+  node.setAttribute('rel', 'noopener noreferrer')
+}
+
+/** The per-node fixups, as one hook so `removeHook` takes both off again. */
+function hardenAttributes(node: Element): void {
+  filterClassAttribute(node)
+  forceLinkTargetBlank(node)
+}
+
 /** Escape a value for interpolation into text or a double-quoted attribute. */
 export function escapeHtmlAttribute(value: string): string {
   return value
@@ -132,7 +160,7 @@ export function sanitizeMarkdownHtml(html: string): string {
   // `afterSanitizeAttributes` runs per node, after DOMPurify has applied
   // ALLOWED_ATTR. Registered and removed around the single call rather than at
   // module load, so this hook only ever sees this function's nodes.
-  DOMPurify.addHook('afterSanitizeAttributes', filterClassAttribute)
+  DOMPurify.addHook('afterSanitizeAttributes', hardenAttributes)
   try {
     return DOMPurify.sanitize(html, {
       ALLOWED_TAGS,

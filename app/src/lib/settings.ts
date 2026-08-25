@@ -84,6 +84,80 @@ export const DEFAULT_SETTINGS: HarnessSettings = {
   },
 }
 
+/**
+ * Server-side bounds for every client-settable knob — the SettingsPanel's own
+ * slider `min`/`max`, restated where they can be enforced.
+ *
+ * `SettingsPanel.tsx` is the only legitimate producer of a settings payload and
+ * it already cannot go outside these, so clamping to them changes nothing for a
+ * real caller. Keep the two in step: a widened slider needs its bound widened
+ * here or the panel's top end silently stops taking effect.
+ */
+const SETTINGS_BOUNDS = {
+  maxToolTurns: [1, 15],
+  maxRetries: [1, 10],
+  maxResultChars: [500, 10_000],
+  maxResultForSummary: [500, 10_000],
+  priorTurnCount: [1, 10],
+  routerTurnWindow: [1, 20],
+  maxConcurrentRuns: [1, 10],
+} as const satisfies Record<Exclude<keyof HarnessSettings, 'sandbox'>, readonly [number, number]>
+
+function clampSetting(
+  key: keyof typeof SETTINGS_BOUNDS,
+  value: unknown,
+): HarnessSettings[typeof key] {
+  const fallback = DEFAULT_SETTINGS[key]
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  const [min, max] = SETTINGS_BOUNDS[key]
+  return Math.min(max, Math.max(min, Math.trunc(value)))
+}
+
+/**
+ * Reduce a settings payload that arrived over the wire to what a caller is
+ * allowed to choose.
+ *
+ * `POST /api/events` reads `settings` straight off the request body and hands it
+ * to `runWithSettings`, from where every pattern reads it at execution time — so
+ * an unvalidated payload is a browser-controlled loop bound, not a preference.
+ * `maxToolTurns` is the sharpest: it is the number of controller round-trips one
+ * request may spend on the shared Anthropic key (`simpleLoop.server.ts`:
+ * `config?.maxTurns ?? settings.maxToolTurns`), and the default `search` agent
+ * pins `maxTurns` on neither of its loops.
+ *
+ * Two rules, and the second is the load-bearing one:
+ *
+ *  - **Numbers are clamped** to {@link SETTINGS_BOUNDS}, and a non-number falls
+ *    back to its default rather than propagating `NaN`/`undefined` into a loop
+ *    bound.
+ *  - **`sandbox` is dropped outright.** It is host policy, not a preference: the
+ *    panel does not surface it, and `defaultEgress` is what decides whether a
+ *    container boots with `--network none` or on the default bridge with
+ *    unrestricted outbound (`docker-backend.server.ts`, `runContainer`), while
+ *    `defaultMemoryMB` / `defaultTimeoutSec` size and time-bound containers on
+ *    the shared host (`with-sandbox.server.ts`). Every agent pins
+ *    `egress: 'mcp-only'` at its own call site today, so the egress half is
+ *    currently unreachable — this keeps it unreachable by construction rather
+ *    than by the diligence of the next `withSandbox` caller.
+ *
+ * Returns `undefined` for an absent/non-object payload, which is what
+ * `runWithSettings` already reads as "use the defaults".
+ */
+export function sanitizeHarnessSettings(input: unknown): HarnessSettings | undefined {
+  if (input === null || typeof input !== 'object') return undefined
+  const raw = input as Record<string, unknown>
+  return {
+    maxToolTurns: clampSetting('maxToolTurns', raw.maxToolTurns),
+    maxRetries: clampSetting('maxRetries', raw.maxRetries),
+    maxResultChars: clampSetting('maxResultChars', raw.maxResultChars),
+    maxResultForSummary: clampSetting('maxResultForSummary', raw.maxResultForSummary),
+    priorTurnCount: clampSetting('priorTurnCount', raw.priorTurnCount),
+    routerTurnWindow: clampSetting('routerTurnWindow', raw.routerTurnWindow),
+    maxConcurrentRuns: clampSetting('maxConcurrentRuns', raw.maxConcurrentRuns),
+    sandbox: DEFAULT_SETTINGS.sandbox,
+  }
+}
+
 /** Context window limits per BAML client (tokens) */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic

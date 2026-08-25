@@ -55,3 +55,12 @@ docker-compose.override.yml
 # models/README.md documents what belongs here and stays tracked.
 models/*
 !models/README.md
+
+# Credential-shaped strays that were tracked in a PUBLIC repo until the preview
+# security baseline removed them. None held a live secret — `neo4j_password.txt`
+# and `.env.local` both carried the `docker-compose.yaml` default (`password`),
+# which is public in the compose file anyway, and `.env` was empty — but a
+# tracked file named like a credential is read as one, and the root-level
+# `**/.env` rule below never applied to them because tracking predates it.
+neo4j_password.txt
+.env.local

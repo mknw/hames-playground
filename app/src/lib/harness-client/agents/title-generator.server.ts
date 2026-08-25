@@ -21,13 +21,24 @@
  * Library boundary: imports only from `~/lib/harness-patterns` and
  * `~/baml_client`. No imports from `~/components` or other consumers —
  * keeps the agent extractable as a standalone npm package example.
+ *
+ * Deliberately NOT a `"use server"` module: every export of one becomes a
+ * client-callable RPC, and `runFirstTurnTitleGen` / `runRegenerateTitle` take a
+ * `userId` — so as RPCs they let the caller name the owner, which is the whole
+ * `updateConversationTitle` scope. Same reasoning as `action-runner.server.ts`
+ * and `turn.server.ts`; both of this module's callers (`turn.server.ts`,
+ * `actions.server.ts`'s gated `regenerateConversationTitle`) resolve the user
+ * themselves and pass it in, so nothing needed the directive.
  */
-'use server'
-
+import { assertServerOnImport } from '../../harness-patterns/assert.server'
 import { harness, compactExecution } from '../../harness-patterns'
 import type { HarnessData, UnifiedContext, UserMessageEventData } from '../../harness-patterns'
 import { b } from '../../../../baml_client'
 import { updateConversationTitle } from '../../db/conversations.server'
+
+// The directive is gone, so nothing else keeps this module off the client. The
+// import-time assertion does.
+assertServerOnImport()
 
 /**
  * Data shape carried through the title agent's harness context. Has to

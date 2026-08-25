@@ -278,8 +278,9 @@ describe('every link the app renders opens in a new tab', () => {
     // markdown path has no hand-written anchor, so the floor is the in-tab
     // exceptions that are themselves anchors — the rest of ALLOWLIST is
     // `location.href` navigation, which this shape never sees. It stays a
-    // floor rather than an equality because the 404 route's outbound link is
-    // a legitimate anchor above it and more may follow.
+    // floor rather than an equality because a legitimate outbound anchor may
+    // sit above it — the 404 route's did until #226 B8 pointed that page back
+    // into the app — and more may follow.
     const anchorExceptions = ALLOWLIST.filter((entry) => entry.match.includes('href='))
     const tags = [...sources].flatMap(([, source]) => anchorOpeningTags(source))
     expect(tags.length).toBeGreaterThanOrEqual(anchorExceptions.length)

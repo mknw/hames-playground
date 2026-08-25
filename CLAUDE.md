@@ -246,12 +246,18 @@ UnoCSS attributify mode — always use attribute syntax:
 <button bg="cyan-600/10 hover:cyan-600/20" text="xs cyan-400">
 ```
 
-Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secondary,tertiary}`, `dark-border-{primary,secondary}`, `neon-{cyan,magenta,purple}`, `cyber-{600,700,800}`.
+**Theming (#226 B8):** the interface palette is `ui-bg-*` / `ui-text-*` / `ui-border-*` / `ui-accent` / `ui-danger` / `ui-success`, each resolving to `var(--ui-…)`. `uno.config.ts`'s first preflight declares those variables on `:root` (dark) and redefines them on `:root.light`; `src/lib/theme.ts` decides which class `<html>` carries and exports the `THEME_BOOT_SCRIPT` that `entry-server.tsx` inlines to avoid a flash. **Write `ui-*`. Never add a `dark:` variant** — the token flips, the component does not.
+
+The switch is three-state: `light`, `dark`, `system` (the default). `system` follows `prefers-color-scheme` live; an explicit choice is persisted in `localStorage.theme` and ignores the OS. Only `light`/`dark` are ever written — `system` is the absent key.
+
+`dark-{bg,text,border}-*` and `neon-*` still exist as fixed hexes, and are now **graph-canvas data colours only** (`lib/turn-colors.ts`, `lib/agent-palette.ts`, Cytoscape's style object, xterm's theme — none of which can read a CSS variable). An `i-…` glyph aside, a `dark-*` or `neon-cyan` token in `src/components` or `src/routes` is a bug; `__tests__/lib/theme-migration.test.ts` fails on one. `cyber-{600,700,800}` (indigo) stays fixed on purpose: it reads on both grounds.
+
+Not yet on the theme, and visible in light mode: the Cytoscape canvas, `UserMenu`'s dropdown (white in both modes), the retriever citation chips (`.doc-ref*`) and the sidebar completion-flash keyframes.
 
 **Icons** — `material-symbols` (+ `material-symbols-light`) is **the** icon set; they are the only two collections registered in `presetIcons` (`app/uno.config.ts`):
 
 - Use via `class="i-material-symbols-<icon-name>"` — icon classes are the one sanctioned `class=` exception, since `presetIcons` has no attributify form
-- Example: `<span class="i-material-symbols-database-outline" w="5" h="5" text="neon-cyan" aria-hidden="true" />`
+- Example: `<span class="i-material-symbols-database-outline" w="5" h="5" text="ui-accent" aria-hidden="true" />`
 - Browse icons at [https://icones.js.org](https://icones.js.org) — filter by `material-symbols`
 - ⚠️ mdi is gone (#226 B6): `@iconify-json/mdi` is no longer a dependency and no `i-mdi-*` class survives in `app/src`. An `i-mdi-*` is a bug — the collection is not registered, so it emits no CSS and the glyph renders as an empty span
 - Full styleguide (attributify rules, house recipes, role→colour mapping, a11y + graph checklists): the `kg-dtalk-ui` skill

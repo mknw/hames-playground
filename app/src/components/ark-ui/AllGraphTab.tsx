@@ -146,13 +146,13 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
         items="center"
         justify="between"
         p="2 3"
-        bg="dark-bg-tertiary"
-        border="b dark-border-primary"
+        bg="ui-bg-tertiary"
+        border="b ui-border-primary"
       >
-        <div text="xs dark-text-secondary">
+        <div text="xs ui-text-secondary">
           <Show when={graphElements().length > 0} fallback="No turns selected">
             {nodeCount()} nodes, {edgeCount()} edges{' '}
-            <span text="dark-text-tertiary">
+            <span text="ui-text-tertiary">
               ({selectedTurnNumbers().length} turn{selectedTurnNumbers().length !== 1 ? 's' : ''})
             </span>
           </Show>
@@ -203,7 +203,7 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
           fallback={
             <div flex="~ col" items="center" justify="center" h="full" text="center">
               <span text="4xl mb-4">🕸️</span>
-              <span text="sm dark-text-secondary" max-w="xs">
+              <span text="sm ui-text-secondary" max-w="xs">
                 <Show
                   when={turnsWithGraphData().length > 0}
                   fallback="No graph data yet. Interact with the agent to see results."
@@ -212,7 +212,7 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
                 </Show>
               </span>
               <Show when={turnsWithGraphData().length > 0}>
-                <span text="xs dark-text-tertiary" m="t-2">
+                <span text="xs ui-text-tertiary" m="t-2">
                   Click <strong text="green-400">Turns</strong> above to open the Turn Explorer
                 </span>
               </Show>
@@ -231,8 +231,8 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
         {/* FloatingPanel overlay */}
         <FloatingPanel.Positioner>
           <FloatingPanel.Content
-            bg="dark-bg-secondary/95"
-            border="1 dark-border-primary"
+            bg="ui-bg-secondary/95"
+            border="1 ui-border-primary"
             rounded="lg"
             shadow="lg"
             overflow="hidden"
@@ -244,16 +244,16 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
               items="center"
               justify="between"
               p="2 3"
-              bg="dark-bg-tertiary"
-              border="b dark-border-primary"
+              bg="ui-bg-tertiary"
+              border="b ui-border-primary"
               cursor="default"
             >
               <FloatingPanel.DragTrigger flex="1 ~" items="center" gap="2" cursor="grab">
                 <span
                   class="i-material-symbols-drag-indicator"
-                  style={{ width: '16px', height: '16px', color: '#71717a' }}
+                  style={{ width: '16px', height: '16px', color: 'var(--ui-text-tertiary)' }}
                 />
-                <span text="sm dark-text-primary" font="medium">
+                <span text="sm ui-text-primary" font="medium">
                   Turn Explorer
                 </span>
               </FloatingPanel.DragTrigger>
@@ -276,7 +276,7 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
                   <button
                     onClick={clearSelection}
                     p="x-2 y-0.5"
-                    text="2xs dark-text-tertiary"
+                    text="2xs ui-text-tertiary"
                     bg="zinc-600/10 hover:zinc-600/20"
                     border="1 zinc-500/30"
                     rounded="sm"
@@ -293,8 +293,8 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
                     p="1"
                     rounded="sm"
                     cursor="pointer"
-                    bg="hover:dark-bg-primary"
-                    text="dark-text-tertiary hover:dark-text-primary"
+                    bg="hover:ui-bg-primary"
+                    text="ui-text-tertiary hover:ui-text-primary"
                     title="Minimize"
                   >
                     <span
@@ -309,8 +309,8 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
                     p="1"
                     rounded="sm"
                     cursor="pointer"
-                    bg="hover:dark-bg-primary"
-                    text="dark-text-tertiary hover:dark-text-primary"
+                    bg="hover:ui-bg-primary"
+                    text="ui-text-tertiary hover:ui-text-primary"
                     title="Maximize (fills the graph area)"
                   >
                     <span
@@ -325,8 +325,8 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
                     p="1"
                     rounded="sm"
                     cursor="pointer"
-                    bg="hover:dark-bg-primary"
-                    text="dark-text-tertiary hover:dark-text-primary"
+                    bg="hover:ui-bg-primary"
+                    text="ui-text-tertiary hover:ui-text-primary"
                     title="Restore"
                   >
                     <span
@@ -343,8 +343,8 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
                   p="1"
                   rounded="sm"
                   cursor="pointer"
-                  bg="hover:dark-bg-primary"
-                  text="dark-text-tertiary hover:dark-text-primary"
+                  bg="hover:ui-bg-primary"
+                  text="ui-text-tertiary hover:ui-text-primary"
                   title="Close"
                 >
                   <span
@@ -361,7 +361,7 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
                 when={turnsWithGraphData().length > 0}
                 fallback={
                   <div flex="~" items="center" justify="center" h="full" p="4">
-                    <span text="xs dark-text-tertiary">No graph data in any turn yet</span>
+                    <span text="xs ui-text-tertiary">No graph data in any turn yet</span>
                   </div>
                 }
               >
@@ -425,12 +425,12 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
               'z-index': '20',
               'pointer-events': 'none',
             }}
-            bg="dark-bg-secondary/90"
-            border="1 dark-border-primary"
+            bg="ui-bg-secondary/90"
+            border="1 ui-border-primary"
             rounded="lg"
             p="2 3"
           >
-            <div text="2xs dark-text-tertiary" m="b-1" font="medium">
+            <div text="2xs ui-text-tertiary" m="b-1" font="medium">
               Turns
             </div>
             <For each={selectedTurnNumbers()}>
@@ -445,7 +445,7 @@ export const AllGraphTab = (props: AllGraphTabProps) => {
                       'flex-shrink': '0',
                     }}
                   />
-                  <span text="2xs dark-text-secondary">Turn {n}</span>
+                  <span text="2xs ui-text-secondary">Turn {n}</span>
                 </div>
               )}
             </For>
@@ -491,8 +491,8 @@ const TurnColumn = (props: TurnColumnProps) => {
         items="center"
         gap="1.5"
         p="2"
-        bg="dark-bg-tertiary/50"
-        border="b dark-border-primary"
+        bg="ui-bg-tertiary/50"
+        border="b ui-border-primary"
         cursor="pointer"
         onClick={() => props.onToggle()}
         transition="all"
@@ -511,11 +511,15 @@ const TurnColumn = (props: TurnColumnProps) => {
         />
         {/* Turn label */}
         <div flex="~ col" min-w="0">
-          <span text="xs" font="medium" style={{ color: props.selected ? color() : '#a1a1aa' }}>
+          <span
+            text="xs"
+            font="medium"
+            style={{ color: props.selected ? color() : 'var(--ui-text-secondary)' }}
+          >
             Turn {props.turn.turnNumber}
           </span>
           <span
-            text="2xs dark-text-tertiary"
+            text="2xs ui-text-tertiary"
             style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
           >
             {getUserMessagePreview(props.turn)}
@@ -529,7 +533,7 @@ const TurnColumn = (props: TurnColumnProps) => {
           style={{
             'margin-left': 'auto',
             background: props.selected ? color() + '20' : '#27272a',
-            color: props.selected ? color() : '#71717a',
+            color: props.selected ? color() : 'var(--ui-text-tertiary)',
             'flex-shrink': '0',
           }}
         >
@@ -548,8 +552,8 @@ const TurnColumn = (props: TurnColumnProps) => {
                 gap="1"
                 p="1 1.5"
                 rounded="md"
-                text="2xs dark-text-secondary"
-                bg="hover:dark-bg-tertiary/50"
+                text="2xs ui-text-secondary"
+                bg="hover:ui-bg-tertiary/50"
                 transition="all"
                 cursor="default"
                 style={{ opacity: props.selected ? '1' : '0.5' }}
@@ -575,22 +579,22 @@ const TurnColumn = (props: TurnColumnProps) => {
               </Tooltip.Trigger>
               <Tooltip.Positioner>
                 <Tooltip.Content
-                  bg="dark-bg-primary"
-                  border="1 dark-border-primary"
+                  bg="ui-bg-primary"
+                  border="1 ui-border-primary"
                   rounded="md"
                   p="2"
                   shadow="lg"
                   max-w="[280px]"
                   style={{ 'z-index': '200' }}
                 >
-                  <div text="2xs dark-text-tertiary" font="mono" m="b-1">
+                  <div text="2xs ui-text-tertiary" font="mono" m="b-1">
                     {item.data.tool}
                   </div>
                   <Show when={item.data.summary}>
-                    <div text="xs dark-text-secondary">{item.data.summary}</div>
+                    <div text="xs ui-text-secondary">{item.data.summary}</div>
                   </Show>
                   <Show when={!item.data.summary}>
-                    <div text="xs dark-text-tertiary" font="italic">
+                    <div text="xs ui-text-tertiary" font="italic">
                       {truncate(JSON.stringify(item.data.result), 200)}
                     </div>
                   </Show>

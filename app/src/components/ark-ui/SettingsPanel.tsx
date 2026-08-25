@@ -32,14 +32,14 @@ function SliderSetting(props: {
       }}
     >
       <div flex="~" justify="between" items="center" m="b-1">
-        <Slider.Label text="xs dark-text-secondary">{props.label}</Slider.Label>
+        <Slider.Label text="xs ui-text-secondary">{props.label}</Slider.Label>
         <Slider.ValueText text="xs cyan-400" font="mono" />
       </div>
       <Slider.Control flex="~" items="center" h="5">
         <Slider.Track
           flex="1"
           h="1"
-          bg="dark-bg-tertiary"
+          bg="ui-bg-tertiary"
           rounded="full"
           style={{ position: 'relative' }}
         >
@@ -56,7 +56,7 @@ function SliderSetting(props: {
           h="3.5"
           bg="cyan-400"
           rounded="full"
-          border="2 dark-bg-primary"
+          border="2 ui-bg-primary"
           shadow="sm"
           cursor="pointer"
           style={{ position: 'absolute' }}
@@ -89,16 +89,16 @@ function NumberSetting(props: {
         }
       }}
     >
-      <NumberInput.Label text="xs dark-text-secondary" m="b-1" style={{ display: 'block' }}>
+      <NumberInput.Label text="xs ui-text-secondary" m="b-1" style={{ display: 'block' }}>
         {props.label}
       </NumberInput.Label>
       <NumberInput.Control flex="~" items="center" gap="1">
         <NumberInput.DecrementTrigger
           p="x-2 y-1"
-          bg="dark-bg-tertiary hover:dark-bg-primary"
-          border="1 dark-border-primary"
+          bg="ui-bg-tertiary hover:ui-bg-primary"
+          border="1 ui-border-primary"
           rounded="md"
-          text="xs dark-text-primary"
+          text="xs ui-text-primary"
           cursor="pointer"
         >
           -
@@ -106,8 +106,8 @@ function NumberSetting(props: {
         <NumberInput.Input
           flex="1"
           p="x-2 y-1"
-          bg="dark-bg-tertiary"
-          border="1 dark-border-primary"
+          bg="ui-bg-tertiary"
+          border="1 ui-border-primary"
           rounded="md"
           text="xs cyan-400 center"
           font="mono"
@@ -116,10 +116,10 @@ function NumberSetting(props: {
         />
         <NumberInput.IncrementTrigger
           p="x-2 y-1"
-          bg="dark-bg-tertiary hover:dark-bg-primary"
-          border="1 dark-border-primary"
+          bg="ui-bg-tertiary hover:ui-bg-primary"
+          border="1 ui-border-primary"
           rounded="md"
-          text="xs dark-text-primary"
+          text="xs ui-text-primary"
           cursor="pointer"
         >
           +
@@ -164,8 +164,8 @@ export function SettingsPanel() {
       {/* Trigger: gear icon button */}
       <FloatingPanel.Trigger
         p="2"
-        bg="dark-bg-tertiary hover:cyber-700"
-        border="1 dark-border-primary hover:dark-border-secondary"
+        bg="ui-bg-tertiary hover:cyber-700"
+        border="1 ui-border-primary hover:ui-border-secondary"
         rounded="md"
         cursor="pointer"
         transition="all"
@@ -176,15 +176,15 @@ export function SettingsPanel() {
       >
         <span
           class="i-material-symbols-settings-outline"
-          style={{ width: '18px', height: '18px', color: '#a1a1aa' }}
+          style={{ width: '18px', height: '18px', color: 'var(--ui-text-secondary)' }}
         />
       </FloatingPanel.Trigger>
 
       {/* Panel */}
       <FloatingPanel.Positioner style={{ 'z-index': '50' }}>
         <FloatingPanel.Content
-          bg="dark-bg-secondary/95"
-          border="1 dark-border-primary"
+          bg="ui-bg-secondary/95"
+          border="1 ui-border-primary"
           rounded="lg"
           shadow="lg"
           overflow="hidden"
@@ -200,16 +200,16 @@ export function SettingsPanel() {
             items="center"
             justify="between"
             p="2 3"
-            bg="dark-bg-tertiary"
-            border="b dark-border-primary"
+            bg="ui-bg-tertiary"
+            border="b ui-border-primary"
             cursor="default"
           >
             <FloatingPanel.DragTrigger flex="1 ~" items="center" gap="2" cursor="grab">
               <span
                 class="i-material-symbols-drag-indicator"
-                style={{ width: '16px', height: '16px', color: '#71717a' }}
+                style={{ width: '16px', height: '16px', color: 'var(--ui-text-tertiary)' }}
               />
-              <span text="sm dark-text-primary" font="medium">
+              <span text="sm ui-text-primary" font="medium">
                 Settings
               </span>
             </FloatingPanel.DragTrigger>
@@ -220,8 +220,8 @@ export function SettingsPanel() {
                   p="1"
                   rounded="sm"
                   cursor="pointer"
-                  bg="hover:dark-bg-primary"
-                  text="dark-text-tertiary hover:dark-text-primary"
+                  bg="hover:ui-bg-primary"
+                  text="ui-text-tertiary hover:ui-text-primary"
                   title="Minimize"
                 >
                   <span
@@ -236,8 +236,8 @@ export function SettingsPanel() {
                   p="1"
                   rounded="sm"
                   cursor="pointer"
-                  bg="hover:dark-bg-primary"
-                  text="dark-text-tertiary hover:dark-text-primary"
+                  bg="hover:ui-bg-primary"
+                  text="ui-text-tertiary hover:ui-text-primary"
                   title="Restore"
                 >
                   <span
@@ -250,8 +250,8 @@ export function SettingsPanel() {
                 p="1"
                 rounded="sm"
                 cursor="pointer"
-                bg="hover:dark-bg-primary"
-                text="dark-text-tertiary hover:dark-text-primary"
+                bg="hover:ui-bg-primary"
+                text="ui-text-tertiary hover:ui-text-primary"
                 title="Close"
               >
                 <span
@@ -272,7 +272,7 @@ export function SettingsPanel() {
             {/* Loop Settings */}
             <div>
               <div
-                text="xs dark-text-tertiary uppercase"
+                text="xs ui-text-tertiary uppercase"
                 font="semibold"
                 m="b-2"
                 style={{ 'letter-spacing': '0.05em' }}
@@ -293,7 +293,7 @@ export function SettingsPanel() {
             {/* Retry & Routing */}
             <div>
               <div
-                text="xs dark-text-tertiary uppercase"
+                text="xs ui-text-tertiary uppercase"
                 font="semibold"
                 m="b-2"
                 style={{ 'letter-spacing': '0.05em' }}
@@ -314,7 +314,7 @@ export function SettingsPanel() {
             {/* Concurrency (#105) */}
             <div>
               <div
-                text="xs dark-text-tertiary uppercase"
+                text="xs ui-text-tertiary uppercase"
                 font="semibold"
                 m="b-2"
                 style={{ 'letter-spacing': '0.05em' }}
@@ -334,7 +334,7 @@ export function SettingsPanel() {
             {/* Result Limits */}
             <div>
               <div
-                text="xs dark-text-tertiary uppercase"
+                text="xs ui-text-tertiary uppercase"
                 font="semibold"
                 m="b-2"
                 style={{ 'letter-spacing': '0.05em' }}
@@ -362,7 +362,7 @@ export function SettingsPanel() {
             {/* Model Context Windows (read-only) */}
             <div>
               <div
-                text="xs dark-text-tertiary uppercase"
+                text="xs ui-text-tertiary uppercase"
                 font="semibold"
                 m="b-2"
                 style={{ 'letter-spacing': '0.05em' }}
@@ -370,8 +370,8 @@ export function SettingsPanel() {
                 Model Context Windows
               </div>
               <div
-                bg="dark-bg-tertiary/50"
-                border="1 dark-border-primary"
+                bg="ui-bg-tertiary/50"
+                border="1 ui-border-primary"
                 rounded="md"
                 p="2"
                 style={{ display: 'grid', 'grid-template-columns': '1fr auto', gap: '2px 12px' }}
@@ -379,7 +379,7 @@ export function SettingsPanel() {
                 <For each={modelEntries}>
                   {(entry) => (
                     <>
-                      <span text="xs dark-text-secondary">{entry.name}</span>
+                      <span text="xs ui-text-secondary">{entry.name}</span>
                       <span text="xs cyan-400" font="mono">
                         {entry.display}
                       </span>
@@ -393,10 +393,10 @@ export function SettingsPanel() {
             <button
               w="full"
               p="y-2"
-              bg="dark-bg-tertiary hover:red-900/30"
-              border="1 dark-border-primary hover:red-500/30"
+              bg="ui-bg-tertiary hover:red-900/30"
+              border="1 ui-border-primary hover:red-500/30"
               rounded="md"
-              text="xs dark-text-secondary hover:red-400"
+              text="xs ui-text-secondary hover:red-400"
               cursor="pointer"
               transition="all"
               onClick={() => resetSettings()}

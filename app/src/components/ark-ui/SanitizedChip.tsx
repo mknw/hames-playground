@@ -77,7 +77,7 @@ export const SanitizedChip = (props: {
           <span class="i-material-symbols-shield-outline" w="3" h="3" aria-hidden="true" />
           {chipLabel(s())}
           <Show when={!props.compact}>
-            <span text="xs dark-text-tertiary">· {ruleSummary(s().rules)}</span>
+            <span text="xs ui-text-tertiary">· {ruleSummary(s().rules)}</span>
           </Show>
         </span>
       }
@@ -104,7 +104,7 @@ export const SanitizedChip = (props: {
         <span class="i-material-symbols-shield-outline" w="3" h="3" aria-hidden="true" />
         {chipLabel(s())}
         <Show when={!props.compact}>
-          <span text="xs dark-text-tertiary">· {ruleSummary(s().rules)}</span>
+          <span text="xs ui-text-tertiary">· {ruleSummary(s().rules)}</span>
         </Show>
       </button>
     </Show>

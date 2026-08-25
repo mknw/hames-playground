@@ -1,7 +1,7 @@
 /**
  * The shipped injection-guard coverage, as an inventory rather than a sample.
  *
- * `injection-guard-wiring.test.ts` asserts that the four guarded agents are
+ * `injection-guard-wiring.test.ts` asserts that the three guarded agents are
  * guarded. This file asks the complementary question — **what is NOT** — and
  * pins the answer for every agent in the repo, guarded or not, registered or
  * not. It is deliberately a snapshot-shaped test: any change to the wiring fails
@@ -124,7 +124,6 @@ const AGENT_MODULES = [
   { file: 'flavoured-sandbox.server.ts', exportName: 'flavouredSandboxAgent' },
   { file: 'retriever-agent.server.ts', exportName: 'retrieverAgent' },
   { file: 'microsoft-365.server.ts', exportName: 'microsoft365Agent' },
-  { file: 'multi-source-research.server.ts', exportName: 'multiSourceResearchAgent' },
 ] as const
 
 /** Static import map — `import()` of a template literal cannot be analysed by
@@ -140,8 +139,6 @@ const LOADERS: Record<string, () => Promise<Record<string, unknown>>> = {
     import('../../../../lib/harness-client/agents/retriever-agent.server'),
   'microsoft-365.server.ts': () =>
     import('../../../../lib/harness-client/agents/microsoft-365.server'),
-  'multi-source-research.server.ts': () =>
-    import('../../../../lib/harness-client/agents/multi-source-research.server'),
 }
 
 async function patternsOf(file: string, exportName: string): Promise<Pattern[]> {
@@ -186,10 +183,12 @@ describe('the inventory is complete', () => {
         'microsoft365Agent',
       ].sort(),
     )
-    // `multiSourceResearchAgent` is deliberately absent (owner decision,
-    // PR #234) — so its guard is real code that never runs in the app. It is
-    // still inventoried below, because re-registering it is a one-line change.
-    expect(registered).not.toContain('multiSourceResearchAgent')
+    // Every module in `agents/` is now registered: the last unregistered one
+    // (`multi-source-research`) was deleted with the GitHub MCP server it was
+    // the final consumer of (owner decision 2026-08-25). An agent that ships on
+    // disk but not in the registry is a trust boundary nobody reviews, so the
+    // two lists being equal is the property worth pinning.
+    expect(registered).toEqual(AGENT_MODULES.map((m) => m.exportName).sort())
   })
 })
 
@@ -235,18 +234,6 @@ describe('per-agent guard coverage (pinned — a wiring change must update this)
       'withReferences-* [withReferences] guarded:web+retriever',
       'web-search [simpleLoop] guarded:web+retriever',
       'response-synth [compactExecution] UNGUARDED',
-    ])
-  })
-
-  it('multi-source-research — guarded, but the agent is unregistered', async () => {
-    expect(
-      inventory(await patternsOf('multi-source-research.server.ts', 'multiSourceResearchAgent')),
-    ).toEqual([
-      'parallel-research [parallel] guarded:web+context7',
-      'web-search [simpleLoop] guarded:web+context7',
-      'doc-lookup [simpleLoop] guarded:web+context7',
-      'quality-judge [quality-judge] UNGUARDED',
-      'research-synth [compactExecution] UNGUARDED',
     ])
   })
 })
@@ -316,7 +303,7 @@ describe('agents with NO guard anywhere (pinned gaps)', () => {
 // ============================================================================
 
 describe('roll-up across every agent', () => {
-  it('pins the guarded / unguarded split (4 of 7 agents carry a guard)', async () => {
+  it('pins the guarded / unguarded split (3 of 6 agents carry a guard)', async () => {
     const guarded: string[] = []
     const unguarded: string[] = []
     for (const { file, exportName } of AGENT_MODULES) {
@@ -324,12 +311,7 @@ describe('roll-up across every agent', () => {
       ;(rows.some((r) => r.includes('guarded:')) ? guarded : unguarded).push(file)
     }
     expect(guarded.sort()).toEqual(
-      [
-        'search.server.ts',
-        'retriever-agent.server.ts',
-        'microsoft-365.server.ts',
-        'multi-source-research.server.ts',
-      ].sort(),
+      ['search.server.ts', 'retriever-agent.server.ts', 'microsoft-365.server.ts'].sort(),
     )
     expect(unguarded.sort()).toEqual(
       ['general.server.ts', 'sandbox-session.server.ts', 'flavoured-sandbox.server.ts'].sort(),

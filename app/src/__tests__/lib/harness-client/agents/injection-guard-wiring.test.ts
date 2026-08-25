@@ -92,22 +92,6 @@ describe('agents that consume untrusted content are guarded', () => {
     expect(guard!.injectionGuard).toEqual({ namespaces: ['graph'], tools: [] })
   })
 
-  it('multi-source-research: both search branches are guarded at once', async () => {
-    const { multiSourceResearchAgent } =
-      await import('../../../../lib/harness-client/agents/multi-source-research.server')
-    const patterns = (await multiSourceResearchAgent.createPatterns('s')) as Pattern[]
-    const guard = guardOf(patterns)
-    expect(guard).toBeDefined()
-    // Guarding the `parallel` covers web + context7 in one place; the ALS scope
-    // reaches every branch. (`github` left with the server in #226 E3.)
-    expect(guard!.config.patternId).toBe('parallel-research')
-    expect(guard!.children?.[0].name).toContain('parallel')
-    expect(guard!.injectionGuard).toEqual({
-      namespaces: ['web', 'context7'],
-      tools: [],
-    })
-  })
-
   it('retriever: routes is guarded, covering both web and the stash', async () => {
     const { retrieverAgent } =
       await import('../../../../lib/harness-client/agents/retriever-agent.server')

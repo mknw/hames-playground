@@ -13,7 +13,7 @@ import type { APIEvent } from '@solidjs/start/server'
 import { runTurnAndPersist } from '../../lib/harness-client/turn.server'
 import { getAuthenticatedUser } from '../../lib/auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../../lib/auth/dev-bypass'
-import type { HarnessSettings } from '../../lib/settings'
+import { sanitizeHarnessSettings } from '../../lib/settings'
 
 async function requireUserId(): Promise<string> {
   if (isBypassEnabled()) return BYPASS_USER.id
@@ -26,8 +26,14 @@ export async function POST(event: APIEvent) {
     sessionId: string
     message: string
     agentId?: string
-    settings?: HarnessSettings
+    settings?: unknown
   }
+  // `settings` is request-body data, and every pattern reads it at execution
+  // time — so it is clamped here, at the only place it enters the server, rather
+  // than trusted. See `sanitizeHarnessSettings`: numbers to the settings panel's
+  // own bounds, and the `sandbox` subtree (egress profile, memory cap, wall
+  // clock) discarded outright as host policy.
+  const safeSettings = sanitizeHarnessSettings(settings)
 
   if (!sessionId || !message) {
     return new Response(JSON.stringify({ error: 'sessionId and message are required' }), {
@@ -62,7 +68,7 @@ export async function POST(event: APIEvent) {
           userId,
           agentId: resolvedAgentId,
           message,
-          settings,
+          settings: safeSettings,
 
           // `sessionId` rides on every envelope so the client can route the
           // event to the right per-session progress controller (#47). Events

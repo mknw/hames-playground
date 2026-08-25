@@ -276,7 +276,12 @@ export interface ConversationEventsRow {
 }
 
 /** Row ceiling for {@link listConversationEvents}. Exported so the dashboard can
- *  say "most recent N" instead of implying it folded everything. */
+ *  say "most recent N" instead of implying it folded everything.
+ *
+ *  Since encryption it is a **memory** ceiling too, not only a row one: the
+ *  whole blob is now materialised in this process, so at the dev table's
+ *  average 249 KiB per `context` this bounds one dashboard load at ~65 MB read
+ *  and ~150 MiB of heap churn. Raising it is a memory decision. */
 export const CONVERSATION_EVENTS_SCAN_LIMIT = 200
 
 /**
@@ -290,7 +295,11 @@ export const CONVERSATION_EVENTS_SCAN_LIMIT = 200
  * cost is real and is the price of the column being unreadable in a dump; the
  * 200-row ceiling from {@link listConversations} is what keeps it bounded, and
  * it is the only reason this is a bounded regression rather than a structural
- * one. Measured cost is in the PR that introduced encryption.
+ * one. Measured at the dev table's own average blob size (249 KiB x 200 rows,
+ * the PR that introduced encryption has the table): ~1.1x the old SQL
+ * projection in wall clock, both dominated by the JSON parse — but ~200 ms and
+ * ~65 MB read in absolute terms, which is the number that matters on a small
+ * VM. See {@link CONVERSATION_EVENTS_SCAN_LIMIT}.
  */
 export async function listConversationEvents(userId: string): Promise<ConversationEventsRow[]> {
   const { rows } = await query<{

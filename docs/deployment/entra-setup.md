@@ -94,8 +94,10 @@ background runs for those users fail until they do.
 
 ⚠️ `DATA_ENCRYPTION_KEY` is **not** like that. It protects data that cannot be
 re-obtained, so losing or changing it makes stored conversations unreadable
-rather than merely stale, and the app refuses to start rather than serve empty
-ones. Back it up somewhere other than the machine holding the database, and
+rather than merely stale, and the app refuses to serve rather than hand back
+empty ones — the process stays up and logs the refusal once, so verify a
+deploy by its log rather than by its unit state (see
+[`azure-vm.md`](azure-vm.md)). Back it up somewhere other than the machine holding the database, and
 treat rotation as a re-encryption pass, not a restart. The `v1.` ciphertext
 prefix exists so that pass can be lazy; it has not been written yet.
 

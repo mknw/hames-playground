@@ -44,13 +44,22 @@
  *   soft there and the read looks like an empty conversation, which the next
  *   turn's `saveConversation` happily overwrites. The loud failure keeps a
  *   key-management incident from becoming data loss.
+ * - **Blast radius of one bad row, named separately** because it is a second
+ *   decision and not a corollary of the one above: a listing maps every row it
+ *   selected, so a single unreadable `title` fails `listConversations` for that
+ *   owner's whole sidebar, not just the one conversation. Fail-closed is still
+ *   right for content the user is being *shown* — a silently shorter list is
+ *   how a key incident turns into "my conversations are gone" — but the two
+ *   background firing paths in `db/routines.server.ts` deliberately choose the
+ *   opposite policy, because a tick that shows nobody their data has no reason
+ *   to take every other user's routines down with the bad row.
  *
  * ## Envelope
  *
  * `v1.<iv>.<authTag>.<ciphertext>`, base64url parts (see
  * `secret-crypto.server.ts`). The version prefix carries two jobs beyond
  * documentation: it is what makes the backfill migration idempotent
- * (`migrate-encryption.server.ts` selects on `NOT LIKE 'v1.%'`), and it is
+ * (`migrate-encryption.server.ts` selects on {@link NOT_ENCRYPTED_SQL}), and it is
  * what lets a future rotation be lazy — `v2.` values can be written alongside
  * `v1.` ones and each read with the key its own prefix names.
  */
@@ -66,19 +75,49 @@ export const DATA_KEY_ENV = 'DATA_ENCRYPTION_KEY'
 /** Current envelope version, including its separator. */
 export const ENVELOPE_PREFIX = 'v1.'
 
-/**
- * SQL predicate fragment that selects *not-yet-encrypted* values of a TEXT
- * column. Shared by the migration and by the boot check so the two can never
- * disagree about what "already encrypted" means at the SQL level.
- */
-export const NOT_ENCRYPTED_SQL = (column: string): string =>
-  `${column} IS NOT NULL AND ${column} NOT LIKE '${ENVELOPE_PREFIX}%'`
-
 const HKDF_INFO = 'kg-agent:db-crypto:v1'
 const KEY_BYTES = 32
 const IV_BYTES = 12
 const TAG_BYTES = 16
-const ENVELOPE_PARTS = 4
+
+/** base64url length of an `n`-byte buffer (unpadded, which is what Node emits). */
+const b64urlLen = (bytes: number): number => Math.ceil((bytes * 4) / 3)
+
+/**
+ * The shape of an envelope, as one source of truth in two dialects.
+ *
+ * `v1.<iv>.<tag>.<ciphertext>`, every part base64url, with the IV and tag parts
+ * pinned to the exact length their byte count encodes to. The body is `*`, not
+ * `+`, because AES-GCM of the empty string is empty and `title = ''` must read
+ * back as itself rather than as a lookalike.
+ *
+ * There used to be three definitions of "already encrypted" in play — this
+ * structural one, a `LIKE 'v1.%'` in SQL and a `startsWith('v1.')` in JS — and
+ * they disagreed on exactly the values that matter: a *user-authored* title
+ * beginning `v1.` was skipped by the backfill (so it stayed in the clear in
+ * every dump) and counted as ciphertext by the key-less boot gate (so an
+ * operator was told to restore a key that had never existed). The prefix tests
+ * are gone; both dialects below are generated from the same constants.
+ */
+const ENVELOPE_BODY = `[A-Za-z0-9_-]`
+const ENVELOPE_SHAPE = `^${ENVELOPE_PREFIX.replace('.', '\\.')}${ENVELOPE_BODY}{${b64urlLen(
+  IV_BYTES,
+)}}\\.${ENVELOPE_BODY}{${b64urlLen(TAG_BYTES)}}\\.${ENVELOPE_BODY}*$`
+
+const ENVELOPE_RE = new RegExp(ENVELOPE_SHAPE)
+
+/**
+ * SQL predicate fragment that selects *not-yet-encrypted* values of a TEXT
+ * column, and its complement. Both use {@link looksEncrypted}'s own rule, so
+ * SQL selection, the JS skip inside the backfill and the read path cannot
+ * disagree about what an envelope is. `~` is a POSIX regex match; the pattern
+ * is a compile-time constant, never user input.
+ */
+export const NOT_ENCRYPTED_SQL = (column: string): string =>
+  `${column} IS NOT NULL AND ${column} !~ '${ENVELOPE_SHAPE}'`
+
+/** `column` holds one of our envelopes. Complement of {@link NOT_ENCRYPTED_SQL}. */
+export const ENCRYPTED_SQL = (column: string): string => `${column} ~ '${ENVELOPE_SHAPE}'`
 
 /** Thrown when `DATA_ENCRYPTION_KEY` is absent and encrypted data is in play. */
 export class MissingDataEncryptionKeyError extends Error {
@@ -131,20 +170,14 @@ function dataKey(what: string): Buffer {
  *
  * Structural, not just prefix-matching: a user-authored title that happens to
  * start with `v1.` must not be mistaken for ciphertext and reported as
- * undecryptable. Checking the part count and the exact IV/tag lengths reduces
- * the false-positive space to values that are, for practical purposes, only
- * produced by {@link encryptField}.
+ * undecryptable. Matching the whole shape — part count, alphabet and the exact
+ * IV/tag lengths — reduces the false-positive space to values that are, for
+ * practical purposes, only produced by {@link encryptField}. This is *the*
+ * definition; {@link NOT_ENCRYPTED_SQL} and {@link ENCRYPTED_SQL} are the same
+ * rule rendered for Postgres, and a test pins the two against each other.
  */
 export function looksEncrypted(value: unknown): value is string {
-  if (typeof value !== 'string' || !value.startsWith(ENVELOPE_PREFIX)) return false
-  const parts = value.split('.')
-  // Note: an empty ciphertext part is legitimate — AES-GCM of the empty string
-  // is empty, and `title = ''` must not read back as its own envelope.
-  if (parts.length !== ENVELOPE_PARTS) return false
-  return (
-    Buffer.from(parts[1], 'base64url').length === IV_BYTES &&
-    Buffer.from(parts[2], 'base64url').length === TAG_BYTES
-  )
+  return typeof value === 'string' && ENVELOPE_RE.test(value)
 }
 
 /** Encrypt a value for storage. */
@@ -201,9 +234,13 @@ export function encryptJsonb(serialized: string): string {
  * legacy plaintext document (a JSON object), returning the serialized JSON in
  * both cases.
  *
- * A string that is *not* an envelope is a corrupt row, not a legacy one — no
- * writer in this repo ever stored a bare string there — so it throws rather
- * than handing a caller a JSON payload that will not parse.
+ * A string that is *not* an envelope is treated as a corrupt row, not a legacy
+ * one, and throws rather than handing a caller a JSON payload that will not
+ * parse. The assumption is about *writers*, not about the column: no writer in
+ * this repo ever stored a bare string there, but the column type permits one,
+ * so a hand-written `jsonb_set`-style fixup would land in the throwing branch.
+ * That is the intended reading — an unexplained bare string in a blob column is
+ * likelier damage than data.
  */
 export function decryptJsonb(stored: unknown, where: string): string {
   if (typeof stored === 'string') {

@@ -42,15 +42,31 @@ import { assertServerOnImport } from '../harness-patterns/assert.server'
 import {
   DATA_KEY_ENV,
   DataDecryptionError,
-  ENVELOPE_PREFIX,
+  ENCRYPTED_SQL,
   NOT_ENCRYPTED_SQL,
   decryptField,
   encryptField,
   encryptJsonb,
   hasDataEncryptionKey,
+  looksEncrypted,
 } from './crypto.server'
 
 assertServerOnImport()
+
+/**
+ * A boot gate said no: the key is missing with ciphertext present, or it does
+ * not open what is stored.
+ *
+ * Typed so `client.server.ts` can tell it apart from a transient init failure.
+ * Nothing about a key mismatch fixes itself on the next request, so this one is
+ * **not** retried — see the comment on `_initPromise`.
+ */
+export class EncryptionBootError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'EncryptionBootError'
+  }
+}
 
 /** Minimal shape of `pg.Pool#query` this module needs. */
 export type QueryRunner = (
@@ -110,7 +126,7 @@ export interface EncryptionMigrationReport {
   totalRowsEncrypted: number
 }
 
-/** `col IS NOT NULL AND NOT LIKE 'v1.%'` for TEXT, `jsonb_typeof <> 'string'` for JSONB. */
+/** Not-an-envelope for TEXT (see `NOT_ENCRYPTED_SQL`), `jsonb_typeof <> 'string'` for JSONB. */
 function duePredicate(spec: TableSpec): string {
   const clauses = [
     ...spec.textColumns.map((c) => `(${NOT_ENCRYPTED_SQL(c)})`),
@@ -138,7 +154,16 @@ async function migrateTable(run: QueryRunner, spec: TableSpec): Promise<TableMig
   }
 
   const due = duePredicate(spec)
-  const selectColumns = [spec.pk, ...spec.textColumns, ...spec.jsonbColumns].join(', ')
+  // `jsonb_typeof` comes along so SQL NULL and JSON `null` stay distinguishable:
+  // `pg` hands both to JavaScript as `null`, and encrypting the second over the
+  // first would write `"null"` on top of an absent value. Unreachable today
+  // (`context` is `NOT NULL`), and selected rather than reasoned about so the
+  // first nullable JSONB column added here does not have to rediscover it.
+  const selectColumns = [
+    spec.pk,
+    ...spec.textColumns,
+    ...spec.jsonbColumns.flatMap((c) => [c, `jsonb_typeof(${c}) AS "${c}__type"`]),
+  ].join(', ')
 
   for (let batch = 0; batch < MIGRATION_MAX_BATCHES; batch++) {
     const { rows } = await run(
@@ -146,25 +171,27 @@ async function migrateTable(run: QueryRunner, spec: TableSpec): Promise<TableMig
     )
     if (rows.length === 0) return result
     result.batches++
+    let attempted = 0
 
     for (const row of rows) {
       const sets: string[] = []
       const params: unknown[] = [row[spec.pk]]
       for (const col of spec.textColumns) {
         const value = row[col]
-        if (typeof value !== 'string' || value.startsWith(ENVELOPE_PREFIX)) continue
+        if (typeof value !== 'string' || looksEncrypted(value)) continue
         params.push(encryptField(value))
         sets.push(`${col} = $${params.length}`)
       }
       for (const col of spec.jsonbColumns) {
-        const value = row[col]
-        if (typeof value === 'string') continue
-        // `?? null` because `JSON.stringify(undefined)` is `undefined`, not a
-        // string, and would reach the cipher as a non-string argument.
-        params.push(encryptJsonb(JSON.stringify(value ?? null)))
+        const jsonType = row[`${col}__type`]
+        // SQL NULL (no `jsonb_typeof`) is absent, not empty — leave it alone.
+        // A JSON string is already an envelope.
+        if (jsonType == null || jsonType === 'string') continue
+        params.push(encryptJsonb(JSON.stringify(row[col] ?? null)))
         sets.push(`${col} = $${params.length}::jsonb`)
       }
       if (sets.length === 0) continue
+      attempted++
       // Predicate repeated in the WHERE so a concurrent booter's write wins
       // once rather than both of us encrypting the same row.
       const { rowCount } = await run(
@@ -172,6 +199,22 @@ async function migrateTable(run: QueryRunner, spec: TableSpec): Promise<TableMig
         params,
       )
       result.rowsEncrypted += rowCount ?? 0
+    }
+
+    // A batch that selected rows and wrote none of them means the SQL predicate
+    // and the JS skip have stopped agreeing — the one way this loop could spin
+    // until the ceiling. Counted as *writes attempted*, not rows changed, so a
+    // concurrent booter winning every row (a 0-row UPDATE, by design) is not
+    // mistaken for it. Stop on the first such batch and say so, instead of
+    // re-reading the same 100 rows 500 times.
+    if (attempted === 0) {
+      console.warn(
+        `[db] ${spec.table}: ${rows.length} row(s) match the backfill predicate but none were ` +
+          'convertible — stopping this table. The SQL predicate and the encrypted-shape check ' +
+          'disagree; this is a bug in crypto.server.ts, not a data problem.',
+      )
+      result.incomplete = true
+      return result
     }
   }
   result.incomplete = true
@@ -216,10 +259,14 @@ export async function sampleEncryptedColumns(run: QueryRunner): Promise<Encrypte
     for (const col of spec.textColumns) {
       const { rows } = await run(
         `SELECT ${col} AS sample FROM ${spec.table}
-          WHERE ${col} LIKE '${ENVELOPE_PREFIX}%' LIMIT 1`,
+          WHERE ${ENCRYPTED_SQL(col)} LIMIT 1`,
       )
       const sample = rows[0]?.sample
-      if (typeof sample === 'string') found.push({ where: `${spec.table}.${col}`, value: sample })
+      // Structural on both sides: SQL selects by the envelope's shape and JS
+      // confirms with the same rule, so a plaintext title that merely starts
+      // `v1.` is not reported as stored ciphertext. That false positive told an
+      // operator to restore a key that had never existed.
+      if (looksEncrypted(sample)) found.push({ where: `${spec.table}.${col}`, value: sample })
     }
     for (const col of spec.jsonbColumns) {
       const { rows } = await run(
@@ -227,7 +274,7 @@ export async function sampleEncryptedColumns(run: QueryRunner): Promise<Encrypte
           WHERE jsonb_typeof(${col}) = 'string' LIMIT 1`,
       )
       const sample = rows[0]?.sample
-      if (typeof sample === 'string') found.push({ where: `${spec.table}.${col}`, value: sample })
+      if (looksEncrypted(sample)) found.push({ where: `${spec.table}.${col}`, value: sample })
     }
   }
   return found
@@ -249,6 +296,12 @@ export async function findEncryptedColumns(run: QueryRunner): Promise<string[]> 
  * the outage it actually is. It runs BEFORE the backfill, so a wrong key cannot
  * first re-encrypt legacy plaintext rows under itself and thereby hide the
  * mismatch it was about to cause.
+ *
+ * **It is a key check, not an integrity check.** The sample is `LIMIT 1` with no
+ * `ORDER BY`, so it proves the key opens *a* row of that column — deliberately:
+ * scanning every row of every encrypted column on each boot is a different
+ * feature with a different cost. A single tampered row passes this gate and
+ * fails at read time, which is the right place for it.
  */
 export async function assertKeyOpensStoredData(run: QueryRunner): Promise<void> {
   for (const { where, value } of await sampleEncryptedColumns(run)) {
@@ -256,9 +309,9 @@ export async function assertKeyOpensStoredData(run: QueryRunner): Promise<void> 
       decryptField(value, where)
     } catch (err) {
       if (!(err instanceof DataDecryptionError)) throw err
-      throw new Error(
+      throw bootFailure(
         `[db] the configured ${DATA_KEY_ENV} does not decrypt existing data in ${where}. ` +
-          'Refusing to start: this is the wrong key (or a rotated one with no re-encryption ' +
+          'Refusing to serve: this is the wrong key (or a rotated one with no re-encryption ' +
           'pass). Continuing would fail every read of that column and, on the session table, ' +
           'would look like every user being signed out.',
       )
@@ -267,8 +320,34 @@ export async function assertKeyOpensStoredData(run: QueryRunner): Promise<void> 
 }
 
 /**
+ * Build the boot failure **and put it in the log on the way past**.
+ *
+ * Throwing alone was not enough. `initSchema()` is lazy, so the process starts
+ * and serves HTTP; `query()` re-throws without logging; and the two callers that
+ * matter here (`auth/server.ts`'s `getSessionUser` and
+ * `harness-client/actions.server.ts`'s `listConversations`) both swallow the
+ * error by design. The measured symptom of a wrong key was therefore a sign-in
+ * screen and an empty sidebar — indistinguishable from a session problem, and
+ * the exact silent degradation this gate exists to prevent. The message reaching
+ * the log from the encryption layer itself is what makes it diagnosable, rather
+ * than depending on whichever unrelated subsystem happens to have a catch-all.
+ */
+function bootFailure(message: string): EncryptionBootError {
+  console.error(message)
+  return new EncryptionBootError(message)
+}
+
+/**
  * The boot gate. Runs inside the schema init, so everything it throws takes the
  * whole process's first query down with a message that names the fix.
+ *
+ * What "takes down" means, precisely, because the runbook used to overstate it:
+ * the schema init is lazy, so the process is already listening. An
+ * {@link EncryptionBootError} is **not** retried (`client.server.ts` keeps the
+ * rejected init promise), so every query from then on fails immediately with
+ * this message and the app serves nothing but errors — but it does not exit,
+ * and `systemctl is-active` still reports `active`. Verify a deploy by the log,
+ * not by the unit state.
  *
  * Two outcomes when no key is configured, and the difference matters:
  *   - encrypted rows already present -> **throw**. Serving would mean either
@@ -284,9 +363,9 @@ export async function ensureEncryptionReady(run: QueryRunner): Promise<void> {
   if (!hasDataEncryptionKey()) {
     const encrypted = await findEncryptedColumns(run)
     if (encrypted.length > 0) {
-      throw new Error(
+      throw bootFailure(
         `[db] ${DATA_KEY_ENV} is not set, but encrypted data is already stored in ` +
-          `${encrypted.join(', ')}. Refusing to start: without the key these rows cannot be ` +
+          `${encrypted.join(', ')}. Refusing to serve: without the key these rows cannot be ` +
           'read, and continuing would serve empty conversations that the next write would ' +
           'destroy. Restore the key (it is NOT recoverable from the database) and restart.',
       )

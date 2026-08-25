@@ -253,12 +253,35 @@ Every var the server reads (`grep process.env src/`), with its localhost default
 > `auth_sessions` profile columns, and the `routines` prompt. A restored dump
 > without it is ciphertext forever — so back the key up **somewhere other than
 > the machine holding the data**, alongside `TOKEN_ENCRYPTION_KEY`. Starting the
-> app with encrypted rows present and the key absent is a deliberate hard boot
-> failure (it refuses to serve rather than return empty conversations that the
-> next write would overwrite), so a lost key shows up as an outage, not as
-> silent data loss. Rotating it needs a re-encryption pass, not just a restart:
-> the ciphertext carries a `v1.` version prefix so that pass can be lazy, but it
-> has not been written yet.
+> app with encrypted rows present and the key absent — or with the wrong key —
+> is a deliberate refusal to serve rather than a return of empty conversations
+> that the next write would overwrite, so a lost key shows up as an outage, not
+> as silent data loss. Rotating it needs a re-encryption pass, not just a
+> restart: the ciphertext carries a `v1.` version prefix so that pass can be
+> lazy, but it has not been written yet.
+>
+> **What that refusal looks like on this VM**, because it is not a crash: the
+> schema init is lazy, so the process starts, binds the port and stays
+> `active`. The key check runs on the first database query, logs
+> `[db] DATA_ENCRYPTION_KEY …` at error level, and is **not retried** — every
+> request from then on fails with it until you restart. `systemctl is-active
+kg-agent` therefore says `active` on a deploy that serves nothing: verify by
+> the log, never by the unit state.
+
+> **Snapshot the database before the first boot with `DATA_ENCRYPTION_KEY`
+> set.** That boot rewrites every existing `conversations` /
+> `users` / `auth_sessions` / `routines` row in place, and there is no
+> down-migration, no dry run and no decrypt-back script — the rollback advice
+> above ("drop the old tree — it is the rollback copy until then") is true of
+> the code and false of the data. Reverting to an earlier build does **not**
+> revert the rows; it produces a build that cannot read them. So:
+>
+> ```bash
+> docker compose exec -T postgres pg_dump -U postgres kgagent > ~/kgagent-preencrypt.sql
+> ```
+>
+> Keep that dump until you are satisfied, and keep the key somewhere else — a
+> dump taken _after_ the cutover is worthless without it.
 
 > **Redis has two paths.** The agentic one goes through the gateway's redis MCP
 > server (configured in `configs/mcp-config.yaml`, no app env var). The direct
@@ -290,6 +313,10 @@ restart) and confirm the service is actually up:
 ```bash
 systemctl is-active kg-agent && journalctl -u kg-agent -n 20 --no-pager
 ```
+
+`is-active` alone is not the check — a bad `DATA_ENCRYPTION_KEY` leaves the
+unit `active` and every request failing (see the warning above). Read the
+`journalctl` output for `[db] schema ready`.
 
 Only once that restart is verified, drop the old tree — it is the rollback copy
 until then:

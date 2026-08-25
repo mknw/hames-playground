@@ -7,7 +7,11 @@
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
-import { ensureEncryptionReady, type QueryRunner } from './migrate-encryption.server'
+import {
+  EncryptionBootError,
+  ensureEncryptionReady,
+  type QueryRunner,
+} from './migrate-encryption.server'
 import pg from 'pg'
 
 assertServerOnImport()
@@ -93,8 +97,9 @@ async function initSchema(): Promise<void> {
   // already stored, then backfill any rows written before encryption existed.
   // Deliberately part of schema-ensure rather than a separate script — a
   // migration an operator can forget leaves a table half in plaintext. This
-  // throws (and so fails every query in the process) when encrypted rows exist
-  // without a key; that is the intended loud failure, not a bug to soften.
+  // throws (and so fails every query in the process, permanently — see the
+  // catch below) when encrypted rows exist without a key, after logging the
+  // reason itself; that is the intended loud failure, not a bug to soften.
   await ensureEncryptionReady(directRunner)
   console.log('[db] schema ready')
 }
@@ -110,7 +115,14 @@ export async function query<R extends pg.QueryResultRow = pg.QueryResultRow>(
 ): Promise<pg.QueryResult<R>> {
   if (!_initPromise) {
     _initPromise = initSchema().catch((err) => {
-      _initPromise = null // allow retry on next call
+      // A transient failure (Postgres briefly unreachable) is retried on the
+      // next call. A key failure is not: nothing about a missing or wrong
+      // DATA_ENCRYPTION_KEY fixes itself while the process runs, and retrying
+      // re-ran the whole DDL + probe set on *every* subsequent request. Keeping
+      // the rejected promise makes the outage what the runbook says it is —
+      // permanent until a restart — at the cost of one log line, not one per
+      // request. `closePool()` clears it for tests.
+      if (!(err instanceof EncryptionBootError)) _initPromise = null
       throw err
     })
   }

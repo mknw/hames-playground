@@ -154,20 +154,44 @@ function toRoutine(row: DbRow): RoutineRow {
  * That's an unknown `trigger_kind` written by a newer deploy, or a config blob
  * that no longer validates — neither should take down a whole listing.
  *
- * A decryption failure is explicitly NOT in that category and is rethrown. The
- * `catch` was written when the only thing `toRoutine` could throw was a trigger
- * parse error; letting it also absorb a `DataDecryptionError` would turn a
- * wrong-key incident into a silently shorter list, which is exactly the
- * failure mode at-rest encryption must not introduce.
+ * ## What an unreadable row does, and why it depends on the caller
+ *
+ * A decryption failure is not a trigger problem, and the two audiences want
+ * opposite answers:
+ *
+ * - **Showing a user their own routines** (`listRoutines`, `getRoutine`) —
+ *   rethrow. A silently shorter list is the failure mode at-rest encryption
+ *   must not introduce: the page would look complete while a routine was
+ *   quietly missing from it.
+ * - **Firing routines in the background** (`listEnabledRoutines`, the 30s
+ *   scheduler tick, and `listEnabledRoutinesForUser`, the session hooks) —
+ *   skip the row, loudly, and keep the rest. Nobody is being shown this list.
+ *   Rethrowing here made one corrupted row an outage for *every* user's
+ *   routines: `runRoutineTick` catches, logs one line and returns `[]`
+ *   (`routines/scheduler.server.ts`), so healthy due routines belonging to
+ *   other people silently stopped firing — indefinitely, and invisibly, since
+ *   each owner's own routines page still rendered. That is a wider blast
+ *   radius than the short list this rethrow was protecting against, and worse
+ *   than the pre-encryption behaviour, which skipped the bad row and carried
+ *   on. The owner still learns about it: their own page fails loudly.
  */
-function toRoutines(rows: DbRow[]): RoutineRow[] {
+function toRoutines(rows: DbRow[], { firing = false }: { firing?: boolean } = {}): RoutineRow[] {
   const out: RoutineRow[] = []
   for (const row of rows) {
     try {
       out.push(toRoutine(row))
     } catch (err) {
-      if (err instanceof DataDecryptionError || err instanceof MissingDataEncryptionKeyError)
-        throw err
+      const unreadable =
+        err instanceof DataDecryptionError || err instanceof MissingDataEncryptionKeyError
+      if (unreadable && !firing) throw err
+      if (unreadable) {
+        console.error(
+          `[routines] routine ${row.id} (user ${row.user_id}) cannot be decrypted and will not ` +
+            'fire; every other routine in this tick still does:',
+          err instanceof Error ? err.message : err,
+        )
+        continue
+      }
       console.warn(
         `[routines] skipping routine ${row.id} with unreadable trigger ` + `'${row.trigger_kind}':`,
         err instanceof Error ? err.message : err,
@@ -297,7 +321,7 @@ export async function listEnabledRoutines(kind?: RoutineTriggerKind): Promise<Ro
     : await query<DbRow>(
         `SELECT ${SELECT_COLUMNS} FROM routines WHERE enabled = TRUE ORDER BY created_at`,
       )
-  return toRoutines(rows)
+  return toRoutines(rows, { firing: true })
 }
 
 /** Enabled routines of one kind belonging to one user (the session hooks). */
@@ -311,7 +335,7 @@ export async function listEnabledRoutinesForUser(
      WHERE enabled = TRUE AND user_id = $1 AND trigger_kind = $2 ORDER BY created_at`,
     [userId, kind],
   )
-  return toRoutines(rows)
+  return toRoutines(rows, { firing: true })
 }
 
 /**

@@ -34,7 +34,7 @@ import {
   sampleEncryptedColumns,
   type QueryRunner,
 } from '../../../lib/db/migrate-encryption.server'
-import { looksEncrypted } from '../../../lib/db/crypto.server'
+import { ENCRYPTED_SQL, encryptField, looksEncrypted } from '../../../lib/db/crypto.server'
 
 const SUFFIX = Math.random().toString(36).slice(2, 10)
 const TEST_USER = `enc-user-${SUFFIX}`
@@ -267,6 +267,40 @@ describe('boot probes, against real SQL', () => {
   })
 })
 
+describe('a wrong key, through query() itself', () => {
+  it('logs it, and does not re-run the whole init on every later call', async () => {
+    if (!dbAvailable) return
+    // The measured symptom before this: the boot gate threw, `query()` cleared
+    // `_initPromise` and re-threw silently, and the two callers that hit it
+    // first (`getSessionUser`, `listConversations`) both swallow — so a wrong
+    // key looked like "everyone is signed out", with nothing in the log from
+    // the layer that detected it, and the full DDL + probe set re-running per
+    // request for as long as it lasted.
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const good = process.env.DATA_ENCRYPTION_KEY
+    await closePool()
+    process.env.DATA_ENCRYPTION_KEY = 'a-key-that-opens-nothing'
+    try {
+      await expect(query('SELECT 1')).rejects.toThrow(/does not decrypt existing data/)
+      expect(error.mock.calls.flat().join(' ')).toContain('does not decrypt existing data')
+
+      // Not retried: even with the right key back in the environment, this
+      // process stays broken until it restarts. That is what the runbook says.
+      process.env.DATA_ENCRYPTION_KEY = good
+      const before = error.mock.calls.length
+      await expect(query('SELECT 1')).rejects.toThrow(/does not decrypt existing data/)
+      expect(error.mock.calls.length).toBe(before)
+    } finally {
+      process.env.DATA_ENCRYPTION_KEY = good
+      await closePool()
+      error.mockRestore()
+    }
+
+    // A restart (a fresh pool) recovers.
+    await expect(query('SELECT 1')).resolves.toBeDefined()
+  })
+})
+
 describe('backfill migration', () => {
   /** Write a row the way the pre-encryption build did: straight plaintext. */
   async function seedLegacyRows(id: string): Promise<void> {
@@ -328,6 +362,70 @@ describe('backfill migration', () => {
     // Byte-identical: nothing was re-encrypted under a fresh IV, so the
     // predicate really did recognise its own output.
     expect(again.rows[0]).toEqual(snapshot.rows[0])
+  })
+
+  it('encrypts a title that only looks like an envelope, and reads it back whole', async () => {
+    if (!dbAvailable) return
+    // A title a user can genuinely type. Under a prefix test the backfill
+    // skipped it for ever, so it stayed readable in every dump — quietly,
+    // because nothing counts a row it never selected.
+    const id = `enc-lookalike-${SUFFIX}`
+    const LOOKALIKE = 'v1.my notes about versioning'
+    await query(
+      `INSERT INTO conversations (id, user_id, agent_id, title, context, status)
+       VALUES ($1, $2, 'general', $3, $4::jsonb, 'done')`,
+      [id, OTHER_USER, LOOKALIKE, context('-lookalike')],
+    )
+
+    await encryptExistingRows(runner)
+
+    const { rows } = await query<{ title: string }>(
+      'SELECT title FROM conversations WHERE id = $1',
+      [id],
+    )
+    expect(looksEncrypted(rows[0].title)).toBe(true)
+    expect(rows[0].title).not.toContain('my notes')
+    expect((await loadConversation(id, OTHER_USER))?.title).toBe(LOOKALIKE)
+  })
+
+  it('does not report that same title as stored ciphertext', async () => {
+    if (!dbAvailable) return
+    // The other half of the same bug: the key-less boot gate counted a
+    // lookalike as an envelope and told the operator to restore a key that had
+    // never existed. Asserted at the SQL layer, where the false positive was.
+    const { rows } = await query<{ hit: boolean }>(`SELECT ${ENCRYPTED_SQL('$1::text')} AS hit`, [
+      'v1.my notes about versioning',
+    ])
+    expect(rows[0].hit).toBe(false)
+  })
+
+  it('agrees with looksEncrypted, in Postgres, value by value', async () => {
+    if (!dbAvailable) return
+    // One rule in two dialects. A disagreement in one direction leaves data in
+    // the clear; in the other it makes the backfill re-read rows it will never
+    // convert. Executed here rather than reasoned about, because the JS regex
+    // and the POSIX one are different engines.
+    const corpus = [
+      encryptField('a title'),
+      encryptField(''),
+      encryptField('a'.repeat(4096)),
+      'a normal conversation title',
+      'v1.my notes about versioning',
+      'v1.aaa.bbb',
+      'v1.YWJjYWJjYWJjYW$j.YWJjYWJjYWJjYWJjYWJjYW.Zg',
+      'v2.YWJjYWJjYWJjYWJj.YWJjYWJjYWJjYWJjYWJjYWJj.Zg',
+      '',
+    ]
+    const { rows } = await query<{ value: string; hit: boolean }>(
+      `SELECT value, ${ENCRYPTED_SQL('value')} AS hit FROM unnest($1::text[]) AS value`,
+      [corpus],
+    )
+    expect(rows).toHaveLength(corpus.length)
+    for (const row of rows) {
+      expect(row.hit, `postgres and looksEncrypted disagree on ${JSON.stringify(row.value)}`).toBe(
+        looksEncrypted(row.value),
+      )
+    }
   })
 
   it('skips tables that do not exist in this database', async () => {

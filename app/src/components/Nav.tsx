@@ -6,14 +6,20 @@ import { ThemeSwitcher } from '~/components/ark-ui/ThemeSwitcher'
  * Top bar. The old "Home"/"About" text links are gone (#132) — the chat is the
  * root route and the SolidStart demo page it linked to no longer exists. What
  * remains is a row of icon controls: metrics dashboard, theme, user.
+ *
+ * The bar itself is on the theme-aware `ui-*` tokens (#226 B8) — it houses the
+ * theme control and it sits above the auth pages, so a dark bar over a light
+ * sign-in page would be the one seam the switch could not hide. The dark
+ * values of those tokens are the `dark-*` hexes it used before, so nothing
+ * about the dark bar changed.
  */
 export default function Nav() {
   const location = useLocation()
   const onDashboard = () => location.pathname === '/dashboard'
 
   return (
-    <nav bg="dark-bg-secondary" border="b dark-border-primary">
-      <ul text="dark-text-primary" p="3" container flex items-center>
+    <nav bg="ui-bg-secondary" border="b ui-border-primary">
+      <ul text="ui-text-primary" p="3" container flex items-center>
         <li flex items-center gap-3 m="l-auto">
           <a
             href={onDashboard() ? '/' : '/dashboard'}
@@ -35,7 +41,7 @@ export default function Nav() {
               }
               w="5"
               h="5"
-              text="neon-cyan"
+              text="ui-accent"
               aria-hidden="true"
             />
           </a>

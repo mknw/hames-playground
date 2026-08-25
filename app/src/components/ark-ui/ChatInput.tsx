@@ -75,15 +75,15 @@ export const ChatInput = (props: ChatInputProps) => {
           p="2"
           m="b-2"
           rounded="md"
-          border="1 neon-cyan/30"
+          border="1 ui-accent/30"
           bg="cyber-700/15"
-          text="xs dark-text-secondary"
+          text="xs ui-text-secondary"
         >
           <span
             w="1.5"
             h="1.5"
             rounded="full"
-            bg="neon-cyan"
+            bg="ui-accent"
             class="animate-pulse"
             style={{ 'flex-shrink': 0 }}
             aria-hidden="true"
@@ -99,21 +99,21 @@ export const ChatInput = (props: ChatInputProps) => {
         autoresize
         placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
         aria-disabled={props.disabled ? 'true' : undefined}
-        border="1 dark-border-secondary focus:neon-cyan"
+        border="1 ui-border-secondary focus:ui-accent"
         rounded="lg"
         p="3"
         resize="none"
         min-h="12"
         max-h="48"
         w="full"
-        text="sm dark-text-primary"
-        bg="dark-bg-tertiary"
+        text="sm ui-text-primary"
+        bg="ui-bg-tertiary"
         outline="none"
-        ring="2 transparent focus:neon-cyan/40"
+        ring="2 transparent focus:ui-accent/40"
         transition="all"
       />
       <div flex="~" items="center" justify="between" gap="2" w="full" m="t-1">
-        <Field.HelperText text="xs dark-text-tertiary">
+        <Field.HelperText text="xs ui-text-tertiary">
           Enter to send • Shift+Enter for new line
         </Field.HelperText>
         {/* Stop replaces Send while this session is streaming — one slot, so

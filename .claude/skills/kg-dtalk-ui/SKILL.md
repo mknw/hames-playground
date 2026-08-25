@@ -435,7 +435,8 @@ attacked it from model output and none got a link through.
 `app/src/__tests__/links-new-tab.test.ts` covers the hand-written half, and it
 is a **lint, not a proof**. It reads `src/` as text, so it catches the literal
 shapes it has been taught — JSX anchors, `document.createElement('a')` /
-`createElementNS`, `location.href`/`assign`/`replace`, `window.location =`,
+`createElementNS`, `location.href`/`assign`/`replace`, a whole-object
+`location =` qualified by `window`/`self`/`top`/`parent`/`globalThis`/`document`,
 `window.open`, and an enumerated set of markup sinks (`innerHTML`/`outerHTML`
 write or append, `insertAdjacentHTML`, `document.write`/`writeln`,
 `createContextualFragment`, `parseFromString`, `setHTMLUnsafe`, `marked`) —

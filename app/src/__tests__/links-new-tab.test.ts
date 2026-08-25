@@ -43,8 +43,10 @@
  *   1. JSX `<a …>` openings                → `target` + `rel`, or an ALLOWLIST entry
  *   2. `document.createElement('a')`       → *that* anchor is a download, or
  *                                            `target` + `rel` set on *it*
- *   3. `location.href = …` / `.assign(…)` / `.replace(…)` / `window.location = …`
- *      / `window.open(…)`                  → an ALLOWLIST entry (the app
+ *   3. `location.href = …` / `.assign(…)` / `.replace(…)`, a whole-object
+ *      `location = …` qualified by any of `window`, `self`, `top`, `parent`,
+ *      `globalThis` or `document`, and `window.open(…)`
+ *                                         → an ALLOWLIST entry (the app
  *                                            navigating itself away is exactly
  *                                            what the rule forbids)
  *   4. HTML sinks — `innerHTML`/`outerHTML` write or append,
@@ -90,6 +92,11 @@
  *     ways than a list can hold; shape 4 names eight. This is the blind spot
  *     that costs more than a tab (SD-1), and the reason the sanitizer — not
  *     this file — is where that boundary is kept.
+ *   - **A bare, unqualified `location = …`.** Shape 3 matches the qualified
+ *     spellings only. `const location = useLocation()` is the idiomatic
+ *     solid-router binding and four current sites use it, so an unqualified
+ *     alternation would be four spurious REDs on day one — the failure
+ *     {@link normalize} exists to prevent, in a different place.
  *   - **Leaving the page by something that is not a link.**
  *     `<form action="https://…">`, the router's `navigate('https://…')`, a
  *     `<meta http-equiv="refresh">`.
@@ -311,9 +318,17 @@ const ANCHOR_FACTORY = /document\.createElement(?:NS)?\(\s*(?:[^,)]+,\s*)?['"`]a
  * makes the formatter able to disarm this shape — the fail-open direction, on
  * the shape the rule most plainly forbids. Matched over the whole file for the
  * same reason, so a statement spanning lines is still one match.
+ *
+ * The whole-object assignment is matched behind *every* qualifier the platform
+ * gives it, not just `window`: `self.location = url` and
+ * `document.location = url` are the same navigation spelled differently — no
+ * variable, no alias, no computed property — so leaving them out was a hole in
+ * shape 3 rather than an instance of the header's indirection family. `top` and
+ * `parent` navigate a frame the app may not own, which is worse, not exempt.
+ * A bare `location = …` is deliberately absent: see the family that says so.
  */
 const NAVIGATES_AWAY =
-  /location\.(?:href\s*=(?!=)|assign\(|replace\()|window\.location\s*=(?!=)|window\.open\(/g
+  /location\.(?:href\s*=(?!=)|assign\(|replace\()|(?:window|self|top|parent|globalThis|document)\.location\s*=(?!=)|window\.open\(/g
 
 /**
  * Markup reaching the DOM, and the markdown renderer that feeds it.
@@ -355,7 +370,14 @@ function unguardedProgrammaticAnchors(source: string): string[] {
     // characters — excuses an in-tab navigating anchor whenever an unrelated
     // download helper happens to sit below it.
     const line = source.slice(source.lastIndexOf('\n', match.index) + 1, match.index)
-    const id = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*$/.exec(line)?.[1]
+    // The optional `: T` is what keeps the fail-closed branch below from
+    // firing on the most idiomatic TS spelling of the shape both real call
+    // sites use — `const a: HTMLAnchorElement = document.createElement('a')`
+    // binds no identifier without it, so a correct download anchor reports as
+    // an offender. `[^=]*` rather than `[^=]+` keeps the un-annotated case; an
+    // annotation containing `=>` still falls through to no exemption, which is
+    // the safe direction.
+    const id = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]*)?=\s*$/.exec(line)?.[1]
     if (id !== undefined) {
       // `$` is legal in an identifier and special in a pattern; leaving it
       // unescaped would make the exemption never match, which fails closed.
@@ -380,7 +402,7 @@ function unguardedProgrammaticAnchors(source: string): string[] {
   return offenders
 }
 
-describe('every link the app renders opens in a new tab', () => {
+describe('no known link shape opens in the current tab', () => {
   it('finds the anchors it is supposed to be guarding', () => {
     // A scanner that silently matches nothing would pass forever. The chat
     // markdown path has no hand-written anchor, so the floor is the in-tab
@@ -412,7 +434,7 @@ describe('every link the app renders opens in a new tab', () => {
     expect(offenders).toEqual([])
   })
 
-  it('does not navigate the current tab away except where allowed', () => {
+  it('does not navigate the current tab away in any shape it knows, except where allowed', () => {
     const offenders: string[] = []
     for (const [file, source] of sources) {
       for (const match of source.matchAll(NAVIGATES_AWAY)) {
@@ -613,6 +635,55 @@ describe('the shapes the scanner advertises', () => {
       '}',
     ].join('\n')
     expect(unguardedProgrammaticAnchors(owned)).toEqual([])
+  })
+
+  it('reads the location assignment behind every qualifier, not just window', () => {
+    // No variable, no alias, no computed property — the same navigation shape 3
+    // advertises, spelled the other ways the platform allows. These were all
+    // green while the header claimed the family.
+    for (const nav of [
+      'self.location = url',
+      'document.location = url',
+      'top.location = url',
+      "globalThis.location = 'https://evil.test/'",
+    ])
+      expect(nav.match(NAVIGATES_AWAY), nav).not.toBeNull()
+
+    // …and the near-misses. A bare `location =` stays out on purpose — the
+    // solid-router binding below is on four current call sites, and a
+    // comparison is not a navigation.
+    for (const clean of [
+      'const location = useLocation()',
+      'if (self.location === url) return',
+      'const { location } = props',
+    ])
+      expect(clean.match(NAVIGATES_AWAY), clean).toBeNull()
+  })
+
+  it('binds a type-annotated declarator to its anchor', () => {
+    // The download is set on the anchor itself, so this is exempt — but the
+    // declarator pattern found no identifier while it required the `=` to
+    // follow the name directly, and no identifier means no exemption.
+    const annotated = [
+      'export function save(blob: Blob, name: string) {',
+      "  const a: HTMLAnchorElement = document.createElement('a')",
+      '  a.href = URL.createObjectURL(blob)',
+      '  a.download = name',
+      '  a.click()',
+      '}',
+    ].join('\n')
+    expect(unguardedProgrammaticAnchors(annotated)).toEqual([])
+
+    // …and the counterpart: the annotation buys no exemption of its own, so an
+    // annotated anchor that neither downloads nor opens a new tab still fails.
+    const annotatedOffender = [
+      'export function go(url: string) {',
+      "  const a: HTMLAnchorElement = document.createElement('a')",
+      '  a.href = url',
+      '  a.click()',
+      '}',
+    ].join('\n')
+    expect(unguardedProgrammaticAnchors(annotatedOffender)).toHaveLength(1)
   })
 
   it('matches an exception across a prettier reflow inside brackets', () => {

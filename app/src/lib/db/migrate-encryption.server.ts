@@ -202,8 +202,12 @@ export interface EncryptedSample {
 /**
  * Sample one envelope from every encrypted column that currently holds any.
  *
- * `#>> '{}'` pulls a JSONB string scalar out as text, so a JSONB envelope and a
- * TEXT one come back in the same shape.
+ * A JSONB envelope is selected as the column, not via `#>> '{}'`, and comes back
+ * as a JS string because `pg` parses a JSONB string scalar that way — the same
+ * property the read path in `crypto.server.ts` already relies on. Extracting it
+ * as text here instead would make the probe *more* tolerant than the reads it is
+ * gating, so a driver-level change would pass the boot gate and then fail every
+ * request. Sharing the assumption means the gate fails whenever the reads would.
  */
 export async function sampleEncryptedColumns(run: QueryRunner): Promise<EncryptedSample[]> {
   const found: EncryptedSample[] = []
@@ -219,7 +223,7 @@ export async function sampleEncryptedColumns(run: QueryRunner): Promise<Encrypte
     }
     for (const col of spec.jsonbColumns) {
       const { rows } = await run(
-        `SELECT ${col} #>> '{}' AS sample FROM ${spec.table}
+        `SELECT ${col} AS sample FROM ${spec.table}
           WHERE jsonb_typeof(${col}) = 'string' LIMIT 1`,
       )
       const sample = rows[0]?.sample

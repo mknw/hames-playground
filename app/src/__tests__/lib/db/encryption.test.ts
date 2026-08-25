@@ -28,7 +28,12 @@ import {
 import { createRoutine, getRoutine, updateRoutine } from '../../../lib/db/routines.server'
 import { createSession, getSession } from '../../../lib/auth/session-store.server'
 import { getUser, upsertUser } from '../../../lib/auth/users.server'
-import { encryptExistingRows, type QueryRunner } from '../../../lib/db/migrate-encryption.server'
+import {
+  assertKeyOpensStoredData,
+  encryptExistingRows,
+  sampleEncryptedColumns,
+  type QueryRunner,
+} from '../../../lib/db/migrate-encryption.server'
 import { looksEncrypted } from '../../../lib/db/crypto.server'
 
 const SUFFIX = Math.random().toString(36).slice(2, 10)
@@ -238,6 +243,27 @@ describe('routines', () => {
     ])
     expect(looksEncrypted(rows[0].input)).toBe(true)
     expect(rows[0].input).not.toContain('New secret prompt')
+  })
+})
+
+describe('boot probes, against real SQL', () => {
+  // The unit tests drive these through a fake runner, which cannot catch a
+  // wrong operator. `context #>> '{}'` in particular is the only way to pull a
+  // JSONB string scalar back out as text, and nothing else in the repo uses it.
+  it('samples a real envelope from every encrypted column, JSONB included', async () => {
+    if (!dbAvailable) return
+    const samples = await sampleEncryptedColumns(runner)
+    const byColumn = new Map(samples.map((s) => [s.where, s.value]))
+
+    for (const where of ['conversations.title', 'conversations.context', 'auth_sessions.email']) {
+      expect(byColumn.has(where), `no sample for ${where}`).toBe(true)
+      expect(looksEncrypted(byColumn.get(where))).toBe(true)
+    }
+  })
+
+  it('accepts the key that wrote those rows', async () => {
+    if (!dbAvailable) return
+    await expect(assertKeyOpensStoredData(runner)).resolves.toBeUndefined()
   })
 })
 

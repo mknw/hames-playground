@@ -25,7 +25,7 @@ import { trackEvent, resolveConfig } from '../context.server'
 import { Collector } from '@boundaryml/baml'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { extractFailureLLMCallData, warnIfCollectorEmpty } from '../baml-adapters.server'
-import { resolveClientForRole } from '../clients.server'
+import { clientOverrideFor, resolveClientForRole } from '../clients.server'
 
 assertServerOnImport()
 
@@ -107,9 +107,16 @@ async function defaultSynthesize(
   }
 
   // Call with or without collector, including error context. `Synthesize`
-  // declares `SynthesizerAnthropic` (Sonnet 5 → Haiku 4.5).
-  const synthOpts = collector ? { collector } : {}
-  const hasSynthOpts = collector !== undefined
+  // declares `SynthesizerAnthropic` (Sonnet 5 → Haiku 4.5), overridden onto
+  // the self-hosted deployment when `USE_VERDA_INFERENCE=1` re-points the
+  // `compactExecution` role. The branch is on whether the options bag ended up
+  // empty, not on `collector`: the override can be the only thing in it, and
+  // the generated functions take their arguments positionally (#154).
+  const synthOpts = {
+    ...(collector ? { collector } : {}),
+    ...clientOverrideFor('compactExecution'),
+  }
+  const hasSynthOpts = Object.keys(synthOpts).length > 0
   const content = hasSynthOpts
     ? await b.Synthesize(
         input.userMessage,

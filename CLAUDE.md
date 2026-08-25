@@ -15,11 +15,13 @@ Project-level guidance for Claude Code in this repository.
 
 - **`pnpm dev:exposed`** binds 0.0.0.0 — required for anything in Docker (Playwright MCP, the gateway) to reach the dev server.
 
-### Client routing: Anthropic only
+### Client routing: Anthropic by default, self-hosted opt-in
 
-Every BAML call (Router / LoopController / ActorController / Critic / Synthesize / ResultDescribe) routes through the chains in `baml_src/anthropic-only.baml`. There is no second routing mode and no routing env var: the mixed-provider chains and `USE_MIXED_CHAINS` were removed 2026-08-24 (ADR-0001) — their cross-provider rate limits made dev iteration too noisy, and one provider is also one processor to paper. `LocalGLM` in `baml_src/local-client.baml` stays for manual wiring; it is in no chain.
+Every BAML call (Router / LoopController / ActorController / Critic / Synthesize / ResultDescribe) routes through the chains in `baml_src/anthropic-only.baml`. The mixed-provider chains and `USE_MIXED_CHAINS` were removed 2026-08-24 (ADR-0001) — their cross-provider rate limits made dev iteration too noisy, and one provider is also one processor to paper. `LocalGLM` in `baml_src/local-client.baml` stays for manual wiring; it is in no chain.
 
-Which client a role runs on: `app/src/lib/harness-patterns/clients.server.ts` (`resolveClientForRole`) — the one place to re-point a role at a different chain.
+One opt-in flag re-points part of that: `USE_VERDA_INFERENCE=1` sends the controller / actor / critic / synthesizer roles to the company's own deployment (see "Self-hosted inference" below). Unset — the default everywhere — it changes nothing.
+
+Which client a role runs on: `app/src/lib/harness-patterns/clients.server.ts` (`resolveClientForRole` / `clientOverrideFor`) — the one place to re-point a role at a different chain.
 
 Docker services (Neo4j, MCP Gateway, Redis) come up with `docker compose up -d` from the repo root.
 
@@ -208,11 +210,17 @@ adapters.
 
 **The injection screen has its own role** — `screen` resolves to `DescribeAnthropic` rather than riding `describe` (SA-M5). Same client today; the separation is what matters, because re-pointing summarization at a cheaper model must never drag prompt-injection screening along with it — a screen must not be talked out of reporting by the content it reviews, and must copy spans verbatim so the guard can neutralize them. Rationale on the map entry in `clients.server.ts`.
 
+**Self-hosted inference (`VerdaQwen`, `baml_src/verda-client.baml`)** — the company's own Qwen deployment on a Verda (DataCrunch) GPU behind vLLM, as a confidential-compute route: prompts stay on infrastructure the company controls. Reached only through `USE_VERDA_INFERENCE=1`, which re-points the controller / actor / critic / synthesizer roles; router / describe / screen / planner stay Anthropic, so the flag is a routing switch and NOT a "no prompt leaves the building" guarantee (`describe` in particular is handed tool results verbatim — widening the map is an owner call). Endpoint and key come from `VERDA_INFERENCE_ENDPOINT` (which must be the OpenAI base, i.e. end in `/v1`) and `VERDA_INFERENCE_API_KEY`; with the flag on, a missing or root-only endpoint throws at module load rather than falling back to Anthropic — a silent fallback would send confidential prompts to the provider the flag exists to avoid.
+
+Three things shape this client. It **asks for no caching**: no `allowed_role_metadata`, so the controller templates' `cache_control` breakpoints (#122) are dropped instead of forwarded, and nothing in a request asks a third party to retain a prompt (the deployment's own vLLM prefix cache is a server flag outside this repo). The endpoint **scales to zero** — billing follows activity and the first call after idle pays a cold start of minutes — hence the deliberately generous `http { request_timeout_ms }` and the all-or-nothing flag: one warm box per session, never a trickle of stray calls. And its window is **131072**, from vLLM's `--max-model-len`, mirrored in `MODEL_CONTEXT_WINDOWS` so `resolveClientForRole` trims against the server's real ceiling; `CLIENT_PRICING` deliberately has no entry, because the box is billed per GPU-second and an invented per-token rate would render as a confident dollar figure.
+
+The live check is manual (CI has no endpoint access): `USE_VERDA_INFERENCE=1 pnpm dlx tsx --env-file=.env src/lib/harness-patterns/scripts/smoke-verda.ts` from `app/` — two calls, back-to-back to pay one cold start, each asserting the collector reports `VerdaQwen` rather than trusting the flag. The hermetic half is `app/src/__tests__/lib/harness-patterns/clients-verda.test.ts`, which also pins that every role in the Verda map has a call site spreading `clientOverrideFor(role)` — an entry without one reads like routing and changes nothing.
+
 Local inference (`LocalGLM` — GLM 4.7 Flash on localhost:8080) is defined in `baml_src/local-client.baml` and available for manual wiring but not used in any chain.
 
-Required env var: `ANTHROPIC_API_KEY`. (`OPENROUTER_API_KEY` is unrelated to routing — it belongs to the optional `openrouter` embedding provider; see `docs/DATA_STASH.md`.)
+Required env var: `ANTHROPIC_API_KEY`; plus `VERDA_INFERENCE_ENDPOINT` + `VERDA_INFERENCE_API_KEY` when `USE_VERDA_INFERENCE=1`. (`OPENROUTER_API_KEY` is unrelated to routing — it belongs to the optional `openrouter` embedding provider; see `docs/DATA_STASH.md`.)
 
-**Structured-output failures propagate.** There is no second provider to escalate to, so a `BamlValidationError` that is neither a truncation nor an empty completion surfaces instead of being retried on a weaker model. Errors are tracked as events; compactExecution reads them via `view.hasErrors()` (scoped by ViewConfig, so they expire naturally across turns).
+**Structured-output failures propagate.** No role has a cross-provider ladder to escalate to — the Anthropic chains fall back within Anthropic, and `VerdaQwen` is a single leaf — so a `BamlValidationError` that is neither a truncation nor an empty completion surfaces instead of being retried on a weaker model. Errors are tracked as events; compactExecution reads them via `view.hasErrors()` (scoped by ViewConfig, so they expire naturally across turns).
 
 ---
 

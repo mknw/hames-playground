@@ -94,6 +94,12 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   AnthropicSonnet5NoThink: 1_000_000, // #139
   // Local (local-client.baml, not used in chains)
   LocalGLM: 16_384,
+  // Self-hosted (verda-client.baml) — vLLM was started with
+  // `--max-model-len 131072`, so this is the server's hard ceiling on
+  // prompt + completion, not a model-family marketing number. An earlier plan
+  // for this client said 250k; the deployment says 131072 and the deployment
+  // wins. Reached through resolveClientForRole() while USE_VERDA_INFERENCE=1.
+  VerdaQwen: 131_072,
   // Strategy-level chain clients — the names patterns actually pass to
   // getContextWindow() (via resolveClientForRole). Without these the lookup
   // fell through to the 16_384 default and over-trimmed prompts, dropping real
@@ -140,6 +146,10 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   AnthropicOpus4: 4_096,
   // Local (local-client.baml — manual wiring only, not in any chain).
   LocalGLM: 2_048,
+  // Self-hosted (verda-client.baml). Mirrors the `max_tokens` declared there;
+  // without this entry the truncation retry is blind on every Verda-routed
+  // controller turn, which is the failure this map exists for.
+  VerdaQwen: 16_384,
   // Strategy-chain FLOORS — the smallest cap of any leaf in the chain, the
   // same conservative-floor pattern as the chain entries in
   // MODEL_CONTEXT_WINDOWS above. Truncation detection never consults these
@@ -159,6 +169,11 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
  *
  * AnthropicSonnet5 uses the INTRO pricing in force through 2026-08-31
  * (standard: 3.00 / 15.00) — update after.
+ *
+ * `VerdaQwen` is deliberately ABSENT: the self-hosted deployment is billed by
+ * the second the GPU is awake, not by the token, so any per-token rate here
+ * would be invented — and a `0` would render as "this call was free" on a box
+ * that is being paid for while it answers. "Unknown" is the honest reading.
  */
 export const CLIENT_PRICING: Record<string, { inPerMTok: number; outPerMTok: number }> = {
   AnthropicSonnet5: { inPerMTok: 2.0, outPerMTok: 10.0 },

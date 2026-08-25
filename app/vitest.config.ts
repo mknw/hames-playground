@@ -34,9 +34,12 @@ export default defineConfig({
         // dropped from the report — naming it just keeps the stack trace out
         // of the log. Drop this line if a test ever mounts the app shell.
         'src/app.tsx',
-        // Manual smoke-test scripts (run by hand against a live sandbox),
-        // not unit-testable — recommendation from the sandbox coverage lane.
-        'src/lib/sandbox/scripts/smoke-*.ts',
+        // Manual smoke-test scripts (run by hand against live infrastructure
+        // — a container engine, a self-hosted inference endpoint), not
+        // unit-testable: recommendation from the sandbox coverage lane,
+        // widened from `src/lib/sandbox/scripts/` when the same convention
+        // grew a second home under `src/lib/harness-patterns/scripts/`.
+        'src/lib/**/scripts/smoke-*.ts',
       ],
       // Backstop floors, not aspirations. Measured on 2026-08-16 against the
       // scope above (post smoke-script exclude) and set 2pp below the

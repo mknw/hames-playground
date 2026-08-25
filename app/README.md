@@ -110,6 +110,13 @@ pnpm baml-generate    # Regenerate baml_client/
 pnpm baml-test        # Run BAML tests
 ```
 
+`pnpm eval:harness` is deliberately NOT in that list. It runs the
+harness/client compatibility evals in [`evals/`](evals/README.md) — real, billed
+LLM calls against a live endpoint, run by hand whenever a BAML client changes to
+check the shipped workflows still work on it. It is not a test, it never runs in
+CI, and [`src/__tests__/evals-not-in-ci.test.ts`](src/__tests__/evals-not-in-ci.test.ts)
+fails if that ever stops being true.
+
 To run this app as a container instead of natively — deployment parity, not the
 dev loop — build `Dockerfile` through the `app` compose service from the repo
 root: `docker compose build app && docker compose up -d app`. Details and the

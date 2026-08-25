@@ -47,7 +47,16 @@ client<llm> VerdaQwen {
     // without it every call 404s on `<root>/chat/completions`.
     base_url env.VERDA_INFERENCE_ENDPOINT
     api_key env.VERDA_INFERENCE_API_KEY
-    model "MODEL_ID_PLACEHOLDER"
+    // ⚠️ PLACEHOLDER — the one line in this repo that still needs a real value.
+    // vLLM serves the model under the id `GET /v1/models` reports (the HF path
+    // it was started with, unless `--served-model-name` overrode it), and the
+    // deployment was unreachable when this landed: every authenticated request
+    // was held open with no response, while an invalid bearer got a fast 404
+    // from the gateway. Rather than commit a model string nobody has seen,
+    // this stays an obviously-wrong constant, and `smoke-verda.ts` refuses to
+    // run while it is here — so the first person to exercise the route gets
+    // told to fill it in instead of debugging a 400 from vLLM.
+    model "REPLACE_WITH_ID_FROM_V1_MODELS"
     // Mirror in CLIENT_MAX_OUTPUT_TOKENS (settings.ts) — enforced by
     // client-output-caps.test.ts. Matches the Sonnet 4.6 / Haiku 4.5 cap: the
     // controller envelope needs room for a large `tool_args`, and it is also

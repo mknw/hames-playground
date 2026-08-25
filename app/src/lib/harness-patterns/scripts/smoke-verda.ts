@@ -40,12 +40,18 @@
  * told the flag is on is not evidence that the call went there.
  */
 
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { Collector } from '@boundaryml/baml'
 import type { ToolDescription } from '../../../../baml_client/types'
 import { createCriticAdapter, extractLLMCallData } from '../baml-adapters.server'
 import { assertVerdaConfigured, clientOverrideFor, verdaInferenceEnabled } from '../clients.server'
 
 const EXPECTED_CLIENT = 'VerdaQwen'
+
+/** The stand-in `verda-client.baml` shipped with, because the deployment was
+ *  unreachable when this route landed and the served id could not be read. */
+const MODEL_PLACEHOLDER = 'REPLACE_WITH_ID_FROM_V1_MODELS'
 
 /** A catalog small enough to read in the transcript, real enough to choose from. */
 const TOOLS: ToolDescription[] = [
@@ -77,6 +83,17 @@ function preflight(): void {
   // Same check the module performs at load; called explicitly so the failure
   // reads as a preflight rather than an import-time stack trace.
   assertVerdaConfigured()
+  // The one value that could not be probed. Caught here rather than at the
+  // provider, where it surfaces as a 400 about an unknown model.
+  const client = readFileSync(path.resolve(process.cwd(), 'baml_src/verda-client.baml'), 'utf8')
+  if (client.includes(`model "${MODEL_PLACEHOLDER}"`)) {
+    throw new Error(
+      'baml_src/verda-client.baml still carries the placeholder model id. Read the served id:\n' +
+        '  curl -H "Authorization: Bearer $VERDA_INFERENCE_API_KEY" ' +
+        '"$VERDA_INFERENCE_ENDPOINT/models"\n' +
+        "put its `id` in the client's `model` option, run `pnpm baml-generate`, and re-run this.",
+    )
+  }
   const override = clientOverrideFor('controller')
   if (override?.client !== EXPECTED_CLIENT) {
     throw new Error(

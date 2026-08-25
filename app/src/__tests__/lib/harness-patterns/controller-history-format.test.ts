@@ -105,6 +105,27 @@ function allText(body: Body): string {
   return JSON.stringify(body)
 }
 
+/** Every rendered text block, system and messages alike, unescaped. */
+function textBlocks(body: Body): string[] {
+  const out: string[] = []
+  for (const s of (body.system ?? []) as Array<{ text?: string }>) if (s?.text) out.push(s.text)
+  for (const m of body.messages) {
+    const blocks = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : m.content
+    for (const blk of blocks) if (blk.text) out.push(blk.text)
+  }
+  return out
+}
+
+/** The EXAMPLES section, from its heading to the end of the block it lives in.
+ *  The actor renders it into the static system head; the loop renders it into
+ *  the agent-static tier-1 user message. Either way it is ONE block, which is
+ *  what makes it separable from `ctx.output_format`. */
+function examplesSection(body: Body): string {
+  const block = textBlocks(body).find((t) => t.includes('EXAMPLES (illustrative'))
+  expect(block, 'the rendered prompt has no EXAMPLES section').toBeTruthy()
+  return (block as string).slice((block as string).indexOf('EXAMPLES (illustrative'))
+}
+
 describe('controller history renders as ControllerAction JSON', () => {
   it('LoopController: every assistant turn parses as a complete action', async () => {
     const req = await b.request.LoopController(
@@ -205,16 +226,23 @@ describe('controller history renders as ControllerAction JSON', () => {
     }
   })
 
-  it('few-shots encode tool_args the same way the history does', async () => {
-    // `tool_args` is a string whose CONTENT is JSON, so its inner quotes are
-    // escaped. Rendered bare, a few-shot demonstrated `tool_args: {"query":...}`
-    // while the assistant turn log demonstrated `"tool_args": "{\"query\":...}"`
-    // — one field, two incompatible encodings, both in the same prompt. Live
-    // failure: an action that opened escaped and closed bare
-    // (`"{\"query\": \"MATCH ... LIMIT 20"}"`), terminating the string early and
-    // failing BAML with status/is_final "missing" at 495 output tokens against a
-    // 32768 cap — neither truncation nor an empty completion, so no retry branch
-    // caught it and the loop lost two good turns of results.
+  it('few-shots demonstrate the same JSON envelope the history does', async () => {
+    // The example's SHAPE, not just its field names. A few-shot rendered as
+    // brace-less `reasoning:` / `tool_name:` / `tool_args:` lines got copied
+    // line for line into a response: complete, correct, and unparseable
+    // (`.harness-logs/baml-validation.json` — `sandbox-session-loop`, 372 output
+    // tokens against a 32768 cap, so neither truncation nor an empty
+    // completion). The model also invented a YAML `additional_calls:` bullet
+    // list, a field the old form demonstrated nowhere. BAML's jsonish parser
+    // found the embedded `tool_args` objects instead and tried each as a
+    // ControllerAction — "in 3 items", each `missing=3` — and the throw killed
+    // the loop with three attempts still in budget.
+    //
+    // `tool_args` is a string whose CONTENT is JSON, so its inner quotes stay
+    // escaped inside the envelope: the earlier bare rendering demonstrated
+    // `tool_args: {"query":...}` against the turn log's
+    // `"tool_args": "{\"query\":...}"` — one field, two incompatible encodings
+    // in one prompt. Both properties are asserted here by PARSING the example.
     const args =
       '{"query":"MATCH (c:Concept) WHERE toLower(c.name) CONTAINS toLower($n)","params":{"n":"graph"}}'
     const fewShot = {
@@ -232,12 +260,29 @@ describe('controller history renders as ControllerAction JSON', () => {
     ).body.json() as Body
 
     for (const body of [loop, actor]) {
-      const text = allText(body)
-      // The example is present as a QUOTED, ESCAPED string — the exact form the
-      // model must reproduce. `allText` is itself JSON, hence the doubling.
-      expect(text).toContain(`tool_args: ${JSON.stringify(JSON.stringify(args)).slice(1, -1)}`)
-      // ...and never as a bare object, which is what taught the wrong encoding.
-      expect(text).not.toContain('tool_args: {')
+      // Scoped to the EXAMPLES section: it sits in the system block for the
+      // actor and in the tier-1 user block for the loop, and `ctx.output_format`
+      // — which legitimately renders `reasoning: string` as a schema line — is
+      // always a different block, so the negative assertions below stay honest.
+      const section = examplesSection(body)
+      const line = section
+        .split('\n')
+        .map((l) => l.trim())
+        .find((l) => l.startsWith('{'))
+      expect(line, 'no JSON-object example found in the rendered prompt').toBeTruthy()
+
+      const parsed = JSON.parse(line as string) as Record<string, unknown>
+      // A COMPLETE action: `status` is optional (#144) and legitimately absent,
+      // exactly as it is on the terminal Return turn.
+      expect(parsed.reasoning).toBe('substring search')
+      expect(parsed.tool_name).toBe('search')
+      expect(parsed.tool_args).toBe(args) // quoted + escaped, byte-for-byte
+      expect(parsed.is_final).toBe(false)
+
+      // The brace-less form must not come back in any of its three fields.
+      expect(section).not.toMatch(/^\s*reasoning: /m)
+      expect(section).not.toMatch(/^\s*tool_name: /m)
+      expect(section).not.toMatch(/^\s*tool_args: /m)
     }
   })
 
@@ -550,4 +595,168 @@ describe('the critic feedback channel', () => {
     )
     expect(loop).toContain('Use \\"Return\\" when you have enough information.')
   })
+})
+
+/**
+ * The multi-call batch — the fourth instance of "disagreeing demonstrations are
+ * defects", and the one where nothing disagreed because nothing demonstrated.
+ *
+ * `additional_calls` was described in prose by `LoopMultiCalls`/`ActorMultiCalls`
+ * and in `ctx.output_format`, and shown nowhere. The capture behind #248
+ * (`.harness-logs/baml-validation.json`, `sandbox-session-loop` attempt 3 — a
+ * `sequential` sandbox agent) is a model reaching for exactly the batch the
+ * section advertises, write-then-run, and INVENTING a YAML `additional_calls:`
+ * bullet list to say it in — dragging the whole envelope brace-less along with
+ * it. 372 output tokens against a 32768 cap, so neither the empty-response nor
+ * the truncation retry matched, and the throw ended the loop with three attempts
+ * still in budget.
+ *
+ * Each mode branch now ends in ONE demonstrated action. These assertions are the
+ * guard: the demonstration must PARSE as a complete ControllerAction (including
+ * `additional_calls` entries whose `tool_args` parse as JSON in their own right),
+ * it must match its mode's semantics, and it must be absent entirely when the
+ * mode is null — the branch is what gates it, so an agent with `off` sees nothing.
+ */
+describe('the multi-call batch demonstration', () => {
+  /** The MULTIPLE CALLS section, from its heading to the end of its block. The
+   *  loop renders it into the agent-static tier-1 user message, the actor into
+   *  the static system head; either way it is one block, which keeps these
+   *  assertions clear of `ctx.output_format`'s own `tool_args: string` line. */
+  function multiCallSection(body: Body): string | null {
+    const HEAD = 'MULTIPLE CALLS PER TURN'
+    const block = textBlocks(body).find((t) => t.includes(HEAD))
+    return block ? block.slice(block.indexOf(HEAD)) : null
+  }
+
+  async function loopSection(mode: string | null): Promise<string | null> {
+    const req = await b.request.LoopController('x', 'x', TOOLS, [] as never, null, null, null, mode)
+    return multiCallSection(req.body.json() as Body)
+  }
+
+  async function actorSection(mode: string | null): Promise<string | null> {
+    const req = await b.request.ActorController(
+      'x',
+      'x',
+      TOOLS,
+      [] as never,
+      null,
+      null,
+      1,
+      3,
+      mode,
+    )
+    return multiCallSection(req.body.json() as Body)
+  }
+
+  /** Parses the demonstrated action out of a rendered section — as JSON, never
+   *  by substring match, so a shape the model could not copy fails here first. */
+  function demonstratedAction(section: string | null): {
+    reasoning: string
+    tool_name: string
+    tool_args: string
+    additional_calls: Array<{ tool_name: string; tool_args: string }>
+    status?: string
+    is_final?: boolean
+  } {
+    expect(section, 'the rendered prompt has no MULTIPLE CALLS section').toBeTruthy()
+    const line = (section as string)
+      .split('\n')
+      .map((l) => l.trim())
+      .find((l) => l.startsWith('{'))
+    expect(line, 'no JSON-object demonstration found in the MULTIPLE CALLS section').toBeTruthy()
+    return JSON.parse(line as string)
+  }
+
+  const RENDER = {
+    LoopController: loopSection,
+    ActorController: actorSection,
+  } as const
+
+  for (const [fn, render] of Object.entries(RENDER)) {
+    for (const mode of ['parallel', 'sequential'] as const) {
+      it(`${fn}/${mode}: the demonstration parses as a complete batched action`, async () => {
+        const action = demonstratedAction(await render(mode))
+
+        // The envelope every other demonstration in these prompts renders.
+        expect(Object.keys(action).sort()).toEqual(
+          ['reasoning', 'tool_name', 'tool_args', 'additional_calls', 'status', 'is_final'].sort(),
+        )
+        expect(typeof action.reasoning).toBe('string')
+        expect(typeof action.tool_name).toBe('string')
+        expect(typeof action.status).toBe('string')
+        // A batch is never the terminal action: the loop breaks before pushing a
+        // final one, and the actor's own spine says a script merely written is
+        // not done.
+        expect(action.is_final).toBe(false)
+
+        // `tool_args` is a STRING whose CONTENT is JSON — the encoding the turn
+        // log and the few-shots use. Bare, it would demonstrate a second,
+        // incompatible encoding of one field in one prompt (#144).
+        expect(typeof action.tool_args).toBe('string')
+        expect(JSON.parse(action.tool_args)).toBeTypeOf('object')
+
+        // Every additional call carries tool_name/tool_args and nothing else,
+        // with tool_args under the same contract as the top-level one.
+        expect(Array.isArray(action.additional_calls)).toBe(true)
+        expect(action.additional_calls.length).toBeGreaterThan(0)
+        for (const call of action.additional_calls) {
+          expect(Object.keys(call).sort()).toEqual(['tool_args', 'tool_name'])
+          expect(typeof call.tool_name).toBe('string')
+          expect(typeof call.tool_args).toBe('string')
+          expect(JSON.parse(call.tool_args)).toBeTypeOf('object')
+        }
+        // Consistent with the cap the same section states two lines above it.
+        expect(1 + action.additional_calls.length).toBeLessThanOrEqual(4)
+      })
+
+      it(`${fn}/${mode}: the section shows no brace-less field lines`, async () => {
+        const section = (await render(mode)) as string
+        expect(section).toBeTruthy()
+        // The captured shape, in every part it was written in: labelled action
+        // fields, plus the invented YAML list and its bullets.
+        expect(section).not.toMatch(/^\s*reasoning: /m)
+        expect(section).not.toMatch(/^\s*tool_name: /m)
+        expect(section).not.toMatch(/^\s*tool_args: /m)
+        expect(section).not.toMatch(/^\s*additional_calls:/m)
+        expect(section).not.toMatch(/^\s*-\s+tool_name: /m)
+        expect(section).not.toMatch(/^\s*is_final: /m)
+      })
+    }
+
+    it(`${fn}: no demonstration at all when the mode is null`, async () => {
+      // 'off' renders the section empty, so the batch shape never reaches an
+      // agent that cannot use it — which is why the demonstration belongs in
+      // this mode-gated section rather than in the few-shots.
+      expect(await render(null)).toBeNull()
+    })
+
+    it(`${fn}/parallel: the demonstrated calls are independent lookups`, async () => {
+      const action = demonstratedAction(await render('parallel'))
+      const names = [action.tool_name, ...action.additional_calls.map((c) => c.tool_name)]
+      // Concurrent execution means no call may depend on another's side effects,
+      // so a mutating tool has no business in this branch's example.
+      for (const name of names) expect(name).not.toMatch(/write|edit|bash|command/)
+      // …and no later call may name a value the first call produces.
+      const firstArgs = Object.values(JSON.parse(action.tool_args) as Record<string, unknown>)
+      for (const call of action.additional_calls) {
+        for (const value of firstArgs) {
+          if (typeof value === 'string' && value.length > 2) {
+            expect(call.tool_args).not.toContain(value)
+          }
+        }
+      }
+    })
+
+    it(`${fn}/sequential: the demonstrated calls chain through a side effect`, async () => {
+      const action = demonstratedAction(await render('sequential'))
+      // The captured case, verbatim in shape: write a file, then run that file.
+      // A later call sees earlier calls' side effects but never their output, so
+      // the dependency has to be on the PATH, not on a result.
+      const written = JSON.parse(action.tool_args) as { path?: string; content?: string }
+      expect(written.path, 'the first sequential call should write a file').toBeTruthy()
+      expect(written.content).toBeTruthy()
+      const follow = action.additional_calls.map((c) => c.tool_args).join(' ')
+      expect(follow).toContain(written.path as string)
+    })
+  }
 })

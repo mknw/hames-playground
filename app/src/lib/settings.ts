@@ -86,37 +86,19 @@ export const DEFAULT_SETTINGS: HarnessSettings = {
 
 /** Context window limits per BAML client (tokens) */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
-  // Groq
-  GroqFast: 32_768, // openai/gpt-oss-20b
-  GroqGPT120B: 131_072, // openai/gpt-oss-120b
-  GroqQwen3_32b: 32_768, // qwen/qwen3-32b
-  // OpenRouter
-  OpenRouterNemotron120B: 131_072, // nvidia/nemotron-3-super-120b-a12b
-  OpenRouterNemotron3Nano30B: 32_768, // nvidia/nemotron-3-nano-30b-a3b
-  OpenRouterGemma4: 131_072, // google/gemma-4-31b-it
-  OpenRouterMiniMax2_5: 1_000_000, // minimax/minimax-m2.5
-  // OpenAI
-  OpenAIGPT5: 1_000_000,
-  OpenAIGPT5Mini: 1_000_000,
-  OpenAIGPT5Nano: 1_000_000,
-  OpenAIGPT5Chat: 1_000_000,
   // Anthropic
   CustomHaiku: 200_000,
   CustomOpus4: 200_000,
   CustomSonnet4: 200_000,
   AnthropicSonnet5: 1_000_000,
   AnthropicSonnet5NoThink: 1_000_000, // #139
-  // Cerebras — separate-quota safety nets at end of each fallback chain
-  CerebrasGPT120B: 131_072, // gpt-oss-120b
-  CerebrasZaiGLM4_7: 131_072, // zai-glm-4.7
-  CerebrasQwen3_235B: 131_072, // qwen-3-235b-a22b-instruct-2507
   // Local (local-client.baml, not used in chains)
   LocalGLM: 16_384,
   // Strategy-level chain clients — the names patterns actually pass to
   // getContextWindow() (via resolveClientForRole). Without these the lookup
   // fell through to the 16_384 default and over-trimmed prompts, dropping real
   // tool results before the LLM saw them (see .harness-logs/neo4j-no-results.json).
-  // Anthropic-only chains (dev default) → Sonnet 4.6 / Haiku 4.5, 200K each.
+  // The Anthropic chains → Sonnet 5 / Sonnet 4.6 / Haiku 4.5, 200K each.
   RouterAnthropic: 200_000,
   ControllerAnthropic: 200_000,
   ActorAnthropic: 200_000, // #139 — actor chain, split from ControllerAnthropic
@@ -124,15 +106,6 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   CriticAnthropic: 200_000,
   SynthesizerAnthropic: 200_000,
   DescribeAnthropic: 200_000,
-  // Mixed-provider fallback chains (USE_MIXED_CHAINS=1). Conservative floor =
-  // the smallest window any client in the chain can fall back to (32_768), so
-  // trimming never overflows a downstream model regardless of which one BAML
-  // lands on.
-  RouterFallback: 32_768,
-  ControllerFallback: 32_768,
-  CriticFallback: 32_768,
-  SynthesizerFallback: 32_768,
-  DescribeFallback: 32_768,
 }
 
 /**
@@ -150,11 +123,10 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
  * `baml_src/*.baml` must be listed here at the same value —
  * `client-output-caps.test.ts` parses the .baml sources and asserts it. A
  * missing entry does not error; it silently blinds truncation detection for
- * that client, which is how mixed-chain (Groq/OpenRouter) truncations skipped
- * the corrective retry and fell into the Groq escalation instead — whose next
- * rung has a SMALLER cap, guaranteeing a second truncation. Clients declaring
- * no cap (the OpenAI ones) are deliberately absent: unknown clients are
- * treated as not-detectable, never a false positive.
+ * that client, which is how seven now-removed Groq/OpenRouter leaves skipped
+ * the corrective retry for months. A client declaring no `max_tokens` at all
+ * is deliberately absent rather than guessed at: an unknown client is treated
+ * as not-detectable, never as a false positive.
  */
 export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   AnthropicSonnet5: 32_768,
@@ -166,16 +138,6 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   AnthropicSonnet46NoThink: 16_384,
   AnthropicHaiku45: 16_384,
   AnthropicOpus4: 4_096,
-  // Mixed-chain leaves (USE_MIXED_CHAINS=1). The collector reports the
-  // selected LEAF attempt's clientName — never the `*Fallback` chain name —
-  // so these are the names truncation detection actually sees in production.
-  GroqFast: 2_048,
-  GroqGPT120B: 4_096,
-  GroqQwen3_32b: 2_048,
-  OpenRouterMiniMax2_5: 4_096,
-  OpenRouterNemotron120B: 4_096,
-  OpenRouterNemotron3Nano30B: 4_096,
-  OpenRouterGemma4: 4_096,
   // Local (local-client.baml — manual wiring only, not in any chain).
   LocalGLM: 2_048,
   // Strategy-chain FLOORS — the smallest cap of any leaf in the chain, the
@@ -185,7 +147,6 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // resolveClientForRole(), which returns chain names — compactBulkData
   // derives its describe batch size here (SA-M6).
   DescribeAnthropic: 16_384, // = AnthropicHaiku45, the chain's only leaf
-  DescribeFallback: 2_048, // = GroqFast; OpenAIGPT5 declares no cap
 }
 
 // ============================================================================
@@ -193,9 +154,8 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
 // ============================================================================
 
 /**
- * $ per MTok per BAML client — the Anthropic-only chains (the dev/prod
- * default). Mixed-chain clients (Groq/OpenRouter/OpenAI) are deliberately
- * absent: cost then reads as "unknown" rather than silently wrong.
+ * $ per MTok per BAML client. A client with no entry reads as cost "unknown"
+ * rather than silently wrong, so a newly added one must be listed here.
  *
  * AnthropicSonnet5 uses the INTRO pricing in force through 2026-08-31
  * (standard: 3.00 / 15.00) — update after.

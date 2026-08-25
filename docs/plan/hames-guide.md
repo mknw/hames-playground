@@ -76,6 +76,7 @@ mistakes kg-agent's own wiring for part of the package contract:
 - `settings-context.server.ts`-style request-scoped settings persistence,
   auth, and the Neo4j/MCP tool catalog (`KNOWN_TOOL_SERVERS`) — all app-side
   configuration a consumer replaces with their own.
-- The mixed-provider BAML fallback chains (Groq/OpenRouter/OpenAI) — dev/
-  legacy tooling behind `USE_MIXED_CHAINS`, never part of the published
+- The mixed-provider BAML fallback chains (Groq/OpenRouter/OpenAI) — removed
+  from the repo entirely on 2026-08-24 (ADR-0001), and never part of the
+  published
   `harness-baml` package.

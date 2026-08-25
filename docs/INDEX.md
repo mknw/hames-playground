@@ -35,9 +35,10 @@ Forward-looking design docs. Live item-tracking stays on the GitHub project boar
 
 How agents are briefed and what they are held to. Procedures themselves live in `.claude/skills/` (see [plan/skills-adoption.md](plan/skills-adoption.md)).
 
-| Document                                       | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [agents/AGENT-BRIEF.md](agents/AGENT-BRIEF.md) | **The dispatch spec template** — the body of an Orca worker dispatch or of an agent-ready GitHub issue. Behavioural contracts and complete acceptance criteria, never file paths or line numbers (a brief outlives the tree it was written against), plus explicit out-of-scope. Carries this repo's **standing acceptance criteria**: CI gate, coverage floors (once #165 lands), prettier on changed files, conventional commits, no attribution trailers, `pnpm`-only from `app/` |
+| Document                                                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [agents/sensitive-domain-brief.md](agents/sensitive-domain-brief.md) | **Read by sub-agents, not by coordinators.** A pointer-based brief: a dispatch carries only the path plus a neutral scope phrase, and the lane self-selects against the brief's own map. Exists so a coordinator can hand off work in areas whose context is expensive to restate in its own visible text. Also carries the handling rules and deliverable contract for work in those areas. Companion to the `kg-lane-dispatch` skill, which owns the hand-off line itself          |
+| [agents/AGENT-BRIEF.md](agents/AGENT-BRIEF.md)                       | **The dispatch spec template** — the body of an Orca worker dispatch or of an agent-ready GitHub issue. Behavioural contracts and complete acceptance criteria, never file paths or line numbers (a brief outlives the tree it was written against), plus explicit out-of-scope. Carries this repo's **standing acceptance criteria**: CI gate, coverage floors (once #165 lands), prettier on changed files, conventional commits, no attribution trailers, `pnpm`-only from `app/` |
 
 ## Decision Records (`docs/adr/`)
 
@@ -144,12 +145,10 @@ Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/rese
 
 | Variable                                              | Purpose                                                                                                                                    |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GROQ_API_KEY`                                        | Groq LLM inference (GroqFast, GroqGPT120B, GroqQwen3_32b)                                                                                  |
-| `OPENROUTER_API_KEY`                                  | OpenRouter models (Nemotron, Gemma4, MiniMax) + the `openrouter` embedding provider                                                        |
+| `OPENROUTER_API_KEY`                                  | The `openrouter` Data Stash embedding provider only — no BAML chain uses it                                                                |
 | `EMBEDDINGS_PROVIDER`                                 | Data Stash embedding provider: `local` (default) or `openrouter` (see [DATA_STASH.md](DATA_STASH.md))                                      |
 | `EMBEDDINGS_LOCAL_URL` / `EMBEDDINGS_LOCAL_MODEL`     | Override the local embedder URL (`http://localhost:8090/v1`) / model (`Qwen3-Embedding-0.6B`)                                              |
-| `OPENAI_API_KEY`                                      | OpenAI models (GPT-5, GPT-5 Mini, GPT-5 Nano)                                                                                              |
-| `ANTHROPIC_API_KEY`                                   | Anthropic models (Sonnet 5, Sonnet 4.6, Haiku 4.5) — the default chains; **required**                                                      |
+| `ANTHROPIC_API_KEY`                                   | Anthropic models (Sonnet 5, Sonnet 4.6, Haiku 4.5) — every BAML chain; **required**, and the only LLM provider key                         |
 | `AZURE_TENANT_ID`                                     | Entra tenant (directory) GUID — the OIDC authority (#119)                                                                                  |
 | `AZURE_CLIENT_ID`                                     | Entra app registration (client) id                                                                                                         |
 | `AZURE_CLIENT_SECRET`                                 | Entra client secret (server-side; resolves sign-in server-side, see `lib/auth/entra.server.ts`)                                            |
@@ -177,7 +176,8 @@ kg-agent/
 │   ├── graph-api-notes.md       # What Graph actually returns: ids, quirks, deprecations
 │   ├── sandbox-flavours.md      # Rootfs flavours (#78): image-processing/data/office
 │   ├── agents/
-│   │   └── AGENT-BRIEF.md       # Dispatch spec template + standing acceptance criteria
+│   │   ├── AGENT-BRIEF.md       # Dispatch spec template + standing acceptance criteria
+│   │   └── sensitive-domain-brief.md  # Sub-agent-only brief; coordinators hand over the path
 │   ├── adr/                     # Architecture decision records
 │   │   ├── README.md            # The mechanism + the index table (statuses live here)
 │   │   └── NNNN-<slug>.md       # One decision each, 1–3 sentences + optional sections

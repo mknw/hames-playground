@@ -7,7 +7,6 @@
 import { assertServerOnImport } from './assert.server'
 import { Collector } from '@boundaryml/baml'
 import { extractLLMCallData, wrapAsLLMCallError } from './baml-adapters.server'
-import { clientOverrideFor } from './clients.server'
 import type { LLMCallData } from './types'
 
 assertServerOnImport()
@@ -51,10 +50,10 @@ export async function routeMessageOp(
   // Build a lookup from route names for validation
   const validRoutes = new Set(routes.map((r) => r.name))
 
-  // Anthropic override applied when `USE_ANTHROPIC_ONLY=1` — routes through
-  // `RouterAnthropic` (Haiku 4.5 primary, Sonnet 4.6 backstop).
-  const routerOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('router') }
-  const hasRouterOpts = Object.keys(routerOpts).length > 0
+  // `router.baml` declares `RouterAnthropic` (Haiku 4.5 primary, Sonnet 4.6
+  // backstop).
+  const routerOpts = collector ? { collector } : {}
+  const hasRouterOpts = collector !== undefined
   const variables = { message, routes, history }
   // Wrap like every other adapter does: the router is the FIRST LLM call of a
   // turn, so a parse failure here aborts routing before any tool runs. Bare,

@@ -14,10 +14,8 @@
  *       cd rootfs && docker build -t kg-sandbox:base .
  *   - BAML client generated:
  *       pnpm baml-generate
- *   - `ANTHROPIC_API_KEY` in env (the Anthropic-default chain routes through
- *     `ControllerAnthropic` → `AnthropicSonnet46` etc.). To use the mixed-
- *     provider chain instead, set `USE_MIXED_CHAINS=1` and the corresponding
- *     keys.
+ *   - `ANTHROPIC_API_KEY` in env — the only provider key the app needs
+ *     (`ActorAnthropic` / `CriticAnthropic` &c.).
  *
  * Run from `app/`:
  *   pnpm dlx tsx src/lib/sandbox/scripts/smoke-llm.ts
@@ -44,8 +42,7 @@ function preflight(): void {
     throw new Error(
       'ANTHROPIC_API_KEY is not set.\n' +
         'Export it before running:\n' +
-        '  export ANTHROPIC_API_KEY=sk-ant-...\n' +
-        '(Or use USE_MIXED_CHAINS=1 with the corresponding provider keys.)',
+        '  export ANTHROPIC_API_KEY=sk-ant-...',
     )
   }
 }

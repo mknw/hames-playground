@@ -79,11 +79,7 @@ export const titleAgent = harness<TitleAgentData>(
     patternId: 'title-gen',
     mode: 'message',
     synthesize: async ({ userMessage }) => {
-      const { clientOverrideFor } = await import('../../harness-patterns/clients.server')
-      const titleOpts = clientOverrideFor('describe')
-      const raw = titleOpts
-        ? await b.GenerateConversationTitle(userMessage, titleOpts)
-        : await b.GenerateConversationTitle(userMessage)
+      const raw = await b.GenerateConversationTitle(userMessage)
       return sanitizeTitle(raw) ?? ''
     },
   }),

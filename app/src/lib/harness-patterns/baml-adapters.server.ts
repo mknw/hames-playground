@@ -38,7 +38,6 @@ import { listTools as mcpListTools } from './mcp-client.server'
 import { getActiveSandbox } from '../sandbox/scope.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
-import { clientOverrideFor } from './clients.server'
 import { CLIENT_MAX_OUTPUT_TOKENS, estimateLlmCostUsd } from '../settings'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 
@@ -117,10 +116,10 @@ export type CriticFnWithLLMData = (
  * generated functions take their arguments POSITIONALLY, so appending a
  * parameter to a BAML function signature and then running new adapter code
  * against an old client shifts every later argument by one slot and pushes the
- * `__baml_options__` object — which carries both the collector and the
- * `clientOverrideFor(...)` routing — off the end. The calls still succeed, so
- * nothing in the logs or the UI hints at it: issue #154 lost ~18 hours of
- * prompt/output/metrics/cost data exactly this way before anyone noticed.
+ * `__baml_options__` object — which carries the collector — off the end. The
+ * calls still succeed, so nothing in the logs or the UI hints at it: issue #154
+ * lost ~18 hours of prompt/output/metrics/cost data exactly this way before
+ * anyone noticed.
  *
  * Remedy when this fires: `pnpm baml-generate`.
  *
@@ -244,9 +243,9 @@ function callTokenBuckets(call: CollectorCall | undefined):
 }
 
 /** Step-level accounting (#122): sum token buckets and cost across EVERY
- *  call in the collector — all BAML invocations (truncation retry, manual
- *  Groq escalation re-invoke) and all attempts within each (client fallback,
- *  retry policies). One collector == one harness step by construction (the
+ *  call in the collector — every BAML invocation (the corrective truncation
+ *  retry included) and all attempts within each (chain fallback, retry
+ *  policies). One collector == one harness step by construction (the
  *  loops create a fresh Collector per turn/attempt), so this is the step's
  *  true bill; `llmCall.usage` remains the selected exchange only.
  *  Cost is omitted (not zeroed) when any token-bearing attempt has no
@@ -399,8 +398,8 @@ export function extractFailureLLMCallData(
 /**
  * Whether an LLM call's output was cut off at its client's `max_tokens` cap.
  * Providers report `outputTokens` == the cap exactly on a cap stop (Anthropic's
- * `max_tokens` stop_reason, the OpenAI-compatible `length` finish_reason on the
- * Groq/OpenRouter leaves), so `>= cap` is a precise signal, not a heuristic.
+ * `max_tokens` stop_reason; the OpenAI-compatible `length` finish_reason on any
+ * openai-generic leaf), so `>= cap` is a precise signal, not a heuristic.
  * Unknown clients (no entry in CLIENT_MAX_OUTPUT_TOKENS) → false, never a
  * false positive — which is why that map must stay complete (SA-C2): a missing
  * leaf entry silently disables this detection for that client.
@@ -473,7 +472,7 @@ function collectorReturnedNoText(collector: Collector | undefined): boolean {
  *    model erred when it simply produced nothing.
  *
  * Returns null when the failure is a genuine structured-output failure, which
- * keeps the existing behaviour (propagate, or escalate on the mixed chains).
+ * keeps the existing behaviour: the failure propagates.
  */
 function planParseRetry(
   error: unknown,
@@ -719,22 +718,13 @@ export function createLoopControllerAdapter(
       return_style: returnStyle,
     }
 
-    // Call with or without collector.
-    //
-    // Default (no override): BAML routes the call to `ControllerAnthropic` —
-    // its declared client in `actorCritic.baml` / `simpleLoop.baml`. Anthropic
-    // models rarely fail structured output, so the manual Groq fallback below
-    // is unhelpful and would defeat the Anthropic-by-default purpose.
-    //
-    // `USE_MIXED_CHAINS=1`: `clientOverrideFor('controller')` returns
-    // `{ client: 'ControllerFallback' }`, swapping in the mixed Groq /
-    // OpenRouter / OpenAI chain. Groq's gpt-oss-120b has a known structured-
-    // output failure on turn 2+ with larger context — manual escalation to
-    // GroqGPT120B → GroqFast kicks in on `BamlValidationError` here, because
-    // BAML's built-in fallback only retries on network/API errors.
-    const clientOverride = clientOverrideFor('controller')
-    const baseOpts = { ...(collector ? { collector } : {}), ...clientOverride }
-    const hasBaseOpts = Object.keys(baseOpts).length > 0
+    // Call with or without collector. BAML routes the call to
+    // `ControllerAnthropic` — its declared client in `actorCritic.baml` /
+    // `simpleLoop.baml`. A structured-output failure that is not a truncation
+    // or an empty completion propagates: there is no second provider to
+    // escalate to, and Anthropic models rarely fail structured output anyway.
+    const baseOpts = collector ? { collector } : {}
+    const hasBaseOpts = collector !== undefined
     let action: ControllerAction
     try {
       action = hasBaseOpts
@@ -809,45 +799,7 @@ export function createLoopControllerAdapter(
           throw wrapAsLLMCallError(eRetry, 'LoopController', variables, startTime, collector)
         }
       }
-      if (!(e instanceof BamlValidationError) || !clientOverride) {
-        throw wrapAsLLMCallError(e, 'LoopController', variables, startTime, collector)
-      }
-      try {
-        action = await b.LoopController(
-          user_message,
-          intent,
-          tools,
-          turns,
-          context,
-          priorResults,
-          fewShots,
-          multiCallMode,
-          planContext,
-          returnStyle,
-          collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' },
-        )
-      } catch (e2) {
-        if (!(e2 instanceof BamlValidationError)) {
-          throw wrapAsLLMCallError(e2, 'LoopController', variables, startTime, collector)
-        }
-        try {
-          action = await b.LoopController(
-            user_message,
-            intent,
-            tools,
-            turns,
-            context,
-            priorResults,
-            fewShots,
-            multiCallMode,
-            planContext,
-            returnStyle,
-            collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' },
-          )
-        } catch (e3) {
-          throw wrapAsLLMCallError(e3, 'LoopController', variables, startTime, collector)
-        }
-      }
+      throw wrapAsLLMCallError(e, 'LoopController', variables, startTime, collector)
     }
 
     // Extract LLM call data if collector present
@@ -952,14 +904,11 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData 
 
     const variables = { user_message, intent, tools, context }
 
-    // `PlannerAnthropic` either way: it is what planner.baml declares, and
-    // `clientOverrideFor('planner')` pins the same client under
-    // `USE_MIXED_CHAINS=1` (see clients.server.ts for why the mixed chain is
-    // the wrong home for this call). So the escalation ladder the controllers
-    // carry for Groq's structured-output failure has nothing to escalate to
-    // here — the retry below is the whole policy.
-    const baseOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('planner') }
-    const hasBaseOpts = Object.keys(baseOpts).length > 0
+    // `PlannerAnthropic` — what planner.baml declares. The retry below is the
+    // whole failure policy: this call runs ONCE per chain, over the largest
+    // tool catalog in the repo, and a throw here means the chain runs unplanned.
+    const baseOpts = collector ? { collector } : {}
+    const hasBaseOpts = collector !== undefined
     let plan: PlanResult
     try {
       plan = hasBaseOpts
@@ -969,8 +918,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData 
       // ONE retry on a cut-off or empty completion, with corrective guidance
       // only when there is something to correct; a genuine structured-output
       // failure propagates as an LLMCallError the pattern turns into an error
-      // event. The controllers' extra Groq→Groq escalation has no counterpart
-      // here on purpose: this call never runs on a Groq client.
+      // event.
       const retry = planParseRetry(e, collector)
       if (!retry) throw wrapAsLLMCallError(e, 'Planner', variables, startTime, collector)
       const retryContext = retry.guidance
@@ -1146,24 +1094,15 @@ export function createActorControllerAdapter(
       multi_call_mode: multiCallMode,
     }
 
-    // Call with or without collector.
-    //
-    // Default (no override): BAML routes to `ControllerAnthropic` (declared
-    // in `actorCritic.baml`). Anthropic models rarely fail structured output,
-    // so the manual Groq fallback below is skipped.
-    //
-    // `USE_MIXED_CHAINS=1`: `clientOverrideFor('controller')` swaps in
-    // `ControllerFallback` (the mixed Groq/OpenRouter/OpenAI chain). Groq's
-    // gpt-oss-120b has a known structured-output failure on turn 2+ — manual
-    // escalation to GroqGPT120B → GroqFast kicks in on `BamlValidationError`
-    // here, mirroring `createLoopControllerAdapter` above. Without this, a
-    // single failure on the first actor call would kill the loop (see
-    // `.harness-logs/parsing-error.json`). Non-validation failures (network,
-    // pre-call) are wrapped as `LLMCallError` so the observability panel
-    // keeps the captured prompt/variables drill-down.
-    const clientOverride = clientOverrideFor('controller')
-    const baseOpts = { ...(collector ? { collector } : {}), ...clientOverride }
-    const hasBaseOpts = Object.keys(baseOpts).length > 0
+    // Call with or without collector. BAML routes to `ControllerAnthropic`
+    // (declared in `actorCritic.baml`), mirroring
+    // `createLoopControllerAdapter` above: a truncated or empty completion
+    // takes one corrective retry, anything else — including a genuine
+    // structured-output failure, a network error or a pre-call throw — is
+    // wrapped as `LLMCallError` so the observability panel keeps the captured
+    // prompt/variables drill-down.
+    const baseOpts = collector ? { collector } : {}
+    const hasBaseOpts = collector !== undefined
     let action: ControllerAction
     try {
       action = hasBaseOpts
@@ -1231,43 +1170,7 @@ export function createActorControllerAdapter(
           throw wrapAsLLMCallError(eRetry, 'ActorController', variables, startTime, collector)
         }
       }
-      if (!(e instanceof BamlValidationError) || !clientOverride) {
-        throw wrapAsLLMCallError(e, 'ActorController', variables, startTime, collector)
-      }
-      try {
-        action = await b.ActorController(
-          user_message,
-          intent,
-          tools,
-          attempts,
-          context,
-          fewShots,
-          attemptNumber,
-          maxAttempts,
-          multiCallMode,
-          collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' },
-        )
-      } catch (e2) {
-        if (!(e2 instanceof BamlValidationError)) {
-          throw wrapAsLLMCallError(e2, 'ActorController', variables, startTime, collector)
-        }
-        try {
-          action = await b.ActorController(
-            user_message,
-            intent,
-            tools,
-            attempts,
-            context,
-            fewShots,
-            attemptNumber,
-            maxAttempts,
-            multiCallMode,
-            collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' },
-          )
-        } catch (e3) {
-          throw wrapAsLLMCallError(e3, 'ActorController', variables, startTime, collector)
-        }
-      }
+      throw wrapAsLLMCallError(e, 'ActorController', variables, startTime, collector)
     }
 
     // Extract LLM call data if collector present
@@ -1315,10 +1218,9 @@ export function createCriticAdapter(): CriticFnWithLLMData {
 
     const variables = { intent, attempts }
 
-    // Call with or without collector. Anthropic override applied when
-    // `USE_ANTHROPIC_ONLY=1` — routes through `CriticAnthropic`.
-    const criticOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('critic') }
-    const hasCriticOpts = Object.keys(criticOpts).length > 0
+    // Call with or without collector — `critic.baml` declares `CriticAnthropic`.
+    const criticOpts = collector ? { collector } : {}
+    const hasCriticOpts = collector !== undefined
     let result: CriticResult
     try {
       result = hasCriticOpts
@@ -1353,10 +1255,7 @@ export async function describeToolResultOp(
 ): Promise<string> {
   try {
     const { b } = await import('../../../baml_client')
-    const describeOpts = clientOverrideFor('describe')
-    return describeOpts
-      ? await b.ResultDescribe(tool, toolArgs, reasoning, result, describeOpts)
-      : await b.ResultDescribe(tool, toolArgs, reasoning, result)
+    return await b.ResultDescribe(tool, toolArgs, reasoning, result)
   } catch {
     return ''
   }
@@ -1393,7 +1292,6 @@ export async function describeToolResultsBatchOp(
   const wanted = new Set(items.map((i) => i.id))
   try {
     const { b } = await import('../../../baml_client')
-    const describeOpts = clientOverrideFor('describe')
     const targets = items.map((i) => ({
       id: i.id,
       tool: i.tool,
@@ -1401,9 +1299,7 @@ export async function describeToolResultsBatchOp(
       reasoning: i.reasoning,
       result: i.result,
     }))
-    const batch = describeOpts
-      ? await b.ResultDescribeBatch(targets, describeOpts)
-      : await b.ResultDescribeBatch(targets)
+    const batch = await b.ResultDescribeBatch(targets)
     for (const entry of batch?.summaries ?? []) {
       const summary = entry?.summary?.trim()
       if (summary && wanted.has(entry.id)) byId.set(entry.id, summary)
@@ -1433,11 +1329,10 @@ export async function describeToolResultsBatchOp(
  * The guard invokes it only for content its deterministic corpus passed clean,
  * so this costs one cheap `DescribeAnthropic` call per otherwise-clean untrusted
  * result — never one per tool call, and never on the default path (no agent gets
- * a screen it did not ask for). `DescribeAnthropic` in BOTH modes: the call
- * goes through the `screen` role, which — like the planner — pins its Anthropic
- * client under `USE_MIXED_CHAINS=1` instead of following `describe` onto
- * `DescribeFallback`, whose first leaf is the weakest model in the repo
- * (rationale on the role's map entry in clients.server.ts; SA-M5).
+ * a screen it did not ask for). It goes through its OWN `screen` role rather
+ * than riding `describe`, so it can never inherit whatever cheap model
+ * summarization is pointed at (rationale on the role's map entry in
+ * clients.server.ts; SA-M5).
  *
  * `maxChars` bounds what is sent: a 2 MB page would blow the context window and
  * cost more than the protection is worth. The head of a document is where
@@ -1475,11 +1370,8 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     const body = head.replace(/(?:BEGIN|END)\s{1,4}UNTRUSTED\s{1,4}CONTENT[^\n]{0,40}/gi, '[fence]')
 
     const { b } = await import('../../../baml_client')
-    const opts = clientOverrideFor('screen')
     const source = `${namespace}/${tool}`
-    const verdict = opts
-      ? await b.ScreenUntrustedContent(source, body, opts)
-      : await b.ScreenUntrustedContent(source, body)
+    const verdict = await b.ScreenUntrustedContent(source, body)
 
     return {
       injection_detected: verdict.injection_detected,

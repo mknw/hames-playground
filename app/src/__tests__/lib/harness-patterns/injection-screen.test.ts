@@ -21,7 +21,9 @@
  *     hyphens)
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -213,38 +215,44 @@ describe('createInjectionScreen — client routing', () => {
     vi.clearAllMocks()
     mockScreen.mockResolvedValue({ injection_detected: false, reason: 'ok', spans: [] })
   })
-  afterEach(() => {
-    delete process.env.USE_MIXED_CHAINS
-  })
 
-  it('calls BAML with no options on the default Anthropic-only path', async () => {
+  it("passes no client override — it runs on injection-screen.baml's declared client", async () => {
+    // The screen used to ride the `describe` role, and under the removed mixed
+    // chains that silently put prompt-injection screening on the weakest model
+    // in the repo while the guard's docs promised DescribeAnthropic. A screen
+    // must not be talked out of reporting by the content it reviews and must
+    // copy spans VERBATIM so the guard can locate and neutralize them, so it
+    // keeps its OWN role: nothing may re-point it by re-pointing `describe`.
     const screen = await (await load())()
     await screen(CLEAN)
     expect(mockScreen.mock.calls[0]).toHaveLength(2)
   })
 
-  it('pins DescribeAnthropic under USE_MIXED_CHAINS — never the describe fallback (SA-M5)', async () => {
-    // The screen used to ride the `describe` role, which under mixed chains
-    // silently put prompt-injection screening on DescribeFallback's first leaf
-    // (GroqFast, the weakest model in the repo) while the guard's docs promised
-    // DescribeAnthropic. A screen must not be talked out of reporting by the
-    // content it reviews and must copy spans VERBATIM so the guard can locate
-    // and neutralize them — so the `screen` role pins the Anthropic client in
-    // both modes, like the planner.
-    process.env.USE_MIXED_CHAINS = '1'
-    const screen = await (await load())()
-    await screen(CLEAN)
-    expect(mockScreen.mock.calls[0]).toHaveLength(3)
-    expect(mockScreen.mock.calls[0][2]).toEqual({ client: 'DescribeAnthropic' })
-  })
-
-  it('resolveClientForRole("screen") is DescribeAnthropic in BOTH modes', async () => {
+  it("resolveClientForRole('screen') is DescribeAnthropic, and tracks the .baml declaration (SA-M5)", async () => {
     const { resolveClientForRole } = await import('../../../lib/harness-patterns/clients.server')
+    // The dangerous change is the screen ending up on a cheap model, so pin the
+    // value. Do NOT pin it by asserting `screen` and `describe` resolve alike:
+    // that fires on the BENIGN change — re-pointing summarization, which is
+    // exactly what having a separate `screen` role exists to allow — and the
+    // obvious way to make it green again is to edit both roles together, i.e.
+    // to re-couple what the separation protects.
     expect(resolveClientForRole('screen')).toBe('DescribeAnthropic')
-    process.env.USE_MIXED_CHAINS = '1'
-    expect(resolveClientForRole('screen')).toBe('DescribeAnthropic')
-    // The role it split from DOES follow the mixed chains — the pin is the
-    // screen's own, not an accident of `describe` being pinned too.
-    expect(resolveClientForRole('describe')).toBe('DescribeFallback')
+
+    // The call passes no `client` override (test above), so the client that
+    // actually runs the screen is the one DECLARED in injection-screen.baml;
+    // the role map only reports it to callers that need the model behind the
+    // call (context window, output cap). Pin the map against that declaration:
+    // the map's docstring says "keep in sync with the `client X` lines in
+    // baml_src/*.baml", and nothing else enforces it.
+    const declared = readFileSync(
+      path.resolve(process.cwd(), 'baml_src/injection-screen.baml'),
+      'utf8',
+    )
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('//'))
+      .join('\n')
+      .match(/^\s*client\s+(\w+)\s*$/m)?.[1]
+    expect(declared).toBeDefined()
+    expect(resolveClientForRole('screen')).toBe(declared)
   })
 })

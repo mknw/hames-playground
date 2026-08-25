@@ -43,7 +43,7 @@ import { getErrorHint } from '../error-hints'
 import { stripThinkBlocks } from '../content-transforms'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { extractLLMCallData, extractFailureLLMCallData } from '../baml-adapters.server'
-import { clientOverrideFor, resolveClientForRole } from '../clients.server'
+import { resolveClientForRole } from '../clients.server'
 
 assertServerOnImport()
 
@@ -129,7 +129,7 @@ export function compactIntent<T extends CompactIntentData>(
       }
 
       // Trim oldest history if it would overflow the describe-tier model
-      // (the client this call will actually use, not the hardcoded Fallback).
+      // (the client this call will actually use, not a hardcoded chain name).
       const contextWindow = getContextWindow(resolveClientForRole('describe'))
       const history = trimToFit(rawHistory, (h) => JSON.stringify(h), 300, contextWindow)
 
@@ -138,9 +138,8 @@ export function compactIntent<T extends CompactIntentData>(
       startTime = Date.now()
       variables = { history, latest }
 
-      // Default (no override): routes to `DescribeAnthropic` (Haiku 4.5).
-      // `USE_MIXED_CHAINS=1`: swaps in `DescribeFallback` via clientOverrideFor.
-      const opts = { collector, ...clientOverrideFor('describe') }
+      // Routes to `DescribeAnthropic` (Haiku 4.5).
+      const opts = { collector }
       const raw = await b.CompactIntent(history, latest, opts)
       const intent = raw.trim() || latest
 

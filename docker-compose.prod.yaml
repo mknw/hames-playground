@@ -1,0 +1,146 @@
+# Production overlay for the preview deployment (docs/PREVIEW.md).
+#
+# This is an OVERLAY, never a standalone file: it carries only the deltas
+# between the laptop stack in `docker-compose.yaml` and a public Linux VM, so
+# the two cannot drift the way a forked copy would. The project name, the
+# service definitions and the three data volumes all come from the base file.
+#
+# It is selected through the repo-root `.env` (see `.env.production.example`):
+#
+#   COMPOSE_FILE=docker-compose.yaml:docker-compose.prod.yaml
+#   COMPOSE_PROFILES=app
+#
+# which is what makes the bring-up a bare `docker compose up -d --build` and,
+# just as importantly, stops Compose auto-loading `docker-compose.override.yml`
+# — the local Apple-Silicon/colima redis `platform: linux/amd64` hack, which is
+# wrong on an x86 VM. Setting COMPOSE_FILE disables that auto-load entirely.
+#
+# `!override` (Compose >= 2.24) replaces the base value rather than merging into
+# it. Used on every `ports:` list because Compose merges port lists additively:
+# a merged `3444:3444` would keep the base's 0.0.0.0 bind alongside the loopback
+# one, which is the exact exposure this file exists to close. Verify any edit
+# with `docker compose config` before deploying — that renders the merged result.
+#
+# What this file does NOT do, deliberately:
+#   * it does not hold a single secret — every credential is a `${VAR:?}`
+#     substitution that fails the bring-up loudly when unset (fail-closed);
+#   * it does not tune Neo4j/Postgres/Redis. Nobody has measured this box yet.
+
+services:
+  # Not part of the preview. The base file gives n8n no profile, so it would
+  # start with everything else; a profile parks it here without touching the
+  # dev bring-up, which still starts it.
+  n8n:
+    profiles: ['n8n']
+
+  # ---------------------------------------------------------------------------
+  # Data tier — reachable only over the compose network and from the VM itself.
+  #
+  # The loopback publishes are kept (rather than dropped outright) so an
+  # operator can reach psql / the Neo4j browser / redis-cli over an SSH tunnel
+  # without editing compose on a live box. They are NOT reachable from the
+  # internet: Docker's iptables rules only bypass `ufw` for 0.0.0.0 publishes.
+  # ---------------------------------------------------------------------------
+  postgres:
+    ports: !override ['127.0.0.1:5432:5432']
+    environment:
+      # Overrides the base file's literal `password`. That default is fine on a
+      # laptop and unacceptable on a host; the override is therefore
+      # load-bearing, not advisory — a compose change has to be read against
+      # this file, not against the base alone.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env — see .env.production.example}
+
+  neo4j:
+    ports: !override ['127.0.0.1:7474:7474', '127.0.0.1:7687:7687']
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in .env — see .env.production.example}
+
+  redis:
+    # No `platform:` here on purpose. The arm64 redisearch SIGILL that
+    # `docker-compose.override.yml` works around is a colima/Apple-Silicon
+    # defect; on an x86 VM the native image is correct and emulation would only
+    # cost throughput.
+    ports: !override ['127.0.0.1:6379:6379']
+
+  mcp-gateway:
+    ports: !override ['127.0.0.1:8811:8811']
+
+  doc-convert:
+    ports: !override ['127.0.0.1:8000:8000']
+
+  # ---------------------------------------------------------------------------
+  # App
+  # ---------------------------------------------------------------------------
+  app:
+    # Caddy reaches the app over the compose network (`app:3444`), so nothing
+    # here needs to be published at all. The loopback publish survives only so
+    # `curl 127.0.0.1:3444/api/health` works on the box while diagnosing a TLS
+    # or DNS problem — i.e. exactly when going through Caddy is not an option.
+    ports: !override ['127.0.0.1:3444:3444']
+
+    # `!override` rather than the additive default: on this host the single
+    # source of runtime config is the repo-root `.env`, and a leftover
+    # `app/.env` (e.g. from a hand-run build) must not contribute variables the
+    # root file does not define.
+    env_file: !override
+      - path: ./.env
+        required: true
+
+    environment:
+      # `environment` beats `env_file`, so these are the in-network rewrites of
+      # the host-facing defaults, with the password folded in from the same
+      # variable Postgres itself reads.
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:?}@postgres:5432/kgagent
+      # The direct Neo4j driver. `config/endpoints.ts` already resolves
+      # bolt://neo4j:7687 in a production build; only the credential is missing.
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?}
+      # Defence in depth, not the control. The bypass is gated on
+      # `import.meta.env.DEV`, which Vite replaces with `false` when this image
+      # is built — so a production image structurally ignores this var, and
+      # `dev-bypass.ts` warns at module load if a prod build still carries it.
+      # Set explicitly anyway so `docker compose config` shows the intent.
+      - VITE_DEV_BYPASS_AUTH=false
+
+  # ---------------------------------------------------------------------------
+  # TLS termination
+  #
+  # Caddy over Traefik: automatic Let's Encrypt with a two-line Caddyfile and no
+  # label plumbing, and `docs/deployment/azure-vm.md` §8 already specifies Caddy
+  # for the systemd shape — one proxy across both run shapes rather than two.
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2.10-alpine
+    container_name: kg-agent-caddy
+    restart: unless-stopped
+    # Same profile as `app`: the proxy has nothing to proxy without it, and one
+    # `COMPOSE_PROFILES=app` then covers the whole public-facing pair.
+    profiles: ['app']
+    ports:
+      - '80:80' # ACME HTTP-01 challenge + the redirect to 443
+      - '443:443'
+      - '443:443/udp' # HTTP/3
+    environment:
+      # Substituted into configs/Caddyfile at startup, so the domain and the
+      # ACME contact live in `.env` with everything else and the Caddyfile
+      # itself stays tenant-agnostic and tracked.
+      - APP_DOMAIN=${APP_DOMAIN:?set APP_DOMAIN in .env — the public hostname, e.g. preview.example.com}
+      - ACME_EMAIL=${ACME_EMAIL:?set ACME_EMAIL in .env — Let's Encrypt expiry notices go here}
+    volumes:
+      - ./configs/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Named, and it matters: /data holds the issued certificates and the ACME
+      # account key. Losing it on every recreate would re-request certificates
+      # and walk straight into Let's Encrypt's rate limit.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        # The image's own healthcheck (GET /api/health) — liveness only, so
+        # this waits for "serving HTTP", not for Postgres to be reachable.
+        condition: service_healthy
+    networks:
+      - app-network
+
+volumes:
+  caddy_data:
+  caddy_config:

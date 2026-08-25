@@ -280,12 +280,16 @@ nothing else.
 ./scripts/backup-preview.sh --no-neo4j   # skip the step that has downtime
 ```
 
-**Neo4j is stopped for its dump** — typically 10–30 s on a preview-sized graph.
-Neo4j Community has no online backup (`neo4j-admin database backup` is
-Enterprise), and copying a live store directory produces a file that restores
-_sometimes_. A short scheduled outage is the honest trade. The script restarts
-Neo4j from an `EXIT` trap, so a failed dump or a Ctrl-C still brings the graph
-back.
+**Neo4j is stopped for its dump, and the graph is unavailable for about 1.5–2
+minutes** — measured, not estimated: ~10 s for stop + dump + start, then ~80 s
+before Neo4j's healthcheck goes green again. Almost all of the window is Neo4j's
+own startup, so it does not shrink with a small graph. Neo4j Community has no
+online backup (`neo4j-admin database backup` is Enterprise), and copying a live
+store directory produces a file that restores _sometimes_ — a short scheduled
+outage is the honest trade. Schedule it when nobody is using the app; use
+`--no-neo4j` for an ad-hoc run that must not interrupt anyone. The script
+restarts Neo4j from an `EXIT` trap, so a failed dump or a Ctrl-C still brings
+the graph back.
 
 Install the cron entry as the user in the `docker` group:
 
@@ -466,11 +470,15 @@ means concretely:
 - The backup script end to end against a live stack — `pg_dump` +
   `pg_restore --list` verification, the Redis `SAVE` + copy + magic-header check,
   the manifest, and rotation.
-- The Neo4j path, separately, against a throwaway instance: stop → dump →
-  **load into a fresh volume → start → query**, and the seeded node came back.
-  This is also where §9's Redis restore command was corrected: the first draft
-  started a bare `redis-server`, which refuses the snapshot outright because it
-  carries RediSearch AUX data.
+- The **whole script including its Neo4j branch**, against a live stack: 9.5 s
+  wall clock, the graph back up on its own afterwards, and the resulting dump
+  loaded into a scratch volume and queried — 49 nodes live, 49 nodes restored.
+  This is what the 1.5–2 minute figure above was measured from.
+- The Neo4j path was also proved independently against a throwaway instance
+  (seed a node → stop → dump → load into a fresh volume → start → query). That
+  run is where §9's Redis restore command was corrected: the first draft started
+  a bare `redis-server`, which refuses the snapshot outright because it carries
+  RediSearch AUX data.
 
 **Not verified, and only a real VM can**
 

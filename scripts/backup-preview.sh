@@ -25,11 +25,15 @@
 #     rebuilt VM without them leaves the token cache permanently undecryptable.
 #     See docs/PREVIEW.md §"Backups".
 #
-# ⚠️  NEO4J IS STOPPED FOR THE DURATION OF ITS DUMP (typically 10-30s on a
-#     preview-sized graph). Neo4j Community has no online backup — `neo4j-admin
-#     database backup` is an Enterprise feature — and copying a live store
-#     directory yields a file that restores, sometimes. A short, scheduled,
-#     honest outage beats an unverifiable backup. `--no-neo4j` skips it.
+# ⚠️  THE GRAPH IS UNAVAILABLE FOR ROUGHLY 1.5-2 MINUTES PER RUN. The dump
+#     itself takes seconds; almost all of that window is Neo4j's own startup
+#     after the restart (measured on a preview-sized graph: ~10s for
+#     stop+dump+start, then ~80s before the healthcheck goes green). Neo4j
+#     Community has no online backup — `neo4j-admin database backup` is an
+#     Enterprise feature — and copying a live store directory yields a file that
+#     restores, sometimes. A short, scheduled, honest outage beats an
+#     unverifiable backup. Schedule it when nobody is using the app, and use
+#     `--no-neo4j` for an ad-hoc run that must not interrupt anyone.
 
 set -euo pipefail
 
@@ -51,7 +55,7 @@ for arg in "$@"; do
   case "$arg" in
     --no-neo4j) SKIP_NEO4J=1 ;;
     -h | --help)
-      sed -n '2,30p' "${BASH_SOURCE[0]}"
+      sed -n '2,36p' "${BASH_SOURCE[0]}"
       exit 0
       ;;
     *)

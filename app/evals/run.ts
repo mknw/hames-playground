@@ -142,7 +142,7 @@ async function main(): Promise<void> {
   }
 
   const meta = { routing, startedAt, totalMs: Date.now() - t0 }
-  const file = writeReport(renderReport(results, meta), meta)
+  const file = await writeReport(renderReport(results, meta), meta)
 
   const passed = results.filter(scenarioPassed).length
   console.log('')

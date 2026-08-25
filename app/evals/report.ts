@@ -100,15 +100,52 @@ export function renderReport(results: ScenarioResult[], meta: RunMeta): string {
   return lines.join('\n') + '\n'
 }
 
-/** Write the report and return its path. The filename carries the timestamp
- *  and the client so two runs never collide and a directory listing reads as a
- *  history. */
-export function writeReport(markdown: string, meta: RunMeta): string {
+/**
+ * Write the report and return its path. The filename carries the timestamp and
+ * the client so two runs never collide and a directory listing reads as a
+ * history.
+ *
+ * The markdown is run through prettier first, using the repo's own config.
+ * That is not cosmetic. A reference run gets committed, and a generated report
+ * is dirty by construction — the renderer does not pad table pipes out to the
+ * column width prettier wants — so without this every reference run fails CI's
+ * changed-file format check.
+ *
+ * And it has to happen HERE, through the API, because the obvious manual fix
+ * does not work. Prettier 3 reads `.gitignore` as well as `.prettierignore` by
+ * default, and both are resolved relative to the WORKING DIRECTORY. Run from
+ * `app/` — as `pnpm exec prettier` is — it reads `app/.gitignore`, finds the
+ * `evals/reports/*` rule that keeps ad-hoc runs untracked, and silently skips
+ * these files while reporting success. CI runs prettier from the repo ROOT,
+ * where that rule is not in scope, and checks them properly. So a hand-run
+ * `prettier --write` from `app/` is a no-op that LOOKS like a fix. The API
+ * applies no ignore file at all, which is exactly what is wanted for a file
+ * this code is about to write.
+ *
+ * Non-fatal: an unavailable or unhappy prettier costs alignment, not the
+ * report — losing a completed run's results to a formatting failure would be
+ * an absurd trade for the billed calls that produced them.
+ */
+export async function writeReport(markdown: string, meta: RunMeta): Promise<string> {
   const dir = path.resolve(process.cwd(), 'evals/reports')
   mkdirSync(dir, { recursive: true })
   const stamp = meta.startedAt.replace(/[:.]/g, '-').replace(/Z$/, '')
   const client = (meta.routing.client ?? 'default').replace(/[^A-Za-z0-9_-]/g, '_')
   const file = path.join(dir, `${stamp}-${client}.md`)
-  writeFileSync(file, markdown, 'utf8')
+  writeFileSync(file, await formatMarkdown(markdown, file), 'utf8')
   return file
+}
+
+async function formatMarkdown(markdown: string, file: string): Promise<string> {
+  try {
+    const prettier = await import('prettier')
+    const config = await prettier.resolveConfig(file)
+    return await prettier.format(markdown, { ...config, filepath: file, parser: 'markdown' })
+  } catch (err) {
+    console.warn(
+      `[eval] could not prettier-format the report (${err instanceof Error ? err.message : String(err)}). ` +
+        'Writing it unformatted — run `pnpm exec prettier --write` on it before committing it as a reference run.',
+    )
+    return markdown
+  }
 }

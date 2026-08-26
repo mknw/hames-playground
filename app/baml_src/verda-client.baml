@@ -71,7 +71,12 @@
 // comment frame is invisible to a human by construction — so the two are
 // complementary rather than one covering for the other. The estimate defaults
 // to the 146s above until a server has measured one of its own; that constant
-// is `COLD_START_FALLBACK_MS`, and this comment is its provenance.
+// is `COLD_START_FALLBACK_MS`, and this comment is its provenance. It is also
+// the floor's provenance: a reading below a quarter of it is dropped rather
+// than recorded, because nothing that fast starts a container and loads 27B of
+// weights, and the alternative is a warm ~4s call entering the history as a
+// measured "cold start" whenever the app's configured scale-down window is
+// shorter than the deployment's own.
 client<llm> VerdaQwen {
   provider openai-generic
   options {

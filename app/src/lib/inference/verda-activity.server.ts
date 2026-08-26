@@ -46,9 +46,15 @@ assertServerOnImport()
 /** BAML client name that means "this call reached the self-hosted box". */
 export const VERDA_CLIENT_NAME = 'VerdaQwen'
 
-/** Default scale-down delay, in seconds. The deployment's current setting;
- *  production is expected to raise it, which is why it is an env var and not a
- *  constant in the code. */
+/** Default scale-down delay, in seconds. NOT a reading of the deployment: the
+ *  live box was raised to 300 on 2026-08-26 and this default stayed at 180,
+ *  because a committed default that tracks one deployment's current setting is
+ *  a claim the repo cannot keep true — which is why it is an env var. Set
+ *  `VERDA_SCALEDOWN_SECONDS` per host (`app/.env.example` says so at length).
+ *  An unset var therefore reads the box as cold while it may still be warm:
+ *  pessimistic for the header's countdown, and no longer able to poison the
+ *  cold-start estimate — `inference/cold-start.server.ts` carries its own
+ *  plausibility floor for exactly this gap. */
 export const DEFAULT_VERDA_SCALEDOWN_SECONDS = 180
 
 /**

@@ -12,8 +12,11 @@
  *
  * ## When the notice fires, and why not at turn entry
  *
- * The `router` role runs on Anthropic in BOTH switch positions and answers in
- * a second or two; only the roles in `VERDA_CLIENT_BY_ROLE` reach the box. So
+ * The `router` role runs on Anthropic in BOTH switch positions **as the map
+ * stands today** and answers in a second or two; only the roles in
+ * `VERDA_CLIENT_BY_ROLE` reach the box. (Widening that map to `router` would
+ * make this sentence stale without making the code wrong — the notice would
+ * simply fire from the router call. Nothing here hardcodes a role.) So
  * the moment worth telling the user about is not "a verda-tier turn began" —
  * it is "routing has answered and the NEXT call is verda-bound while nothing
  * says the box is up". {@link noteVerdaCallStarting} is therefore called from
@@ -28,14 +31,38 @@
  * seconds.
  *
  * **Whether to RECORD the wait as a cold-start measurement** does not get that
- * licence, because a wrong reading here poisons every future estimate. It
- * requires evidence the box actually went cold — this process has seen a call
- * to the box finish (`verdaLastCallCompletedAt() !== null`) and the scale-down
- * window has elapsed since. With no such evidence the state is genuinely
- * unknown: the box may well have been warm and this process simply had not
- * noticed (a restart, a second instance), and a four-second warm call entering
- * the history as a "cold start" would drag the estimate to a number no cold
- * start ever took.
+ * licence, because a wrong reading here poisons every future estimate — and in
+ * the understating direction, which is the dishonest one: a four-second warm
+ * call entering the history as a "cold start" makes the notice promise "~10
+ * sec" for a 146-second wait, with `basis: 'measured'` behind it.
+ *
+ * So recording is gated **twice**, because neither gate is sufficient alone.
+ *
+ * 1. **A coldness gate on the wait**, which is weaker than it reads and is
+ *    stated here as what it actually proves: *this process has been quiet
+ *    longer than the scale-down value it was **configured with*** — a call to
+ *    the box finished (`verdaLastCallCompletedAt() !== null`) and
+ *    `VERDA_SCALEDOWN_SECONDS` has elapsed since. It is not proof the platform
+ *    released the GPU. The app cannot read the deployment's own setting, so a
+ *    `VERDA_SCALEDOWN_SECONDS` **lower** than the deployment's poisons the
+ *    history downward: every idle gap between the two values looks cold here
+ *    while the box is still held warm. `app/.env.example` records that the code
+ *    default (180) currently lags the live deployment (300), on a line that is
+ *    commented out — so that window is open on the preview as shipped. The same
+ *    shape arrives with no misconfiguration at all the moment a second instance
+ *    exists: an instance that has itself seen a call finish and then gone quiet
+ *    is indistinguishable from a cold box.
+ * 2. **A plausibility floor on the reading** ({@link
+ *    COLD_START_PLAUSIBILITY_FLOOR_MS}), which is what closes both of those. A
+ *    duration too short to *be* a container start plus a 27B weight load is not
+ *    a cold start whatever the gate above believed, and dropping it cannot cost
+ *    a real one. It protects the history regardless of how
+ *    `VERDA_SCALEDOWN_SECONDS` is set, which is the point: the value is an
+ *    operator's to get right and the estimate's honesty must not depend on it.
+ *
+ * With neither gate satisfied the state is genuinely unknown — the box may well
+ * have been warm and this process simply had not noticed (a restart, a second
+ * instance) — and the notice still shows, pessimistically, measuring nothing.
  *
  * ## MULTI-INSTANCE CAVEAT
  *
@@ -82,6 +109,27 @@ export const COLD_START_FALLBACK_MS = 146_000
  */
 export const COLD_START_WINDOW = 8
 
+/**
+ * Shortest duration the history will accept as a cold start.
+ *
+ * A quarter of {@link COLD_START_FALLBACK_MS} — 36.5s. The recording gate in
+ * {@link noteVerdaCallStarting} can only prove that THIS process was quiet for
+ * longer than the scale-down it was configured with (see the module docstring),
+ * and two ordinary situations make that false: a `VERDA_SCALEDOWN_SECONDS`
+ * lower than the deployment's own, and a second app instance. Both let a warm
+ * ~4s call through the gate, and five of those in an eight-sample window pull
+ * the median to 4s while still reporting `basis: 'measured'`.
+ *
+ * This is the backstop that cannot be misconfigured. Nothing anywhere near this
+ * fast starts a container and loads 27B of weights — the one measured cold start
+ * is 146s and the load test's WARM p95 at 8-way concurrency is 9.9s — so a
+ * reading below the floor is a warm call the gate misread, and dropping it
+ * cannot cost a real cold start. Deliberately generous rather than tight: the
+ * cost of dropping a genuine 30s cold start is one lost sample, and the cost of
+ * keeping a warm one is a confidently wrong promise to every future user.
+ */
+export const COLD_START_PLAUSIBILITY_FLOOR_MS = COLD_START_FALLBACK_MS / 4
+
 /** Warm states that count as PROOF the box is up. Everything else — `starting`,
  *  `cold`, `unknown` — shows the notice. */
 const PROVEN_WARM = new Set(['warm', 'running'])
@@ -109,9 +157,15 @@ export interface ColdStartEstimate {
  * Non-finite and non-positive readings are DROPPED rather than clamped, the
  * same rule `noteCallLatency` follows: they mean the wait was not measured, and
  * a 0 in the window is a cold start that never happened.
+ *
+ * So is anything below {@link COLD_START_PLAUSIBILITY_FLOOR_MS} — the floor
+ * lives HERE, at the single funnel into the history, rather than beside the
+ * caller's gate in {@link settleColdStart}: a second recording path added later
+ * inherits it instead of having to remember it.
  */
 export function noteColdStartMeasured(durationMs: number): void {
   if (!Number.isFinite(durationMs) || durationMs <= 0) return
+  if (durationMs < COLD_START_PLAUSIBILITY_FLOOR_MS) return
   history.push(durationMs)
   if (history.length > COLD_START_WINDOW) history.splice(0, history.length - COLD_START_WINDOW)
 }
@@ -194,10 +248,13 @@ export function noteVerdaCallStarting(now: number = Date.now()): void {
   const last = verdaLastCallCompletedAt()
   watch.fired = true
   // Evidence of coldness, not merely absence of evidence of warmth: this
-  // process watched a call to the box finish, and the scale-down window has
-  // elapsed since. `verdaWarmth` cannot answer this — its `starting` state
-  // collapses "went cold" and "never seen" into one word, and only the first
-  // may enter the history.
+  // process watched a call to the box finish, and the CONFIGURED scale-down
+  // window has elapsed since. `verdaWarmth` cannot answer this — its `starting`
+  // state collapses "went cold" and "never seen" into one word, and only the
+  // first may enter the history. Read this for exactly what it says: the
+  // configured window is not the deployment's, and a second instance sees only
+  // its own traffic, so this is a necessary condition and not a sufficient one.
+  // `noteColdStartMeasured`'s plausibility floor is what covers the gap.
   watch.recordable = last !== null && now - last >= verdaScaledownSeconds() * 1000
 
   try {

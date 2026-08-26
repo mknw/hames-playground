@@ -14,7 +14,10 @@
  *    four-second reading in the history drags the median, and every future
  *    estimate quietly understates the wait. The rule is evidence of coldness,
  *    not absence of evidence of warmth — a fresh process has never seen the box
- *    and must measure nothing.
+ *    and must measure nothing. Pinned twice over, because the coldness gate is
+ *    a necessary and not a sufficient condition: it can only speak for the
+ *    scale-down value this process was CONFIGURED with, so the plausibility
+ *    floor below covers the two cases where that value is not the deployment's.
  *
  * The routing half — that the notice fires from a verda-bound call and never
  * from an anthropic-tier one — is exercised through `clientOverrideFor` itself
@@ -30,6 +33,7 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
 
 import {
   COLD_START_FALLBACK_MS,
+  COLD_START_PLAUSIBILITY_FLOOR_MS,
   COLD_START_WINDOW,
   coldStartEstimate,
   noteColdStartMeasured,
@@ -44,6 +48,7 @@ import {
   endVerdaTurn,
   noteVerdaCallCompleted,
   resetVerdaActivity,
+  verdaWarmth,
 } from '../../../lib/inference/verda-activity.server'
 import {
   clientOverrideFor,
@@ -69,6 +74,7 @@ afterEach(() => {
   delete process.env.VERDA_INFERENCE_ENDPOINT
   delete process.env.VERDA_INFERENCE_API_KEY
   delete process.env.USE_VERDA_INFERENCE
+  delete process.env.VERDA_SCALEDOWN_SECONDS
 })
 
 /** Collect every notice a watched body produces. */
@@ -116,11 +122,95 @@ describe('the estimate', () => {
   })
 
   it('keeps only the most recent window, so it tracks the deployment today', () => {
-    for (let i = 0; i < COLD_START_WINDOW + 4; i++) noteColdStartMeasured(1000 + i)
+    // Above the plausibility floor: a reading a cold start could not have taken
+    // never reaches the window at all (see the floor's own cases below).
+    for (let i = 0; i < COLD_START_WINDOW + 4; i++) noteColdStartMeasured(100_000 + i)
     const { samples, estimateMs } = coldStartEstimate()
     expect(samples).toBe(COLD_START_WINDOW)
-    // The four oldest are gone: the smallest surviving reading is 1004.
-    expect(estimateMs).toBeGreaterThanOrEqual(1004)
+    // The four oldest are gone: the smallest surviving reading is 100_004.
+    expect(estimateMs).toBeGreaterThanOrEqual(100_004)
+  })
+})
+
+/**
+ * The plausibility floor.
+ *
+ * The coldness gate one layer up proves less than it reads: it proves THIS
+ * process was quiet for longer than the scale-down value it was CONFIGURED
+ * with. Two ordinary situations make that a lie in the same direction — a
+ * `VERDA_SCALEDOWN_SECONDS` lower than the deployment's own (the committed
+ * default, 180, against the live box's 300), and a second app instance that has
+ * seen a call finish and then gone quiet. Both admit a warm ~4s call, and a
+ * handful of those turn the estimate into a confident "~10 sec" promise for a
+ * 146-second wait, which is the exact dishonesty the whole `basis` apparatus
+ * exists to prevent.
+ */
+describe('the plausibility floor', () => {
+  it('is a duration no container start plus 27B weight load could match', () => {
+    // Pinned as a relation, not a literal: it is a quarter of the one measured
+    // cold start, and the load test's WARM p95 at 8-way concurrency is 9.9s —
+    // so every warm reading is far below it and every cold one far above.
+    expect(COLD_START_PLAUSIBILITY_FLOOR_MS).toBe(COLD_START_FALLBACK_MS / 4)
+    expect(COLD_START_PLAUSIBILITY_FLOOR_MS).toBeGreaterThan(10_000)
+  })
+
+  it('drops a reading too short to be a cold start, however the gate voted', () => {
+    noteColdStartMeasured(COLD_START_PLAUSIBILITY_FLOOR_MS - 1)
+    expect(coldStartEstimate().basis).toBe('default')
+
+    noteColdStartMeasured(COLD_START_PLAUSIBILITY_FLOOR_MS)
+    expect(coldStartEstimate()).toEqual({
+      estimateMs: COLD_START_PLAUSIBILITY_FLOOR_MS,
+      basis: 'measured',
+      samples: 1,
+    })
+  })
+
+  it('refuses a warm call the CONFIGURED scale-down window mistook for a cold box', async () => {
+    // The preview as shipped: the app is told 180s, the deployment holds the box
+    // for 300s. A 200s idle gap passes the coldness gate — `verdaWarmth` agrees
+    // the box is cold — and the call still comes back in 4.1s because the
+    // platform never released the GPU.
+    process.env.VERDA_SCALEDOWN_SECONDS = '180'
+    noteVerdaCallCompleted(NOW - 200_000)
+    expect(verdaWarmth(NOW).state).toBe('cold')
+
+    await runWithColdStartWatch(
+      () => {},
+      async () => {
+        noteVerdaCallStarting(NOW)
+        settleColdStart(4_100)
+      },
+    )
+
+    // Without the floor this is `{ estimateMs: 4_100, basis: 'measured' }` — a
+    // fabricated measurement, and the notice would promise "~5 sec".
+    expect(coldStartEstimate()).toEqual({
+      estimateMs: COLD_START_FALLBACK_MS,
+      basis: 'default',
+      samples: 0,
+    })
+    delete process.env.VERDA_SCALEDOWN_SECONDS
+  })
+
+  it('keeps the estimate honest when most of the window is poisoned', () => {
+    // The reviewer's own probe: five warm readings admitted by the gate plus
+    // three real cold starts. The nearest-rank median of the raw eight is 4_000
+    // — reported as `measured` over 8 samples, i.e. "~5 sec" for a 146s wait.
+    for (const ms of [4_000, 4_000, 4_000, 4_000, 4_000, 146_000, 150_000, 140_000]) {
+      noteColdStartMeasured(ms)
+    }
+    const { estimateMs, samples, basis } = coldStartEstimate()
+    expect(samples).toBe(3)
+    expect(basis).toBe('measured')
+    expect(estimateMs).toBeGreaterThanOrEqual(140_000)
+  })
+
+  it('still records a genuine cold start well under the published reading', () => {
+    // The floor must not be a ceiling on honesty: a box that starts faster than
+    // 2026-08-26's 146s is exactly what the window exists to notice.
+    noteColdStartMeasured(60_000)
+    expect(coldStartEstimate()).toMatchObject({ estimateMs: 60_000, basis: 'measured' })
   })
 })
 

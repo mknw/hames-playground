@@ -26,20 +26,20 @@ import { SanitizedChip } from '../SanitizedChip'
 const ToolCallDetail = (props: { data: ToolCallEventData }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Tool
       </div>
-      <div text="sm neon-cyan" font="mono">
+      <div text="sm ui-accent" font="mono">
         {props.data.tool}
       </div>
     </div>
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Arguments
       </div>
       <pre
-        text="xs dark-text-primary"
-        bg="dark-bg-tertiary"
+        text="xs ui-text-primary"
+        bg="ui-bg-tertiary"
         p="3"
         rounded="md"
         overflow="auto"
@@ -57,18 +57,18 @@ const ToolResultDetail = (props: {
 }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Tool
       </div>
-      <div text="sm neon-cyan" font="mono">
+      <div text="sm ui-accent" font="mono">
         {props.data.tool}
       </div>
     </div>
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Status
       </div>
-      <div text={`sm ${props.data.success ? 'neon-green' : 'red-400'}`} font="medium">
+      <div text={`sm ${props.data.success ? 'ui-success' : 'red-400'}`} font="medium">
         {props.data.success ? 'Success' : `Error: ${props.data.error}`}
       </div>
     </div>
@@ -81,12 +81,12 @@ const ToolResultDetail = (props: {
           </div>
         )}
       </Show>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Result
       </div>
       <pre
-        text="xs dark-text-primary"
-        bg="dark-bg-tertiary"
+        text="xs ui-text-primary"
+        bg="ui-bg-tertiary"
         p="3"
         rounded="md"
         overflow="auto"
@@ -101,28 +101,28 @@ const ToolResultDetail = (props: {
 const ActionDetail = (props: { data: ControllerActionEventData }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Tool
       </div>
-      <div text="sm neon-cyan" font="mono">
+      <div text="sm ui-accent" font="mono">
         {props.data.action.tool_name}
       </div>
     </div>
     <Show when={props.data.action.reasoning}>
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           Reasoning
         </div>
-        <div text="sm dark-text-primary">{props.data.action.reasoning}</div>
+        <div text="sm ui-text-primary">{props.data.action.reasoning}</div>
       </div>
     </Show>
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Arguments
       </div>
       <pre
-        text="xs dark-text-primary"
-        bg="dark-bg-tertiary"
+        text="xs ui-text-primary"
+        bg="ui-bg-tertiary"
         p="3"
         rounded="md"
         overflow="auto"
@@ -133,19 +133,19 @@ const ActionDetail = (props: { data: ControllerActionEventData }) => (
     </div>
     <Show when={props.data.action.additional_calls?.length}>
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           Additional calls (same turn)
         </div>
         <div flex="~ col" gap="2">
           <For each={props.data.action.additional_calls ?? []}>
             {(call) => (
               <div>
-                <div text="sm neon-cyan" font="mono">
+                <div text="sm ui-accent" font="mono">
                   {call.tool_name}
                 </div>
                 <pre
-                  text="xs dark-text-primary"
-                  bg="dark-bg-tertiary"
+                  text="xs ui-text-primary"
+                  bg="ui-bg-tertiary"
                   p="2"
                   rounded="md"
                   overflow="auto"
@@ -161,17 +161,17 @@ const ActionDetail = (props: { data: ControllerActionEventData }) => (
     </Show>
     <div flex="~" gap="4">
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           Final
         </div>
-        <div text="sm dark-text-primary">{props.data.action.is_final ? 'Yes' : 'No'}</div>
+        <div text="sm ui-text-primary">{props.data.action.is_final ? 'Yes' : 'No'}</div>
       </div>
       <Show when={props.data.action.status}>
         <div>
-          <div text="xs dark-text-tertiary" m="b-1">
+          <div text="xs ui-text-tertiary" m="b-1">
             Status
           </div>
-          <div text="sm dark-text-primary">{props.data.action.status}</div>
+          <div text="sm ui-text-primary">{props.data.action.status}</div>
         </div>
       </Show>
     </div>
@@ -181,7 +181,7 @@ const ActionDetail = (props: { data: ControllerActionEventData }) => (
 const ErrorDetail = (props: { data: ErrorEventData }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Error
       </div>
       <div
@@ -199,7 +199,7 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
     <div flex="~ wrap" gap="4">
       <Show when={props.data.severity}>
         <div>
-          <div text="xs dark-text-tertiary" m="b-1">
+          <div text="xs ui-text-tertiary" m="b-1">
             Severity
           </div>
           <div
@@ -212,20 +212,20 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
       </Show>
       <Show when={props.data.turn !== undefined}>
         <div>
-          <div text="xs dark-text-tertiary" m="b-1">
+          <div text="xs ui-text-tertiary" m="b-1">
             Turn
           </div>
-          <div text="sm dark-text-primary" font="mono">
+          <div text="sm ui-text-primary" font="mono">
             {props.data.turn}
           </div>
         </div>
       </Show>
       <Show when={props.data.iteration !== undefined}>
         <div>
-          <div text="xs dark-text-tertiary" m="b-1">
+          <div text="xs ui-text-tertiary" m="b-1">
             Iteration
           </div>
-          <div text="sm dark-text-primary" font="mono">
+          <div text="sm ui-text-primary" font="mono">
             {props.data.iteration}
           </div>
         </div>
@@ -233,10 +233,10 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
     </div>
     <Show when={props.data.hint}>
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           Hint
         </div>
-        <div text="sm dark-text-secondary" style={{ 'white-space': 'pre-wrap' }}>
+        <div text="sm ui-text-secondary" style={{ 'white-space': 'pre-wrap' }}>
           {props.data.hint}
         </div>
       </div>
@@ -247,20 +247,20 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
 const MessageDetail = (props: { data: { content: string }; role: 'user' | 'assistant' }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Role
       </div>
-      <div text="sm dark-text-primary" font="medium">
+      <div text="sm ui-text-primary" font="medium">
         {props.role}
       </div>
     </div>
     <div>
-      <div text="xs dark-text-tertiary" m="b-1">
+      <div text="xs ui-text-tertiary" m="b-1">
         Content
       </div>
       <div
-        text="sm dark-text-primary"
-        bg="dark-bg-tertiary"
+        text="sm ui-text-primary"
+        bg="ui-bg-tertiary"
         p="3"
         rounded="md"
         style={{ 'white-space': 'pre-wrap' }}
@@ -285,7 +285,7 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
   <div flex="~ col" gap="3">
     <div flex="~" gap="6">
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           Source
         </div>
         <div text="sm orange-400" font="mono">
@@ -293,46 +293,46 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
         </div>
       </div>
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           Scanned
         </div>
-        <div text="sm dark-text-primary" font="mono">
+        <div text="sm ui-text-primary" font="mono">
           {props.data.scanned.toLocaleString()} chars
         </div>
       </div>
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           Spotlighted
         </div>
-        <div text="sm dark-text-primary">{props.data.spotlighted ? 'yes' : 'no'}</div>
+        <div text="sm ui-text-primary">{props.data.spotlighted ? 'yes' : 'no'}</div>
       </div>
     </div>
 
     <Show when={props.data.screenReason}>
       <div>
-        <div text="xs dark-text-tertiary" m="b-1">
+        <div text="xs ui-text-tertiary" m="b-1">
           LLM screen
         </div>
-        <div text="sm dark-text-primary">{props.data.screenReason}</div>
+        <div text="sm ui-text-primary">{props.data.screenReason}</div>
       </div>
     </Show>
 
     <div>
-      <div text="xs dark-text-tertiary" m="b-2">
+      <div text="xs ui-text-tertiary" m="b-2">
         {props.data.findings.length} finding(s) — original text shown verbatim, never sent to a
         model
       </div>
       <div flex="~ col" gap="2">
         <For each={props.data.findings}>
           {(f) => (
-            <div bg="dark-bg-tertiary" p="3" rounded="md" flex="~ col" gap="1">
+            <div bg="ui-bg-tertiary" p="3" rounded="md" flex="~ col" gap="1">
               <div flex="~" items="center" gap="2">
                 <span text="xs orange-400" font="mono">
                   {f.rule}
                 </span>
-                <span text="xs dark-text-tertiary">{f.layer}</span>
+                <span text="xs ui-text-tertiary">{f.layer}</span>
               </div>
-              <div text="xs dark-text-secondary">{f.description}</div>
+              <div text="xs ui-text-secondary">{f.description}</div>
               <div
                 text="xs red-300"
                 font="mono"
@@ -340,7 +340,7 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
               >
                 {f.match}
               </div>
-              <div text="xs neon-green" font="mono">
+              <div text="xs ui-success" font="mono">
                 → {f.replacement || '(removed)'}
               </div>
             </div>
@@ -353,12 +353,12 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
 
 const GenericDetail = (props: { data: unknown }) => (
   <div>
-    <div text="xs dark-text-tertiary" m="b-2">
+    <div text="xs ui-text-tertiary" m="b-2">
       Data
     </div>
     <pre
-      text="xs dark-text-primary"
-      bg="dark-bg-tertiary"
+      text="xs ui-text-primary"
+      bg="ui-bg-tertiary"
       p="3"
       rounded="md"
       overflow="auto"
@@ -396,20 +396,20 @@ export const ToolPairDetail = (props: {
       }}
     >
       {/* Header */}
-      <div flex="~" items="center" justify="between" p="4" border="b dark-border-primary">
+      <div flex="~" items="center" justify="between" p="4" border="b ui-border-primary">
         <div flex="~ col" gap="1">
           <div flex="~" items="center" gap="2">
             <span text="lg">🔧</span>
-            <span text="sm dark-text-primary" font="medium">
+            <span text="sm ui-text-primary" font="medium">
               tool call
             </span>
             <Show when={props.call.llmCall}>
-              <span text="xs neon-cyan" bg="neon-cyan/10" p="x-1.5 y-0.5" rounded="sm" font="mono">
+              <span text="xs ui-accent" bg="ui-accent/10" p="x-1.5 y-0.5" rounded="sm" font="mono">
                 LLM
               </span>
             </Show>
           </div>
-          <div flex="~" gap="3" text="xs dark-text-tertiary">
+          <div flex="~" gap="3" text="xs ui-text-tertiary">
             <span>{props.call.patternId}</span>
             <span>{new Date(props.call.ts).toLocaleTimeString()}</span>
           </div>
@@ -417,8 +417,8 @@ export const ToolPairDetail = (props: {
         <button
           onClick={props.onClose}
           p="2"
-          text="dark-text-secondary"
-          bg="dark-bg-hover hover:dark-bg-tertiary"
+          text="ui-text-secondary"
+          bg="ui-bg-hover hover:ui-bg-tertiary"
           rounded="md"
           cursor="pointer"
         >
@@ -435,22 +435,22 @@ export const ToolPairDetail = (props: {
 
         {/* Tool name */}
         <div m="b-3">
-          <div text="xs dark-text-tertiary" m="b-1">
+          <div text="xs ui-text-tertiary" m="b-1">
             Tool
           </div>
-          <div text="sm neon-cyan" font="mono">
+          <div text="sm ui-accent" font="mono">
             {callData().tool}
           </div>
         </div>
 
         {/* Arguments */}
         <div m="b-3">
-          <div text="xs dark-text-tertiary" m="b-1">
+          <div text="xs ui-text-tertiary" m="b-1">
             Arguments
           </div>
           <pre
-            text="xs dark-text-primary"
-            bg="dark-bg-tertiary"
+            text="xs ui-text-primary"
+            bg="ui-bg-tertiary"
             p="3"
             rounded="md"
             overflow="auto"
@@ -463,10 +463,10 @@ export const ToolPairDetail = (props: {
         {/* Result */}
         <Show when={resultData()}>
           <div m="b-3">
-            <div text="xs dark-text-tertiary" m="b-1">
+            <div text="xs ui-text-tertiary" m="b-1">
               Status
             </div>
-            <div text={`sm ${resultData()!.success ? 'neon-green' : 'red-400'}`} font="medium">
+            <div text={`sm ${resultData()!.success ? 'ui-success' : 'red-400'}`} font="medium">
               {resultData()!.success ? 'Success' : `Error: ${resultData()!.error}`}
             </div>
           </div>
@@ -479,12 +479,12 @@ export const ToolPairDetail = (props: {
                 </div>
               )}
             </Show>
-            <div text="xs dark-text-tertiary" m="b-1">
+            <div text="xs ui-text-tertiary" m="b-1">
               Result
             </div>
             <pre
-              text="xs dark-text-primary"
-              bg="dark-bg-tertiary"
+              text="xs ui-text-primary"
+              bg="ui-bg-tertiary"
               p="3"
               rounded="md"
               overflow="auto"
@@ -543,20 +543,20 @@ export const EventDetailPanel = (props: {
       }}
     >
       {/* Header */}
-      <div flex="~" items="center" justify="between" p="4" border="b dark-border-primary">
+      <div flex="~" items="center" justify="between" p="4" border="b ui-border-primary">
         <div flex="~ col" gap="1">
           <div flex="~" items="center" gap="2">
             <span text="lg">{eventIcons[type]}</span>
-            <span text="sm dark-text-primary" font="medium">
+            <span text="sm ui-text-primary" font="medium">
               {type.replace(/_/g, ' ')}
             </span>
             <Show when={llmCall}>
-              <span text="xs neon-cyan" bg="neon-cyan/10" p="x-1.5 y-0.5" rounded="sm" font="mono">
+              <span text="xs ui-accent" bg="ui-accent/10" p="x-1.5 y-0.5" rounded="sm" font="mono">
                 LLM
               </span>
             </Show>
           </div>
-          <div flex="~" gap="3" text="xs dark-text-tertiary">
+          <div flex="~" gap="3" text="xs ui-text-tertiary">
             <span>{patternId}</span>
             <span>{new Date(ts).toLocaleTimeString()}</span>
           </div>
@@ -564,8 +564,8 @@ export const EventDetailPanel = (props: {
         <button
           onClick={props.onClose}
           p="2"
-          text="dark-text-secondary"
-          bg="dark-bg-hover hover:dark-bg-tertiary"
+          text="ui-text-secondary"
+          bg="ui-bg-hover hover:ui-bg-tertiary"
           rounded="md"
           cursor="pointer"
         >

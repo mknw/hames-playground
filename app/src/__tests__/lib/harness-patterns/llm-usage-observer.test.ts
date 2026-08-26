@@ -201,7 +201,12 @@ describe('accounting coverage across roles', () => {
    * is invisible: an uncounted role does not lose detail, it silently biases
    * the on-prem share the whole preview exists to show.
    */
-  const UNACCOUNTED: Record<string, string> = {}
+  const UNACCOUNTED: Record<string, string> = {
+    'src/lib/harness-patterns/scripts/smoke-verda-load.ts:LoopController':
+      'A manual live-load measurement run by hand against the endpoint, not a path any turn ' +
+      'takes. Counting it would put a benchmark burst into the preview header as if users had ' +
+      'spent it. Excluded from coverage for the same reason.',
+  }
 
   it('every BAML function called under src/lib is named at an accounting site', () => {
     // A source scan rather than a behavioural test, because the failure mode is

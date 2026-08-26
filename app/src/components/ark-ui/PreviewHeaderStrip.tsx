@@ -37,11 +37,21 @@
  *
  * ## Themes
  *
- * Dark tokens only, per the house styleguide — `uno.config.ts` defines exactly
- * one palette and there is no light token set behind `ThemeSwitcher` today, so
- * this strip reads identically in both switcher positions because everything
- * around it does. Flagged in the PR body rather than papered over with `dark:`
- * variants nothing could test.
+ * On the theme-aware `ui-*` tokens (#226 B8), like the bar it sits in — never
+ * `dark-*`, and never a `dark:` variant: the token flips, the component does
+ * not. The strip is chrome, so `theme-migration.test.ts` gates it.
+ *
+ * The fixed hues (`cyan-400`, `amber-500`, `violet-400`, `emerald-500`) stay,
+ * matching the rest of the chrome: they are mid-tone GLYPH colours that read on
+ * both grounds. Nothing that has to be read is one of them — the values, the
+ * labels, the warm-state word and both degradation chips are `ui-text-*` /
+ * `ui-danger`, because `amber-500` on the light ground is about 2:1.
+ *
+ * The tier switch marks its selection with `ui-accent` in BOTH positions rather
+ * than a hue per tier. The tiers are already distinguished by an icon, a word
+ * and the radio state; the second hue it used to carry was `neon-magenta`,
+ * which the light palette has no darkened twin for and which nothing else in
+ * the chrome uses any more.
  */
 import { createSignal, createMemo, onMount, onCleanup, Show, type JSX } from 'solid-js'
 import { SegmentGroup } from '@ark-ui/solid/segment-group'
@@ -65,42 +75,77 @@ export const POLL_INTERVAL_MS = 15_000
 /** How often the countdown re-renders. */
 export const TICK_INTERVAL_MS = 1_000
 
-/** Warm state → the word, the glyph and the tone that carry it. The word is
- *  not decoration: a bare coloured dot fails `color-not-only`, and "warm" vs
- *  "cold" is the whole content of the indicator anyway. */
+/** Warm state → the word and the glyph that carry it. The word is not
+ *  decoration: a bare coloured dot fails `color-not-only`, and "warm" vs "cold"
+ *  is the whole content of the indicator anyway.
+ *
+ *  The glyph is a THUNK returning literal JSX rather than an icon-name/tone
+ *  pair, for the reason spelled out on `Metric` below: a colour applied as
+ *  `text={props.tone}` is invisible to UnoCSS's extractor and emits no CSS at
+ *  all. Written this way the colour cannot be resolved at runtime, so it cannot
+ *  silently fail to exist. */
 export const WARMTH_PRESENTATION = {
   running: {
     word: 'answering',
-    icon: 'i-material-symbols-bolt',
-    tone: 'cyan-400',
+    glyph: () => (
+      <span class="i-material-symbols-bolt" w="3.5" h="3.5" text="cyan-400" aria-hidden="true" />
+    ),
     hint: 'A chat is running on the self-hosted endpoint, which was already up when it started.',
   },
   starting: {
     word: 'starting',
-    icon: 'i-material-symbols-hourglass-top-outline',
-    tone: 'amber-500',
+    glyph: () => (
+      <span
+        class="i-material-symbols-hourglass-top"
+        w="3.5"
+        h="3.5"
+        text="amber-500"
+        aria-hidden="true"
+      />
+    ),
     hint:
       'A chat is running on the self-hosted endpoint, but nothing recent shows the endpoint was ' +
       'up — so it is probably paying a cold start of minutes. Sending now joins the same wait.',
   },
   warm: {
     word: 'warm',
-    icon: 'i-material-symbols-local-fire-department-outline',
-    tone: 'amber-500',
+    glyph: () => (
+      <span
+        class="i-material-symbols-local-fire-department-outline"
+        w="3.5"
+        h="3.5"
+        text="amber-500"
+        aria-hidden="true"
+      />
+    ),
     hint:
       'The self-hosted endpoint is up. It scales to zero when the countdown reaches nought, and ' +
       'the next message then pays a cold start of minutes.',
   },
   cold: {
     word: 'cold',
-    icon: 'i-material-symbols-ac-unit',
-    tone: 'dark-text-tertiary',
+    glyph: () => (
+      <span
+        class="i-material-symbols-ac-unit"
+        w="3.5"
+        h="3.5"
+        text="ui-text-tertiary"
+        aria-hidden="true"
+      />
+    ),
     hint: 'The self-hosted endpoint has scaled to zero. The next message pays a cold start of minutes.',
   },
   unknown: {
     word: 'unknown',
-    icon: 'i-material-symbols-help-outline',
-    tone: 'dark-text-tertiary',
+    glyph: () => (
+      <span
+        class="i-material-symbols-help-outline"
+        w="3.5"
+        h="3.5"
+        text="ui-text-tertiary"
+        aria-hidden="true"
+      />
+    ),
     hint:
       'This server has not seen a call to the self-hosted endpoint yet, so it cannot tell cold ' +
       'from warm.',
@@ -124,10 +169,10 @@ type WarmthKey = keyof typeof WARMTH_PRESENTATION
 const Metric = (props: { label: string; value: string; hint: string; children: JSX.Element }) => (
   <div flex="~" items="center" gap="1" title={props.hint}>
     {props.children}
-    <span text="xs dark-text-primary right" font="mono" min-w="8">
+    <span text="xs ui-text-primary right" font="mono" min-w="8">
       {props.value}
     </span>
-    <span text="xs dark-text-tertiary">{props.label}</span>
+    <span text="xs ui-text-tertiary">{props.label}</span>
   </div>
 )
 
@@ -227,7 +272,7 @@ export const PreviewHeaderStrip = () => {
       <Show when={!state() && error()}>
         <span
           role="status"
-          text="xs amber-500"
+          text="xs ui-danger"
           title={error() ?? undefined}
           data-testid="preview-header-unavailable"
         >
@@ -259,15 +304,15 @@ export const PreviewHeaderStrip = () => {
                 items="center"
                 gap="2"
               >
-                <SegmentGroup.Label text="xs dark-text-tertiary">Model</SegmentGroup.Label>
+                <SegmentGroup.Label text="xs ui-text-tertiary">Model</SegmentGroup.Label>
                 <div
                   flex="~"
                   items="center"
                   gap="0.5"
                   p="0.5"
                   rounded="md"
-                  bg="dark-bg-tertiary"
-                  border="1 dark-border-primary"
+                  bg="ui-bg-tertiary"
+                  border="1 ui-border-primary"
                 >
                   <SegmentGroup.Item
                     value="verda"
@@ -279,9 +324,9 @@ export const PreviewHeaderStrip = () => {
                     rounded="sm"
                     cursor="pointer"
                     transition="all"
-                    ring="2 transparent focus-within:neon-cyan/40"
-                    text={s().tier === 'verda' ? 'xs neon-cyan' : 'xs dark-text-secondary'}
-                    bg={s().tier === 'verda' ? 'neon-cyan/10' : 'transparent hover:dark-bg-hover'}
+                    ring="2 transparent focus-within:ui-accent/40"
+                    text={s().tier === 'verda' ? 'xs ui-accent' : 'xs ui-text-secondary'}
+                    bg={s().tier === 'verda' ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
                     op={s().verdaAvailable ? '100' : '50'}
                     title={
                       s().verdaAvailable
@@ -307,13 +352,9 @@ export const PreviewHeaderStrip = () => {
                     rounded="sm"
                     cursor="pointer"
                     transition="all"
-                    ring="2 transparent focus-within:neon-cyan/40"
-                    text={s().tier === 'anthropic' ? 'xs neon-magenta' : 'xs dark-text-secondary'}
-                    bg={
-                      s().tier === 'anthropic'
-                        ? 'neon-magenta/10'
-                        : 'transparent hover:dark-bg-hover'
-                    }
+                    ring="2 transparent focus-within:ui-accent/40"
+                    text={s().tier === 'anthropic' ? 'xs ui-accent' : 'xs ui-text-secondary'}
+                    bg={s().tier === 'anthropic' ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
                     title="Run your chats on Anthropic's hosted models."
                   >
                     <span
@@ -338,18 +379,16 @@ export const PreviewHeaderStrip = () => {
                 title={WARMTH_PRESENTATION[warmthKey()].hint}
                 data-testid="verda-warmth"
               >
-                <span
-                  class={WARMTH_PRESENTATION[warmthKey()].icon}
-                  w="3.5"
-                  h="3.5"
-                  text={WARMTH_PRESENTATION[warmthKey()].tone}
-                  aria-hidden="true"
-                />
-                <span text={`xs ${WARMTH_PRESENTATION[warmthKey()].tone}`} aria-hidden="true">
+                {WARMTH_PRESENTATION[warmthKey()].glyph()}
+                {/* The WORD is themed text, not the glyph's hue: `amber-500` on
+                    the light ground is around 2:1, and the state has to be
+                    readable in both. The hue rides the glyph beside it, which
+                    carries no information of its own (`color-not-only`). */}
+                <span text="xs ui-text-primary" aria-hidden="true">
                   {WARMTH_PRESENTATION[warmthKey()].word}
                 </span>
                 <Show when={warmthKey() === 'warm' && countdown() !== null}>
-                  <span text="xs dark-text-tertiary right" font="mono" min-w="9" aria-hidden="true">
+                  <span text="xs ui-text-tertiary right" font="mono" min-w="9" aria-hidden="true">
                     {formatCountdown(countdown() ?? 0)}
                   </span>
                 </Show>
@@ -362,7 +401,7 @@ export const PreviewHeaderStrip = () => {
             </Show>
 
             {/* ---- Metrics ----------------------------------------------- */}
-            <div flex="~" items="center" gap="3" border="l dark-border-primary" p="l-3">
+            <div flex="~" items="center" gap="3" border="l ui-border-primary" p="l-3">
               <Metric
                 label="active"
                 value={formatCompactNumber(s().activeUsers)}
@@ -385,7 +424,7 @@ export const PreviewHeaderStrip = () => {
                   class="i-material-symbols-token-outline"
                   w="3.5"
                   h="3.5"
-                  text="neon-cyan"
+                  text="ui-accent"
                   aria-hidden="true"
                 />
               </Metric>
@@ -420,7 +459,9 @@ export const PreviewHeaderStrip = () => {
             </div>
 
             <Show when={error()}>
-              <span role="status" text="xs amber-500" title={error() ?? undefined}>
+              {/* `ui-danger`, not `amber-500`: this is text a user has to READ,
+                  and amber on the light ground is about 2:1. */}
+              <span role="status" text="xs ui-danger" title={error() ?? undefined}>
                 stale
               </span>
             </Show>

@@ -40,6 +40,7 @@ vi.mock('../../../lib/auth/dev-bypass', () => ({
 }))
 
 const { POST } = await import('../../../routes/api/events')
+const { DEFAULT_SETTINGS } = await import('../../../lib/settings')
 
 function evt(body: unknown) {
   return {
@@ -141,7 +142,7 @@ describe('POST /api/events', () => {
 
   it('drives one interactive turn, with the caller-supplied settings', async () => {
     await POST(
-      evt({ sessionId: 's1', message: 'hi', agentId: 'neo4j', settings: { maxTurns: 3 } }),
+      evt({ sessionId: 's1', message: 'hi', agentId: 'neo4j', settings: { maxToolTurns: 3 } }),
     ).then((r) => r.text())
 
     expect(runTurnAndPersist).toHaveBeenCalledTimes(1)
@@ -151,7 +152,41 @@ describe('POST /api/events', () => {
       userId: 'user-1',
       agentId: 'neo4j',
       message: 'hi',
-      settings: { maxTurns: 3 },
+      settings: { maxToolTurns: 3 },
+    })
+  })
+
+  // `settings` is request-body data that every pattern reads at execution time,
+  // so the route clamps it rather than forwarding it. See
+  // `sanitizeHarnessSettings`.
+  describe('caller-supplied settings are not trusted', () => {
+    it('clamps a loop bound to the settings panel’s own ceiling', async () => {
+      await POST(evt({ sessionId: 's1', message: 'hi', settings: { maxToolTurns: 100_000 } })).then(
+        (r) => r.text(),
+      )
+      expect(runTurnAndPersist.mock.calls[0][0].settings).toMatchObject({ maxToolTurns: 15 })
+    })
+
+    it('discards a caller-chosen sandbox policy, egress included', async () => {
+      await POST(
+        evt({
+          sessionId: 's1',
+          message: 'hi',
+          settings: { sandbox: { defaultEgress: 'open', defaultMemoryMB: 64_000 } },
+        }),
+      ).then((r) => r.text())
+      expect(runTurnAndPersist.mock.calls[0][0].settings).toMatchObject({
+        sandbox: DEFAULT_SETTINGS.sandbox,
+      })
+    })
+
+    it('falls back to the default for a non-numeric bound rather than propagating it', async () => {
+      await POST(evt({ sessionId: 's1', message: 'hi', settings: { maxToolTurns: 'lots' } })).then(
+        (r) => r.text(),
+      )
+      expect(runTurnAndPersist.mock.calls[0][0].settings).toMatchObject({
+        maxToolTurns: DEFAULT_SETTINGS.maxToolTurns,
+      })
     })
   })
 

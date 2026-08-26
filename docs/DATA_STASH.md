@@ -153,11 +153,7 @@ Vectors are only comparable within one model, so there is **no silent cross-prov
 
 `embed()` returns vectors tagged with `{provider, model, dimensions}`; `assertSameSpace()` enforces comparability. The space is baked into the index name and key prefix, and re-ingesting a session under a different model **throws** (override with `allowSpaceChange`). Env: `EMBEDDINGS_PROVIDER`, `EMBEDDINGS_LOCAL_URL`, `EMBEDDINGS_LOCAL_MODEL`.
 
-Start the local embedder (separate from `pnpm dev:llama`, which serves a _chat_ model on `:8080`):
-
-```bash
-llama-server --embedding -m models/Qwen3-Embedding-0.6B-Q8_0.gguf --port 8090 --ctx-size 8192
-```
+Start the local embedder with `make embed` from the repo root (separate from `pnpm dev:llama`, which serves a _chat_ model on `:8080`, and from `make llm-small`, the summarizer on `:8095`). The GGUF lives gitignored in `models/` — see [`models/README.md`](../models/README.md).
 
 ## Shared vector store
 

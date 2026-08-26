@@ -223,28 +223,6 @@ describe('settings and baml_src agree about VerdaQwen', () => {
     expect(Number(timeout?.[1])).toBeGreaterThanOrEqual(300_000)
   })
 
-  it("the smoke script's placeholder guard matches the placeholder actually in the file", () => {
-    // The model id could not be probed (the deployment held every authenticated
-    // request open), so it shipped as a stand-in that `smoke-verda.ts` refuses
-    // to run against. That guard is a string comparison across two files:
-    // rename it in one and the check stops matching while still LOOKING like it
-    // protects the route. Once a real id lands, the placeholder, its guard and
-    // this test all go together.
-    const client = readFileSync(path.resolve(process.cwd(), 'baml_src/verda-client.baml'), 'utf8')
-    const declared = client.match(/model\s+"([^"]+)"/)?.[1]
-    expect(declared).toBeDefined()
-    if (!declared?.startsWith('REPLACE_')) return // a real id — nothing to guard
-
-    const script = readFileSync(
-      path.resolve(process.cwd(), 'src/lib/harness-patterns/scripts/smoke-verda.ts'),
-      'utf8',
-    )
-    expect(script.match(/const MODEL_PLACEHOLDER = '([^']+)'/)?.[1]).toBe(declared)
-    // …and the guard still compares against that constant rather than a copy
-    // that drifted.
-    expect(script).toContain('model "${MODEL_PLACEHOLDER}"')
-  })
-
   it('settings mirrors the cap and the --max-model-len window', async () => {
     const { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS, CLIENT_PRICING } =
       await import('../../../lib/settings')

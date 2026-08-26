@@ -17,8 +17,8 @@ import { SanitizedChip } from '../SanitizedChip'
 export const LaneHeaders = () => (
   <div
     flex="~"
-    border="b dark-border-primary"
-    bg="dark-bg-secondary"
+    border="b ui-border-primary"
+    bg="ui-bg-secondary"
     style={{ position: 'sticky', top: '0', 'z-index': '10' }}
   >
     {/* Interface Lane Header */}
@@ -29,18 +29,18 @@ export const LaneHeaders = () => (
       items="center"
       justify="center"
       gap="2"
-      border="r dark-border-secondary"
+      border="r ui-border-secondary"
     >
       <div w="2" h="2" rounded="full" bg="cyber-500" />
-      <span text="xs dark-text-primary" font="medium">
+      <span text="xs ui-text-primary" font="medium">
         Interface
       </span>
     </div>
 
     {/* Tools Lane Header */}
     <div w="1/2" p="2" flex="~" items="center" justify="center" gap="2">
-      <div w="2" h="2" rounded="full" bg="neon-cyan" />
-      <span text="xs dark-text-primary" font="medium">
+      <div w="2" h="2" rounded="full" bg="ui-accent" />
+      <span text="xs ui-text-primary" font="medium">
         Tools
       </span>
     </div>
@@ -64,10 +64,10 @@ export const EmptyState = () => (
     >
       <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
     </svg>
-    <div text="sm dark-text-secondary" m="t-3">
+    <div text="sm ui-text-secondary" m="t-3">
       No events yet
     </div>
-    <div text="xs dark-text-tertiary" m="t-1">
+    <div text="xs ui-text-tertiary" m="t-1">
       Send a message to see the timeline
     </div>
   </div>
@@ -155,8 +155,8 @@ export const EventRow = (props: {
       gap="1"
       p="2 3"
       cursor="pointer"
-      bg={props.expanded ? 'dark-bg-tertiary' : 'transparent hover:dark-bg-hover'}
-      border={props.expanded ? '1 neon-cyan/30' : 'none'}
+      bg={props.expanded ? 'ui-bg-tertiary' : 'transparent hover:ui-bg-hover'}
+      border={props.expanded ? '1 ui-accent/30' : 'none'}
       rounded="md"
       transition="all"
       onClick={props.onExpand}
@@ -180,7 +180,7 @@ export const EventRow = (props: {
 
       {/* Pattern ID */}
       <Show when={patternId && patternId !== 'harness'}>
-        <div text="xs dark-text-tertiary" font="mono">
+        <div text="xs ui-text-tertiary" font="mono">
           {patternId}
         </div>
       </Show>
@@ -188,7 +188,7 @@ export const EventRow = (props: {
       {/* Preview */}
       <Show when={preview}>
         <div
-          text="xs dark-text-secondary"
+          text="xs ui-text-secondary"
           max-w="120px"
           overflow="hidden"
           style={{ 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
@@ -203,11 +203,11 @@ export const EventRow = (props: {
     <div
       flex="~"
       min-h="70px"
-      border="b dark-border-secondary/30"
+      border="b ui-border-secondary/30"
       style={{ 'background-color': props.bgTint ?? 'transparent' }}
     >
       {/* Interface Lane (left) */}
-      <div w="1/2" flex="~" justify="center" items="center" border="r dark-border-secondary/30">
+      <div w="1/2" flex="~" justify="center" items="center" border="r ui-border-secondary/30">
         <Show when={lane === 'interface'}>
           <NodeContent />
         </Show>
@@ -249,11 +249,11 @@ export const ToolPairRow = (props: {
     <div
       flex="~"
       min-h="70px"
-      border="b dark-border-secondary/30"
+      border="b ui-border-secondary/30"
       style={{ 'background-color': props.bgTint ?? 'transparent' }}
     >
       {/* Interface Lane (left) - empty for tool pairs */}
-      <div w="1/2" flex="~" justify="center" items="center" border="r dark-border-secondary/30" />
+      <div w="1/2" flex="~" justify="center" items="center" border="r ui-border-secondary/30" />
 
       {/* Tools Lane (right) */}
       <div w="1/2" flex="~" justify="center" items="center">
@@ -263,8 +263,8 @@ export const ToolPairRow = (props: {
           gap="1"
           p="2 3"
           cursor="pointer"
-          bg={props.expanded ? 'dark-bg-tertiary' : 'transparent hover:dark-bg-hover'}
-          border={props.expanded ? '1 neon-cyan/30' : 'none'}
+          bg={props.expanded ? 'ui-bg-tertiary' : 'transparent hover:ui-bg-hover'}
+          border={props.expanded ? '1 ui-accent/30' : 'none'}
           rounded="md"
           transition="all"
           onClick={props.onExpand}
@@ -283,12 +283,12 @@ export const ToolPairRow = (props: {
             tool call
           </div>
           <Show when={props.call.patternId && props.call.patternId !== 'harness'}>
-            <div text="xs dark-text-tertiary" font="mono">
+            <div text="xs ui-text-tertiary" font="mono">
               {props.call.patternId}
             </div>
           </Show>
           <div
-            text="xs dark-text-secondary"
+            text="xs ui-text-secondary"
             max-w="120px"
             overflow="hidden"
             style={{ 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}

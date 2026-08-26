@@ -73,8 +73,24 @@ describe('Nav', () => {
   it('carries the theme control alongside the link', () => {
     const { container } = render(() => <Nav />)
 
-    // ThemeSwitcher is the only button in the bar while signed out.
+    // ThemeSwitcher is the only button in the bar while signed out. It is a
+    // menu trigger since the switch grew a third setting, so the title names
+    // the current choice rather than the action.
     expect(container.querySelectorAll('button')).toHaveLength(1)
-    expect(container.querySelector('button')!.getAttribute('title')).toMatch(/Switch to .* mode/)
+    expect(container.querySelector('button')!.getAttribute('title')).toMatch(
+      /^Theme: (Light|Dark|System)$/,
+    )
+  })
+
+  it('leaves the preview strip off the auth routes', () => {
+    // The strip polls an authenticated action, so on the sign-in page every
+    // poll is a rejection — and a failed FIRST poll now says so out loud.
+    // Rendering it there would greet every signed-out visitor with a failure
+    // notice for a feature they cannot reach yet.
+    setPathname('/auth/signin')
+    const { container } = render(() => <Nav />)
+
+    expect(container.querySelector('[role="group"][aria-label="Preview status"]')).toBeNull()
+    expect(container.querySelector('[data-testid="preview-header-unavailable"]')).toBeNull()
   })
 })

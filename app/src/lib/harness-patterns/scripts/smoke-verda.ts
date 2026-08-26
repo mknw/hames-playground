@@ -3,11 +3,14 @@
  *
  * CI cannot run this — the endpoint is company-internal and reachable only
  * from a machine holding `VERDA_INFERENCE_API_KEY`. The hermetic half of the
- * proof (which roles move, what happens when the flag is off, what happens
- * when the env is wrong) lives in
- * `src/__tests__/lib/harness-patterns/clients-verda.test.ts`. This script is
- * the other half: that the box actually answers, and that what it answers
- * PARSES into the structured types the patterns depend on.
+ * proof lives in two files: which roles move (and what happens when the flag is
+ * off or the env is wrong) in `clients-verda.test.ts`, and what the request body
+ * carries in `verda-body-shape.test.ts`, both under
+ * `src/__tests__/lib/harness-patterns/`. This script is the other half: that the
+ * box actually answers, and that what it answers PARSES into the structured
+ * types the patterns depend on.
+ *
+ * Its sibling `smoke-verda-load.ts` measures the same route under load.
  *
  * Run from `app/`:
  *
@@ -27,7 +30,7 @@
  * back-to-back rather than being run repeatedly — each separate session risks
  * paying another cold start.
  *
- * Two calls, chosen for what they prove:
+ * Three calls, chosen for what they prove:
  *   1. `createCriticAdapter()` — the smallest structured-output round trip in
  *      the repo (no tool catalog, no gateway, no sandbox). If the endpoint is
  *      wired at all, this passes.
@@ -35,23 +38,28 @@
  *      or brace-less action is the repo's recurring parse failure), over a
  *      hand-written two-tool catalog so the script stays independent of the
  *      MCP gateway being up.
+ *   3. `ActorController` WITH a populated attempt log and a context — the
+ *      actor's RETRY shape, and the one call in this script that a passing
+ *      first attempt does not cover. It 400d here (`System message must be at
+ *      the beginning.`) until the two `_.role("system")` markers that followed
+ *      the conversation in `actorCritic.baml` were rendered `user` instead;
+ *      `src/__tests__/lib/harness-patterns/prompt-role-order.test.ts` is the
+ *      hermetic pin, and this is the live one. Both of that fix's inputs are
+ *      exercised at once: attempts non-empty AND context non-null, because
+ *      each marker fires on a different one.
  *
- * Both calls assert the collector reports `clientName === 'VerdaQwen'`. Being
- * told the flag is on is not evidence that the call went there.
+ * All three calls assert the collector reports `clientName === 'VerdaQwen'`.
+ * Being told the flag is on is not evidence that the call went there.
  */
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { Collector } from '@boundaryml/baml'
-import type { ToolDescription } from '../../../../baml_client/types'
+import type { Attempt, ToolDescription } from '../../../../baml_client/types'
 import { createCriticAdapter, extractLLMCallData } from '../baml-adapters.server'
 import { assertVerdaConfigured, clientOverrideFor, verdaInferenceEnabled } from '../clients.server'
 
 const EXPECTED_CLIENT = 'VerdaQwen'
-
-/** The stand-in `verda-client.baml` shipped with, because the deployment was
- *  unreachable when this route landed and the served id could not be read. */
-const MODEL_PLACEHOLDER = 'REPLACE_WITH_ID_FROM_V1_MODELS'
 
 /** A catalog small enough to read in the transcript, real enough to choose from. */
 const TOOLS: ToolDescription[] = [
@@ -71,7 +79,19 @@ const TOOLS: ToolDescription[] = [
   },
 ]
 
-function preflight(): void {
+/** The ids `GET /v1/models` reports. A plain fetch, not a BAML call: this runs
+ *  before the first billed completion and only needs the served id list. */
+async function servedModelIds(): Promise<string[]> {
+  const base = process.env.VERDA_INFERENCE_ENDPOINT ?? ''
+  const res = await fetch(`${base}/models`, {
+    headers: { Authorization: `Bearer ${process.env.VERDA_INFERENCE_API_KEY ?? ''}` },
+  })
+  if (!res.ok) throw new Error(`GET ${base}/models → ${res.status} ${res.statusText}`)
+  const body = (await res.json()) as { data?: Array<{ id?: string }> }
+  return (body.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === 'string')
+}
+
+async function preflight(): Promise<void> {
   if (!verdaInferenceEnabled()) {
     throw new Error(
       'USE_VERDA_INFERENCE is not set to 1, so this run would route to Anthropic and prove ' +
@@ -83,15 +103,19 @@ function preflight(): void {
   // Same check the module performs at load; called explicitly so the failure
   // reads as a preflight rather than an import-time stack trace.
   assertVerdaConfigured()
-  // The one value that could not be probed. Caught here rather than at the
-  // provider, where it surfaces as a 400 about an unknown model.
+  // The model id is pinned in the client (read live from `GET /v1/models` on
+  // 2026-08-25). Re-checked here rather than trusted, because the deployment —
+  // not this repo — decides what it serves: a redeploy under a different id, or
+  // a `--served-model-name`, turns every call into a 400 that reads like a
+  // client bug. Cheap, and it runs before anything is billed.
   const client = readFileSync(path.resolve(process.cwd(), 'baml_src/verda-client.baml'), 'utf8')
-  if (client.includes(`model "${MODEL_PLACEHOLDER}"`)) {
+  const pinned = /model "([^"]+)"/.exec(client)?.[1]
+  const served = await servedModelIds()
+  if (!pinned || !served.includes(pinned)) {
     throw new Error(
-      'baml_src/verda-client.baml still carries the placeholder model id. Read the served id:\n' +
-        '  curl -H "Authorization: Bearer $VERDA_INFERENCE_API_KEY" ' +
-        '"$VERDA_INFERENCE_ENDPOINT/models"\n' +
-        "put its `id` in the client's `model` option, run `pnpm baml-generate`, and re-run this.",
+      `baml_src/verda-client.baml pins model ${JSON.stringify(pinned)}, but the endpoint ` +
+        `serves ${served.map((m) => JSON.stringify(m)).join(', ') || '(nothing)'}. ` +
+        'Put the served id in the client, run `pnpm baml-generate`, and re-run this.',
     )
   }
   const override = clientOverrideFor('controller')
@@ -118,7 +142,7 @@ function assertServedByVerda(label: string, collector: Collector): void {
 }
 
 async function critic(): Promise<void> {
-  console.log('\n▶ 1/2 Critic — smallest structured round trip')
+  console.log('\n▶ 1/3 Critic — smallest structured round trip')
   const collector = new Collector('smoke-verda-critic')
   const t0 = Date.now()
   const { result } = await createCriticAdapter()(
@@ -143,7 +167,7 @@ async function critic(): Promise<void> {
 }
 
 async function controller(): Promise<void> {
-  console.log('\n▶ 2/2 LoopController — the action envelope')
+  console.log('\n▶ 2/3 LoopController — the action envelope')
   const { b } = await import('../../../../baml_client')
   const collector = new Collector('smoke-verda-controller')
   const opts = { collector, ...clientOverrideFor('controller') }
@@ -192,14 +216,72 @@ async function controller(): Promise<void> {
   // for caching — a non-zero cache figure would mean that changed.
 }
 
+/**
+ * The actor's retry shape: a non-empty attempt log AND a context block.
+ *
+ * `ActorController` is called directly rather than through
+ * `createActorControllerAdapter`, for the same reason step 2 calls
+ * `LoopController` directly — the adapter lists tools over the MCP gateway, and
+ * this script must not need the gateway up. Calling the function is also what
+ * lets the attempt log be HAND-BUILT: the failure only appears once there is
+ * something in it, so an empty one would pass and prove nothing.
+ */
+async function actorRetry(): Promise<void> {
+  console.log('\n▶ 3/3 ActorController — retry shape (attempt log + context)')
+  const { b } = await import('../../../../baml_client')
+  const collector = new Collector('smoke-verda-actor-retry')
+  // 'controller' — the one role covers BOTH loop patterns' controllers, which
+  // is exactly why the actor's 400 rode in on the same map entry that the
+  // healthy LoopController scenarios had already been passing on.
+  const opts = { collector, ...clientOverrideFor('controller') }
+  const attempts: Attempt[] = [
+    {
+      n: 1,
+      action: {
+        reasoning: 'Ask the graph what labels it has before querying them.',
+        tool_name: 'read_neo4j_cypher',
+        tool_args: JSON.stringify({ query: 'MATCH (n) RETURN n LIMIT 1' }),
+        status: 'Sampling a node',
+        is_final: false,
+      },
+      result: '[]',
+      feedback: 'Empty result — sample the schema instead of a node.',
+    },
+  ]
+  const t0 = Date.now()
+  const action = await b.ActorController(
+    'What node labels exist in the graph?',
+    'inspect the graph schema',
+    TOOLS,
+    attempts,
+    'The graph is a knowledge graph of documents and the entities mentioned in them.',
+    undefined, // few_shots
+    2, // attempt_n — 1-based, so this is the retry
+    5, // max_attempts
+    undefined, // multi_call_mode
+    opts,
+  )
+  const llmCall = extractLLMCallData(collector, 'ActorController', {}, t0, action)
+  if (!llmCall) throw new Error('the collector captured nothing — is baml_client stale? (#154)')
+  console.log(`   ${Date.now() - t0}ms · served by ${llmCall.clientName} (${llmCall.provider})`)
+  assertServedByVerda('ActorController', collector)
+  console.log(
+    `   action: tool=${action.tool_name} status=${action.status} is_final=${action.is_final}`,
+  )
+  if (typeof action.tool_name !== 'string' || typeof action.reasoning !== 'string') {
+    throw new Error('ControllerAction did not parse into its declared shape')
+  }
+}
+
 async function main(): Promise<void> {
   console.log('🔒 Verda (self-hosted) smoke — confidential-compute route')
-  preflight()
+  await preflight()
   console.log('   flag on, env configured, controller role → VerdaQwen')
   console.log('   NOTE: a cold start can take minutes on the first call.')
   await critic()
   await controller()
-  console.log('\n✅ both calls served by VerdaQwen and parsed into their declared types')
+  await actorRetry()
+  console.log('\n✅ all three calls served by VerdaQwen and parsed into their declared types')
 }
 
 main().catch((err) => {

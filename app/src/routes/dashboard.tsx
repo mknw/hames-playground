@@ -53,18 +53,18 @@ const Card = (props: {
     gap="1"
     p="4"
     rounded="lg"
-    bg="dark-bg-secondary"
-    border="1 dark-border-primary"
+    bg="ui-bg-secondary"
+    border="1 ui-border-primary"
     title={props.title}
   >
-    <span text="xs dark-text-tertiary" tracking="wide" uppercase>
+    <span text="xs ui-text-tertiary" tracking="wide" uppercase>
       {props.label}
     </span>
-    <span text={`2xl ${props.tone ?? 'dark-text-primary'}`} font="mono">
+    <span text={`2xl ${props.tone ?? 'ui-text-primary'}`} font="mono">
       {props.value}
     </span>
     <Show when={props.hint}>
-      <span text="xs dark-text-secondary">{props.hint}</span>
+      <span text="xs ui-text-secondary">{props.hint}</span>
     </Show>
     {props.children}
   </div>
@@ -76,9 +76,9 @@ const CompositionBar = (props: { summary: MetricSummary }) => {
   const seg = (n: number) => `${(n / total()) * 100}%`
   return (
     <div flex="~ col" gap="2" m="t-2">
-      <div flex="~" h="2" w="full" rounded="full" overflow="hidden" bg="dark-bg-tertiary">
+      <div flex="~" h="2" w="full" rounded="full" overflow="hidden" bg="ui-bg-tertiary">
         <div
-          bg="neon-green"
+          bg="ui-success"
           style={{ width: seg(props.summary.inputUncachedTokens) }}
           title={`Uncached input: ${props.summary.inputUncachedTokens.toLocaleString()} tokens`}
         />
@@ -93,9 +93,9 @@ const CompositionBar = (props: { summary: MetricSummary }) => {
           title={`Cache write: ${props.summary.inputCacheWriteTokens.toLocaleString()} tokens`}
         />
       </div>
-      <div flex="~ wrap" gap="3" text="xs dark-text-secondary">
+      <div flex="~ wrap" gap="3" text="xs ui-text-secondary">
         <span>
-          <span text="neon-green">■</span> fresh {fmtTok(props.summary.inputUncachedTokens)}
+          <span text="ui-success">■</span> fresh {fmtTok(props.summary.inputUncachedTokens)}
         </span>
         <span>
           <span text="violet-400">■</span> cache read {fmtTok(props.summary.inputCacheReadTokens)}
@@ -113,7 +113,7 @@ const Th = (props: { children: import('solid-js').JSX.Element; right?: boolean }
   // UnoCSS config (verified against the built stylesheet), unlike `text="left"`.
   <th
     p="x-3 y-2"
-    text="xs dark-text-tertiary"
+    text="xs ui-text-tertiary"
     font="medium"
     tracking="wide"
     uppercase
@@ -131,7 +131,7 @@ const Td = (props: {
 }) => (
   <td
     p="x-3 y-2"
-    text="sm dark-text-primary"
+    text="sm ui-text-primary"
     font={props.mono === false ? undefined : 'mono'}
     title={props.title}
     style={{ 'text-align': props.right ? 'right' : 'left' }}
@@ -142,11 +142,11 @@ const Td = (props: {
 
 const SectionTitle = (props: { title: string; note?: string }) => (
   <div flex="~ wrap" items="baseline" gap="3" m="b-3">
-    <h2 text="lg dark-text-primary" font="medium">
+    <h2 text="lg ui-text-primary" font="medium">
       {props.title}
     </h2>
     <Show when={props.note}>
-      <span text="xs dark-text-tertiary">{props.note}</span>
+      <span text="xs ui-text-tertiary">{props.note}</span>
     </Show>
   </div>
 )
@@ -160,15 +160,12 @@ const SummaryCells = (props: { summary: MetricSummary }) => (
     </Td>
     <Td right>{fmtTok(props.summary.outputTokens)}</Td>
     <Td right>
-      <span text={props.summary.cacheHitRate > 0 ? 'violet-400' : 'dark-text-tertiary'}>
+      <span text={props.summary.cacheHitRate > 0 ? 'violet-400' : 'ui-text-tertiary'}>
         {fmtPct(props.summary.cacheHitRate)}
       </span>
     </Td>
     <Td right>
-      <Show
-        when={props.summary.pricedCalls > 0}
-        fallback={<span text="dark-text-tertiary">—</span>}
-      >
+      <Show when={props.summary.pricedCalls > 0} fallback={<span text="ui-text-tertiary">—</span>}>
         {fmtUsd(props.summary.costUsd)}
       </Show>
     </Td>
@@ -191,20 +188,20 @@ export default function Dashboard() {
   // No `min-h="screen"` on <main>: `Nav` sits above this route in the root
   // layout, so a full viewport here would always overflow by the nav's height.
   return (
-    <main flex="~ col" gap="6" p="6" bg="dark-bg-primary" text="dark-text-primary" font="sans">
+    <main flex="~ col" gap="6" p="6" bg="ui-bg-primary" text="ui-text-primary" font="sans">
       <header flex="~ wrap" items="center" gap="4">
         <div flex="~ col" gap="1">
-          <h1 text="2xl dark-text-primary" font="medium">
+          <h1 text="2xl ui-text-primary" font="medium">
             Metrics
           </h1>
-          <span text="xs dark-text-secondary">
+          <span text="xs ui-text-secondary">
             Tokens, cache and estimated cost across your conversations
           </span>
         </div>
         <div flex="~" items="center" gap="2" m="l-auto">
           <Show when={data()}>
             {(d) => (
-              <span text="xs dark-text-tertiary" font="mono">
+              <span text="xs ui-text-tertiary" font="mono">
                 {/* Say so when the load hit its ceiling — "N conversations" would
                     otherwise read as "all of them". */}
                 {d().conversationCount >= d().conversationScanLimit
@@ -223,7 +220,7 @@ export default function Dashboard() {
             rounded="md"
             bg="cyber-800/20 hover:cyber-700/30"
             border="1 cyber-700/50"
-            text="xs dark-text-primary"
+            text="xs ui-text-primary"
             cursor="pointer"
             transition="all"
             disabled={data.loading}
@@ -239,7 +236,7 @@ export default function Dashboard() {
       <Show
         when={data()}
         fallback={
-          <div p="6" text="sm dark-text-tertiary">
+          <div p="6" text="sm ui-text-tertiary">
             <Show when={!data.error} fallback={<span text="red-400">{String(data.error)}</span>}>
               Folding your conversations…
             </Show>
@@ -253,14 +250,14 @@ export default function Dashboard() {
               <div
                 p="8"
                 rounded="lg"
-                bg="dark-bg-secondary"
-                border="1 dark-border-primary"
-                text="sm dark-text-secondary"
+                bg="ui-bg-secondary"
+                border="1 ui-border-primary"
+                text="sm ui-text-secondary"
                 flex="~ col"
                 gap="2"
               >
-                <span text="dark-text-primary">No LLM activity recorded yet.</span>
-                <span text="xs dark-text-tertiary">
+                <span text="ui-text-primary">No LLM activity recorded yet.</span>
+                <span text="xs ui-text-tertiary">
                   Run a conversation and its per-step token and cost accounting shows up here.
                 </span>
               </div>
@@ -284,7 +281,7 @@ export default function Dashboard() {
                 <Card
                   label="Estimated cost"
                   value={totals()!.pricedCalls > 0 ? fmtUsd(totals()!.costUsd) : '—'}
-                  tone={totals()!.pricedCalls > 0 ? 'neon-cyan' : 'dark-text-tertiary'}
+                  tone={totals()!.pricedCalls > 0 ? 'ui-accent' : 'ui-text-tertiary'}
                   hint={
                     totals()!.pricedCalls < totals()!.meteredCalls
                       ? `${totals()!.pricedCalls}/${totals()!.meteredCalls} steps priced`
@@ -295,7 +292,7 @@ export default function Dashboard() {
                 <Card
                   label="Saved by caching"
                   value={fmtUsd(totals()!.savingsUsd)}
-                  tone="neon-green"
+                  tone="ui-success"
                   hint={`${fmtPct(totals()!.savingsPct)} off ${fmtUsd(totals()!.noCacheUsd)} uncached`}
                   title="Difference between the billed estimate and the same tokens priced with no caching"
                 />
@@ -311,21 +308,21 @@ export default function Dashboard() {
                 <Card
                   label="Output tokens"
                   value={fmtTok(totals()!.outputTokens)}
-                  tone="neon-cyan"
+                  tone="ui-accent"
                   hint={`${fmtTok(totals()!.totalTokens)} tokens in total`}
                 />
                 <div
                   p="4"
                   rounded="lg"
-                  bg="dark-bg-secondary"
-                  border="1 dark-border-primary"
+                  bg="ui-bg-secondary"
+                  border="1 ui-border-primary"
                   style={{ 'grid-column': '1 / -1' }}
                 >
                   <div flex="~ wrap" items="baseline" gap="3">
-                    <span text="xs dark-text-tertiary" tracking="wide" uppercase>
+                    <span text="xs ui-text-tertiary" tracking="wide" uppercase>
                       Input composition
                     </span>
-                    <span text="sm dark-text-primary" font="mono">
+                    <span text="sm ui-text-primary" font="mono">
                       {fmtTok(totals()!.inputTotalTokens)} tokens
                     </span>
                   </div>
@@ -359,14 +356,9 @@ export default function Dashboard() {
             {/* ---------------------------------------------------------- */}
             <section>
               <SectionTitle title="By pattern" note="ranked by estimated cost" />
-              <div
-                rounded="lg"
-                bg="dark-bg-secondary"
-                border="1 dark-border-primary"
-                overflow="auto"
-              >
+              <div rounded="lg" bg="ui-bg-secondary" border="1 ui-border-primary" overflow="auto">
                 <table w="full" border="collapse">
-                  <thead bg="dark-bg-tertiary">
+                  <thead bg="ui-bg-tertiary">
                     <tr>
                       <Th>Pattern</Th>
                       <Th right>Steps</Th>
@@ -379,9 +371,9 @@ export default function Dashboard() {
                   <tbody>
                     <For each={d().byPattern}>
                       {(row) => (
-                        <tr border="t dark-border-primary">
+                        <tr border="t ui-border-primary">
                           <Td mono={false}>
-                            <span text="sm neon-cyan" font="mono">
+                            <span text="sm ui-accent" font="mono">
                               {row.patternId}
                             </span>
                             <Show when={row.summary.unmeteredCalls > 0}>
@@ -411,14 +403,9 @@ export default function Dashboard() {
                     : 'by estimated cost'
                 }
               />
-              <div
-                rounded="lg"
-                bg="dark-bg-secondary"
-                border="1 dark-border-primary"
-                overflow="auto"
-              >
+              <div rounded="lg" bg="ui-bg-secondary" border="1 ui-border-primary" overflow="auto">
                 <table w="full" border="collapse">
-                  <thead bg="dark-bg-tertiary">
+                  <thead bg="ui-bg-tertiary">
                     <tr>
                       <Th>Conversation</Th>
                       <Th>Agent</Th>
@@ -432,9 +419,9 @@ export default function Dashboard() {
                   <tbody>
                     <For each={d().byConversation}>
                       {(row) => (
-                        <tr border="t dark-border-primary">
+                        <tr border="t ui-border-primary">
                           <Td mono={false} title={`Last activity ${fmtWhen(row.updatedAt)}`}>
-                            <span text="sm dark-text-primary">{row.title ?? 'Untitled'}</span>
+                            <span text="sm ui-text-primary">{row.title ?? 'Untitled'}</span>
                             <Show when={row.summary.unmeteredCalls > 0}>
                               <span text="xs amber-300" m="l-2">
                                 +{row.summary.unmeteredCalls} unmetered
@@ -442,7 +429,7 @@ export default function Dashboard() {
                             </Show>
                           </Td>
                           <Td mono={false}>
-                            <span text="xs dark-text-tertiary" font="mono">
+                            <span text="xs ui-text-tertiary" font="mono">
                               {row.agentId}
                             </span>
                           </Td>
@@ -455,7 +442,7 @@ export default function Dashboard() {
               </div>
             </section>
 
-            <footer text="xs dark-text-secondary" m="t-2">
+            <footer text="xs ui-text-secondary" m="t-2">
               Costs are estimates: each step is priced at the $/MTok rates in force for the client
               that served it (see <span font="mono">CLIENT_PRICING</span> in{' '}
               <span font="mono">lib/settings.ts</span>), with cache reads at 0.1× and cache writes

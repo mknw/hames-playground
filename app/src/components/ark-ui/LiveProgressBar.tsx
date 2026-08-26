@@ -74,8 +74,8 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
           setPreviousStatus(null)
           statusTimer = undefined
         }, STATUS_FADE_MS)
-      }
-    )
+      },
+    ),
   )
 
   // Mount/unmount with delays:
@@ -108,8 +108,8 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
             exitTimer = undefined
           }, EXIT_FADE_MS)
         }
-      }
-    )
+      },
+    ),
   )
 
   const max = createMemo(() => Math.max(1, props.maxProjection))
@@ -119,9 +119,7 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
     const scaled = (props.current * max()) / path
     return Math.max(0, Math.min(max(), Math.round(scaled)))
   })
-  const percent = createMemo(() =>
-    Math.max(0, Math.min(100, (value() / max()) * 100))
-  )
+  const percent = createMemo(() => Math.max(0, Math.min(100, (value() / max()) * 100)))
 
   return (
     <Show when={mounted()}>
@@ -147,7 +145,7 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
           text="white xs"
           font="medium"
           bg="cyber-800"
-          border="~ neon-cyan/30"
+          border="~ ui-accent/30"
         >
           AI
         </div>
@@ -160,14 +158,14 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
                 w="1.5"
                 h="1.5"
                 rounded="full"
-                bg="neon-cyan"
+                bg="ui-accent"
                 class="animate-pulse"
                 style={{ 'flex-shrink': 0 }}
               />
               <div flex="~ 1" style={{ position: 'relative', 'min-width': 0 }}>
                 <Show when={previousStatus()}>
                   <Progress.Label
-                    text="xs dark-text-tertiary"
+                    text="xs ui-text-tertiary"
                     truncate=""
                     style={{
                       position: 'absolute',
@@ -181,7 +179,7 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
                   </Progress.Label>
                 </Show>
                 <Progress.Label
-                  text="xs dark-text-secondary"
+                  text="xs ui-text-secondary"
                   truncate=""
                   style={{
                     display: 'block',

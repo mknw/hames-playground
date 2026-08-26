@@ -11,10 +11,26 @@
  * `auth/session-store.server.ts` rather than being appended to
  * `db/client.server.ts`'s conversations bootstrap: a new domain owns its own
  * DDL, and `query()` still runs the shared init first.
+ *
+ * `input` and `label` are encrypted at rest (`db/crypto.server.ts`) — `input`
+ * is the prompt the user typed and `label` is their own words for the routine
+ * (it also becomes the run's conversation title). `trigger_kind` and
+ * `trigger_config` stay plaintext: the kind is the scheduler's SQL filter and
+ * its index, and every config the registry defines today holds only scheduling
+ * parameters (`intervalSeconds`). A future trigger kind that carries user
+ * content in its config would need its own entry in `ENCRYPTED_TABLES`.
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { query } from './client.server'
+import {
+  DataDecryptionError,
+  MissingDataEncryptionKeyError,
+  decryptField,
+  decryptFieldOrNull,
+  encryptField,
+  encryptFieldOrNull,
+} from './crypto.server'
 import {
   parseTrigger,
   serializeTrigger,
@@ -124,8 +140,8 @@ function toRoutine(row: DbRow): RoutineRow {
     userId: row.user_id,
     agentId: row.agent_id,
     trigger: parseTrigger(row.trigger_kind, row.trigger_config),
-    input: row.input,
-    label: row.label,
+    input: decryptField(row.input, 'routines.input'),
+    label: decryptFieldOrNull(row.label, 'routines.label'),
     enabled: row.enabled,
     lastRunAt: row.last_run_at,
     createdAt: row.created_at,
@@ -137,13 +153,45 @@ function toRoutine(row: DbRow): RoutineRow {
  * Map rows, dropping (and logging) any whose trigger this build can't parse.
  * That's an unknown `trigger_kind` written by a newer deploy, or a config blob
  * that no longer validates — neither should take down a whole listing.
+ *
+ * ## What an unreadable row does, and why it depends on the caller
+ *
+ * A decryption failure is not a trigger problem, and the two audiences want
+ * opposite answers:
+ *
+ * - **Showing a user their own routines** (`listRoutines`, `getRoutine`) —
+ *   rethrow. A silently shorter list is the failure mode at-rest encryption
+ *   must not introduce: the page would look complete while a routine was
+ *   quietly missing from it.
+ * - **Firing routines in the background** (`listEnabledRoutines`, the 30s
+ *   scheduler tick, and `listEnabledRoutinesForUser`, the session hooks) —
+ *   skip the row, loudly, and keep the rest. Nobody is being shown this list.
+ *   Rethrowing here made one corrupted row an outage for *every* user's
+ *   routines: `runRoutineTick` catches, logs one line and returns `[]`
+ *   (`routines/scheduler.server.ts`), so healthy due routines belonging to
+ *   other people silently stopped firing — indefinitely, and invisibly, since
+ *   each owner's own routines page still rendered. That is a wider blast
+ *   radius than the short list this rethrow was protecting against, and worse
+ *   than the pre-encryption behaviour, which skipped the bad row and carried
+ *   on. The owner still learns about it: their own page fails loudly.
  */
-function toRoutines(rows: DbRow[]): RoutineRow[] {
+function toRoutines(rows: DbRow[], { firing = false }: { firing?: boolean } = {}): RoutineRow[] {
   const out: RoutineRow[] = []
   for (const row of rows) {
     try {
       out.push(toRoutine(row))
     } catch (err) {
+      const unreadable =
+        err instanceof DataDecryptionError || err instanceof MissingDataEncryptionKeyError
+      if (unreadable && !firing) throw err
+      if (unreadable) {
+        console.error(
+          `[routines] routine ${row.id} (user ${row.user_id}) cannot be decrypted and will not ` +
+            'fire; every other routine in this tick still does:',
+          err instanceof Error ? err.message : err,
+        )
+        continue
+      }
       console.warn(
         `[routines] skipping routine ${row.id} with unreadable trigger ` + `'${row.trigger_kind}':`,
         err instanceof Error ? err.message : err,
@@ -170,8 +218,8 @@ export async function createRoutine(input: CreateRoutineInput): Promise<RoutineR
       input.agentId,
       input.trigger.kind,
       JSON.stringify(serializeTrigger(input.trigger)),
-      input.input,
-      input.label ?? null,
+      encryptField(input.input),
+      encryptFieldOrNull(input.label),
       input.enabled ?? true,
     ],
   )
@@ -218,8 +266,8 @@ export async function updateRoutine(
   }
 
   if (patch.enabled !== undefined) push('enabled', patch.enabled)
-  if (patch.input !== undefined) push('input', patch.input)
-  if (patch.label !== undefined) push('label', patch.label)
+  if (patch.input !== undefined) push('input', encryptField(patch.input))
+  if (patch.label !== undefined) push('label', encryptFieldOrNull(patch.label))
   if (patch.trigger !== undefined) {
     push('trigger_kind', patch.trigger.kind)
     params.push(JSON.stringify(serializeTrigger(patch.trigger)))
@@ -273,7 +321,7 @@ export async function listEnabledRoutines(kind?: RoutineTriggerKind): Promise<Ro
     : await query<DbRow>(
         `SELECT ${SELECT_COLUMNS} FROM routines WHERE enabled = TRUE ORDER BY created_at`,
       )
-  return toRoutines(rows)
+  return toRoutines(rows, { firing: true })
 }
 
 /** Enabled routines of one kind belonging to one user (the session hooks). */
@@ -287,7 +335,7 @@ export async function listEnabledRoutinesForUser(
      WHERE enabled = TRUE AND user_id = $1 AND trigger_kind = $2 ORDER BY created_at`,
     [userId, kind],
   )
-  return toRoutines(rows)
+  return toRoutines(rows, { firing: true })
 }
 
 /**

@@ -31,6 +31,7 @@ const {
   listRoutines,
   updateRoutine,
 } = await import('../../../lib/db/routines.server')
+const { encryptField, looksEncrypted } = await import('../../../lib/db/crypto.server')
 
 const NOW = new Date('2026-08-16T00:00:00Z')
 
@@ -79,14 +80,19 @@ describe('createRoutine', () => {
     })
     const { text, params } = lastCall()
     expect(text).toContain('INSERT INTO routines')
-    expect(params.slice(0, 6)).toEqual([
+    expect(params.slice(0, 5)).toEqual([
       'r1',
       'u1',
       'search',
       'interval',
       JSON.stringify({ intervalSeconds: 3600 }),
-      'go',
     ])
+    // `input` is user-typed content, so it goes to the column encrypted
+    // (lib/db/crypto.server.ts) — the plaintext must never appear in the
+    // parameter list. `trigger_kind` and the config blob stay readable because
+    // the scheduler filters on them in SQL.
+    expect(looksEncrypted(params[5])).toBe(true)
+    expect(params[5]).not.toBe('go')
     // enabled defaults to true.
     expect(params[7]).toBe(true)
   })
@@ -250,5 +256,49 @@ describe('unreadable rows', () => {
     })
     expect(await listRoutines('u1')).toEqual([])
     warn.mockRestore()
+  })
+})
+
+describe('an undecryptable row, per audience', () => {
+  /** A structurally valid envelope whose payload will not authenticate. */
+  function corruptEnvelope(): string {
+    const parts = encryptField('the prompt this user typed').split('.')
+    parts[3] = Buffer.from('tampered').toString('base64url')
+    return parts.join('.')
+  }
+
+  it("fails the owner's own listing rather than showing a shorter one", async () => {
+    query.mockResolvedValue({ rows: [dbRow({ id: 'bad', input: corruptEnvelope() })], rowCount: 1 })
+    await expect(listRoutines('u1')).rejects.toThrow(/could not decrypt routines.input/)
+  })
+
+  it('does not stop the scheduler tick for everyone else', async () => {
+    // The regression this pins: `runRoutineTick` catches whatever
+    // `listEnabledRoutines` throws and returns [], so one corrupted row used to
+    // mean NO user's due routines fired, indefinitely, behind one log line.
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    query.mockResolvedValue({
+      rows: [
+        dbRow({ id: 'bad', user_id: 'u1', input: corruptEnvelope() }),
+        dbRow({ id: 'healthy', user_id: 'u2' }),
+      ],
+      rowCount: 2,
+    })
+    const rows = await listEnabledRoutines()
+    expect(rows.map((r) => r.id)).toEqual(['healthy'])
+    // Loud, and it names the row and its owner — the tick is nobody's UI.
+    expect(error.mock.calls.flat().join(' ')).toContain('bad')
+    expect(error.mock.calls.flat().join(' ')).toContain('u1')
+  })
+
+  it("does not stop the session hooks for that user's other routines", async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    query.mockResolvedValue({
+      rows: [dbRow({ id: 'bad', input: corruptEnvelope() }), dbRow({ id: 'healthy' })],
+      rowCount: 2,
+    })
+    const rows = await listEnabledRoutinesForUser('u1', 'session_start')
+    expect(rows.map((r) => r.id)).toEqual(['healthy'])
+    expect(error).toHaveBeenCalled()
   })
 })

@@ -8,9 +8,17 @@
  * *application* permission admin-consented) and the Neo4j compose service up.
  *
  * ## Output is redacted by construction
- * Everything printed is a count, a property name or a reason code. No display
- * name and no address is ever written to stdout — see `_redact.ts`. That is
- * what makes it safe to paste this transcript into a PR.
+ * Everything printed on the success path is a count, a property name or a
+ * reason code. No display name and no address is ever written to stdout — see
+ * `_redact.ts`.
+ *
+ * The **error** path is the one that is not redacted by construction, because
+ * the string does not originate here: a Graph failure message quotes the
+ * request path, and on the memberships loop that path carries a member's Entra
+ * object id. Still no name and no address, so the guarantee above holds
+ * literally — but an opaque identifier for one employee is enough to make
+ * "paste this into a PR" need a caveat, so the message goes through
+ * `maskGraphIds` and does not.
  *
  * `--no-memberships` skips the per-member group reads. They are gated by a
  * one-request probe anyway (`probeGroupReadAccess`), so the flag is for when you
@@ -27,7 +35,7 @@ import { countNonConforming, listConstraintNames } from '../schema.server'
 import { CONSTRAINT_NAMES } from '../ontology'
 import { loadDirectoryRoster } from '../roster-source.server'
 import { resetDriver } from '../../neo4j/client'
-import { formatCounts } from './_redact'
+import { formatCounts, maskGraphIds } from './_redact'
 
 function requireEnv(): void {
   const missing = ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET'].filter(
@@ -96,7 +104,10 @@ async function main(): Promise<void> {
 
 main()
   .catch((err) => {
-    console.error('\n✗ ingest failed:', err instanceof Error ? err.message : err)
+    console.error(
+      '\n✗ ingest failed:',
+      maskGraphIds(err instanceof Error ? err.message : String(err)),
+    )
     process.exitCode = 1
   })
   .finally(() => resetDriver())

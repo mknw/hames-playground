@@ -141,17 +141,40 @@ describe('graphAppFetch', () => {
 
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe(`${GRAPH_BASE}/users`)
-    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer app-tok')
+    expect((init.headers as Headers).get('authorization')).toBe('Bearer app-tok')
   })
 
-  it('cannot have its credential overridden by a caller header', async () => {
+  it.each([['Authorization'], ['authorization'], ['AUTHORIZATION']])(
+    'cannot have its credential overridden by a caller header spelled %s',
+    async (name) => {
+      // Header names are case-insensitive, so pinning only the exact spelling
+      // pins a typo rather than the invariant. Building the request from an
+      // object literal passed all three of these by inspection and none of
+      // them on the wire: `Headers` appends, so a lowercase key survived
+      // alongside ours and folded into `attacker, Bearer app-tok`.
+      const fetchMock = ok({})
+      vi.stubGlobal('fetch', fetchMock)
+
+      await graphAppFetch('/users', { headers: { [name]: 'Bearer attacker' } })
+
+      const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+      expect((init.headers as Headers).get('authorization')).toBe('Bearer app-tok')
+    },
+  )
+
+  it('cannot have its content type overridden either', async () => {
+    // Same shape, same fix — it was the second key written after the spread.
     const fetchMock = ok({})
     vi.stubGlobal('fetch', fetchMock)
 
-    await graphAppFetch('/users', { headers: { Authorization: 'Bearer attacker' } })
+    await graphAppFetch('/users', {
+      method: 'POST',
+      body: { a: 1 },
+      headers: { 'content-type': 'text/plain' },
+    })
 
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
-    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer app-tok')
+    expect((init.headers as Headers).get('content-type')).toBe('application/json')
   })
 
   it('passes an absolute nextLink through unchanged', async () => {

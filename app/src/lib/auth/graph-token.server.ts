@@ -220,23 +220,33 @@ interface GraphRequestInit {
  * Issue the HTTP request. The credential is attached **here**, in the one place
  * both the delegated and the app-only path share, so neither can drift into
  * letting a caller supply or override `Authorization`.
+ *
+ * ## Why a `Headers` and not an object literal
+ * Header names are case-insensitive and `Headers` **appends** rather than
+ * replaces when it is built from a record. Spreading the caller's headers into
+ * an object and writing `Authorization` last therefore only wins against that
+ * exact spelling: a caller passing lowercase `authorization` produced *two*
+ * entries, which `fetch` folds into one comma-joined value with the caller's
+ * credential in front of ours. `Headers.set` is case-insensitive and really
+ * does replace, so the sentence above is now true of every spelling rather
+ * than of one. Same for `Content-Type`, which had the same shape.
  */
 function sendGraphRequest(token: string, path: string, init: GraphRequestInit): Promise<Response> {
   const url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`
   const wantsBytes = init.responseType === 'base64'
+  const headers = new Headers(init.headers)
+  // Set last, and by name rather than by key, so a caller can never replace the
+  // credential or the content type.
+  headers.set('Authorization', `Bearer ${token}`)
+  headers.set('Accept', wantsBytes ? '*/*' : 'application/json')
+  // Decorated traffic is prioritized under Graph throttling; undecorated
+  // traffic is first to be shed. NONISV|<company>|<app>/<version> is the
+  // documented shape for internal (non-ISV) apps.
+  headers.set('User-Agent', 'NONISV|DTSC|kg-agent/1.0')
+  if (init.body) headers.set('Content-Type', 'application/json')
   return fetch(url, {
     method: init.method ?? 'GET',
-    headers: {
-      ...init.headers,
-      // Set last so a caller can never replace the credential or content type.
-      Authorization: `Bearer ${token}`,
-      Accept: wantsBytes ? '*/*' : 'application/json',
-      // Decorated traffic is prioritized under Graph throttling; undecorated
-      // traffic is first to be shed. NONISV|<company>|<app>/<version> is the
-      // documented shape for internal (non-ISV) apps.
-      'User-Agent': 'NONISV|DTSC|kg-agent/1.0',
-      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-    },
+    headers,
     ...(init.body ? { body: JSON.stringify(init.body) } : {}),
   })
 }

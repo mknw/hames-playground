@@ -61,9 +61,17 @@ env var) so it can never become a side effect of ordinary setup — re-read
 Every script prints counts, property names and reason codes only. Where an
 identity has to be shown at all — `smoke-pseudonymise.ts` has to prove a
 _specific_ real name was replaced — it goes through `mask()` in `_redact.ts`,
-which keeps the shape (`J·· V·· D····`) and drops the person. Assertions run on
-the unmasked strings in memory. That is what makes these transcripts safe to
-paste into a PR; it is output hygiene, not a security control.
+which replaces every alphanumeric run with a **fixed-width** `···`, so neither
+the initial nor the length of a name survives into a pasted transcript.
+Assertions run on the unmasked strings in memory. That is output hygiene, not a
+security control: it keeps a transcript pasteable, and the thing that makes it
+pasteable is that nothing in it identifies anybody.
+
+One thing it does **not** cover: `ingest-roster.ts`'s error path prints
+`err.message`, and a Graph error carries the request path — which on the
+memberships loop contains a member's Entra object id. Still no display name and
+no address, but an opaque directory identifier is not nothing, so that path
+masks the id out before printing (see `maskGraphIds` in `_redact.ts`).
 
 ## What "passing" looks like
 

@@ -222,7 +222,12 @@ somewhere that cannot help.
 
 Both paths now share one request builder, so the credential is attached in
 exactly one place and neither can drift into letting a caller override
-`Authorization`.
+`Authorization`. That builder composes the request through a `Headers` object
+rather than an object literal, which is what makes the sentence true: header
+names are case-insensitive and `Headers` **appends**, so writing `Authorization`
+last into a spread only outranked that exact spelling — a caller passing
+lowercase `authorization` got `attacker, Bearer real` on the wire. `Headers.set`
+replaces whatever the casing. Three spellings are pinned by test.
 
 ### The read
 

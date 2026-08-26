@@ -48,7 +48,7 @@ import { getActiveInjectionGuard } from '../injection-guard-scope.server'
 import { getErrorHint } from '../error-hints'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { extractLLMCallData, extractFailureLLMCallData } from '../baml-adapters.server'
-import { resolveClientForRole } from '../clients.server'
+import { clientOverrideFor, resolveClientForRole } from '../clients.server'
 
 assertServerOnImport()
 
@@ -406,7 +406,9 @@ async function rewriteQuery<T>(
   const variables = { history: trimmed, latest }
   try {
     const { b } = await import('../../../../baml_client')
-    const opts = { collector }
+    // describe-tier, and it moves with a verda tier decision: the rewrite is
+    // built from the user's own question and the conversation history.
+    const opts = { collector, ...clientOverrideFor('describe') }
     const raw = await b.RetrieveQuery(trimmed, latest, opts)
     const text = raw.trim() || latest
     return {

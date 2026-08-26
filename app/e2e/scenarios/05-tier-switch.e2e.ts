@@ -20,11 +20,27 @@
  *     that silently started a new context would look identical in the UI until
  *     the user scrolled up.
  *
- * And one that must NOT move: `screen`, `router` and `describe` stay on the
- * Anthropic chain in both positions. `clients-verda.test.ts` pins the map that
- * says so; this pins that a real turn honours it, which is the half a map
- * cannot prove (`SA-M5` / `SD-4` — a summarisation re-point must never drag
- * prompt-injection screening with it).
+ * The second scenario used to be the mirror image of that — `screen`, `router`
+ * and `describe` pinned to Anthropic in both positions. The 2026-08-26 owner
+ * decision moved `router` and `describe` onto the box, so it now pins the
+ * OPPOSITE for those two, and the reason it is still worth a scenario is
+ * unchanged: a map cannot prove that a real turn honours it. It is also the
+ * only thing that would catch a MISSING spread at one of the six describe call
+ * sites — `clients-verda.test.ts` scans for the literal once per role, so five
+ * of the six could lose it and stay green.
+ *
+ * `screen` moved too, later the same day, on the owner's rule that no call made
+ * under the private tier may be sent to any public AI provider (SA-M5 / SD-4).
+ * It is still NOT asserted here, and for the unchanged reason: no agent in this
+ * repo enables the opt-in LLM screen, so no turn this suite can run makes a
+ * `ScreenUntrustedContent` call and an assertion over zero of them would be
+ * theatre. What changed is which pin covers it. `clients-verda.test.ts` used to
+ * fail if `clientOverrideFor('screen')` appeared anywhere in `src/lib`; it now
+ * fails unless the map entry AND the spread on the screen's own call expression
+ * are both present, extracted by balanced parens rather than grepped. The
+ * BEHAVIOUR of the screen on that client is measured by the eval suite's
+ * `screen-on-the-tier` scenario, which needs a live endpoint and so cannot live
+ * here either.
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
@@ -98,33 +114,73 @@ describe('switching tier between turns', () => {
     expect(eventsOfType(row!.serializedContext, 'user_message')).toHaveLength(3)
   })
 
-  it.runIf(IS_HERMETIC)('never moves the roles the switch is not allowed to move', async () => {
-    const sessionId = newSessionId('pinned-roles')
+  it.runIf(IS_HERMETIC)('moves the cheap side-roles too, not just the heavy ones', async () => {
+    const sessionId = newSessionId('side-roles')
 
     await app.setTier('verda')
     await app.runTurn(sessionId, 'How many nodes are in the graph?')
 
-    // The whole turn ran on the self-hosted tier, so if any of these had moved
-    // with it, they would report VERDA_MODEL here.
-    const pinned = app.fakeLlm.calls.filter((c) =>
-      (
-        [
-          'Router',
-          'ResultDescribe',
-          'ResultDescribeBatch',
-          'ScreenUntrustedContent',
-          'ReferenceSelector',
-          'GenerateConversationTitle',
-        ] as const
-      ).includes(c.fn as never),
-    )
-    expect(pinned.length, 'no pinned-role call was made, so this asserts nothing').toBeGreaterThan(
-      0,
-    )
-    for (const call of pinned) {
-      expect(call.model, `${call.fn} was re-pointed by the tier switch`).toBe(
-        FAKE_ANTHROPIC_TIER_MODEL,
-      )
+    // `Router` runs before the loop and the title is awaited inside the turn,
+    // so both have landed by now. The describe-of-tool-results does NOT: the
+    // turn runner starts it detached, after the answer has reached the caller
+    // (`compactAndSave`), so it is polled for rather than assumed. It is also
+    // the single most important one to check — a tool result is the payload
+    // this whole widening was about (SD-10).
+    const describe = await waitForCall(['ResultDescribe', 'ResultDescribeBatch'])
+
+    for (const fn of ['Router', 'GenerateConversationTitle', describe]) {
+      const calls = app.fakeLlm.calls.filter((c) => c.fn === fn)
+      expect(calls.length, `no ${fn} call was made, so this asserts nothing`).toBeGreaterThan(0)
+      for (const call of calls) {
+        expect(call.model, `${fn} did not follow the tier switch`).toBe(VERDA_MODEL)
+      }
+    }
+  })
+
+  it.runIf(IS_HERMETIC)('leaves those same roles on Anthropic in the other position', async () => {
+    // The counterpart, and the reason the test above is not just "everything is
+    // VerdaQwen": these roles have to be steerable in BOTH directions. A call
+    // site that hardcoded the override rather than spreading
+    // `clientOverrideFor` would pass the verda leg and fail here.
+    const sessionId = newSessionId('side-roles-anthropic')
+
+    await app.setTier('anthropic')
+    await app.runTurn(sessionId, 'How many nodes are in the graph?')
+    const describe = await waitForCall(['ResultDescribe', 'ResultDescribeBatch'])
+
+    for (const fn of ['Router', 'GenerateConversationTitle', describe]) {
+      const calls = app.fakeLlm.calls.filter((c) => c.fn === fn)
+      // Same vacuity guard as the verda leg above, which this test was missing:
+      // `waitForCall` only covers the describe leg (it throws), so `Router` and
+      // the title could both go silently uncalled and this loop would iterate
+      // nothing and pass.
+      expect(calls.length, `no ${fn} call was made, so this asserts nothing`).toBeGreaterThan(0)
+      for (const call of calls) {
+        expect(call.model, `${fn} did not follow the tier switch`).toBe(FAKE_ANTHROPIC_TIER_MODEL)
+      }
     }
   })
 })
+
+/**
+ * Wait for any of `names` to appear in the fake's log, and return which one.
+ *
+ * Only the post-turn summarization needs this: `runTurnAndPersist` deliberately
+ * does not await it, so a scenario that read the log the instant the turn
+ * resolved would assert on a call that had not been made yet — intermittently,
+ * which is worse than never.
+ */
+async function waitForCall(names: readonly string[], timeoutMs = 15_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const hit = app.fakeLlm.calls.find((c) => c.fn !== null && names.includes(c.fn))
+    if (hit?.fn) return hit.fn
+    if (Date.now() > deadline) {
+      throw new Error(
+        `e2e: no ${names.join(' / ')} call within ${timeoutMs}ms. The detached ` +
+          'summarization either never ran or no longer reaches the describe role.',
+      )
+    }
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}

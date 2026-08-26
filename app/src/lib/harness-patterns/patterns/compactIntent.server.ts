@@ -43,7 +43,7 @@ import { getErrorHint } from '../error-hints'
 import { stripThinkBlocks } from '../content-transforms'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { extractLLMCallData, extractFailureLLMCallData } from '../baml-adapters.server'
-import { resolveClientForRole } from '../clients.server'
+import { clientOverrideFor, resolveClientForRole } from '../clients.server'
 
 assertServerOnImport()
 
@@ -138,8 +138,10 @@ export function compactIntent<T extends CompactIntentData>(
       startTime = Date.now()
       variables = { history, latest }
 
-      // Routes to `DescribeAnthropic` (Haiku 4.5).
-      const opts = { collector }
+      // Routes to `DescribeAnthropic` (Haiku 4.5), or to the self-hosted box
+      // on a verda-tier run — the intent is compacted FROM the conversation's
+      // own history, so it moves with the rest of the describe role.
+      const opts = { collector, ...clientOverrideFor('describe') }
       const raw = await b.CompactIntent(history, latest, opts)
       const intent = raw.trim() || latest
 

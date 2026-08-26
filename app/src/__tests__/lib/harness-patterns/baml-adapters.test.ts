@@ -37,6 +37,33 @@ vi.mock('../../../../baml_client', () => ({
   },
 }))
 
+/**
+ * Run `fn` with the self-hosted tier in force.
+ *
+ * Through the real `runWithInferenceTier` scope rather than by stubbing
+ * `clientOverrideFor`: the claim under test is "this call site spreads whatever
+ * the active tier says", and a stubbed override would prove only that the
+ * stub was called. The endpoint values are fakes — nothing opens a socket, they
+ * exist to satisfy the fail-closed check the scope runs before `fn`.
+ */
+async function withVerdaTier<T>(fn: () => Promise<T>): Promise<T> {
+  const clients = await import('../../../lib/harness-patterns/clients.server')
+  const saved = {
+    endpoint: process.env.VERDA_INFERENCE_ENDPOINT,
+    key: process.env.VERDA_INFERENCE_API_KEY,
+  }
+  process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
+  process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  try {
+    return await clients.runWithInferenceTier('verda', fn)
+  } finally {
+    if (saved.endpoint === undefined) delete process.env.VERDA_INFERENCE_ENDPOINT
+    else process.env.VERDA_INFERENCE_ENDPOINT = saved.endpoint
+    if (saved.key === undefined) delete process.env.VERDA_INFERENCE_API_KEY
+    else process.env.VERDA_INFERENCE_API_KEY = saved.key
+  }
+}
+
 describe('createLoopControllerAdapter', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -701,12 +728,11 @@ describe('describeToolResultOp', () => {
     )
 
     expect(result).toBe('Found 3 nodes in the graph.')
-    // The trailing options bag carries a collector and NOTHING else. Describe
-    // takes no client override — re-pointing this role is a per-function edit
-    // in `baml_src/`, never an options-bag one — but it does have to be
-    // COUNTED: it is the repo's highest-frequency role and an Anthropic-only
-    // one, so an unaccounted describe call silently biases the preview
-    // header's on-prem share upward by shrinking its denominator.
+    // OUTSIDE a verda scope the trailing options bag carries a collector and
+    // NOTHING else — no `client` key, so the function runs the chain
+    // `describe.baml` declares. The collector is not optional either: describe
+    // is the repo's highest-frequency role, so an unaccounted describe call
+    // biases the preview header's on-prem share by shrinking its denominator.
     expect(mockResultDescribe).toHaveBeenCalledWith(
       'read_neo4j_cypher',
       '{"query":"MATCH (n) RETURN n"}',
@@ -715,6 +741,21 @@ describe('describeToolResultOp', () => {
       expect.anything(),
     )
     expect(Object.keys(mockResultDescribe.mock.calls[0][4] as object)).toEqual(['collector'])
+  })
+
+  it('adds the client override inside a verda scope', async () => {
+    // The 2026-08-26 half of the pair above. `clients-verda.test.ts` greps for
+    // the literal ONCE PER ROLE, and describe has six call sites, so five could
+    // lose their spread and stay green there; the e2e tier scenario only ever
+    // exercises whichever describe path that turn happened to take. This is the
+    // per-call-site check for the two that carry tool results.
+    const { describeToolResultOp } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    mockResultDescribe.mockResolvedValue('ok')
+
+    await withVerdaTier(() => describeToolResultOp('search', '{}', '', 'data'))
+
+    expect(mockResultDescribe.mock.calls[0][4]).toMatchObject({ client: 'VerdaQwen' })
   })
 
   it('should return empty string on failure', async () => {
@@ -752,8 +793,9 @@ describe('describeToolResultsBatchOp', () => {
 
     expect(byId.get('1')).toBe('Found A.')
     expect(byId.get('2')).toBe('Fetched B.')
-    // `toolArgs` is renamed to the BAML class's snake_case `tool_args`; the
-    // trailing bag is the accounting collector only (see `describeToolResultOp`).
+    // `toolArgs` is renamed to the BAML class's snake_case `tool_args`; outside
+    // a verda scope the trailing bag is the accounting collector only (see
+    // `describeToolResultOp`).
     expect(mockResultDescribeBatch).toHaveBeenCalledWith(
       [
         { id: '1', tool: 'search', tool_args: '{"q":"a"}', reasoning: 'find a', result: 'A' },
@@ -762,6 +804,21 @@ describe('describeToolResultsBatchOp', () => {
       expect.anything(),
     )
     expect(Object.keys(mockResultDescribeBatch.mock.calls[0][1] as object)).toEqual(['collector'])
+  })
+
+  it('adds the client override inside a verda scope', async () => {
+    // The BATCH path specifically. The e2e tier scenario cannot reach it — its
+    // turns produce a single tool result, which routes to the single-item call
+    // — so without this the busiest describe path would be pinned by nothing
+    // but a per-role grep. It is also the call that carries the most user data
+    // in one prompt (SD-10: several tool results, verbatim).
+    const { describeToolResultsBatchOp } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    mockResultDescribeBatch.mockResolvedValue({ summaries: [{ id: '1', summary: 'A.' }] })
+
+    await withVerdaTier(() => describeToolResultsBatchOp(items))
+
+    expect(mockResultDescribeBatch.mock.calls[0][1]).toMatchObject({ client: 'VerdaQwen' })
   })
 
   it('omits ids the model dropped or answered blank', async () => {

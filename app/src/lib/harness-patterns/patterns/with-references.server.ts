@@ -176,6 +176,7 @@ const defaultSelector: SelectorFn = async (input) => {
   const { b } = await import('../../../../baml_client')
   const { accountBamlCall, warnIfCollectorEmpty, wrapAsLLMCallError } =
     await import('../baml-adapters.server')
+  const { clientOverrideFor } = await import('../clients.server')
   const now = Date.now()
   const collector = new Collector('reference-selector')
   const candidates = input.candidates.map((c) => ({
@@ -191,7 +192,9 @@ const defaultSelector: SelectorFn = async (input) => {
       input.intent,
       input.recentMessages.map((m) => ({ role: m.role, content: m.content })),
       candidates,
-      { collector },
+      // describe-tier, so a verda tier decision moves it: the candidates it
+      // ranks are summaries of this conversation's own tool results.
+      { collector, ...clientOverrideFor('describe') },
     )
   } catch (e) {
     // Non-fatal upstream (the wrapper falls back to attaching nothing), but the

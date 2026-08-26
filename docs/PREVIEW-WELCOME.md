@@ -44,16 +44,25 @@ It will sometimes be confidently wrong. Check anything you intend to act on.
 
 We would rather over-explain this than have you assume something convenient.
 
-**Your messages are sent to Anthropic**, the company behind the Claude models,
-which processes them to generate the answers. That is the only external model
-provider involved — nothing is sent anywhere else for inference. Anything the
-assistant reads on your behalf goes with it: if it searches your mailbox to
-answer, the content of the messages it found is part of what gets sent.
+**By default, your messages stay on our own hardware.** The models answering
+you run on a GPU server we rent and control at a European provider, and in that
+default position no conversation content is sent to any external AI provider.
+The header carries a switch: flip it from **Private (Verda)** to **Anthropic**
+and your conversation is instead processed by Anthropic, the company behind the
+Claude models — sometimes worth it for answer quality, and your choice per
+conversation. Whichever position you use, anything the assistant reads on your
+behalf travels with your messages: if it searches your mailbox to answer, the
+content of the messages it found is part of what gets processed.
 
-**Nothing is anonymised on the way out.** Names, addresses and identifying
-details in your conversation — yours or anyone else's — go as written. We have
-built the machinery to substitute them and it is not switched on yet, so please
-do not rely on it being there.
+One practical note about the private position: the GPU server switches off when
+idle, so the **first message after a quiet period can take about two minutes**
+— the app shows a "warming up" notice with an estimate while that happens.
+
+**Colleague names are substituted before anything reaches an external model.**
+The substitution works from the staff directory, so it covers the names and
+addresses it knows about — it does NOT cover every identifying detail you might
+type. On the Anthropic position, treat free-text details (client names, case
+specifics, anything not in our directory) as going out as written.
 
 **Conversations are stored, in full, on our own server** — a virtual machine we
 control, in our own subscription, along with any documents you upload and any

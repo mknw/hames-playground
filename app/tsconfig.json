@@ -20,5 +20,5 @@
     "baseUrl": "./"
   },
   "exclude": ["./node_modules", ".output", ".vinxi"],
-  "include": ["src"]
+  "include": ["src", "evals"]
 }

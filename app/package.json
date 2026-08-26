@@ -14,6 +14,7 @@
     "start": "vinxi start",
     "test": "vitest",
     "test:run": "vitest run",
+    "eval:harness": "BAML_LOG=warn pnpm dlx tsx --env-file=.env evals/run.ts",
     "dev:llama": "llama-server --model /Users/mknw/Library/Caches/llama.cpp/bartowski_zai-org_GLM-4.7-Flash-GGUF_zai-org_GLM-4.7-Flash-Q4_K_M.gguf --ctx-size 16384 --parallel 2 --threads 4 --host 127.0.0.1 --port 8080",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

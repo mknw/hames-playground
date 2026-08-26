@@ -31,3 +31,10 @@ gitignore
 Thumbs.db
 .env.bak
 .env.*.bak
+
+# Eval reports are run OUTPUT: one file per `pnpm eval:harness` invocation,
+# against whatever endpoint happened to be up. Tracking every ad-hoc run would
+# make the directory unreadable within a week. The README stays, and the
+# reference runs that a PR argues from are added explicitly with `git add -f`.
+evals/reports/*
+!evals/reports/README.md

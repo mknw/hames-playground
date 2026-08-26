@@ -379,3 +379,64 @@ export function deriveTitle(firstUserMessage: string): string | null {
   if (!cleaned) return null
   return cleaned.length > 60 ? cleaned.slice(0, 60) + '…' : cleaned
 }
+
+// ============================================================================
+// Cross-user aggregates
+// ============================================================================
+
+/**
+ * How recently a conversation must have been touched to count its owner as
+ * active. 15 minutes — long enough to cover a user reading an answer, short
+ * enough that the number means "right now".
+ */
+export const ACTIVE_WINDOW_MINUTES = 15
+
+/**
+ * Distinct users whose conversations were touched in the last
+ * {@link ACTIVE_WINDOW_MINUTES} minutes. Feeds the preview header's "active"
+ * counter (`metrics/preview-counters.server.ts` owns the rest of that strip's
+ * numbers, in a table of its own).
+ *
+ * **It lives in this module because this module owns SQL against
+ * `conversations`.** That is the #260 seam: encryption cannot live in
+ * `query()`, which takes opaque SQL and an untyped parameter array, so
+ * encrypt-on-write / decrypt-on-read live in the four repositories that own the
+ * encrypted tables — and `encryption-coverage.test.ts` pins that nothing else
+ * names one of those tables in SQL. A counter module reaching into
+ * `conversations` for itself would have been the fifth namer: not a leak today,
+ * because the two columns below are plaintext by design, but a second door onto
+ * an encrypted table that the pin exists to keep from opening. The aggregate is
+ * cheap and reads no personal data, so it comes to the door rather than the
+ * door being widened.
+ *
+ * Only `user_id` and `updated_at` are read, and only in aggregate: no title, no
+ * `context` blob, no row identity, and nothing per-user leaves this function —
+ * the caller gets a count (SD-10).
+ *
+ * `conversations.updated_at` is bumped by every `saveSession`, so it is the
+ * app's existing record of "this user did something", with no new write path
+ * and no new table. It is a *chat* activity signal specifically: a signed-in
+ * user staring at the dashboard is not counted, which is the honest reading of
+ * "active" for this app and is how the label is worded.
+ *
+ * The interval is inlined rather than parameterised because it is a constant,
+ * and `make_interval` with a bound parameter is the alternative — this keeps
+ * the SQL readable; the value never comes from a caller, let alone a client.
+ *
+ * **This is only cheap because of `conversations_updated_idx`**
+ * (`db/client.server.ts`), which leads on `updated_at`. The two composite
+ * indexes on that table lead on `user_id`, so without the recency-only one this
+ * degrades to a full index-only scan — O(every conversation ever) rather than
+ * O(the 15-minute window) — on a query that runs per poll, per tab, per user,
+ * on every route. Do not drop it while that surface polls.
+ */
+export async function countActiveUsers(): Promise<number> {
+  const { rows } = await query<{ active: string | number }>(
+    `SELECT COUNT(DISTINCT user_id) AS active
+       FROM conversations
+      WHERE updated_at > NOW() - INTERVAL '${ACTIVE_WINDOW_MINUTES} minutes'`,
+  )
+  // `COUNT` arrives from `pg` as a string (BIGINT), so it is parsed rather than
+  // trusted to be a number.
+  return Number(rows[0]?.active ?? 0) || 0
+}

@@ -1,25 +1,41 @@
+import { Show } from 'solid-js'
 import { useLocation } from '@solidjs/router'
 import { UserMenu } from '~/components/ark-ui/UserMenu'
 import { ThemeSwitcher } from '~/components/ark-ui/ThemeSwitcher'
+import { PreviewHeaderStrip } from '~/components/ark-ui/PreviewHeaderStrip'
 
 /**
  * Top bar. The old "Home"/"About" text links are gone (#132) — the chat is the
  * root route and the SolidStart demo page it linked to no longer exists. What
- * remains is a row of icon controls: metrics dashboard, theme, user.
+ * remains is the preview status strip on the left (inference tier, self-hosted
+ * warm state, global counters) and a row of icon controls on the right: metrics
+ * dashboard, theme, user.
  *
  * The bar itself is on the theme-aware `ui-*` tokens (#226 B8) — it houses the
  * theme control and it sits above the auth pages, so a dark bar over a light
  * sign-in page would be the one seam the switch could not hide. The dark
  * values of those tokens are the `dark-*` hexes it used before, so nothing
  * about the dark bar changed.
+ *
+ * The status strip is hidden on the auth routes. It reads a per-user preference
+ * and cross-user aggregates behind an authenticated gate, so on the sign-in
+ * page every poll is a rejected call — and since a first poll that fails now
+ * says so rather than rendering nothing, leaving it in would greet every
+ * signed-out visitor with a failure notice for a feature they cannot use yet.
  */
 export default function Nav() {
   const location = useLocation()
   const onDashboard = () => location.pathname === '/dashboard'
+  const onAuthRoute = () => location.pathname.startsWith('/auth')
 
   return (
     <nav bg="ui-bg-secondary" border="b ui-border-primary">
       <ul text="ui-text-primary" p="3" container flex items-center>
+        <li flex items-center>
+          <Show when={!onAuthRoute()}>
+            <PreviewHeaderStrip />
+          </Show>
+        </li>
         <li flex items-center gap-3 m="l-auto">
           <a
             href={onDashboard() ? '/' : '/dashboard'}

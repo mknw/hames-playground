@@ -68,6 +68,7 @@ Records: [0001](adr/0001-anthropic-only-default-chains.md) Anthropic-only defaul
 
 Authoritative source-level docs (closer to the code):
 
+- [`app/evals/README.md`](../app/evals/README.md) — **harness/client compatibility evals** (`pnpm eval:harness`): the scenario set, the `EVAL_CLIENT` seam and why it is not a new routing switch, the roles that are never re-pointed, and how the suite is kept structurally out of CI. Run it whenever a BAML client changes
 - [`app/src/lib/harness-patterns/SPEC.md`](../app/src/lib/harness-patterns/SPEC.md) — full framework API and design spec
 - [`app/src/lib/harness-patterns/README.md`](../app/src/lib/harness-patterns/README.md) — the `hames` library front page
 - [`app/src/lib/harness-client/agents/README.md`](../app/src/lib/harness-client/agents/README.md) — example implementations

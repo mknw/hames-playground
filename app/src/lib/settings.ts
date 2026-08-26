@@ -239,18 +239,32 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
 // ============================================================================
 // LLM pricing (#122 / #132 — token & cost metrics)
 // ============================================================================
+//
+// TWO pricing models, one currency. Everything this app renders as a price is
+// in EUR, because that is the currency the bills arrive in.
+//
+//  - TOKEN-priced clients (Anthropic): the vendor publishes $/MTok, so the
+//    tables below stay in dollars — the list price is the auditable fact — and
+//    the conversion to EUR happens once, at the end, at `USD_EUR_RATE`.
+//  - TIME-priced clients (the self-hosted GPU): billed by the wall-clock second
+//    the box is awake, at `VERDA_EUR_PER_HOUR`. Tokens on it are free.
+//
+// Which model a call takes is decided by the client BAML actually SELECTED
+// (`call.clientName`), never by the tier the run intended — the same attribution
+// rule the preview counters use (`metrics/usage-recorder.server.ts`). A call
+// that fell back to Anthropic is priced as Anthropic even on a verda-tier turn.
 
 /**
- * $ per MTok per BAML client. A client with no entry reads as cost "unknown"
- * rather than silently wrong, so a newly added one must be listed here.
+ * $ per MTok per BAML client. A client with no entry — and not in
+ * {@link TIME_PRICED_CLIENT} either — reads as cost "unknown" rather than
+ * silently wrong, so a newly added one must be listed here.
+ *
+ * These stay in USD on purpose: it is the number Anthropic publishes, so it is
+ * the number a reader can check. The EUR figure the UI shows is this × the
+ * static {@link DEFAULT_USD_EUR_RATE} (or its env override).
  *
  * AnthropicSonnet5 uses the INTRO pricing in force through 2026-08-31
  * (standard: 3.00 / 15.00) — update after.
- *
- * `VerdaQwen` is deliberately ABSENT: the self-hosted deployment is billed by
- * the second the GPU is awake, not by the token, so any per-token rate here
- * would be invented — and a `0` would render as "this call was free" on a box
- * that is being paid for while it answers. "Unknown" is the honest reading.
  */
 export const CLIENT_PRICING: Record<string, { inPerMTok: number; outPerMTok: number }> = {
   AnthropicSonnet5: { inPerMTok: 2.0, outPerMTok: 10.0 },
@@ -262,27 +276,117 @@ export const CLIENT_PRICING: Record<string, { inPerMTok: number; outPerMTok: num
   AnthropicOpus4: { inPerMTok: 15.0, outPerMTok: 75.0 },
 }
 
+/**
+ * The one BAML client billed by wall-clock rather than by token.
+ *
+ * Written as a literal rather than imported from `VERDA_CLIENT_NAME` in
+ * `inference/verda-activity.server.ts`, because this file is client-safe and
+ * that one is server-only — the same reason `CLIENT_PRICING`'s and
+ * `MODEL_CONTEXT_WINDOWS`' keys are literals. The two are pinned equal by
+ * `__tests__/lib/pricing-eur.test.ts`; a rename that moved only one of them
+ * would silently drop the box back to per-token pricing.
+ */
+export const TIME_PRICED_CLIENT = 'VerdaQwen'
+
 /** Anthropic cache pricing multipliers on the base input rate. */
 export const CACHE_WRITE_MULT = 1.25
 export const CACHE_READ_MULT = 0.1
 
-/** Cost of one call given its token buckets, at `clientName`'s rates.
- *  Returns undefined for clients without a pricing entry. `noCacheUsd` is the
- *  same tokens priced as if nothing were cached — the savings baseline. */
-export function estimateLlmCostUsd(
-  tokens: {
-    inputUncachedTokens: number
-    inputCacheReadTokens: number
-    inputCacheWriteTokens: number
-    outputTokens: number
-  },
+/**
+ * EUR per USD — a STATIC conversion, set by hand.
+ *
+ * There is no live FX lookup and there should not be one: the figure exists so
+ * a spend estimate reads in the currency of the invoice, and a rate that moved
+ * under the UI would make two page loads of the same conversation disagree for
+ * a reason that has nothing to do with the conversation. Overridable at
+ * `USD_EUR_RATE` (see `cost-rates.server.ts`) so an operator can put the rate
+ * their finance team uses in without a rebuild.
+ *
+ * 0.86 ≈ EUR/USD 1.16, the rate around 2026-08. Update it by hand; the number
+ * it feeds is labelled an estimate everywhere it renders.
+ */
+export const DEFAULT_USD_EUR_RATE = 0.86
+
+/**
+ * EUR per hour the self-hosted GPU is awake — the owner's figure for the Verda
+ * (DataCrunch) instance, 2026-08-26. Overridable at `VERDA_EUR_PER_HOUR`.
+ *
+ * The deployment scales to zero, so an idle box costs nothing and this rate is
+ * only ever multiplied by time something was actually running.
+ */
+export const DEFAULT_VERDA_EUR_PER_HOUR = 1.819
+
+/** Token buckets one call was billed on. */
+export interface TokenBuckets {
+  inputUncachedTokens: number
+  inputCacheReadTokens: number
+  inputCacheWriteTokens: number
+  outputTokens: number
+}
+
+/** How a figure was arrived at — the UI needs this to know whether the number
+ *  is an estimate of a token bill or a FLOOR on a time bill. */
+export type CostBasis = 'tokens' | 'time'
+
+/** One call's cost in EUR, plus the audit trail for whichever basis produced it. */
+export interface CostEstimateEur {
+  costEur: number
+  /** The same call priced with zero caching — the savings baseline. Equal to
+   *  `costEur` on the time basis: caching cannot save wall-clock, and the
+   *  self-hosted client asks for no caching at all. */
+  noCacheEur: number
+  basis: CostBasis
+  /** €/MTok actually applied (token basis) — list price × the USD→EUR rate. */
+  rates?: { inPerMTok: number; outPerMTok: number }
+  /** €/h and the wall-clock it was applied to (time basis). */
+  timeRate?: { eurPerHour: number; durationMs: number }
+}
+
+/**
+ * Cost of ONE physical API call in EUR, by whichever model `clientName` is
+ * billed under. `undefined` means "not priceable", which is rendered as unknown
+ * rather than as zero — an invented figure is worse than an absent one.
+ *
+ * Returns undefined when:
+ *  - the client is neither in {@link CLIENT_PRICING} nor time-priced, or
+ *  - it IS time-priced but the call was not measured (`durationMs` absent).
+ *    A time bill with no time is not a free call; BAML reports no duration when
+ *    it measured none, and a 0 there would read as a call that cost nothing on
+ *    a box that was demonstrably awake.
+ *
+ * `opts.usdEurRate` / `opts.eurPerHour` default to the constants above so a
+ * caller with no access to the environment still gets a sane figure; the one
+ * production call site passes the env-resolved values from
+ * `cost-rates.server.ts`.
+ */
+export function estimateLlmCostEur(
+  tokens: TokenBuckets,
   clientName?: string,
-):
-  | { costUsd: number; noCacheUsd: number; rates: { inPerMTok: number; outPerMTok: number } }
-  | undefined {
-  const rates = clientName ? CLIENT_PRICING[clientName] : undefined
-  if (!rates) return undefined
-  const inUsd =
+  opts?: { durationMs?: number; usdEurRate?: number; eurPerHour?: number },
+): CostEstimateEur | undefined {
+  if (clientName === TIME_PRICED_CLIENT) {
+    const durationMs = opts?.durationMs
+    if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) return undefined
+    const eurPerHour = opts?.eurPerHour ?? DEFAULT_VERDA_EUR_PER_HOUR
+    const costEur = (durationMs / 3_600_000) * eurPerHour
+    return {
+      costEur,
+      noCacheEur: costEur,
+      basis: 'time',
+      timeRate: { eurPerHour, durationMs },
+    }
+  }
+
+  const listed = clientName ? CLIENT_PRICING[clientName] : undefined
+  if (!listed) return undefined
+  const usdEur = opts?.usdEurRate ?? DEFAULT_USD_EUR_RATE
+  // Convert the rates, not the totals: `rates` is the audit trail the UI shows,
+  // so it has to be the €/MTok the arithmetic below actually used.
+  const rates = {
+    inPerMTok: listed.inPerMTok * usdEur,
+    outPerMTok: listed.outPerMTok * usdEur,
+  }
+  const inEur =
     (tokens.inputUncachedTokens +
       tokens.inputCacheWriteTokens * CACHE_WRITE_MULT +
       tokens.inputCacheReadTokens * CACHE_READ_MULT) *
@@ -290,8 +394,9 @@ export function estimateLlmCostUsd(
   const allIn =
     tokens.inputUncachedTokens + tokens.inputCacheWriteTokens + tokens.inputCacheReadTokens
   return {
-    costUsd: (inUsd + tokens.outputTokens * rates.outPerMTok) / 1_000_000,
-    noCacheUsd: (allIn * rates.inPerMTok + tokens.outputTokens * rates.outPerMTok) / 1_000_000,
+    costEur: (inEur + tokens.outputTokens * rates.outPerMTok) / 1_000_000,
+    noCacheEur: (allIn * rates.inPerMTok + tokens.outputTokens * rates.outPerMTok) / 1_000_000,
+    basis: 'tokens',
     rates,
   }
 }

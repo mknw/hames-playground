@@ -14,10 +14,13 @@
  *
  * `getEventMetrics` is the single accessor every fold goes through — if the
  * accounting ever moves off `event.metrics`, this one function is the swap
- * point.
+ * point. `stepCostEur` beside it is the same idea for the money: one currency,
+ * one conversion rule, shared with the observability panel's own fold so the
+ * two surfaces cannot disagree about the same conversation.
  */
 
 import type { ContextEvent, EventMetrics } from '../harness-patterns/types'
+import { DEFAULT_USD_EUR_RATE } from '../settings'
 
 // ============================================================================
 // Selector
@@ -31,6 +34,41 @@ export function getEventMetrics(event: ContextEvent): EventMetrics | undefined {
 /** True when the event came from an LLM call, metered or not. */
 export function isLlmBearing(event: ContextEvent): boolean {
   return getEventMetrics(event) !== undefined || event.llmCall !== undefined
+}
+
+/**
+ * The EUR cost of one step — the second accessor every fold goes through, and
+ * the one place that knows a stamp might predate the currency fix.
+ *
+ * `undefined` means the step was not priced at all: no client rate and no
+ * measured wall-clock. That is rendered as "—", never as €0.
+ *
+ * Pre-EUR events carry `costUsd`, and that figure was always a token-priced
+ * Anthropic estimate — the self-hosted box had no pricing entry back then, so
+ * no wrong time-priced number can be in the store — which makes converting it
+ * exactly as accurate as converting a new one. It converts at the DEFAULT rate,
+ * not the operator's current one, because the rate in force when it was stamped
+ * was never recorded; using the live value would silently re-price history
+ * every time `USD_EUR_RATE` moved.
+ *
+ * Shared with `observability/token-totals.ts`: the panel and the dashboard must
+ * agree to the cent on the same conversation, and two copies of this rule would
+ * be one copy away from disagreeing.
+ */
+export function stepCostEur(m: EventMetrics): { costEur: number; noCacheEur: number } | undefined {
+  if (m.costEur !== undefined) {
+    // No `noCacheEur` ⇒ treat the call as its own baseline, so it contributes
+    // zero savings rather than a fabricated one. A time-priced call is always
+    // its own baseline: caching cannot save wall-clock.
+    return { costEur: m.costEur, noCacheEur: m.noCacheEur ?? m.costEur }
+  }
+  if (m.costUsd !== undefined) {
+    return {
+      costEur: m.costUsd * DEFAULT_USD_EUR_RATE,
+      noCacheEur: (m.noCacheUsd ?? m.costUsd) * DEFAULT_USD_EUR_RATE,
+    }
+  }
+  return undefined
 }
 
 // ============================================================================
@@ -49,12 +87,17 @@ export interface MetricTotals {
   inputCacheReadTokens: number
   inputCacheWriteTokens: number
   outputTokens: number
-  /** Estimated spend over the calls that had pricing */
-  costUsd: number
-  /** Same tokens priced with zero caching — the savings baseline */
-  noCacheUsd: number
-  /** Metered calls whose client had a pricing entry (cost covers only these) */
+  /** Estimated spend in EUR over the calls that could be priced */
+  costEur: number
+  /** Same calls priced with zero caching — the savings baseline */
+  noCacheEur: number
+  /** Metered calls that could be priced (cost covers only these) */
   pricedCalls: number
+  /** Priced calls billed by wall-clock rather than by token. `> 0` ⇒ `costEur`
+   *  is a FLOOR: the self-hosted box is also paid for the idle scale-down
+   *  window after the last call and the cold start before the first, and
+   *  neither is any call's measured duration. The UI renders a `≥`. */
+  timePricedCalls: number
 }
 
 /** Totals plus the ratios the UI shows. */
@@ -63,9 +106,9 @@ export interface MetricSummary extends MetricTotals {
   totalTokens: number
   /** Share of input tokens served from cache (0 when there was no input) */
   cacheHitRate: number
-  /** noCacheUsd − costUsd, i.e. what caching avoided */
-  savingsUsd: number
-  /** savingsUsd as a share of the uncached baseline */
+  /** noCacheEur − costEur, i.e. what caching avoided */
+  savingsEur: number
+  /** savingsEur as a share of the uncached baseline */
   savingsPct: number
 }
 
@@ -121,9 +164,10 @@ export function emptyTotals(): MetricTotals {
     inputCacheReadTokens: 0,
     inputCacheWriteTokens: 0,
     outputTokens: 0,
-    costUsd: 0,
-    noCacheUsd: 0,
+    costEur: 0,
+    noCacheEur: 0,
     pricedCalls: 0,
+    timePricedCalls: 0,
   }
 }
 
@@ -143,12 +187,12 @@ export function accumulate(totals: MetricTotals, event: ContextEvent): MetricTot
   totals.inputCacheReadTokens += m.inputCacheReadTokens
   totals.inputCacheWriteTokens += m.inputCacheWriteTokens
   totals.outputTokens += m.outputTokens
-  if (m.costUsd !== undefined) {
+  const cost = stepCostEur(m)
+  if (cost) {
     totals.pricedCalls++
-    totals.costUsd += m.costUsd
-    // No `noCacheUsd` (older stamp) ⇒ treat the call as its own baseline, so
-    // it contributes zero savings rather than a fabricated one.
-    totals.noCacheUsd += m.noCacheUsd ?? m.costUsd
+    totals.costEur += cost.costEur
+    totals.noCacheEur += cost.noCacheEur
+    if (m.basis === 'time') totals.timePricedCalls++
   }
   return totals
 }
@@ -157,14 +201,14 @@ export function accumulate(totals: MetricTotals, event: ContextEvent): MetricTot
 export function summarize(totals: MetricTotals): MetricSummary {
   const inputTotalTokens =
     totals.inputUncachedTokens + totals.inputCacheReadTokens + totals.inputCacheWriteTokens
-  const savingsUsd = totals.noCacheUsd - totals.costUsd
+  const savingsEur = totals.noCacheEur - totals.costEur
   return {
     ...totals,
     inputTotalTokens,
     totalTokens: inputTotalTokens + totals.outputTokens,
     cacheHitRate: inputTotalTokens > 0 ? totals.inputCacheReadTokens / inputTotalTokens : 0,
-    savingsUsd,
-    savingsPct: totals.noCacheUsd > 0 ? savingsUsd / totals.noCacheUsd : 0,
+    savingsEur,
+    savingsPct: totals.noCacheEur > 0 ? savingsEur / totals.noCacheEur : 0,
   }
 }
 
@@ -177,7 +221,7 @@ export function foldEvents(events: ContextEvent[]): MetricSummary {
 
 /** Cost first, then tokens — a call with unknown pricing still ranks by size. */
 function byCostThenTokens(a: MetricSummary, b: MetricSummary): number {
-  if (b.costUsd !== a.costUsd) return b.costUsd - a.costUsd
+  if (b.costEur !== a.costEur) return b.costEur - a.costEur
   return b.totalTokens - a.totalTokens
 }
 

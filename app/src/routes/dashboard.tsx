@@ -14,6 +14,7 @@
 import { createResource, createMemo, For, Show } from 'solid-js'
 import { getMetricsDashboard, type MetricsDashboard } from '~/lib/metrics/dashboard.server'
 import type { MetricSummary } from '~/lib/metrics/aggregate'
+import { fmtEur } from '~/lib/observability/token-totals'
 
 // ============================================================================
 // Formatting
@@ -26,8 +27,10 @@ const fmtTok = (n: number): string => {
   return String(n)
 }
 
-/** Cost with enough precision to stay meaningful at per-call scale. */
-const fmtUsd = (v: number): string => (v >= 0.1 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`)
+/** A `≥` in front of a figure that only some of the bill is visible for — see
+ *  `MetricTotals.timePricedCalls`. Nothing when every priced call was billed by
+ *  the token, which is a number this app can state exactly. */
+const floorMark = (s: MetricSummary): string => (s.timePricedCalls > 0 ? '≥ ' : '')
 
 const fmtPct = (v: number): string => `${Math.round(v * 100)}%`
 
@@ -166,7 +169,8 @@ const SummaryCells = (props: { summary: MetricSummary }) => (
     </Td>
     <Td right>
       <Show when={props.summary.pricedCalls > 0} fallback={<span text="ui-text-tertiary">—</span>}>
-        {fmtUsd(props.summary.costUsd)}
+        {floorMark(props.summary)}
+        {fmtEur(props.summary.costEur)}
       </Show>
     </Td>
   </>
@@ -195,7 +199,7 @@ export default function Dashboard() {
             Metrics
           </h1>
           <span text="xs ui-text-secondary">
-            Tokens, cache and estimated cost across your conversations
+            Tokens, cache and estimated cost (EUR) across your conversations
           </span>
         </div>
         <div flex="~" items="center" gap="2" m="l-auto">
@@ -277,24 +281,38 @@ export default function Dashboard() {
               />
               <div grid="~ cols-1 sm:cols-2 lg:cols-4" gap="4">
                 {/* Same rule as the table's cost column: no priced step means no
-                    figure, not $0.0000. */}
+                    figure, not €0.0000. */}
                 <Card
                   label="Estimated cost"
-                  value={totals()!.pricedCalls > 0 ? fmtUsd(totals()!.costUsd) : '—'}
+                  value={
+                    totals()!.pricedCalls > 0
+                      ? `${floorMark(totals()!)}${fmtEur(totals()!.costEur)}`
+                      : '—'
+                  }
                   tone={totals()!.pricedCalls > 0 ? 'ui-accent' : 'ui-text-tertiary'}
                   hint={
                     totals()!.pricedCalls < totals()!.meteredCalls
                       ? `${totals()!.pricedCalls}/${totals()!.meteredCalls} steps priced`
                       : 'all steps priced'
                   }
-                  title="Sum of per-call estimates stamped with the rates in force at call time"
+                  title={
+                    'Sum of per-call estimates stamped with the rates in force at call time. ' +
+                    'Token-priced clients use the vendor list price converted at a static USD→EUR ' +
+                    'rate — no live FX.' +
+                    (totals()!.timePricedCalls > 0
+                      ? ` ${totals()!.timePricedCalls} step(s) ran on the self-hosted GPU, which bills` +
+                        ' wall-clock rather than tokens, so the total is a FLOOR: it covers the' +
+                        " calls' own duration, not the idle window the box stays warm afterwards" +
+                        ' nor the cold start before the first call.'
+                      : '')
+                  }
                 />
                 <Card
                   label="Saved by caching"
-                  value={fmtUsd(totals()!.savingsUsd)}
+                  value={fmtEur(totals()!.savingsEur)}
                   tone="ui-success"
-                  hint={`${fmtPct(totals()!.savingsPct)} off ${fmtUsd(totals()!.noCacheUsd)} uncached`}
-                  title="Difference between the billed estimate and the same tokens priced with no caching"
+                  hint={`${fmtPct(totals()!.savingsPct)} off ${fmtEur(totals()!.noCacheEur)} uncached`}
+                  title="Difference between the billed estimate and the same tokens priced with no caching. Wall-clock-billed steps contribute nothing here — caching cannot save GPU seconds."
                 />
                 <Card
                   label="Cache hit-rate"
@@ -442,12 +460,26 @@ export default function Dashboard() {
               </div>
             </section>
 
-            <footer text="xs ui-text-secondary" m="t-2">
-              Costs are estimates: each step is priced at the $/MTok rates in force for the client
-              that served it (see <span font="mono">CLIENT_PRICING</span> in{' '}
-              <span font="mono">lib/settings.ts</span>), with cache reads at 0.1× and cache writes
-              at 1.25× the base input rate. Steps whose client has no pricing entry are counted but
-              left out of the cost columns.
+            <footer flex="~ col" gap="1" text="xs ui-text-secondary" m="t-2">
+              <span>
+                Every figure is in euro. Token-priced clients are priced at the $/MTok rates in
+                force for the client that served each step (see{' '}
+                <span font="mono">CLIENT_PRICING</span> in <span font="mono">lib/settings.ts</span>
+                ), with cache reads at 0.1× and cache writes at 1.25× the base input rate, converted
+                at a static USD→EUR rate (<span font="mono">USD_EUR_RATE</span>) — there is no live
+                FX lookup. Steps whose client could not be priced are counted but left out of the
+                cost columns.
+              </span>
+              <Show when={totals()!.timePricedCalls > 0}>
+                <span>
+                  A <span font="mono">≥</span> marks a figure that includes wall-clock-billed steps.
+                  The self-hosted GPU bills by the second it is awake (
+                  <span font="mono">VERDA_EUR_PER_HOUR</span>) and its tokens are free, but the only
+                  seconds visible here are the durations of the calls themselves — not the idle
+                  window the box stays warm for afterwards, nor the cold start before the first
+                  call. Those figures are floors on the bill, not the bill.
+                </span>
+              </Show>
             </footer>
           </Show>
         )}

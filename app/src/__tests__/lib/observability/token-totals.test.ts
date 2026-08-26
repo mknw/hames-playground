@@ -8,7 +8,8 @@
 import { describe, it, expect } from 'vitest'
 import type { ContextEvent } from '~/lib/harness-patterns'
 import type { EventMetrics } from '~/lib/harness-patterns/types'
-import { fmtTok, fmtUsd, foldTokenTotals } from '~/lib/observability/token-totals'
+import { fmtTok, fmtEur, foldTokenTotals } from '~/lib/observability/token-totals'
+import { DEFAULT_USD_EUR_RATE } from '~/lib/settings'
 
 const metrics = (m: Partial<EventMetrics> = {}): EventMetrics => ({
   inputUncachedTokens: 1000,
@@ -37,11 +38,11 @@ describe('fmtTok', () => {
   })
 })
 
-describe('fmtUsd', () => {
+describe('fmtEur', () => {
   it('keeps sub-cent costs at four decimals and rounds larger ones to two', () => {
-    expect(fmtUsd(0.0123)).toBe('$0.0123')
-    expect(fmtUsd(0.1)).toBe('$0.10')
-    expect(fmtUsd(1.239)).toBe('$1.24')
+    expect(fmtEur(0.0123)).toBe('€0.0123')
+    expect(fmtEur(0.1)).toBe('€0.10')
+    expect(fmtEur(1.239)).toBe('€1.24')
   })
 })
 
@@ -86,19 +87,61 @@ describe('foldTokenTotals', () => {
 
   it('accumulates cost only from priced calls and reports the caching saving', () => {
     const totals = foldTokenTotals([
-      ev({ metrics: metrics({ costUsd: 0.02, noCacheUsd: 0.05 }) }),
+      ev({ metrics: metrics({ costEur: 0.02, noCacheEur: 0.05 }) }),
       ev({ metrics: metrics() }),
     ])
     expect(totals.llmCalls).toBe(2)
     expect(totals.costKnownCalls).toBe(1)
-    expect(totals.costUsd).toBeCloseTo(0.02)
+    expect(totals.costEur).toBeCloseTo(0.02)
     expect(totals.savedPct).toBeCloseTo(0.6)
   })
 
   it('treats a priced call with no uncached figure as having saved nothing', () => {
-    const totals = foldTokenTotals([ev({ metrics: metrics({ costUsd: 0.03 }) })])
-    expect(totals.noCacheUsd).toBeCloseTo(0.03)
+    const totals = foldTokenTotals([ev({ metrics: metrics({ costEur: 0.03 }) })])
+    expect(totals.noCacheEur).toBeCloseTo(0.03)
     expect(totals.savedPct).toBe(0)
+  })
+
+  it('flags the total as a floor when a step was billed by wall-clock', () => {
+    // A time-priced step's figure covers only the durations of the calls; the
+    // box is also paid for the idle window after them and the cold start before
+    // them. `timePricedCalls > 0` is what makes the bar render a `≥`.
+    const totals = foldTokenTotals([
+      ev({ metrics: metrics({ costEur: 0.01, noCacheEur: 0.01, basis: 'time' }) }),
+      ev({ metrics: metrics({ costEur: 0.02, noCacheEur: 0.05, basis: 'tokens' }) }),
+    ])
+    expect(totals.timePricedCalls).toBe(1)
+    expect(totals.costEur).toBeCloseTo(0.03)
+  })
+
+  it('leaves timePricedCalls at zero for an all-token session', () => {
+    const totals = foldTokenTotals([
+      ev({ metrics: metrics({ costEur: 0.02, noCacheEur: 0.05, basis: 'tokens' }) }),
+    ])
+    expect(totals.timePricedCalls).toBe(0)
+  })
+
+  it('converts a pre-EUR stamp at the DEFAULT rate rather than dropping it', () => {
+    // Events persisted before the currency fix carry `costUsd`. Reading them as
+    // unpriced would empty the panel for every historical conversation; the
+    // figure was always a token-priced Anthropic estimate, so converting it is
+    // as accurate as converting a new one. The DEFAULT rate, not the operator's
+    // current one — the rate in force at stamp time was never recorded.
+    const totals = foldTokenTotals([
+      ev({ metrics: { ...metrics(), costUsd: 0.5, noCacheUsd: 1.0 } }),
+    ])
+    expect(totals.costKnownCalls).toBe(1)
+    expect(totals.costEur).toBeCloseTo(0.5 * DEFAULT_USD_EUR_RATE, 9)
+    expect(totals.noCacheEur).toBeCloseTo(1.0 * DEFAULT_USD_EUR_RATE, 9)
+    // No basis on a legacy stamp ⇒ not counted as a floor.
+    expect(totals.timePricedCalls).toBe(0)
+  })
+
+  it('prefers a new EUR stamp over a legacy USD one on the same event', () => {
+    const totals = foldTokenTotals([
+      ev({ metrics: { ...metrics(), costEur: 0.01, noCacheEur: 0.01, costUsd: 99 } }),
+    ])
+    expect(totals.costEur).toBeCloseTo(0.01, 9)
   })
 
   it('counts retry attempts above the number of LLM steps', () => {
@@ -130,7 +173,7 @@ describe('foldTokenTotals', () => {
       cacheRead: 200,
       cacheWrite: 100,
       output: 40,
-      costUsd: 0,
+      costEur: 0,
       costKnownCalls: 0,
     })
   })

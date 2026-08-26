@@ -14,6 +14,10 @@ export type {
   PlanResult,
 } from '../../../baml_client/types'
 
+import type { CostBasis } from '../settings'
+
+export type { CostBasis }
+
 /** How a loop pattern handles multi-call turns (ControllerAction.additional_calls).
  *  - 'parallel'   — affordance advertised; independent calls run concurrently
  *                   (capped at MAX_PARALLEL_TOOL_CALLS in flight)
@@ -118,13 +122,32 @@ export interface EventMetrics {
   outputTokens: number
   /** Physical API calls this step made (>1 ⇒ retries/fallbacks burned spend) */
   attempts: number
-  /** Estimated cost in USD at the rates below; absent when any attempt's
-   *  client has no pricing entry (unknown beats silently wrong) */
-  costUsd?: number
-  /** Same tokens priced with zero caching — the savings baseline */
-  noCacheUsd?: number
-  /** $/MTok rates used for the final attempt's client (audit trail) */
+  /** Estimated cost in EUR — one currency everywhere a price renders. Absent
+   *  when any token-bearing attempt could not be priced (unknown beats
+   *  silently wrong). Summed across attempts, which may mix bases: a
+   *  token-priced fallback and a time-priced attempt each contribute their own
+   *  arithmetic. */
+  costEur?: number
+  /** Same call priced with zero caching — the savings baseline. Equal to
+   *  `costEur` for a time-priced attempt: caching cannot save wall-clock. */
+  noCacheEur?: number
+  /** How the final priced attempt was billed. `'time'` means the figure is a
+   *  FLOOR: it covers the wall-clock of the calls themselves and not the idle
+   *  scale-down window after the last one or the cold start before the first,
+   *  both of which the box is also paid for. Render it with a `≥`. */
+  basis?: CostBasis
+  /** €/MTok applied to the final priced attempt (token basis, audit trail) —
+   *  the vendor's USD list price already converted at the USD→EUR rate. */
   rates?: { inPerMTok: number; outPerMTok: number }
+  /** €/h and the measured wall-clock it was applied to (time basis). */
+  timeRate?: { eurPerHour: number; durationMs: number }
+  /** @deprecated Pre-EUR stamp, in USD. Events persisted before the currency
+   *  fix carry this instead of `costEur`; the folds convert it at the DEFAULT
+   *  USD→EUR rate, because the rate in force when it was stamped was never
+   *  recorded. Never written by new code. */
+  costUsd?: number
+  /** @deprecated Pre-EUR stamp, in USD. See {@link EventMetrics.costUsd}. */
+  noCacheUsd?: number
 }
 
 /** A single event in the context stream */

@@ -6,8 +6,49 @@
 import { Match, Show, Switch, createSignal } from 'solid-js'
 import { Accordion } from '@ark-ui/solid/accordion'
 import type { LLMCallData } from '~/lib/harness-patterns'
-import { fmtUsd } from '~/lib/observability/token-totals'
+import type { EventMetrics } from '~/lib/harness-patterns/types'
+import { fmtEur } from '~/lib/observability/token-totals'
+import { stepCostEur } from '~/lib/metrics/aggregate'
 import { CodeBlock, ParsedPromptView } from './PromptView'
+
+/**
+ * What the step's price chip shows, or `undefined` when the step could not be
+ * priced — rendered as no chip at all rather than as €0.
+ *
+ * The two bases read differently on purpose. A token-priced step is an
+ * ESTIMATE, and its tooltip carries the €/MTok it used and the uncached
+ * baseline. A time-priced step is a FLOOR: the self-hosted box is billed for
+ * every second it is awake, and the only seconds this app can see are the
+ * durations of the calls themselves — not the idle scale-down window it stays
+ * up for after the last one, nor the cold start it pays before the first. So
+ * the label says "compute time" and the figure carries a `≥`.
+ */
+function stepCost(m: EventMetrics): { eur: number; isFloor: boolean; title: string } | undefined {
+  const cost = stepCostEur(m)
+  if (!cost) return undefined
+  if (m.basis === 'time' && m.timeRate) {
+    const seconds = (m.timeRate.durationMs / 1000).toFixed(1)
+    return {
+      eur: cost.costEur,
+      isFloor: true,
+      title:
+        `Billed by the second on the self-hosted GPU at €${m.timeRate.eurPerHour}/h — ` +
+        `${seconds}s of measured call time. Tokens on it are free. ` +
+        `A FLOOR, not the bill: the box is also paid for the idle window it stays warm ` +
+        `after the last call and for the cold start before the first, and neither is any ` +
+        `call's duration.`,
+    }
+  }
+  const rates = m.rates
+  return {
+    eur: cost.costEur,
+    isFloor: false,
+    title:
+      (rates
+        ? `At €${rates.inPerMTok.toFixed(2)}/€${rates.outPerMTok.toFixed(2)} per MTok (USD list price at a static conversion rate — no live FX); `
+        : '') + `uncached this call would be ${fmtEur(cost.noCacheEur)}`,
+  }
+}
 
 type LLMTab = 'prompt' | 'output'
 
@@ -121,17 +162,18 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
             </span>
           </div>
         </Show>
-        <Show when={props.llmCall.metrics!.costUsd !== undefined}>
-          <div
-            flex="~ col"
-            gap="0.5"
-            title={`At $${props.llmCall.metrics!.rates?.inPerMTok}/$${props.llmCall.metrics!.rates?.outPerMTok} per MTok; uncached this call would be ${fmtUsd(props.llmCall.metrics!.noCacheUsd ?? props.llmCall.metrics!.costUsd!)}`}
-          >
-            <span text="xs ui-text-tertiary">Cost (step)</span>
-            <span text="sm ui-text-primary" font="mono">
-              {fmtUsd(props.llmCall.metrics!.costUsd!)}
-            </span>
-          </div>
+        <Show when={stepCost(props.llmCall.metrics!)}>
+          {(cost) => (
+            <div flex="~ col" gap="0.5" title={cost().title}>
+              <span text="xs ui-text-tertiary">
+                {cost().isFloor ? 'Compute time (step)' : 'Cost (step)'}
+              </span>
+              <span text="sm ui-text-primary" font="mono">
+                {cost().isFloor ? '≥ ' : ''}
+                {fmtEur(cost().eur)}
+              </span>
+            </div>
+          )}
         </Show>
       </Show>
 

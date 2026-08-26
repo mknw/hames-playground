@@ -38,7 +38,8 @@ import { listTools as mcpListTools } from './mcp-client.server'
 import { getActiveSandbox } from '../sandbox/scope.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
-import { CLIENT_MAX_OUTPUT_TOKENS, estimateLlmCostUsd } from '../settings'
+import { CLIENT_MAX_OUTPUT_TOKENS, estimateLlmCostEur, type CostBasis } from '../settings'
+import { usdEurRate, verdaEurPerHour } from '../cost-rates.server'
 import { clientOverrideFor } from './clients.server'
 import { notifyLlmUsage } from './llm-usage-observer.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
@@ -200,11 +201,14 @@ export function accountBamlCall(
     functionName,
     clientName: selectedCall?.clientName,
     metrics: metrics ?? computeEventMetrics(collector),
-    durationMs: functionDurationMs(last),
+    durationMs: measuredDurationMs(last),
   })
 }
 
-/** How long BAML measured this function call to take, across every attempt.
+/** How long BAML measured something to take — a whole function call across
+ *  every attempt (`FunctionLog`) or one physical attempt (`LLMCall`). Both
+ *  expose the same `timing` getter, and the second is what a time-priced client
+ *  is billed on.
  *
  *  Read off the collector rather than timed around the call: the number a user
  *  waits on is the model round trip, and a stopwatch here would also fold in
@@ -212,9 +216,14 @@ export function accountBamlCall(
  *  class and is absent from the collector stubs the tests build, so it is read
  *  defensively — and a non-finite or negative reading is reported as "not
  *  measured" (undefined) rather than as a 0 that would look like a fast call.
+ *  For a time-priced call that undefined is what makes the whole step's cost
+ *  read as unknown, which is the honest reading: a time bill with no time is
+ *  not a free call.
  */
-function functionDurationMs(last: { timing?: { durationMs?: number | null } }): number | undefined {
-  const raw = last.timing?.durationMs
+function measuredDurationMs(source: {
+  timing?: { durationMs?: number | null }
+}): number | undefined {
+  const raw = source.timing?.durationMs
   return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : undefined
 }
 
@@ -255,6 +264,10 @@ type CollectorCall = {
   selected?: boolean
   provider?: string
   clientName?: string
+  /** Per-ATTEMPT duration — the wall-clock a time-priced client is billed on.
+   *  Read off the same `timing` getter as the function-level reading, which is
+   *  why {@link measuredDurationMs} takes both. */
+  timing?: { durationMs?: number | null }
   httpRequest?: { body?: unknown }
   httpResponse?: { body?: { json?: () => unknown } } | null
   usage?: {
@@ -328,8 +341,16 @@ function callTokenBuckets(call: CollectorCall | undefined):
  *  policies). One collector == one harness step by construction (the
  *  loops create a fresh Collector per turn/attempt), so this is the step's
  *  true bill; `llmCall.usage` remains the selected exchange only.
- *  Cost is omitted (not zeroed) when any token-bearing attempt has no
- *  pricing entry — unknown beats silently wrong. */
+ *  Cost is omitted (not zeroed) when any token-bearing attempt could not be
+ *  priced — unknown beats silently wrong.
+ *
+ *  Each attempt is priced under the model its OWN selected client is billed
+ *  under (`estimateLlmCostEur`), so a step whose retry fell back from the
+ *  self-hosted box to Anthropic pays wall-clock for the first attempt and
+ *  tokens for the second. Attribution is the client BAML reports, never the
+ *  tier the run intended — the same rule `usage-recorder.server.ts` follows.
+ *  The audit fields describe the LAST priced attempt, which is the convention
+ *  `rates` already had. */
 export function computeEventMetrics(collector: Collector | undefined): EventMetrics | undefined {
   if (!collector) return undefined
   const totals = {
@@ -338,11 +359,17 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
     inputCacheWriteTokens: 0,
     outputTokens: 0,
   }
+  // Resolved once per step rather than per attempt: an operator changing a rate
+  // mid-step would otherwise price two attempts of one call differently.
+  const usdEur = usdEurRate()
+  const eurPerHour = verdaEurPerHour()
   let attempts = 0
-  let costUsd = 0
-  let noCacheUsd = 0
+  let costEur = 0
+  let noCacheEur = 0
   let costKnown = true
+  let basis: CostBasis | undefined
   let rates: { inPerMTok: number; outPerMTok: number } | undefined
+  let timeRate: { eurPerHour: number; durationMs: number } | undefined
   for (const log of collector.logs ?? []) {
     for (const call of (log.calls ?? []) as CollectorCall[]) {
       const buckets = callTokenBuckets(call)
@@ -352,11 +379,17 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
       totals.inputCacheReadTokens += buckets.inputCacheReadTokens
       totals.inputCacheWriteTokens += buckets.inputCacheWriteTokens
       totals.outputTokens += buckets.outputTokens
-      const est = estimateLlmCostUsd(buckets, call.clientName)
+      const est = estimateLlmCostEur(buckets, call.clientName, {
+        durationMs: measuredDurationMs(call),
+        usdEurRate: usdEur,
+        eurPerHour,
+      })
       if (est) {
-        costUsd += est.costUsd
-        noCacheUsd += est.noCacheUsd
+        costEur += est.costEur
+        noCacheEur += est.noCacheEur
+        basis = est.basis
         rates = est.rates
+        timeRate = est.timeRate
       } else {
         costKnown = false
       }
@@ -366,7 +399,15 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
   return {
     ...totals,
     attempts,
-    ...(costKnown ? { costUsd, noCacheUsd, rates } : {}),
+    ...(costKnown
+      ? {
+          costEur,
+          noCacheEur,
+          basis,
+          ...(rates ? { rates } : {}),
+          ...(timeRate ? { timeRate } : {}),
+        }
+      : {}),
   }
 }
 

@@ -5,7 +5,7 @@
 
 import { Show, createMemo } from 'solid-js'
 import type { ContextEvent, ToolResultEventData } from '~/lib/harness-patterns'
-import { fmtTok, fmtUsd, foldTokenTotals } from '~/lib/observability/token-totals'
+import { fmtEur, fmtTok, foldTokenTotals } from '~/lib/observability/token-totals'
 
 export const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void }) => {
   const metrics = createMemo(() => {
@@ -91,11 +91,25 @@ export const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void
             flex="~"
             items="center"
             gap="2"
-            title={`Estimated from per-call rates at call time; ${tokenTotals().costKnownCalls}/${tokenTotals().llmCalls} calls priced. Without caching: ${fmtUsd(tokenTotals().noCacheUsd)}`}
+            title={
+              `Estimated from per-call rates at call time; ${tokenTotals().costKnownCalls}/${tokenTotals().llmCalls} calls priced. ` +
+              `Without caching: ${fmtEur(tokenTotals().noCacheEur)}. ` +
+              `USD list prices converted at a static rate — no live FX.` +
+              (tokenTotals().timePricedCalls > 0
+                ? ` ${tokenTotals().timePricedCalls} call(s) ran on the self-hosted GPU and are billed by the second, so the total is a FLOOR: it covers the calls' own duration, not the idle scale-down window after the last one or the cold start before the first.`
+                : '')
+            }
           >
-            <span text="xs ui-text-tertiary">Cost:</span>
+            {/* The label carries the caveat too, not just the `title`: the bar is
+                the one surface where the `≥` was the only visible sign that the
+                total is a floor, while the per-step chip changes its label and
+                the dashboard shows a footnote. */}
+            <span text="xs ui-text-tertiary">
+              {tokenTotals().timePricedCalls > 0 ? 'Cost (floor):' : 'Cost:'}
+            </span>
             <span text="sm ui-text-primary" font="mono">
-              {fmtUsd(tokenTotals().costUsd)}
+              {tokenTotals().timePricedCalls > 0 ? '≥ ' : ''}
+              {fmtEur(tokenTotals().costEur)}
             </span>
             <Show when={tokenTotals().savedPct > 0.005}>
               <span text="xs ui-success" font="mono">

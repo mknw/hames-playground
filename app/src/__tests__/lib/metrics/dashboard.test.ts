@@ -28,9 +28,9 @@ vi.mock('../../../lib/db/conversations.server', () => ({
 import { getMetricsDashboard } from '../../../lib/metrics/dashboard.server'
 import type { ContextEvent } from '../../../lib/harness-patterns/types'
 
-function llmEvent(costUsd: number): ContextEvent {
+function llmEvent(costEur: number): ContextEvent {
   return {
-    id: `e-${costUsd}`,
+    id: `e-${costEur}`,
     type: 'assistant_message',
     timestamp: 1,
     patternId: 'simple-loop',
@@ -41,8 +41,8 @@ function llmEvent(costUsd: number): ContextEvent {
       inputCacheReadTokens: 0,
       inputCacheWriteTokens: 0,
       outputTokens: 5,
-      costUsd,
-      noCacheUsd: costUsd,
+      costEur,
+      noCacheEur: costEur,
       priced: true,
     },
   } as unknown as ContextEvent
@@ -71,7 +71,7 @@ describe('getMetricsDashboard', () => {
     const out = await getMetricsDashboard()
 
     expect(listConversationEvents).toHaveBeenCalledWith('oid-1')
-    expect(out.totals.costUsd).toBeCloseTo(0.5)
+    expect(out.totals.costEur).toBeCloseTo(0.5)
     expect(out.byConversation.map((c) => c.id)).toEqual(['conv-1'])
   })
 

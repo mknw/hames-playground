@@ -29,12 +29,18 @@
  * sites — `clients-verda.test.ts` scans for the literal once per role, so five
  * of the six could lose it and stay green.
  *
- * `screen` is the one role that still must not move (SA-M5 / SD-4), and it is
- * NOT asserted here, deliberately: no agent in this repo enables the opt-in LLM
- * screen, so no turn this suite can run makes a `ScreenUntrustedContent` call
- * and an assertion over zero of them would be theatre. It is pinned instead by
- * `clients-verda.test.ts`, which fails if the literal `clientOverrideFor('screen')`
- * appears anywhere in `src/lib` at all.
+ * `screen` moved too, later the same day, on the owner's rule that no call made
+ * under the private tier may be sent to any public AI provider (SA-M5 / SD-4).
+ * It is still NOT asserted here, and for the unchanged reason: no agent in this
+ * repo enables the opt-in LLM screen, so no turn this suite can run makes a
+ * `ScreenUntrustedContent` call and an assertion over zero of them would be
+ * theatre. What changed is which pin covers it. `clients-verda.test.ts` used to
+ * fail if `clientOverrideFor('screen')` appeared anywhere in `src/lib`; it now
+ * fails unless the map entry AND the spread on the screen's own call expression
+ * are both present, extracted by balanced parens rather than grepped. The
+ * BEHAVIOUR of the screen on that client is measured by the eval suite's
+ * `screen-on-the-tier` scenario, which needs a live endpoint and so cannot live
+ * here either.
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
@@ -143,7 +149,13 @@ describe('switching tier between turns', () => {
     const describe = await waitForCall(['ResultDescribe', 'ResultDescribeBatch'])
 
     for (const fn of ['Router', 'GenerateConversationTitle', describe]) {
-      for (const call of app.fakeLlm.calls.filter((c) => c.fn === fn)) {
+      const calls = app.fakeLlm.calls.filter((c) => c.fn === fn)
+      // Same vacuity guard as the verda leg above, which this test was missing:
+      // `waitForCall` only covers the describe leg (it throws), so `Router` and
+      // the title could both go silently uncalled and this loop would iterate
+      // nothing and pass.
+      expect(calls.length, `no ${fn} call was made, so this asserts nothing`).toBeGreaterThan(0)
+      for (const call of calls) {
         expect(call.model, `${fn} did not follow the tier switch`).toBe(FAKE_ANTHROPIC_TIER_MODEL)
       }
     }

@@ -8,11 +8,21 @@
 //
 // It runs ONLY on content the deterministic layer passed clean — its job is
 // novel phrasings the corpus does not know, not the ones it already catches.
-// Cheap DescribeAnthropic client, pinned as its own `screen` role in
+// Cheap DescribeAnthropic client, held as its own `screen` role in
 // clients.server.ts rather than sharing `describe`: a screen must not be
 // talked out of reporting and must copy spans verbatim, so it must never
 // inherit whatever weakest-model chain summarization happens to sit on
-// (SA-M5).
+// IMPLICITLY (SA-M5).
+//
+// "Implicitly" is the whole of it, and 2026-08-26 is why the word is there.
+// The private tier now routes this function to VerdaQwen — a DELIBERATE owner
+// decision on the rule that no call made under that tier may be sent to any
+// public AI provider, with its own line in VERDA_CLIENT_BY_ROLE and its own
+// eval scenario (`screen-on-the-tier`), which is exactly what the role split
+// makes possible. The chain declared below is still what runs on the Anthropic
+// tier, and re-pointing THIS chain would still move the screen as a side
+// effect of moving summarization. That accident is the one this role prevents,
+// and it is unaffected by the tier decision.
 //
 // The prompt is written defensively: the content under review is fenced and the
 // model is told, repeatedly, that everything inside the fence is DATA. A screen

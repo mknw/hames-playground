@@ -6,12 +6,13 @@
  * positions reach the right client override.
  *
  * The failures worth pinning, in the order they would ship:
- *   - a scope that widens the role set. The switch must move EXACTLY the roles
- *     `USE_VERDA_INFERENCE` moved; `screen` must stay on Anthropic in BOTH
- *     positions (SA-M5), because a switch is the easiest place to drag the
- *     injection screen somewhere unmeasured — and since the 2026-08-26
- *     widening it is the ONLY role holding that line, on the same BAML chain
- *     as a `describe` role that did move.
+ *   - a scope that widens OR narrows the role set. The switch must move exactly
+ *     the roles `USE_VERDA_INFERENCE` moves, which after the two 2026-08-26
+ *     owner decisions is all of them, `screen` included. That was the inverse
+ *     until the second decision, and the reason the pin is per-role either way:
+ *     a user-facing control is the easiest place for a security control's client
+ *     to end up somewhere nobody decided (SA-M5). The two halves are now "the
+ *     scope moves the screen too" and "the anthropic position moves it back".
  *   - the `'anthropic'` position failing to *undo* the deployment default. A
  *     user who opts out while `USE_VERDA_INFERENCE=1` must actually leave.
  *   - a scope leaking past its own callback, which would make one user's choice
@@ -34,8 +35,10 @@ const ENV_KEYS = [
   'VERDA_INFERENCE_API_KEY',
 ] as const
 
-/** The roles the map routes, and the one that deliberately never moves.
- *  `router` / `planner` / `describe` joined ROUTED on 2026-08-26. */
+/** The roles the map routes — all of them, since 2026-08-26. `router` /
+ *  `planner` / `describe` joined on the widening; `screen` on the owner's rule
+ *  that no call made under the private tier may be sent to any public AI
+ *  provider. */
 const ROUTED: BamlRole[] = [
   'controller',
   'critic',
@@ -43,8 +46,11 @@ const ROUTED: BamlRole[] = [
   'router',
   'planner',
   'describe',
+  'screen',
 ]
-const UNROUTED: [BamlRole, string][] = [['screen', 'DescribeAnthropic']]
+/** Nothing is held back. Kept as an empty list rather than deleted so a future
+ *  exception is added in one place and asserted in both scope positions. */
+const UNROUTED: [BamlRole, string][] = []
 
 let saved: Record<string, string | undefined>
 
@@ -86,7 +92,7 @@ describe('runWithInferenceTier — both positions reach the right override', () 
     })
   })
 
-  it('the verda position leaves the injection screen — and only it — alone', async () => {
+  it('the verda position moves the injection screen too, and holds nothing back', async () => {
     const { runWithInferenceTier, clientOverrideFor, resolveClientForRole } = await load()
 
     await runWithInferenceTier('verda', async () => {
@@ -94,12 +100,15 @@ describe('runWithInferenceTier — both positions reach the right override', () 
         expect(clientOverrideFor(role)).toBeUndefined()
         expect(resolveClientForRole(role)).toBe(chain)
       }
-      // SA-M5, stated separately because this is the one that must never move:
-      // the injection screen is only worth running on a model that cannot be
-      // talked out of reporting, and this switch is a user-facing control.
-      expect(resolveClientForRole('screen')).toBe('DescribeAnthropic')
-      // Paired with its neighbour on the same BAML chain, which DID move — so
-      // the line above is a real difference rather than a restatement.
+      // SA-M5, stated separately because it is the one role whose client is a
+      // security decision rather than a routing preference. It used to be
+      // asserted as `DescribeAnthropic` here; the owner moved it on 2026-08-26
+      // and a user-facing control is exactly where that has to be visible, in
+      // both directions, rather than inferred from the map.
+      expect(clientOverrideFor('screen')).toEqual({ client: 'VerdaQwen' })
+      expect(resolveClientForRole('screen')).toBe('VerdaQwen')
+      // Paired with its neighbour on the same BAML chain, which moved a few
+      // hours earlier — the two are now on the same side, by two decisions.
       expect(resolveClientForRole('describe')).toBe('VerdaQwen')
     })
   })
@@ -138,8 +147,12 @@ describe('runWithInferenceTier — both positions reach the right override', () 
       // …including the describe role, which sizes `compactBulkData`'s batches
       // and the retriever's history trim.
       expect(getContextWindow(resolveClientForRole('describe'))).toBe(131_072)
-      // …and the role that stayed put keeps sizing against Anthropic's.
-      expect(getContextWindow(resolveClientForRole('screen'))).toBe(200_000)
+      // …and the screen, which moved on 2026-08-26. This is the half of that
+      // move easiest to forget: the guard hands the screen up to 20 000
+      // characters of fetched content, so a screen still budgeted for 200K
+      // against a 131K server would be the switch working and the control
+      // failing on exactly the payload it exists to read.
+      expect(getContextWindow(resolveClientForRole('screen'))).toBe(131_072)
     })
   })
 })

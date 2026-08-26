@@ -37,9 +37,13 @@ afterEach(() => {
 })
 
 describe('verdaScaledownSeconds', () => {
-  it('defaults to the deployment’s current 180s', () => {
+  it('defaults to the deployment’s current 300s', () => {
+    // Owner-confirmed 2026-08-26. Pinned as a literal, not just as "whatever
+    // the constant says": the countdown is a claim about a deployment the app
+    // cannot interrogate, so the number is the assertion. `app/.env.example`
+    // carries the same value uncommented and the two must not drift.
     expect(verdaScaledownSeconds()).toBe(DEFAULT_VERDA_SCALEDOWN_SECONDS)
-    expect(DEFAULT_VERDA_SCALEDOWN_SECONDS).toBe(180)
+    expect(DEFAULT_VERDA_SCALEDOWN_SECONDS).toBe(300)
   })
 
   it('takes the env value, so production can raise it without a rebuild', () => {
@@ -68,7 +72,7 @@ describe('verdaWarmth', () => {
     expect(verdaWarmth(NOW)).toEqual({
       state: 'unknown',
       secondsUntilScaledown: null,
-      scaledownSeconds: 180,
+      scaledownSeconds: 300,
     })
   })
 
@@ -76,32 +80,32 @@ describe('verdaWarmth', () => {
     noteVerdaCallCompleted(NOW)
     expect(verdaWarmth(NOW + 30_000)).toMatchObject({
       state: 'warm',
-      secondsUntilScaledown: 150,
+      secondsUntilScaledown: 270,
     })
   })
 
   it('rounds the countdown UP, so it never shows 0 while still warm', () => {
     noteVerdaCallCompleted(NOW)
-    expect(verdaWarmth(NOW + 179_500).secondsUntilScaledown).toBe(1)
+    expect(verdaWarmth(NOW + 299_500).secondsUntilScaledown).toBe(1)
   })
 
   it('goes cold exactly at the window, and stays cold', () => {
     noteVerdaCallCompleted(NOW)
-    expect(verdaWarmth(NOW + 180_000).state).toBe('cold')
+    expect(verdaWarmth(NOW + 300_000).state).toBe('cold')
     expect(verdaWarmth(NOW + 10_000_000)).toEqual({
       state: 'cold',
       secondsUntilScaledown: null,
-      scaledownSeconds: 180,
+      scaledownSeconds: 300,
     })
   })
 
   it('follows the configured window rather than the default', () => {
-    process.env.VERDA_SCALEDOWN_SECONDS = '600'
+    process.env.VERDA_SCALEDOWN_SECONDS = '900'
     noteVerdaCallCompleted(NOW)
     expect(verdaWarmth(NOW + 300_000)).toMatchObject({
       state: 'warm',
-      secondsUntilScaledown: 300,
-      scaledownSeconds: 600,
+      secondsUntilScaledown: 600,
+      scaledownSeconds: 900,
     })
   })
 
@@ -110,9 +114,9 @@ describe('verdaWarmth', () => {
     // would be counting towards something that will not occur.
     noteVerdaCallCompleted(NOW)
     beginVerdaTurn()
-    const warmth = verdaWarmth(NOW + 175_000)
+    const warmth = verdaWarmth(NOW + 295_000)
     expect(warmth.state).toBe('running')
-    expect(warmth.secondsUntilScaledown).toBe(180)
+    expect(warmth.secondsUntilScaledown).toBe(300)
   })
 
   it('reports STARTING, not running, when nothing proves the box was up', () => {
@@ -131,14 +135,14 @@ describe('verdaWarmth', () => {
     // inside the window is evidence of warmth.
     noteVerdaCallCompleted(NOW)
     beginVerdaTurn()
-    expect(verdaWarmth(NOW + 181_000).state).toBe('starting')
+    expect(verdaWarmth(NOW + 301_000).state).toBe('starting')
   })
 
   it('returns to the countdown when the turn ends', () => {
     noteVerdaCallCompleted(NOW)
     beginVerdaTurn()
     endVerdaTurn()
-    expect(verdaWarmth(NOW + 60_000)).toMatchObject({ state: 'warm', secondsUntilScaledown: 120 })
+    expect(verdaWarmth(NOW + 60_000)).toMatchObject({ state: 'warm', secondsUntilScaledown: 240 })
   })
 
   it('tracks concurrent turns rather than the last one to finish', () => {

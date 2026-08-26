@@ -129,7 +129,7 @@ describe('recordSample', () => {
     expect(verdaWarmth(NOW).state).toBe('unknown')
 
     recordSample({ functionName: 'B', clientName: 'VerdaQwen', metrics: metrics() }, NOW)
-    expect(verdaWarmth(NOW)).toMatchObject({ state: 'warm', secondsUntilScaledown: 180 })
+    expect(verdaWarmth(NOW)).toMatchObject({ state: 'warm', secondsUntilScaledown: 300 })
   })
 
   it('stamps the clock even for a call that failed', () => {
@@ -157,12 +157,15 @@ describe('recordSample — the latency window', () => {
     // the two windows holding different role mixes and a user would read that
     // as a model difference.
     //
-    // Since the 2026-08-26 widening exactly one function is in that position:
-    // `ScreenUntrustedContent` runs on Anthropic in both positions (SD-4 /
-    // SA-M5), so it is the only one filtered out. `Router`, `ResultDescribe`
-    // and `Planner` moved into the window with their roles.
+    // After BOTH 2026-08-26 owner decisions — router/planner/describe, then the
+    // injection screen (SD-4 / SA-M5) — that is ZERO functions, so the filter
+    // admits everything and this test asserts the identity rather than an
+    // exclusion. It is the exclusion machinery that is being pinned, not the
+    // current emptiness of the excluded set: a function name the map does not
+    // know still has to be dropped, or the window would start counting calls
+    // whose client never followed the switch.
     recordSample({
-      functionName: 'ScreenUntrustedContent',
+      functionName: 'NotABamlFunction',
       clientName: 'DescribeAnthropic',
       durationMs: 500,
     })
@@ -171,6 +174,8 @@ describe('recordSample — the latency window', () => {
     // ...and every switched function lands, on whichever tier ran it. Listed
     // rather than derived from TIER_SWITCHED_FUNCTIONS on purpose: a test that
     // reads the same set the code filters on would pass whatever that set said.
+    // `ScreenUntrustedContent` is in the list now — it used to be the one name
+    // asserted OUT of it.
     const switched = [
       'LoopController',
       'ActorController',
@@ -184,6 +189,7 @@ describe('recordSample — the latency window', () => {
       'CompactIntent',
       'RetrieveQuery',
       'ReferenceSelector',
+      'ScreenUntrustedContent',
     ]
     for (const fn of switched) {
       recordSample({ functionName: fn, clientName: 'AnthropicSonnet5', durationMs: 1000 })

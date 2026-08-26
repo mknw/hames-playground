@@ -21,13 +21,16 @@
  *   figures comparable, which is the whole point of a number that sits beside
  *   a switch: a function that runs on Anthropic in BOTH positions would leave
  *   each window holding a different role mix, and a user comparing the two
- *   medians would read that as a model difference. Since the 2026-08-26
- *   widening exactly one function is in that position — `ScreenUntrustedContent`
- *   (SD-4) — and everything else a turn calls is in the window.
+ *   medians would read that as a model difference. After the two 2026-08-26
+ *   owner decisions — the router/planner/describe widening, then the injection
+ *   screen (SD-4) — NO function is in that position, so the filter currently
+ *   admits every model call the app makes and the window is simply "recent
+ *   calls, per tier". It stops being an identity the moment a role is pulled
+ *   back out of the map, which is why the filter stays.
  *
- *   That widening changed what the number MEANS without changing what it
- *   promises. It used to be four heavy calls; it is now twelve functions, nine
- *   of them short. The median dropped accordingly — same route, different mix —
+ *   Those decisions changed what the number MEANS without changing what it
+ *   promises. It used to be four heavy calls; it is now all thirteen functions,
+ *   most of them short. The median dropped accordingly — same route, different mix —
  *   so a figure read against a pre-2026-08-26 note will look like a speed-up
  *   that did not happen. The filter is at the recording site
  *   (`usage-recorder.server.ts`), not here: this module is "the median of what

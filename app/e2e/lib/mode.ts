@@ -21,15 +21,16 @@
  * to cross.
  *
  * WHAT LIVE MODE STILL BILLS, stated rather than implied. `E2E_LIVE=verda` was
- * never "no Anthropic calls", and as of the 2026-08-26 widening it is very
- * nearly that: the tier switch moves exactly the roles in
- * `VERDA_CLIENT_BY_ROLE`, which is now every role except `screen`. So a live
- * run bills Anthropic only for the injection screen — and no scenario here
- * triggers one, because no agent enables the opt-in LLM screen. The bill moved
- * rather than shrank: `router`, `planner`, the title and every describe call
- * now land on the self-hosted box, which is more traffic through a
- * single-replica deployment than the pre-widening shape, and the reason the
- * burst discipline above matters more than it did.
+ * never "no Anthropic calls", and after the two 2026-08-26 owner decisions it
+ * is: the tier switch moves exactly the roles in `VERDA_CLIENT_BY_ROLE`, which
+ * is now EVERY role — the injection screen included. So a live run in the
+ * self-hosted position bills Anthropic nothing at all. That is a smaller claim
+ * than it sounds, because no scenario here triggers a screen call anyway (no
+ * agent enables the opt-in LLM screen), and the bill moved rather than shrank:
+ * `router`, `planner`, the title and every describe call now land on the
+ * self-hosted box, which is more traffic through a single-replica deployment
+ * than the pre-widening shape, and the reason the burst discipline above
+ * matters more than it did.
  *
  * What is still avoidable is running each scenario a second time with the
  * switch in the anthropic position, which would put every one of those roles

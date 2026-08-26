@@ -74,8 +74,8 @@ const DESCRIBE_TARGETS = [
 ]
 
 /**
- * EVERY routed role's functions — which since 2026-08-26 is every function
- * except `ScreenUntrustedContent`.
+ * EVERY routed role's functions — which since 2026-08-26 is every function in
+ * `baml_src/`, `ScreenUntrustedContent` included.
  *
  * The kwarg is declared on the CLIENT, so all of them must carry it without any
  * call site knowing about it. That was cheap reassurance while only four heavy
@@ -83,8 +83,12 @@ const DESCRIBE_TARGETS = [
  * does too, because a describe call is short and its `max_tokens` is the same
  * 16 384 — an unsuppressed reasoning block in `content` would eat a two-line
  * summary's whole budget and the failure mode is a degraded parse, never an
- * error. `TIER_SWITCHED_FUNCTIONS` is asserted equal to these names below, so a
- * role added to the map cannot skip this file.
+ * error. It matters a third time for the SCREEN: a reasoning block ahead of a
+ * `ScreenVerdict` degrades the parse of `spans`, and a span that does not
+ * survive character-for-character is one the guard cannot neutralize (SD-3),
+ * so the failure would be a quietly weaker control rather than an error.
+ * `TIER_SWITCHED_FUNCTIONS` is asserted equal to these names below, so a role
+ * added to the map cannot skip this file.
  */
 const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
   [
@@ -106,6 +110,10 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
   ['CompactIntent', () => b.request.CompactIntent(MESSAGES, 'q', VERDA)],
   ['RetrieveQuery', () => b.request.RetrieveQuery(MESSAGES, 'q', VERDA)],
   ['ReferenceSelector', () => b.request.ReferenceSelector('i', MESSAGES, CANDIDATES, VERDA)],
+  [
+    'ScreenUntrustedContent',
+    () => b.request.ScreenUntrustedContent('web/fetch', 'fetched page text', VERDA),
+  ],
 ]
 
 describe('VerdaQwen request body', () => {
@@ -118,11 +126,13 @@ describe('VerdaQwen request body', () => {
     // Without this, adding a role to `VERDA_CLIENT_BY_ROLE` would route new
     // functions to a client whose one silent-failure property nothing checked
     // for them. Compared against the derived set, so the list above cannot go
-    // short — and `ScreenUntrustedContent` is absent from BOTH, which is the
-    // one function that must never render through this client (SD-4).
+    // short — and `ScreenUntrustedContent` is now present in BOTH, which is the
+    // inversion of what this line pinned until 2026-08-26 (SD-4: the screen
+    // moved on an explicit owner decision, so it is checked like every other
+    // routed function rather than excluded).
     const { TIER_SWITCHED_FUNCTIONS } = await import('../../../lib/harness-patterns/clients.server')
     expect(CALLS.map(([name]) => name).sort()).toEqual([...TIER_SWITCHED_FUNCTIONS].sort())
-    expect(CALLS.map(([name]) => name)).not.toContain('ScreenUntrustedContent')
+    expect(CALLS.map(([name]) => name)).toContain('ScreenUntrustedContent')
   })
 
   it('names the served model id exactly', async () => {

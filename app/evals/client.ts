@@ -21,32 +21,42 @@
  *
  * By default `EVAL_CLIENT=X` moves exactly the roles that a verda tier decision
  * moves in production (`DEFAULT_ROUTED_ROLES`), so a default run measures the
- * shipped posture rather than a hypothetical one. Since the 2026-08-26 widening
- * that is every role this suite has a scenario for except `screen` — the
- * exploratory question `EVAL_ROLES` used to answer ("would this client cope
- * with the router too?") is now the default question, and `EVAL_ROLES` is left
- * for NARROWING a run to one role while bisecting a regression.
+ * shipped posture rather than a hypothetical one. After the two 2026-08-26
+ * owner decisions that is EVERY role this suite has a scenario for, `screen`
+ * included — the exploratory question `EVAL_ROLES` used to answer ("would this
+ * client cope with the router too?") is now the default question, and
+ * `EVAL_ROLES` is left for NARROWING a run to one role while bisecting a
+ * regression.
  *
- * `screen` is refused either way. The injection screen resolves through a role
- * of its OWN precisely so that a re-pointing of summarization cannot drag
- * prompt-injection screening along with it (SD-4 / SA-M5): the screen has to
- * copy spans VERBATIM for the guard to neutralize them, and has to be a model
- * that cannot be talked out of reporting by the content it reviews. Neither is
- * a property an unmeasured client gets by default, and a security control's
- * model is not a knob an eval may turn. `screen-pinned.ts` asserts this holds.
+ * `screen` was REFUSED here until 2026-08-26, by a `PINNED_ROLES` list this
+ * file owned, on the reasoning that a security control's model is not a knob an
+ * eval may turn. That refusal is gone, and its removal is the point rather than
+ * a relaxation. The owner ruled the same day that no call made under the
+ * private tier may be sent to any public AI provider, so production now routes
+ * the screen to the self-hosted box — and the two properties a screener needs
+ * (it must not be talked out of reporting by the content it reviews; it must
+ * copy `spans` VERBATIM, because the guard neutralizes them by literal match)
+ * are UNMEASURED on that client. A suite that refuses to point the screen at a
+ * candidate client is a suite that guarantees the gap it was protecting
+ * against: the refusal was what left `VerdaQwen` unmeasured as a screener in
+ * the first place. Measuring a control before shipping it is the opposite of
+ * turning a knob on it, and `scenarios/screen.ts` is where that measurement
+ * lives.
  *
- * That refusal did most of its work on 2026-08-26, when `describe` moved to the
- * self-hosted box in production and `screen` — the same chain in BAML, one role
- * apart here — did not. The two are now measured on opposite sides of the same
- * default run, which is exactly the separation the role split exists for.
+ * What still holds, and is the reason `screen` remains a role of its own rather
+ * than folding into `describe`: nothing may move the screen IMPLICITLY. Here
+ * that means the same thing it means in `clients.server.ts` — the screen is its
+ * own entry in `DEFAULT_ROUTED_ROLES`, so a run narrowed to `describe` does not
+ * silently drag it, and `EVAL_ROLES=screen` is the way to measure it alone.
  */
 
 import { resolveClientForRole, type BamlRole } from '../src/lib/harness-patterns/clients.server'
 
-/** The roles this suite has scenarios for. A subset of `BamlRole` plus
- *  `actor`, which shares the `controller` role but a different BAML function
- *  and a different chain (`ActorAnthropic`, thinking left ON). */
-export type EvalRole = Exclude<BamlRole, 'planner'> | 'actor'
+/** The roles this suite has scenarios for — every `BamlRole` since the planner
+ *  scenario landed — plus `actor`, which shares the `controller` role but a
+ *  different BAML function and a different chain (`ActorAnthropic`, thinking
+ *  left ON). */
+export type EvalRole = BamlRole | 'actor'
 
 /** `EvalRole` → the `BamlRole` production resolves it through. */
 const PRODUCTION_ROLE: Record<EvalRole, BamlRole> = {
@@ -55,6 +65,7 @@ const PRODUCTION_ROLE: Record<EvalRole, BamlRole> = {
   critic: 'critic',
   compactExecution: 'compactExecution',
   router: 'router',
+  planner: 'planner',
   describe: 'describe',
   screen: 'screen',
 }
@@ -64,18 +75,26 @@ const PRODUCTION_ROLE: Record<EvalRole, BamlRole> = {
  * `VERDA_CLIENT_BY_ROLE`. Keeping these in step is what makes a default run a
  * measurement of the shipped route rather than of a configuration nobody runs.
  *
- * `router` and `describe` joined on 2026-08-26 with the production map. NOT
+ * `router` and `describe` joined on 2026-08-26 with the production map, and
+ * `planner` and `screen` followed the same day — the first because a scenario
+ * now exists for it, the second because the owner moved it in production. NOT
  * kept in step automatically, and the drift is one-directional: a role added
  * to the production map and forgotten here means the suite quietly stops
  * measuring part of the shipped route — the run still passes, over less. The
  * report header prints this list next to `resolveClientForRole()`'s answer per
  * scenario, which is where a divergence shows.
  *
- * `planner` is absent because this suite has no planner scenario (see
- * `EvalRole`), not because the production map leaves it out — it does not, as
- * of the same date. That is a coverage gap in the eval suite: the role with the
- * harshest failure policy in the repo now takes the self-hosted route and
- * nothing here measures it.
+ * Nothing is held back now, so this list IS the production map plus `actor`.
+ * The two roles worth knowing about:
+ *
+ *  - `planner` closes what was recorded here as a gap: "the role with the
+ *    harshest failure policy in the repo now takes the self-hosted route and
+ *    nothing here measures it". `planner-plan-shape` measures it. Read the
+ *    composite consequence on the `planner:` entry in `VERDA_CLIENT_BY_ROLE`
+ *    for what that scenario is standing in front of.
+ *  - `screen` is the security control (SD-4). It is measured, not merely
+ *    routed — `screen-on-the-tier` asserts the two properties the guard depends
+ *    on, and a green run of it is the evidence the production move is owed.
  */
 export const DEFAULT_ROUTED_ROLES: readonly EvalRole[] = [
   'controller',
@@ -83,11 +102,10 @@ export const DEFAULT_ROUTED_ROLES: readonly EvalRole[] = [
   'critic',
   'compactExecution',
   'router',
+  'planner',
   'describe',
+  'screen',
 ]
-
-/** Never re-pointed, by any combination of env vars. See the SD-4 note above. */
-export const PINNED_ROLES: readonly EvalRole[] = ['screen']
 
 export interface EvalRouting {
   /** The client under test, or `undefined` for the declared-chain baseline. */
@@ -134,15 +152,16 @@ export function resolveEvalRouting(): EvalRouting {
       note: 'baseline — every function on the Anthropic chain it declares in baml_src/',
     }
   }
-  const asked = requestedRoles()
-  const pinned = new Set(PINNED_ROLES)
-  const refused = asked.filter((r) => pinned.has(r))
-  const routed = asked.filter((r) => !pinned.has(r))
+  // No role is refused. The `PINNED_ROLES` machinery this replaced is deleted
+  // rather than kept as an empty list: a refusal set with no members is a
+  // control that cannot fail, and an unfailable control in a security-adjacent
+  // file reads as protection to the next person to open it. If a role ever
+  // needs pinning again, the honest version is a fresh list added with the
+  // reason and a test that fails without it (SD-4).
+  const routed = requestedRoles()
   const notes = [`${requested} on ${routed.join(', ') || '(no roles)'}`]
-  if (refused.length > 0) {
-    notes.push(
-      `REFUSED to re-point ${refused.join(', ')} — a screen's model is not an eval knob (SD-4)`,
-    )
+  if (routed.includes('screen')) {
+    notes.push('INCLUDING screen — measuring a security control, not tuning it (SD-4)')
   }
   if (!process.env.EVAL_ROLES) notes.push('default role set = the production Verda map')
   return { client: requested, routed, note: notes.join('; ') }

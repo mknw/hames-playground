@@ -46,10 +46,14 @@ assertServerOnImport()
 /** BAML client name that means "this call reached the self-hosted box". */
 export const VERDA_CLIENT_NAME = 'VerdaQwen'
 
-/** Default scale-down delay, in seconds. The deployment's current setting;
- *  production is expected to raise it, which is why it is an env var and not a
- *  constant in the code. */
-export const DEFAULT_VERDA_SCALEDOWN_SECONDS = 180
+/** Default scale-down delay, in seconds — the live deployment's setting, which
+ *  the owner confirmed as 300 on 2026-08-26. It stays an env var because the
+ *  app cannot read the deployment's own value, so a host that changes it must
+ *  be able to correct the countdown without a rebuild; the default is here so
+ *  that an UNSET var describes the deployment we actually run rather than one
+ *  we used to. `app/.env.example` carries the same number, uncommented, and a
+ *  disagreement between the two is a confidently wrong countdown. */
+export const DEFAULT_VERDA_SCALEDOWN_SECONDS = 300
 
 /**
  * `VERDA_SCALEDOWN_SECONDS`, or the default. Read per call so an operator can

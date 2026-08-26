@@ -248,8 +248,18 @@ describe('accounting coverage across roles', () => {
       /(?:extractLLMCallData|extractFailureLLMCallData|wrapAsLLMCallError|accountBamlCall|withUsageAccounting)\(([^)]*)/g
     const offenders: string[] = []
 
+    // COMMENTS STRIPPED FIRST, the same way `clients-verda.test.ts` does it and
+    // for the same reason in the opposite direction: a scan that reads prose
+    // cannot tell a call from an explanation of one. `clients.server.ts`
+    // DISCUSSES `b.ScreenUntrustedContent(...)` while documenting the screen's
+    // routing, and un-stripped that reads as an unaccounted call site in a file
+    // that makes no BAML calls at all. A real call site is never inside a
+    // comment, so this removes false positives only.
+    const stripComments = (src: string): string =>
+      src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+
     for (const file of walk(LIB)) {
-      const source = readFileSync(file, 'utf8')
+      const source = stripComments(readFileSync(file, 'utf8'))
       const called = new Set([...source.matchAll(/\bb\.([A-Z]\w+)\s*\(/g)].map((m) => m[1]))
       if (called.size === 0) continue
       const accounted = new Set(

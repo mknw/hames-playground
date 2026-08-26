@@ -54,7 +54,6 @@ export interface AppHandles {
   readonly userId: string
   readonly fakeLlm: FakeLlm
   readonly fakeGateway: FakeGateway
-  close(): Promise<void>
 }
 
 /** The shape of a harness result, narrowed to what a scenario asserts on. */
@@ -78,9 +77,19 @@ export interface StoredRow {
 
 let booted: Promise<AppHandles> | null = null
 
-/** Boot once per process and share it. `vitest.config.ts` pins the suite to a
- *  single fork precisely so this can be a process-wide singleton: two forks
- *  would mean two fakes, two pattern caches and two views of one database. */
+/**
+ * Boot once per process and share it. `vitest.config.ts` pins the suite to a
+ * single fork precisely so this can be a process-wide singleton: two forks
+ * would mean two fakes, two pattern caches and two views of one database.
+ *
+ * There is deliberately NO matching teardown. A singleton shared across files
+ * has no correct place to be closed from: any file's `afterAll` would take the
+ * fakes and the pg pool away from the files still to run, and vitest offers no
+ * per-fork hook that runs after the last of them (`globalSetup` runs in the
+ * main process, not here). So process exit is the teardown — which is what
+ * already happened, since the `close()` this used to expose was never called
+ * from anywhere. Each scenario file cleans up what it actually owns: its rows.
+ */
 export function bootApp(): Promise<AppHandles> {
   booted ??= boot()
   return booted
@@ -204,12 +213,6 @@ async function boot(): Promise<AppHandles> {
 
     async wipe() {
       await dbClient.query('DELETE FROM conversations WHERE user_id = $1', [userId])
-    },
-
-    async close() {
-      await dbClient.closePool().catch(() => {})
-      await fakeLlm.close()
-      await fakeGateway.close()
     },
   }
 }

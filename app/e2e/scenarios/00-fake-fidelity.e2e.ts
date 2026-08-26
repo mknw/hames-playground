@@ -26,6 +26,7 @@ import { bootApp } from '../lib/app'
 import {
   ALL_BAML_FUNCTIONS,
   classifyPrompt,
+  generatedFunctionNames,
   promptText,
   type ChatMessage,
 } from '../lib/baml-functions'
@@ -34,12 +35,14 @@ import { VERDA_MODEL } from '../lib/mode'
 type Renderer = () => Promise<{ body: { json: () => unknown } }>
 
 let renderers: Record<string, Renderer>
+let declared: string[]
 
 beforeAll(async () => {
   // Boots only for its env side effects — `VerdaQwen` refuses to resolve
   // without a `/v1` endpoint, and `bootApp` is the one place that is set.
   await bootApp()
   const { b } = await import('../../baml_client')
+  declared = generatedFunctionNames(b.request)
   const via = { client: 'VerdaQwen' }
   const tools = [{ name: 'search', description: 'Search', args_schema: '{}' }]
   const attempt = {
@@ -81,21 +84,26 @@ describe('the fake recognises every BAML function', () => {
     expect(Object.keys(renderers).sort()).toEqual([...ALL_BAML_FUNCTIONS].sort())
   })
 
-  for (const name of [
-    'Router',
-    'LoopController',
-    'ActorController',
-    'Critic',
-    'Synthesize',
-    'ResultDescribe',
-    'ResultDescribeBatch',
-    'CompactIntent',
-    'Planner',
-    'ScreenUntrustedContent',
-    'RetrieveQuery',
-    'ReferenceSelector',
-    'GenerateConversationTitle',
-  ]) {
+  it('knows every function the generated client declares', () => {
+    // The other direction, and the one nothing checked before: MARKERS said
+    // what the fake recognises, and nothing said whether that was all of
+    // `baml_src/`. A fourteenth function used to surface as a 400 from the fake
+    // in whichever scenario reached it first ("no BAML function matched this
+    // prompt"), three files away from the cause. Now it is red here.
+    //
+    // Read off `b.request` rather than counted, so it also catches a REMOVED
+    // function — a marker matching nothing is dead weight the classifier still
+    // walks on every request.
+    expect(
+      declared.length,
+      'no function names were read off the generated client — the reflection found nothing, so ' +
+        'the comparison below would pass on an empty list',
+    ).toBeGreaterThan(0)
+    expect(declared).toEqual([...ALL_BAML_FUNCTIONS].sort())
+  })
+
+  // Driven off the derived list, so this loop cannot fall out of step with it.
+  for (const name of ALL_BAML_FUNCTIONS) {
     it(`classifies ${name} as itself`, async () => {
       const request = await renderers[name]()
       const body = request.body.json() as { model?: string; messages?: ChatMessage[] }

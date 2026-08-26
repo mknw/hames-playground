@@ -15,9 +15,23 @@
  * fault-injection scenarios, which have no live analogue that is safe to
  * cause, are skipped rather than faked.
  *
- * There is deliberately no third mode. "Live Anthropic" would mean billing a
- * metered API from a test suite, which is the line `app/evals/README.md` draws
- * for the eval runner and this suite has no reason to cross.
+ * There is deliberately no third mode. A "live Anthropic" mode would mean
+ * running the whole suite against a metered API, which is the line
+ * `app/evals/README.md` draws for the eval runner and this suite has no reason
+ * to cross.
+ *
+ * WHAT LIVE MODE STILL BILLS, stated rather than implied. `E2E_LIVE=verda` is
+ * not "no Anthropic calls": the tier switch moves exactly the roles in
+ * `VERDA_CLIENT_BY_ROLE`, so every verda-tier turn ALSO makes its `router`,
+ * `describe`, `screen`, `planner` and title calls on the Anthropic chains they
+ * declare. That is unavoidable — it is what the shipped tier does, and a suite
+ * that avoided it would be measuring a route the app does not take. What IS
+ * avoidable is running each scenario a second time with the switch in the
+ * anthropic position, which would put the controller / critic / synthesizer
+ * there too and roughly double the bill for no live-route information. So the
+ * per-tier legs collapse to the self-hosted tier in live mode — see
+ * {@link TIERS}, which is the single definition all three multi-tier scenarios
+ * read.
  */
 
 export type E2eMode = 'hermetic' | 'live-verda'
@@ -36,6 +50,19 @@ export function resolveMode(): E2eMode {
 export const MODE: E2eMode = resolveMode()
 export const IS_HERMETIC = MODE === 'hermetic'
 export const IS_LIVE = MODE === 'live-verda'
+
+/** The two positions of the header switch. */
+export type Tier = 'anthropic' | 'verda'
+
+/**
+ * The tiers a multi-tier scenario runs its legs over — one definition, read by
+ * scenarios 1, 2 and 7 rather than each spelling out its own pair.
+ *
+ * Hermetic runs both: the anthropic leg costs nothing there and it is the only
+ * way to tell "the app works" from "the app works on one route". Live mode runs
+ * the self-hosted tier only, for the billing reason in the header.
+ */
+export const TIERS: readonly Tier[] = IS_HERMETIC ? ['anthropic', 'verda'] : ['verda']
 
 /**
  * The `api_key` the hermetic run puts in `ANTHROPIC_API_KEY`.

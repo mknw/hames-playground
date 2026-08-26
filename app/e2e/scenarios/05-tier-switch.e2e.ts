@@ -10,7 +10,11 @@
  * Two things have to hold at once, and only one of them is obvious:
  *
  *  1. The switched roles follow the switch. Asserted on the `model` the fake
- *     recorded, per turn — never on the preference, which is the input.
+ *     recorded, per turn — never on the preference, which is the input. Both of
+ *     the roles this agent's chain actually uses are checked (`controller` and
+ *     `compactExecution`, i.e. `LoopController` and `Synthesize`): each is a
+ *     separate call site spreading its own `clientOverrideFor(role)`, so one
+ *     being right says nothing about the other.
  *  2. The conversation does not fork. The stored blob has to keep accumulating
  *     across the switch: the tier is a routing decision, and a routing decision
  *     that silently started a new context would look identical in the UI until
@@ -24,7 +28,7 @@
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
-import { IS_HERMETIC, FAKE_ANTHROPIC_TIER_MODEL, VERDA_MODEL } from '../lib/mode'
+import { IS_HERMETIC, FAKE_ANTHROPIC_TIER_MODEL, VERDA_MODEL, type Tier } from '../lib/mode'
 
 let app: AppHandles
 
@@ -40,12 +44,17 @@ beforeEach(() => {
   app.fakeGateway.reset()
 })
 
-/** Controller calls recorded since `from`, which is how a turn is isolated in
- *  a shared recording. */
-function controllersSince(app: AppHandles, from: number): string[] {
+/**
+ * The models one function's calls were routed to inside `[from, to)`.
+ *
+ * BOUNDED at both ends, which matters: the fake records every call in one
+ * array, so an open-ended `slice(from)` read after all three turns have run
+ * would pick up the later turns' calls too and see both tiers in every window.
+ */
+function modelsBetween(app: AppHandles, from: number, to: number, fn: string): string[] {
   return app.fakeLlm.calls
-    .slice(from)
-    .filter((c) => c.fn === 'LoopController')
+    .slice(from, to)
+    .filter((c) => c.fn === fn)
     .map((c) => c.model)
 }
 
@@ -54,28 +63,34 @@ describe('switching tier between turns', () => {
   it.runIf(IS_HERMETIC)('routes each turn per the switch and keeps one conversation', async () => {
     const sessionId = newSessionId('tier-switch')
 
-    await app.setTier('anthropic')
-    const mark1 = app.fakeLlm.calls.length
-    await app.runTurn(sessionId, 'How many nodes are in the graph?')
-    const turn1 = controllersSince(app, mark1)
+    // Each turn's window is closed before the next one opens, so a call can
+    // only ever be attributed to the turn that made it.
+    const turns: Array<{ tier: Tier; from: number; to: number }> = []
+    for (const [tier, message] of [
+      ['anthropic', 'How many nodes are in the graph?'],
+      ['verda', 'And how many relationships?'],
+      ['anthropic', 'Summarise both answers.'],
+    ] as const) {
+      await app.setTier(tier)
+      const from = app.fakeLlm.calls.length
+      await app.runTurn(sessionId, message)
+      turns.push({ tier, from, to: app.fakeLlm.calls.length })
+    }
 
-    await app.setTier('verda')
-    const mark2 = app.fakeLlm.calls.length
-    await app.runTurn(sessionId, 'And how many relationships?')
-    const turn2 = controllersSince(app, mark2)
-
-    await app.setTier('anthropic')
-    const mark3 = app.fakeLlm.calls.length
-    await app.runTurn(sessionId, 'Summarise both answers.')
-    const turn3 = controllersSince(app, mark3)
-
-    expect(turn1.length, 'turn 1 made no controller call').toBeGreaterThan(0)
-    expect(turn2.length, 'turn 2 made no controller call').toBeGreaterThan(0)
-    expect(turn3.length, 'turn 3 made no controller call').toBeGreaterThan(0)
-
-    expect(new Set(turn1)).toEqual(new Set([FAKE_ANTHROPIC_TIER_MODEL]))
-    expect(new Set(turn2)).toEqual(new Set([VERDA_MODEL]))
-    expect(new Set(turn3)).toEqual(new Set([FAKE_ANTHROPIC_TIER_MODEL]))
+    // Both of the search agent's switched roles, not just the loud one.
+    // `controller` is `LoopController`; `compactExecution` is `Synthesize`, and
+    // it is in `VERDA_CLIENT_BY_ROLE` too — a call site that forgot to spread
+    // `clientOverrideFor('compactExecution')` would leave the answer-writing
+    // call on Anthropic through a turn the user asked to keep self-hosted, and
+    // the controller assertion alone would stay green.
+    for (const fn of ['LoopController', 'Synthesize'] as const) {
+      turns.forEach(({ tier, from, to }, i) => {
+        const models = modelsBetween(app, from, to, fn)
+        const expected = tier === 'verda' ? VERDA_MODEL : FAKE_ANTHROPIC_TIER_MODEL
+        expect(models.length, `turn ${i + 1} made no ${fn} call`).toBeGreaterThan(0)
+        expect(new Set(models), `${fn} on turn ${i + 1} (${tier})`).toEqual(new Set([expected]))
+      })
+    }
 
     // One conversation, three turns — the switch did not fork it.
     const row = await app.readRow(sessionId)

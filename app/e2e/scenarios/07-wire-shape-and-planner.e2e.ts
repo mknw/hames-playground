@@ -39,7 +39,7 @@
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
-import { FAKE_ANTHROPIC_TIER_MODEL, IS_HERMETIC, VERDA_MODEL } from '../lib/mode'
+import { FAKE_ANTHROPIC_TIER_MODEL, IS_HERMETIC, TIERS, VERDA_MODEL } from '../lib/mode'
 
 let app: AppHandles
 
@@ -78,7 +78,7 @@ describe.runIf(IS_HERMETIC)('every request the self-hosted route receives is leg
   })
 })
 
-describe.each(['anthropic', 'verda'] as const)('the general agent on the %s tier', (tier) => {
+describe.each(TIERS)('the general agent on the %s tier', (tier) => {
   it('plans, executes and answers', async () => {
     await app.setTier(tier)
     const sessionId = newSessionId(`general-${tier}`)

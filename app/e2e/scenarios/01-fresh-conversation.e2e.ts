@@ -25,7 +25,7 @@
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
 import { FAKE_ANSWER_MARK } from '../lib/fake-llm'
-import { FAKE_ANTHROPIC_TIER_MODEL, VERDA_MODEL, IS_HERMETIC } from '../lib/mode'
+import { FAKE_ANTHROPIC_TIER_MODEL, VERDA_MODEL, IS_HERMETIC, TIERS } from '../lib/mode'
 
 let app: AppHandles
 
@@ -43,8 +43,9 @@ beforeEach(() => {
   app.fakeGateway.reset()
 })
 
-const TIERS = ['anthropic', 'verda'] as const
-
+// `TIERS` is both tiers hermetically and the self-hosted one alone in live
+// mode — running the anthropic leg against the real provider would bill a
+// metered API for a route the live run is not there to measure (`mode.ts`).
 describe.each(TIERS)('a fresh conversation on the %s tier', (tier) => {
   it('completes through the server action and persists a sane row', async () => {
     await app.setTier(tier)

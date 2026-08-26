@@ -20,7 +20,7 @@
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
-import { IS_HERMETIC } from '../lib/mode'
+import { IS_HERMETIC, TIERS } from '../lib/mode'
 
 let app: AppHandles
 
@@ -36,7 +36,7 @@ beforeEach(() => {
   app.fakeGateway.reset()
 })
 
-describe.each(['anthropic', 'verda'] as const)('three turns on the %s tier', (tier) => {
+describe.each(TIERS)('three turns on the %s tier', (tier) => {
   it('continues the same conversation and keeps the history', async () => {
     await app.setTier(tier)
     const sessionId = newSessionId(`multi-${tier}`)

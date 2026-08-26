@@ -20,22 +20,6 @@
  * marker here, never loosening the classifier.
  */
 
-/** Every BAML function this repo declares. Keep in step with `baml_src/`. */
-export type BamlFunctionName =
-  | 'Router'
-  | 'LoopController'
-  | 'ActorController'
-  | 'Critic'
-  | 'Synthesize'
-  | 'ResultDescribe'
-  | 'ResultDescribeBatch'
-  | 'CompactIntent'
-  | 'Planner'
-  | 'ScreenUntrustedContent'
-  | 'RetrieveQuery'
-  | 'ReferenceSelector'
-  | 'GenerateConversationTitle'
-
 /**
  * Marker → function, in match order. Order is load-bearing:
  *
@@ -52,7 +36,7 @@ export type BamlFunctionName =
  *    did on its first draft, and the scenario it broke reported "no tool
  *    result" rather than "wrong function".
  */
-const MARKERS: ReadonlyArray<readonly [BamlFunctionName, string]> = [
+const MARKERS = [
   ['Router', 'Analyze the user message and determine routing.'],
   ['ActorController', 'A critic evaluates your output. Learn from previous feedback.'],
   ['LoopController', 'Select one tool per turn. Use "Return" when you have enough information.'],
@@ -72,7 +56,21 @@ const MARKERS: ReadonlyArray<readonly [BamlFunctionName, string]> = [
     'GenerateConversationTitle',
     'Generate a 3-to-5-word title summarizing what this conversation is',
   ],
-]
+] as const
+
+/**
+ * Every BAML function this repo declares — DERIVED from the markers above, not
+ * a second copy of the list.
+ *
+ * There used to be three hand-maintained copies of the same thirteen names
+ * (this union, `MARKERS`, and the fidelity scenario's loop) and none of them
+ * was checked against `baml_src/`. Now there is one — the marker table, which
+ * cannot be derived because each entry is a hand-picked sentence — and
+ * {@link generatedFunctionNames} pins it against the generated client, so a
+ * fourteenth function is a red test here rather than a 400 from the fake in
+ * whichever scenario happens to trigger it first.
+ */
+export type BamlFunctionName = (typeof MARKERS)[number][0]
 
 /** An OpenAI chat message, in either of the two content shapes BAML emits. */
 export interface ChatMessage {
@@ -107,3 +105,25 @@ export function classifyPrompt(text: string): BamlFunctionName | null {
 
 /** Every function name the classifier can produce — used by the fidelity pin. */
 export const ALL_BAML_FUNCTIONS: readonly BamlFunctionName[] = MARKERS.map(([name]) => name)
+
+/**
+ * The function names the GENERATED client declares, read off `b.request`.
+ *
+ * This is the completeness half of the fidelity pin: `MARKERS` says what the
+ * fake recognises, and this says what `baml_src/` actually contains, so
+ * comparing them catches a function added (or removed) upstream. Without it the
+ * pin only proved the fake agrees with itself.
+ *
+ * Reflection rather than `Object.keys`, and the difference is load-bearing:
+ * `b.request` is a class instance (`AsyncHttpRequest`), so one method per BAML
+ * function sits on the PROTOTYPE and the instance has no own enumerable keys at
+ * all — `Object.keys` returns `[]`, which would make this pin vacuously true.
+ * The prototype carries nothing else but `constructor`; if a generator upgrade
+ * ever adds a helper there, this list grows and the pin goes red, which is the
+ * right way round for a guard.
+ */
+export function generatedFunctionNames(request: object): string[] {
+  return Object.getOwnPropertyNames(Object.getPrototypeOf(request))
+    .filter((name) => name !== 'constructor')
+    .sort()
+}

@@ -40,16 +40,22 @@ export interface FakeGateway {
   readonly url: string
   readonly port: number
   readonly toolCalls: readonly FakeToolCall[]
-  /** Override one tool's reply for the next scenario. `text` is returned as a
-   *  single MCP text block, which `callTool` JSON-parses when it can. */
-  setResult(tool: string, text: string): void
   /** Make one tool fail, so a scenario can drive the loop's error branch. */
   setError(tool: string, message: string): void
   reset(): void
-  close(): Promise<void>
+  // No `close()`, for the same reason `FakeLlm` has none: this server is a
+  // process-wide singleton shared by every scenario file (`isolate: false`, one
+  // fork), so no file may close it, and process exit is the teardown.
 }
 
-/** Tool name → the JSON text block it answers with, by default. */
+/**
+ * Tool name → the JSON text block it answers with.
+ *
+ * Fixed, with no per-scenario override. There was a `setResult()` and nothing
+ * called it: every scenario here asserts on conversation FLOW, and the one that
+ * needs a different reply needs a failing one, which is `setError()`. A
+ * per-tool result override belongs with the first assertion that reads it.
+ */
 const DEFAULT_RESULTS: Record<string, string> = {
   get_neo4j_schema: JSON.stringify([{ label: 'Node', properties: { name: 'STRING' } }]),
   read_neo4j_cypher: JSON.stringify([{ n: 42 }]),
@@ -91,7 +97,6 @@ const TOOLS = [
 
 export async function startFakeGateway(port = 0): Promise<FakeGateway> {
   const toolCalls: FakeToolCall[] = []
-  const results = new Map<string, string>()
   const errors = new Map<string, string>()
 
   const server = http.createServer((req, res) => {
@@ -144,7 +149,7 @@ export async function startFakeGateway(port = 0): Promise<FakeGateway> {
             reply({ content: [{ type: 'text', text: failure }], isError: true })
             return
           }
-          const text = results.get(name) ?? DEFAULT_RESULTS[name] ?? JSON.stringify({ ok: true })
+          const text = DEFAULT_RESULTS[name] ?? JSON.stringify({ ok: true })
           reply({ content: [{ type: 'text', text }] })
           return
         }
@@ -169,20 +174,12 @@ export async function startFakeGateway(port = 0): Promise<FakeGateway> {
     get toolCalls() {
       return toolCalls
     },
-    setResult(tool, text) {
-      results.set(tool, text)
-    },
     setError(tool, message) {
       errors.set(tool, message)
     },
     reset() {
       toolCalls.length = 0
-      results.clear()
       errors.clear()
-    },
-    async close() {
-      server.closeAllConnections?.()
-      await new Promise<void>((resolve) => server.close(() => resolve()))
     },
   }
 }

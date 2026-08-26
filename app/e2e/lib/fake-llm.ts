@@ -27,15 +27,21 @@
  *
  * ## Faults
  *
- * `fake.fault = { … }` injects one of the four failure shapes the preview cares
- * about. They are set per scenario and cleared by `reset()`:
+ * `arm({ … })` injects one of the failure shapes the preview cares about. They
+ * are set per scenario and cleared by `reset()`:
  *
  * | shape        | what the socket sees                                          |
  * | ------------ | ------------------------------------------------------------- |
  * | `cold-start` | nothing at all for N ms, then a normal 200                    |
  * | `status`     | an immediate 4xx/5xx with an OpenAI-shaped error body         |
  * | `mid-stream` | 200, headers, half the body, then the connection destroyed    |
- * | `trickle`    | 200, then the body one byte at a time with a delay per chunk  |
+ *
+ * Three, and every one of them is armed by a scenario. A `trickle` shape (a
+ * complete body delivered in small delayed chunks) was here and is gone: it
+ * worked, nothing asserted on it, and a fault table advertising an affordance
+ * no scenario uses reads as coverage that does not exist. `cold-start` already
+ * covers "slow" and `mid-stream` covers "truncated"; add it back when an
+ * assertion needs the difference.
  *
  * A fault carries an optional `model` filter so a scenario can make ONE tier
  * cold while the other stays warm — which is the only way to tell "the app
@@ -85,7 +91,7 @@ export interface FakeCall {
    *  (e.g. that turn 3 carried turn 1's answer in its history). */
   prompt: string
   /** How the fake answered: a normal reply, or the fault it injected. */
-  outcome: 'ok' | 'unrecognised' | 'status' | 'mid-stream' | 'trickle' | 'bad-role-order'
+  outcome: 'ok' | 'unrecognised' | 'status' | 'mid-stream' | 'bad-role-order'
   /** Milliseconds the fake deliberately withheld the response. */
   delayedMs: number
 }
@@ -104,8 +110,6 @@ export type Fault =
   | { kind: 'status'; status: number; message?: string; model?: string; times?: number }
   /** Send headers and a truncated body, then destroy the socket. */
   | { kind: 'mid-stream'; model?: string; times?: number }
-  /** Deliver a complete, valid body one chunk at a time. */
-  | { kind: 'trickle'; chunkMs: number; model?: string; times?: number }
 
 /** A fault applies to a request when the model matches (or no filter is set)
  *  and it has not already been spent `times` times. */
@@ -130,11 +134,13 @@ export interface FakeLlm {
   reset(): void
   /** Stop accepting connections entirely — the "endpoint is down" case, which
    *  a status code cannot model because a refused TCP connect fails in a
-   *  different layer of the client than an HTTP error does. */
+   *  different layer of the client than an HTTP error does. Also the only
+   *  teardown there is: the fake is a process-wide singleton (see
+   *  `app.ts#bootApp`), so nothing may close it for good while other scenario
+   *  files are still to run, and process exit is what reclaims the port. */
   goDown(): Promise<void>
   /** Bring a downed endpoint back on the SAME port. */
   comeBack(): Promise<void>
-  close(): Promise<void>
 }
 
 export async function startFakeLlm(port = 0): Promise<FakeLlm> {
@@ -245,17 +251,6 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       return
     }
 
-    if (fault?.kind === 'trickle') {
-      record('trickle', delayedMs)
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked' })
-      for (const piece of chunks(payload, 24)) {
-        res.write(piece)
-        await sleep(fault.chunkMs)
-      }
-      res.end()
-      return
-    }
-
     record('ok', delayedMs)
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(payload)
@@ -301,19 +296,17 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       if (!server) return
       const s = server
       server = null
-      await new Promise<void>((resolve) => s.close(() => resolve()))
+      // Sockets first, THEN close. `close()` stops new connections and waits
+      // for live ones to end on their own, so a keep-alive connection the BAML
+      // client is holding would make this await until the client gave up —
+      // which is the shape of an intermittent hang, not a fast "endpoint is
+      // down".
       s.closeAllConnections?.()
+      await new Promise<void>((resolve) => s.close(() => resolve()))
     },
     async comeBack() {
       if (server) return
       await listen()
-    },
-    async close() {
-      if (!server) return
-      const s = server
-      server = null
-      s.closeAllConnections?.()
-      await new Promise<void>((resolve) => s.close(() => resolve()))
     },
   }
 }
@@ -469,12 +462,6 @@ function json(res: http.ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body)
   res.writeHead(status, { 'Content-Type': 'application/json' })
   res.end(payload)
-}
-
-function chunks(text: string, size: number): string[] {
-  const out: string[] = []
-  for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size))
-  return out
 }
 
 /** True when a `system` message follows a non-system one — the ordering vLLM

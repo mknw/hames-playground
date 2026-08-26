@@ -94,8 +94,19 @@ concurrency is queueing rather than scaling (measured 2026-08-25,
 `smoke-verda-load.ts`), and the box pays one cold start for the whole run rather
 than one per file.
 
-Scenarios that inject faults (6) or simulate a cold start (4's timing
-assertions) are **skipped**, not faked — there is no responsible way to cause a
+**What it bills, stated rather than implied.** Live mode is not "no Anthropic
+calls": the switch moves exactly the roles in `VERDA_CLIENT_BY_ROLE`, so every
+self-hosted turn still makes its `router` / `describe` / `screen` / `planner`
+and title calls on the Anthropic chains those roles declare. That is unavoidable
+— it is what the shipped tier does, and a suite that avoided it would be
+measuring a route the app never takes. What _is_ avoidable is running each
+scenario a second time with the switch in the anthropic position, which would
+put the controller / critic / synthesizer there too for no live-route
+information. So the per-tier legs of scenarios 1, 2 and 7 collapse to the
+self-hosted tier here, via the single `TIERS` in `lib/mode.ts`.
+
+Scenarios that inject faults (6's four injected shapes) or simulate a cold start
+(4's timing assertions) are **skipped**, not faked — there is no responsible way to cause a
 mid-stream disconnect on the real endpoint, and faking one there would only test
 the fake. Assertions that read the fake's recorded model ids are skipped for the
 same reason, with `it.runIf` rather than an early `return`, so a skipped check
@@ -150,30 +161,69 @@ fake recorded it.
 
 ## The scenarios
 
-| File                               | What it pins                                                                                                                                                                                                                                                                    |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `00-fake-fidelity.e2e.ts`          | The fake still recognises all thirteen BAML functions. Renders each offline through `b.request.*` and asserts it classifies as itself. No app path, no sockets.                                                                                                                 |
-| `01-fresh-conversation.e2e.ts`     | One message, one answer, per tier — through the server action **and** the SSE route. Row is `done`, titled, carries an assistant message and a tool result.                                                                                                                     |
-| `02-multi-turn.e2e.ts`             | Turns 2 and 3 take the `continueSession` branch. All three user messages in one blob; turn 3's prompt still contains turn 1.                                                                                                                                                    |
-| `03-concurrent-cold.e2e.ts`        | Two conversations overlapping on a cold endpoint. Both complete, neither picks up the other's message, and each keeps the tier its turn started under.                                                                                                                          |
-| `04-cold-start-survival.e2e.ts`    | A 90-second withheld first response does not kill the turn — through the server action and through the SSE route, which holds a stream open across the whole wait.                                                                                                              |
-| `05-tier-switch.e2e.ts`            | Flipping the header switch between turns moves the switched roles, does not fork the conversation, and never moves `router` / `describe` / `screen` (`SA-M5`).                                                                                                                  |
-| `06-failure-honesty.e2e.ts`        | A 400, a refused connection and a mid-stream drop each end the turn **visibly** — never a `done` row with a fabricated answer, never a row stuck at `running`, never a silent close.                                                                                            |
-| `07-wire-shape-and-planner.e2e.ts` | What a three-turn conversation actually puts on the wire is legal for vLLM (the #263 shape, checked at runtime rather than at template-render time), plus a second agent chain — `general`'s planner → simpleLoop — and the planner staying Anthropic in both switch positions. |
+| File                               | What it pins                                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `00-fake-fidelity.e2e.ts`          | The fake still recognises all thirteen BAML functions. Renders each offline through `b.request.*` and asserts it classifies as itself, and pins the marker list against the names the **generated client** declares, so a fourteenth function is red here. No app path, no sockets.                                               |
+| `01-fresh-conversation.e2e.ts`     | One message, one answer, per tier — through the server action **and** the SSE route. Row is `done`, titled, carries an assistant message and a tool result.                                                                                                                                                                       |
+| `02-multi-turn.e2e.ts`             | Turns 2 and 3 take the `continueSession` branch. All three user messages in one blob; turn 3's prompt still contains turn 1.                                                                                                                                                                                                      |
+| `03-concurrent-cold.e2e.ts`        | Two conversations overlapping on a cold endpoint. Both complete, neither picks up the other's message, and each keeps the tier its turn started under.                                                                                                                                                                            |
+| `04-cold-start-survival.e2e.ts`    | A 90-second withheld first response does not kill the turn — through the server action and through the SSE route, which holds a stream open across the whole wait.                                                                                                                                                                |
+| `05-tier-switch.e2e.ts`            | Flipping the header switch between turns moves both switched roles this chain uses (`LoopController` **and** `Synthesize`), does not fork the conversation, and never moves `router` / `describe` / `screen` (`SA-M5`).                                                                                                           |
+| `06-failure-honesty.e2e.ts`        | A 400, a refused connection and a mid-stream drop each end the turn **visibly** — never a `done` row with a fabricated answer, never a row stuck at `running`, never a silent close. Plus the other mechanism: a turn that **throws** (a pattern build that fails) sends an SSE `error` frame and flips its row out of `running`. |
+| `07-wire-shape-and-planner.e2e.ts` | What a three-turn conversation actually puts on the wire is legal for vLLM (the #263 shape, checked at runtime rather than at template-render time), plus a second agent chain — `general`'s planner → simpleLoop — and the planner staying Anthropic in both switch positions.                                                   |
 
 ### What is NOT covered
 
-`ActorController` and `Critic` are exercised nowhere here. The only agents using
-`actorCritic` are the two sandbox agents, which need a container runtime — so
-the pattern whose **retry** path #263 actually broke is still covered only by
-`prompt-role-order.test.ts` and the evals. Closing that needs a sandbox fake,
-which is larger than this suite. Stated rather than papered over, because a
-suite's coverage claim is only worth what its gaps are.
+A suite's coverage claim is only worth what its gaps are, so this list is meant
+to be complete. Add to it when you add a scenario that leaves something out.
 
-## Results of the first run (2026-08-26, hermetic, against `main` @ 4ff54b3)
+- **`ActorController` and `Critic`** — exercised nowhere. The only agents using
+  `actorCritic` are the two sandbox agents, which need a container runtime, so
+  the pattern whose **retry** path #263 actually broke is still covered only by
+  `prompt-role-order.test.ts` and the evals. Closing it needs a sandbox fake,
+  which is larger than this suite.
+- **Two of the three turn modes.** `turn.server.ts` documents `interactive`,
+  `triggered` and `approval`; only `interactive` runs here. So
+  `resumeHarness` behind an approval gate, and the triggered runner's
+  pre-seeded-row path (`POST /api/agents/:id`, a routine), are untraversed.
+- **A positive injection verdict.** `ScreenUntrustedContent` always answers
+  `injection_detected: false`, and the fake router deliberately picks `neo4j`
+  so the search agent's guarded `web` route is never taken — a conversation
+  scenario should not double as an injection-guard scenario. What the guard does
+  when it fires is `withInjectionGuard`'s own tests' job; scenario 5 only pins
+  that `screen` did not move tier.
+- **Multi-call batches.** The fake never returns `additional_calls`, so
+  `multiToolCalls: 'parallel'` — the default for both loop patterns — is never
+  demonstrated end to end.
+- **Output-cap truncation recovery.** Every fake completion carries
+  `finish_reason: 'stop'`, so `llmCallHitOutputCap` and the adapters' one
+  corrective retry are unexercised.
+- **The auth gate.** This suite runs _with_ the dev bypass on (`SD-15`), so it
+  says nothing about an unauthenticated caller being refused. That stays
+  `SD-13`'s own tests' job.
 
-**40 tests across 8 files, all green.** ~190 s wall clock, of which ~180 s is
-scenario 4 sitting through two ninety-second cold starts by design.
+And two things that are outside the traversal rather than untested, both
+consequences of running under vitest rather than a server:
+
+- The server action is called **in-process**, so SolidStart's RPC encode/decode
+  is not on the path.
+- `src/middleware.ts` is never imported, so the server-boot arming it does
+  (`startRoutineScheduler`, `installUsageRecorder`) does not happen — which is
+  why `recordTurn()`'s counters see nothing here.
+
+One non-gap worth writing down, because it looks like one: **a dead MCP gateway
+is not a failure path.** Measured — a turn with the gateway refusing connections
+completes `done`, because every gateway read degrades on purpose (`listTools`
+logs and returns the app-side tools; `getGraphSchema` warns and refuses the
+pattern cache). Scenario 6's throw path therefore uses a failing pattern build
+instead; see its header.
+
+## Results (2026-08-26, hermetic, against `main` @ 4ff54b3)
+
+**43 tests across 8 files, all green.** 187 s wall clock, of which ~180 s is
+scenario 4 sitting through two ninety-second cold starts by design. (The first
+run was 40 tests; the three added close the throw path and the marker-list
+completeness pin — see the mutation table below.)
 
 Green on `main` is itself a finding: the app-layer flow — server actions, the
 turn runner, `continueSession`, persistence, the SSE wire, the tier scope under
@@ -184,16 +234,29 @@ latency, credentials, or the actorCritic path above).
 
 Checks verified **by mutation**, not by reading:
 
-| Mutation                                                      | What went red                                             |
-| ------------------------------------------------------------- | --------------------------------------------------------- |
-| `clientOverrideFor()` returns `undefined` unconditionally     | scenario 5's per-turn tier assertions                     |
-| a late `system` block added to `Synthesize` + `baml-generate` | scenario 7's wire-shape check, and the general-agent turn |
-| `pnpm test:e2e` added to `ci.yml`                             | `e2e-not-in-ci.test.ts`                                   |
-| an `import '../../e2e/lib/mode'` added under `src/`           | `e2e-not-in-ci.test.ts`                                   |
+| Mutation                                                                            | What went red                                                                |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `clientOverrideFor()` returns `undefined` unconditionally                           | scenario 5's per-turn tier assertions                                        |
+| a late `system` block added to `Synthesize` + `baml-generate`                       | scenario 7's wire-shape check, and the general-agent turn                    |
+| `pnpm test:e2e` added to `ci.yml`                                                   | `e2e-not-in-ci.test.ts`                                                      |
+| an `import '../../e2e/lib/mode'` added under `src/`                                 | `e2e-not-in-ci.test.ts`                                                      |
+| `events.ts`: the `catch`'s `error` frame deleted, stream closed silently            | 06's throw path — `the stream closed without an error frame; frames were []` |
+| `turn.server.ts`: `runAndSave` no longer flips the row to `error` before rethrowing | 06's throw path — `the row was left spinning at running`                     |
+| `compactExecution.server.ts`: `clientOverrideFor('compactExecution')` removed       | 05 — `Synthesize on turn 2 (verda)` (the controller assertion stayed green)  |
+| a `MARKERS` entry removed (stands in for a function added to `baml_src/`)           | 00's completeness pin, naming the missing function                           |
+
+Two of those are worth their own line.
 
 The wire-shape check was **vacuous on its first draft** — the enforcement it
 depends on had silently failed to land, and only the mutation exposed it. That
 is the reason the rule below is a rule.
+
+And the first two rows above are a hole this suite shipped with: an independent
+review deleted the SSE `catch`'s error frame and **every scenario stayed green**,
+because all four injected faults resolve through `onResult` with
+`status: 'error'` and none of them makes the turn throw. The silent-stop shape
+the suite is named for was the one it did not cover. Both halves of the throw
+path now have a test and both go red when removed.
 
 ### Adding one
 

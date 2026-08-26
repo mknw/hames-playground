@@ -8,7 +8,8 @@
  * and the dev-only inference redirect the browser e2e layer reaches through.
  *
  * The first two are import side effects, so they cost nothing per request. The
- * third needs an `await` and therefore a handler; see below.
+ * third needs an `await`, and must not be reachable from module scope at all;
+ * see below.
  */
 
 import { createMiddleware } from '@solidjs/start/middleware'
@@ -26,24 +27,42 @@ startRoutineScheduler()
 installUsageRecorder()
 
 /**
- * The dev-only inference redirect (`app/e2e-browser/`), or `null` — which is
- * every ordinary `pnpm dev` and EVERY production build, because
- * `devFakeInferenceUrl()`'s first gate is `import.meta.env.DEV`, a constant
- * Vite replaces with `false`. The import is dynamic so an ordinary `pnpm start`
- * never pulls the BAML native runtime into server boot for a hook that cannot
- * fire.
+ * The dev-only inference redirect (`app/e2e-browser/`) — armed on the first
+ * request and then already resolved for every later one.
  *
- * NOT awaited at the top level: nitro transpiles the server bundle to es2019,
- * where top-level await is a build error rather than a slower build. So the
- * promise is parked here and awaited in `onRequest` instead, which SolidStart
- * awaits before handling — the redirect is provably in place before the first
- * BAML call, because the first BAML call is inside a request.
+ * ## Why the `import()` is inside the handler
+ *
+ * Nothing in `src/` imports `baml_client` at module scope: every call site in
+ * the app writes `const { b } = await import('…/baml_client')` INSIDE an async
+ * function, which is what keeps the native runtime out of the server entry.
+ * The first draft of this file broke that by creating the promise at module
+ * scope — nitro then linked `@boundaryml/baml` into `.output/server/index.mjs`
+ * itself and the production container died at boot with `Cannot find module
+ * '…/@boundaryml/baml/native'` before serving a single request. `pnpm build`
+ * passes either way; CI's `docker image · build · boot` job is what caught it.
+ * Following the same idiom as everything else keeps the import in a lazy chunk
+ * that a production run never loads.
+ *
+ * ## Why a handler at all rather than a top-level await
+ *
+ * Nitro transpiles the server bundle to es2019, where top-level `await` is a
+ * build error. `onRequest` is the next-best ordering guarantee and is in fact
+ * sufficient: SolidStart awaits it before handling, and the first BAML call is
+ * inside a request, so the redirect is provably in place before it.
+ *
+ * ## Why it costs production nothing
+ *
+ * `devFakeInferenceUrl()` returns `null` unless `import.meta.env.DEV` — a
+ * constant a build replaces with `false` — so `onRequest` is `undefined` and
+ * there is no per-request hook at all.
  */
-const fakeInferenceReady = devFakeInferenceUrl()
-  ? import('../baml_client').then(({ b }) => installDevFakeInference(b))
-  : null
+let fakeInferenceReady: Promise<unknown> | null = null
 
 export default createMiddleware({
-  // `undefined` in production, so there is no per-request hook at all there.
-  onRequest: fakeInferenceReady ? async () => void (await fakeInferenceReady) : undefined,
+  onRequest: devFakeInferenceUrl()
+    ? async () => {
+        fakeInferenceReady ??= import('../baml_client').then(({ b }) => installDevFakeInference(b))
+        await fakeInferenceReady
+      }
+    : undefined,
 })

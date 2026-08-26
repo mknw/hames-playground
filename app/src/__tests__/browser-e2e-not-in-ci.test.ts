@@ -153,6 +153,32 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
     expect(seam).toMatch(/process\.env\.E2E_FAKE_INFERENCE_URL/)
   })
 
+  it('never imports BAML at module scope, so the production entry stays clean', () => {
+    // The regression CI caught on the first push of this suite: a static
+    // `import { ClientRegistry } from '@boundaryml/baml'` in the seam reaches
+    // the server ENTRY chunk through `src/middleware.ts` (which imports the
+    // seam statically), nitro links the native runtime into
+    // `.output/server/index.mjs`, and the production container dies at boot
+    // with `Cannot find module '…/@boundaryml/baml/native'` before serving a
+    // request. `pnpm typecheck`, `pnpm test:run` and `pnpm build` ALL pass with
+    // that in place — only the docker boot job fails — which is exactly why it
+    // is pinned here, in the suite that runs on every push.
+    //
+    // Nothing else in `src/` imports BAML at module scope either: the house
+    // idiom is `const { b } = await import('…/baml_client')` inside an async
+    // function. These two modules have to keep following it.
+    for (const [name, source] of [
+      ['dev-fake-inference.server.ts', seam],
+      ['middleware.ts', middleware],
+    ] as const) {
+      const staticImports = source
+        .split('\n')
+        .filter((line) => /^import\b/.test(line) || /^\s*\} from '/.test(line))
+        .filter((line) => /@boundaryml\/baml|baml_client/.test(line))
+      expect(staticImports, `${name} imports BAML at module scope`).toEqual([])
+    }
+  })
+
   it('is only ever reached from the boot hook behind that same gate', () => {
     // A call NOT guarded by `devFakeInferenceUrl()` would import the BAML
     // client into server boot on every deployment, for a hook that cannot fire

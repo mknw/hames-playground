@@ -11,6 +11,10 @@
  * `import.meta.env.DEV` is true under vitest, so the DEV gate cannot be
  * exercised from here — a build is what flips it, and the source pin is what
  * covers it.
+ *
+ * The install is async because it imports `ClientRegistry` lazily; that is not
+ * a detail of the test but the thing that keeps `@boundaryml/baml` out of the
+ * production server entry. See the module's own header.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -64,7 +68,7 @@ describe('installDevFakeInference', () => {
     const { installDevFakeInference } = await load()
     const client = { bamlOptions: { marker: 'untouched' } }
 
-    expect(installDevFakeInference(client)).toBe(false)
+    expect(await installDevFakeInference(client)).toBe(false)
     // Not merely "returned false": the caller's options are the thing a silent
     // half-install would corrupt, and a redirect that partly took is worse
     // than one that did not.
@@ -76,7 +80,7 @@ describe('installDevFakeInference', () => {
     const { installDevFakeInference } = await load()
     const client: { bamlOptions?: unknown } = {}
 
-    expect(installDevFakeInference(client)).toBe(true)
+    expect(await installDevFakeInference(client)).toBe(true)
     const options = client.bamlOptions as { clientRegistry?: unknown }
     expect(options.clientRegistry).toBeDefined()
   })
@@ -88,7 +92,7 @@ describe('installDevFakeInference', () => {
     process.env.E2E_FAKE_INFERENCE_URL = FAKE_URL
     const { installDevFakeInference } = await load()
     const client: { bamlOptions?: unknown } = {}
-    installDevFakeInference(client)
+    await installDevFakeInference(client)
 
     const first = (client.bamlOptions as { clientRegistry: unknown }).clientRegistry
     const second = (client.bamlOptions as { clientRegistry: unknown }).clientRegistry

@@ -34,11 +34,16 @@ vi.mock('../../../lib/db/client.server', () => ({
   query: (...args: unknown[]) => query(...args),
 }))
 
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import {
   reapStuckConversations,
   STUCK_RUN_TIMEOUT_MINUTES,
+  PER_CALL_TIMEOUT_MINUTES,
+  CHAIN_OVERHEAD_CALLS,
 } from '../../../lib/db/conversations.server'
 import { SETTINGS_BOUNDS } from '../../../lib/settings'
+import { VERDA_WAKE_TIMEOUT_MS } from '../../../lib/inference/wake.server'
 
 beforeEach(() => {
   query.mockReset()
@@ -114,10 +119,15 @@ describe('the reap statement', () => {
     // A running row gets no write between the pre-seed and the final save, so
     // the only protection a live turn has is that this number outlasts it. That
     // makes it a bound, and a bound has to be computed from the same ceilings
-    // the app enforces — recomputed here from `SETTINGS_BOUNDS` so that
-    // widening a slider fails HERE if the threshold did not move with it.
-    const PER_CALL_TIMEOUT_MINUTES = 10 // VerdaQwen request_timeout_ms 600_000
-    const CHAIN_OVERHEAD_CALLS = 5 // router, compactIntent, planner, synth, +1
+    // the app enforces — so every term is IMPORTED here rather than restated,
+    // and widening a slider fails HERE if the threshold did not move with it.
+    //
+    // The imports are the fix for N1 on #278: this test used to keep its own
+    // copies of the two private constants, so when #279 took the per-call
+    // ceiling to 3 minutes and the threshold correctly followed to 90, the
+    // assertion — still holding a stale 250 — accused the right answer of being
+    // able to reap a live turn. A pin that goes red for the wrong reason costs
+    // more than one that does not exist.
     const worstTurnMinutes =
       (Math.max(SETTINGS_BOUNDS.maxToolTurns[1], 2 * SETTINGS_BOUNDS.maxRetries[1]) +
         CHAIN_OVERHEAD_CALLS) *
@@ -135,8 +145,47 @@ describe('the reap statement', () => {
     expect(STUCK_RUN_TIMEOUT_MINUTES).toBeLessThanOrEqual(Math.ceil(worstTurnMinutes * 1.5))
   })
 
+  it('mirrors the per-call ceiling declared on VerdaQwen', () => {
+    // `PER_CALL_TIMEOUT_MINUTES` is the term that dominates the derivation, and
+    // it is a COPY: `request_timeout_ms` lives in BAML, which exports nothing a
+    // module can read it from (same situation as `VERDA_MODEL_ID`, pinned the
+    // same way in `verda-wake.test.ts`). This scan is what makes the copy safe —
+    // without it, the one number that moves the threshold could drift from its
+    // declaration with every other test still green.
+    const declared = readFileSync(path.resolve(process.cwd(), 'baml_src/verda-client.baml'), 'utf8')
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('//'))
+      .join('\n')
+    const match = /request_timeout_ms\s+(\d+)/.exec(declared)
+    expect(match, 'VerdaQwen no longer declares a request_timeout_ms').not.toBeNull()
+    expect(
+      PER_CALL_TIMEOUT_MINUTES * 60_000,
+      'the reaper threshold is derived from a per-call ceiling the client no longer has',
+    ).toBe(Number(match![1]))
+  })
+
+  it('leaves room for the wake ping in front of the turn', () => {
+    // The one term outside the product (#279): a turn is parked on a wake ping
+    // BEFORE its first LLM call, and the row is pre-seeded before that wait, so
+    // the wake is spent against this budget. It is absorbed by the margin rather
+    // than added as a term — bounded, once per turn, and two orders of magnitude
+    // below the chain — which is only defensible while the inequality holds.
+    // Pinned against the real constant so a longer wake fails here instead of
+    // quietly shortening how long a live turn is protected for.
+    const worstTurnMinutes =
+      (Math.max(SETTINGS_BOUNDS.maxToolTurns[1], 2 * SETTINGS_BOUNDS.maxRetries[1]) +
+        CHAIN_OVERHEAD_CALLS) *
+      PER_CALL_TIMEOUT_MINUTES
+    const wakeMinutes = VERDA_WAKE_TIMEOUT_MS / 60_000
+
+    expect(
+      STUCK_RUN_TIMEOUT_MINUTES,
+      'a turn that waited out the wake and then ran the longest legal chain can be reaped mid-flight',
+    ).toBeGreaterThan(worstTurnMinutes + wakeMinutes)
+  })
+
   it('is a whole number of minutes, because it is interpolated into an INTERVAL', () => {
-    // `INTERVAL '300.0000001 minutes'` would still parse, but the derivation
+    // `INTERVAL '90.0000001 minutes'` would still parse, but the derivation
     // multiplies by a fractional margin and a rounding change here would show
     // up as a puzzling SQL literal rather than as a failing test.
     expect(Number.isInteger(STUCK_RUN_TIMEOUT_MINUTES)).toBe(true)

@@ -351,9 +351,10 @@ function planTurn(req: TurnRequest, loaded: LoadedSession | null): { agentId: st
  *
  * Both are the same defect: a routine, network-dependent failure on the tier
  * that is the deployment DEFAULT, against a box whose documented behaviour is to
- * be asleep. #278's reaper is a 20-minute backstop, not the designed path. So
- * the ping happens here, first, inside the try — every entry point ends its row
- * in an error state, chat or not.
+ * be asleep. #278's reaper is a 90-minute backstop (it is derived from the
+ * per-call ceiling this PR halved, so it moved with it), not the designed path.
+ * So the ping happens here, first, inside the try — every entry point ends its
+ * row in an error state, chat or not.
  *
  * ORDER, and both halves of it are deliberate. The row is seeded BEFORE the
  * wake (that is the interactive fix), and the wake comes before

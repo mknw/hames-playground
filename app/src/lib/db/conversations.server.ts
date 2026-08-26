@@ -242,17 +242,26 @@ export async function setConversationStatus(
 }
 
 /**
- * The per-LLM-call ceiling in force on this branch: `VerdaQwen`'s
- * `request_timeout_ms` of 600_000 (`baml_src/verda-client.baml`), which is the
- * only declared one and belongs to the DEPLOYMENT DEFAULT tier. It is generous
- * on purpose — the box scales to zero and a cold start was measured at 146s
- * (#273) — and it is the single term below that dominates everything else.
+ * The per-LLM-call ceiling in force: `VerdaQwen`'s `request_timeout_ms` of
+ * 180_000 (`baml_src/verda-client.baml`), which is the only declared one and
+ * belongs to the DEPLOYMENT DEFAULT tier. It is the single term below that
+ * dominates everything else, so it is the number that moves the threshold.
  *
- * **This is the number that tightens.** #279 (unmerged at the time of writing)
- * drops the ceiling to ~120s; changing this constant to `2` re-derives
- * {@link STUCK_RUN_TIMEOUT_MINUTES} to 48 minutes with no other edit.
+ * **Three minutes, not ten, since #279** — that PR moved the cold start out in
+ * front of the turn (a wake ping, `lib/inference/wake.server.ts`) so the client's
+ * own timeout could be sized for a WARM call, and derived it from the halved
+ * `max_tokens` of 4 096: a full-cap generation has to finish inside the timeout
+ * or the truncation retry can never fire. Both halves of that are one decision
+ * and the arithmetic is stated on the client; this constant only mirrors the
+ * result, and `stuck-run-reaper.test.ts` pins the mirror against the `.baml`
+ * declaration rather than trusting it — BAML exports nothing a module can read
+ * the number from, so the copy has to be held by a source scan.
+ *
+ * This is a MIRROR, exported for the pin and for the derivation's own test. It
+ * is not the declaration: change `request_timeout_ms` and this follows, or the
+ * scan goes red naming both numbers.
  */
-const PER_CALL_TIMEOUT_MINUTES = 10
+export const PER_CALL_TIMEOUT_MINUTES = 3
 
 /**
  * The most sequential LLM calls one turn can make, on the longest chain a
@@ -270,7 +279,7 @@ const PER_CALL_TIMEOUT_MINUTES = 10
  * `SETTINGS_BOUNDS.maxRetries[1]` at an actor call plus a critic call per
  * attempt; `Math.max` takes whichever loop is worse rather than assuming.
  */
-const CHAIN_OVERHEAD_CALLS = 5
+export const CHAIN_OVERHEAD_CALLS = 5
 const MAX_SEQUENTIAL_LLM_CALLS =
   Math.max(SETTINGS_BOUNDS.maxToolTurns[1], 2 * SETTINGS_BOUNDS.maxRetries[1]) +
   CHAIN_OVERHEAD_CALLS
@@ -287,14 +296,24 @@ const MAX_SEQUENTIAL_LLM_CALLS =
  * threshold outlasts it, which makes the number a bound and not a preference:
  *
  *     worst legitimate turn = MAX_SEQUENTIAL_LLM_CALLS × PER_CALL_TIMEOUT_MINUTES
- *                           = (max(15, 2 × 10) + 5) × 10 min
- *                           = 250 min
- *     threshold             = worst × MARGIN (1.2) = 300 min
+ *                           = (max(maxToolTurns 15, 2 × maxRetries 10) + 5) × 3 min
+ *                           =  25 calls × 3 min = 75 min
+ *     threshold             = ceil(worst × MARGIN 1.2) = 90 min
+ *
+ * **Every term is read from where it lives**, which is the property that makes
+ * this survive an edit somewhere else: the two loop bounds come from the
+ * exported {@link SETTINGS_BOUNDS}, so widening a slider lengthens this with no
+ * edit here, and {@link PER_CALL_TIMEOUT_MINUTES} mirrors the client's
+ * `request_timeout_ms` under a source-scan pin. The pin in
+ * `stuck-run-reaper.test.ts` imports all three rather than restating them —
+ * local copies there were what made the last ceiling change fail with a
+ * *misleading* message (N1 on #278): 90 minutes is the right answer at a
+ * 3-minute ceiling, and a test holding a stale 250 accused it of being unsafe.
  *
  * The value it replaces was 20 minutes, and 20 minutes is exactly 2 × the 600s
- * per-call ceiling — while CLAUDE.md's own measurement of a burst into a
- * sleeping box is that ceiling being hit *twice in one turn* (controller, then
- * synthesizer). It was therefore a coin flip on the shape it was written
+ * per-call ceiling then in force — while CLAUDE.md's own measurement of a burst
+ * into a sleeping box is that ceiling being hit *twice in one turn* (controller,
+ * then synthesizer). It was therefore a coin flip on the shape it was written
  * against, and a 21-minute turn was in fact reaped out from under itself in
  * review: the reap wrote `error`, the turn later wrote its own outcome over it,
  * and in between the row lied and `sweepStuckRuns` logged an abandonment that
@@ -302,10 +321,21 @@ const MAX_SEQUENTIAL_LLM_CALLS =
  * never live ones — and the intent is what this honours; the number was never
  * the thing being asked for.
  *
- * **The margin is 1.2 and does no other work.** It is not a fudge for an
- * unaccounted term: every term above is a hard ceiling the app enforces, and
- * the margin exists only so that a turn sitting exactly at the bound is not a
- * race with the sweep.
+ * **The wake is the one term not in the product, and it fits.** #279 parks a
+ * turn on a wake ping before its first LLM call, for up to
+ * `VERDA_WAKE_TIMEOUT_MS` (300s, `lib/inference/wake.server.ts`), and the row is
+ * pre-seeded before that wait — so the worst legitimate turn is really 75 + 5 =
+ * **80 minutes against a 90-minute threshold**, 10 minutes clear. It is folded
+ * into the margin rather than added as a term because it is bounded, once per
+ * turn (concurrent turns share one ping) and two orders of magnitude below the
+ * chain; `stuck-run-reaper.test.ts` pins the inequality against the real
+ * constant so a longer wake fails here rather than shortening a live turn's
+ * protection in silence.
+ *
+ * **The margin is 1.2, and the wake above is the only other thing it absorbs.**
+ * It is not slack for an unaccounted term: every term in the product is a hard
+ * ceiling the app enforces, and the margin exists so that a turn sitting at the
+ * bound is not racing the sweep.
  *
  * The cost of the larger number is bounded and small: an abandoned row is
  * reconciled later, and nothing else changes — reaping was never what a WAITING
@@ -314,9 +344,9 @@ const MAX_SEQUENTIAL_LLM_CALLS =
  * reap buys is honest data at rest, and honest data late beats a wrong status
  * early.
  *
- * It tightens when the per-call ceiling does: see
- * {@link PER_CALL_TIMEOUT_MINUTES} — #279 takes it to ~2 minutes, and this
- * expression then yields 48.
+ * It tightens when the per-call ceiling does, and has once already: see
+ * {@link PER_CALL_TIMEOUT_MINUTES}, which #279 took from 10 minutes to 3 and
+ * this expression from 300 minutes to 90, with no other edit.
  */
 const STUCK_RUN_MARGIN = 1.2
 export const STUCK_RUN_TIMEOUT_MINUTES = Math.ceil(

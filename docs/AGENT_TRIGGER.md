@@ -72,9 +72,10 @@ Since #273 D-a the row no longer spins forever — the routines tick sweeps rows
 stuck at `running` with no write for `STUCK_RUN_TIMEOUT_MINUTES` to `error`, on
 boot and every 30s (see ROUTINES.md → "Trigger evaluation"). That threshold is
 **derived from the longest turn a browser can ask for** rather than picked, and
-is therefore long (five hours at the 600s per-call ceiling this branch runs
-with); the alternative is reaping a turn that is still legitimately in flight,
-which a 20-minute threshold demonstrably did. It reconciles the ROW, not the
+is therefore long (90 minutes at the 180s per-call ceiling #279 landed — it was
+five hours at the 600s one that preceded it, and moved on its own); the
+alternative is reaping a turn that is still legitimately in flight, which a
+20-minute threshold demonstrably did. It reconciles the ROW, not the
 run: nothing resumes the work, and crash-recovery / retries are still an upgrade
 path — a Postgres-polling worker. Assumes a **persistent node server** (not
 serverless).

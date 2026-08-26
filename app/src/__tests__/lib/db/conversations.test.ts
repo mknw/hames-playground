@@ -503,6 +503,34 @@ describe('reapStuckConversations', () => {
     expect(await statusOf(finished)).toBe('done')
   })
 
+  it('reaps one minute over the threshold and not one minute under', async () => {
+    if (!dbAvailable) return
+    // The boundary itself, driven rather than argued — the derivation is only
+    // worth what the statement does at its edges. Re-driven at the post-#279
+    // threshold of 90 minutes (it was 300 when these cases were first run).
+    const tag = Math.random().toString(36).slice(2, 8)
+    const under = `reap-under-${tag}`
+    const over = `reap-over-${tag}`
+    // The base review's case: a live 21-minute turn WAS reaped out from under
+    // itself under the old 20-minute threshold, which is what made the number
+    // derived rather than chosen (#278 F3). It must still survive, and it is the
+    // one row here whose age is a fact about the past rather than a fraction of
+    // the current constant — so it stays honest if the threshold moves again.
+    const live21 = `reap-live21-${tag}`
+    await seed(under, 'running', STUCK_RUN_TIMEOUT_MINUTES - 1)
+    await seed(over, 'running', STUCK_RUN_TIMEOUT_MINUTES + 1)
+    await seed(live21, 'running', 21)
+
+    const reaped = await reapStuckConversations()
+
+    expect(reaped).toContain(over)
+    expect(await statusOf(over)).toBe('error')
+    expect(reaped).not.toContain(under)
+    expect(await statusOf(under)).toBe('running')
+    expect(reaped).not.toContain(live21)
+    expect(await statusOf(live21)).toBe('running')
+  })
+
   it('is idempotent — a second sweep finds nothing to do', async () => {
     if (!dbAvailable) return
     const id = `reap-twice-${Math.random().toString(36).slice(2, 8)}`

@@ -222,6 +222,15 @@ const VERDA_CLIENT_BY_ROLE: Partial<Record<BamlRole, string>> = {
   // exists precisely so this stops being four flags in four files.
   planner: 'VerdaQwen',
   describe: 'VerdaQwen', // the six summarization functions
+  // The composite consequence of THIS line, in the style the `planner:` entry
+  // above sets: the screen now inherits the scale-to-zero LATENCY profile as
+  // well as the routing. A guarded tool result can wait a 146s cold start — or
+  // the client's 600s `request_timeout_ms`, or the platform's 55s 504 — before
+  // `withInjectionGuard`'s fail-open gives up and records `screen unavailable:`
+  // (`patterns/withInjectionGuard.server.ts`). The degradation IS emitted, so SD-4's
+  // "recorded rather than hidden" still holds and the guard's own regex layer is
+  // untouched by it; what the tier buys back is that no such payload leaves the
+  // box. Blast radius is zero today because no agent enables the LLM screen.
   screen: 'VerdaQwen', // ScreenUntrustedContent — owner decision 2026-08-26, above
 }
 

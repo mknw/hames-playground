@@ -177,11 +177,13 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
     // The describe role trims against the same server ceiling now that it
     // moves; `compactBulkData` and the retriever both size off this.
     expect(getContextWindow(resolveClientForRole('describe'))).toBe(131_072)
-    // The screen sizes against the same server ceiling now that it moves. This
-    // is the half of the screen's move that is easy to forget: the guard hands
-    // it up to 20 000 characters of fetched content, so a screen budgeted for
-    // 200K against a 131K server is the flag being "on" and quietly broken on
-    // exactly the payload it exists to read.
+    // The screen, unlike the two above, is NOT budgeted by context window —
+    // nothing in production calls `getContextWindow` for it, and it bounds its
+    // own input by characters instead (`maxChars: 20_000`, see the note on the
+    // role map). So this line is a mirror-consistency pin, not a budgeting one:
+    // it asserts that the map keeps reporting the client the screen's calls
+    // actually reach, so the day something DOES size the screen's prompt it is
+    // handed the server's real ceiling rather than Anthropic's 200K.
     expect(getContextWindow(resolveClientForRole('screen'))).toBe(131_072)
   })
 })

@@ -100,10 +100,10 @@ client<llm> SynthesizerAnthropic {
 // lands on: the one edit to avoid. Still true after 2026-08-26, when the private
 // tier moved the screen deliberately (its own line in VERDA_CLIENT_BY_ROLE, its
 // own eval scenario): a deliberate move is not the accident this warns about,
-// and this block is what the Anthropic tier still runs. To move the describe tier, rewrite its SIX
-// `client DescribeAnthropic` lines individually, or declare a separate chain
-// (e.g. `DescribeLocal`) and point those six at it. The owned-inference flip is
-// documented on LocalQwenSmall in local-client.baml.
+// and this block is what the Anthropic tier still runs. To move the describe
+// tier, rewrite its SIX `client DescribeAnthropic` lines individually, or
+// declare a separate chain (e.g. `DescribeLocal`) and point those six at it.
+// The owned-inference flip is documented on LocalQwenSmall in local-client.baml.
 client<llm> DescribeAnthropic {
   provider fallback
   options {

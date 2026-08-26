@@ -11,13 +11,14 @@ mechanics in §4 and §5.
 
 This skill is only the repo contract — it routes everything generic elsewhere:
 coordination doctrine (how to split the work, which executor and model take a
-piece, supervision, the review gate before merge) is the `dispatching-work`
+piece, supervision, and the review gate itself) is the `dispatching-work`
 skill; Orca's command surface and message mechanics are the `orchestration`
 skill. Within this repo, the standing acceptance criteria each piece of work is
 held to live in [`docs/agents/AGENT-BRIEF.md`](../../../docs/agents/AGENT-BRIEF.md);
 the issue-tracker workflow lives in
 [`docs/agents/issue-tracker.md`](../../../docs/agents/issue-tracker.md).
-This skill covers only what none of those do: the shape of the hand-off itself.
+This skill covers only what none of those do: the shape of the hand-off, and
+what this repo's review loop and merge mechanics add on top of the generic gate.
 
 ## 1. Point, don't restate
 
@@ -105,9 +106,12 @@ test:run` passing is not evidence that a guard guards — only a mutation that
 goes red is.
 
 **Every fix round gets a delta review, until CONVERGED.** The same reviewer,
-re-reading only the delta. The loop terminates on the **reviewer's** word — a
-lane declaring itself done is a report, not a verdict, and the round that
-introduces a regression is usually the one that felt trivial.
+re-reading only the delta — a deliberate departure from `dispatching-work`'s
+fresh-reviewer default, because only the agent that wrote the terms can tell a
+fix that honours them from one that re-solved the problem. The loop terminates
+on the **reviewer's** word — a lane declaring itself done is a report, not a
+verdict, and the round that introduces a regression is usually the one that
+felt trivial.
 
 **A substituted fix is allowed when the prescribed one provably fails — with the
 proof on the record.** Post what was prescribed, what it did when tried, and

@@ -109,9 +109,11 @@ globbing a directory shut.
 ### 3. Hermetic is the pre-merge instrument; live is a separate act
 
 Layers 2 and 3 default to fakes — no credential, no network, no bill — which is
-what makes them runnable on demand before a merge. Every live mode is opt-in
-through an env var (`E2E_LIVE`, `EVAL_CLIENT`) and is never a default, so no
-routine invocation can start billing by accident.
+what makes them runnable on demand before a merge. Their live mode is opt-in
+through `E2E_LIVE` and is never a default, so no routine invocation of them can
+start billing by accident. Layer 4 is the opposite by construction — every eval
+scenario makes real billed calls, and `EVAL_CLIENT` chooses which client the
+bill lands on, never whether there is one.
 
 Faking is not the same as skipping. A scenario that cannot be honestly staged
 live — an injected fault, a simulated cold start — is **skipped** there, with

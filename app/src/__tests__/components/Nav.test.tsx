@@ -63,8 +63,12 @@ describe('Nav', () => {
   it('carries the theme control alongside the link', () => {
     const { container } = render(() => <Nav />)
 
-    // ThemeSwitcher is the only button in the bar while signed out.
+    // ThemeSwitcher is the only button in the bar while signed out. It is a
+    // menu trigger since the switch grew a third setting, so the title names
+    // the current choice rather than the action.
     expect(container.querySelectorAll('button')).toHaveLength(1)
-    expect(container.querySelector('button')!.getAttribute('title')).toMatch(/Switch to .* mode/)
+    expect(container.querySelector('button')!.getAttribute('title')).toMatch(
+      /^Theme: (Light|Dark|System)$/,
+    )
   })
 })

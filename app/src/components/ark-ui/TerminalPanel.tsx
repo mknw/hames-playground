@@ -163,22 +163,22 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
   const hasSession = () => typeof props.sessionId === 'string' && props.sessionId.length > 0
 
   return (
-    <div flex="~ col" h="full" bg="dark-bg-primary" overflow="hidden">
+    <div flex="~ col" h="full" bg="ui-bg-primary" overflow="hidden">
       {/* Header: count + Activity/Shell toggle */}
       <div
         flex="~"
         items="center"
         justify="between"
         p="2 3"
-        bg="dark-bg-tertiary"
-        border="b dark-border-primary"
+        bg="ui-bg-tertiary"
+        border="b ui-border-primary"
       >
         <div flex="~" items="center" gap="2">
           <span
             class="i-material-symbols-terminal"
             style={{ width: '16px', height: '16px', color: '#10b981' }}
           />
-          <span text="xs dark-text-secondary">
+          <span text="xs ui-text-secondary">
             {entries().length} sandbox {entries().length === 1 ? 'command' : 'commands'}
           </span>
         </div>
@@ -186,8 +186,8 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
           <button
             onClick={() => setView('activity')}
             p="x-2 y-0.5"
-            text={view() === 'activity' ? 'xs emerald-400' : 'xs dark-text-tertiary'}
-            bg={view() === 'activity' ? 'emerald-600/15' : 'transparent hover:dark-bg-primary'}
+            text={view() === 'activity' ? 'xs emerald-400' : 'xs ui-text-tertiary'}
+            bg={view() === 'activity' ? 'emerald-600/15' : 'transparent hover:ui-bg-primary'}
             border="1 transparent"
             rounded="md"
             cursor="pointer"
@@ -204,8 +204,8 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
                 : 'No active session'
             }
             p="x-2 y-0.5"
-            text={view() === 'shell' ? 'xs emerald-400' : 'xs dark-text-tertiary'}
-            bg={view() === 'shell' ? 'emerald-600/15' : 'transparent hover:dark-bg-primary'}
+            text={view() === 'shell' ? 'xs emerald-400' : 'xs ui-text-tertiary'}
+            bg={view() === 'shell' ? 'emerald-600/15' : 'transparent hover:ui-bg-primary'}
             border="1 transparent"
             rounded="md"
             cursor={hasSession() ? 'pointer' : 'not-allowed'}
@@ -226,7 +226,7 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
             fallback={
               <div flex="~ col" items="center" justify="center" h="full" text="center" gap="3">
                 <span text="4xl">🖥️</span>
-                <span text="sm dark-text-secondary" max-w="xs">
+                <span text="sm ui-text-secondary" max-w="xs">
                   No sandbox activity yet. Run the <strong>Sandbox Demo</strong> agent (or any agent
                   wrapped in <code>withSandbox</code>) to see commands here — or hit{' '}
                   <strong>Shell</strong> to open a live terminal in this session's sandbox.
@@ -257,7 +257,7 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
                     </Show>
                     <Show when={!e.pending && e.output}>
                       <pre
-                        text="xs dark-text-primary"
+                        text="xs ui-text-primary"
                         m="t-1 b-0"
                         pl="4"
                         style={{ 'white-space': 'pre-wrap', 'word-break': 'break-word' }}

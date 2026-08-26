@@ -7,29 +7,62 @@
  * and the regression is only noticed once a user has been navigated out of a
  * live chat — so the rule needs a gate rather than a sweep.
  *
- * Two halves enforce it. Links produced from *data* (assistant markdown,
- * citations) are fixed at their single chokepoint, the DOMPurify hook in
- * `~/lib/sanitize-html`, and pinned by `lib/sanitize-html.test.ts` and
- * `components/ark-ui/chat-markdown.test.ts`. Links written by *hand* are this
- * file's job: it reads `src/` as text and looks for four shapes.
+ * ## What is enforced, and what is only checked
+ *
+ * Two mechanisms carry the rule, and they are not the same strength. Reading
+ * them as one is how a gate ends up trusted for more than it holds.
+ *
+ * **The enforcement of record is the render path, not this file.** Every link
+ * produced from *data* — assistant markdown, citations, doc-ref chips — reaches
+ * the DOM through one function, and the `afterSanitizeAttributes` hook in
+ * `~/lib/sanitize-html` stamps `target`/`rel` onto every `<a>` that passes it.
+ * That is structural: it runs on the node, so it holds for hrefs nobody
+ * anticipated, including ones written to defeat it — `target` and `rel` are
+ * deliberately kept out of `ALLOWED_ATTR`, so a model-written value is stripped
+ * before the hook's own is set. Three independent review rounds attacked it
+ * from model output and none of them got a link through it. Pinned by
+ * `lib/sanitize-html.test.ts` and `components/ark-ui/chat-markdown.test.ts`.
+ *
+ * **This file is a lint over hand-written source, not a proof.** It reads
+ * `src/` as text and matches literal shapes, so it reports on the shapes it has
+ * been taught and on nothing else. Three review rounds each found further
+ * shapes *inside* the set an earlier version of this header claimed to cover —
+ * that is evidence about source scanning as a technique, not about one missing
+ * branch found three times. So the claim it makes is deliberately narrow:
+ *
+ *     a green run means **no *known* shape is unguarded**.
+ *     It does not mean no link in the app opens in-tab.
+ *
+ * What it is good for is drift: a hand-written anchor added in the ordinary
+ * way, in one of the ordinary shapes, fails on the PR that adds it, with the
+ * file and the tag named. That is worth having and it is all it is. A property
+ * that has to *hold* belongs in the sanitizer half.
+ *
+ * ## The shapes it covers
  *
  *   1. JSX `<a …>` openings                → `target` + `rel`, or an ALLOWLIST entry
  *   2. `document.createElement('a')`       → *that* anchor is a download, or
- *                                            `target` + `rel`
- *   3. `location.href = …` / `.assign(…)` / `.replace(…)` / `window.open(…)`
- *                                          → an ALLOWLIST entry (the app
+ *                                            `target` + `rel` set on *it*
+ *   3. `location.href = …` / `.assign(…)` / `.replace(…)`, a whole-object
+ *      `location = …` qualified by any of `window`, `self`, `top`, `parent`,
+ *      `globalThis` or `document`, and `window.open(…)`
+ *                                         → an ALLOWLIST entry (the app
  *                                            navigating itself away is exactly
  *                                            what the rule forbids)
- *   4. HTML sinks (`innerHTML` and friends, `marked`) → the one sanitized
- *                                            render path, or an HTML_SINKS entry
+ *   4. HTML sinks — `innerHTML`/`outerHTML` write or append,
+ *      `insertAdjacentHTML`, `document.write`/`writeln`,
+ *      `createContextualFragment`, `parseFromString`, `setHTMLUnsafe`, and any
+ *      `marked` render call                → the one sanitized render path, or
+ *                                            an HTML_SINKS entry
  *
- * Shape 4 is not about `target` at all. The data half only holds while
+ * Shape 4 is not about `target` at all. The data half above only holds while
  * `sanitizeMarkdownHtml` is the *only* way markup reaches the DOM: a second
  * `marked` → `innerHTML` path would render model text with no sanitizer in
  * front of it, re-opening the content boundary (SD-1) and the citation-forgery
  * posture (SA-M10) rather than merely opening a link in the wrong tab. The
  * styleguide already says "do not add a second markdown or `innerHTML` path";
- * this makes that instruction a mechanism instead of a sentence.
+ * this makes that instruction a mechanism instead of a sentence. It is also the
+ * shape where the enumeration below is least able to keep up.
  *
  * Router `<A>` elements are deliberately NOT scanned: in-app navigation between
  * the app's own routes is not a "link" under the rule and stays in-tab.
@@ -38,17 +71,35 @@
  * number, so an edit above one does not trip the gate — and each one has to
  * carry a written reason, which is the point of the mechanism.
  *
- * **Where the gate deliberately stops.** It is a text scanner, so it only sees
- * shapes that are written out literally. Known and accepted blind spots, none
- * of which any current call site uses:
- *   - an anchor rendered without a literal `<a`, e.g. `<Dynamic component="a">`
- *     or a third-party component that proxies to one;
- *   - `document.createElement(tag)` with the tag in a variable;
- *   - `location` captured into a local first (`const loc = location; loc.href =`);
- *   - an HTML sink reached through a computed property (`el['innerHTML'] = …`);
- *   - taking the user off the page by something that is not a link:
- *     `<form action="https://…">`, or the router's `navigate('https://…')`.
- * Anything structural belongs in the sanitizer half, not here.
+ * ## The families it cannot see
+ *
+ * Not a list of instances — the individual examples are illustrations, and
+ * each family is open-ended by construction. None of them is used by any
+ * current call site, which is a fact about this tree today, not a control.
+ *
+ *   - **Indirection of any kind.** The scanner matches literals, so anything
+ *     held in a variable, an alias or a computed property is invisible:
+ *     `createElement(tag)`, `const loc = location; loc.href = …`,
+ *     `el['innerHTML'] = …`, `const opener = window.open; opener(url)`, a bare
+ *     `open(url, '_self')`, `import { marked as md2html }`, `new Marked()`.
+ *   - **Nodes obtained rather than created.** Shape 2 keys on the factory call,
+ *     so an anchor from `querySelector` or a `ref` is never scanned — and its
+ *     `target` can be overwritten at runtime after render.
+ *   - **Anything rendered through a boundary.** A component that proxies to an
+ *     anchor without a literal `<a` in `src/` (`<Dynamic component="a">`, a
+ *     third-party link component), and any code outside `src/`.
+ *   - **Markup sinks beyond the enumeration.** The DOM takes a string in more
+ *     ways than a list can hold; shape 4 names eight. This is the blind spot
+ *     that costs more than a tab (SD-1), and the reason the sanitizer — not
+ *     this file — is where that boundary is kept.
+ *   - **A bare, unqualified `location = …`.** Shape 3 matches the qualified
+ *     spellings only. `const location = useLocation()` is the idiomatic
+ *     solid-router binding and four current sites use it, so an unqualified
+ *     alternation would be four spurious REDs on day one — the failure
+ *     {@link normalize} exists to prevent, in a different place.
+ *   - **Leaving the page by something that is not a link.**
+ *     `<form action="https://…">`, the router's `navigate('https://…')`, a
+ *     `<meta http-equiv="refresh">`.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -77,12 +128,28 @@ interface Exception {
  * while and then be normalised by an unrelated sweep. Pinning the raw text
  * makes that sweep fail *this* gate on someone else's PR — a gate that fails
  * for a reason unrelated to its rule is a gate people start ignoring. So quote
- * characters are unified, semicolons dropped and whitespace collapsed first,
+ * characters are unified, semicolons dropped and whitespace removed first,
  * which keeps the match specific to the offending *statement* without pinning
  * its punctuation.
+ *
+ * Whitespace is *removed*, not collapsed, and a comma before a closing bracket
+ * goes with it. Collapsing survives the churn that bit once (a `--write` over a
+ * dirty file) but not prettier breaking immediately inside a bracket, which
+ * leaves a space the entry does not have; `trailingComma: 'all'` then adds a
+ * comma a wrapped call did not have. Both produce a spurious RED, i.e. the same
+ * failure this function exists to prevent, one reflow later.
+ *
+ * The cost is that matching is slightly laxer — an entry can in principle span
+ * a boundary the author did not intend. That is the fail-open direction, and it
+ * is accepted here because an exception is already scoped to one file and has
+ * to reproduce the offending statement's characters in order.
  */
 const normalize = (text: string): string =>
-  text.replace(/["`]/g, "'").replace(/;/g, '').replace(/\s+/g, ' ')
+  text
+    .replace(/["`]/g, "'")
+    .replace(/;/g, '')
+    .replace(/\s+/g, '')
+    .replace(/,(?=[)\]}])/g, '')
 
 const ALLOWLIST: Exception[] = [
   {
@@ -251,9 +318,17 @@ const ANCHOR_FACTORY = /document\.createElement(?:NS)?\(\s*(?:[^,)]+,\s*)?['"`]a
  * makes the formatter able to disarm this shape — the fail-open direction, on
  * the shape the rule most plainly forbids. Matched over the whole file for the
  * same reason, so a statement spanning lines is still one match.
+ *
+ * The whole-object assignment is matched behind *every* qualifier the platform
+ * gives it, not just `window`: `self.location = url` and
+ * `document.location = url` are the same navigation spelled differently — no
+ * variable, no alias, no computed property — so leaving them out was a hole in
+ * shape 3 rather than an instance of the header's indirection family. `top` and
+ * `parent` navigate a frame the app may not own, which is worse, not exempt.
+ * A bare `location = …` is deliberately absent: see the family that says so.
  */
 const NAVIGATES_AWAY =
-  /location\.(?:href\s*=(?!=)|assign\(|replace\()|window\.location\s*=(?!=)|window\.open\(/g
+  /location\.(?:href\s*=(?!=)|assign\(|replace\()|(?:window|self|top|parent|globalThis|document)\.location\s*=(?!=)|window\.open\(/g
 
 /**
  * Markup reaching the DOM, and the markdown renderer that feeds it.
@@ -267,19 +342,75 @@ const NAVIGATES_AWAY =
  *
  * `parseInline` is a first-class render entry point in marked, not a helper:
  * it emits HTML from model markdown the same way `parse` does.
+ *
+ * The last four alternations are the `innerHTML`-free routes to the same DOM —
+ * `createContextualFragment`, `DOMParser.parseFromString`, `setHTMLUnsafe`, and
+ * `document.write`'s sibling `writeln`. They are here because an enumeration
+ * that names one member of a family and not the others reads as a boundary
+ * while being a sample; the header says plainly that the family is larger than
+ * this list, and adding to the list is the maintenance this shape costs.
  */
 const HTML_SINK =
-  /\b(?:inner|outer)HTML\s*\+?=(?!=)|\binsertAdjacentHTML\s*\(|\bdocument\.write\s*\(/g
+  /\b(?:inner|outer)HTML\s*\+?=(?!=)|\binsertAdjacentHTML\s*\(|\bdocument\.write(?:ln)?\s*\(|\bcreateContextualFragment\s*\(|\bparseFromString\s*\(|\bsetHTMLUnsafe\s*\(/g
 const MARKED_CALL = /\bmarked(?:\.parse(?:Inline)?)?\s*\(/g
 
-describe('every link the app renders opens in a new tab', () => {
+/**
+ * Programmatic anchors in `source` that neither download nor open a new tab.
+ *
+ * Extracted so the fixtures at the bottom of this file can exercise the same
+ * decision the `src/` scan makes, rather than a re-implementation of it.
+ */
+function unguardedProgrammaticAnchors(source: string): string[] {
+  const offenders: string[] = []
+  for (const match of source.matchAll(ANCHOR_FACTORY)) {
+    const block = enclosingBlock(source, match.index)
+    // Exempt on *association*, not proximity: the download has to be set on
+    // the identifier this anchor was assigned to, inside the block that made
+    // it. A byte window after the call — the first version used 600
+    // characters — excuses an in-tab navigating anchor whenever an unrelated
+    // download helper happens to sit below it.
+    const line = source.slice(source.lastIndexOf('\n', match.index) + 1, match.index)
+    // The optional `: T` is what keeps the fail-closed branch below from
+    // firing on the most idiomatic TS spelling of the shape both real call
+    // sites use — `const a: HTMLAnchorElement = document.createElement('a')`
+    // binds no identifier without it, so a correct download anchor reports as
+    // an offender. `[^=]*` rather than `[^=]+` keeps the un-annotated case; an
+    // annotation containing `=>` still falls through to no exemption, which is
+    // the safe direction.
+    const id = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]*)?=\s*$/.exec(line)?.[1]
+    if (id !== undefined) {
+      // `$` is legal in an identifier and special in a pattern; leaving it
+      // unescaped would make the exemption never match, which fails closed.
+      const escaped = id.replace(/\$/g, '\\$')
+      /** The literal this anchor assigns to its own `prop`, if any. */
+      const own = (prop: string) =>
+        new RegExp(`\\b${escaped}\\.${prop}\\s*=\\s*['"\`]?([^'"\`\\n]*)`).exec(block)?.[1]
+      if (own('download') !== undefined) continue
+      // Both halves have to be set on *this* anchor. Reading `rel` off the
+      // block instead lets an anchor with only its own `target` borrow a
+      // sibling's `rel` and ship the live `window.opener` the rule forbids.
+      const rel = own('rel') ?? ''
+      if (own('target') === '_blank' && rel.includes('noopener') && rel.includes('noreferrer'))
+        continue
+    }
+    // No declarator, no exemption. The fallback used to be "any identifier",
+    // which restores the proximity behaviour the block scoping replaced —
+    // failing open inside the one branch whose job is to withhold an
+    // exemption. Flagging sends it to a human and an ALLOWLIST entry instead.
+    offenders.push(block.split('\n').slice(0, 3).join(' ').trim())
+  }
+  return offenders
+}
+
+describe('no known link shape opens in the current tab', () => {
   it('finds the anchors it is supposed to be guarding', () => {
     // A scanner that silently matches nothing would pass forever. The chat
     // markdown path has no hand-written anchor, so the floor is the in-tab
     // exceptions that are themselves anchors — the rest of ALLOWLIST is
     // `location.href` navigation, which this shape never sees. It stays a
-    // floor rather than an equality because the 404 route's outbound link is
-    // a legitimate anchor above it and more may follow.
+    // floor rather than an equality because a legitimate outbound anchor may
+    // sit above it — the 404 route's did until #226 B8 pointed that page back
+    // into the app — and more may follow.
     const anchorExceptions = ALLOWLIST.filter((entry) => entry.match.includes('href='))
     const tags = [...sources].flatMap(([, source]) => anchorOpeningTags(source))
     expect(tags.length).toBeGreaterThanOrEqual(anchorExceptions.length)
@@ -298,29 +429,12 @@ describe('every link the app renders opens in a new tab', () => {
 
   it('gives every programmatic anchor a download or a new tab', () => {
     const offenders: string[] = []
-    for (const [file, source] of sources) {
-      for (const match of source.matchAll(ANCHOR_FACTORY)) {
-        const block = enclosingBlock(source, match.index)
-        // Exempt on *association*, not proximity: the download has to be set
-        // on the identifier this anchor was assigned to, inside the block that
-        // made it. A byte window after the call — the first version used 600
-        // characters — excuses an in-tab navigating anchor whenever an
-        // unrelated download helper happens to sit below it.
-        const line = source.slice(source.lastIndexOf('\n', match.index) + 1, match.index)
-        const id = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*$/.exec(line)?.[1]
-        // `$` is legal in an identifier and special in a pattern; leaving it
-        // unescaped would make the exemption never match, which fails closed.
-        const own = (prop: string) =>
-          new RegExp(`\\b${(id ?? '\\w+').replace(/\$/g, '\\$')}\\.${prop}\\s*=`)
-        if (own('download').test(block)) continue
-        if (own('target').test(block) && opensNewTab(block)) continue
-        offenders.push(`${file}: ${block.split('\n').slice(0, 3).join(' ').trim()}`)
-      }
-    }
+    for (const [file, source] of sources)
+      offenders.push(...unguardedProgrammaticAnchors(source).map((text) => `${file}: ${text}`))
     expect(offenders).toEqual([])
   })
 
-  it('does not navigate the current tab away except where allowed', () => {
+  it('does not navigate the current tab away in any shape it knows, except where allowed', () => {
     const offenders: string[] = []
     for (const [file, source] of sources) {
       for (const match of source.matchAll(NAVIGATES_AWAY)) {
@@ -441,5 +555,150 @@ describe('the shapes the scanner advertises', () => {
     ].join('\n')
     expect(at(nested)).toContain('a.download')
     expect(at(nested)).not.toContain('unrelated')
+  })
+
+  it('reads the markup sinks that are not spelled innerHTML', () => {
+    for (const sink of [
+      'frag = document.createRange().createContextualFragment(html)',
+      "doc = new DOMParser().parseFromString(html, 'text/html')",
+      'el.setHTMLUnsafe(html)',
+      'document.writeln(html)',
+    ])
+      expect(sink.match(HTML_SINK), sink).not.toBeNull()
+
+    // …and the near-misses that must stay clean, so widening the alternation
+    // to reach the four above cannot turn ordinary parsing into an offender.
+    for (const clean of [
+      'const parsed = JSON.parse(text)',
+      'logger.write(line)',
+      'const html = doc.documentElement.outerHTML',
+    ])
+      expect(clean.match(HTML_SINK), clean).toBeNull()
+  })
+
+  it('refuses to exempt an anchor it cannot bind to an identifier', () => {
+    // The offender is assigned to an outer `let`, so the declarator pattern
+    // finds no identifier for it. The exemption used to fall back to "any
+    // identifier", which lets the unrelated `dl` download below excuse it.
+    const noDeclarator = [
+      'let a: HTMLAnchorElement | undefined',
+      'export function nav(url: string) {',
+      "  a = document.createElement('a')",
+      '  a.href = url',
+      '  a.click()',
+      "  const dl = document.createElement('a')",
+      "  dl.download = 'x'",
+      '  dl.click()',
+      '}',
+    ].join('\n')
+    expect(unguardedProgrammaticAnchors(noDeclarator)).toHaveLength(1)
+
+    // …and the counterpart: a declared download anchor is still exempt, so
+    // failing closed here does not flag the two real call sites' shape.
+    const declared = [
+      'export function save(blob: Blob, name: string) {',
+      "  const a = document.createElement('a')",
+      '  a.href = URL.createObjectURL(blob)',
+      '  a.download = name',
+      '  a.click()',
+      '}',
+    ].join('\n')
+    expect(unguardedProgrammaticAnchors(declared)).toEqual([])
+  })
+
+  it('reads target and rel off the anchor they were set on', () => {
+    // `a` sets only its own `target`; the `rel` in the block belongs to `b`.
+    // Borrowing it ships `target="_blank"` with a live `window.opener` — the
+    // thing the rule's `rel` half exists to prevent.
+    const borrowed = [
+      'export function go(url: string) {',
+      "  const a = document.createElement('a')",
+      '  a.href = url',
+      "  a.target = '_blank'",
+      '  a.click()',
+      "  const b = document.createElement('a')",
+      "  b.target = '_blank'",
+      "  b.rel = 'noopener noreferrer'",
+      '  b.click()',
+      '}',
+    ].join('\n')
+    expect(unguardedProgrammaticAnchors(borrowed)).toHaveLength(1)
+
+    // …and the counterpart: both halves set on the same identifier is exempt.
+    const owned = [
+      'export function go(url: string) {',
+      "  const a = document.createElement('a')",
+      '  a.href = url',
+      "  a.target = '_blank'",
+      "  a.rel = 'noopener noreferrer'",
+      '  a.click()',
+      '}',
+    ].join('\n')
+    expect(unguardedProgrammaticAnchors(owned)).toEqual([])
+  })
+
+  it('reads the location assignment behind every qualifier, not just window', () => {
+    // No variable, no alias, no computed property — the same navigation shape 3
+    // advertises, spelled the other ways the platform allows. These were all
+    // green while the header claimed the family.
+    for (const nav of [
+      'self.location = url',
+      'document.location = url',
+      'top.location = url',
+      "globalThis.location = 'https://evil.test/'",
+    ])
+      expect(nav.match(NAVIGATES_AWAY), nav).not.toBeNull()
+
+    // …and the near-misses. A bare `location =` stays out on purpose — the
+    // solid-router binding below is on four current call sites, and a
+    // comparison is not a navigation.
+    for (const clean of [
+      'const location = useLocation()',
+      'if (self.location === url) return',
+      'const { location } = props',
+    ])
+      expect(clean.match(NAVIGATES_AWAY), clean).toBeNull()
+  })
+
+  it('binds a type-annotated declarator to its anchor', () => {
+    // The download is set on the anchor itself, so this is exempt — but the
+    // declarator pattern found no identifier while it required the `=` to
+    // follow the name directly, and no identifier means no exemption.
+    const annotated = [
+      'export function save(blob: Blob, name: string) {',
+      "  const a: HTMLAnchorElement = document.createElement('a')",
+      '  a.href = URL.createObjectURL(blob)',
+      '  a.download = name',
+      '  a.click()',
+      '}',
+    ].join('\n')
+    expect(unguardedProgrammaticAnchors(annotated)).toEqual([])
+
+    // …and the counterpart: the annotation buys no exemption of its own, so an
+    // annotated anchor that neither downloads nor opens a new tab still fails.
+    const annotatedOffender = [
+      'export function go(url: string) {',
+      "  const a: HTMLAnchorElement = document.createElement('a')",
+      '  a.href = url',
+      '  a.click()',
+      '}',
+    ].join('\n')
+    expect(unguardedProgrammaticAnchors(annotatedOffender)).toHaveLength(1)
+  })
+
+  it('matches an exception across a prettier reflow inside brackets', () => {
+    // Collapsing whitespace leaves a space the entry does not have, and
+    // `trailingComma: 'all'` adds a comma a wrapped call did not have — so
+    // both of these used to be spurious REDs the next time a file was
+    // reformatted, which is the failure `normalize` exists to prevent.
+    const ternary = "href={onDashboard() ? '/' : '/dashboard'}"
+    expect(normalize("href={\n  onDashboard() ? '/' : '/dashboard'\n}")).toContain(
+      normalize(ternary),
+    )
+    const call = "window.open(url, '_blank')"
+    expect(normalize("window.open(\n  url,\n  '_blank',\n)")).toContain(normalize(call))
+
+    // …and it still tells two different statements apart.
+    expect(normalize("href='/profile'")).not.toContain(normalize("href='/dashboard'"))
   })
 })

@@ -50,6 +50,7 @@ describe('embeddings (Issue #8)', () => {
     delete process.env.EMBEDDINGS_PROVIDER
     delete process.env.EMBEDDINGS_LOCAL_URL
     delete process.env.EMBEDDINGS_LOCAL_MODEL
+    delete process.env.EMBEDDINGS_LOCAL_API_KEY
     delete process.env.OPENROUTER_API_KEY
   })
   afterEach(() => {
@@ -77,6 +78,33 @@ describe('embeddings (Issue #8)', () => {
       const res = await embed(['x'], { fetchImpl })
       expect(calls[0].url).toBe('http://127.0.0.1:9000/v1/embeddings')
       expect(res.model).toBe('my-model')
+    })
+
+    // The `local` provider names a WIRE FORMAT, not a host: EMBEDDINGS_LOCAL_URL
+    // + EMBEDDINGS_LOCAL_API_KEY are what make a remote OpenAI-compatible
+    // embedder reachable without a code change. The absent-key case matters as
+    // much as the present one — llama-server is auth-less, and a header reading
+    // `Bearer undefined` is worse than no header at all.
+    it('sends no Authorization header when EMBEDDINGS_LOCAL_API_KEY is unset', async () => {
+      const { fetchImpl, calls } = makeFakeFetch()
+      await embed(['x'], { fetchImpl })
+      expect(calls[0].headers).not.toHaveProperty('Authorization')
+    })
+
+    it('honours EMBEDDINGS_LOCAL_API_KEY as a bearer token', async () => {
+      process.env.EMBEDDINGS_LOCAL_URL = 'https://embed.example.com/v1'
+      process.env.EMBEDDINGS_LOCAL_API_KEY = 'remote-secret'
+      const { fetchImpl, calls } = makeFakeFetch()
+      await embed(['x'], { fetchImpl })
+      expect(calls[0].url).toBe('https://embed.example.com/v1/embeddings')
+      expect(calls[0].headers.Authorization).toBe('Bearer remote-secret')
+    })
+
+    it('an explicit apiKey in config beats the env var', async () => {
+      process.env.EMBEDDINGS_LOCAL_API_KEY = 'from-env'
+      const { fetchImpl, calls } = makeFakeFetch()
+      await embed(['x'], { fetchImpl, apiKey: 'from-config' })
+      expect(calls[0].headers.Authorization).toBe('Bearer from-config')
     })
 
     it('batches inputs beyond batchSize, preserving order', async () => {

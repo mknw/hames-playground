@@ -133,9 +133,10 @@ Source-level index: see [app/README.md](../app/README.md#documentation-index).
 
 ## Data Management
 
-| Document                                             | Description                                |
-| ---------------------------------------------------- | ------------------------------------------ |
-| [../neo4j_dumps/README.md](../neo4j_dumps/README.md) | Database versioning: export, import, reset |
+| Document                                             | Description                                                                                                                                                                                                                                                        |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [../neo4j_dumps/README.md](../neo4j_dumps/README.md) | Database versioning: export, import, reset                                                                                                                                                                                                                         |
+| [../models/README.md](../models/README.md)           | **The local GGUF weights** — which file each `make` target (`embed` :8090, `llm-small` :8095) expects under `models/`, why the directory is gitignored, the `MODELS_DIR` override a git worktree needs, and how to point either model at a remote endpoint instead |
 
 Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/reset-neo4j.sh`
 
@@ -143,19 +144,23 @@ Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/rese
 
 ## Environment Variables
 
-| Variable                                              | Purpose                                                                                                                                    |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OPENROUTER_API_KEY`                                  | The `openrouter` Data Stash embedding provider only — no BAML chain uses it                                                                |
-| `EMBEDDINGS_PROVIDER`                                 | Data Stash embedding provider: `local` (default) or `openrouter` (see [DATA_STASH.md](DATA_STASH.md))                                      |
-| `EMBEDDINGS_LOCAL_URL` / `EMBEDDINGS_LOCAL_MODEL`     | Override the local embedder URL (`http://localhost:8090/v1`) / model (`Qwen3-Embedding-0.6B`)                                              |
-| `ANTHROPIC_API_KEY`                                   | Anthropic models (Sonnet 5, Sonnet 4.6, Haiku 4.5) — every BAML chain; **required**, and the only LLM provider key                         |
-| `AZURE_TENANT_ID`                                     | Entra tenant (directory) GUID — the OIDC authority (#119)                                                                                  |
-| `AZURE_CLIENT_ID`                                     | Entra app registration (client) id                                                                                                         |
-| `AZURE_CLIENT_SECRET`                                 | Entra client secret (server-side; resolves sign-in server-side, see `lib/auth/entra.server.ts`)                                            |
-| `AUTH_SESSION_SECRET`                                 | HMAC key signing the auth cookies (`openssl rand -base64 32`)                                                                              |
-| `AUTH_REDIRECT_URI` / `AUTH_POST_LOGOUT_REDIRECT_URI` | Optional OIDC redirect / post-logout overrides (default dev port 3444)                                                                     |
-| `VITE_ALLOWED_EMAILS`                                 | Comma-separated allow-list; supports `*@domain.com` wildcards                                                                              |
-| `VITE_DEV_BYPASS_AUTH`                                | `'true'` to skip auth in dev (gated on `import.meta.env.DEV`; ignored in prod builds). See `app/.env.example` and `lib/auth/dev-bypass.ts` |
+| Variable                                              | Purpose                                                                                                                                                                                       |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENROUTER_API_KEY`                                  | The `openrouter` Data Stash embedding provider only — no BAML chain uses it                                                                                                                   |
+| `EMBEDDINGS_PROVIDER`                                 | Data Stash embedding provider: `local` (default) or `openrouter` (see [DATA_STASH.md](DATA_STASH.md))                                                                                         |
+| `EMBEDDINGS_LOCAL_URL` / `EMBEDDINGS_LOCAL_MODEL`     | Override the local embedder URL (`http://localhost:8090/v1`) / model (`Qwen3-Embedding-0.6B`). The URL includes `/v1`; changing the MODEL invalidates the vector index                        |
+| `EMBEDDINGS_LOCAL_API_KEY`                            | Optional bearer token for the embedder — unset for a local llama-server, set to reach a remote OpenAI-compatible endpoint                                                                     |
+| `SMALL_LLM_BASE_URL` / `SMALL_LLM_API_KEY`            | `LocalQwenSmall`'s endpoint (`http://localhost:8095/v1`, `make llm-small`) and its optional bearer token. BAML reads these directly, so they have no in-code default — see `app/.env.example` |
+| `ANTHROPIC_API_KEY`                                   | Anthropic models (Sonnet 5, Sonnet 4.6, Haiku 4.5) — every BAML chain; **required**, and the only LLM provider key                                                                            |
+| `AZURE_TENANT_ID`                                     | Entra tenant (directory) GUID — the OIDC authority (#119)                                                                                                                                     |
+| `AZURE_CLIENT_ID`                                     | Entra app registration (client) id                                                                                                                                                            |
+| `AZURE_CLIENT_SECRET`                                 | Entra client secret (server-side; resolves sign-in server-side, see `lib/auth/entra.server.ts`)                                                                                               |
+| `AUTH_SESSION_SECRET`                                 | HMAC key signing the auth cookies (`openssl rand -base64 32`)                                                                                                                                 |
+| `TOKEN_ENCRYPTION_KEY`                                | Encrypts the per-user MSAL token cache at rest; HKDF-derived from `AUTH_SESSION_SECRET` when unset |
+| `DATA_ENCRYPTION_KEY`                                 | **Required.** Encrypts stored conversations and personal data at rest. No fallback — see `app/src/lib/db/crypto.server.ts` |
+| `AUTH_REDIRECT_URI` / `AUTH_POST_LOGOUT_REDIRECT_URI` | Optional OIDC redirect / post-logout overrides (default dev port 3444)                                                                                                                        |
+| `VITE_ALLOWED_EMAILS`                                 | Comma-separated allow-list; supports `*@domain.com` wildcards                                                                                                                                 |
+| `VITE_DEV_BYPASS_AUTH`                                | `'true'` to skip auth in dev (gated on `import.meta.env.DEV`; ignored in prod builds). See `app/.env.example` and `lib/auth/dev-bypass.ts`                                                    |
 
 ---
 
@@ -214,5 +219,7 @@ kg-agent/
 ├── configs/                     # MCP and catalog configurations
 ├── scripts/                     # Utility scripts
 ├── neo4j_dumps/                 # Graph data exports
+├── models/                      # Local GGUF weights (gitignored except README.md)
+├── Makefile                     # `make embed` :8090 · `make llm-small` :8095
 └── docker-compose.yaml
 ```

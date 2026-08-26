@@ -5,7 +5,7 @@ OpenID Connect auth-code flow (issue #119). This note is the concrete list of
 what the **Entra tenant owner** must provision, plus the env the app needs.
 
 > **Why direct MSAL and not Stack Auth?** #110 (on-behalf-of, for Graph
-> connectors) needs the *raw* Entra access/ID token server-side. A
+> connectors) needs the _raw_ Entra access/ID token server-side. A
 > Stack-brokered Microsoft login only yields a Stack session, never the Entra
 > token — so we own the OIDC client directly.
 
@@ -17,19 +17,19 @@ Use the existing **DTalk v2** registration (client id
 `8006d5eb-14f6-4214-be5a-0f3448b34063`) or create one: Entra admin center →
 **App registrations** → **New registration**.
 
-- **Supported account types:** *Accounts in this organizational directory only*
+- **Supported account types:** _Accounts in this organizational directory only_
   (single tenant). Gives a fixed `AZURE_TENANT_ID` and matches the MS-only
   identity decision.
 
-## 2. Redirect URIs — **Authentication** blade → *Add a platform* → **Web**
+## 2. Redirect URIs — **Authentication** blade → _Add a platform_ → **Web**
 
 The redirect must point at the app's **server** callback (the code→token
 exchange is server-side), not at Stack Auth. Add one per environment:
 
-| Environment | Redirect URI |
-|-------------|--------------|
+| Environment | Redirect URI                              |
+| ----------- | ----------------------------------------- |
 | Local dev   | `http://localhost:3444/api/auth/callback` |
-| Production  | `https://<app-domain>/api/auth/callback` |
+| Production  | `https://<app-domain>/api/auth/callback`  |
 
 `http://localhost` is allowed by Entra for loopback; production must be HTTPS.
 (If migrating from the Stack setup, **remove** the old
@@ -39,17 +39,17 @@ Front-channel logout returns to `AUTH_POST_LOGOUT_REDIRECT_URI`
 (default `.../auth/signin`); no separate registration needed for the v2 logout
 endpoint.
 
-## 3. Client secret — **Certificates & secrets** → *New client secret*
+## 3. Client secret — **Certificates & secrets** → _New client secret_
 
 Copy the **value** (not the id) into `AZURE_CLIENT_SECRET`. Note the expiry and
 set a rotation reminder. (Rotate out any secret previously shared with Stack.)
 
-## 4. API permissions — **API permissions** → Microsoft Graph → *Delegated*
+## 4. API permissions — **API permissions** → Microsoft Graph → _Delegated_
 
-| Permission | Admin consent |
-|------------|---------------|
-| `openid`, `profile`, `email`, `offline_access` | not required (user consent) |
-| `User.Read` | grant tenant-wide admin consent |
+| Permission                                                                          | Admin consent                                                                                        |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `openid`, `profile`, `email`, `offline_access`                                      | not required (user consent)                                                                          |
+| `User.Read`                                                                         | grant tenant-wide admin consent                                                                      |
 | `Mail.Read`, `Mail.Send`, `Calendars.ReadWrite`, `Files.Read.All`, `Sites.Read.All` | add + grant admin consent before enabling the connectors — see "Scopes are requested up front" below |
 
 `offline_access` is what yields the refresh token the app persists so Graph calls
@@ -77,6 +77,11 @@ AUTH_SESSION_SECRET=<openssl rand -base64 32>   # signs auth cookies
 # production so it can rotate independently of the cookie-signing key; when
 # unset, the key is HKDF-derived from AUTH_SESSION_SECRET.
 TOKEN_ENCRYPTION_KEY=<openssl rand -base64 32>
+# REQUIRED. Encrypts stored conversations and personal data at rest (titles,
+# the context blob, email + display name, routine prompts). No fallback, on
+# purpose: it must rotate independently of the two keys above, because rotating
+# it is far more expensive than either.
+DATA_ENCRYPTION_KEY=<openssl rand -base64 32>
 # Optional overrides (defaults target dev):
 # AUTH_REDIRECT_URI=http://localhost:3444/api/auth/callback
 # AUTH_POST_LOGOUT_REDIRECT_URI=http://localhost:3444/auth/signin
@@ -86,6 +91,15 @@ TOKEN_ENCRYPTION_KEY=<openssl rand -base64 32>
 key is set) makes existing stored token caches undecryptable. That is handled
 gracefully — affected users are simply asked to sign in again — but it does mean
 background runs for those users fail until they do.
+
+⚠️ `DATA_ENCRYPTION_KEY` is **not** like that. It protects data that cannot be
+re-obtained, so losing or changing it makes stored conversations unreadable
+rather than merely stale, and the app refuses to serve rather than hand back
+empty ones — the process stays up and logs the refusal once, so verify a
+deploy by its log rather than by its unit state (see
+[`azure-vm.md`](azure-vm.md)). Back it up somewhere other than the machine holding the database, and
+treat rotation as a re-encryption pass, not a restart. The `v1.` ciphertext
+prefix exists so that pass can be lazy; it has not been written yet.
 
 Access is still gated by the email allow-list (`VITE_ALLOWED_EMAILS`); a
 signed-in account whose email isn't listed lands on `/auth/access-denied` and
@@ -115,27 +129,27 @@ API"** and there is no `api://…/access_as_user` scope. Leave that blade empty.
 `DEFAULT_GRAPH_SCOPES` in `lib/auth/entra-config.server.ts` requests the whole
 connector set at sign-in:
 
-| Scope | For | Kind |
-|---|---|---|
-| `User.Read`, `email` | own profile | read |
-| `Mail.Read` | mailbox search / summarise | read |
-| `Mail.Send` | send as the user | **write** |
-| `Calendars.ReadWrite` | availability + scheduling | **write** |
-| `Files.Read.All` | OneDrive + SharePoint files the user can access | read |
-| `Sites.Read.All` | SharePoint sites the user can access | read |
+| Scope                 | For                                             | Kind      |
+| --------------------- | ----------------------------------------------- | --------- |
+| `User.Read`, `email`  | own profile                                     | read      |
+| `Mail.Read`           | mailbox search / summarise                      | read      |
+| `Mail.Send`           | send as the user                                | **write** |
+| `Calendars.ReadWrite` | availability + scheduling                       | **write** |
+| `Files.Read.All`      | OneDrive + SharePoint files the user can access | read      |
+| `Sites.Read.All`      | SharePoint sites the user can access            | read      |
 
 Why up front rather than incrementally: **adding a scope later forces every user
 to sign in again** (their stored refresh token must cover it), and background runs
 have no user present to consent mid-run. One consent, done.
 
-A granted scope is not a capability. The model can only do what a *registered
-tool* exposes — see
+A granted scope is not a capability. The model can only do what a _registered
+tool_ exposes — see
 [MICROSOFT_GRAPH.md](../MICROSOFT_GRAPH.md#what-it-can-do-today) for the current
 set, none of which writes to Microsoft 365. Any future write tool should carry
 its own confirmation gate.
 
 > ⚠️ **Order matters.** Every scope in the request must exist under **API
-> permissions** with consent granted *before* anyone signs in. A scope that is
+> permissions** with consent granted _before_ anyone signs in. A scope that is
 > requested but not consented fails **the whole sign-in** — not just that
 > connector ("Need admin approval"). If that happens, trim the list via the
 > `AZURE_GRAPH_SCOPES` env var (space- or comma-separated) and restart — no code
@@ -155,7 +169,7 @@ taken up front. Grant it in the portal first, then extend
 ## Identity model & migration
 
 - The stable per-user id (`userId`) is the Entra **`oid`** claim (the user's
-  *Object ID*). Sessions, `conversations.user_id`, the `users` table, and
+  _Object ID_). Sessions, `conversations.user_id`, the `users` table, and
   per-user data all key on it.
 - Every successful sign-in upserts a row in **`users`** (oid, email, display
   name, tid, first/last login) — the app's own activity record, and the future

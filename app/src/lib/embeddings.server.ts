@@ -20,7 +20,12 @@
  *   - `local`      (dev default) — `llama-server --embedding` on :8090 serving
  *                  Qwen3-Embedding-0.6B over the OpenAI-compatible
  *                  `POST /v1/embeddings`. (Distinct from `pnpm dev:llama`, which
- *                  serves a *chat* model on :8080.)
+ *                  serves a *chat* model on :8080.) "local" names the WIRE
+ *                  FORMAT, not the host: `EMBEDDINGS_LOCAL_URL` points it at any
+ *                  OpenAI-compatible embedder and `EMBEDDINGS_LOCAL_API_KEY`
+ *                  authenticates to one, so moving embeddings to a remote
+ *                  endpoint is env-vars-only. The model must still be the SAME
+ *                  model — see comparability above.
  *   - `openrouter` (prod / fallback you opt into) — OpenRouter's
  *                  `/v1/embeddings`. Requires `OPENROUTER_API_KEY`.
  *
@@ -125,7 +130,13 @@ function resolveConfig(config?: EmbeddingConfig): ResolvedConfig {
         config?.baseUrl ?? process.env.EMBEDDINGS_LOCAL_URL ?? LOCAL_DEFAULT_URL,
       ),
       model: config?.model ?? process.env.EMBEDDINGS_LOCAL_MODEL ?? LOCAL_DEFAULT_MODEL,
-      apiKey: config?.apiKey, // llama-server needs none
+      // `local` is a wire format, not a location: EMBEDDINGS_LOCAL_URL already
+      // points it anywhere, so a remote OpenAI-compatible embedder is reached
+      // by URL alone. The key is the piece that was missing — llama-server
+      // needs none, a hosted endpoint usually does. Unset stays unset, and
+      // requestEmbeddings() omits the Authorization header entirely rather
+      // than sending `Bearer undefined`.
+      apiKey: config?.apiKey ?? process.env.EMBEDDINGS_LOCAL_API_KEY,
       ...common,
     }
   }
@@ -133,9 +144,7 @@ function resolveConfig(config?: EmbeddingConfig): ResolvedConfig {
   // openrouter
   const apiKey = config?.apiKey ?? process.env.OPENROUTER_API_KEY
   if (!apiKey) {
-    throw new Error(
-      'OPENROUTER_API_KEY is required for the openrouter embedding provider',
-    )
+    throw new Error('OPENROUTER_API_KEY is required for the openrouter embedding provider')
   }
   return {
     provider,
@@ -158,13 +167,15 @@ function resolveConfig(config?: EmbeddingConfig): ResolvedConfig {
  *         response is malformed, or the returned vectors are inconsistent in
  *         dimensionality (which would silently break similarity search).
  */
-export async function embed(
-  texts: string[],
-  config?: EmbeddingConfig,
-): Promise<EmbeddingResult> {
+export async function embed(texts: string[], config?: EmbeddingConfig): Promise<EmbeddingResult> {
   const cfg = resolveConfig(config)
   if (texts.length === 0) {
-    return { provider: cfg.provider, model: cfg.model, dimensions: cfg.dimensions ?? 0, vectors: [] }
+    return {
+      provider: cfg.provider,
+      model: cfg.model,
+      dimensions: cfg.dimensions ?? 0,
+      vectors: [],
+    }
   }
 
   const vectors: number[][] = []
@@ -221,9 +232,7 @@ async function requestEmbeddings(cfg: ResolvedConfig, batch: string[]): Promise<
     })
   } catch (err) {
     const hint =
-      cfg.provider === 'local'
-        ? ` (is llama-server --embedding running at ${cfg.baseUrl}?)`
-        : ''
+      cfg.provider === 'local' ? ` (is llama-server --embedding running at ${cfg.baseUrl}?)` : ''
     throw new Error(
       `Embedding request to ${cfg.provider} failed: ${err instanceof Error ? err.message : String(err)}${hint}`,
     )

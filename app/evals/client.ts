@@ -17,12 +17,27 @@
  * path is untouched and still consulted — `resolveClientForRole()` is what the
  * report prints as the baseline each scenario is compared against.
  *
+ * ## Two questions, two modes
+ *
+ * `EVAL_CLIENT=<name>` is the EXPLORATORY question — "would this one client cope
+ * with all these roles?" — and it applies that client to every role in
+ * `DEFAULT_ROUTED_ROLES`. `EVAL_ROLES` narrows it while bisecting a regression.
+ *
+ * `EVAL_CLIENT=tier` is the SHIPPED question — "does the private tier, as
+ * configured, still work?" — and it resolves each role through production's own
+ * map, which since 2026-08-26 is TWO clients: the 27B for the heavy roles and the
+ * 4B `LocalQwenSmall` for `describe`. That mode exists because the single-name
+ * mode stopped being able to express the shipped route on the day the describe
+ * flip landed, and the honest response to that was a second mode rather than a
+ * comment claiming the first one still measured it. A default `EVAL_CLIENT=VerdaQwen`
+ * run now measures summarization on a model production does not use for it — which
+ * is a fair question to ask, just not the same question.
+ *
  * ## Roles
  *
- * By default `EVAL_CLIENT=X` moves exactly the roles that a verda tier decision
- * moves in production (`DEFAULT_ROUTED_ROLES`), so a default run measures the
- * shipped posture rather than a hypothetical one. After the two 2026-08-26
- * owner decisions that is EVERY role this suite has a scenario for, `screen`
+ * `DEFAULT_ROUTED_ROLES` is the set a plain `EVAL_CLIENT=X` moves, and it is kept
+ * equal to the KEY SET of the production map. After the two 2026-08-26 owner
+ * decisions that is EVERY role this suite has a scenario for, `screen`
  * included — the exploratory question `EVAL_ROLES` used to answer ("would this
  * client cope with the router too?") is now the default question, and
  * `EVAL_ROLES` is left for NARROWING a run to one role while bisecting a
@@ -50,7 +65,11 @@
  * silently drag it, and `EVAL_ROLES=screen` is the way to measure it alone.
  */
 
-import { resolveClientForRole, type BamlRole } from '../src/lib/harness-patterns/clients.server'
+import {
+  resolveClientForRole,
+  VERDA_CLIENT_BY_ROLE,
+  type BamlRole,
+} from '../src/lib/harness-patterns/clients.server'
 
 /** The roles this suite has scenarios for — every `BamlRole` since the planner
  *  scenario landed — plus `actor`, which shares the `controller` role but a
@@ -108,8 +127,13 @@ export const DEFAULT_ROUTED_ROLES: readonly EvalRole[] = [
 ]
 
 export interface EvalRouting {
-  /** The client under test, or `undefined` for the declared-chain baseline. */
+  /** The one client under test, or `undefined` for the declared-chain baseline
+   *  AND for the per-role {@link byRole} mode. */
   client?: string
+  /** Per-role clients, set only by `EVAL_CLIENT=tier`. When present it OVERRIDES
+   *  {@link client} and {@link routed} in {@link evalOverrideFor}: the tier is
+   *  not one client, so "which client" is a question per role. */
+  byRole?: Partial<Record<EvalRole, string>>
   /** Roles `client` is applied to. Empty when running the baseline. */
   routed: readonly EvalRole[]
   /** Human-readable note for the report header. */
@@ -152,6 +176,27 @@ export function resolveEvalRouting(): EvalRouting {
       note: 'baseline — every function on the Anthropic chain it declares in baml_src/',
     }
   }
+  // `EVAL_CLIENT=tier` — the SHIPPED route, read straight off the production map
+  // rather than approximated by one client name. `EVAL_ROLES` still narrows it,
+  // so bisecting works the same way in both modes.
+  if (requested === 'tier') {
+    const asked = new Set(requestedRoles())
+    const byRole: Partial<Record<EvalRole, string>> = {}
+    for (const role of asked) {
+      // `actor` shares the `controller` BamlRole; the map is keyed by the latter.
+      const client = VERDA_CLIENT_BY_ROLE[PRODUCTION_ROLE[role]]
+      if (client) byRole[role] = client
+    }
+    const routed = [...asked].filter((role) => byRole[role] !== undefined)
+    const distinct = [...new Set(Object.values(byRole))].sort()
+    return {
+      byRole,
+      routed,
+      note:
+        `the shipped private tier — ${distinct.join(' + ')} across ${routed.join(', ')}` +
+        (routed.includes('screen') ? '; INCLUDING screen (SD-4)' : ''),
+    }
+  }
   // No role is refused. The `PINNED_ROLES` machinery this replaced is deleted
   // rather than kept as an empty list: a refusal set with no members is a
   // control that cannot fail, and an unfailable control in a security-adjacent
@@ -178,6 +223,12 @@ export function evalOverrideFor(
   routing: EvalRouting,
   role: EvalRole,
 ): { client: string } | undefined {
+  // Per-role first: in `tier` mode there IS no single `routing.client`, and
+  // falling through to the branch below would silently run the baseline.
+  if (routing.byRole) {
+    const client = routing.byRole[role]
+    return client ? { client } : undefined
+  }
   if (!routing.client) return undefined
   return routing.routed.includes(role) ? { client: routing.client } : undefined
 }

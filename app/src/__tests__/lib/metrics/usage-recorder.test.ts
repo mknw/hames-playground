@@ -34,6 +34,9 @@ import {
 import { resetVerdaActivity, verdaWarmth } from '../../../lib/inference/verda-activity.server'
 import { resetCallLatency, tierLatency } from '../../../lib/metrics/call-latency.server'
 import type { EventMetrics } from '../../../lib/harness-patterns/types'
+// Namespace import: the tier map is read as DATA here, to prove the recorder
+// derives its private-client set from it rather than restating it.
+import * as clients from '../../../lib/harness-patterns/clients.server'
 
 const metrics = (over: Partial<EventMetrics> = {}): EventMetrics => ({
   inputUncachedTokens: 100,
@@ -65,6 +68,34 @@ describe('tierOfSample — the selected client is the evidence', () => {
     expect(tierOfSample({ functionName: 'LoopController', clientName: 'VerdaQwen' })).toBe('verda')
   })
 
+  it('attributes a LocalQwenSmall call to the private tier too', () => {
+    // THE DESCRIBE FLIP'S ACCOUNTING HALF (2026-08-26). The private tier became
+    // TWO models — the heavy roles on the 27B, summarization on the 4B — and a
+    // hardcoded `=== 'VerdaQwen'` would have counted every private-tier describe
+    // call as an ANTHROPIC call. That is six of the twelve routed functions, and
+    // the highest-frequency ones, so the header's "private share" would have
+    // understated itself on exactly the tier the number exists to report, while
+    // the routing was perfectly correct. Nothing would have looked wrong.
+    expect(
+      tierOfSample({ functionName: 'ResultDescribeBatch', clientName: 'LocalQwenSmall' }),
+    ).toBe('verda')
+  })
+
+  it('derives the set from the tier map rather than listing names', () => {
+    // The property, not the two values: every client the production map routes to
+    // is counted as private. A third model added to the tier is counted with no
+    // edit in the recorder — which is the failure this replaced, arriving a second
+    // time.
+    const { VERDA_CLIENT_BY_ROLE } = clients
+    const routed = Object.values(VERDA_CLIENT_BY_ROLE).filter(Boolean) as string[]
+    expect(routed.length).toBeGreaterThan(1)
+    for (const clientName of routed) {
+      expect(tierOfSample({ functionName: 'X', clientName }), clientName).toBe('verda')
+    }
+    // Not vacuous: the map really does hold more than one client.
+    expect(new Set(routed).size).toBe(2)
+  })
+
   it('attributes everything else to Anthropic, including an unnamed client', () => {
     expect(tierOfSample({ functionName: 'Router', clientName: 'RouterAnthropic' })).toBe(
       'anthropic',
@@ -73,6 +104,26 @@ describe('tierOfSample — the selected client is the evidence', () => {
     // Near-misses are not the self-hosted box. A prefix match would let a
     // future `VerdaQwenSomethingElse` silently join the confidential tier.
     expect(tierOfSample({ functionName: 'X', clientName: 'VerdaQwenPreview' })).toBe('anthropic')
+    // `LocalGLM` is the OTHER local client and is in no chain and no tier map.
+    // "Local" is not the criterion; being in the tier map is.
+    expect(tierOfSample({ functionName: 'X', clientName: 'LocalGLM' })).toBe('anthropic')
+  })
+})
+
+describe('the warm clock does NOT follow the tier attribution', () => {
+  it('is stamped by a 27B call and not by a 4B describe call', () => {
+    // The deliberate divergence. `tierOfSample` widened with the describe flip;
+    // the warm clock did not, because it is a claim about ONE deployment — the
+    // scale-to-zero GPU box — and a 4B summary is evidence of nothing about it.
+    // Letting a describe call stamp it would report "warm" for a box that is
+    // asleep, which is exactly the wrong direction: the whole module errs
+    // pessimistic so a user is never told the box is up when it is not.
+    const NOW = 1_700_000_000_000
+    recordSample({ functionName: 'ResultDescribe', clientName: 'LocalQwenSmall' }, NOW)
+    expect(verdaWarmth(NOW).state).toBe('unknown')
+
+    recordSample({ functionName: 'LoopController', clientName: 'VerdaQwen' }, NOW)
+    expect(verdaWarmth(NOW).state).toBe('warm')
   })
 })
 

@@ -431,15 +431,24 @@ describe('compactBulkData', () => {
     expect(maxBatchItems()).toBe(MAX_BATCH_ITEMS)
   })
 
-  it('sizes against the self-hosted client, not Anthropic, on a verda-tier run', async () => {
-    // The 2026-08-26 widening put `describe` on `VerdaQwen`, and both halves of
-    // this batcher read `resolveClientForRole('describe')` — the OUTPUT cap for
-    // the item count and the INPUT window for the per-batch token budget. So a
-    // tier decision now moves the batch geometry, and the two numbers move in
-    // opposite directions: the cap is identical (16 384 either way, so the
-    // 8-item ceiling holds and batching does not regress into N+1 calls) while
-    // the window is SMALLER (131 072 against 200 000), which trims sooner
-    // rather than overflowing a server that would reject the request outright.
+  it('shrinks the batch geometry on a verda-tier run, both halves', async () => {
+    // BOTH halves of this batcher read `resolveClientForRole('describe')` — the
+    // OUTPUT cap for the item count and the INPUT window for the per-batch token
+    // budget — so a tier decision moves the batch geometry, and this is what
+    // makes the mirror reporting the override load-bearing rather than tidy.
+    //
+    // THE NUMBERS CHANGED ON 2026-08-26, TWICE. The widening put `describe` on
+    // `VerdaQwen`, where the cap happened to be identical to Haiku's (16 384, so
+    // the 8-item ceiling held) and only the window shrank. The describe flip
+    // later the same day moved it to the 4B `LocalQwenSmall`, and now BOTH
+    // shrink: the cap to 2 048 and the window to 32 768.
+    //
+    // The cap is the one with a behavioural consequence, and it is a cost the
+    // flip pays deliberately: `maxBatchItems()` derives from it, so it drops
+    // below the ceiling and a busy turn's results cost MORE describe calls than
+    // the same turn on Haiku. That is the trade — many cheap local calls instead
+    // of fewer calls queued behind a scale-to-zero 27B — and asserting the
+    // inequality rather than a bare number is what states it.
     //
     // Asserted through the real scope rather than by stubbing the map, because
     // "the budget follows the tier" is the claim and the scope is what carries
@@ -450,27 +459,33 @@ describe('compactBulkData', () => {
     const { maxBatchItems, MAX_BATCH_ITEMS } =
       await import('../../../lib/harness-patterns/compactBulkData.server')
 
-    const saved = {
-      endpoint: process.env.VERDA_INFERENCE_ENDPOINT,
-      key: process.env.VERDA_INFERENCE_API_KEY,
-    }
+    const KEYS = ['VERDA_INFERENCE_ENDPOINT', 'VERDA_INFERENCE_API_KEY', 'SMALL_LLM_BASE_URL']
+    const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
     process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
     process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+    process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
     try {
       await clients.runWithInferenceTier('verda', async () => {
-        expect(clients.resolveClientForRole('describe')).toBe('VerdaQwen')
-        expect(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwen).toBe(CLIENT_MAX_OUTPUT_TOKENS.DescribeAnthropic)
-        expect(maxBatchItems()).toBe(MAX_BATCH_ITEMS)
-        expect(getContextWindow(clients.resolveClientForRole('describe'))).toBe(131_072)
+        expect(clients.resolveClientForRole('describe')).toBe('LocalQwenSmall')
+        expect(CLIENT_MAX_OUTPUT_TOKENS.LocalQwenSmall).toBeLessThan(
+          CLIENT_MAX_OUTPUT_TOKENS.DescribeAnthropic,
+        )
+        // The batch floor, not the ceiling — stated as both, because the exact
+        // number is derived arithmetic (floor(2048 * 0.5 / 200) = 5) and the
+        // PROPERTY is "smaller than on Anthropic".
+        expect(maxBatchItems()).toBeLessThan(MAX_BATCH_ITEMS)
+        expect(maxBatchItems()).toBe(5)
+        expect(getContextWindow(clients.resolveClientForRole('describe'))).toBe(32_768)
       })
       // Outside the scope the geometry is Anthropic's again — the mirror is not
       // a module-load constant.
+      expect(maxBatchItems()).toBe(MAX_BATCH_ITEMS)
       expect(getContextWindow(clients.resolveClientForRole('describe'))).toBe(200_000)
     } finally {
-      if (saved.endpoint === undefined) delete process.env.VERDA_INFERENCE_ENDPOINT
-      else process.env.VERDA_INFERENCE_ENDPOINT = saved.endpoint
-      if (saved.key === undefined) delete process.env.VERDA_INFERENCE_API_KEY
-      else process.env.VERDA_INFERENCE_API_KEY = saved.key
+      for (const k of KEYS) {
+        if (saved[k] === undefined) delete process.env[k]
+        else process.env[k] = saved[k]
+      }
     }
   })
 

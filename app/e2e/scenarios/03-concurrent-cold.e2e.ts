@@ -16,9 +16,20 @@
  *    is what makes an interleaving failure attributable to the app rather than
  *    to the test double.
  *
- * "Cold" is modelled by withholding the FIRST N responses. The delay is short
- * on purpose — scenario 4 owns the minutes-long case; this one owns the
+ * "Cold" is modelled by withholding the FIRST response. The delay is short on
+ * purpose — scenario 4 owns the minutes-long case; this one owns the
  * interleaving, and the two do not need to be slow twice.
+ *
+ * ONE withheld response, not two, and that number is the point since wake-then-
+ * run landed. Both turns call `ensureVerdaAwake()` and SHARE one in-flight ping
+ * (`inference/wake.server.ts`), so two concurrent turns into a sleeping box pay
+ * ONE cold start between them. This scenario used to arm `times: 2` because each
+ * turn absorbed its own delay on its own first call — which was the measured
+ * failure it was named after: three chats into a sleeping box are one replica's
+ * QUEUE, so the delays did not actually run in parallel on the real deployment
+ * the way they did against this fake. The dedupe is what makes them share, and
+ * `sends exactly one wake ping for two concurrent turns` below is the assertion
+ * that the sharing is real rather than incidental.
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
@@ -37,15 +48,23 @@ beforeAll(async () => {
 afterAll(async () => {
   await app.wipe()
 })
-beforeEach(() => {
+beforeEach(async () => {
   app.fakeLlm.reset()
   app.fakeGateway.reset()
+  // The box goes back to sleep between tests. One process, one warm clock (see
+  // `goToSleep`): a successful wake ping in an earlier test stamps it, and every
+  // assertion in this file is about the cold path.
+  await app.goToSleep()
 })
 
 describe('two conversations in flight together', () => {
   it('both complete on a cold endpoint, and neither disrupts the other', async () => {
     await app.setTier('verda')
-    if (IS_HERMETIC) app.fakeLlm.arm({ kind: 'cold-start', ms: COLD_MS, times: 2 })
+    // ONE — see the header. The shared wake ping absorbs it for both turns, so a
+    // second armed delay would land on a turn's first REAL call and make this
+    // scenario measure the wake serializing with the harness rather than the
+    // interleaving it is named for.
+    if (IS_HERMETIC) app.fakeLlm.arm({ kind: 'cold-start', ms: COLD_MS, times: 1 })
 
     const a = newSessionId('concurrent-a')
     const bee = newSessionId('concurrent-b')
@@ -87,6 +106,14 @@ describe('two conversations in flight together', () => {
       // least twice the delay. This is the assertion that keeps the scenario
       // from silently degrading into "two turns, one after the other".
       expect(elapsed, 'the two turns did not overlap').toBeLessThan(COLD_MS * 2)
+      // AND the wait was shared rather than merely concurrent. One ping for two
+      // turns is the property; against a single-replica deployment two pings
+      // would have QUEUED, so "both turns were in flight" would have cost the
+      // second one a second cold start on the real box while looking parallel
+      // here.
+      const pings = app.fakeLlm.calls.filter((c) => c.outcome === 'wake')
+      expect(pings, 'each turn sent its own wake ping').toHaveLength(1)
+      expect(pings[0].delayedMs).toBe(COLD_MS)
     }
   })
 

@@ -11,47 +11,61 @@ client<llm> LocalGLM {
   }
 }
 
-// Small summarizer (Qwen3.5-4B class) — the describe role's designated
-// owned-inference replacement. Served locally by `make llm-small` on port 8095,
-// or remotely: see "WHERE IT RUNS" below.
+// Small summarizer (Qwen3.5-4B class) — the describe role's owned-inference
+// model, and since 2026-08-26 the one it ACTUALLY runs on under the private
+// tier. Served locally by `make llm-small` on port 8095, or remotely: see
+// "WHERE IT RUNS" below.
 //
-// Nothing is re-pointed yet — the flip lands with the Verda-hosted 27B that
-// takes the heavy roles. The describe work runs on AnthropicHaiku45 via the
-// DescribeAnthropic chain today; the block on that chain in anthropic-only.baml
-// is the canonical list of which functions that is (six for `describe`, plus
-// ScreenUntrustedContent on its own `screen` role).
+// ── WHICH TIER REACHES IT, AND THROUGH WHICH SEAM ───────────────────────────
 //
-// ── HOW THE FLIP ACTUALLY WORKS, because the obvious lever is the wrong one ──
+// The flip is per TIER, not per chain, and it went through the per-call
+// override rather than through any `client` line here:
 //
-//   * The lever is BAML. Either rewrite the SIX `client DescribeAnthropic`
-//     lines the describe role owns (enumerated on the DescribeAnthropic block
-//     in anthropic-only.baml) to `client LocalQwenSmall`, or declare a
-//     `DescribeLocal` chain there and point those six lines at it. A function's
-//     `client` line is the only thing that routes its call: there is no client
-//     registry and no per-call client override anywhere under app/src/lib.
+//   * ANTHROPIC TIER — unchanged. The six describe functions still declare
+//     `client DescribeAnthropic` (→ AnthropicHaiku45) and still run there. The
+//     canonical per-function list is the block on that chain in
+//     anthropic-only.baml. Nothing in this file is read on that tier.
 //
-//   * NOT `resolveClientForRole` / `CLIENT_BY_ROLE` in clients.server.ts. That
-//     map routes nothing — every non-test caller feeds it to `getContextWindow()`
-//     or `CLIENT_MAX_OUTPUT_TOKENS`, so it is prompt/batch BUDGETING only.
-//     Setting `describe: 'LocalQwenSmall'` there on its own leaves every call
-//     going to Anthropic while prompts are sized for a 32768-token local window
-//     — a silent mis-budget no test would catch. It is a MIRROR of the BAML
-//     declarations: update it WITH the `client` lines, never instead of them.
+//   * PRIVATE TIER — `describe: 'LocalQwenSmall'` in `VERDA_CLIENT_BY_ROLE`
+//     (harness-patterns/clients.server.ts) spreads `{ client: 'LocalQwenSmall' }`
+//     into every describe call's options bag. That is the SAME seam the 27B
+//     roles take; the private tier is now two models, not one — the heavy roles
+//     on VerdaQwen and summarization here.
 //
-//   * ScreenUntrustedContent (injection-screen.baml) STAYS on DescribeAnthropic
-//     when the describe tier flips. It declares the same chain but is its own
-//     `screen` role (SA-M5): a screen must not be talked out of reporting by the
+//   * WHY NOT the obvious lever. Rewriting the six `client DescribeAnthropic`
+//     lines (or pointing them at a new `DescribeLocal` chain) would move
+//     describe on BOTH tiers at once, which is not what was asked for, and it
+//     would move ScreenUntrustedContent with them — see below. The `client`
+//     line stays the Anthropic-tier declaration; the tier map is what re-points
+//     it per call.
+//
+//   * `CLIENT_BY_ROLE` in clients.server.ts is still the BUDGETING mirror of the
+//     `client` lines and still routes nothing. What routes is
+//     `VERDA_CLIENT_BY_ROLE` beside it. Setting a client in the mirror alone
+//     re-sizes prompts for a model no call reaches (a silent mis-budget); this
+//     flip therefore lives in the map that routes, and the budgeting follows it
+//     automatically because `resolveClientForRole` reports the override.
+//
+//   * ScreenUntrustedContent (injection-screen.baml) DOES NOT COME ALONG. It
+//     declares the same DescribeAnthropic chain but is its own `screen` role
+//     (SA-M5 / SD-4): a screen must not be talked out of reporting by the
 //     content it reviews, and must copy spans VERBATIM so the guard can locate
-//     and neutralize them. Both are what a small summarization model is worst
-//     at. Re-pointing the shared DescribeAnthropic CHAIN — the one-line change
-//     that reads like "switch the tier on" — would move the injection screen
-//     onto this 4B as a side effect. Six lines, not the chain.
+//     and neutralize them character-for-character. Both are what a small
+//     summarization model is worst at. On the private tier the screen stays on
+//     VerdaQwen — a 27B — by owner decision (2026-08-26), and that decision is
+//     the whole reason the two roles are separate: re-pointing the shared
+//     DescribeAnthropic CHAIN, the one-line edit that reads like "switch the
+//     describe tier on", would have dragged prompt-injection screening onto
+//     this 4B as a side effect. The tier map moves the two roles independently,
+//     on separate lines, which is exactly what a security control's client
+//     needs.
 //
-//     NOT a claim that the screen never moves: the private tier routes it to
-//     VerdaQwen (a 27B) as of 2026-08-26, by explicit owner decision with its
-//     own map line and its own eval scenario. That is the difference this role
-//     exists to preserve — a screen may be moved on purpose, never as a side
-//     effect of a describe flip, and least of all onto a 4B summarizer.
+//   * IF THIS ENDPOINT IS NOT CONFIGURED while the private tier is active, the
+//     tier is REFUSED — loudly, at module load or at scope entry
+//     (`assertPrivateTierConfigured`). Owner decision 2026-08-26: describe must
+//     never silently descale back onto the 27B. Falling back would be a routing
+//     change nobody asked for, made invisibly, on the role that is handed tool
+//     results verbatim (SD-10).
 //
 // ── WHERE IT RUNS ───────────────────────────────────────────────────────────
 //
@@ -62,8 +76,10 @@ client<llm> LocalGLM {
 //                        BAML options take an `env.X` reference, not an
 //                        expression, so nothing can append the path for us and
 //                        nothing can supply a default here either — the local
-//                        value lives in app/.env.example, and this client is in
-//                        no chain, so an unset var is inert until it is wired.
+//                        value lives in app/.env.example. NO LONGER INERT when
+//                        unset: the private tier routes describe here, so
+//                        `assertPrivateTierConfigured()` refuses that tier
+//                        outright rather than letting the first summary 404.
 //   SMALL_LLM_API_KEY    Bearer token. llama-server ignores it; set it for a
 //                        remote endpoint that checks one. Keep a placeholder
 //                        rather than an empty string: openai-generic sends the
@@ -80,10 +96,18 @@ client<llm> LocalGLM {
 // mirrored in CLIENT_MAX_OUTPUT_TOKENS; MODEL_CONTEXT_WINDOWS carries the 32768
 // --ctx-size `make llm-small` serves it with. client-output-caps.test.ts pins
 // the first, client-context-windows.test.ts pins the second against the root
-// Makefile. Behaviour note for the flip: 2048 re-imposes the batch floor
-// compactBulkData.server.ts records from the removed mixed chains —
-// `maxBatchItems()` returns 5 rather than the ceiling of 8, so a turn's tool
-// results cost more describe calls here than on Haiku's 16384.
+// Makefile. Behaviour note, now live rather than prospective: 2048 re-imposes
+// the batch floor compactBulkData.server.ts records from the removed mixed
+// chains — `maxBatchItems()` returns 5 rather than the ceiling of 8, so a
+// private-tier turn's tool results cost more describe calls than the same turn
+// on Haiku's 16384. That is the cost of the flip and it is paid per turn.
+//
+// No CLIENT_PRICING entry, deliberately, and it is not the VerdaQwen case: this
+// box is neither billed per token by a vendor nor per GPU-hour by this repo's
+// own rate, so an invented figure would render as a confident price for a
+// machine whose bill nobody here can see. Consequence, stated rather than
+// discovered: a private-tier step that made a describe call reads as
+// cost-unknown. Pricing it is an owner call (see the PR that landed the flip).
 client<llm> LocalQwenSmall {
   provider openai-generic
   options {
@@ -91,5 +115,26 @@ client<llm> LocalQwenSmall {
     api_key env.SMALL_LLM_API_KEY
     model "qwen3.5-4b-instruct"
     max_tokens 2048
+    // THINKING OFF, REQUEST-SIDE, for VerdaQwen's reason and one more.
+    //
+    // Qwen3.5 is a thinking model: with the chat template left to itself the
+    // reasoning lands in `content` ahead of the answer (no reasoning parser is
+    // configured on either server), and at 2048 output tokens a reasoning block
+    // eats a two-line summary's whole budget — the failure mode is a degraded
+    // parse, never an error.
+    //
+    // The extra reason is WHERE it runs. `make llm-small` bakes the equivalent
+    // into the server it starts (see the root Makefile), so the local box was
+    // already covered — but this client's whole point is that its host is an env
+    // var, and a REMOTE 4B endpoint is somebody else's `vllm serve` with
+    // somebody else's flags. Declaring it here makes the setting travel with the
+    // client instead of with one machine's launch command. `openai-generic`
+    // forwards an unrecognised option into the request body verbatim, which is
+    // what puts it on the wire; `verda-body-shape.test.ts` renders one real request
+    // per private-tier function offline — the six describe ones against THIS
+    // client — and pins it, because nothing upstream would look wrong.
+    chat_template_kwargs {
+      enable_thinking false
+    }
   }
 }

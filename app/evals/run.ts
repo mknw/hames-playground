@@ -42,6 +42,7 @@ import {
 import { criticAcceptScenario, criticRejectAndReviseScenario } from './scenarios/actor-critic'
 import { synthesizerGroundedScenario } from './scenarios/synthesizer'
 import { describeBatchScenario } from './scenarios/describe'
+import { referenceSelectorScenario } from './scenarios/reference-selector'
 import { screenScenario } from './scenarios/screen'
 import { plannerScenario } from './scenarios/planner'
 import { reliabilityScenario } from './scenarios/reliability'
@@ -60,6 +61,7 @@ export const SCENARIOS: Scenario[] = [
   criticRejectAndReviseScenario,
   synthesizerGroundedScenario,
   describeBatchScenario,
+  referenceSelectorScenario,
   reliabilityScenario,
 ]
 

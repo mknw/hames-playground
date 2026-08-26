@@ -22,12 +22,22 @@
  *
  * The second scenario used to be the mirror image of that — `screen`, `router`
  * and `describe` pinned to Anthropic in both positions. The 2026-08-26 owner
- * decision moved `router` and `describe` onto the box, so it now pins the
- * OPPOSITE for those two, and the reason it is still worth a scenario is
+ * decisions moved `router` and `describe` onto the private tier, so it now pins
+ * the OPPOSITE for those two, and the reason it is still worth a scenario is
  * unchanged: a map cannot prove that a real turn honours it. It is also the
  * only thing that would catch a MISSING spread at one of the six describe call
  * sites — `clients-verda.test.ts` scans for the literal once per role, so five
  * of the six could lose it and stay green.
+ *
+ * AND THE PRIVATE TIER IS NOT ONE MODEL. The describe flip later the same day
+ * put summarization on a 4B, so "the private tier" is `VERDA_MODEL` for the
+ * heavy roles and `SMALL_MODEL` for the six describe ones. This is the only
+ * layer that can catch the two being swapped: the unit tests pin the map, and
+ * the map is a statement about intent, while the fake records what each request
+ * actually named. A turn whose tool-result summary went to the 27B would be a
+ * working turn on the right tier with the flip silently reverted — and before
+ * the flip those two calls named the SAME model, so nothing here could have told
+ * them apart at all.
  *
  * `screen` moved too, later the same day, on the owner's rule that no call made
  * under the private tier may be sent to any public AI provider (SA-M5 / SD-4).
@@ -44,7 +54,13 @@
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
-import { IS_HERMETIC, FAKE_ANTHROPIC_TIER_MODEL, VERDA_MODEL, type Tier } from '../lib/mode'
+import {
+  IS_HERMETIC,
+  FAKE_ANTHROPIC_TIER_MODEL,
+  SMALL_MODEL,
+  VERDA_MODEL,
+  type Tier,
+} from '../lib/mode'
 
 let app: AppHandles
 
@@ -114,7 +130,7 @@ describe('switching tier between turns', () => {
     expect(eventsOfType(row!.serializedContext, 'user_message')).toHaveLength(3)
   })
 
-  it.runIf(IS_HERMETIC)('moves the cheap side-roles too, not just the heavy ones', async () => {
+  it.runIf(IS_HERMETIC)('splits the private tier across its TWO models', async () => {
     const sessionId = newSessionId('side-roles')
 
     await app.setTier('verda')
@@ -125,16 +141,31 @@ describe('switching tier between turns', () => {
     // turn runner starts it detached, after the answer has reached the caller
     // (`compactAndSave`), so it is polled for rather than assumed. It is also
     // the single most important one to check — a tool result is the payload
-    // this whole widening was about (SD-10).
+    // the widening was about (SD-10).
     const describe = await waitForCall(['ResultDescribe', 'ResultDescribeBatch'])
 
-    for (const fn of ['Router', 'GenerateConversationTitle', describe]) {
+    // The routing table this scenario exists to prove, per FUNCTION rather than
+    // per tier, because the tier is two models. `Router` is a heavy role on the
+    // 27B; the title and the tool-result summary are describe functions on the
+    // 4B — and the title is the interesting one, because it is a describe
+    // function that does NOT carry a tool result, so getting it wrong would look
+    // harmless and would still be a role split down the middle.
+    const expected: Record<string, string> = {
+      Router: VERDA_MODEL,
+      GenerateConversationTitle: SMALL_MODEL,
+      [describe]: SMALL_MODEL,
+    }
+    for (const [fn, model] of Object.entries(expected)) {
       const calls = app.fakeLlm.calls.filter((c) => c.fn === fn)
       expect(calls.length, `no ${fn} call was made, so this asserts nothing`).toBeGreaterThan(0)
       for (const call of calls) {
-        expect(call.model, `${fn} did not follow the tier switch`).toBe(VERDA_MODEL)
+        expect(call.model, `${fn} was routed to ${call.model}, not ${model}`).toBe(model)
       }
     }
+    // Not vacuous: the turn really did reach both models, so the table above is
+    // distinguishing something. A table that had collapsed to one model would
+    // pass every assertion in the loop and prove nothing about the flip.
+    expect(new Set(Object.values(expected)).size).toBe(2)
   })
 
   it.runIf(IS_HERMETIC)('leaves those same roles on Anthropic in the other position', async () => {
@@ -156,6 +187,11 @@ describe('switching tier between turns', () => {
       // nothing and pass.
       expect(calls.length, `no ${fn} call was made, so this asserts nothing`).toBeGreaterThan(0)
       for (const call of calls) {
+        // ONE model on this side, all three functions. The Anthropic tier is
+        // untouched by the describe flip — that was the constraint the flip was
+        // designed around, and it is why the flip went through the tier map
+        // rather than through the six `client` lines in `baml_src/`, which would
+        // have moved describe here too.
         expect(call.model, `${fn} did not follow the tier switch`).toBe(FAKE_ANTHROPIC_TIER_MODEL)
       }
     }

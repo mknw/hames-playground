@@ -69,12 +69,23 @@ import {
 } from '../../../lib/harness-client/preview-header.server'
 import { noteCallLatency, resetCallLatency } from '../../../lib/metrics/call-latency.server'
 
-const ENV_KEYS = ['VERDA_INFERENCE_ENDPOINT', 'VERDA_INFERENCE_API_KEY'] as const
+const ENV_KEYS = [
+  'VERDA_INFERENCE_ENDPOINT',
+  'VERDA_INFERENCE_API_KEY',
+  // The private tier is two models since 2026-08-26, and `verdaConfigured()`
+  // asks about both — so a fixture that configures only the 27B leaves the
+  // switch's private position DISABLED.
+  'SMALL_LLM_BASE_URL',
+] as const
 let saved: Record<string, string | undefined>
 
+/** BOTH endpoints the private tier needs — the 27B and the 4B summarizer. A
+ *  fixture that sets only the first describes a deployment the switch refuses
+ *  to offer, which is the case the "is anthropic when it is not" tests cover. */
 function configureVerda(): void {
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 
 beforeEach(() => {

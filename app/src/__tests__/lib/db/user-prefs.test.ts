@@ -30,12 +30,22 @@ import {
   setStoredInferenceTier,
 } from '../../../lib/db/user-prefs.server'
 
-const ENV_KEYS = ['VERDA_INFERENCE_ENDPOINT', 'VERDA_INFERENCE_API_KEY'] as const
+const ENV_KEYS = [
+  'VERDA_INFERENCE_ENDPOINT',
+  'VERDA_INFERENCE_API_KEY',
+  // The private tier needs the 4B summarizer too (2026-08-26); the preview
+  // default reads `verdaConfigured()`, which asks about both endpoints.
+  'SMALL_LLM_BASE_URL',
+] as const
 let saved: Record<string, string | undefined>
 
+/** BOTH endpoints the private tier needs — the 27B and the 4B summarizer. A
+ *  fixture that sets only the first describes a deployment the switch refuses
+ *  to offer, which is the case the "is anthropic when it is not" tests cover. */
 function configureVerda(): void {
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 
 beforeEach(() => {
@@ -86,8 +96,21 @@ describe('defaultInferenceTier — the owner’s preview decision', () => {
   })
 
   it('is anthropic for a misshapen endpoint too', () => {
+    configureVerda()
+    // Only the /v1 suffix is wrong. Everything else is present, so a pass here
+    // is about the shape check rather than about a missing variable.
     process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/'
-    process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+    expect(defaultInferenceTier()).toBe('anthropic')
+  })
+
+  it('is anthropic when the 4B summarizer has no endpoint', () => {
+    // The private tier is TWO models (2026-08-26): the heavy roles on the 27B
+    // and `describe` on LocalQwenSmall. A deployment with only the 27B
+    // configured cannot serve a private turn's first tool-result summary, and
+    // must not silently descale it back onto the 27B — so it is not offered at
+    // all. This is the half a one-endpoint fixture used to hide.
+    configureVerda()
+    delete process.env.SMALL_LLM_BASE_URL
     expect(defaultInferenceTier()).toBe('anthropic')
   })
 })

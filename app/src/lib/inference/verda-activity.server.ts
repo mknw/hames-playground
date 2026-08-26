@@ -46,6 +46,20 @@ assertServerOnImport()
 /** BAML client name that means "this call reached the self-hosted box". */
 export const VERDA_CLIENT_NAME = 'VerdaQwen'
 
+/**
+ * The model id the deployment serves, copied from the `model` line on
+ * `VerdaQwen` in `baml_src/verda-client.baml`.
+ *
+ * A COPY, and the copy is the smaller evil. It exists for the wake ping
+ * (`wake.server.ts`), which is a hand-rolled `fetch` rather than a BAML call —
+ * it has to name a model, vLLM 400s any other id, and BAML exports nothing that
+ * would let this be read from the declaration. `verda-wake.test.ts` parses that
+ * line out of the `.baml` file and pins it equal to this constant, so the
+ * failure mode of a re-deployment under a new id is a red test rather than a
+ * wake ping that 400s on every first turn of every session.
+ */
+export const VERDA_MODEL_ID = 'Qwen/Qwen3.8-27B-FP8'
+
 /** Default scale-down delay, in seconds — the live deployment's setting. The
  *  committed default used to sit at 180 on the argument that a default tracking
  *  one deployment's current setting is a claim the repo cannot keep true; the
@@ -95,9 +109,13 @@ const state: VerdaState = ((globalThis as VerdaGlobal)[STATE_KEY] ??= {
   inFlight: 0,
 })
 
-/** Record that a call to the self-hosted box just finished. Called from the
- *  LLM-usage observer for every sample naming `VerdaQwen` — success or failure,
- *  because a failed call woke the box exactly as much as a successful one. */
+/** Record that a call to the self-hosted box just finished. Two callers, both
+ *  holding the same evidence — an answered completion on the deployment:
+ *  the LLM-usage observer, for every sample naming `VerdaQwen` (success or
+ *  failure, because a failed call woke the box exactly as much as a successful
+ *  one), and the wake ping, which is not a BAML call and so has no sample. The
+ *  ping stamps only on success, and `wake.server.ts` says why that is not the
+ *  same rule rather than an inconsistency. */
 export function noteVerdaCallCompleted(at: number = Date.now()): void {
   state.lastCompletedAt = at
 }

@@ -66,6 +66,9 @@ beforeEach(() => {
   resetVerdaActivity()
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://e2e.invalid/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  // The private tier's second endpoint (the 4B summarizer `describe` runs on).
+  // Needed only so `runWithInferenceTier('verda', …)` opens at all.
+  process.env.SMALL_LLM_BASE_URL = 'https://e2e.invalid/small/v1'
 })
 
 afterEach(() => {
@@ -73,6 +76,7 @@ afterEach(() => {
   resetVerdaActivity()
   delete process.env.VERDA_INFERENCE_ENDPOINT
   delete process.env.VERDA_INFERENCE_API_KEY
+  delete process.env.SMALL_LLM_BASE_URL
   delete process.env.USE_VERDA_INFERENCE
   delete process.env.VERDA_SCALEDOWN_SECONDS
 })
@@ -257,6 +261,42 @@ describe('when the notice fires', () => {
         clientOverrideFor('controller')
         clientOverrideFor('critic')
         clientOverrideFor('compactExecution')
+        endVerdaTurn()
+      }),
+    )
+    expect(seen).toHaveLength(1)
+  })
+
+  it('is NOT fired by a describe call — the 4B does not scale to zero', async () => {
+    // The describe flip's trap, and it is the one place the hook had to learn
+    // something new. The private tier moves `describe` too, so a describe call
+    // gets a `client` override just like the controller's — but the client is
+    // `LocalQwenSmall`, a llama-server somebody is running, which answers in
+    // milliseconds. Announcing "starting GPU, ~146 seconds" in front of it would
+    // be a countdown for a wait nobody is paying, fired from the tier's
+    // highest-frequency role. So the hook keys on the CLIENT, not on "the tier
+    // moved this role".
+    const seen = await runWithInferenceTier('verda', () =>
+      noticesFrom(() => {
+        beginVerdaTurn()
+        // A real override is produced — this is not "describe is unrouted".
+        expect(clientOverrideFor('describe')).toEqual({ client: 'LocalQwenSmall' })
+        endVerdaTurn()
+      }),
+    )
+    expect(seen).toEqual([])
+  })
+
+  it('still fires for the 27B on a turn that also made describe calls', async () => {
+    // The other half: the test above must not pass by having broken the notice.
+    // A describe call BEFORE the controller's must not consume the turn's one
+    // announcement, or the flip would have silently deleted the cold-start UX for
+    // every turn whose first override happened to be a summary.
+    const seen = await runWithInferenceTier('verda', () =>
+      noticesFrom(() => {
+        beginVerdaTurn()
+        clientOverrideFor('describe')
+        clientOverrideFor('controller')
         endVerdaTurn()
       }),
     )

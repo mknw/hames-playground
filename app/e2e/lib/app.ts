@@ -35,6 +35,11 @@ export interface SseFrame {
   /** The `event:` name, or `message` for an unnamed data frame. */
   event: string
   data: Record<string, unknown>
+  /** `Date.now()` when this reader saw the frame. Frames arrive in order
+   *  regardless, so this is not for sequencing — it is for the scenarios whose
+   *  claim is about WHEN inside a wait a frame landed (scenario 8: the
+   *  cold-start notice reaches the user during the wait, not after it). */
+  at: number
 }
 
 export interface AppHandles {
@@ -252,6 +257,7 @@ async function readSse(response: Response): Promise<SseFrame[]> {
 }
 
 function parseFrame(raw: string): SseFrame | null {
+  const at = Date.now()
   const lines = raw.split('\n').filter(Boolean)
   if (lines.length === 0) return null
   let event = 'message'
@@ -262,9 +268,9 @@ function parseFrame(raw: string): SseFrame | null {
   }
   if (data.length === 0) return null
   try {
-    return { event, data: JSON.parse(data.join('\n')) as Record<string, unknown> }
+    return { event, data: JSON.parse(data.join('\n')) as Record<string, unknown>, at }
   } catch {
-    return { event, data: { raw: data.join('\n') } }
+    return { event, data: { raw: data.join('\n') }, at }
   }
 }
 

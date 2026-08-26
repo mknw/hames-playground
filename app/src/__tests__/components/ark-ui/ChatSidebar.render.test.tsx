@@ -60,8 +60,12 @@ const byText = (root: ParentNode, label: string) =>
 const confirmDialog = () =>
   document.querySelector<HTMLElement>('[data-scope="dialog"][data-part="content"]')
 
-const idle: SessionRunState = { isProcessing: false, runningTool: null }
-const busy: SessionRunState = { isProcessing: true, runningTool: 'read_neo4j_cypher' }
+const idle: SessionRunState = { isProcessing: false, runningTool: null, warming: null }
+const busy: SessionRunState = {
+  isProcessing: true,
+  runningTool: 'read_neo4j_cypher',
+  warming: null,
+}
 
 const snapshot = (over: Partial<ChainProgressSnapshot> = {}): ChainProgressSnapshot => ({
   currentTurn: 0,

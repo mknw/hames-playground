@@ -30,10 +30,18 @@ const repo = () => import('../../../lib/neo4j/graph-edit.server')
 beforeEach(() => {
   vi.clearAllMocks()
   getAuthenticatedUser.mockResolvedValue({ id: 'user-a' })
+  // The gate is `isBypassEnabled() || getAuthenticatedUser()`, and the first
+  // half reads `import.meta.env.VITE_DEV_BYPASS_AUTH` at call time — so a
+  // developer running with the bypass on in their own `.env` used to turn the
+  // rejection case below green-while-asserting-nothing on their machine and
+  // red nowhere. Pinned here rather than left to the environment: what these
+  // tests are about is the gate, so the gate's inputs are inputs of the test.
+  vi.stubEnv('VITE_DEV_BYPASS_AUTH', 'false')
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
 })
 
 describe('auth gate', () => {
@@ -51,6 +59,20 @@ describe('auth gate', () => {
       'Authentication required',
     )
     expect(driverSession).not.toHaveBeenCalled()
+  })
+
+  it('is bypassed by the dev flag — which is what makes the pin above load-bearing', async () => {
+    // Without this case the `stubEnv` above could stop reaching
+    // `isBypassEnabled()` entirely and nothing would notice: the rejection case
+    // passes on any machine that simply has no bypass set. Here the stub is the
+    // only thing that can produce the behaviour, so a pin that stopped working
+    // fails rather than silently reverting the test to environment-dependent.
+    vi.stubEnv('VITE_DEV_BYPASS_AUTH', 'true')
+    getAuthenticatedUser.mockRejectedValue(new Error('Authentication required: no session.'))
+    const { createGraphNode } = await repo()
+
+    await expect(createGraphNode('Concept', 'GraphQL')).resolves.toBeUndefined()
+    expect(driverSession).toHaveBeenCalled()
   })
 })
 

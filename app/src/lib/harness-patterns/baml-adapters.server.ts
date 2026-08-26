@@ -38,8 +38,14 @@ import { listTools as mcpListTools } from './mcp-client.server'
 import { getActiveSandbox } from '../sandbox/scope.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
-import { CLIENT_MAX_OUTPUT_TOKENS, estimateLlmCostEur, type CostBasis } from '../settings'
-import { usdEurRate, verdaEurPerHour } from '../cost-rates.server'
+import {
+  CLIENT_MAX_OUTPUT_TOKENS,
+  TIME_PRICED_CLIENT,
+  estimateLlmCostEur,
+  type CostBasis,
+  type TokenBuckets,
+} from '../settings'
+import { eurPerUsdRate, verdaEurPerHour } from '../cost-rates.server'
 import { clientOverrideFor } from './clients.server'
 import { notifyLlmUsage } from './llm-usage-observer.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
@@ -305,6 +311,16 @@ function usageFromResponse(call: CollectorCall | undefined):
   }
 }
 
+/** What a call that reported no usage at all is priced against when its client
+ *  is billed by the second. Not a claim that it moved no tokens — a claim that
+ *  its tokens are free either way, so the missing count changes no figure. */
+const NO_TOKEN_USAGE: TokenBuckets = {
+  inputUncachedTokens: 0,
+  inputCacheReadTokens: 0,
+  inputCacheWriteTokens: 0,
+  outputTokens: 0,
+}
+
 /** One call's token buckets: raw response usage first (has the cache-write
  *  bucket), Collector usage as fallback (write reads as 0). Undefined when
  *  the call never produced usage (pre-flight failures). */
@@ -349,8 +365,12 @@ function callTokenBuckets(call: CollectorCall | undefined):
  *  self-hosted box to Anthropic pays wall-clock for the first attempt and
  *  tokens for the second. Attribution is the client BAML reports, never the
  *  tier the run intended — the same rule `usage-recorder.server.ts` follows.
- *  The audit fields describe the LAST priced attempt, which is the convention
- *  `rates` already had. */
+ *  `basis` names the LAST priced attempt, which is the convention `rates`
+ *  already had; `timePricedAttempts` is the one that must NOT be read off the
+ *  last one, because it is what the `≥` on every surface claims. A step with a
+ *  billed GPU hour and one Anthropic retry is a floor whichever attempt came
+ *  last, so the count is accumulated and `timeRate` sums the seconds
+ *  `costEur` actually charged for. */
 export function computeEventMetrics(collector: Collector | undefined): EventMetrics | undefined {
   if (!collector) return undefined
   const totals = {
@@ -361,18 +381,27 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
   }
   // Resolved once per step rather than per attempt: an operator changing a rate
   // mid-step would otherwise price two attempts of one call differently.
-  const usdEur = usdEurRate()
+  const eurPerUsd = eurPerUsdRate()
   const eurPerHour = verdaEurPerHour()
   let attempts = 0
   let costEur = 0
   let noCacheEur = 0
   let costKnown = true
+  let timePricedAttempts = 0
   let basis: CostBasis | undefined
   let rates: { inPerMTok: number; outPerMTok: number } | undefined
   let timeRate: { eurPerHour: number; durationMs: number } | undefined
   for (const log of collector.logs ?? []) {
     for (const call of (log.calls ?? []) as CollectorCall[]) {
-      const buckets = callTokenBuckets(call)
+      // A time-priced attempt is billed on wall-clock, so absent token usage must
+      // not drop it before pricing: `callTokenBuckets` reports none for a
+      // pre-flight failure and for an unreadable body, and the box was awake
+      // either way. Zero buckets leave the token sums truthful and let the
+      // measured duration price the attempt — dropping it instead understated a
+      // 15-minute cold start as €0.003 with a `≥` in front of it.
+      const buckets =
+        callTokenBuckets(call) ??
+        (call.clientName === TIME_PRICED_CLIENT ? NO_TOKEN_USAGE : undefined)
       if (!buckets) continue
       attempts++
       totals.inputUncachedTokens += buckets.inputUncachedTokens
@@ -381,15 +410,23 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
       totals.outputTokens += buckets.outputTokens
       const est = estimateLlmCostEur(buckets, call.clientName, {
         durationMs: measuredDurationMs(call),
-        usdEurRate: usdEur,
+        eurPerUsd,
         eurPerHour,
       })
       if (est) {
         costEur += est.costEur
         noCacheEur += est.noCacheEur
         basis = est.basis
-        rates = est.rates
-        timeRate = est.timeRate
+        // Each audit field keeps the last attempt that HAD one, so a mixed step
+        // carries both rather than whichever basis happened to run last.
+        if (est.rates) rates = est.rates
+        if (est.basis === 'time') {
+          timePricedAttempts++
+          timeRate = {
+            eurPerHour: est.timeRate?.eurPerHour ?? eurPerHour,
+            durationMs: (timeRate?.durationMs ?? 0) + (est.timeRate?.durationMs ?? 0),
+          }
+        }
       } else {
         costKnown = false
       }
@@ -404,6 +441,7 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
           costEur,
           noCacheEur,
           basis,
+          ...(timePricedAttempts > 0 ? { timePricedAttempts } : {}),
           ...(rates ? { rates } : {}),
           ...(timeRate ? { timeRate } : {}),
         }

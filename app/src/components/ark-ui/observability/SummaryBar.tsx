@@ -100,7 +100,13 @@ export const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void
                 : '')
             }
           >
-            <span text="xs ui-text-tertiary">Cost:</span>
+            {/* The label carries the caveat too, not just the `title`: the bar is
+                the one surface where the `≥` was the only visible sign that the
+                total is a floor, while the per-step chip changes its label and
+                the dashboard shows a footnote. */}
+            <span text="xs ui-text-tertiary">
+              {tokenTotals().timePricedCalls > 0 ? 'Cost (floor):' : 'Cost:'}
+            </span>
             <span text="sm ui-text-primary" font="mono">
               {tokenTotals().timePricedCalls > 0 ? '≥ ' : ''}
               {fmtEur(tokenTotals().costEur)}

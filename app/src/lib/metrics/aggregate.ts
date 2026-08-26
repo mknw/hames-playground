@@ -16,11 +16,13 @@
  * accounting ever moves off `event.metrics`, this one function is the swap
  * point. `stepCostEur` beside it is the same idea for the money: one currency,
  * one conversion rule, shared with the observability panel's own fold so the
- * two surfaces cannot disagree about the same conversation.
+ * two surfaces cannot disagree about the same conversation. `isTimePricedStep`
+ * is the third: one rule for whether a figure is a floor, so the `≥` means the
+ * same thing on every surface that renders one.
  */
 
 import type { ContextEvent, EventMetrics } from '../harness-patterns/types'
-import { DEFAULT_USD_EUR_RATE } from '../settings'
+import { DEFAULT_EUR_PER_USD } from '../settings'
 
 // ============================================================================
 // Selector
@@ -49,7 +51,7 @@ export function isLlmBearing(event: ContextEvent): boolean {
  * exactly as accurate as converting a new one. It converts at the DEFAULT rate,
  * not the operator's current one, because the rate in force when it was stamped
  * was never recorded; using the live value would silently re-price history
- * every time `USD_EUR_RATE` moved.
+ * every time `EUR_PER_USD` moved.
  *
  * Shared with `observability/token-totals.ts`: the panel and the dashboard must
  * agree to the cent on the same conversation, and two copies of this rule would
@@ -64,11 +66,26 @@ export function stepCostEur(m: EventMetrics): { costEur: number; noCacheEur: num
   }
   if (m.costUsd !== undefined) {
     return {
-      costEur: m.costUsd * DEFAULT_USD_EUR_RATE,
-      noCacheEur: (m.noCacheUsd ?? m.costUsd) * DEFAULT_USD_EUR_RATE,
+      costEur: m.costUsd * DEFAULT_EUR_PER_USD,
+      noCacheEur: (m.noCacheUsd ?? m.costUsd) * DEFAULT_EUR_PER_USD,
     }
   }
   return undefined
+}
+
+/**
+ * Whether a step's figure is a FLOOR — the third accessor every fold goes
+ * through, and the reason the `≥` on the panel, the summary bar and the
+ * dashboard cannot drift apart.
+ *
+ * True when ANY of the step's priced attempts was billed by wall-clock, not
+ * when the last one was: a step holding a billed GPU hour plus one Anthropic
+ * retry is a floor whichever attempt ran last, and reading `basis` alone
+ * dropped the marker for exactly that step. Events stamped before
+ * `timePricedAttempts` existed carry only `basis`, and are read that way.
+ */
+export function isTimePricedStep(m: EventMetrics): boolean {
+  return m.timePricedAttempts !== undefined ? m.timePricedAttempts > 0 : m.basis === 'time'
 }
 
 // ============================================================================
@@ -192,7 +209,7 @@ export function accumulate(totals: MetricTotals, event: ContextEvent): MetricTot
     totals.pricedCalls++
     totals.costEur += cost.costEur
     totals.noCacheEur += cost.noCacheEur
-    if (m.basis === 'time') totals.timePricedCalls++
+    if (isTimePricedStep(m)) totals.timePricedCalls++
   }
   return totals
 }

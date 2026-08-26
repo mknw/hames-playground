@@ -466,7 +466,7 @@ export default function Dashboard() {
                 force for the client that served each step (see{' '}
                 <span font="mono">CLIENT_PRICING</span> in <span font="mono">lib/settings.ts</span>
                 ), with cache reads at 0.1× and cache writes at 1.25× the base input rate, converted
-                at a static USD→EUR rate (<span font="mono">USD_EUR_RATE</span>) — there is no live
+                at a static USD→EUR rate (<span font="mono">EUR_PER_USD</span>) — there is no live
                 FX lookup. Steps whose client could not be priced are counted but left out of the
                 cost columns.
               </span>

@@ -4,7 +4,7 @@
  */
 
 import type { ContextEvent } from '../harness-patterns'
-import { stepCostEur } from '../metrics/aggregate'
+import { isTimePricedStep, stepCostEur } from '../metrics/aggregate'
 
 /** Compact token count: 1234 → "1.2k", 25_320 → "25.3k". */
 export const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
@@ -55,7 +55,7 @@ export const foldTokenTotals = (events: ContextEvent[]) => {
         t.costEur += cost.costEur
         t.noCacheEur += cost.noCacheEur
         t.costKnownCalls++
-        if (m.basis === 'time') t.timePricedCalls++
+        if (isTimePricedStep(m)) t.timePricedCalls++
       }
     } else if (e.llmCall?.usage) {
       const u = e.llmCall.usage

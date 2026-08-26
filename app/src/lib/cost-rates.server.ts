@@ -13,12 +13,12 @@
  * `verdaScaledownSeconds()` follows, and for the same reason.
  *
  * Neither rate is fetched from anywhere. The USD→EUR figure is deliberately
- * static (see `DEFAULT_USD_EUR_RATE`); a live FX lookup would put a network
+ * static (see `DEFAULT_EUR_PER_USD`); a live FX lookup would put a network
  * dependency behind a spend estimate and make two page loads of the same
  * conversation disagree.
  */
 import { assertServerOnImport } from './harness-patterns/assert.server'
-import { DEFAULT_USD_EUR_RATE, DEFAULT_VERDA_EUR_PER_HOUR } from './settings'
+import { DEFAULT_EUR_PER_USD, DEFAULT_VERDA_EUR_PER_HOUR } from './settings'
 
 assertServerOnImport()
 
@@ -38,9 +38,9 @@ function positiveRate(name: string, raw: string | undefined, fallback: number): 
   return parsed
 }
 
-/** EUR per USD, from `USD_EUR_RATE`. Static by design — see the default's doc. */
-export function usdEurRate(): number {
-  return positiveRate('USD_EUR_RATE', process.env.USD_EUR_RATE, DEFAULT_USD_EUR_RATE)
+/** EUR per USD, from `EUR_PER_USD`. Static by design — see the default's doc. */
+export function eurPerUsdRate(): number {
+  return positiveRate('EUR_PER_USD', process.env.EUR_PER_USD, DEFAULT_EUR_PER_USD)
 }
 
 /** EUR per hour the self-hosted GPU is awake, from `VERDA_EUR_PER_HOUR`. */

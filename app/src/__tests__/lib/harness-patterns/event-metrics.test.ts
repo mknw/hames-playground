@@ -47,7 +47,7 @@ describe('estimateLlmCostEur (token basis)', () => {
         outputTokens: 1_000_000,
       },
       'AnthropicSonnet5',
-      { usdEurRate: 0.5 },
+      { eurPerUsd: 0.5 },
     )
     // Sonnet 5 intro: $2 in / $10 out per MTok → €1 / €5 at this rate
     expect(est).toBeDefined()
@@ -111,8 +111,8 @@ describe('computeEventMetrics', () => {
     expect(m!.inputCacheWriteTokens).toBe(800)
     expect(m!.outputTokens).toBe(33_668)
     // Cost includes the burned 32k output — the whole point of step accounting
-    const { DEFAULT_USD_EUR_RATE } = await import('../../../lib/settings')
-    const r = DEFAULT_USD_EUR_RATE
+    const { DEFAULT_EUR_PER_USD } = await import('../../../lib/settings')
+    const r = DEFAULT_EUR_PER_USD
     const expected = ((450 + 800 * 1.25 + 10_500 * 0.1) * 2 * r + 33_668 * 10 * r) / 1e6
     expect(m!.basis).toBe('tokens')
     expect(m!.costEur).toBeCloseTo(expected, 9)
@@ -136,7 +136,7 @@ describe('computeEventMetrics', () => {
     expect(m!.inputUncachedTokens).toBe(200)
     expect(m!.outputTokens).toBe(110)
     // Per-attempt rates: Sonnet5 intro (2/10) + Sonnet46 standard (3/15)
-    const { DEFAULT_USD_EUR_RATE: r } = await import('../../../lib/settings')
+    const { DEFAULT_EUR_PER_USD: r } = await import('../../../lib/settings')
     expect(m!.costEur).toBeCloseTo(((100 * 2 + 50 * 10) / 1e6 + (100 * 3 + 60 * 15) / 1e6) * r, 9)
   })
 
@@ -189,7 +189,7 @@ describe('computeEventMetrics', () => {
     // would bill one of the two wrong.
     const { computeEventMetrics } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
-    const { DEFAULT_USD_EUR_RATE, DEFAULT_VERDA_EUR_PER_HOUR, TIME_PRICED_CLIENT } =
+    const { DEFAULT_EUR_PER_USD, DEFAULT_VERDA_EUR_PER_HOUR, TIME_PRICED_CLIENT } =
       await import('../../../lib/settings')
     const collector = fakeCollector([
       {
@@ -206,12 +206,121 @@ describe('computeEventMetrics', () => {
       },
     ])
     const m = computeEventMetrics(collector as never)!
-    const anthropicEur = ((5_000 * 2 + 100 * 10) / 1e6) * DEFAULT_USD_EUR_RATE
+    const anthropicEur = ((5_000 * 2 + 100 * 10) / 1e6) * DEFAULT_EUR_PER_USD
     expect(m.attempts).toBe(2)
     expect(m.costEur).toBeCloseTo(DEFAULT_VERDA_EUR_PER_HOUR + anthropicEur, 9)
-    // The audit fields describe the LAST priced attempt — the Anthropic one.
+    // `basis` still names the LAST priced attempt — the Anthropic one — which is
+    // the convention `rates` already had, and why it is NOT the floor test.
     expect(m.basis).toBe('tokens')
     expect(m.rates).toBeDefined()
+    // ...so the floor marker rides on its own count. A step holding a full
+    // billed GPU hour is a floor whichever attempt happened to run last, and
+    // this assertion used to say `basis === 'tokens'` and stop there — which
+    // pinned the panel, the summary bar and the dashboard all dropping the `≥`
+    // for a figure that was 99.9% wall-clock.
+    expect(m.timePricedAttempts).toBe(1)
+    const { isTimePricedStep } = await import('../../../lib/metrics/aggregate')
+    expect(isTimePricedStep(m)).toBe(true)
+    // Both audit fields survive the mix rather than only the last basis'.
+    expect(m.timeRate).toEqual({
+      eurPerHour: DEFAULT_VERDA_EUR_PER_HOUR,
+      durationMs: 3_600_000,
+    })
+  })
+
+  it('counts a time-priced attempt that reported NO token usage, and bills it', async () => {
+    // The wall-clock bill must not be gated on token usage: BAML reports no
+    // usage for a pre-flight failure and for an unreadable body, and the box was
+    // awake either way. Dropping such an attempt rendered a 15-minute cold start
+    // plus a 6.3s call as €0.003 — with a `≥` in front of it, which reads as
+    // accounted for.
+    const { computeEventMetrics } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { DEFAULT_VERDA_EUR_PER_HOUR, TIME_PRICED_CLIENT } = await import('../../../lib/settings')
+    const collector = fakeCollector([
+      {
+        calls: [
+          // Usage-less: no httpResponse to read, no Collector usage either.
+          {
+            selected: false,
+            clientName: TIME_PRICED_CLIENT,
+            provider: 'openai-generic',
+            timing: { durationMs: 900_000 },
+          },
+          {
+            ...apiCall(TIME_PRICED_CLIENT, { input_tokens: 2_000, output_tokens: 80 }),
+            timing: { durationMs: 6_300 },
+          },
+        ],
+      },
+    ])
+    const m = computeEventMetrics(collector as never)!
+    expect(m.attempts).toBe(2)
+    expect(m.timePricedAttempts).toBe(2)
+    expect(m.costEur).toBeCloseTo((906.3 / 3600) * DEFAULT_VERDA_EUR_PER_HOUR, 9)
+    // Its tokens are free, so the missing count changes no figure — and the ones
+    // that were reported are still summed.
+    expect(m.inputUncachedTokens).toBe(2_000)
+    // The audit field describes the seconds `costEur` charged for, both attempts.
+    expect(m.timeRate).toEqual({
+      eurPerHour: DEFAULT_VERDA_EUR_PER_HOUR,
+      durationMs: 906_300,
+    })
+    expect(m.noCacheEur).toBeCloseTo(m.costEur!, 12) // caching cannot save wall-clock
+  })
+
+  it('a usage-less time-priced attempt with no duration makes the step unknown', async () => {
+    // Counting the attempt must not invent a price for it: a time bill with no
+    // time is not a free call, so the whole step reads as cost-unknown.
+    const { computeEventMetrics } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { TIME_PRICED_CLIENT } = await import('../../../lib/settings')
+    const collector = fakeCollector([
+      {
+        calls: [
+          { selected: false, clientName: TIME_PRICED_CLIENT, provider: 'openai-generic' },
+          {
+            ...apiCall(TIME_PRICED_CLIENT, { input_tokens: 2_000, output_tokens: 80 }),
+            timing: { durationMs: 6_300 },
+          },
+        ],
+      },
+    ])
+    const m = computeEventMetrics(collector as never)!
+    expect(m.attempts).toBe(2)
+    expect(m.costEur).toBeUndefined()
+    expect(m.timePricedAttempts).toBeUndefined()
+  })
+
+  it('leaves a usage-less TOKEN-priced attempt dropped — no tokens, no token bill', async () => {
+    // The other half of the gate: the fallback is for the time basis only, so a
+    // pre-flight failure on Anthropic still contributes nothing and does not
+    // count as an attempt.
+    const { computeEventMetrics } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const collector = fakeCollector([
+      {
+        calls: [
+          { selected: false, clientName: 'AnthropicSonnet5', provider: 'anthropic' },
+          apiCall('AnthropicSonnet5', { input_tokens: 100, output_tokens: 50 }),
+        ],
+      },
+    ])
+    const m = computeEventMetrics(collector as never)!
+    expect(m.attempts).toBe(1)
+    expect(m.timePricedAttempts).toBeUndefined()
+  })
+
+  it('a purely token-priced step carries no floor marker at all', async () => {
+    const { computeEventMetrics } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { isTimePricedStep } = await import('../../../lib/metrics/aggregate')
+    const collector = fakeCollector([
+      { calls: [apiCall('AnthropicSonnet5', { input_tokens: 100, output_tokens: 50 })] },
+    ])
+    const m = computeEventMetrics(collector as never)!
+    expect(m.timePricedAttempts).toBeUndefined()
+    expect(isTimePricedStep(m)).toBe(false)
   })
 
   it('omits the whole step cost when a self-hosted attempt was not measured', async () => {

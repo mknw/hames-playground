@@ -200,6 +200,20 @@ describe('ObservabilityPanel — summary bar', () => {
     expect(costCell?.getAttribute('title')).toMatch(/cold start/)
   })
 
+  it('says so in the LABEL, not only in the tooltip, when the total is a floor', () => {
+    // The bar was the one surface where the `≥` was the only visible sign: the
+    // per-step chip changes its label and the dashboard shows a footnote.
+    const events = [
+      ev(
+        'controller_action',
+        { action: { tool_name: 'x' } },
+        { metrics: metrics({ costEur: 0.01, noCacheEur: 0.01, basis: 'time' }) },
+      ),
+    ]
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+    expect(container.textContent).toContain('Cost (floor):')
+  })
+
   it('does NOT mark a token-only session total as a floor', () => {
     const events = [
       ev(
@@ -211,6 +225,8 @@ describe('ObservabilityPanel — summary bar', () => {
     const { container } = render(() => <ObservabilityPanel events={events} />)
     expect(container.textContent).toContain('€0.25')
     expect(container.textContent).not.toContain('≥')
+    expect(container.textContent).toContain('Cost:')
+    expect(container.textContent).not.toContain('Cost (floor):')
   })
 
   it('surfaces retries when a step needed more API calls than steps', () => {
@@ -697,6 +713,37 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
     expect(cell?.getAttribute('title')).toMatch(/Tokens on it are free/)
     expect(cell?.getAttribute('title')).toMatch(/FLOOR/)
     expect(cell?.getAttribute('title')).toMatch(/cold start/)
+  })
+
+  it('keeps the floor marker on a MIXED step, without calling it compute time', () => {
+    // A step that ran on the self-hosted box and retried on Anthropic ends with
+    // `basis: 'tokens'`, and reading that alone dropped the `≥` from a figure
+    // holding a billed GPU hour. Only part of it is wall-clock, so the label
+    // stays a price — but a floor plus an exact number is still a floor.
+    const panel = openLLMRow(
+      llmCall({
+        provider: 'anthropic',
+        clientName: 'AnthropicSonnet5',
+        metrics: metrics({
+          attempts: 2,
+          costEur: 1.83,
+          noCacheEur: 1.83,
+          basis: 'tokens',
+          timePricedAttempts: 1,
+          rates: { inPerMTok: 2, outPerMTok: 10 },
+          timeRate: { eurPerHour: 1.819, durationMs: 3_600_000 },
+        }),
+      }),
+    )
+    expect(panel.textContent).toContain('Cost (step)')
+    expect(panel.textContent).not.toContain('Compute time (step)')
+    expect(panel.textContent).toContain('≥ €1.83')
+    const cell = [...panel.querySelectorAll('div[title]')].find((el) =>
+      el.textContent?.includes('€1.83'),
+    )
+    expect(cell?.getAttribute('title')).toMatch(/self-hosted GPU/)
+    expect(cell?.getAttribute('title')).toMatch(/FLOOR/)
+    expect(cell?.getAttribute('title')).toMatch(/per MTok/)
   })
 
   it('shows no price chip at all for an unpriced step, rather than €0', () => {

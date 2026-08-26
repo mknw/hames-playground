@@ -32,7 +32,7 @@ import {
   CACHE_READ_MULT,
   CACHE_WRITE_MULT,
   CLIENT_PRICING,
-  DEFAULT_USD_EUR_RATE,
+  DEFAULT_EUR_PER_USD,
   DEFAULT_VERDA_EUR_PER_HOUR,
   TIME_PRICED_CLIENT,
   estimateLlmCostEur,
@@ -85,7 +85,7 @@ describe('the time-priced client is the same one everything else means by "verda
 
 describe('token pricing → EUR', () => {
   it('converts the RATES, so the audit trail is the €/MTok applied', () => {
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'AnthropicSonnet5', { usdEurRate: 0.5 })!
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'AnthropicSonnet5', { eurPerUsd: 0.5 })!
     expect(est.basis).toBe('tokens')
     expect(est.rates).toEqual({ inPerMTok: 1.0, outPerMTok: 5.0 })
     // 1 uncached + 0.1 cache-read + 1.25 cache-write, all at €1/MTok, + €5 out
@@ -93,22 +93,22 @@ describe('token pricing → EUR', () => {
   })
 
   it('scales linearly with the conversion rate', () => {
-    const at1 = estimateLlmCostEur(ONE_MTOK_EACH, 'AnthropicHaiku45', { usdEurRate: 1 })!
-    const at2 = estimateLlmCostEur(ONE_MTOK_EACH, 'AnthropicHaiku45', { usdEurRate: 2 })!
+    const at1 = estimateLlmCostEur(ONE_MTOK_EACH, 'AnthropicHaiku45', { eurPerUsd: 1 })!
+    const at2 = estimateLlmCostEur(ONE_MTOK_EACH, 'AnthropicHaiku45', { eurPerUsd: 2 })!
     expect(at2.costEur).toBeCloseTo(at1.costEur * 2, 9)
     expect(at2.noCacheEur).toBeCloseTo(at1.noCacheEur * 2, 9)
   })
 
-  it('uses DEFAULT_USD_EUR_RATE when no rate is passed', () => {
+  it('uses DEFAULT_EUR_PER_USD when no rate is passed', () => {
     const explicit = estimateLlmCostEur(ONE_MTOK_EACH, 'AnthropicSonnet5', {
-      usdEurRate: DEFAULT_USD_EUR_RATE,
+      eurPerUsd: DEFAULT_EUR_PER_USD,
     })!
     const implied = estimateLlmCostEur(ONE_MTOK_EACH, 'AnthropicSonnet5')!
     expect(implied.costEur).toBeCloseTo(explicit.costEur, 12)
   })
 
   it('noCacheEur is the same tokens with nothing cached — the savings baseline', () => {
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'AnthropicSonnet5', { usdEurRate: 1 })!
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'AnthropicSonnet5', { eurPerUsd: 1 })!
     expect(est.noCacheEur).toBeCloseTo(3 * 2 + 10, 9)
     expect(est.noCacheEur).toBeGreaterThan(est.costEur)
   })
@@ -196,7 +196,7 @@ describe('attribution: the SELECTED client decides the model', () => {
     )!
     expect(est.basis).toBe('tokens')
     expect(est.timeRate).toBeUndefined()
-    expect(est.costEur).toBeCloseTo(2 * DEFAULT_USD_EUR_RATE, 9)
+    expect(est.costEur).toBeCloseTo(2 * DEFAULT_EUR_PER_USD, 9)
   })
 
   it('a time-priced client never gets token pricing, however many tokens it moved', () => {
@@ -217,21 +217,21 @@ describe('attribution: the SELECTED client decides the model', () => {
 })
 
 describe('the env overrides (cost-rates.server.ts)', () => {
-  const saved = { usd: process.env.USD_EUR_RATE, verda: process.env.VERDA_EUR_PER_HOUR }
+  const saved = { usd: process.env.EUR_PER_USD, verda: process.env.VERDA_EUR_PER_HOUR }
 
   afterEach(() => {
-    if (saved.usd === undefined) delete process.env.USD_EUR_RATE
-    else process.env.USD_EUR_RATE = saved.usd
+    if (saved.usd === undefined) delete process.env.EUR_PER_USD
+    else process.env.EUR_PER_USD = saved.usd
     if (saved.verda === undefined) delete process.env.VERDA_EUR_PER_HOUR
     else process.env.VERDA_EUR_PER_HOUR = saved.verda
     vi.restoreAllMocks()
   })
 
   it('reads both rates, per call, so a host change needs no rebuild', async () => {
-    const { usdEurRate, verdaEurPerHour } = await import('../../lib/cost-rates.server')
-    process.env.USD_EUR_RATE = '0.9'
+    const { eurPerUsdRate, verdaEurPerHour } = await import('../../lib/cost-rates.server')
+    process.env.EUR_PER_USD = '0.9'
     process.env.VERDA_EUR_PER_HOUR = '2.5'
-    expect(usdEurRate()).toBe(0.9)
+    expect(eurPerUsdRate()).toBe(0.9)
     expect(verdaEurPerHour()).toBe(2.5)
     // Changed again without re-importing the module:
     process.env.VERDA_EUR_PER_HOUR = '3'
@@ -239,13 +239,13 @@ describe('the env overrides (cost-rates.server.ts)', () => {
   })
 
   it('falls back to the defaults when unset or blank', async () => {
-    const { usdEurRate, verdaEurPerHour } = await import('../../lib/cost-rates.server')
-    delete process.env.USD_EUR_RATE
+    const { eurPerUsdRate, verdaEurPerHour } = await import('../../lib/cost-rates.server')
+    delete process.env.EUR_PER_USD
     delete process.env.VERDA_EUR_PER_HOUR
-    expect(usdEurRate()).toBe(DEFAULT_USD_EUR_RATE)
+    expect(eurPerUsdRate()).toBe(DEFAULT_EUR_PER_USD)
     expect(verdaEurPerHour()).toBe(DEFAULT_VERDA_EUR_PER_HOUR)
-    process.env.USD_EUR_RATE = '   '
-    expect(usdEurRate()).toBe(DEFAULT_USD_EUR_RATE)
+    process.env.EUR_PER_USD = '   '
+    expect(eurPerUsdRate()).toBe(DEFAULT_EUR_PER_USD)
   })
 
   it('warns and falls back on a non-positive or garbage rate, never renders free', async () => {
@@ -256,6 +256,35 @@ describe('the env overrides (cost-rates.server.ts)', () => {
       expect(verdaEurPerHour(), bad).toBe(DEFAULT_VERDA_EUR_PER_HOUR)
     }
     expect(warn).toHaveBeenCalledTimes(4)
+  })
+})
+
+describe('the conversion rate is named for the direction it multiplies in', () => {
+  it('is EUR_PER_USD, never the reversed name that reads as the 1.16 pair quote', () => {
+    // `positiveRate` accepts any positive number, and no sanity band wide enough
+    // to allow a real rate move would reject 1.16 — so the NAME is the guard
+    // against an operator entering the reciprocal and inflating every price in
+    // the app by ~35%. A source scan rather than a render: it also catches the
+    // reversed name coming back in a doc comment or a new module.
+    const offenders = sourceFiles('src').filter((f) =>
+      /USD_EUR_RATE|usdEurRate/.test(readFileSync(f, 'utf8')),
+    )
+    expect(offenders).toEqual([])
+    // The operator's copy of the name is the one that decides which number they
+    // type, so the example file is pinned too.
+    const envExample = readFileSync('.env.example', 'utf8')
+    expect(envExample).toMatch(/^# EUR_PER_USD=/m)
+    expect(envExample).not.toMatch(/USD_EUR_RATE/)
+  })
+
+  it('multiplies a USD list price, so 1.0 is parity and 0.86 is less', () => {
+    const listed = CLIENT_PRICING.AnthropicSonnet5
+    const parity = estimateLlmCostEur(ONE_MTOK_EACH, 'AnthropicSonnet5', { eurPerUsd: 1 })!
+    expect(parity.rates).toEqual({ inPerMTok: listed.inPerMTok, outPerMTok: listed.outPerMTok })
+    const real = estimateLlmCostEur(ONE_MTOK_EACH, 'AnthropicSonnet5', {
+      eurPerUsd: DEFAULT_EUR_PER_USD,
+    })!
+    expect(real.costEur).toBeLessThan(parity.costEur)
   })
 })
 

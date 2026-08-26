@@ -245,7 +245,7 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
 //
 //  - TOKEN-priced clients (Anthropic): the vendor publishes $/MTok, so the
 //    tables below stay in dollars — the list price is the auditable fact — and
-//    the conversion to EUR happens once, at the end, at `USD_EUR_RATE`.
+//    the conversion to EUR happens once, at the end, at `EUR_PER_USD`.
 //  - TIME-priced clients (the self-hosted GPU): billed by the wall-clock second
 //    the box is awake, at `VERDA_EUR_PER_HOUR`. Tokens on it are free.
 //
@@ -261,7 +261,7 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
  *
  * These stay in USD on purpose: it is the number Anthropic publishes, so it is
  * the number a reader can check. The EUR figure the UI shows is this × the
- * static {@link DEFAULT_USD_EUR_RATE} (or its env override).
+ * static {@link DEFAULT_EUR_PER_USD} (or its env override).
  *
  * AnthropicSonnet5 uses the INTRO pricing in force through 2026-08-31
  * (standard: 3.00 / 15.00) — update after.
@@ -295,17 +295,26 @@ export const CACHE_READ_MULT = 0.1
 /**
  * EUR per USD — a STATIC conversion, set by hand.
  *
+ * Named for the direction it multiplies in, not for the currency pair. It is
+ * `0.86`, the multiplier a USD list price is multiplied BY; the quote a reader
+ * is likelier to have to hand is its reciprocal, EUR/USD ≈ 1.16, and entering
+ * that here inflates every price in the app by about 35 % with nothing to catch
+ * it — `positiveRate` accepts any positive number, and a sanity band wide
+ * enough to allow a real rate move would still allow 1.16. The name is the
+ * guard, which is why it names the direction and not the currency pair — and
+ * why `pricing-eur.test.ts` scans the source for the reversed spelling.
+ *
  * There is no live FX lookup and there should not be one: the figure exists so
  * a spend estimate reads in the currency of the invoice, and a rate that moved
  * under the UI would make two page loads of the same conversation disagree for
  * a reason that has nothing to do with the conversation. Overridable at
- * `USD_EUR_RATE` (see `cost-rates.server.ts`) so an operator can put the rate
+ * `EUR_PER_USD` (see `cost-rates.server.ts`) so an operator can put the rate
  * their finance team uses in without a rebuild.
  *
  * 0.86 ≈ EUR/USD 1.16, the rate around 2026-08. Update it by hand; the number
  * it feeds is labelled an estimate everywhere it renders.
  */
-export const DEFAULT_USD_EUR_RATE = 0.86
+export const DEFAULT_EUR_PER_USD = 0.86
 
 /**
  * EUR per hour the self-hosted GPU is awake — the owner's figure for the Verda
@@ -354,7 +363,7 @@ export interface CostEstimateEur {
  *    it measured none, and a 0 there would read as a call that cost nothing on
  *    a box that was demonstrably awake.
  *
- * `opts.usdEurRate` / `opts.eurPerHour` default to the constants above so a
+ * `opts.eurPerUsd` / `opts.eurPerHour` default to the constants above so a
  * caller with no access to the environment still gets a sane figure; the one
  * production call site passes the env-resolved values from
  * `cost-rates.server.ts`.
@@ -362,7 +371,7 @@ export interface CostEstimateEur {
 export function estimateLlmCostEur(
   tokens: TokenBuckets,
   clientName?: string,
-  opts?: { durationMs?: number; usdEurRate?: number; eurPerHour?: number },
+  opts?: { durationMs?: number; eurPerUsd?: number; eurPerHour?: number },
 ): CostEstimateEur | undefined {
   if (clientName === TIME_PRICED_CLIENT) {
     const durationMs = opts?.durationMs
@@ -379,12 +388,12 @@ export function estimateLlmCostEur(
 
   const listed = clientName ? CLIENT_PRICING[clientName] : undefined
   if (!listed) return undefined
-  const usdEur = opts?.usdEurRate ?? DEFAULT_USD_EUR_RATE
+  const eurPerUsd = opts?.eurPerUsd ?? DEFAULT_EUR_PER_USD
   // Convert the rates, not the totals: `rates` is the audit trail the UI shows,
   // so it has to be the €/MTok the arithmetic below actually used.
   const rates = {
-    inPerMTok: listed.inPerMTok * usdEur,
-    outPerMTok: listed.outPerMTok * usdEur,
+    inPerMTok: listed.inPerMTok * eurPerUsd,
+    outPerMTok: listed.outPerMTok * eurPerUsd,
   }
   const inEur =
     (tokens.inputUncachedTokens +

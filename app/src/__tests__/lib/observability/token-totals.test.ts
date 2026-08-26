@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest'
 import type { ContextEvent } from '~/lib/harness-patterns'
 import type { EventMetrics } from '~/lib/harness-patterns/types'
 import { fmtTok, fmtEur, foldTokenTotals } from '~/lib/observability/token-totals'
-import { DEFAULT_USD_EUR_RATE } from '~/lib/settings'
+import { DEFAULT_EUR_PER_USD } from '~/lib/settings'
 
 const metrics = (m: Partial<EventMetrics> = {}): EventMetrics => ({
   inputUncachedTokens: 1000,
@@ -114,6 +114,23 @@ describe('foldTokenTotals', () => {
     expect(totals.costEur).toBeCloseTo(0.03)
   })
 
+  it('flags a MIXED step a floor too — the panel folds the same rule as the dashboard', () => {
+    // `basis` names the last priced attempt, so a step that retried from the
+    // self-hosted box onto Anthropic reads `'tokens'` while still holding a
+    // wall-clock bill. Gating on it dropped the bar's `≥` for that session.
+    const totals = foldTokenTotals([
+      ev({
+        metrics: metrics({
+          costEur: 1.83,
+          noCacheEur: 1.83,
+          basis: 'tokens',
+          timePricedAttempts: 1,
+        }),
+      }),
+    ])
+    expect(totals.timePricedCalls).toBe(1)
+  })
+
   it('leaves timePricedCalls at zero for an all-token session', () => {
     const totals = foldTokenTotals([
       ev({ metrics: metrics({ costEur: 0.02, noCacheEur: 0.05, basis: 'tokens' }) }),
@@ -131,8 +148,8 @@ describe('foldTokenTotals', () => {
       ev({ metrics: { ...metrics(), costUsd: 0.5, noCacheUsd: 1.0 } }),
     ])
     expect(totals.costKnownCalls).toBe(1)
-    expect(totals.costEur).toBeCloseTo(0.5 * DEFAULT_USD_EUR_RATE, 9)
-    expect(totals.noCacheEur).toBeCloseTo(1.0 * DEFAULT_USD_EUR_RATE, 9)
+    expect(totals.costEur).toBeCloseTo(0.5 * DEFAULT_EUR_PER_USD, 9)
+    expect(totals.noCacheEur).toBeCloseTo(1.0 * DEFAULT_EUR_PER_USD, 9)
     // No basis on a legacy stamp ⇒ not counted as a floor.
     expect(totals.timePricedCalls).toBe(0)
   })

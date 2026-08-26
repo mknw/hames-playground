@@ -13,6 +13,7 @@ import type { ContextEvent, EventMetrics } from '../../../lib/harness-patterns/t
 import {
   getEventMetrics,
   isLlmBearing,
+  isTimePricedStep,
   foldEvents,
   aggregateByPattern,
   aggregateByConversation,
@@ -21,7 +22,7 @@ import {
   emptyTotals,
   type ConversationEvents,
 } from '../../../lib/metrics/aggregate'
-import { DEFAULT_USD_EUR_RATE } from '../../../lib/settings'
+import { DEFAULT_EUR_PER_USD } from '../../../lib/settings'
 
 // ============================================================================
 // Fixtures
@@ -183,6 +184,26 @@ describe('foldEvents', () => {
     expect(s.timePricedCalls).toBe(0)
   })
 
+  it('marks a MIXED step a floor — the last attempt does not get to decide', () => {
+    // A step whose self-hosted attempt was followed by an Anthropic retry ends
+    // up with `basis: 'tokens'`, and reading that alone dropped the `≥` from a
+    // conversation holding a full billed GPU hour.
+    const s = foldEvents([
+      metered('a', { costEur: 1.83, noCacheEur: 1.83, basis: 'tokens', timePricedAttempts: 1 }),
+    ])
+    expect(s.timePricedCalls).toBe(1)
+  })
+
+  it('isTimePricedStep counts attempts, and falls back to basis for old stamps', () => {
+    // `timePricedAttempts` is the rule; events stamped before it existed carry
+    // only `basis`, and must keep the marker they were rendered with.
+    expect(isTimePricedStep(metrics({ basis: 'tokens', timePricedAttempts: 2 }))).toBe(true)
+    expect(isTimePricedStep(metrics({ basis: 'time', timePricedAttempts: 0 }))).toBe(false)
+    expect(isTimePricedStep(metrics({ basis: 'time' }))).toBe(true)
+    expect(isTimePricedStep(metrics({ basis: 'tokens' }))).toBe(false)
+    expect(isTimePricedStep(metrics({}))).toBe(false)
+  })
+
   it('converts a pre-EUR (USD) stamp at the default rate rather than dropping it', () => {
     // Persisted events predating the currency fix carry `costUsd`. Reading them
     // as unpriced would empty the dashboard for every historical conversation.
@@ -190,8 +211,8 @@ describe('foldEvents', () => {
       metered('a', { costEur: undefined, noCacheEur: undefined, costUsd: 0.5, noCacheUsd: 1 }),
     ])
     expect(s.pricedCalls).toBe(1)
-    expect(s.costEur).toBeCloseTo(0.5 * DEFAULT_USD_EUR_RATE, 10)
-    expect(s.noCacheEur).toBeCloseTo(1 * DEFAULT_USD_EUR_RATE, 10)
+    expect(s.costEur).toBeCloseTo(0.5 * DEFAULT_EUR_PER_USD, 10)
+    expect(s.noCacheEur).toBeCloseTo(1 * DEFAULT_EUR_PER_USD, 10)
     expect(s.timePricedCalls).toBe(0)
   })
 

@@ -8,46 +8,73 @@ import { Accordion } from '@ark-ui/solid/accordion'
 import type { LLMCallData } from '~/lib/harness-patterns'
 import type { EventMetrics } from '~/lib/harness-patterns/types'
 import { fmtEur } from '~/lib/observability/token-totals'
-import { stepCostEur } from '~/lib/metrics/aggregate'
+import { isTimePricedStep, stepCostEur } from '~/lib/metrics/aggregate'
 import { CodeBlock, ParsedPromptView } from './PromptView'
+
+/** The floor caveat, in the words all three time-priced tooltips end with. */
+const FLOOR_CAVEAT =
+  'A FLOOR, not the bill: the box is also paid for the idle window it stays warm ' +
+  'after the last call and for the cold start before the first, and neither is any ' +
+  "call's duration."
 
 /**
  * What the step's price chip shows, or `undefined` when the step could not be
  * priced — rendered as no chip at all rather than as €0.
  *
- * The two bases read differently on purpose. A token-priced step is an
- * ESTIMATE, and its tooltip carries the €/MTok it used and the uncached
- * baseline. A time-priced step is a FLOOR: the self-hosted box is billed for
- * every second it is awake, and the only seconds this app can see are the
- * durations of the calls themselves — not the idle scale-down window it stays
- * up for after the last one, nor the cold start it pays before the first. So
- * the label says "compute time" and the figure carries a `≥`.
+ * The bases read differently on purpose. A token-priced step is an ESTIMATE,
+ * and its tooltip carries the €/MTok it used and the uncached baseline. A
+ * time-priced step is a FLOOR: the self-hosted box is billed for every second
+ * it is awake, and the only seconds this app can see are the durations of the
+ * calls themselves — not the idle scale-down window it stays up for after the
+ * last one, nor the cold start it pays before the first. So the label says
+ * "compute time" and the figure carries a `≥`.
+ *
+ * A step can hold both (a self-hosted attempt, an Anthropic retry). Then only
+ * part of the figure is wall-clock, so the label stays "Cost (step)" — but the
+ * `≥` does NOT go away, because a floor plus an exact number is still a floor.
+ * That is why the marker comes from `isTimePricedStep` rather than from
+ * `basis`, which names only whichever attempt happened to run last.
  */
-function stepCost(m: EventMetrics): { eur: number; isFloor: boolean; title: string } | undefined {
+function stepCost(
+  m: EventMetrics,
+): { eur: number; isFloor: boolean; label: string; title: string } | undefined {
   const cost = stepCostEur(m)
   if (!cost) return undefined
-  if (m.basis === 'time' && m.timeRate) {
-    const seconds = (m.timeRate.durationMs / 1000).toFixed(1)
+  const isFloor = isTimePricedStep(m)
+  const seconds = m.timeRate ? (m.timeRate.durationMs / 1000).toFixed(1) : undefined
+  // Every attempt on the box ⇒ the whole figure is wall-clock. An event stamped
+  // before `timePricedAttempts` existed reads as it always did: basis-wide.
+  const onlyTime = isFloor && (m.timePricedAttempts ?? m.attempts) >= m.attempts
+  if (onlyTime && m.timeRate && seconds) {
     return {
       eur: cost.costEur,
-      isFloor: true,
+      isFloor,
+      label: 'Compute time (step)',
       title:
         `Billed by the second on the self-hosted GPU at €${m.timeRate.eurPerHour}/h — ` +
         `${seconds}s of measured call time. Tokens on it are free. ` +
-        `A FLOOR, not the bill: the box is also paid for the idle window it stays warm ` +
-        `after the last call and for the cold start before the first, and neither is any ` +
-        `call's duration.`,
+        FLOOR_CAVEAT,
     }
   }
   const rates = m.rates
-  return {
-    eur: cost.costEur,
-    isFloor: false,
-    title:
-      (rates
-        ? `At €${rates.inPerMTok.toFixed(2)}/€${rates.outPerMTok.toFixed(2)} per MTok (USD list price at a static conversion rate — no live FX); `
-        : '') + `uncached this call would be ${fmtEur(cost.noCacheEur)}`,
+  const tokenTitle =
+    (rates
+      ? `At €${rates.inPerMTok.toFixed(2)}/€${rates.outPerMTok.toFixed(2)} per MTok (USD list price at a static conversion rate — no live FX); `
+      : '') + `uncached this call would be ${fmtEur(cost.noCacheEur)}`
+  if (isFloor) {
+    return {
+      eur: cost.costEur,
+      isFloor,
+      label: 'Cost (step)',
+      title:
+        `Part of this step ran on the self-hosted GPU` +
+        (m.timeRate ? ` (${seconds}s at €${m.timeRate.eurPerHour}/h, tokens free)` : '') +
+        `, the rest on tokens. ` +
+        FLOOR_CAVEAT +
+        ` Token part: ${tokenTitle}.`,
+    }
   }
+  return { eur: cost.costEur, isFloor, label: 'Cost (step)', title: tokenTitle }
 }
 
 type LLMTab = 'prompt' | 'output'
@@ -165,9 +192,7 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
         <Show when={stepCost(props.llmCall.metrics!)}>
           {(cost) => (
             <div flex="~ col" gap="0.5" title={cost().title}>
-              <span text="xs ui-text-tertiary">
-                {cost().isFloor ? 'Compute time (step)' : 'Cost (step)'}
-              </span>
+              <span text="xs ui-text-tertiary">{cost().label}</span>
               <span text="sm ui-text-primary" font="mono">
                 {cost().isFloor ? '≥ ' : ''}
                 {fmtEur(cost().eur)}

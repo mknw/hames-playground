@@ -31,12 +31,30 @@
 //
 // SCALE TO ZERO. The endpoint sleeps when idle, bills only while awake, and
 // pays a cold start (container + 27B weight load) before answering the first
-// request after a sleep — measured in minutes, not seconds. Hence the
-// deliberately generous `request_timeout_ms`: the timeout has to survive a
-// cold start, because the alternative is a client that reliably fails exactly
-// the first call of every session. The cost of that generosity is that a
-// genuinely hung warm call also waits it out, which is why the flag is
-// all-or-nothing (one warm box per session) rather than per-call.
+// request after a sleep. Measured 2026-08-26: 146s for a 21-token completion
+// on a single request to a sleeping box. Hence the deliberately generous
+// `request_timeout_ms`: the timeout has to survive a cold start, because the
+// alternative is a client that reliably fails exactly the first call of every
+// session. Which is why the flag is all-or-nothing (one warm box per session)
+// rather than per-call.
+//
+// WHAT THAT GENEROSITY ACTUALLY COSTS, measured the same day and worse than
+// the "a hung warm call also waits it out" this comment used to claim. Three
+// chats sent in quick succession into a sleeping box are ONE replica's queue,
+// not three cold starts in parallel: two of them were still unanswered at
+// 600 000ms and ended as `BamlTimeoutError`, while the deployment's own
+// gateway had meanwhile answered a sibling call with
+// `504 {"error":"inference request was canceled"}` after 55s. So the platform
+// gives up on a queued request long before this timeout does, and every second
+// past that point is spent waiting for a reply that will never arrive — ten
+// minutes of it, per call, twice per turn (controller then synthesizer).
+// Lowering it is a real option and an OWNER decision, because the number
+// trades "survive a cold start" against "notice a cancelled request", and
+// nothing in this repo has measured where the platform's own ceiling sits.
+// What is NOT a judgement call, and is fixed: a turn that spends that time and
+// comes back with nothing is no longer recorded as a success (`settleTurn` in
+// `harness-patterns/harness.server.ts`), and the SSE stream no longer goes
+// byte-silent for the whole wait (`SSE_KEEPALIVE_MS` in `routes/api/events.ts`).
 client<llm> VerdaQwen {
   provider openai-generic
   options {
@@ -93,7 +111,9 @@ client<llm> VerdaQwen {
     http {
       connect_timeout_ms 30000
       // ~10 minutes: sized for the cold start described above, NOT for a
-      // healthy call (a warm turn answers in seconds).
+      // healthy call (a warm turn answers in seconds). See the SCALE TO ZERO
+      // note above before changing it — it is longer than the deployment's own
+      // request ceiling, which is a measured trade-off, not an oversight.
       request_timeout_ms 600000
     }
   }

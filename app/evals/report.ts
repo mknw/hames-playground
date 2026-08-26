@@ -11,7 +11,13 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { EvalRouting } from './client'
-import { scenarioPassed, type ScenarioResult } from './harness'
+import {
+  scenarioPassed,
+  summarizeLatency,
+  type CallSample,
+  type LatencyStats,
+  type ScenarioResult,
+} from './harness'
 
 export interface RunMeta {
   routing: EvalRouting
@@ -23,6 +29,126 @@ export interface RunMeta {
 
 function ok(pass: boolean): string {
   return pass ? '✅' : '❌'
+}
+
+/**
+ * Whether repeated prefixes get cheaper on this route — one line in the header,
+ * because it is the single biggest thing that makes the latency numbers below
+ * mean different things on different clients.
+ *
+ * Keyed by client and deliberately explicit about the unknown case. A new
+ * client's first run is exactly when nobody knows its caching posture, and a
+ * silently omitted line would read as "no caveat" rather than as "unmeasured".
+ */
+const CACHING_NOTES: Record<string, string> = {
+  // Two independent reasons, one in this repo and one on the box. In-repo:
+  // `VerdaQwen` declares no `allowed_role_metadata`, so the controller/actor
+  // templates' `cache_control` breakpoints (#122) are dropped rather than
+  // forwarded (`baml_src/verda-client.baml`). On the deployment: vLLM is
+  // started without `--enable-prefix-caching`, so there is no server-side
+  // prefix cache either (owner, 2026-08-26; may change later).
+  VerdaQwen:
+    'NONE today. The deployment runs vLLM without `--enable-prefix-caching`, and the client ' +
+    'declares no `allowed_role_metadata` so the templates’ `cache_control` breakpoints are ' +
+    'dropped — repeated long prompts pay FULL PREFILL every time. Read every number below as ' +
+    'a cold-prefill measurement, and expect no speed-up from a prompt that is mostly a prefix ' +
+    'of the previous one.',
+}
+
+const BASELINE_CACHING_NOTE =
+  'the Anthropic chains allowlist `cache_control`, so production reuses prefixes (#122). These ' +
+  'scenarios are one-shot prompts with no shared prefix, so the numbers below are uncached ' +
+  'either way.'
+
+function cachingNote(client: string | undefined): string {
+  if (client === undefined) return BASELINE_CACHING_NOTE
+  // Every Anthropic leaf inherits the chain's posture, so naming one directly
+  // with `EVAL_CLIENT` should not read as "unrecorded".
+  if (client.startsWith('Anthropic')) return BASELINE_CACHING_NOTE
+  return (
+    CACHING_NOTES[client] ??
+    `unrecorded for \`${client}\`. Find out whether this route caches prompt prefixes and add ` +
+      'it to `CACHING_NOTES` in `evals/report.ts` — without it the numbers below cannot be ' +
+      'compared against a route that does.'
+  )
+}
+
+function latencyRow(label: string[], st: LatencyStats): string {
+  return row([
+    ...label,
+    st.client,
+    `${st.calls}`,
+    `${Math.round(st.p50Ms)}`,
+    `${Math.round(st.p95Ms)}`,
+    st.outputTokens === undefined ? '—' : `${st.outputTokens}`,
+    st.tokensPerSecond === undefined ? '—' : st.tokensPerSecond.toFixed(1),
+  ])
+}
+
+/**
+ * Wall-clock and throughput, per client for the whole run and then per
+ * scenario. First-class output rather than a footnote: a new client's latency
+ * profile is one of the two things this suite exists to surface the first time
+ * it is pointed at one, and it is not knowable up front.
+ */
+function latencySection(results: ScenarioResult[]): string[] {
+  const all: CallSample[] = results.flatMap((r) => r.calls)
+  const lines = ['## Latency', '']
+  lines.push(
+    'Wall-clock per LLM CALL, attributed to the leaf client that actually served it — a chain',
+    'that falls back produces samples under both leaves rather than one blended number. `n` is',
+    'the sampled call count; percentiles are nearest-rank, so at `n = 1` p50 and p95 are the',
+    'same call and only the reliability scenario samples enough for p95 to carry its usual',
+    'meaning. `tok/s` is aggregate decode — output tokens over the wall-clock of the calls that',
+    'reported usage. Non-selected fallback attempts are included: they cost the caller the time',
+    'they took. Only calls made through the runner’s options bag are sampled — the injection',
+    'screen’s production-adapter call is not — so a scenario’s `ms` in the next table can exceed',
+    'the calls counted here. Read all of it against the caching line in the header.',
+    '',
+  )
+  if (all.length === 0) {
+    lines.push('_No LLM calls were sampled in this run._', '')
+    return lines
+  }
+
+  lines.push('### Per client — whole run', '')
+  lines.push(
+    row(['Client', 'n', 'p50 ms', 'p95 ms', 'output tok', 'tok/s']),
+    row(['---', '---:', '---:', '---:', '---:', '---:']),
+  )
+  for (const st of summarizeLatency(all)) lines.push(latencyRow([], st))
+  lines.push('')
+
+  lines.push('### Per scenario', '')
+  lines.push(
+    row(['Scenario', 'Role', 'Client', 'n', 'p50 ms', 'p95 ms', 'output tok', 'tok/s']),
+    row(['---', '---', '---', '---:', '---:', '---:', '---:', '---:']),
+  )
+  for (const r of results) {
+    const stats = summarizeLatency(r.calls)
+    if (stats.length === 0) {
+      // Printed rather than skipped: a scenario that makes no calls (the
+      // structural ones) must not read as a scenario whose calls went missing.
+      lines.push(
+        row([
+          `[${r.scenario.title}](#${r.scenario.id})`,
+          r.scenario.role,
+          '—',
+          '0',
+          '—',
+          '—',
+          '—',
+          '—',
+        ]),
+      )
+      continue
+    }
+    for (const st of stats) {
+      lines.push(latencyRow([`[${r.scenario.title}](#${r.scenario.id})`, r.scenario.role], st))
+    }
+  }
+  lines.push('')
+  return lines
 }
 
 /** `| a | b |` with pipes in cell text escaped, so a tool_args value carrying a
@@ -45,11 +171,13 @@ export function renderReport(results: ScenarioResult[], meta: RunMeta): string {
     `- **Routing:** ${meta.routing.note}`,
     `- **Scenarios:** ${passed}/${results.length} passed`,
     `- **Checks:** ${passedChecks}/${totalChecks} passed`,
+    `- **Prompt caching:** ${cachingNote(meta.routing.client)}`,
     '',
     '> Generated by `pnpm eval:harness`. These are synthetic prompts against',
     '> fixed fixtures — no user data, no live tools, no gateway. See',
     '> [`../README.md`](../README.md).',
     '',
+    ...latencySection(results),
     '## Scenarios',
     '',
     row(['', 'Scenario', 'Role', 'Checks', 'Served by', 'ms']),

@@ -115,6 +115,40 @@ as an _observation_ instead, which lands in the report but never fails the run.
 | `describe-batch-shape`                     | describe         | One summary per item with ids echoed verbatim — the contract `compactBulkData` matches results back on.                                                                                        |
 | `controller-structured-output-reliability` | controller       | N escaping-heavy controller calls, counting parse failures. Reported as a rate; the pass/fail threshold is deliberately an owner decision, so the only check is "at least one valid action".   |
 
+### Latency
+
+Every report opens with a **Latency** section: per-call wall-clock (p50 / p95)
+and aggregate decode throughput, broken out per client for the whole run and
+then per scenario. It is first-class output rather than a footnote, because a
+new client's latency profile is one of the two things nobody knows up front and
+this suite is the first thing pointed at it.
+
+Three things to know before reading a number out of it:
+
+- **The sample is collected by the runner, not by the scenarios.** `runScenario`
+  attaches a second collector to every options bag `ctx.opts` builds, so a
+  scenario can neither forget to be timed nor choose which of its calls count —
+  which is what makes the reliability scenario's N calls a real p95 sample even
+  though it reports only its first collector in the served-by column. The one
+  call outside the bag is the injection screen's production-adapter call, so
+  that scenario's `ms` exceeds the calls counted for it.
+- **Samples are attributed to the leaf client that served them**, not to the
+  client under test, and non-selected fallback attempts are included. A chain
+  that fell back shows up as two rows rather than one blended number, and the
+  attempt that failed still cost the caller its wall-clock.
+- **Percentiles are nearest-rank over `n` calls, and `n` is printed.** Most
+  scenarios make one to three calls, so read p95 there as "the slowest of a
+  handful".
+
+The header also carries a **Prompt caching** line, because whether repeated
+prefixes get cheaper is what makes the same numbers mean different things on
+different routes. It is keyed by client in `CACHING_NOTES` (`report.ts`) and
+says _unrecorded_ rather than nothing for a client nobody has recorded yet.
+`VerdaQwen` has none today, on both counts: the client declares no
+`allowed_role_metadata`, so the templates' `cache_control` breakpoints are
+dropped, and the deployment runs vLLM without `--enable-prefix-caching` — so a
+repeated long prompt pays full prefill on that route.
+
 ### Adding one
 
 Write a module under `scenarios/`, export a `Scenario`, and add it to

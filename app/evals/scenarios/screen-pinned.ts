@@ -109,13 +109,16 @@ export const screenPinnedScenario: Scenario = {
       ),
     )
 
-    // 4. Measured, not assumed: who actually served a screen call. The adapter
-    //    passes no options bag at all, so this repeats its call shape with only
-    //    a collector added — the same client selection, now observable.
+    // 4. Measured, not assumed: who actually served a screen call. The bag comes
+    //    from `ctx.opts` — the SAME seam every other scenario calls through —
+    //    and not from a hand-built `{ collector }`. That is the whole point of
+    //    the row: a hand-built bag carries no client key by construction, so
+    //    the check below would verify a constant and stay green even if
+    //    PINNED_ROLES stopped refusing the screen. Through the seam, it fails.
     const collector = new Collector('eval-screen-servedby')
     collectors.push(collector)
     const { b } = await import('../../baml_client')
-    await b.ScreenUntrustedContent('web/fetch', PAGE, { collector })
+    await b.ScreenUntrustedContent('web/fetch', PAGE, ctx.opts('screen', collector))
     const served = servedBy(collector)
     const evalClient = ctx.routing.client
     checks.push(

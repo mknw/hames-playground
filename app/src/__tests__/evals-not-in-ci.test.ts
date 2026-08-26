@@ -79,7 +79,16 @@ describe('the eval suite is not reachable from CI', () => {
     const offenders = walk(path.join(APP, 'src'))
       .filter((f) => /\.(ts|tsx)$/.test(f))
       .filter((f) => f !== 'src/__tests__/evals-not-in-ci.test.ts')
-      .filter((f) => /from\s+['"][^'"]*\/evals\//.test(readFileSync(path.join(APP, f), 'utf8')))
+      // Every import shape, not just `from '…'`: `await import('../../evals/run')`
+      // and a bare `import '../../evals/run'` both reach the module — and
+      // `evals/run.ts` calls `main()` at module scope, so either would bill
+      // eleven scenarios inside the job this guard exists to keep unbilled.
+      // `await import()` is also the shape every scenario in this suite uses.
+      .filter((f) =>
+        /(?:from|import|require)\s*\(?\s*['"][^'"]*evals\//.test(
+          readFileSync(path.join(APP, f), 'utf8'),
+        ),
+      )
     expect(offenders).toEqual([])
   })
 

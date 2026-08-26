@@ -76,13 +76,13 @@ export function recordSample(sample: LlmUsageSample, at: number = Date.now()): v
   //
   // And only the SWITCHED roles, unlike the counters above and below, which
   // count every call. The latency is read as a comparison between the two
-  // switch positions, and `router` / `describe` / `screen` / `planner` run on
-  // Anthropic in both — so counting them would leave each window holding a
-  // different role mix: on a verda-tier turn the heavy calls land in the
-  // `verda` window while that same turn's cheap side-roles land in the
-  // `anthropic` one. Filtering here rather than in the store keeps the store's
-  // job "median of what it was given" and puts the eligibility rule next to the
-  // map it comes from.
+  // switch positions, so a function whose client does not follow the switch
+  // would leave each window holding a different role mix and a user would read
+  // that as a model difference. Since 2026-08-26 that is exactly ONE function:
+  // `ScreenUntrustedContent` runs on Anthropic in both positions (SD-4). The
+  // filter is here rather than in the store so the store's job stays "median of
+  // what it was given" and the eligibility rule sits next to the map it comes
+  // from.
   if (sample.durationMs !== undefined && TIER_SWITCHED_FUNCTIONS.has(sample.functionName)) {
     noteCallLatency(tierOfSample(sample), sample.durationMs)
   }

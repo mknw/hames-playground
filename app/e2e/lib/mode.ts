@@ -20,18 +20,23 @@
  * `app/evals/README.md` draws for the eval runner and this suite has no reason
  * to cross.
  *
- * WHAT LIVE MODE STILL BILLS, stated rather than implied. `E2E_LIVE=verda` is
- * not "no Anthropic calls": the tier switch moves exactly the roles in
- * `VERDA_CLIENT_BY_ROLE`, so every verda-tier turn ALSO makes its `router`,
- * `describe`, `screen`, `planner` and title calls on the Anthropic chains they
- * declare. That is unavoidable — it is what the shipped tier does, and a suite
- * that avoided it would be measuring a route the app does not take. What IS
- * avoidable is running each scenario a second time with the switch in the
- * anthropic position, which would put the controller / critic / synthesizer
- * there too and roughly double the bill for no live-route information. So the
- * per-tier legs collapse to the self-hosted tier in live mode — see
- * {@link TIERS}, which is the single definition all three multi-tier scenarios
- * read.
+ * WHAT LIVE MODE STILL BILLS, stated rather than implied. `E2E_LIVE=verda` was
+ * never "no Anthropic calls", and as of the 2026-08-26 widening it is very
+ * nearly that: the tier switch moves exactly the roles in
+ * `VERDA_CLIENT_BY_ROLE`, which is now every role except `screen`. So a live
+ * run bills Anthropic only for the injection screen — and no scenario here
+ * triggers one, because no agent enables the opt-in LLM screen. The bill moved
+ * rather than shrank: `router`, `planner`, the title and every describe call
+ * now land on the self-hosted box, which is more traffic through a
+ * single-replica deployment than the pre-widening shape, and the reason the
+ * burst discipline above matters more than it did.
+ *
+ * What is still avoidable is running each scenario a second time with the
+ * switch in the anthropic position, which would put every one of those roles
+ * on the metered API and roughly double the bill for no live-route
+ * information. So the per-tier legs collapse to the self-hosted tier in live
+ * mode — see {@link TIERS}, which is the single definition all three
+ * multi-tier scenarios read.
  */
 
 export type E2eMode = 'hermetic' | 'live-verda'

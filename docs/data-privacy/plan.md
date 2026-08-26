@@ -116,9 +116,11 @@ Two things follow that _are_ in our control:
   materially changes the risk picture, and is a contract setting rather than a
   code one.
 
-**Update (2026-08-25) — a self-hosted route now exists, opt-in and not default.**
-`USE_VERDA_INFERENCE=1` re-points the controller / actor / critic / synthesizer
-roles at the company's own Qwen deployment on a Verda (DataCrunch) GPU
+**Update (2026-08-25, widened 2026-08-26) — a self-hosted route now exists,
+and it now covers every conversational role.** A verda tier decision — the
+`USE_VERDA_INFERENCE=1` deployment default or a per-user header switch —
+re-points controller / actor / critic / synthesizer / router / planner /
+describe at the company's own Qwen deployment on a Verda (DataCrunch) GPU
 (`baml_src/verda-client.baml`). Read against the paragraph above: no
 configuration still sends a prompt to Groq, OpenRouter or OpenAI, and the new
 route moves prompts _off_ a third-country processor rather than onto one, so it
@@ -126,12 +128,24 @@ cuts the exposure this finding is about rather than widening it. Three caveats
 belong in the same breath, because each is the kind of thing this doc exists to
 stop being assumed:
 
-- The flag is **not** a "no prompt leaves the building" switch. `router`,
-  `describe`, `screen` and `planner` stay on Anthropic while it is on, and
-  `describe` is the role handed `tool_result` content verbatim — i.e. exactly
-  the mail and file bodies "The part that changes the risk profile" is about.
-  Whether those roles should follow is an open owner decision, and the role map
-  in `clients.server.ts` is where it would be made.
+- The flag is **not** a "no prompt leaves the building" switch, though it is
+  much closer to one than this doc first recorded. The open owner decision named
+  here — whether `router`, `describe` and `planner` should follow — was **made
+  on 2026-08-26, and they did**: `describe` is the role handed `tool_result`
+  content verbatim, i.e. exactly the mail and file bodies "The part that changes
+  the risk profile" is about, and leaving it on Anthropic while calling the tier
+  confidential was the wrong way round. `router` went with it (it sees the raw
+  user message) and `planner` with them.
+  What remains on Anthropic in both tier positions is **`screen`** — the opt-in
+  prompt-injection classifier — and it is not a leftover: a screen is only worth
+  running on a model that cannot be talked out of reporting by the content it
+  reviews and that copies matched spans verbatim, and the self-hosted model is
+  unmeasured on both (SA-M5). The residual exposure is therefore narrow and
+  specific: for an agent with the screen enabled, up to 20 000 characters of
+  **fetched third-party content** per guarded tool result reach Anthropic
+  whatever tier the chat is on. No agent enables it today. Moving it is a
+  distinct owner decision and wants a measurement first, not a map edit; the
+  role map in `clients.server.ts` is where it would be made.
 - The **infrastructure** is company-controlled, which is a claim about hosting,
   not a completed Art. 28 / Chapter V analysis: DataCrunch is still a hosting
   provider with its own contract, location and sub-processors, and this doc has

@@ -7,9 +7,11 @@
  *
  * The failures worth pinning, in the order they would ship:
  *   - a scope that widens the role set. The switch must move EXACTLY the roles
- *     `USE_VERDA_INFERENCE` moved; `screen` in particular must stay on
- *     Anthropic in BOTH positions (SA-M5), because a switch is the easiest
- *     place to drag the injection screen somewhere unmeasured.
+ *     `USE_VERDA_INFERENCE` moved; `screen` must stay on Anthropic in BOTH
+ *     positions (SA-M5), because a switch is the easiest place to drag the
+ *     injection screen somewhere unmeasured — and since the 2026-08-26
+ *     widening it is the ONLY role holding that line, on the same BAML chain
+ *     as a `describe` role that did move.
  *   - the `'anthropic'` position failing to *undo* the deployment default. A
  *     user who opts out while `USE_VERDA_INFERENCE=1` must actually leave.
  *   - a scope leaking past its own callback, which would make one user's choice
@@ -32,14 +34,17 @@ const ENV_KEYS = [
   'VERDA_INFERENCE_API_KEY',
 ] as const
 
-/** The roles the map routes, and the ones that deliberately never move. */
-const ROUTED: BamlRole[] = ['controller', 'critic', 'compactExecution']
-const UNROUTED: [BamlRole, string][] = [
-  ['planner', 'PlannerAnthropic'],
-  ['router', 'RouterAnthropic'],
-  ['describe', 'DescribeAnthropic'],
-  ['screen', 'DescribeAnthropic'],
+/** The roles the map routes, and the one that deliberately never moves.
+ *  `router` / `planner` / `describe` joined ROUTED on 2026-08-26. */
+const ROUTED: BamlRole[] = [
+  'controller',
+  'critic',
+  'compactExecution',
+  'router',
+  'planner',
+  'describe',
 ]
+const UNROUTED: [BamlRole, string][] = [['screen', 'DescribeAnthropic']]
 
 let saved: Record<string, string | undefined>
 
@@ -81,7 +86,7 @@ describe('runWithInferenceTier — both positions reach the right override', () 
     })
   })
 
-  it('the verda position leaves router, describe, screen and planner alone', async () => {
+  it('the verda position leaves the injection screen — and only it — alone', async () => {
     const { runWithInferenceTier, clientOverrideFor, resolveClientForRole } = await load()
 
     await runWithInferenceTier('verda', async () => {
@@ -93,6 +98,9 @@ describe('runWithInferenceTier — both positions reach the right override', () 
       // the injection screen is only worth running on a model that cannot be
       // talked out of reporting, and this switch is a user-facing control.
       expect(resolveClientForRole('screen')).toBe('DescribeAnthropic')
+      // Paired with its neighbour on the same BAML chain, which DID move — so
+      // the line above is a real difference rather than a restatement.
+      expect(resolveClientForRole('describe')).toBe('VerdaQwen')
     })
   })
 
@@ -127,8 +135,11 @@ describe('runWithInferenceTier — both positions reach the right override', () 
 
     await runWithInferenceTier('verda', async () => {
       expect(getContextWindow(resolveClientForRole('controller'))).toBe(131_072)
-      // …and the roles that stayed put keep sizing against theirs.
-      expect(getContextWindow(resolveClientForRole('router'))).toBe(200_000)
+      // …including the describe role, which sizes `compactBulkData`'s batches
+      // and the retriever's history trim.
+      expect(getContextWindow(resolveClientForRole('describe'))).toBe(131_072)
+      // …and the role that stayed put keeps sizing against Anthropic's.
+      expect(getContextWindow(resolveClientForRole('screen'))).toBe(200_000)
     })
   })
 })

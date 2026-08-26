@@ -183,10 +183,13 @@ export function extractLLMCallData(
  * *observability* coverage are not the same set. A call that produces no
  * `LLMCallData` event — every describe-tier call, the injection screen — still
  * spent tokens on a client, and leaving those out does not merely lose detail:
- * describe and screen are Anthropic-only roles, so their absence from the
- * denominator made the header's "on-prem %" read HIGHER than the truth. Use
- * {@link withUsageAccounting} at any site that has no other reason to hold a
- * collector.
+ * it biases the header's "on-prem %" in whichever direction the missing calls
+ * would have counted. When those two roles were both Anthropic-only that bias
+ * had one sign (the share read HIGHER than the truth). Since 2026-08-26
+ * `describe` moves with the tier and `screen` does not, so the sign now
+ * depends on the tier a turn ran on — which is a reason to count them, not a
+ * reason to reason about it. Use {@link withUsageAccounting} at any site that
+ * has no other reason to hold a collector.
  *
  * `metrics` is passed in by the two extractors, which have already computed it;
  * everyone else lets this recompute from the collector.
@@ -1070,11 +1073,14 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData 
 
     const variables = { user_message, intent, tools, context }
 
-    // `PlannerAnthropic` — what planner.baml declares. The retry below is the
-    // whole failure policy: this call runs ONCE per chain, over the largest
-    // tool catalog in the repo, and a throw here means the chain runs unplanned.
-    const baseOpts = collector ? { collector } : {}
-    const hasBaseOpts = collector !== undefined
+    // `PlannerAnthropic` — what planner.baml declares — unless a verda-tier
+    // run overrides it per call. The retry below is the whole failure policy:
+    // this call runs ONCE per chain, over the largest tool catalog in the repo,
+    // and a throw here means the chain runs unplanned. That failure policy is
+    // why the planner was held off the self-hosted box until 2026-08-26; it is
+    // unchanged, and it now applies on whichever client the tier picked.
+    const baseOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('planner') }
+    const hasBaseOpts = Object.keys(baseOpts).length > 0
     let plan: PlanResult
     try {
       plan = hasBaseOpts
@@ -1419,8 +1425,9 @@ export function createCriticAdapter(): CriticFnWithLLMData {
  *
  * The collector exists only for accounting — nothing here reads it, and this
  * call emits no `LLMCallData` event. See {@link withUsageAccounting}: describe
- * is the repo's highest-frequency role and an Anthropic-only one, so an
- * uncounted describe call biases the header's on-prem share upward.
+ * is the repo's highest-frequency role, so an uncounted describe call biases
+ * the header's on-prem share by more than any other single role. Since
+ * 2026-08-26 it is also a role a tier decision MOVES, hence the override.
  */
 export async function describeToolResultOp(
   tool: string,
@@ -1431,7 +1438,10 @@ export async function describeToolResultOp(
   try {
     const { b } = await import('../../../baml_client')
     return await withUsageAccounting('ResultDescribe', (opts) =>
-      b.ResultDescribe(tool, toolArgs, reasoning, result, opts),
+      b.ResultDescribe(tool, toolArgs, reasoning, result, {
+        ...opts,
+        ...clientOverrideFor('describe'),
+      }),
     )
   } catch {
     return ''
@@ -1478,7 +1488,7 @@ export async function describeToolResultsBatchOp(
     }))
     // Collector for accounting only — see `describeToolResultOp`.
     const batch = await withUsageAccounting('ResultDescribeBatch', (opts) =>
-      b.ResultDescribeBatch(targets, opts),
+      b.ResultDescribeBatch(targets, { ...opts, ...clientOverrideFor('describe') }),
     )
     for (const entry of batch?.summaries ?? []) {
       const summary = entry?.summary?.trim()
@@ -1555,6 +1565,15 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     // cannot become one: `clientOverrideFor('screen')` has no call site
     // anywhere, which is what keeps this call on `DescribeAnthropic` in every
     // tier position (SA-M5) — structurally, not by a map's omission.
+    //
+    // As of 2026-08-26 that is doing real work rather than restating the map:
+    // `describe` MOVED to the self-hosted box and this call, two functions
+    // away in the same file and on the same chain in BAML, did not. Adding a
+    // spread here is all it would take to undo a deliberate security
+    // exception, so `clients-verda.test.ts` scans `src/lib` and fails if this
+    // literal ever appears. The consequence is stated where the exception is
+    // (`VERDA_CLIENT_BY_ROLE`): on a verda-tier turn, this is the one call
+    // still handing untrusted fetched content to Anthropic.
     const verdict = await withUsageAccounting('ScreenUntrustedContent', (opts) =>
       b.ScreenUntrustedContent(source, body, opts),
     )

@@ -153,30 +153,42 @@ describe('recordSample — the latency window', () => {
 
   it('counts only the roles a tier decision moves, so the two windows compare', () => {
     // The number sits beside the switch and is read as "this tier vs the other
-    // one". `router`, `describe`, `screen` and `planner` run on Anthropic in
-    // BOTH positions, so counting them would leave the anthropic window holding
-    // a different role mix from the verda one — and in a verda-default
-    // deployment, NOTHING BUT the cheap side-roles. A user would then read a
-    // role-mix difference as a model difference.
-    recordSample({ functionName: 'Router', clientName: 'RouterAnthropic', durationMs: 300 })
-    recordSample({
-      functionName: 'ResultDescribe',
-      clientName: 'DescribeAnthropic',
-      durationMs: 400,
-    })
+    // one", so a function whose client does NOT follow the switch would leave
+    // the two windows holding different role mixes and a user would read that
+    // as a model difference.
+    //
+    // Since the 2026-08-26 widening exactly one function is in that position:
+    // `ScreenUntrustedContent` runs on Anthropic in both positions (SD-4 /
+    // SA-M5), so it is the only one filtered out. `Router`, `ResultDescribe`
+    // and `Planner` moved into the window with their roles.
     recordSample({
       functionName: 'ScreenUntrustedContent',
       clientName: 'DescribeAnthropic',
       durationMs: 500,
     })
-    recordSample({ functionName: 'Planner', clientName: 'PlannerAnthropic', durationMs: 9000 })
     expect(tierLatency('anthropic')).toEqual({ p50Ms: null, samples: 0 })
 
-    // ...and all four switched functions do land, on whichever tier ran them.
-    for (const fn of ['LoopController', 'ActorController', 'Critic', 'Synthesize']) {
+    // ...and every switched function lands, on whichever tier ran it. Listed
+    // rather than derived from TIER_SWITCHED_FUNCTIONS on purpose: a test that
+    // reads the same set the code filters on would pass whatever that set said.
+    const switched = [
+      'LoopController',
+      'ActorController',
+      'Critic',
+      'Synthesize',
+      'Router',
+      'Planner',
+      'ResultDescribe',
+      'ResultDescribeBatch',
+      'GenerateConversationTitle',
+      'CompactIntent',
+      'RetrieveQuery',
+      'ReferenceSelector',
+    ]
+    for (const fn of switched) {
       recordSample({ functionName: fn, clientName: 'AnthropicSonnet5', durationMs: 1000 })
     }
-    expect(tierLatency('anthropic').samples).toBe(4)
+    expect(tierLatency('anthropic').samples).toBe(switched.length)
   })
 
   it('records the wait for a call that spent no tokens', () => {

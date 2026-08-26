@@ -16,16 +16,20 @@
  *
  * - It is **per call, not per turn.** A turn makes several calls; the number
  *   here is not how long a message takes to answer.
- * - It is **the switched roles only** — `LoopController`, `ActorController`,
- *   `Critic`, `Synthesize`, i.e. `TIER_SWITCHED_FUNCTIONS` in
+ * - It is **the switched roles only** — `TIER_SWITCHED_FUNCTIONS` in
  *   `harness-patterns/clients.server.ts`. This is what makes the two tiers'
  *   figures comparable, which is the whole point of a number that sits beside
- *   a switch: `router`, `describe`, `screen` and `planner` run on Anthropic in
- *   BOTH positions, so counting them would leave each window holding a
- *   different role mix — on a verda-tier turn the heavy calls land in the
- *   `verda` window while that same turn's cheap side-roles land in the
- *   `anthropic` one, and a user comparing the two medians would read a role-mix
- *   difference as a model difference. The filter is at the recording site
+ *   a switch: a function that runs on Anthropic in BOTH positions would leave
+ *   each window holding a different role mix, and a user comparing the two
+ *   medians would read that as a model difference. Since the 2026-08-26
+ *   widening exactly one function is in that position — `ScreenUntrustedContent`
+ *   (SD-4) — and everything else a turn calls is in the window.
+ *
+ *   That widening changed what the number MEANS without changing what it
+ *   promises. It used to be four heavy calls; it is now twelve functions, nine
+ *   of them short. The median dropped accordingly — same route, different mix —
+ *   so a figure read against a pre-2026-08-26 note will look like a speed-up
+ *   that did not happen. The filter is at the recording site
  *   (`usage-recorder.server.ts`), not here: this module is "the median of what
  *   it was given". The tooltip says "model call", not "reply".
  * - **A cold start is inside it.** The self-hosted deployment scales to zero,

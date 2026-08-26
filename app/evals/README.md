@@ -46,12 +46,12 @@ it), so they cannot rot into unbuildable code unnoticed.
 
 ## Knobs
 
-| Env var              | Default                  | What it does                                                                                                                                                                                                                              |
-| -------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EVAL_CLIENT`        | unset                    | The BAML client to route through, e.g. `VerdaQwen`. Unset (or `default`) is the **baseline**: no override anywhere, so every function runs the Anthropic chain it declares in `baml_src/`.                                                |
-| `EVAL_ROLES`         | the production Verda map | Comma-separated roles `EVAL_CLIENT` applies to. Default is `controller,actor,critic,compactExecution` — the same set `USE_VERDA_INFERENCE` moves in production, so a plain run measures the shipped route rather than a hypothetical one. |
-| `EVAL_RELIABILITY_N` | `20`                     | Calls in the structured-output reliability sample. `0` skips them, for a quick structural-only pass.                                                                                                                                      |
-| `EVAL_ONLY`          | unset                    | Comma-separated scenario ids, to re-run one thing. Unknown ids throw.                                                                                                                                                                     |
+| Env var              | Default                  | What it does                                                                                                                                                                                                                                                                                                                                                 |
+| -------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `EVAL_CLIENT`        | unset                    | The BAML client to route through, e.g. `VerdaQwen`. Unset (or `default`) is the **baseline**: no override anywhere, so every function runs the Anthropic chain it declares in `baml_src/`.                                                                                                                                                                   |
+| `EVAL_ROLES`         | the production Verda map | Comma-separated roles `EVAL_CLIENT` applies to. Default is `controller,actor,critic,compactExecution,router,describe` — the same set a verda tier decision moves in production (widened 2026-08-26), so a plain run measures the shipped route rather than a hypothetical one. Set it to NARROW a run while bisecting; `screen` is refused whatever it says. |
+| `EVAL_RELIABILITY_N` | `20`                     | Calls in the structured-output reliability sample. `0` skips them, for a quick structural-only pass.                                                                                                                                                                                                                                                         |
+| `EVAL_ONLY`          | unset                    | Comma-separated scenario ids, to re-run one thing. Unknown ids throw.                                                                                                                                                                                                                                                                                        |
 
 The script sets `BAML_LOG=warn` so the console stays readable; override it
 (`BAML_LOG=info pnpm eval:harness`) to see the rendered prompts and raw replies
@@ -81,7 +81,12 @@ client.
 
 ### The screen is never re-pointed
 
-`screen` is in `PINNED_ROLES` and no combination of env vars moves it. The
+`screen` is in `PINNED_ROLES` and no combination of env vars moves it — and
+since 2026-08-26 that is the whole of the difference between it and `describe`,
+which a default run now DOES re-point, having followed the production map onto
+the self-hosted box. The two share one chain in `baml_src/` and sit one role
+apart in `client.ts`; a default run measures them on opposite sides, which is
+what the role split was for. The
 injection screen resolves through a role of its **own** rather than riding
 `describe` (`SD-4` / `SA-M5`) because a screen is only worth running on a model
 that cannot be talked out of reporting by the content it reviews, and that

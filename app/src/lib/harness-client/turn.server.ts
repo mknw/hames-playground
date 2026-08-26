@@ -158,9 +158,18 @@ export async function runTurnAndPersist(
   // stays there in BOTH switch positions, because a screen is only worth
   // running on a model that cannot be talked out of reporting by the content it
   // reviews and that copies matched spans verbatim (SA-M5, and the note on
-  // `CLIENT_BY_ROLE`). `router` and `describe` likewise stay Anthropic in both
-  // positions — the switch moves exactly the roles `VERDA_CLIENT_BY_ROLE`
-  // lists, which is the same set `USE_VERDA_INFERENCE` moved before it.
+  // `CLIENT_BY_ROLE`). Since 2026-08-26 it is the ONLY role that stays — the
+  // switch moves exactly the roles `VERDA_CLIENT_BY_ROLE` lists, which is now
+  // every other one, `router` and `describe` included. The BAML-level hazard is
+  // therefore sharper than it was, not softer: `screen` and `describe` still
+  // name the same chain in `baml_src/`, and re-pointing that chain would move
+  // the screen the one way this switch cannot.
+  //
+  // The scope also covers what the turn STARTS and does not await — the title
+  // and the detached `compactAndSave` below both make describe-tier calls, and
+  // both keep this tier through their continuation (see the note at
+  // `compactAndSave`). Before the widening that was bookkeeping; now it decides
+  // which machine this turn's tool results are summarized on.
   //
   // Resolved here rather than at each entry point so all three modes
   // (interactive, triggered, approval) get it from one place, and a failure to

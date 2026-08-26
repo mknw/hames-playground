@@ -10,9 +10,11 @@
  *   - flag unset ⇒ NOTHING changes. Every role still resolves to its Anthropic
  *     chain and no options bag gains a `client` key. This is the whole default
  *     posture, so it is asserted role by role rather than in aggregate.
- *   - flag set ⇒ exactly the mapped roles move, and the unmapped ones (router,
- *     describe, screen, planner) provably do NOT — a widening slip is the kind
- *     of change that reads as harmless in a diff.
+ *   - flag set ⇒ exactly the mapped roles move, which since 2026-08-26 is every
+ *     conversational role, and the ONE unmapped one (`screen`) provably does
+ *     NOT. The widening slip that reads as harmless in a diff now has a single
+ *     target, so `screen` is asserted twice over: through the map, and through
+ *     a source scan proving no call site can spread an override for it.
  *   - the flag is `'1'`, not truthiness. `USE_VERDA_INFERENCE=0` used to be the
  *     classic way to switch a feature ON by accident.
  *   - the trim window follows the override. A routed role that keeps sizing its
@@ -56,16 +58,23 @@ const ALL_ROLES: BamlRole[] = [
   'screen',
 ]
 
-/** The roles the map routes, and the Anthropic chain each one leaves behind. */
+/** The roles the map routes, and the Anthropic chain each one leaves behind.
+ *  `router` / `planner` / `describe` joined on 2026-08-26 (the owner's call:
+ *  the router sees the raw user message and describe sees tool results
+ *  verbatim, so holding them back left the private tier shipping the two
+ *  payloads it exists to keep). */
 const ROUTED: Partial<Record<BamlRole, string>> = {
   controller: 'ControllerAnthropic',
   critic: 'CriticAnthropic',
   compactExecution: 'SynthesizerAnthropic',
-}
-const UNROUTED: Partial<Record<BamlRole, string>> = {
-  planner: 'PlannerAnthropic',
   router: 'RouterAnthropic',
+  planner: 'PlannerAnthropic',
   describe: 'DescribeAnthropic',
+}
+/** The exception, and the whole of it. `screen` is a security control's client
+ *  (SD-4 / SA-M5), not a routing preference, and moving it is a decision the
+ *  owner has not made. */
+const UNROUTED: Partial<Record<BamlRole, string>> = {
   screen: 'DescribeAnthropic',
 }
 const roles = (map: Partial<Record<BamlRole, string>>): [BamlRole, string][] =>
@@ -119,7 +128,7 @@ describe('USE_VERDA_INFERENCE unset — the default posture is untouched', () =>
 describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
   beforeEach(enable)
 
-  it('routes controller, critic and compactExecution to VerdaQwen', async () => {
+  it('routes every conversational role to VerdaQwen', async () => {
     const { resolveClientForRole, clientOverrideFor, verdaInferenceEnabled } = await load()
 
     expect(verdaInferenceEnabled()).toBe(true)
@@ -129,7 +138,7 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
     }
   })
 
-  it('leaves router, describe, screen and planner on Anthropic', async () => {
+  it('leaves the injection screen — and only it — on Anthropic', async () => {
     const { resolveClientForRole, clientOverrideFor } = await load()
 
     for (const [role, chain] of roles(UNROUTED)) {
@@ -137,8 +146,12 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
       expect(resolveClientForRole(role)).toBe(chain)
     }
     // SA-M5 in the one place it could regress silently: the injection screen
-    // must not follow `describe` — or anything else — onto an unmeasured model.
+    // must not follow `describe` — which HAS moved — onto an unmeasured model.
     expect(resolveClientForRole('screen')).toBe('DescribeAnthropic')
+    // …and `describe` really did move, so the assertion above is a difference
+    // between two roles on the same BAML chain rather than a restatement of a
+    // posture nothing has tested.
+    expect(resolveClientForRole('describe')).toBe('VerdaQwen')
   })
 
   it('trims Verda-routed prompts against the 131K server window, not 200K', async () => {
@@ -149,7 +162,12 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
     // rejected outright, so this is the difference between "the flag works"
     // and "the flag routes to a client that refuses every long turn".
     expect(getContextWindow(resolveClientForRole('controller'))).toBe(131_072)
-    expect(getContextWindow(resolveClientForRole('router'))).toBe(200_000)
+    // The describe role trims against the same server ceiling now that it
+    // moves; `compactBulkData` and the retriever both size off this.
+    expect(getContextWindow(resolveClientForRole('describe'))).toBe(131_072)
+    // The screen is the one role still sized for Anthropic's window, because it
+    // is the one role still calling it.
+    expect(getContextWindow(resolveClientForRole('screen'))).toBe(200_000)
   })
 })
 
@@ -250,10 +268,54 @@ describe('the switched-function set follows the routed roles', () => {
     expect(Object.keys(SWITCHED_FUNCTIONS_BY_ROLE).sort()).toEqual(Object.keys(ROUTED).sort())
     expect([...TIER_SWITCHED_FUNCTIONS].sort()).toEqual([
       'ActorController',
+      'CompactIntent',
       'Critic',
+      'GenerateConversationTitle',
       'LoopController',
+      'Planner',
+      'ReferenceSelector',
+      'ResultDescribe',
+      'ResultDescribeBatch',
+      'RetrieveQuery',
+      'Router',
       'Synthesize',
     ])
+    // The screen is absent, and that is the whole point of the filter: it runs
+    // on Anthropic in BOTH positions, so its duration is the one number that
+    // would not compare.
+    expect(TIER_SWITCHED_FUNCTIONS.has('ScreenUntrustedContent')).toBe(false)
+  })
+
+  it('lists every function that declares the describe chain, not a subset', async () => {
+    // The `describe` array in `SWITCHED_FUNCTIONS_BY_ROLE` is a second copy of
+    // a list whose home is `baml_src/anthropic-only.baml`, and a copy that can
+    // silently go short is worse than none: a seventh describe function added
+    // to BAML and forgotten there would keep running on Anthropic through a
+    // turn the user asked to keep on the box, with nothing red. So the list is
+    // derived from the .baml sources here and compared.
+    //
+    // `screen` shares the chain in BAML (the separation lives only in
+    // `CLIENT_BY_ROLE`), so `injection-screen.baml` is excluded BY FILE — the
+    // exclusion is the assertion, not an accounting convenience.
+    const bamlDir = path.resolve(process.cwd(), 'baml_src')
+    const declaringDescribe: string[] = []
+    for (const entry of readdirSync(bamlDir)) {
+      if (!entry.endsWith('.baml') || entry === 'injection-screen.baml') continue
+      const src = readFileSync(path.join(bamlDir, entry), 'utf8')
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('//'))
+        .join('\n')
+      // `function Name(...) -> T { client DescribeAnthropic` — the client line
+      // is what routes the call, so the function is found through it.
+      for (const m of src.matchAll(/function\s+(\w+)\s*\([\s\S]*?\bclient\s+(\w+)/g)) {
+        if (m[2] === 'DescribeAnthropic') declaringDescribe.push(m[1])
+      }
+    }
+    const { SWITCHED_FUNCTIONS_BY_ROLE } = await load()
+    expect(declaringDescribe.sort()).toEqual([...SWITCHED_FUNCTIONS_BY_ROLE.describe!].sort())
+    // Guard against a regex that matched nothing: the comparison above would
+    // then pass only if the map were empty too.
+    expect(declaringDescribe).toHaveLength(6)
   })
 
   it('is the same set whether the flag is on or off', async () => {
@@ -280,6 +342,33 @@ describe('every routed role has a wired call site', () => {
     return out
   }
 
+  /**
+   * Source with comments removed.
+   *
+   * Load-bearing, not tidiness: `baml-adapters.server.ts` DISCUSSES
+   * `clientOverrideFor('screen')` at length — explaining that it has no call
+   * site — and a scan that reads prose cannot tell a spread from an
+   * explanation of why there isn't one. It cut both ways: the "every routed
+   * role is wired" test below would also pass on a role that appears only in a
+   * comment, which is exactly the reads-like-routing-changes-nothing failure it
+   * exists to catch.
+   *
+   * A `//` inside a string literal (a URL) truncates that line early. Nothing
+   * in this corpus spreads an override after a URL on the same line, and the
+   * failure mode is a LOUD one — the role reads as unwired — not a silent pass.
+   */
+  function stripComments(src: string): string {
+    return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  }
+
+  /** Every .ts under src/lib, comments stripped, as one string. */
+  function corpus(): string {
+    return sources(path.resolve(process.cwd(), 'src/lib'))
+      .filter((f) => !f.endsWith('clients.server.ts'))
+      .map((f) => stripComments(readFileSync(f, 'utf8')))
+      .join('\n')
+  }
+
   it('spreads clientOverrideFor(role) somewhere in src/lib for each routed role', async () => {
     enable()
     const { clientOverrideFor } = await load()
@@ -288,12 +377,72 @@ describe('every routed role has a wired call site', () => {
     // trivially over zero roles.
     expect(routed.length).toBeGreaterThanOrEqual(3)
 
-    const corpus = sources(path.resolve(process.cwd(), 'src/lib'))
-      .filter((f) => !f.endsWith('clients.server.ts'))
-      .map((f) => readFileSync(f, 'utf8'))
-      .join('\n')
-
-    const unwired = routed.filter((role) => !corpus.includes(`clientOverrideFor('${role}')`))
+    const code = corpus()
+    const unwired = routed.filter((role) => !code.includes(`clientOverrideFor('${role}')`))
     expect(unwired).toEqual([])
+  })
+
+  it('spreads it in every FILE that calls a routed function, not just one', async () => {
+    // The test above greps once per ROLE, which is exactly as strong as the
+    // role with one call site. `describe` has SIX, spread over five files: four
+    // of them could lose their spread and it would stay green there, and the
+    // e2e tier scenario only ever exercises whichever describe path a given
+    // turn took (a one-result turn takes the single-item call, never the
+    // batch). So this checks per FILE.
+    //
+    // Per file rather than per call, deliberately. The adapters render each
+    // call TWICE — `hasOpts ? b.X(…, opts) : b.X(…)` — because the generated
+    // functions take their arguments positionally and an empty `{}` in the
+    // trailing slot is not the same as passing nothing (#154). The
+    // no-options branch is correct and a per-call rule would flag it. What
+    // cannot be legitimate is a file that reaches a routed function and never
+    // mentions the override at all.
+    //
+    // The two describe sites that SHARE a file (`ResultDescribe` and
+    // `ResultDescribeBatch`, both in `baml-adapters.server.ts`) are therefore
+    // not separated here; `baml-adapters.test.ts` asserts the options bag of
+    // each one individually.
+    enable()
+    const { SWITCHED_FUNCTIONS_BY_ROLE } = await load()
+
+    const missing: string[] = []
+    let callingFiles = 0
+    for (const file of sources(path.resolve(process.cwd(), 'src/lib'))) {
+      if (file.endsWith('clients.server.ts')) continue
+      const code = stripComments(readFileSync(file, 'utf8'))
+      for (const [role, fns] of Object.entries(SWITCHED_FUNCTIONS_BY_ROLE)) {
+        const calls = (fns as readonly string[]).filter((fn) => code.includes(`b.${fn}(`))
+        if (calls.length === 0) continue
+        callingFiles += 1
+        if (!code.includes(`clientOverrideFor('${role}')`)) {
+          missing.push(
+            `${path.basename(file)} calls ${calls.join(', ')} without a ${role} override`,
+          )
+        }
+      }
+    }
+    expect(missing).toEqual([])
+    // Guard against the scan going vacuous — a changed call shape would
+    // otherwise make the assertion above pass over nothing.
+    expect(callingFiles).toBeGreaterThanOrEqual(8)
+  })
+
+  it('spreads clientOverrideFor(screen) NOWHERE, which is what pins the exception', async () => {
+    // The converse of the test above, and since 2026-08-26 it is the load-
+    // bearing one. `screen` and `describe` name the SAME chain in BAML and
+    // their two call sites sit two functions apart in `baml-adapters.server.ts`;
+    // `describe` now carries an override and `screen` must not. Nothing about
+    // the map's omission enforces that — an added spread here would route the
+    // screen the moment someone put `screen` in the map, or even before, since
+    // an unmapped role's override is just `undefined` and a future map edit is
+    // one line. A source scan is the only thing that fails on the first half of
+    // that mistake.
+    const code = corpus()
+
+    expect(code).not.toContain("clientOverrideFor('screen')")
+    expect(code).not.toContain('clientOverrideFor("screen")')
+    // Not vacuous: the same corpus DOES carry the describe spread, so the scan
+    // is looking in a place where these literals really appear.
+    expect(code).toContain("clientOverrideFor('describe')")
   })
 })

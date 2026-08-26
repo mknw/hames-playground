@@ -15,7 +15,10 @@
  *
  *  1. the options bag the runner builds for `screen` carries no `client` key,
  *     even when `EVAL_ROLES` explicitly asked for it (PINNED_ROLES refuses);
- *  2. `resolveClientForRole('screen')` still reports the Anthropic chain;
+ *  2. `resolveClientForRole('screen')` still reports the Anthropic chain, and
+ *     `describe` — the role it shares a BAML chain with, and which a default
+ *     run DOES re-point since 2026-08-26 — reports something else, so check 2
+ *     is a live difference rather than a restatement;
  *  3. a live call is actually SERVED by that chain — being told the role is
  *     pinned is not evidence that the call went there;
  *  4. and the screen still returns spans that are exact substrings of the
@@ -25,7 +28,7 @@
 import { Collector } from '@boundaryml/baml'
 import { resolveClientForRole } from '../../src/lib/harness-patterns/clients.server'
 import { createInjectionScreen } from '../../src/lib/harness-patterns/baml-adapters.server'
-import { evalOverrideFor, PINNED_ROLES } from '../client'
+import { evalOverrideFor, expectedClientFor, PINNED_ROLES } from '../client'
 import { check, servedBy, type Check, type Scenario } from '../harness'
 
 /** A plausible fetched page with an instruction addressed at the agent buried
@@ -83,6 +86,21 @@ export const screenPinnedScenario: Scenario = {
         `screen → ${resolved}`,
       ),
     )
+    // …and the same run really is moving its neighbour. `screen` and `describe`
+    // name ONE chain in `baml_src/` — the separation lives only in
+    // `clients.server.ts` — so "the screen stayed put" is worth nothing unless
+    // something proves this run was re-pointing describe-shaped calls at all.
+    // Skipped on a baseline run, where nothing moves by definition.
+    if (ctx.routing.client) {
+      const describeClient = expectedClientFor(ctx.routing, 'describe')
+      checks.push(
+        check(
+          'the same run DOES re-point describe, so the pin above is a difference',
+          describeClient !== resolved,
+          `describe → ${describeClient}; screen → ${resolved}`,
+        ),
+      )
+    }
 
     // 3. Live, through the real adapter — de-fencing, maxChars bound and all.
     const screen = createInjectionScreen()

@@ -19,11 +19,13 @@
  *
  * ## Roles
  *
- * By default `EVAL_CLIENT=X` moves exactly the roles that `USE_VERDA_INFERENCE`
+ * By default `EVAL_CLIENT=X` moves exactly the roles that a verda tier decision
  * moves in production (`DEFAULT_ROUTED_ROLES`), so a default run measures the
- * shipped posture rather than a hypothetical one. `EVAL_ROLES=a,b,c` widens
- * that for exploration — you are asking "would this client cope with the
- * router too?", which is a fair question for a compatibility suite to answer.
+ * shipped posture rather than a hypothetical one. Since the 2026-08-26 widening
+ * that is every role this suite has a scenario for except `screen` — the
+ * exploratory question `EVAL_ROLES` used to answer ("would this client cope
+ * with the router too?") is now the default question, and `EVAL_ROLES` is left
+ * for NARROWING a run to one role while bisecting a regression.
  *
  * `screen` is refused either way. The injection screen resolves through a role
  * of its OWN precisely so that a re-pointing of summarization cannot drag
@@ -32,6 +34,11 @@
  * that cannot be talked out of reporting by the content it reviews. Neither is
  * a property an unmeasured client gets by default, and a security control's
  * model is not a knob an eval may turn. `screen-pinned.ts` asserts this holds.
+ *
+ * That refusal did most of its work on 2026-08-26, when `describe` moved to the
+ * self-hosted box in production and `screen` — the same chain in BAML, one role
+ * apart here — did not. The two are now measured on opposite sides of the same
+ * default run, which is exactly the separation the role split exists for.
  */
 
 import { resolveClientForRole, type BamlRole } from '../src/lib/harness-patterns/clients.server'
@@ -56,12 +63,27 @@ const PRODUCTION_ROLE: Record<EvalRole, BamlRole> = {
  * The roles a plain `EVAL_CLIENT=X` moves — deliberately the same set as
  * `VERDA_CLIENT_BY_ROLE`. Keeping these in step is what makes a default run a
  * measurement of the shipped route rather than of a configuration nobody runs.
+ *
+ * `router` and `describe` joined on 2026-08-26 with the production map. NOT
+ * kept in step automatically, and the drift is one-directional: a role added
+ * to the production map and forgotten here means the suite quietly stops
+ * measuring part of the shipped route — the run still passes, over less. The
+ * report header prints this list next to `resolveClientForRole()`'s answer per
+ * scenario, which is where a divergence shows.
+ *
+ * `planner` is absent because this suite has no planner scenario (see
+ * `EvalRole`), not because the production map leaves it out — it does not, as
+ * of the same date. That is a coverage gap in the eval suite: the role with the
+ * harshest failure policy in the repo now takes the self-hosted route and
+ * nothing here measures it.
  */
 export const DEFAULT_ROUTED_ROLES: readonly EvalRole[] = [
   'controller',
   'actor',
   'critic',
   'compactExecution',
+  'router',
+  'describe',
 ]
 
 /** Never re-pointed, by any combination of env vars. See the SD-4 note above. */

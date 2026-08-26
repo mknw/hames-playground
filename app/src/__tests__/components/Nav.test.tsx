@@ -22,6 +22,16 @@ vi.mock('@solidjs/router', () => ({
   }),
 }))
 
+// The bar renders the preview strip, whose server action would otherwise be
+// imported for real here. In a build, `'use server'` leaves the client with an
+// RPC stub; under vitest the module is loaded as written, so the whole
+// auth/DB/harness import graph comes with it. Stubbed to a never-resolving
+// promise so the strip renders nothing and this file stays about the nav.
+vi.mock('~/lib/harness-client/preview-header.server', () => ({
+  getPreviewHeaderState: () => new Promise(() => {}),
+  setPreviewInferenceTier: () => new Promise(() => {}),
+}))
+
 // The bar renders UserMenu, whose auth context is exercised elsewhere.
 vi.mock('~/components/AuthProvider', () => ({
   useAuth: () => ({
@@ -70,5 +80,17 @@ describe('Nav', () => {
     expect(container.querySelector('button')!.getAttribute('title')).toMatch(
       /^Theme: (Light|Dark|System)$/,
     )
+  })
+
+  it('leaves the preview strip off the auth routes', () => {
+    // The strip polls an authenticated action, so on the sign-in page every
+    // poll is a rejection — and a failed FIRST poll now says so out loud.
+    // Rendering it there would greet every signed-out visitor with a failure
+    // notice for a feature they cannot reach yet.
+    setPathname('/auth/signin')
+    const { container } = render(() => <Nav />)
+
+    expect(container.querySelector('[role="group"][aria-label="Preview status"]')).toBeNull()
+    expect(container.querySelector('[data-testid="preview-header-unavailable"]')).toBeNull()
   })
 })

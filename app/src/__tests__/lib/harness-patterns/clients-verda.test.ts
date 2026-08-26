@@ -24,6 +24,10 @@
  *     between that and a silent no-op.
  *   - misconfiguration throws at module load (fail closed). The alternative is
  *     confidential-compute traffic quietly going to Anthropic instead.
+ *   - the SWITCHED-FUNCTION set follows the routed roles, and is the same set in
+ *     both flag positions. It is what the header's latency median filters on, so
+ *     a role added to the map without its BAML functions would drop out of the
+ *     tier comparison rather than join it.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -231,6 +235,34 @@ describe('settings and baml_src agree about VerdaQwen', () => {
     // Billed per GPU-second, not per token — an invented rate here would
     // render as a confident dollar figure. "Unknown" is the honest reading.
     expect(CLIENT_PRICING.VerdaQwen).toBeUndefined()
+  })
+})
+
+describe('the switched-function set follows the routed roles', () => {
+  it('lists BAML functions for exactly the roles the map routes', async () => {
+    // The header's latency median counts only these functions, so that both
+    // switch positions hold the same role mix and the two figures compare
+    // (`metrics/call-latency.server.ts`). A role added to VERDA_CLIENT_BY_ROLE
+    // without its functions here would silently drop OUT of that comparison
+    // rather than joining it — invisible in a diff, and this is the pin.
+    const { SWITCHED_FUNCTIONS_BY_ROLE, TIER_SWITCHED_FUNCTIONS } = await load()
+
+    expect(Object.keys(SWITCHED_FUNCTIONS_BY_ROLE).sort()).toEqual(Object.keys(ROUTED).sort())
+    expect([...TIER_SWITCHED_FUNCTIONS].sort()).toEqual([
+      'ActorController',
+      'Critic',
+      'LoopController',
+      'Synthesize',
+    ])
+  })
+
+  it('is the same set whether the flag is on or off', async () => {
+    // The filter is about which roles a tier decision CAN move, not about the
+    // position it is in: a set that shrank with the flag off would leave the
+    // anthropic window unfiltered and the comparison broken again.
+    const off = [...(await load()).TIER_SWITCHED_FUNCTIONS].sort()
+    enable()
+    expect([...(await load()).TIER_SWITCHED_FUNCTIONS].sort()).toEqual(off)
   })
 })
 

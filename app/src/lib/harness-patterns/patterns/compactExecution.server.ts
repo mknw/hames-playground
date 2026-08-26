@@ -24,7 +24,7 @@ import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig } from '../context.server'
 import { Collector } from '@boundaryml/baml'
 import { trimToFit, getContextWindow } from '../token-budget.server'
-import { extractFailureLLMCallData, warnIfCollectorEmpty } from '../baml-adapters.server'
+import { extractFailureLLMCallData, extractLLMCallData } from '../baml-adapters.server'
 import { clientOverrideFor, resolveClientForRole } from '../clients.server'
 
 assertServerOnImport()
@@ -134,82 +134,18 @@ async function defaultSynthesize(
         input.errorMessage,
       )
 
-  // Extract LLM call data if collector present. This site builds its own
-  // LLMCallData rather than going through extractLLMCallData, so it calls the
-  // stale-client guard itself (#154).
-  warnIfCollectorEmpty(collector, 'Synthesize')
-  let llmCall: LLMCallData | undefined
-  if (collector?.last) {
-    const last = collector.last
-    const calls = (last.calls ?? []) as Array<{
-      selected?: boolean
-      httpRequest?: { body?: unknown }
-    }>
-    const selectedCall = calls.find((c) => c.selected) ?? calls[calls.length - 1]
-    let rawInput: string | undefined
-    const body = selectedCall?.httpRequest?.body as
-      { text?: () => string } | string | Record<string, unknown> | undefined
-    if (typeof body === 'string') {
-      rawInput = body
-    } else if (body && typeof (body as { text?: () => string }).text === 'function') {
-      try {
-        rawInput = (body as { text: () => string }).text()
-      } catch {
-        /* body.text() may throw — leave undefined */
-      }
-    } else if (body && typeof body === 'object') {
-      rawInput = JSON.stringify(body, null, 2)
-    }
-
-    // Extract prompt template from inlined BAML source
-    let promptTemplate: string | undefined
-    try {
-      const { getBamlFiles } = await import('../../../../baml_client/inlinedbaml')
-      const files = getBamlFiles() as Record<string, string>
-      for (const source of Object.values(files)) {
-        const match =
-          /function\s+Synthesize\s*\([^)]*\)\s*->\s*\S+\s*\{[^}]*?prompt\s+#"([\s\S]*?)"#/.exec(
-            source,
-          )
-        if (match) {
-          promptTemplate = match[1]
-          break
-        }
-      }
-    } catch {
-      /* inlined BAML not available */
-    }
-
-    // Extract provider and client info from the selected call
-    const provider =
-      selectedCall && 'provider' in selectedCall
-        ? (selectedCall as { provider: string }).provider
-        : undefined
-    const clientName =
-      selectedCall && 'clientName' in selectedCall
-        ? (selectedCall as { clientName: string }).clientName
-        : undefined
-
-    llmCall = {
-      functionName: 'Synthesize',
-      variables,
-      promptTemplate,
-      rawInput,
-      rawOutput: last.rawLlmResponse ?? undefined,
-      parsedOutput: content,
-      usage: last.usage
-        ? {
-            inputTokens: last.usage.inputTokens ?? 0,
-            outputTokens: last.usage.outputTokens ?? 0,
-            cachedInputTokens: last.usage.cachedInputTokens ?? 0,
-            totalTokens: (last.usage.inputTokens ?? 0) + (last.usage.outputTokens ?? 0),
-          }
-        : undefined,
-      durationMs: Date.now() - startTime,
-      provider,
-      clientName,
-    }
-  }
+  // Route through the SHARED extractor rather than rebuilding LLMCallData here.
+  // This site used to hand-roll it, and the copy had drifted: no cache-write
+  // token bucket, no step `metrics`, and — the one that mattered — no call to
+  // the usage chokepoint. `Synthesize` is a compactExecution-role call, i.e.
+  // one of the three roles the self-hosted tier moves, and it is the LAST call
+  // of a turn. Successes went uncounted while its failure path (below) counted,
+  // so the preview header's on-prem share read high and its warm clock started
+  // ticking from the controller's last call instead of this one. One extractor,
+  // one accounting stamp, one stale-client guard (#154).
+  const llmCall = collector
+    ? extractLLMCallData(collector, 'Synthesize', variables, startTime, content)
+    : undefined
 
   return { content, llmCall }
 }

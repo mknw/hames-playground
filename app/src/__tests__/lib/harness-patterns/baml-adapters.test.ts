@@ -701,14 +701,20 @@ describe('describeToolResultOp', () => {
     )
 
     expect(result).toBe('Found 3 nodes in the graph.')
-    // No trailing options bag: describe carries no collector and no client
-    // override, so `ResultDescribe` is called with its data params only.
+    // The trailing options bag carries a collector and NOTHING else. Describe
+    // takes no client override — re-pointing this role is a per-function edit
+    // in `baml_src/`, never an options-bag one — but it does have to be
+    // COUNTED: it is the repo's highest-frequency role and an Anthropic-only
+    // one, so an unaccounted describe call silently biases the preview
+    // header's on-prem share upward by shrinking its denominator.
     expect(mockResultDescribe).toHaveBeenCalledWith(
       'read_neo4j_cypher',
       '{"query":"MATCH (n) RETURN n"}',
       'Need to list nodes',
       '[{name:"A"},{name:"B"},{name:"C"}]',
+      expect.anything(),
     )
+    expect(Object.keys(mockResultDescribe.mock.calls[0][4] as object)).toEqual(['collector'])
   })
 
   it('should return empty string on failure', async () => {
@@ -746,11 +752,16 @@ describe('describeToolResultsBatchOp', () => {
 
     expect(byId.get('1')).toBe('Found A.')
     expect(byId.get('2')).toBe('Fetched B.')
-    // `toolArgs` is renamed to the BAML class's snake_case `tool_args`
-    expect(mockResultDescribeBatch).toHaveBeenCalledWith([
-      { id: '1', tool: 'search', tool_args: '{"q":"a"}', reasoning: 'find a', result: 'A' },
-      { id: '2', tool: 'fetch', tool_args: '{"url":"b"}', reasoning: '', result: 'B' },
-    ])
+    // `toolArgs` is renamed to the BAML class's snake_case `tool_args`; the
+    // trailing bag is the accounting collector only (see `describeToolResultOp`).
+    expect(mockResultDescribeBatch).toHaveBeenCalledWith(
+      [
+        { id: '1', tool: 'search', tool_args: '{"q":"a"}', reasoning: 'find a', result: 'A' },
+        { id: '2', tool: 'fetch', tool_args: '{"url":"b"}', reasoning: '', result: 'B' },
+      ],
+      expect.anything(),
+    )
+    expect(Object.keys(mockResultDescribeBatch.mock.calls[0][1] as object)).toEqual(['collector'])
   })
 
   it('omits ids the model dropped or answered blank', async () => {

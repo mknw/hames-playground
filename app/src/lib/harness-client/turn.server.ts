@@ -17,6 +17,7 @@
  * | pre-seeds a missing row      | yes (#105)  | no        | no       |
  * | `runWithRequestContext`      | yes         | yes       | yes      |
  * | `runWithSettings`            | yes         | yes       | yes      |
+ * | `runWithInferenceTier`       | yes         | yes       | yes      |
  * | first-turn title generation  | yes         | no        | no       |
  * | `saveSession`                | yes         | yes       | yes      |
  * | `compactBulkData` + re-save  | yes         | yes       | yes      |
@@ -57,6 +58,10 @@ import {
 } from './session.server'
 import { runWithRequestContext } from './request-user.server'
 import { runWithSettings } from '../settings-context.server'
+import { activeInferenceTier, runWithInferenceTier } from '../harness-patterns/clients.server'
+import { resolveInferenceTier } from '../db/user-prefs.server'
+import { beginVerdaTurn, endVerdaTurn } from '../inference/verda-activity.server'
+import { recordTurn } from '../metrics/usage-recorder.server'
 import type { HarnessSettings } from '../settings'
 import { runFirstTurnTitleGen } from './agents/title-generator.server'
 import {
@@ -138,6 +143,33 @@ export async function runTurnAndPersist(
   req: TurnRequest,
 ): Promise<HarnessResultScoped<SessionData>> {
   const { sessionId, userId } = req
+  // ---------------------------------------------------------------------------
+  // Inference tier — the per-user switch, resolved ONCE per turn.
+  //
+  // This is the whole mechanism behind the header's "Private (Verda)" /
+  // "Anthropic" control: the user's stored preference (or the preview default)
+  // opens an AsyncLocalStorage scope, and every adapter deep inside the run
+  // reads it through `clientOverrideFor(role)` — a PER-CALL client override in
+  // the BAML options bag, which is the seam `clients.server.ts` owns.
+  //
+  // It is emphatically NOT a re-pointing of the chains in `baml_src/`. That
+  // class of edit moves whole ROLES at once, and the injection screen is the
+  // role that must never move: `screen` resolves to `DescribeAnthropic` and
+  // stays there in BOTH switch positions, because a screen is only worth
+  // running on a model that cannot be talked out of reporting by the content it
+  // reviews and that copies matched spans verbatim (SA-M5, and the note on
+  // `CLIENT_BY_ROLE`). `router` and `describe` likewise stay Anthropic in both
+  // positions — the switch moves exactly the roles `VERDA_CLIENT_BY_ROLE`
+  // lists, which is the same set `USE_VERDA_INFERENCE` moved before it.
+  //
+  // Resolved here rather than at each entry point so all three modes
+  // (interactive, triggered, approval) get it from one place, and a failure to
+  // read the preference falls back to the default rather than failing the turn.
+  const tier =
+    (await resolveInferenceTier(userId).catch((err: unknown) => {
+      console.error(`[turn] could not read the inference-tier preference for ${userId}:`, err)
+      return undefined
+    })) ?? activeInferenceTier()
   // Establish the request scope so pattern closures and app-side tools that
   // need per-conversation context at runtime (a per-conversation allowlist
   // reader, `graph_file_ingest`'s Data Stash target) resolve the right user and
@@ -147,43 +179,67 @@ export async function runTurnAndPersist(
   // `getRequestSettings()` silently fell back to DEFAULT_SETTINGS and ignored
   // the user's `maxResultForSummary` (SA-M13).
   return runWithRequestContext({ userId, sessionId }, () =>
-    runWithSettings(req.settings, async () => {
-      // A triggered run never loads (see the module docstring).
-      const loaded = req.mode === 'triggered' ? null : await loadSession(sessionId, userId)
-      const { agentId, run } = planTurn(req, loaded)
-
-      if (req.mode === 'interactive' && !loaded) {
-        // Brand-new conversation: persist the row BEFORE the run so it exists
-        // in the sidebar for its whole first turn (#105) — previously the row
-        // only appeared at run end, so an in-flight new chat was invisible (and
-        // lost outright if the user clicked "+ New Chat" again, dropping its
-        // placeholder). Mirrors `seedActionRow`: a minimal valid context
-        // carrying the user message (so a mid-run reload still replays it) and
-        // a title derived from the message; the run's own `saveSession` below
-        // overwrites the blob, and the first-turn LLM title replaces the
-        // derived one. Guarded on `!loaded`, so pre-seeded action rows (which
-        // always exist before their run) are never touched.
-        await dbSaveConversation({
-          id: sessionId,
-          userId,
-          agentId,
-          title: deriveTitle(req.message),
-          serializedContext: serializeContext(createContext(req.message, undefined, sessionId)),
-          status: 'running',
-        })
-      }
-
-      const result = await runAndSave(req, agentId, run)
-
-      req.onResult?.(result)
-      if (req.mode === 'interactive') await generateTitle(req, result)
-      req.onSettled?.()
-      // Deliberately not awaited — see `compactAndSave`. Started from inside
-      // both scopes, so it keeps them for its whole continuation.
-      void compactAndSave(req, agentId, result)
-      return result
-    }),
+    runWithSettings(req.settings, () =>
+      runWithInferenceTier(tier, async () => {
+        // The header's warm indicator and the global counters both learn about
+        // this turn here — one place, so no entry point can forget. `finally`
+        // is load-bearing: a turn that throws must not leave the in-flight
+        // gauge pinned, which would show "running" forever.
+        if (tier === 'verda') beginVerdaTurn()
+        recordTurn(tier)
+        try {
+          return await runOneTurn(req)
+        } finally {
+          if (tier === 'verda') endVerdaTurn()
+        }
+      }),
+    ),
   )
+}
+
+/**
+ * The turn itself, inside all three scopes. Split out only so the scope stack
+ * above stays readable — it is not a second entry point and nothing else calls
+ * it.
+ */
+async function runOneTurn(req: TurnRequest): Promise<HarnessResultScoped<SessionData>> {
+  const { sessionId, userId } = req
+  // A triggered run never loads (see the module docstring).
+  const loaded = req.mode === 'triggered' ? null : await loadSession(sessionId, userId)
+  const { agentId, run } = planTurn(req, loaded)
+
+  if (req.mode === 'interactive' && !loaded) {
+    // Brand-new conversation: persist the row BEFORE the run so it exists
+    // in the sidebar for its whole first turn (#105) — previously the row
+    // only appeared at run end, so an in-flight new chat was invisible (and
+    // lost outright if the user clicked "+ New Chat" again, dropping its
+    // placeholder). Mirrors `seedActionRow`: a minimal valid context
+    // carrying the user message (so a mid-run reload still replays it) and
+    // a title derived from the message; the run's own `saveSession` below
+    // overwrites the blob, and the first-turn LLM title replaces the
+    // derived one. Guarded on `!loaded`, so pre-seeded action rows (which
+    // always exist before their run) are never touched.
+    await dbSaveConversation({
+      id: sessionId,
+      userId,
+      agentId,
+      title: deriveTitle(req.message),
+      serializedContext: serializeContext(createContext(req.message, undefined, sessionId)),
+      status: 'running',
+    })
+  }
+
+  const result = await runAndSave(req, agentId, run)
+
+  req.onResult?.(result)
+  if (req.mode === 'interactive') await generateTitle(req, result)
+  req.onSettled?.()
+  // Deliberately not awaited — see `compactAndSave`. Started from inside
+  // all three scopes, so it keeps them for its whole continuation (the
+  // tier scope included: a detached summarization must not silently
+  // change provider halfway through a turn).
+  void compactAndSave(req, agentId, result)
+  return result
 }
 
 /**

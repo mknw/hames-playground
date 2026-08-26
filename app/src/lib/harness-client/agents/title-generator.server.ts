@@ -31,7 +31,7 @@
  * themselves and pass it in, so nothing needed the directive.
  */
 import { assertServerOnImport } from '../../harness-patterns/assert.server'
-import { harness, compactExecution } from '../../harness-patterns'
+import { harness, compactExecution, withUsageAccounting } from '../../harness-patterns'
 import type { HarnessData, UnifiedContext, UserMessageEventData } from '../../harness-patterns'
 import { b } from '../../../../baml_client'
 import { updateConversationTitle } from '../../db/conversations.server'
@@ -90,7 +90,12 @@ export const titleAgent = harness<TitleAgentData>(
     patternId: 'title-gen',
     mode: 'message',
     synthesize: async ({ userMessage }) => {
-      const raw = await b.GenerateConversationTitle(userMessage)
+      // Collector for ACCOUNTING only (nothing here reads it): a title is a
+      // describe-tier call, and a role that is not counted drops out of the
+      // preview header's on-prem denominator rather than merely losing detail.
+      const raw = await withUsageAccounting('GenerateConversationTitle', (opts) =>
+        b.GenerateConversationTitle(userMessage, opts),
+      )
       return sanitizeTitle(raw) ?? ''
     },
   }),

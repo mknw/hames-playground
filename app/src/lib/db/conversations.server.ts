@@ -241,6 +241,92 @@ export async function setConversationStatus(
 }
 
 /**
+ * How long a row may sit at `status='running'` with NO write of its own before
+ * the sweep below calls it abandoned.
+ *
+ * It has to exceed the longest turn that is still legitimately in flight,
+ * because a running row is not touched again between the pre-seed and the
+ * final `saveSession` — there is no mid-turn heartbeat, so "no state change"
+ * cannot distinguish a slow turn from a dead process. The longest measured
+ * legitimate wait is the self-hosted tier's cold start plus a queued burst:
+ * 146s of boot (#273) against a 600s per-call `request_timeout_ms`, and a turn
+ * makes several calls. 20 minutes clears that with room, and is still short
+ * enough that a person who left a spinner running comes back to an answer or
+ * an error rather than to the spinner.
+ *
+ * Lower it and a long turn is reaped out from under itself: the reap writes
+ * `error`, the turn finishes and writes `done` over it, and the row lies in
+ * whichever order they land. Raise it and an abandoned row spins for longer.
+ * Both are worse than the current value; change it against a measurement, not
+ * a hunch.
+ */
+export const STUCK_RUN_TIMEOUT_MINUTES = 20
+
+/**
+ * Reconcile abandoned runs: every row still at `status='running'` whose last
+ * write is older than {@link STUCK_RUN_TIMEOUT_MINUTES} becomes `'error'`.
+ * Returns the ids it changed (for the caller's log and for tests).
+ *
+ * The rows this exists for are the ones no code path will ever finish: the
+ * process died mid-turn, so the `catch` in `turn.server.ts#runAndSave` that
+ * normally flips a failed row out of `running` (sf-M2/sf-M3) never ran. In the
+ * sidebar such a row is a spinner nothing can clear, which is the same
+ * dishonesty the app-path e2e suite exists to forbid — just at rest rather
+ * than in a turn.
+ *
+ * **Multi-instance safe, and it has to be, because nothing elects a leader.**
+ * Every input is in the database:
+ *
+ *   - the freshness test is `updated_at` against the DATABASE's `NOW()`, so two
+ *     app instances agree on the deadline even with skewed host clocks, and an
+ *     instance that just booted judges another instance's rows correctly — it
+ *     holds no memory of which turns are live, and must not, since its own
+ *     in-flight set says nothing about anyone else's;
+ *   - `status = 'running'` in the WHERE clause is the claim. Postgres takes a
+ *     row lock per UPDATE, so two concurrent sweeps serialize: the first flips
+ *     the row and the second no longer matches it, which is why `RETURNING`
+ *     reports each reaped row to exactly one sweeper and the sweep is
+ *     idempotent rather than merely repeatable.
+ *
+ * The one interleaving left is a turn that outlives the threshold: it is reaped
+ * mid-flight and then overwrites the reap with its own outcome. That is the
+ * threshold's job to prevent, not this statement's — see the constant.
+ *
+ * Cross-user by design (no `user_id` scope): this is a process-wide sweep, not
+ * a request, and an abandoned row is abandoned whoever owns it. It reads and
+ * writes only plaintext columns — `status`, `updated_at`, and `id` for the
+ * report — so no key is needed and no `context` blob is touched. Like
+ * {@link countActiveUsers}, it lives here because this module owns SQL against
+ * `conversations` (`encryption-coverage.test.ts` pins that nothing else does).
+ *
+ * `paused` is deliberately untouched: an approval gate waits for a person, for
+ * as long as that takes, and reaping one would discard resumable work.
+ *
+ * **`updated_at` is left alone**, which is the one place this write differs
+ * from every other write in this module. Two reasons, both about what the
+ * column means: it is the app's record of "this user did something"
+ * ({@link countActiveUsers} reads exactly that, per poll, per tab), and a sweep
+ * is not something the user did — bumping it would report every reaped
+ * conversation's owner as active. It is also what the sidebar renders as "x
+ * ago", where the abandonment time is the honest answer and the reap time is
+ * not. Nothing depends on it advancing here: the idempotence above comes from
+ * `status`, not from the timestamp.
+ */
+export async function reapStuckConversations(): Promise<string[]> {
+  // The interval is a constant, never a caller value — inlined for the same
+  // reason `countActiveUsers` inlines its window (readability over
+  // `make_interval` with a bound parameter).
+  const { rows } = await query<{ id: string }>(
+    `UPDATE conversations
+        SET status = 'error'
+      WHERE status = 'running'
+        AND updated_at < NOW() - INTERVAL '${STUCK_RUN_TIMEOUT_MINUTES} minutes'
+      RETURNING id`,
+  )
+  return rows.map((r) => r.id)
+}
+
+/**
  * List a user's conversations, newest-created first.
  *
  * Deliberately `created_at`, not `updated_at` (#105): every turn-save bumps

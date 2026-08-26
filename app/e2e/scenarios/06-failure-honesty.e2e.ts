@@ -39,18 +39,25 @@
  * suite named for catching them. The last describe block below is that hole:
  * one turn whose pattern build fails, asserted through both entry points.
  *
- * WHICH FAULT, AND WHY NOT THE GATEWAY. The obvious candidate is a dead MCP
- * gateway, and it does not work: measured here, a turn with the gateway
- * refusing connections still completes `done`, because every gateway read
+ * WHICH FAULT, AND WHY NOT THE GATEWAY. The obvious candidate for the throw
+ * path is a dead MCP gateway, and it does not throw: every gateway read
  * degrades on purpose — `listTools` logs and returns the app-side tools
  * (`mcp-client.server.ts`), and `getGraphSchema` warns, refuses the pattern
- * cache and returns `''`. That is the designed behaviour and this suite is not
- * the place to argue with it. What DOES throw in the interactive path is
+ * cache and returns `''`. What DOES throw in the interactive path is
  * `getOrBuildPatterns` on an agent id nothing is registered under — a real
  * client-reachable request (a stale bundle, a hand-built POST, a renamed agent
  * whose forward map missed a row: see `registry.server.ts`'s note on exactly
  * that), and the same `pattern build failed` shape the throw path was written
  * for.
+ *
+ * This file used to add that the dead gateway "still completes `done`… that is
+ * the designed behaviour and this suite is not the place to argue with it". It
+ * was measured, written down, and left — a silent failure recorded in the file
+ * named for catching them. #276 argued with it: a turn whose tool surface
+ * collapsed now says so instead of answering around the hole, and the
+ * measurement above is the red test it was built from. It lives in
+ * `09-gateway-degrade.e2e.ts`, because the fault is in the TOOL half rather
+ * than the endpoint and every LLM call in it succeeds.
  *
  * HERMETIC ONLY for the four injected shapes. There is no responsible way to
  * cause those against the real deployment, and faking them there would only be

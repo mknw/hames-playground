@@ -67,9 +67,13 @@ failure (e.g. Redis down) is logged and the run still proceeds.
 Precedent: `routes/api/events.ts` already fires post-response async work
 (title-gen, tool-result summaries).
 
-**Caveat (be honest):** a process restart mid-run orphans a `running` row
-(detectable as stale). Crash-recovery / retries are an upgrade path — a
-Postgres-polling worker. Assumes a **persistent node server** (not serverless).
+**Caveat (be honest):** a process restart mid-run orphans a `running` row.
+Since #273 D-a the row no longer spins forever — the routines tick sweeps rows
+stuck at `running` with no write for `STUCK_RUN_TIMEOUT_MINUTES` (20) to
+`error`, on boot and every 30s (see ROUTINES.md → "Trigger evaluation"). That
+reconciles the ROW, not the run: nothing resumes the work, and crash-recovery /
+retries are still an upgrade path — a Postgres-polling worker. Assumes a
+**persistent node server** (not serverless).
 
 ## Data model — ONE table (`conversations`)
 
@@ -165,4 +169,5 @@ ingestion pipeline (binary is skipped by ingest). See [DATA_STASH.md](DATA_STASH
 
 - Completion email / push notification (per-agent settings).
 - A dedicated observability view for agent runs (the Actions filter is the interim surface).
-- Durable queue / crash-recovery worker (the fire-and-forget orphan caveat above).
+- Durable queue / crash-recovery worker (the fire-and-forget orphan caveat
+  above — the reaper reconciles the row's status, it does not resume the run).

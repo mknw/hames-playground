@@ -31,6 +31,7 @@ import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { omitResultFields } from '../content-transforms'
 import { getRequestSettings } from '../../settings-context.server'
 import { getActiveSandbox } from '../../sandbox/scope.server'
+import { toolSurfaceOutage } from '../gateway-health.server'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { resolveClientForRole } from '../clients.server'
 import type { ControllerFnWithLLMData } from '../baml-adapters.server'
@@ -171,6 +172,25 @@ export function simpleLoop<T extends SimpleLoopData>(
   const resolved = resolveConfig('simpleLoop', config)
 
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
+    // Nothing to decide with (#276). A loop whose tool list is empty BECAUSE
+    // the gateway is unreachable used to run its full turn budget, call
+    // nothing, and hand an empty execution to the synthesizer, which answered
+    // as though the tools had been consulted. Say so instead, and say it before
+    // spending a controller call on a question this pattern cannot act on.
+    //
+    // Stamped `irrecoverable` on the EVENT rather than left to the pattern
+    // default (`simpleLoop: 'recoverable'`, which is right for every other
+    // failure this loop has): no further iteration can put the tools back, so
+    // `runChain` stops the chain here and this error is what reaches the user.
+    // A sandbox scope is the exception — its tools arrive over `docker exec`,
+    // never through the gateway, so a loop inside one is not tool-less and the
+    // allowlist check further down already knows it.
+    const outage = getActiveSandbox() ? null : toolSurfaceOutage(tools)
+    if (outage) {
+      trackEvent(scope, 'error', { ...outage, severity: 'irrecoverable' } as ErrorEventData, true)
+      return scope
+    }
+
     const settings = getRequestSettings()
     const maxTurns = config?.maxTurns ?? settings.maxToolTurns
     // Multi-call turns (ControllerAction.additional_calls). 'off' still

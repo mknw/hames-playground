@@ -117,6 +117,45 @@ docker compose logs -f mcp-gateway
 docker compose restart mcp-gateway
 ```
 
+### When the gateway is not there (#276)
+
+Every gateway read in the app degrades rather than throwing, which is right on
+its own and used to add up to something wrong: with the gateway refusing
+connections, `listTools()` returned only the app-side tools, so each agent's
+`tools.<namespace> ?? []` handed its loop an empty allowlist, the loop called
+nothing, and the synthesizer answered the question anyway. A `done` row and a
+confident answer no tool contributed to.
+
+What happens now, all of it in `app/src/lib/harness-patterns/`:
+
+1. **`mcp-client.server.ts` recovers what it owns.** A failed `listTools` is
+   retried once per lease (`withReconnect`), and if that fails the WHOLE
+   connection pool is rebuilt and the call is tried once more — a gateway
+   restart drops all four pooled keep-alives at once, and the per-lease
+   reconnect only heals the one it was holding.
+2. **`gateway-health.server.ts` records the outcome.** Only `listTools` writes
+   it: a failing tool CALL is ordinary (the controller sees the error and
+   decides), while a catalog that cannot be fetched means no tool can be chosen
+   at all. One successful read clears it.
+3. **The loops refuse instead of guessing.** `simpleLoop` / `actorCritic` handed
+   an empty tool list _while the gateway is known unreachable_ record an
+   `irrecoverable` error naming the outage, which stops the chain
+   (`errorSeverity`, see the harness SPEC) so the synthesizer never answers
+   around the hole. An empty list with a healthy gateway is left alone — the
+   sandbox agents pass one deliberately, since their tools arrive over
+   `docker exec`.
+
+**The app does not restart the gateway container, deliberately.** It could — the
+docker socket is reachable in both shapes the app runs in — and it should not:
+the gateway is shared by every user, so one degraded conversation would tear
+down everyone else's in-flight tool calls; the socket is root-equivalent and is
+mounted for the sandbox alone; the service is already `restart: unless-stopped`,
+so Docker restarts a gateway that exits; and `MCP_GATEWAY_URL` may name a
+gateway that is not this deployment's container at all. The case a hook would
+add is a gateway that is up and wedged, which is an owner decision. Until then,
+the command above is the operator's, and the app's job is to say the tools are
+unavailable rather than to pretend otherwise.
+
 ---
 
 ## General MCP Gateway Reference

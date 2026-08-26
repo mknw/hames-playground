@@ -30,6 +30,7 @@ import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
 import { getActiveSandbox } from '../../sandbox/scope.server'
+import { toolSurfaceOutage } from '../gateway-health.server'
 import type { ActorControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
 import { LLMCallError, llmCallHitOutputCap } from '../baml-adapters.server'
 import { formatPlanContext, type PlannerData } from './planner.server'
@@ -75,6 +76,18 @@ export function actorCritic<T extends ActorCriticData>(
   const resolved = resolveConfig('actorCritic', config)
 
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
+    // Same collapsed-tool-surface refusal as simpleLoop (#276) — see the
+    // comment there for why the event, not the pattern default, carries the
+    // `irrecoverable`. This pattern's production users are the two sandbox
+    // agents, which pass `[]` on purpose and run inside a sandbox scope, so
+    // that guard is what keeps them out of this branch rather than an
+    // exemption; a future gateway-backed actorCritic gets the check for free.
+    const outage = getActiveSandbox() ? null : toolSurfaceOutage(availableTools)
+    if (outage) {
+      trackEvent(scope, 'error', { ...outage, severity: 'irrecoverable' } as ErrorEventData, true)
+      return scope
+    }
+
     const maxRetries = config?.maxRetries ?? getRequestSettings().maxRetries
     // Critic cadence: run the critic every Nth *successful* actor turn (default
     // 1 = every turn, the original behavior). Clamped to >= 1 so a stray 0 /

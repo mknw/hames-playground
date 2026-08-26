@@ -16,6 +16,15 @@ vi.mock('../../../lib/db/routines.server', () => ({ listEnabledRoutines }))
 const fireRoutine = vi.fn<(r: { id: string }) => Promise<string | null>>(async (r) => `run-${r.id}`)
 vi.mock('../../../lib/routines/dispatch.server', () => ({ fireRoutine }))
 
+// The tick's other half (#273 D-a). Mocked for the same reason the store is:
+// this file drives the timer under fake timers, and the real reaper would run
+// SQL against the test database on every advance.
+const reapStuckConversations = vi.fn<() => Promise<string[]>>(async () => [])
+vi.mock('../../../lib/db/conversations.server', () => ({
+  reapStuckConversations,
+  STUCK_RUN_TIMEOUT_MINUTES: 20,
+}))
+
 const {
   ROUTINE_TICK_INTERVAL_MS,
   isDue,
@@ -23,6 +32,7 @@ const {
   runRoutineTick,
   startRoutineScheduler,
   stopRoutineScheduler,
+  sweepStuckRuns,
 } = await import('../../../lib/routines/scheduler.server')
 
 const T0 = new Date('2026-08-16T12:00:00Z')
@@ -50,6 +60,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   listEnabledRoutines.mockResolvedValue([])
   fireRoutine.mockImplementation(async (r) => `run-${r.id}`)
+  reapStuckConversations.mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -130,13 +141,19 @@ describe('runRoutineTick', () => {
 })
 
 describe('the armed timer', () => {
-  it('sweeps on each tick', async () => {
+  // Arming sweeps ONCE immediately as well as on every interval (#273 D-a), so
+  // every count below is `ticks + 1`. That boot sweep is the whole point of the
+  // stuck-run half: the rows to reconcile are usually the ones the previous
+  // process abandoned when it died, and they should not wait out a tick.
+  it('sweeps on each tick, plus once at arming', async () => {
     vi.useFakeTimers()
     startRoutineScheduler(1000)
     expect(isRoutineSchedulerArmed()).toBe(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(listEnabledRoutines).toHaveBeenCalledTimes(1)
 
     await vi.advanceTimersByTimeAsync(3000)
-    expect(listEnabledRoutines).toHaveBeenCalledTimes(3)
+    expect(listEnabledRoutines).toHaveBeenCalledTimes(4)
   })
 
   it('is idempotent — a second arm (HMR reload, second import) adds no timer', async () => {
@@ -145,7 +162,8 @@ describe('the armed timer', () => {
     startRoutineScheduler(1000)
 
     await vi.advanceTimersByTimeAsync(2000)
-    expect(listEnabledRoutines).toHaveBeenCalledTimes(2)
+    // One boot sweep, not two: the second arm returns before sweeping.
+    expect(listEnabledRoutines).toHaveBeenCalledTimes(3)
   })
 
   it('stops cleanly and can be re-armed', async () => {
@@ -156,11 +174,31 @@ describe('the armed timer', () => {
     expect(isRoutineSchedulerArmed()).toBe(false)
 
     await vi.advanceTimersByTimeAsync(5000)
-    expect(listEnabledRoutines).toHaveBeenCalledTimes(1)
+    expect(listEnabledRoutines).toHaveBeenCalledTimes(2)
 
     startRoutineScheduler(1000)
     await vi.advanceTimersByTimeAsync(1000)
+    // Re-arming boots-sweeps again, then ticks once.
+    expect(listEnabledRoutines).toHaveBeenCalledTimes(4)
+  })
+
+  it('reconciles stuck runs on the same wake-ups', async () => {
+    vi.useFakeTimers()
+    startRoutineScheduler(1000)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(reapStuckConversations).toHaveBeenCalledTimes(3)
+  })
+
+  it('still fires routines when the reap throws', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    reapStuckConversations.mockRejectedValue(new Error('database is starting up'))
+    vi.useFakeTimers()
+    startRoutineScheduler(1000)
+    await vi.advanceTimersByTimeAsync(1000)
+    // The two halves are independent: a boot before the database is up must not
+    // cost the routines their tick.
     expect(listEnabledRoutines).toHaveBeenCalledTimes(2)
+    err.mockRestore()
   })
 
   it('unrefs the timer so it never holds the process open', () => {
@@ -176,5 +214,40 @@ describe('the armed timer', () => {
 
   it('ticks well under the minimum interval, so a per-minute routine barely drifts', () => {
     expect(ROUTINE_TICK_INTERVAL_MS).toBeLessThan(60_000)
+  })
+})
+
+describe('sweepStuckRuns', () => {
+  it('passes the reaped ids back and names them in one warning', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    reapStuckConversations.mockResolvedValue(['conv-a', 'conv-b'])
+
+    expect(await sweepStuckRuns()).toEqual(['conv-a', 'conv-b'])
+
+    // The reap is the only writer of an `error` status with no turn behind it,
+    // so the log has to be able to attribute one.
+    expect(warn).toHaveBeenCalledTimes(1)
+    const line = warn.mock.calls[0].join(' ')
+    expect(line).toContain('conv-a')
+    expect(line).toContain('conv-b')
+    warn.mockRestore()
+  })
+
+  it('says nothing on an idle sweep', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await sweepStuckRuns()).toEqual([])
+    // Every 30s, forever — a "reaped 0" line would bury the rest of the log.
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('swallows a database failure rather than throwing into the timer', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    reapStuckConversations.mockRejectedValue(new Error('connection refused'))
+
+    await expect(sweepStuckRuns()).resolves.toEqual([])
+
+    expect(err).toHaveBeenCalled()
+    err.mockRestore()
   })
 })

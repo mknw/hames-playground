@@ -21,10 +21,27 @@
  * builds on (docs/AGENT_TRIGGER.md). Missed ticks are not backfilled: an
  * interval routine fires at most once per tick, so a process that was down for
  * an hour fires once on the way back up, not sixty times.
+ *
+ * ## The second job: reconciling abandoned runs (#273 D-a)
+ *
+ * The same tick sweeps conversations stuck at `status='running'`
+ * ({@link reapStuckConversations}). It is hosted here rather than in a timer of
+ * its own because this module already owns the only periodic wake-up the server
+ * has, and a second `setInterval` would double the HMR-safety and teardown
+ * surface for one indexed UPDATE. The two jobs are independent: the reap runs
+ * first and cannot stop the routines from firing, and vice versa.
+ *
+ * It also runs ONCE at arming, which is the case a periodic sweep alone cannot
+ * cover well: the rows that need reconciling are usually the ones this process's
+ * predecessor abandoned when it died, and they should not have to wait out a
+ * tick to stop spinning. Deliberately not awaited by `startRoutineScheduler` —
+ * arming happens at module load (`src/middleware.ts`), where nothing may block
+ * on the database being up.
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { listEnabledRoutines, type RoutineRow } from '../db/routines.server'
+import { reapStuckConversations, STUCK_RUN_TIMEOUT_MINUTES } from '../db/conversations.server'
 import { nextDueAt } from './triggers'
 import { fireRoutine } from './dispatch.server'
 
@@ -62,12 +79,52 @@ export function startRoutineScheduler(intervalMs: number = ROUTINE_TICK_INTERVAL
   if (g[ARMED_KEY]) return
 
   const timer = setInterval(() => {
-    void runRoutineTick().catch((err) => console.error('[routines] tick failed:', err))
+    void tick()
   }, intervalMs)
   // Node's Timeout has unref(); guard in case the runtime's return type differs.
   timer.unref?.()
   g[ARMED_KEY] = { timer }
   console.log(`[routines] scheduler armed (tick every ${Math.round(intervalMs / 1000)}s)`)
+  // The boot sweep. Fire-and-forget for the reason in the module docstring: we
+  // are inside a module-load side effect, so a database that is not up yet must
+  // degrade to a logged failure and the next tick, never to a failed boot.
+  void tick()
+}
+
+/**
+ * One wake-up: reconcile abandoned runs, then fire the due routines. Both
+ * halves swallow their own failures, so a wake-up cannot throw into the timer
+ * (an unhandled rejection there takes the process down under
+ * `--unhandled-rejections=throw`).
+ */
+async function tick(): Promise<void> {
+  await sweepStuckRuns()
+  await runRoutineTick().catch((err) => console.error('[routines] tick failed:', err))
+}
+
+/**
+ * Reconcile conversations abandoned at `status='running'`. Never throws.
+ *
+ * Logs only when it actually changed something — this runs every 30s on an idle
+ * server, and a per-tick "reaped 0" line would bury everything else. The ids
+ * are logged because a row flipping to `error` with no turn behind it is
+ * otherwise unattributable: this line is the only record that the sweep, rather
+ * than a failing turn, is what wrote that status.
+ */
+export async function sweepStuckRuns(): Promise<string[]> {
+  try {
+    const reaped = await reapStuckConversations()
+    if (reaped.length > 0) {
+      console.warn(
+        `[routines] reconciled ${reaped.length} run(s) stuck at 'running' for more than ` +
+          `${STUCK_RUN_TIMEOUT_MINUTES}m to 'error': ${reaped.join(', ')}`,
+      )
+    }
+    return reaped
+  } catch (err) {
+    console.error('[routines] could not sweep stuck runs this tick:', err)
+    return []
+  }
 }
 
 /** Disarm the sweep (idempotent). Teardown / tests. */

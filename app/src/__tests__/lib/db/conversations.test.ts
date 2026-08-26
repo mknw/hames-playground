@@ -25,6 +25,8 @@ import {
   getConversationOwner,
   promoteConversation,
   setConversationStatus,
+  reapStuckConversations,
+  STUCK_RUN_TIMEOUT_MINUTES,
 } from '../../../lib/db/conversations.server'
 import { closePool, query } from '../../../lib/db/client.server'
 
@@ -432,5 +434,112 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
     expect(row!.kind).toBe('action')
     expect(row!.source).toBe('post')
     expect(row!.status).toBe('running')
+  })
+})
+
+/**
+ * The stuck-run reaper's round trip (#273 D-a). The statement itself is pinned
+ * hermetically in `stuck-run-reaper.test.ts`; what only a real database can
+ * answer is here — whose clock decides staleness, and what two concurrent
+ * sweepers see.
+ *
+ * Every row is seeded under `TEST_USER` and then backdated, because
+ * `saveConversation` stamps `updated_at = NOW()` and the reaper's whole input is
+ * that timestamp. The reap is CROSS-USER by design, so these assertions are
+ * about specific ids rather than about the size of the returned list — another
+ * suite's abandoned row may legitimately ride along.
+ */
+describe('reapStuckConversations', () => {
+  /** Seed one row, then age its `updated_at` by `ageMinutes`. */
+  async function seed(id: string, status: 'running' | 'paused' | 'done', age: number) {
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'search',
+      title: null,
+      serializedContext: '{}',
+      status,
+    })
+    await query(
+      `UPDATE conversations SET updated_at = NOW() - INTERVAL '${age} minutes'
+        WHERE id = $1 AND user_id = $2`,
+      [id, TEST_USER],
+    )
+  }
+
+  async function statusOf(id: string): Promise<string | null> {
+    const { rows } = await query<{ status: string }>(
+      'SELECT status FROM conversations WHERE id = $1',
+      [id],
+    )
+    return rows[0]?.status ?? null
+  }
+
+  const past = STUCK_RUN_TIMEOUT_MINUTES + 5
+
+  it('reaps an abandoned run and leaves every other row alone', async () => {
+    if (!dbAvailable) return
+    const tag = Math.random().toString(36).slice(2, 8)
+    const stale = `reap-stale-${tag}`
+    const fresh = `reap-fresh-${tag}`
+    const paused = `reap-paused-${tag}`
+    const finished = `reap-done-${tag}`
+    await seed(stale, 'running', past)
+    await seed(fresh, 'running', 1)
+    await seed(paused, 'paused', past)
+    await seed(finished, 'done', past)
+
+    const reaped = await reapStuckConversations()
+
+    expect(reaped).toContain(stale)
+    expect(await statusOf(stale)).toBe('error')
+    // A turn that is merely slow keeps its spinner — that is the threshold
+    // doing its job, and the reason it is measured in tens of minutes.
+    expect(reaped).not.toContain(fresh)
+    expect(await statusOf(fresh)).toBe('running')
+    // An approval gate waits for a person for as long as that takes.
+    expect(reaped).not.toContain(paused)
+    expect(await statusOf(paused)).toBe('paused')
+    expect(await statusOf(finished)).toBe('done')
+  })
+
+  it('is idempotent — a second sweep finds nothing to do', async () => {
+    if (!dbAvailable) return
+    const id = `reap-twice-${Math.random().toString(36).slice(2, 8)}`
+    await seed(id, 'running', past)
+
+    expect(await reapStuckConversations()).toContain(id)
+    expect(await reapStuckConversations()).not.toContain(id)
+  })
+
+  it('reports a row to exactly one of two concurrent sweepers', async () => {
+    if (!dbAvailable) return
+    const id = `reap-race-${Math.random().toString(36).slice(2, 8)}`
+    await seed(id, 'running', past)
+
+    // Two app instances, no leader election, the same 30s tick. Postgres takes
+    // a row lock per UPDATE, so once the first sweeper has flipped the status
+    // the second one's WHERE no longer matches it — which is what makes
+    // `status` the claim, and this sweep safe to arm on every instance.
+    const [a, b] = await Promise.all([reapStuckConversations(), reapStuckConversations()])
+    expect([...a, ...b].filter((reaped) => reaped === id)).toHaveLength(1)
+  })
+
+  it('does not make a reaped row look like recent user activity', async () => {
+    if (!dbAvailable) return
+    const id = `reap-activity-${Math.random().toString(36).slice(2, 8)}`
+    await seed(id, 'running', past)
+
+    await reapStuckConversations()
+
+    const { rows } = await query<{ stale: boolean }>(
+      `SELECT updated_at < NOW() - INTERVAL '${STUCK_RUN_TIMEOUT_MINUTES} minutes' AS stale
+         FROM conversations WHERE id = $1`,
+      [id],
+    )
+    // `countActiveUsers` counts owners of rows touched in the last 15 minutes.
+    // Had the reap bumped `updated_at`, every reaped conversation's owner would
+    // appear in the preview header's "active" figure.
+    expect(rows[0].stale).toBe(true)
   })
 })

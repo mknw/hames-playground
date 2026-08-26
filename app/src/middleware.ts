@@ -4,7 +4,10 @@
  * SolidStart imports this module once when the server handler graph loads,
  * before any request is served, which makes it the natural place to arm
  * process-wide background work. Two things today: the routine scheduler (#131)
- * and the LLM-usage recorder behind the preview header's global counters.
+ * — whose tick also reconciles runs abandoned at `status='running'`, and which
+ * sweeps once here at boot for exactly the rows the previous process left
+ * behind (#273 D-a) — and the LLM-usage recorder behind the preview header's
+ * global counters.
  *
  * There are no request/response handlers here on purpose — the arming is the
  * module's import side effect, so it costs nothing per request. If a real

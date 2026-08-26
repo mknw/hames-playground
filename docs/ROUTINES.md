@@ -71,6 +71,26 @@ on every save). Shape follows the #82 sandbox sweep and the #97 startup reaper.
 Each tick lists enabled routines, asks the registry `nextDueAt()`, and fires
 what's due. One bad routine is logged and skipped; the sweep continues.
 
+**The tick has a second job** (#273 D-a): it reconciles abandoned runs —
+conversations still at `status='running'` whose last write is older than
+`STUCK_RUN_TIMEOUT_MINUTES` (20) become `error`, so a row whose process died
+mid-turn stops spinning in the sidebar. It runs here because this is the only
+periodic wake-up the server has, and ALSO once at arming, since the rows to
+reconcile are usually the previous process's. The two halves are independent: a
+reap that fails (a database that is not up yet at boot) is logged and the
+routines still fire.
+
+The threshold is one named constant in `lib/db/conversations.server.ts`, and it
+has to exceed the longest legitimate turn — nothing writes to a running row
+between the pre-seed and the final save, so "no state change" cannot tell a slow
+turn from a dead process. The sweep is **multi-instance safe by construction**,
+which it must be because nothing elects a leader: staleness is measured against
+the DATABASE's `NOW()` (not a process clock, and never a process's own memory of
+which turns are live), and `status = 'running'` in the WHERE clause is the claim,
+so two concurrent sweepers serialize on the row lock and `RETURNING` reports each
+reaped row to exactly one of them. `paused` rows are never touched — an approval
+gate waits for a person.
+
 **Session lifecycle** — `onSessionStart` / `onSessionEnd` in
 `lib/routines/dispatch.server.ts`, called from `routes/api/auth/callback.ts`
 (right after `createSession`) and `routes/api/auth/logout.ts`. Both are
@@ -92,7 +112,9 @@ skip. Missed ticks are **not** backfilled: a process that was down for an hour
 fires an hourly routine once on the way back up, not sixty times.
 
 Same persistent-node-server assumption as the agent-trigger endpoint: a restart
-mid-run orphans a `running` row (see AGENT_TRIGGER.md's caveat).
+mid-run orphans a `running` row (see AGENT_TRIGGER.md's caveat) — which the
+reaper above now reconciles to `error` within 20 minutes. It does not recover the
+run; it stops the row from lying about being in flight.
 
 ## Execution
 
@@ -144,7 +166,7 @@ curl -X PATCH localhost:3444/api/routines/<id> -H 'Content-Type: application/jso
 | `lib/routines/triggers.ts`         | The union + registry. Dependency-free, so routes, store and any future client form share it                                                                                                                          |
 | `lib/db/routines.server.ts`        | The `routines` table: CRUD, the trigger-evaluation queries, `claimRoutineRun`                                                                                                                                        |
 | `lib/routines/dispatch.server.ts`  | Claim → run through the agent-trigger path; `fireRoutinesForEvent` + the session hooks. **Server-only, deliberately NOT `"use server"`** — it takes a `userId`, so an RPC surface would let a caller run as any user |
-| `lib/routines/scheduler.server.ts` | The armed tick + `isDue`                                                                                                                                                                                             |
+| `lib/routines/scheduler.server.ts` | The armed tick + `isDue` + the stuck-run sweep (`sweepStuckRuns`)                                                                                                                                                    |
 | `lib/routines/dto.ts`              | Wire shape for the API                                                                                                                                                                                               |
 | `src/middleware.ts`                | The server-boot hook that arms the scheduler                                                                                                                                                                         |
 | `routes/api/routines/*`            | Management API                                                                                                                                                                                                       |
@@ -154,5 +176,6 @@ curl -X PATCH localhost:3444/api/routines/<id> -H 'Content-Type: application/jso
 - A settings-panel UI for routines (the API is the interim surface).
 - Per-routine run history / "last outcome" — today you read the Actions filter.
 - A "run now" endpoint for smoke-testing a routine without waiting.
-- Durable queue / crash recovery — inherited from the agent-trigger caveat.
+- Durable queue / crash recovery — inherited from the agent-trigger caveat. The
+  reaper reconciles the ROW; nothing resumes the run.
 - Future trigger kinds (`webhook`, `threshold`): one registry entry each.

@@ -43,6 +43,16 @@ export interface FakeGateway {
   /** Make one tool fail, so a scenario can drive the loop's error branch. */
   setError(tool: string, message: string): void
   reset(): void
+  /**
+   * Stop accepting connections entirely — the "gateway is down" case, which
+   * `setError` cannot model: a failing TOOL is an ordinary event the controller
+   * reacts to, while a refused connect kills the CATALOG, and the two land in
+   * different layers of `mcp-client.server.ts` (#276). Same mechanism, and same
+   * "this is also the only teardown there is", as `FakeLlm#goDown`.
+   */
+  goDown(): Promise<void>
+  /** Bring a downed gateway back on the SAME port. */
+  comeBack(): Promise<void>
   // No `close()`, for the same reason `FakeLlm` has none: this server is a
   // process-wide singleton shared by every scenario file (`isolate: false`, one
   // fork), so no file may close it, and process exit is the teardown.
@@ -99,7 +109,7 @@ export async function startFakeGateway(port = 0): Promise<FakeGateway> {
   const toolCalls: FakeToolCall[] = []
   const errors = new Map<string, string>()
 
-  const server = http.createServer((req, res) => {
+  const handler: http.RequestListener = (req, res) => {
     if (req.method !== 'POST') {
       // The client may open a GET for the server→client SSE channel. This fake
       // never pushes, so refusing it is correct and the SDK tolerates it.
@@ -160,13 +170,25 @@ export async function startFakeGateway(port = 0): Promise<FakeGateway> {
           reply({})
       }
     })
-  })
+  }
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(port, '127.0.0.1', () => resolve())
-  })
-  const bound = (server.address() as AddressInfo).port
+  let server: http.Server | null = null
+  let bound = port
+
+  async function listen(): Promise<void> {
+    const next = http.createServer(handler)
+    await new Promise<void>((resolve, reject) => {
+      next.once('error', reject)
+      // Re-listens on the port the first bind was given, so a scenario that
+      // brings the gateway back reaches the URL `mcp-client.server.ts` froze
+      // into its module-level const at boot.
+      next.listen(bound, '127.0.0.1', () => resolve())
+    })
+    bound = (next.address() as AddressInfo).port
+    server = next
+  }
+
+  await listen()
 
   return {
     url: `http://127.0.0.1:${bound}/mcp`,
@@ -180,6 +202,20 @@ export async function startFakeGateway(port = 0): Promise<FakeGateway> {
     reset() {
       toolCalls.length = 0
       errors.clear()
+    },
+    async goDown() {
+      if (!server) return
+      const s = server
+      server = null
+      // Sockets first, then close — a pooled keep-alive the MCP client is
+      // holding would otherwise make this await until the client gave up, which
+      // is the shape of a hang rather than of a gateway that is not there.
+      s.closeAllConnections?.()
+      await new Promise<void>((resolve) => s.close(() => resolve()))
+    },
+    async comeBack() {
+      if (server) return
+      await listen()
     },
   }
 }

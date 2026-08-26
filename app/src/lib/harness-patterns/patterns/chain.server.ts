@@ -5,7 +5,13 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import type { UnifiedContext, ContextEvent, ConfiguredPattern, PatternConfig } from '../types'
+import type {
+  UnifiedContext,
+  ContextEvent,
+  ConfiguredPattern,
+  PatternConfig,
+  ErrorEventData,
+} from '../types'
 import {
   createScope,
   commitEvents,
@@ -29,8 +35,9 @@ assertServerOnImport()
  * 3. Adds pattern_enter event
  * 4. Executes pattern function
  * 5. Commits events based on commitStrategy
- * 6. Adds pattern_exit event
- * 7. Passes data forward
+ * 6. Stops the chain if that pattern reported an irrecoverable error
+ * 7. Adds pattern_exit event
+ * 8. Passes data forward
  *
  * @param ctx - UnifiedContext to execute in
  * @param patterns - ConfiguredPatterns to execute in sequence
@@ -100,6 +107,24 @@ export async function runChain<T extends Record<string, unknown>>(
           }
         }
 
+        // 5c. Stop the chain if this pattern reported a failure it cannot come
+        //     back from (#273 D-d). Everything before this read `errorSeverity`
+        //     for presentation only, so an irrecoverable error was recorded and
+        //     then run past: the next pattern ran on a missing result and the
+        //     synthesizer at the end of the chain answered anyway, from a hole.
+        const fatal = firstIrrecoverable(ctx, beforeLen, pattern.config.errorSeverity!)
+        if (fatal) {
+          // NOT `setError()`: the pattern already emitted the `error` event
+          // carrying its LLM-call detail, and setError would push a second one
+          // — a doubled error bubble in the transcript and in every replay of
+          // it (same reasoning as `settleTurn` in harness.server.ts). Only the
+          // status and the message are set; the loop's own guard at the top
+          // sees `status !== 'running'` and stops, after this pattern's
+          // `pattern_exit` below has landed.
+          ctx.status = 'error'
+          ctx.error = fatal
+        }
+
         // 6. Pass data forward
         currentData = result.data
       } catch (error) {
@@ -124,6 +149,40 @@ export async function runChain<T extends Record<string, unknown>>(
     setError(ctx, msg, 'chain')
     return ctx
   }
+}
+
+/**
+ * The message of the first irrecoverable `error` event this pattern committed,
+ * or undefined when it committed none.
+ *
+ * Severity is read from the EVENT first and from the pattern's resolved
+ * `errorSeverity` only as a fallback, because those two answer different
+ * questions. The pattern-level value classifies the pattern ("can a simpleLoop
+ * self-heal?" — usually yes); the event-level one classifies THIS failure, and
+ * a pattern that is recoverable in general can still hit something it cannot
+ * come back from (a loop handed a collapsed tool surface, #276). Only the
+ * failure knows, so when it says, it wins.
+ *
+ * It looks at COMMITTED events rather than at the pattern's scope, so the gate
+ * and the user see the same thing: an error dropped by `commitStrategy` is not
+ * in the transcript, and stopping the chain over a failure with no visible
+ * cause would leave the person with an empty turn and no reason for it. That
+ * makes `commitStrategy: 'never'` a way to opt a pattern out of the gate, which
+ * is the same trade the transcript already makes.
+ */
+function firstIrrecoverable<T>(
+  ctx: UnifiedContext<T>,
+  from: number,
+  patternSeverity: 'recoverable' | 'irrecoverable',
+): string | undefined {
+  for (let i = from; i < ctx.events.length; i++) {
+    const event = ctx.events[i]
+    if (event.type !== 'error') continue
+    const data = event.data as ErrorEventData | undefined
+    if ((data?.severity ?? patternSeverity) !== 'irrecoverable') continue
+    return data?.error || 'Pattern reported an irrecoverable error'
+  }
+  return undefined
 }
 
 /**

@@ -660,9 +660,9 @@ diagnosis, and nothing is reachable from outside.
 
 ## What is not true yet — lands with in-flight work
 
-Two things a reader might reasonably assume are in place, and are not. Both are
-enumerated in `.env.production.example` so the variable is ready when the work
-lands; neither is required to deploy.
+Three things a reader might reasonably assume are in place, and are not. None
+is required to deploy. The two that need a variable have one reserved and
+commented in `.env.production.example`, ready for the day the work lands.
 
 | Claim                                            | Reality today                                                                                                                                                                                                                      | Lands with                                                                                                                                                                                                                                                                                                                                    |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

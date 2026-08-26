@@ -4,8 +4,11 @@
  * SolidStart imports this module once when the server handler graph loads,
  * before any request is served, which makes it the natural place to arm
  * process-wide background work. Three things today: the routine scheduler
- * (#131), the LLM-usage recorder behind the preview header's global counters,
- * and the dev-only inference redirect the browser e2e layer reaches through.
+ * (#131) — whose tick also reconciles runs abandoned at `status='running'`, and
+ * which sweeps once here at boot for exactly the rows the previous process left
+ * behind (#273 D-a) — the LLM-usage recorder behind the preview header's global
+ * counters, and the dev-only inference redirect the browser e2e layer reaches
+ * through.
  *
  * The first two are import side effects, so they cost nothing per request. The
  * third needs an `await`, and must not be reachable from module scope at all;

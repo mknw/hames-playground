@@ -9,6 +9,7 @@ import { assertServerOnImport } from './assert.server'
 import { getActiveSandbox } from '../sandbox/scope.server'
 import { getActiveInjectionGuard } from './injection-guard-scope.server'
 import { hasAppTool, runAppTool, appToolDescriptions } from '../app-tools/index.server'
+import { markGatewayReachable, markGatewayUnreachable } from './gateway-health.server'
 import type { ToolCallResult, MCPToolDescription } from './types'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -466,24 +467,59 @@ export async function listTools(): Promise<MCPToolDescription[]> {
       retry: true,
       label: 'listTools',
     })
-    return [
-      ...tools.map((t) => ({
-        name: t.name,
-        description: t.description ?? '',
-        inputSchema: (t.inputSchema as Record<string, unknown>) ?? {},
-      })),
-      ...appTools,
-    ]
+    markGatewayReachable()
+    return [...tools.map(toDescription), ...appTools]
   } catch (err) {
-    // Reconnect already tried once. If we still failed here, this is a real
-    // problem (gateway down, URL misconfigured, etc.) — log it loudly so the
-    // operator can see it. Returning [] still degrades gracefully for callers
-    // that don't want to crash on a missing tool list, but the cause is no
-    // longer hidden the way it was before this change.
+    // Reconnect already tried once, on the ONE connection the lease held. The
+    // other warm connections can be just as dead (a gateway restart drops all
+    // four keep-alives at once, and only the leased one gets rebuilt), so the
+    // second attempt is worth making from an empty pool — the catch below is
+    // what makes this an attempt rather than a promise.
     const msg = err instanceof Error ? err.message : String(err)
     console.error('[mcp-client] listTools failed after reconnect:', msg)
-    // App-side tools don't depend on the gateway — keep offering them.
-    return appTools
+    try {
+      await closeMcpClient()
+    } catch (closeErr) {
+      // A client that will not close is not a reason to skip the retry — the
+      // pool has already been emptied by `closeMcpClient` before it threw.
+      console.warn(
+        '[mcp-client] pool rebuild hit an error while closing:',
+        closeErr instanceof Error ? closeErr.message : closeErr,
+      )
+    }
+    try {
+      const { tools } = await withReconnect((c) => c.listTools(), {
+        retry: true,
+        label: 'listTools (after pool rebuild)',
+      })
+      console.log('[mcp-client] listTools recovered after a pool rebuild')
+      markGatewayReachable()
+      return [...tools.map(toDescription), ...appTools]
+    } catch (retryErr) {
+      // The gateway is genuinely not answering. RECORD it (#276): returning
+      // the app-side tools alone still degrades gracefully for callers that
+      // must not crash on a missing catalog, but a caller that would otherwise
+      // run a tool loop with an empty tool list — and answer as if it had
+      // tools — can now find out why instead.
+      const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr)
+      console.error('[mcp-client] listTools failed after a pool rebuild too:', retryMsg)
+      markGatewayUnreachable(retryMsg)
+      // App-side tools don't depend on the gateway — keep offering them.
+      return appTools
+    }
+  }
+}
+
+/** One SDK tool descriptor in this package's shape. */
+function toDescription(t: {
+  name: string
+  description?: string
+  inputSchema?: unknown
+}): MCPToolDescription {
+  return {
+    name: t.name,
+    description: t.description ?? '',
+    inputSchema: (t.inputSchema as Record<string, unknown>) ?? {},
   }
 }
 

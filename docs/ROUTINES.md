@@ -71,6 +71,49 @@ on every save). Shape follows the #82 sandbox sweep and the #97 startup reaper.
 Each tick lists enabled routines, asks the registry `nextDueAt()`, and fires
 what's due. One bad routine is logged and skipped; the sweep continues.
 
+**The tick has a second job** (#273 D-a): it reconciles abandoned runs —
+conversations still at `status='running'` whose last write is older than
+`STUCK_RUN_TIMEOUT_MINUTES` become `error`, so a row whose process died mid-turn
+stops claiming to be working. It runs here because this is the only periodic
+wake-up the server has, and ALSO once at arming, since the rows to reconcile are
+usually the previous process's. The two halves are independent: a reap that
+fails (a database that is not up yet at boot) is logged and the routines still
+fire.
+
+**The threshold is derived, not chosen** (#278 F3). A running row gets no write
+between the pre-seed and the final save, so "no state change" cannot tell a slow
+turn from a dead process and the only protection a live turn has is that the
+threshold outlasts it. The arithmetic is on the constant in
+`lib/db/conversations.server.ts`: the tool loop at `SETTINGS_BOUNDS`' ceiling
+plus the single-call patterns around it (25 calls), times the **180s** per-call
+timeout, times a 1.2 margin — **90 minutes**. The 20 minutes it replaces was
+exactly two of the 600s per-call ceilings in force at the time, which is what
+CLAUDE.md measures a burst into a sleeping box spending in ONE turn; a 21-minute
+live turn was duly reaped. The number tightens on its own when the per-call
+ceiling drops, and did: #279 took that ceiling from 600s to 180s and this
+threshold from five hours to 90 minutes, with no edit here. The wake ping #279
+puts in front of a turn (up to 300s) is the one term outside the product and is
+covered by the margin — 75 + 5 = 80 minutes against 90 — which
+`stuck-run-reaper.test.ts` pins against the real constant.
+
+**What the reap is visible AS** is honest data at rest, not a spinner stopping —
+a live run's spinner is `session-registry`'s per-tab `isProcessing` signal,
+which a reload clears whatever the row says. Since #278 F4 the sidebar shows a
+failure glyph for a CONVERSATION row at `error` (it previously showed one only
+for `kind='action'` rows), so a reaped conversation is at least distinguishable
+from one that answered.
+
+The threshold is one named constant in `lib/db/conversations.server.ts`, and it
+has to exceed the longest legitimate turn — nothing writes to a running row
+between the pre-seed and the final save, so "no state change" cannot tell a slow
+turn from a dead process. The sweep is **multi-instance safe by construction**,
+which it must be because nothing elects a leader: staleness is measured against
+the DATABASE's `NOW()` (not a process clock, and never a process's own memory of
+which turns are live), and `status = 'running'` in the WHERE clause is the claim,
+so two concurrent sweepers serialize on the row lock and `RETURNING` reports each
+reaped row to exactly one of them. `paused` rows are never touched — an approval
+gate waits for a person.
+
 **Session lifecycle** — `onSessionStart` / `onSessionEnd` in
 `lib/routines/dispatch.server.ts`, called from `routes/api/auth/callback.ts`
 (right after `createSession`) and `routes/api/auth/logout.ts`. Both are
@@ -92,7 +135,10 @@ skip. Missed ticks are **not** backfilled: a process that was down for an hour
 fires an hourly routine once on the way back up, not sixty times.
 
 Same persistent-node-server assumption as the agent-trigger endpoint: a restart
-mid-run orphans a `running` row (see AGENT_TRIGGER.md's caveat).
+mid-run orphans a `running` row (see AGENT_TRIGGER.md's caveat) — which the
+reaper above reconciles to `error` once the row is older than any turn could
+legitimately be. It does not recover the run; it stops the row from lying about
+being in flight.
 
 ## Execution
 
@@ -144,7 +190,7 @@ curl -X PATCH localhost:3444/api/routines/<id> -H 'Content-Type: application/jso
 | `lib/routines/triggers.ts`         | The union + registry. Dependency-free, so routes, store and any future client form share it                                                                                                                          |
 | `lib/db/routines.server.ts`        | The `routines` table: CRUD, the trigger-evaluation queries, `claimRoutineRun`                                                                                                                                        |
 | `lib/routines/dispatch.server.ts`  | Claim → run through the agent-trigger path; `fireRoutinesForEvent` + the session hooks. **Server-only, deliberately NOT `"use server"`** — it takes a `userId`, so an RPC surface would let a caller run as any user |
-| `lib/routines/scheduler.server.ts` | The armed tick + `isDue`                                                                                                                                                                                             |
+| `lib/routines/scheduler.server.ts` | The armed tick + `isDue` + the stuck-run sweep (`sweepStuckRuns`)                                                                                                                                                    |
 | `lib/routines/dto.ts`              | Wire shape for the API                                                                                                                                                                                               |
 | `src/middleware.ts`                | The server-boot hook that arms the scheduler                                                                                                                                                                         |
 | `routes/api/routines/*`            | Management API                                                                                                                                                                                                       |
@@ -154,5 +200,6 @@ curl -X PATCH localhost:3444/api/routines/<id> -H 'Content-Type: application/jso
 - A settings-panel UI for routines (the API is the interim surface).
 - Per-routine run history / "last outcome" — today you read the Actions filter.
 - A "run now" endpoint for smoke-testing a routine without waiting.
-- Durable queue / crash recovery — inherited from the agent-trigger caveat.
+- Durable queue / crash recovery — inherited from the agent-trigger caveat. The
+  reaper reconciles the ROW; nothing resumes the run.
 - Future trigger kinds (`webhook`, `threshold`): one registry entry each.

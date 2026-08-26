@@ -21,6 +21,7 @@
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { query } from './client.server'
+import { SETTINGS_BOUNDS } from '../settings'
 import {
   decryptFieldOrNull,
   decryptJsonb,
@@ -238,6 +239,191 @@ export async function setConversationStatus(
      WHERE id = $2 AND user_id = $3`,
     [status, id, userId],
   )
+}
+
+/**
+ * The per-LLM-call ceiling in force: `VerdaQwen`'s `request_timeout_ms` of
+ * 180_000 (`baml_src/verda-client.baml`), which is the only declared one and
+ * belongs to the DEPLOYMENT DEFAULT tier. It is the single term below that
+ * dominates everything else, so it is the number that moves the threshold.
+ *
+ * **Three minutes, not ten, since #279** — that PR moved the cold start out in
+ * front of the turn (a wake ping, `lib/inference/wake.server.ts`) so the client's
+ * own timeout could be sized for a WARM call, and derived it from the halved
+ * `max_tokens` of 4 096: a full-cap generation has to finish inside the timeout
+ * or the truncation retry can never fire. Both halves of that are one decision
+ * and the arithmetic is stated on the client; this constant only mirrors the
+ * result, and `stuck-run-reaper.test.ts` pins the mirror against the `.baml`
+ * declaration rather than trusting it — BAML exports nothing a module can read
+ * the number from, so the copy has to be held by a source scan.
+ *
+ * This is a MIRROR, exported for the pin and for the derivation's own test. It
+ * is not the declaration: change `request_timeout_ms` and this follows, or the
+ * scan goes red naming both numbers.
+ */
+export const PER_CALL_TIMEOUT_MINUTES = 3
+
+/**
+ * The most sequential LLM calls one turn can make, on the longest chain a
+ * BROWSER can ask for.
+ *
+ * `SETTINGS_BOUNDS.maxToolTurns[1]` is the tool loop's ceiling and it is
+ * client-settable (`SettingsPanel`, clamped server-side), so the reachable
+ * bound is the ceiling and not the default of 5. `CHAIN_OVERHEAD_CALLS` covers
+ * the single-call patterns a registered chain wraps around that loop — router,
+ * compactIntent, planner, compactExecution — plus one spare, because the count
+ * is a property of whichever agent is registered and a new one must not
+ * silently invalidate the arithmetic.
+ *
+ * `actorCritic` is the other loop shape and is bounded by
+ * `SETTINGS_BOUNDS.maxRetries[1]` at an actor call plus a critic call per
+ * attempt; `Math.max` takes whichever loop is worse rather than assuming.
+ */
+export const CHAIN_OVERHEAD_CALLS = 5
+const MAX_SEQUENTIAL_LLM_CALLS =
+  Math.max(SETTINGS_BOUNDS.maxToolTurns[1], 2 * SETTINGS_BOUNDS.maxRetries[1]) +
+  CHAIN_OVERHEAD_CALLS
+
+/**
+ * How long a row may sit at `status='running'` with NO write of its own before
+ * the sweep below calls it abandoned.
+ *
+ * **Derived, not chosen** — the arithmetic is right here because the previous
+ * value was not supported by its own stated rationale. A running row is not
+ * touched again between the pre-seed and the final `saveSession`, so there is
+ * no mid-turn heartbeat and "no state change" cannot distinguish a slow turn
+ * from a dead process. The ONLY protection a live turn has is that this
+ * threshold outlasts it, which makes the number a bound and not a preference:
+ *
+ *     worst legitimate turn = MAX_SEQUENTIAL_LLM_CALLS × PER_CALL_TIMEOUT_MINUTES
+ *                           = (max(maxToolTurns 15, 2 × maxRetries 10) + 5) × 3 min
+ *                           =  25 calls × 3 min = 75 min
+ *     threshold             = ceil(worst × MARGIN 1.2) = 90 min
+ *
+ * **Every term is read from where it lives**, which is the property that makes
+ * this survive an edit somewhere else: the two loop bounds come from the
+ * exported {@link SETTINGS_BOUNDS}, so widening a slider lengthens this with no
+ * edit here, and {@link PER_CALL_TIMEOUT_MINUTES} mirrors the client's
+ * `request_timeout_ms` under a source-scan pin. The pin in
+ * `stuck-run-reaper.test.ts` imports all three rather than restating them —
+ * local copies there were what made the last ceiling change fail with a
+ * *misleading* message (N1 on #278): 90 minutes is the right answer at a
+ * 3-minute ceiling, and a test holding a stale 250 accused it of being unsafe.
+ *
+ * The value it replaces was 20 minutes, and 20 minutes is exactly 2 × the 600s
+ * per-call ceiling then in force — while CLAUDE.md's own measurement of a burst
+ * into a sleeping box is that ceiling being hit *twice in one turn* (controller,
+ * then synthesizer). It was therefore a coin flip on the shape it was written
+ * against, and a 21-minute turn was in fact reaped out from under itself in
+ * review: the reap wrote `error`, the turn later wrote its own outcome over it,
+ * and in between the row lied and `sweepStuckRuns` logged an abandonment that
+ * had not happened. The owner's "~20 min" was policy intent — reap STUCK runs,
+ * never live ones — and the intent is what this honours; the number was never
+ * the thing being asked for.
+ *
+ * **The wake is the one term not in the product, and it fits.** #279 parks a
+ * turn on a wake ping before its first LLM call, for up to
+ * `VERDA_WAKE_TIMEOUT_MS` (300s, `lib/inference/wake.server.ts`), and the row is
+ * pre-seeded before that wait — so the worst legitimate turn is really 75 + 5 =
+ * **80 minutes against a 90-minute threshold**, 10 minutes clear. It is folded
+ * into the margin rather than added as a term because it is bounded, once per
+ * turn (concurrent turns share one ping) and two orders of magnitude below the
+ * chain; `stuck-run-reaper.test.ts` pins the inequality against the real
+ * constant so a longer wake fails here rather than shortening a live turn's
+ * protection in silence.
+ *
+ * **The margin is 1.2, and the wake above is the only other thing it absorbs.**
+ * It is not slack for an unaccounted term: every term in the product is a hard
+ * ceiling the app enforces, and the margin exists so that a turn sitting at the
+ * bound is not racing the sweep.
+ *
+ * The cost of the larger number is bounded and small: an abandoned row is
+ * reconciled later, and nothing else changes — reaping was never what a WAITING
+ * user sees (a live run's spinner is `session-registry`'s per-tab
+ * `isProcessing` signal, which a reload clears whatever the row says). What the
+ * reap buys is honest data at rest, and honest data late beats a wrong status
+ * early.
+ *
+ * It tightens when the per-call ceiling does, and has once already: see
+ * {@link PER_CALL_TIMEOUT_MINUTES}, which #279 took from 10 minutes to 3 and
+ * this expression from 300 minutes to 90, with no other edit.
+ */
+const STUCK_RUN_MARGIN = 1.2
+export const STUCK_RUN_TIMEOUT_MINUTES = Math.ceil(
+  MAX_SEQUENTIAL_LLM_CALLS * PER_CALL_TIMEOUT_MINUTES * STUCK_RUN_MARGIN,
+)
+
+/**
+ * Reconcile abandoned runs: every row still at `status='running'` whose last
+ * write is older than {@link STUCK_RUN_TIMEOUT_MINUTES} becomes `'error'`.
+ * Returns the ids it changed (for the caller's log and for tests).
+ *
+ * The rows this exists for are the ones no code path will ever finish: the
+ * process died mid-turn, so the `catch` in `turn.server.ts#runAndSave` that
+ * normally flips a failed row out of `running` (sf-M2/sf-M3) never ran. Such a
+ * row claims to be working and is not, which is the same dishonesty the
+ * app-path e2e suite exists to forbid — just at rest rather than in a turn.
+ *
+ * **What it is NOT is "a spinner nothing can clear"** — an earlier version of
+ * this docstring said that and it was wrong (F4 on #278). A live run's spinner
+ * is `session-registry`'s client-side `isProcessing` signal, per browser tab; it
+ * is never seeded from the persisted status and a reload clears it whatever the
+ * row says. What the reap actually buys is honest data AT REST — a
+ * `kind='action'` row's badge, the row's own status wherever it is read, and a
+ * conversation that no longer reports itself as running to anything that asks.
+ * `rowIndicator` shows a conversation's `error` since F4, so the correction is
+ * "a reaped row now says so", not "a spinner stops".
+ *
+ * **Multi-instance safe, and it has to be, because nothing elects a leader.**
+ * Every input is in the database:
+ *
+ *   - the freshness test is `updated_at` against the DATABASE's `NOW()`, so two
+ *     app instances agree on the deadline even with skewed host clocks, and an
+ *     instance that just booted judges another instance's rows correctly — it
+ *     holds no memory of which turns are live, and must not, since its own
+ *     in-flight set says nothing about anyone else's;
+ *   - `status = 'running'` in the WHERE clause is the claim. Postgres takes a
+ *     row lock per UPDATE, so two concurrent sweeps serialize: the first flips
+ *     the row and the second no longer matches it, which is why `RETURNING`
+ *     reports each reaped row to exactly one sweeper and the sweep is
+ *     idempotent rather than merely repeatable.
+ *
+ * The one interleaving left is a turn that outlives the threshold: it is reaped
+ * mid-flight and then overwrites the reap with its own outcome. That is the
+ * threshold's job to prevent, not this statement's — see the constant.
+ *
+ * Cross-user by design (no `user_id` scope): this is a process-wide sweep, not
+ * a request, and an abandoned row is abandoned whoever owns it. It reads and
+ * writes only plaintext columns — `status`, `updated_at`, and `id` for the
+ * report — so no key is needed and no `context` blob is touched. Like
+ * {@link countActiveUsers}, it lives here because this module owns SQL against
+ * `conversations` (`encryption-coverage.test.ts` pins that nothing else does).
+ *
+ * `paused` is deliberately untouched: an approval gate waits for a person, for
+ * as long as that takes, and reaping one would discard resumable work.
+ *
+ * **`updated_at` is left alone**, which is the one place this write differs
+ * from every other write in this module. Two reasons, both about what the
+ * column means: it is the app's record of "this user did something"
+ * ({@link countActiveUsers} reads exactly that, per poll, per tab), and a sweep
+ * is not something the user did — bumping it would report every reaped
+ * conversation's owner as active. It is also what the sidebar renders as "x
+ * ago", where the abandonment time is the honest answer and the reap time is
+ * not. Nothing depends on it advancing here: the idempotence above comes from
+ * `status`, not from the timestamp.
+ */
+export async function reapStuckConversations(): Promise<string[]> {
+  // The interval is a constant, never a caller value — inlined for the same
+  // reason `countActiveUsers` inlines its window (readability over
+  // `make_interval` with a bound parameter).
+  const { rows } = await query<{ id: string }>(
+    `UPDATE conversations
+        SET status = 'error'
+      WHERE status = 'running'
+        AND updated_at < NOW() - INTERVAL '${STUCK_RUN_TIMEOUT_MINUTES} minutes'
+      RETURNING id`,
+  )
+  return rows.map((r) => r.id)
 }
 
 /**

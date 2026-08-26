@@ -1310,21 +1310,80 @@ background work, so requests and tokens are what matter.
 
 ## Configuration System
 
-Two orthogonal configuration axes:
+Three orthogonal configuration axes:
 
-| Axis               | Controls              | Options                                         |
-| ------------------ | --------------------- | ----------------------------------------------- |
-| **commitStrategy** | _When_ to commit      | `'always'`, `'on-success'`, `'last'`, `'never'` |
-| **trackHistory**   | _What types_ to track | `true`, `false`, `EventType`, or `EventType[]`  |
+| Axis               | Controls                        | Options                                         |
+| ------------------ | ------------------------------- | ----------------------------------------------- |
+| **commitStrategy** | _When_ to commit                | `'always'`, `'on-success'`, `'last'`, `'never'` |
+| **trackHistory**   | _What types_ to track           | `true`, `false`, `EventType`, or `EventType[]`  |
+| **errorSeverity**  | Whether a failure ends the turn | `'recoverable'`, `'irrecoverable'`              |
 
 ```typescript
 interface PatternConfig {
   patternId?: string
   commitStrategy?: CommitStrategy
   trackHistory?: TrackHistory
+  errorSeverity?: 'recoverable' | 'irrecoverable'
   viewConfig?: ViewConfig
 }
 ```
+
+### errorSeverity — the chain gate
+
+Patterns do not throw on failure; they record an `error` event and return. So
+`runChain` decides what a recorded failure means, and `errorSeverity` is that
+decision:
+
+- **`recoverable`** — the chain continues. The failure cost something (a turn
+  budget, a plan, a set of matches) but the patterns after it can still produce
+  an honest answer. A `simpleLoop` that exhausts `maxTurns` is the canonical
+  case: it records a recoverable error and the `compactExecution` answers from
+  the partial results.
+- **`irrecoverable`** — the chain stops at that pattern. `ctx.status` becomes
+  `'error'`, `ctx.error` carries the message, and the pattern's own error event
+  is what the user sees (no second event is pushed, so the transcript shows one
+  error bubble rather than two). Everything after it is skipped, because the
+  alternative is a downstream synthesizer composing a confident answer out of
+  an execution that produced nothing.
+
+Two levels, and the finer one wins:
+
+| Where                                                                   | Classifies                                                | Read when                            |
+| ----------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------ |
+| `PatternConfig.errorSeverity` (default: `DEFAULT_ERROR_SEVERITY[type]`) | the PATTERN — can this kind of pattern usually self-heal? | the event carries no severity        |
+| `ErrorEventData.severity`                                               | this FAILURE                                              | always, and it overrides the pattern |
+
+The event level exists because a pattern that is recoverable in general can hit
+something it cannot come back from. Three do today, and they are all the same
+shape — _this run produced nothing for a later pattern to work with_:
+
+- `simpleLoop` / `actorCritic` handed a **collapsed tool surface** (the gateway
+  is unreachable, so the pattern lost the tools it would have had). No further
+  iteration can bring them back. See `gateway-health.server.ts` — and note the
+  guard fires on an amputated list as well as an empty one, because `listTools`
+  degrades to the app-side tools rather than to `[]`.
+- `guardrail` when an input rail **blocks** or the **circuit breaker trips**.
+  Both `return scope` without running the wrapped pattern, so the execution the
+  chain is composing from does not exist. The pattern default stays
+  `recoverable`, which is correct for the case it was written against: an output
+  rail with `action: 'warn'` records an `error` event BY DESIGN.
+- `parallel` when **no branch survived**, and when the fan-out itself throws.
+  The default is right while one branch came back — the survivors are what the
+  rest of the chain is for — and says nothing about zero.
+
+In every case the classification is stamped on the EVENT rather than moved to
+the pattern default, because only the failure knows which of the two it is.
+
+Severity also drives presentation — `errorBubble` paints `recoverable` as a
+warning and everything else as an error — and the gate only ever considers
+events that were actually COMMITTED, so an error the transcript does not show
+cannot stop the chain silently. `commitStrategy: 'never'` therefore opts a
+pattern out of the gate.
+
+**Every pattern type in the package has a `DEFAULT_ERROR_SEVERITY` entry.** The
+fallback for an unknown (`configurePattern`) name is `'recoverable'`: we know
+nothing about a pattern we have never seen, and the rule is to gate only when
+the turn genuinely cannot continue.
 
 ### ViewConfig Options
 
@@ -1389,6 +1448,10 @@ router(
 - `compactExecution`: `trackHistory: 'assistant_message'`, `commitStrategy: 'always'`
 - `compactIntent`: `trackHistory: 'intent_compacted'`, `commitStrategy: 'always'`, default `viewConfig` of last 5 message turns
 - `planner`: `trackHistory: 'plan_created'`, `commitStrategy: 'always'`, default `viewConfig` of last 2 message turns
+- `errorSeverity`: `irrecoverable` for `compactExecution`, `router`, `routes` and
+  `chain` — the four whose failure leaves nothing for a later pattern to work
+  with; `recoverable` for every other type. The per-type rationale is on
+  `DEFAULT_ERROR_SEVERITY` in `types.ts`, one comment per entry.
 
 ## Event → BAML Type Mapping
 

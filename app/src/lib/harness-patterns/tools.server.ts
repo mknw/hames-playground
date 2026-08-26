@@ -7,6 +7,7 @@
 import { assertServerOnImport } from './assert.server'
 import { listTools as mcpListTools } from './mcp-client.server'
 import { appToolNamespace } from '../app-tools/index.server'
+import { gatewayDegradation, markDegradedToolSurface } from './gateway-health.server'
 import type { ToolSet, MCPToolDescription } from './types'
 
 assertServerOnImport()
@@ -43,6 +44,23 @@ function groupTools(mcpTools: MCPToolDescription[]): ToolSet {
   }
 
   const all = mcpTools.map((t) => t.name)
+
+  // Provenance for the outage guard (#278 F1). `all` means "every tool this app
+  // can reach", and the gateway is part of that surface whether or not it
+  // answered — so an `all` built during an outage is an AMPUTATED whole surface,
+  // not a small one. The pattern that receives it cannot tell: `listTools`
+  // degrades to the app-side tools, and those are byte-identical to the list
+  // `microsoft-365` composes on purpose. Recording it here is the only place
+  // both facts are in hand at once — which catalog read this came from, and
+  // whether that read reached the gateway.
+  //
+  // Only `all` is marked, and that is sufficient rather than a shortcut: a
+  // gateway namespace has no key at all under an outage (`grouped` only gets a
+  // key for a namespace some tool landed in), so `tools.neo4j ?? []` reaches
+  // the guard as an empty array and the empty half of the check already holds
+  // it. Marking the surviving app-side namespaces instead would refuse
+  // `tools.graph` for an outage that costs it nothing.
+  if (gatewayDegradation()) markDegradedToolSurface(all)
 
   return { ...grouped, all } as ToolSet
 }

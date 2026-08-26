@@ -43,7 +43,7 @@ failure (e.g. Redis down) is logged and the run still proceeds.
 | `routes/api/agents/[id].ts`                  | The route: auth, multipart parse, recording store, seed row, fire-and-forget, `202`                                                                                                                                                                      |
 | `lib/auth/action-tokens.server.ts`           | Parse `configs/action-tokens.yaml` → `secret → userId` map (cached); `bearerSecret()` header extraction                                                                                                                                                  |
 | `lib/harness-client/action-runner.server.ts` | `seedActionRow` (observable `running` row) + `runAgentInBackground` (fresh harness run, off the request path). **Server-only, deliberately NOT `"use server"`** — it takes a `userId`, so exposing it as a client RPC would let a caller run as any user |
-| `lib/harness-client/turn.server.ts`           | `runTurnAndPersist` — the one implementation of run-a-turn-and-persist, shared with the interactive path (#226 C5). `runAgentInBackground` is this in `triggered` mode |
+| `lib/harness-client/turn.server.ts`          | `runTurnAndPersist` — the one implementation of run-a-turn-and-persist, shared with the interactive path (#226 C5). `runAgentInBackground` is this in `triggered` mode                                                                                   |
 | `lib/harness-client/actions.server.ts`       | `promoteAction()` server action (flip `kind`); `ConversationSummary` carries `kind`/`source`/`status`                                                                                                                                                    |
 | `lib/db/conversations.server.ts`             | `kind`/`source`/`status` columns; `promoteConversation`, `setConversationStatus`; `saveConversation` keeps `kind`/`source` immutable on update                                                                                                           |
 
@@ -67,9 +67,18 @@ failure (e.g. Redis down) is logged and the run still proceeds.
 Precedent: `routes/api/events.ts` already fires post-response async work
 (title-gen, tool-result summaries).
 
-**Caveat (be honest):** a process restart mid-run orphans a `running` row
-(detectable as stale). Crash-recovery / retries are an upgrade path — a
-Postgres-polling worker. Assumes a **persistent node server** (not serverless).
+**Caveat (be honest):** a process restart mid-run orphans a `running` row.
+Since #273 D-a the row no longer spins forever — the routines tick sweeps rows
+stuck at `running` with no write for `STUCK_RUN_TIMEOUT_MINUTES` to `error`, on
+boot and every 30s (see ROUTINES.md → "Trigger evaluation"). That threshold is
+**derived from the longest turn a browser can ask for** rather than picked, and
+is therefore long (90 minutes at the 180s per-call ceiling #279 landed — it was
+five hours at the 600s one that preceded it, and moved on its own); the
+alternative is reaping a turn that is still legitimately in flight, which a
+20-minute threshold demonstrably did. It reconciles the ROW, not the
+run: nothing resumes the work, and crash-recovery / retries are still an upgrade
+path — a Postgres-polling worker. Assumes a **persistent node server** (not
+serverless).
 
 ## Data model — ONE table (`conversations`)
 
@@ -165,4 +174,5 @@ ingestion pipeline (binary is skipped by ingest). See [DATA_STASH.md](DATA_STASH
 
 - Completion email / push notification (per-agent settings).
 - A dedicated observability view for agent runs (the Actions filter is the interim surface).
-- Durable queue / crash-recovery worker (the fire-and-forget orphan caveat above).
+- Durable queue / crash-recovery worker (the fire-and-forget orphan caveat
+  above — the reaper reconciles the row's status, it does not resume the run).

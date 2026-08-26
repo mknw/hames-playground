@@ -934,14 +934,50 @@ export const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy> = {
   retriever: 'always',
 }
 
-/** Default errorSeverity by pattern type.
- *  Loops are recoverable (may self-heal on next iteration);
- *  non-loop patterns are irrecoverable (no retry mechanism). */
+/**
+ * Default errorSeverity by pattern type — and, since #273 D-d, the map that
+ * decides whether an `error` event STOPS THE CHAIN.
+ *
+ * `runChain` reads it (through `resolveConfig`, and only when the event itself
+ * carries no `severity`): an irrecoverable error ends the turn where it
+ * happened instead of letting the patterns after it answer around the hole.
+ * Before that it fed presentation only — `errorBubble` paints recoverable as a
+ * warning and everything else as an error — so a wrong entry here was cosmetic.
+ * It is not any more. The question each entry answers is the owner's:
+ *
+ *   **can this turn still produce an honest answer after this failure?**
+ *
+ * Yes → `recoverable`, whatever else the failure cost. No → `irrecoverable`,
+ * because the alternative is a downstream synthesizer composing a confident
+ * answer out of nothing, which is the failure mode the app-path e2e suite calls
+ * dishonest.
+ *
+ * Every pattern type in this package has an entry, so `resolveConfig`'s
+ * fallback only ever covers a custom `configurePattern` name.
+ */
 export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverable'> = {
+  // The loops may self-heal on the next iteration, and when they cannot, they
+  // still return their partial results: a loop that exhausts `maxTurns`
+  // records a recoverable error and the synthesizer answers from what it got
+  // (#83). Note this is the PATTERN default — the loops stamp a severity on
+  // each error event themselves, and one of them is deliberately harsher: a
+  // collapsed tool surface is stamped irrecoverable at the event, because no
+  // further iteration of THAT loop can bring the tools back (#276).
   simpleLoop: 'recoverable',
   actorCritic: 'recoverable',
+  // compactExecution is the answer. If it fails there is nothing to show, so
+  // there is nothing for a later pattern to add — and `settleTurn` already
+  // reports the turn as failed on exactly this shape (empty response + an
+  // error).
   compactExecution: 'irrecoverable',
+  // A router failure clears `data.route`, and `routes()` then throws rather
+  // than dispatching last turn's route — so this classification agrees with
+  // what already happens one pattern later, and now says it at the pattern
+  // that actually failed instead of via a message about missing wiring.
   router: 'irrecoverable',
+  // routes' own error is "the router named a route I do not have". Nothing ran,
+  // so every pattern after this one would be composing from an empty
+  // execution.
   routes: 'irrecoverable',
   chain: 'irrecoverable',
   // compactIntent is best-effort: on failure it leaves intent unset and the
@@ -954,4 +990,29 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   // retriever is best-effort: a backend failure yields empty matches and the
   // compactExecution answers from whatever else is in context — never fatal.
   retriever: 'recoverable',
+  // ---------------------------------------------------------------------------
+  // The five below were unlisted until #273 D-d, and therefore inherited
+  // `resolveConfig`'s `'irrecoverable'` fallback. That was harmless while
+  // nothing read severity for control flow and wrong the moment something did:
+  // each of these emits `error` events for things a turn plainly survives, and
+  // the guardrail one is the clearest — an output rail with `action: 'warn'`
+  // records an `error` event BY DESIGN, so a chain-fatal default would have let
+  // a warning kill the turn. They are spelled out rather than left to the
+  // fallback so the next reader sees a decision instead of an omission.
+  // ---------------------------------------------------------------------------
+  // A blocked rail returns the scope early and a warning does not even do that;
+  // the wrapped pattern's own errors carry their own severity.
+  guardrail: 'recoverable',
+  // judge is advisory ranking. "No candidates to evaluate" is a normal outcome
+  // of an execution that found nothing, not a reason to stop.
+  judge: 'recoverable',
+  // parallel logs one event per rejected BRANCH and keeps every fulfilled
+  // one — the surviving branches are exactly what the rest of the chain is for.
+  parallel: 'recoverable',
+  // hook fires side effects (session close, approval timeout). Its failure
+  // costs the side effect, never the answer.
+  hook: 'recoverable',
+  // withReferences failing means the inner pattern ran without curated prior
+  // results, i.e. the behaviour it had before the wrapper existed.
+  withReferences: 'recoverable',
 }

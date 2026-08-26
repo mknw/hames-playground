@@ -40,8 +40,20 @@ const {
 type ChatThreadSummary = import('../../../components/ark-ui/ChatSidebar').ChatThreadSummary
 
 const persisted: ChatThreadSummary[] = [
-  { id: 'a', title: 'Alpha', updatedAt: '2026-05-10T00:00:00Z', kind: 'conversation', status: 'done' },
-  { id: 'b', title: 'Beta', updatedAt: '2026-05-09T00:00:00Z', kind: 'conversation', status: 'done' },
+  {
+    id: 'a',
+    title: 'Alpha',
+    updatedAt: '2026-05-10T00:00:00Z',
+    kind: 'conversation',
+    status: 'done',
+  },
+  {
+    id: 'b',
+    title: 'Beta',
+    updatedAt: '2026-05-09T00:00:00Z',
+    kind: 'conversation',
+    status: 'done',
+  },
 ]
 
 describe('mergeThreadsWithPlaceholder', () => {
@@ -50,11 +62,7 @@ describe('mergeThreadsWithPlaceholder', () => {
   })
 
   it('prepends an optimistic placeholder when its id is not yet persisted', () => {
-    const merged = mergeThreadsWithPlaceholder(
-      persisted,
-      'new-id',
-      () => '2026-05-10T12:00:00Z',
-    )
+    const merged = mergeThreadsWithPlaceholder(persisted, 'new-id', () => '2026-05-10T12:00:00Z')
     expect(merged).toHaveLength(3)
     expect(merged[0]).toEqual({
       id: 'new-id',
@@ -70,7 +78,13 @@ describe('mergeThreadsWithPlaceholder', () => {
 
   it('drops the placeholder once a persisted row with the same id arrives', () => {
     const withRow: ChatThreadSummary[] = [
-      { id: 'new-id', title: 'First message…', updatedAt: '2026-05-10T12:00:00Z', kind: 'conversation', status: 'done' },
+      {
+        id: 'new-id',
+        title: 'First message…',
+        updatedAt: '2026-05-10T12:00:00Z',
+        kind: 'conversation',
+        status: 'done',
+      },
       ...persisted,
     ]
     const merged = mergeThreadsWithPlaceholder(withRow, 'new-id')
@@ -98,11 +112,7 @@ describe('mergeThreadsWithPlaceholder', () => {
       status: 'done' as const,
     }))
     const uuid = '550e8400-e29b-41d4-a716-446655440000'
-    const merged = mergeThreadsWithPlaceholder(
-      legacy,
-      uuid,
-      () => '2026-05-10T12:00:00Z',
-    )
+    const merged = mergeThreadsWithPlaceholder(legacy, uuid, () => '2026-05-10T12:00:00Z')
     expect(merged).toHaveLength(legacy.length + 1)
     expect(merged[0].id).toBe(uuid)
     expect(merged[0].isPlaceholder).toBe(true)
@@ -121,14 +131,33 @@ describe('rowIndicator', () => {
     expect(rowIndicator({ kind: 'action', status: 'done' })).toBe('action-done')
   })
 
-  // A conversation must never pick up the action-only badges, which would
+  // A conversation must never pick up the action-ONLY badges, which would
   // brand an ordinary chat as POST-triggered — even when its persisted
   // status says 'running' (which is also the at-rest value for completed
   // chats; the harness never writes 'done').
-  it('never returns a badge for a conversation', () => {
+  it('never returns an action badge for a conversation', () => {
     for (const status of ['running', 'paused', 'done', 'error'] as const) {
+      expect(rowIndicator({ kind: 'conversation', status })).not.toMatch(/^action-/)
+    }
+  })
+
+  it('shows nothing for a conversation that is running, paused or finished', () => {
+    // A live run in this browser is the progress strip's job, and 'running' is
+    // also the at-rest value of a completed chat — a badge on either would be
+    // noise on every row in the list.
+    for (const status of ['running', 'paused', 'done'] as const) {
       expect(rowIndicator({ kind: 'conversation', status })).toBe('none')
     }
+  })
+
+  it('shows a conversation that ended in error, so a reap is visible (F4 #278)', () => {
+    // This case used to return 'none' with the rest, and the reaper's whole
+    // user-visible effect was therefore an ACTION-row badge: the three
+    // abandoned conversations in the dev database that motivated the feature
+    // looked exactly the same before and after being reconciled. The progress
+    // strip cannot cover it — it reports a run happening now, and these are
+    // rows where nothing is happening at all.
+    expect(rowIndicator({ kind: 'conversation', status: 'error' })).toBe('error')
   })
 })
 
@@ -136,29 +165,21 @@ describe('progressPercent', () => {
   // Between run start and the chainTurnEstimate seed there is no denominator
   // — null tells the strip to render its indeterminate shimmer.
   it('is null before any projection is seeded', () => {
-    expect(
-      progressPercent({ currentTurn: 0, pathProjection: 0, maxProjection: 0 }),
-    ).toBeNull()
+    expect(progressPercent({ currentTurn: 0, pathProjection: 0, maxProjection: 0 })).toBeNull()
   })
 
   it('divides currentTurn by the path projection', () => {
-    expect(
-      progressPercent({ currentTurn: 2, pathProjection: 8, maxProjection: 8 }),
-    ).toBe(25)
+    expect(progressPercent({ currentTurn: 2, pathProjection: 8, maxProjection: 8 })).toBe(25)
   })
 
   // Mirrors the in-chat bar: the refined path projection is the denominator,
   // the stable max only steps in when the path is unknown.
   it('falls back to maxProjection when pathProjection is 0', () => {
-    expect(
-      progressPercent({ currentTurn: 1, pathProjection: 0, maxProjection: 4 }),
-    ).toBe(25)
+    expect(progressPercent({ currentTurn: 1, pathProjection: 0, maxProjection: 4 })).toBe(25)
   })
 
   it('clamps to 100 when the turn count overruns the projection', () => {
-    expect(
-      progressPercent({ currentTurn: 9, pathProjection: 4, maxProjection: 4 }),
-    ).toBe(100)
+    expect(progressPercent({ currentTurn: 9, pathProjection: 4, maxProjection: 4 })).toBe(100)
   })
 })
 
@@ -184,12 +205,7 @@ describe('threadIcon', () => {
 })
 
 describe('select-mode helpers', () => {
-  const rows = [
-    { id: 'a' },
-    { id: 'b' },
-    { id: 'running-1' },
-    { id: 'ph', isPlaceholder: true },
-  ]
+  const rows = [{ id: 'a' }, { id: 'b' }, { id: 'running-1' }, { id: 'ph', isPlaceholder: true }]
   const running = (id: string) => id.startsWith('running')
 
   it('toggleSelection adds and removes immutably', () => {
@@ -250,18 +266,18 @@ describe('deleteConfirmCopy', () => {
   })
 
   it('counts a bulk delete, singular and plural', () => {
-    expect(
-      deleteConfirmCopy({ kind: 'bulk', ids: ['a'], skippedRunning: 0 }),
-    ).toBe("Delete 1 conversation? This can't be undone.")
-    expect(
-      deleteConfirmCopy({ kind: 'bulk', ids: ['a', 'b', 'c'], skippedRunning: 0 }),
-    ).toBe("Delete 3 conversations? This can't be undone.")
+    expect(deleteConfirmCopy({ kind: 'bulk', ids: ['a'], skippedRunning: 0 })).toBe(
+      "Delete 1 conversation? This can't be undone.",
+    )
+    expect(deleteConfirmCopy({ kind: 'bulk', ids: ['a', 'b', 'c'], skippedRunning: 0 })).toBe(
+      "Delete 3 conversations? This can't be undone.",
+    )
   })
 
   it('appends the running-skip note only when rows were skipped', () => {
-    expect(
-      deleteConfirmCopy({ kind: 'bulk', ids: ['a', 'b'], skippedRunning: 2 }),
-    ).toBe("Delete 2 conversations? This can't be undone. 2 running — skipped.")
+    expect(deleteConfirmCopy({ kind: 'bulk', ids: ['a', 'b'], skippedRunning: 2 })).toBe(
+      "Delete 2 conversations? This can't be undone. 2 running — skipped.",
+    )
   })
 })
 

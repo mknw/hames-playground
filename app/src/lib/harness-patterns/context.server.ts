@@ -323,7 +323,16 @@ export function resolveConfig(
     patternId: config?.patternId ?? generateId(patternType),
     commitStrategy: config?.commitStrategy ?? getDefaultCommitStrategy(patternType),
     trackHistory: config?.trackHistory ?? getDefaultTrackHistory(patternType),
-    errorSeverity: config?.errorSeverity ?? DEFAULT_ERROR_SEVERITY[patternType] ?? 'irrecoverable',
+    // The last fallback covers only a `configurePattern` name this package
+    // does not know (every built-in type has a DEFAULT_ERROR_SEVERITY entry),
+    // and it says `recoverable` because since #273 D-d this value can END A
+    // TURN: `runChain` stops the chain on an irrecoverable error. Defaulting an
+    // unknown pattern to chain-fatal would make a custom pattern's first
+    // logged error kill turns that used to complete, on no evidence — we know
+    // nothing about a pattern we have never seen, and the owner's rule is to
+    // gate only when the turn genuinely cannot continue. A pattern that IS
+    // turn-fatal says so, in its own config or on the event it emits.
+    errorSeverity: config?.errorSeverity ?? DEFAULT_ERROR_SEVERITY[patternType] ?? 'recoverable',
     viewConfig: config?.viewConfig,
   }
 }

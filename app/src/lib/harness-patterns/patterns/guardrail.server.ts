@@ -133,6 +133,17 @@ export function guardrail<T extends Record<string, unknown>>(
                 'error',
                 {
                   error: `Circuit breaker tripped: ${recentFailures.data.length} failures in ${cb.windowMs}ms`,
+                  // Stamped on the EVENT, not moved to the pattern default
+                  // (F5 on #278). `guardrail: 'recoverable'` is right for the
+                  // case it was written for — an output rail with
+                  // `action: 'warn'` records an `error` BY DESIGN and must not
+                  // end a turn — but this return is the opposite shape: the
+                  // wrapped pattern never ran, so there is no execution for a
+                  // later pattern to compose from and the synthesizer would
+                  // answer around the hole. Only the failure knows which of the
+                  // two it is, which is exactly why severity is read from the
+                  // event first.
+                  severity: 'irrecoverable',
                 },
                 true,
               )
@@ -166,6 +177,12 @@ export function guardrail<T extends Record<string, unknown>>(
                 'error',
                 {
                   error: `Input rail '${rail.name}' blocked: ${result.reason}`,
+                  // Same reasoning as the circuit breaker above (F5 on #278): a
+                  // BLOCK returns the scope without running the wrapped
+                  // pattern, so the turn has nothing to answer from. A `redact`
+                  // is the recoverable sibling and does not come through here —
+                  // it rewrites the input and falls through to the execution.
+                  severity: 'irrecoverable',
                 },
                 true,
               )

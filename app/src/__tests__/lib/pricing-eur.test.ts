@@ -17,7 +17,10 @@
  *     teeth: a call that fell back to Anthropic on a verda-tier turn must be
  *     priced by tokens, and a Verda call on an anthropic-tier turn by time.
  *     Get this wrong and the panel confidently prices the wrong bill.
- *  4. **One formatter, one symbol.** Every surface that renders a price imports
+ *  4. **Locally-served clients** are an exact €0.00 on a third basis, `local`,
+ *     rather than absent from both tables. Owner decision 2026-08-26: unknown
+ *     means unmeasured, and a call with no marginal bill is not unmeasured.
+ *  5. **One formatter, one symbol.** Every surface that renders a price imports
  *     `fmtEur`; there is no second copy to drift.
  *
  * The env overrides are covered here too, including the failure policy: a
@@ -34,6 +37,7 @@ import {
   CLIENT_PRICING,
   DEFAULT_EUR_PER_USD,
   DEFAULT_VERDA_EUR_PER_HOUR,
+  LOCAL_PRICED_CLIENTS,
   TIME_PRICED_CLIENT,
   estimateLlmCostEur,
 } from '../../lib/settings'
@@ -205,6 +209,32 @@ describe('attribution: the SELECTED client decides the model', () => {
     expect(est.rates).toBeUndefined()
     // Nothing anywhere near a per-MTok figure.
     expect(est.costEur).toBeLessThan(0.001)
+  })
+
+  it('a locally-served client is €0.00 on the local basis, never unknown', () => {
+    // The coverage hole this closed: `describe` (six of twelve BAML functions,
+    // and the frequent ones) moved onto the 4B, and with the client in neither
+    // table every private-tier step that summarized a tool result rendered
+    // cost-UNKNOWN. Unknown reads as unmeasured; this call is measured and free.
+    for (const name of LOCAL_PRICED_CLIENTS) {
+      const est = estimateLlmCostEur(ONE_MTOK_EACH, name, { durationMs: 4_000 })
+      expect(est, name).toBeDefined()
+      expect(est!.basis, name).toBe('local')
+      expect(est!.costEur, name).toBe(0)
+      // Its own baseline: there is no caching saving to claim on a free call.
+      expect(est!.noCacheEur, name).toBe(0)
+      expect(est!.rates, name).toBeUndefined()
+      expect(est!.timeRate, name).toBeUndefined()
+    }
+  })
+
+  it('the local set and the two priced tables are disjoint', () => {
+    // A client in two of them would price by whichever branch ran first, which
+    // is exactly the silent-wrong-figure failure this suite exists for.
+    for (const name of LOCAL_PRICED_CLIENTS) {
+      expect(CLIENT_PRICING[name], name).toBeUndefined()
+      expect(name).not.toBe(TIME_PRICED_CLIENT)
+    }
   })
 
   it('every client in CLIENT_PRICING prices by tokens', () => {

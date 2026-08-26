@@ -1,5 +1,6 @@
 /**
- * What `VerdaQwen` actually puts on the wire.
+ * What the PRIVATE TIER actually puts on the wire — for every function it routes,
+ * against the client it routes that function to.
  *
  * `clients-verda.test.ts` pins the ROUTING decision (which role goes where).
  * This file pins the REQUEST, because two of the client's properties are
@@ -22,6 +23,20 @@
  *     message text, which reads alarmingly like it was sent — the rendered body
  *     is the authority, and this test is what makes that readable.
  *
+ * SINCE 2026-08-26 THAT IS TWO CLIENTS, not one. The tier routes `describe` to
+ * the 4B `LocalQwenSmall` and everything else to the 27B `VerdaQwen`, so this
+ * file derives each function's client from `VERDA_CLIENT_BY_ROLE` rather than
+ * rendering everything against one name. The reason is not tidiness: rendering a
+ * describe function against `VerdaQwen` would pin a request nothing makes, and
+ * the 4B's own body would then be checked by nothing at all — while the file
+ * still read as complete coverage of the tier.
+ *
+ * The `enable_thinking` check applies to BOTH clients, for the same reason and a
+ * different weight: Qwen3.5-4B is a thinking model too, and its output cap is
+ * 2 048 rather than 16 384, so an unsuppressed reasoning block does not just eat
+ * the budget — it eats all of it. The `cache_control` and served-model checks are
+ * VerdaQwen's alone: they are properties of the confidential-compute deployment.
+ *
  * Rendered offline via `b.request.*`: no socket is opened, so this runs in CI
  * where the endpoint is unreachable. The live counterpart is
  * `scripts/smoke-verda.ts`.
@@ -39,9 +54,13 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
 const ENV = {
   VERDA_INFERENCE_ENDPOINT: 'https://example.invalid/deployment/v1',
   VERDA_INFERENCE_API_KEY: 'offline-render-test',
+  SMALL_LLM_BASE_URL: 'https://example.invalid/small/v1',
+  SMALL_LLM_API_KEY: 'offline-render-test',
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || 'offline-render-test',
 }
 const VERDA = { client: 'VerdaQwen', env: ENV }
+/** The 4B summarizer the tier routes `describe` to. Same options-bag contract. */
+const SMALL = { client: 'LocalQwenSmall', env: ENV }
 
 type Body = {
   model?: string
@@ -75,7 +94,10 @@ const DESCRIBE_TARGETS = [
 
 /**
  * EVERY routed role's functions — which since 2026-08-26 is every function in
- * `baml_src/`, `ScreenUntrustedContent` included.
+ * `baml_src/`, `ScreenUntrustedContent` included — each rendered against the
+ * client the tier routes IT to (`describe` → the 4B, everything else → the 27B).
+ * `renders each function against the client the tier routes it to` below pins
+ * that pairing against the production map, so it cannot silently go stale.
  *
  * The kwarg is declared on the CLIENT, so all of them must carry it without any
  * call site knowing about it. That was cheap reassurance while only four heavy
@@ -104,22 +126,58 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
   ['Synthesize', () => b.request.Synthesize('q', 'i', TURNS, false, null, VERDA)],
   ['Router', () => b.request.Router('q', [{ name: 'search', description: 'd' }], MESSAGES, VERDA)],
   ['Planner', () => b.request.Planner('q', 'i', TOOLS, null, VERDA)],
-  ['ResultDescribe', () => b.request.ResultDescribe('search', '{}', 'r', 'rows', VERDA)],
-  ['ResultDescribeBatch', () => b.request.ResultDescribeBatch(DESCRIBE_TARGETS, VERDA)],
-  ['GenerateConversationTitle', () => b.request.GenerateConversationTitle('q', VERDA)],
-  ['CompactIntent', () => b.request.CompactIntent(MESSAGES, 'q', VERDA)],
-  ['RetrieveQuery', () => b.request.RetrieveQuery(MESSAGES, 'q', VERDA)],
-  ['ReferenceSelector', () => b.request.ReferenceSelector('i', MESSAGES, CANDIDATES, VERDA)],
+  // The six describe functions, on the 4B — the shipped route since the flip.
+  ['ResultDescribe', () => b.request.ResultDescribe('search', '{}', 'r', 'rows', SMALL)],
+  ['ResultDescribeBatch', () => b.request.ResultDescribeBatch(DESCRIBE_TARGETS, SMALL)],
+  ['GenerateConversationTitle', () => b.request.GenerateConversationTitle('q', SMALL)],
+  ['CompactIntent', () => b.request.CompactIntent(MESSAGES, 'q', SMALL)],
+  ['RetrieveQuery', () => b.request.RetrieveQuery(MESSAGES, 'q', SMALL)],
+  ['ReferenceSelector', () => b.request.ReferenceSelector('i', MESSAGES, CANDIDATES, SMALL)],
   [
     'ScreenUntrustedContent',
     () => b.request.ScreenUntrustedContent('web/fetch', 'fetched page text', VERDA),
   ],
 ]
 
-describe('VerdaQwen request body', () => {
+describe('private-tier request bodies', () => {
   it.each(CALLS)('%s disables the chat template’s thinking block', async (_name, render) => {
     const body = (await render()).body.json() as Body
     expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
+  })
+
+  it('renders each function against the client the tier routes it to', async () => {
+    // The pairing above is a hand-written table, and the failure it can have is
+    // silent: retarget a function at the wrong client and the thinking check
+    // still passes (both clients declare the kwarg) while the file pins a
+    // request production never makes. So the table is compared against the
+    // production map, by reading the `model` field off each rendered body — the
+    // one field that names the client BAML actually resolved.
+    const { VERDA_CLIENT_BY_ROLE, SWITCHED_FUNCTIONS_BY_ROLE } =
+      await import('../../../lib/harness-patterns/clients.server')
+    const MODEL_OF: Record<string, string> = {
+      VerdaQwen: 'Qwen/Qwen3.8-27B-FP8',
+      LocalQwenSmall: 'qwen3.5-4b-instruct',
+    }
+    const expected = new Map<string, string>()
+    for (const [role, fns] of Object.entries(SWITCHED_FUNCTIONS_BY_ROLE)) {
+      const client = VERDA_CLIENT_BY_ROLE[role as keyof typeof VERDA_CLIENT_BY_ROLE]!
+      for (const fn of fns as readonly string[]) expected.set(fn, MODEL_OF[client])
+    }
+    // Every routed client has a model id here — a third one added to the tier
+    // fails loudly rather than comparing against `undefined`.
+    expect([...expected.values()].every(Boolean)).toBe(true)
+
+    const wrong: string[] = []
+    for (const [name, render] of CALLS) {
+      const model = ((await render()).body.json() as Body).model
+      if (model !== expected.get(name)) {
+        wrong.push(`${name}: rendered ${model}, tier routes it to ${expected.get(name)}`)
+      }
+    }
+    expect(wrong).toEqual([])
+    // Not vacuous: the tier really does route two clients, so this comparison is
+    // distinguishing something.
+    expect(new Set(expected.values()).size).toBe(2)
   })
 
   it('renders every function a tier decision routes, and nothing it does not', async () => {
@@ -141,6 +199,22 @@ describe('VerdaQwen request body', () => {
     expect(body.model).toBe('Qwen/Qwen3.8-27B-FP8')
     const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
     expect(body.max_tokens).toBe(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwen)
+  })
+
+  it('caps the 4B at its own max_tokens, not the 27B’s', async () => {
+    // The describe flip's other half. 2 048 against the 27B's own cap is what
+    // re-imposes `maxBatchItems()`'s batch-of-5 floor, so a body carrying the
+    // 27B's number would mean the flip routed but did not re-budget — and the
+    // summarizer would be asked for eight items' worth of output it cannot
+    // produce. Written as the inequality plus the named mirror rather than as
+    // two literals, so the 27B's cap can move (it did, in #279) without
+    // touching this.
+    const body = (
+      await b.request.ResultDescribe('search', '{}', 'r', 'rows', SMALL)
+    ).body.json() as Body
+    const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
+    expect(body.max_tokens).toBe(CLIENT_MAX_OUTPUT_TOKENS.LocalQwenSmall)
+    expect(body.max_tokens).toBeLessThan(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwen)
   })
 
   it('sends no cache_control anywhere in the body, where the Anthropic chain does', async () => {

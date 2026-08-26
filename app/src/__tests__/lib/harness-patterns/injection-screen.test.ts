@@ -211,7 +211,13 @@ describe('createInjectionScreen — truncation', () => {
 })
 
 describe('createInjectionScreen — client routing', () => {
-  const VERDA_ENV = ['VERDA_INFERENCE_ENDPOINT', 'VERDA_INFERENCE_API_KEY'] as const
+  const VERDA_ENV = [
+    'VERDA_INFERENCE_ENDPOINT',
+    'VERDA_INFERENCE_API_KEY',
+    // Third member since the describe flip: the private tier is two models and
+    // a scope naming it without the 4B's endpoint is refused.
+    'SMALL_LLM_BASE_URL',
+  ] as const
   let savedVerdaEnv: Record<string, string | undefined>
 
   beforeEach(() => {
@@ -261,11 +267,21 @@ describe('createInjectionScreen — client routing', () => {
     // exactly the payload the tier exists to keep on the box.
     process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
     process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+    // The tier's second endpoint — the 4B summarizer `describe` runs on. Present
+    // only so the scope opens; it is the model this screen must NOT be sent to,
+    // which is what the second assertion below says.
+    process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
     const { runWithInferenceTier } = await import('../../../lib/harness-patterns/clients.server')
     const screen = await (await load())()
     await runWithInferenceTier('verda', () => screen(CLEAN))
     const opts = mockScreen.mock.calls[0][2] as Record<string, unknown> | undefined
     expect(opts?.client).toBe('VerdaQwen')
+    // AND NOT THE 4B. `describe` moved to `LocalQwenSmall` on the same tier a few
+    // hours after the screen moved, and the two declare the SAME chain in
+    // `baml_src/` — so this is the assertion that the flip did not carry
+    // prompt-injection screening onto a 4B summarizer as a side effect, which is
+    // the exact hazard SA-M5 / SD-4 named years before it was available to make.
+    expect(opts?.client).not.toBe('LocalQwenSmall')
   })
 
   it("resolveClientForRole('screen') is DescribeAnthropic, and tracks the .baml declaration (SA-M5)", async () => {

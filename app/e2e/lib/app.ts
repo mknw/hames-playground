@@ -55,6 +55,25 @@ export interface AppHandles {
   readRow(sessionId: string): Promise<StoredRow | null>
   /** Delete every row this suite's user owns. Test database only. */
   wipe(): Promise<void>
+  /**
+   * Forget that this process ever saw the self-hosted box answer, so the next
+   * private-tier turn treats it as asleep and sends a wake ping.
+   *
+   * NEEDED BECAUSE THIS SUITE IS ONE PROCESS (`isolate: false`, deliberately —
+   * see `e2e/vitest.config.ts`), and the warm clock is process state with a
+   * 300s default window. A successful wake ping stamps that clock, which is
+   * correct in production and means the SECOND scenario to want a cold box
+   * would silently get a warm one: no ping, so nothing to arm a cold start on
+   * and nothing to assert about sharing one. The suite used to get "cold" by
+   * accident — the usage observer that stamps the clock is installed in
+   * `middleware.ts`, which these scenarios do not load — and #279 made the ping
+   * itself stamp it, which turned the accident into a visible failure.
+   *
+   * Call it in `beforeEach` of any scenario whose subject is the cold path. It
+   * models exactly one thing: the box went to sleep and this process has not
+   * seen a call since.
+   */
+  goToSleep(): Promise<void>
   /** The id every turn runs as (the dev-bypass user). */
   readonly userId: string
   readonly fakeLlm: FakeLlm
@@ -112,6 +131,11 @@ async function boot(): Promise<AppHandles> {
       'ANTHROPIC_API_KEY',
       'VERDA_INFERENCE_ENDPOINT',
       'VERDA_INFERENCE_API_KEY',
+      // The private tier's 4B summarizer. Required in live mode for the same
+      // reason as the two above: the tier is refused without it, so a live run
+      // would fail every private-tier turn on a missing var rather than on
+      // anything about the deployment.
+      'SMALL_LLM_BASE_URL',
     ]) {
       if (!process.env[name]) {
         throw new Error(`E2E_LIVE=verda needs ${name} in app/.env (see app/.env.example).`)
@@ -133,6 +157,13 @@ async function boot(): Promise<AppHandles> {
     // required by `assertVerdaConfigured()`, which still runs.
     process.env.VERDA_INFERENCE_ENDPOINT = fakeLlm.baseUrl
     process.env.VERDA_INFERENCE_API_KEY = 'e2e-fake-key'
+    // The private tier's SECOND model since 2026-08-26: `describe` runs on the 4B
+    // `LocalQwenSmall`, and the tier is refused outright without this. Pointed at
+    // the SAME fake, which is what lets a scenario tell the two apart — the fake
+    // records the `model` field, so a describe call arrives as the 4B's id and a
+    // controller call as the 27B's.
+    process.env.SMALL_LLM_BASE_URL = fakeLlm.baseUrl
+    process.env.SMALL_LLM_API_KEY = 'e2e-fake-key'
     // Poison the real credential — see HERMETIC_ANTHROPIC_KEY.
     process.env.ANTHROPIC_API_KEY = HERMETIC_ANTHROPIC_KEY
   }
@@ -214,6 +245,15 @@ async function boot(): Promise<AppHandles> {
         title: row.title,
         serializedContext: row.serializedContext,
       }
+    },
+
+    async goToSleep() {
+      const activity = await import('../../src/lib/inference/verda-activity.server')
+      const wake = await import('../../src/lib/inference/wake.server')
+      activity.resetVerdaActivity()
+      // And drop any ping still parked on the shared symbol, so a scenario that
+      // just failed one does not attach to its rejected promise.
+      wake.resetVerdaWake()
     },
 
     async wipe() {

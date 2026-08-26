@@ -55,19 +55,20 @@ vi.mock('../../../../baml_client', () => ({
  */
 async function withVerdaTier<T>(fn: () => Promise<T>): Promise<T> {
   const clients = await import('../../../lib/harness-patterns/clients.server')
-  const saved = {
-    endpoint: process.env.VERDA_INFERENCE_ENDPOINT,
-    key: process.env.VERDA_INFERENCE_API_KEY,
-  }
+  // BOTH endpoints: the private tier is the 27B plus the 4B summarizer, and a
+  // scope naming it without the second is refused outright (2026-08-26).
+  const KEYS = ['VERDA_INFERENCE_ENDPOINT', 'VERDA_INFERENCE_API_KEY', 'SMALL_LLM_BASE_URL']
+  const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
   try {
     return await clients.runWithInferenceTier('verda', fn)
   } finally {
-    if (saved.endpoint === undefined) delete process.env.VERDA_INFERENCE_ENDPOINT
-    else process.env.VERDA_INFERENCE_ENDPOINT = saved.endpoint
-    if (saved.key === undefined) delete process.env.VERDA_INFERENCE_API_KEY
-    else process.env.VERDA_INFERENCE_API_KEY = saved.key
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k]
+      else process.env[k] = saved[k]
+    }
   }
 }
 
@@ -797,13 +798,18 @@ describe('describeToolResultOp', () => {
     // lose their spread and stay green there; the e2e tier scenario only ever
     // exercises whichever describe path that turn happened to take. This is the
     // per-call-site check for the two that carry tool results.
+    //
+    // `LocalQwenSmall`, not `VerdaQwen` — the describe flip later the same day.
+    // Asserting the specific client rather than "some override" is what makes
+    // this the test that would catch summarization being sent to the 27B (or to
+    // Anthropic) on a private-tier turn.
     const { describeToolResultOp } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
     mockResultDescribe.mockResolvedValue('ok')
 
     await withVerdaTier(() => describeToolResultOp('search', '{}', '', 'data'))
 
-    expect(mockResultDescribe.mock.calls[0][4]).toMatchObject({ client: 'VerdaQwen' })
+    expect(mockResultDescribe.mock.calls[0][4]).toMatchObject({ client: 'LocalQwenSmall' })
   })
 
   it('should return empty string on failure', async () => {
@@ -866,7 +872,7 @@ describe('describeToolResultsBatchOp', () => {
 
     await withVerdaTier(() => describeToolResultsBatchOp(items))
 
-    expect(mockResultDescribeBatch.mock.calls[0][1]).toMatchObject({ client: 'VerdaQwen' })
+    expect(mockResultDescribeBatch.mock.calls[0][1]).toMatchObject({ client: 'LocalQwenSmall' })
   })
 
   it('omits ids the model dropped or answered blank', async () => {

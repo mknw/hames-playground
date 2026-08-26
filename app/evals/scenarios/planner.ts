@@ -27,7 +27,7 @@
  *     named, and no obvious invention is", where an invention is a decoy name
  *     placed in the request and absent from the catalog.
  *  4. **It did not spend the whole ceiling.** The real risk on a self-hosted
- *     route is the output cap halving (32 768 → 16 384) on the role whose
+ *     route is the output cap dropping 32 768 → 4 096 on the role whose
  *     output is longest. A plan that lands at the cap truncates mid-JSON, and
  *     the recovery is one retry of the same prompt — which truncates again.
  *     So the check is HEADROOM: output tokens strictly under the client's cap,

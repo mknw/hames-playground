@@ -348,6 +348,30 @@ grep -cE "^($K)=" .env               # must print 4 — fewer means a line is go
 Two checks because the two failures look nothing alike: a value left at the
 template's `''` and a line removed from `.env` altogether.
 
+**Pre-launch check — the private tier is TWO endpoints, and it refuses on one.**
+Only if this host will reach the self-hosted tier at all: either
+`USE_VERDA_INFERENCE='1'`, or nothing set but a user picking **Private** in the
+header switch, which is available whenever the endpoints are configured. The
+`describe` role runs on a 4B summarizer at `SMALL_LLM_BASE_URL`, and a private
+tier without it is **refused, not descaled** — deliberately, because falling back
+onto the 27B would be a routing change nobody asked for, invisible in every log,
+on the role that is handed tool results verbatim. So a host with the 27B
+configured and this line missing has a header switch whose private position
+either fails every turn or renders disabled, depending on which of the two is
+missing:
+
+```bash
+# All three, or none of them — two out of three is the refusal. Must print 3 or 0.
+grep -cE "^(VERDA_INFERENCE_ENDPOINT|VERDA_INFERENCE_API_KEY|SMALL_LLM_BASE_URL)='.+'$" .env
+
+# And read the two URLs back: both MUST end in `/v1`. Without it every call 404s
+# on `<root>/chat/completions`, which the app refuses at module load for the 27B.
+grep -E "^(VERDA_INFERENCE_ENDPOINT|SMALL_LLM_BASE_URL)=" .env
+```
+
+`SMALL_LLM_API_KEY` is **not** required: llama-server authenticates nothing, and
+an endpoint that does check a key 401s loudly on its own.
+
 ```bash
 cd /opt/kg-agent
 

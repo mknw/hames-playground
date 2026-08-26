@@ -232,8 +232,14 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   LocalQwenSmall: 2_048,
   // Self-hosted (verda-client.baml). Mirrors the `max_tokens` declared there;
   // without this entry the truncation retry is blind on every Verda-routed
-  // controller turn, which is the failure this map exists for.
-  VerdaQwen: 16_384,
+  // controller turn, which is the failure this map exists for. 4 096 rather
+  // than the 16 384 the Anthropic mid-tier carries, and the reason is a
+  // COUPLING rather than a property of the model: this cap and that client's
+  // `request_timeout_ms` are one decision — a full-cap generation has to finish
+  // inside the timeout, or the retry this map enables can never fire on the
+  // outputs that need it. The arithmetic is in verda-client.baml; the
+  // inequality is pinned by clients-verda.test.ts.
+  VerdaQwen: 4_096,
   // Strategy-chain FLOORS — the smallest cap of any leaf in the chain, the
   // same conservative-floor pattern as the chain entries in
   // MODEL_CONTEXT_WINDOWS above. Truncation detection never consults these
@@ -282,6 +288,31 @@ export const CLIENT_PRICING: Record<string, { inPerMTok: number; outPerMTok: num
   AnthropicHaiku45: { inPerMTok: 1.0, outPerMTok: 5.0 },
   AnthropicOpus4: { inPerMTok: 15.0, outPerMTok: 75.0 },
 }
+
+/**
+ * Clients that cost nothing per call, because they are served by a model process
+ * on infrastructure with no marginal bill — `make llm-small` on :8095 and
+ * `pnpm dev:llama` on :8080.
+ *
+ * They are priced at €0.00 on a basis of their OWN (`'local'`), rather than left
+ * out of both tables to read as "unknown". Owner decision 2026-08-26, and the
+ * distinction is the point: unknown means unmeasured, and a locally-served call
+ * is not unmeasured — it is free. Before this, a private-tier step that
+ * summarized a tool result rendered cost-unknown, which is a coverage hole in
+ * the dashboard on the tier's highest-frequency role (six of twelve BAML
+ * functions run on the 4B).
+ *
+ * WHAT THE LABEL CLAIMS, AND ITS ONE LIMIT. It is a statement about the CLIENT,
+ * which is the same attribution rule the rest of the cost path follows (the
+ * client BAML selected, never the tier the run intended). `SMALL_LLM_BASE_URL`
+ * can point anywhere — "local" names the wire format, not the machine (#256) —
+ * so a deployment that moves the 4B onto metered infrastructure has to move the
+ * client out of this set, the way the 27B sits in {@link TIME_PRICED_CLIENT}.
+ * That is the same edit the tier map already requires and is why this is a set
+ * rather than a guess about the URL: a URL check would silently re-price the
+ * same call differently on two hosts.
+ */
+export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set(['LocalQwenSmall', 'LocalGLM'])
 
 /**
  * The one BAML client billed by wall-clock rather than by token.
@@ -341,8 +372,9 @@ export interface TokenBuckets {
 }
 
 /** How a figure was arrived at — the UI needs this to know whether the number
- *  is an estimate of a token bill or a FLOOR on a time bill. */
-export type CostBasis = 'tokens' | 'time'
+ *  is an estimate of a token bill, a FLOOR on a time bill, or an exact €0 for a
+ *  call that was served locally and has no bill at all. */
+export type CostBasis = 'tokens' | 'time' | 'local'
 
 /** One call's cost in EUR, plus the audit trail for whichever basis produced it. */
 export interface CostEstimateEur {
@@ -364,7 +396,8 @@ export interface CostEstimateEur {
  * rather than as zero — an invented figure is worse than an absent one.
  *
  * Returns undefined when:
- *  - the client is neither in {@link CLIENT_PRICING} nor time-priced, or
+ *  - the client is in none of {@link CLIENT_PRICING}, {@link TIME_PRICED_CLIENT}
+ *    or {@link LOCAL_PRICED_CLIENTS}, or
  *  - it IS time-priced but the call was not measured (`durationMs` absent).
  *    A time bill with no time is not a free call; BAML reports no duration when
  *    it measured none, and a 0 there would read as a call that cost nothing on
@@ -380,6 +413,13 @@ export function estimateLlmCostEur(
   clientName?: string,
   opts?: { durationMs?: number; eurPerUsd?: number; eurPerHour?: number },
 ): CostEstimateEur | undefined {
+  // Checked before the two priced paths: a locally-served call has no bill on
+  // either basis, and €0.00 with a basis that says so is a different statement
+  // from an absent figure. `noCacheEur` matches, so the step contributes no
+  // fabricated saving.
+  if (clientName !== undefined && LOCAL_PRICED_CLIENTS.has(clientName)) {
+    return { costEur: 0, noCacheEur: 0, basis: 'local' }
+  }
   if (clientName === TIME_PRICED_CLIENT) {
     const durationMs = opts?.durationMs
     if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) return undefined

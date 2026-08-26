@@ -21,16 +21,20 @@
  * to cross.
  *
  * WHAT LIVE MODE STILL BILLS, stated rather than implied. `E2E_LIVE=verda` was
- * never "no Anthropic calls", and after the two 2026-08-26 owner decisions it
- * is: the tier switch moves exactly the roles in `VERDA_CLIENT_BY_ROLE`, which
- * is now EVERY role — the injection screen included. So a live run in the
+ * never "no Anthropic calls", and after the 2026-08-26 owner decisions it is:
+ * the tier switch moves exactly the roles in `VERDA_CLIENT_BY_ROLE`, which is
+ * now EVERY role — the injection screen included. So a live run in the
  * self-hosted position bills Anthropic nothing at all. That is a smaller claim
  * than it sounds, because no scenario here triggers a screen call anyway (no
- * agent enables the opt-in LLM screen), and the bill moved rather than shrank:
- * `router`, `planner`, the title and every describe call now land on the
- * self-hosted box, which is more traffic through a single-replica deployment
- * than the pre-widening shape, and the reason the burst discipline above
- * matters more than it did.
+ * agent enables the opt-in LLM screen).
+ *
+ * WHERE THE TRAFFIC GOES changed again with the describe flip, and it went the
+ * helpful way: `router`, `planner` and the controller land on the self-hosted
+ * box, while every describe call — the title, the intent compaction, and one per
+ * tool result, i.e. the majority by count — lands on `SMALL_LLM_BASE_URL`
+ * instead. A live run therefore puts LESS through the single-replica deployment
+ * than the pre-flip shape did, though the burst discipline above still holds:
+ * the calls that remain are the slow ones.
  *
  * What is still avoidable is running each scenario a second time with the
  * switch in the anthropic position, which would put every one of those roles
@@ -93,12 +97,31 @@ export const FAKE_ANTHROPIC_TIER_MODEL = 'e2e-fake-anthropic-tier'
 export const VERDA_MODEL = 'Qwen/Qwen3.8-27B-FP8'
 
 /**
- * How long the cold-start scenario withholds the first response.
+ * The model id `LocalQwenSmall` declares in `baml_src/local-client.baml` — the
+ * 4B the private tier routes the `describe` role to since 2026-08-26.
  *
- * The brief asks for minutes. 90s is the default because it already exceeds
- * every default HTTP timeout in the stack that is NOT the one deliberately
- * sized for a cold start, which is what the scenario is there to find; raise it
- * with `E2E_COLD_START_MS=180000` for the full pre-release shape.
+ * Hardcoded for VERDA_MODEL's reason, and it buys something extra here: the fake
+ * records each request's `model` field, so this is how a scenario tells a
+ * private-tier SUMMARY apart from a private-tier CONTROLLER call. Before the flip
+ * those were the same model and indistinguishable on the wire.
+ */
+export const SMALL_MODEL = 'qwen3.5-4b-instruct'
+
+/**
+ * How long the slow-response scenarios withhold a response.
+ *
+ * 90s because it already exceeds every default HTTP timeout in the stack that is
+ * NOT deliberately sized for a slow model call, which is what those scenarios
+ * are there to find.
+ *
+ * IT HAS A CEILING NOW, and it is 180s — `VerdaQwen`'s `request_timeout_ms`.
+ * Since wake-then-run the cold start is paid by the wake ping (bounded
+ * separately, at `VERDA_WAKE_TIMEOUT_MS` = 300s) and scenario 4 aims its delay
+ * PAST the ping, at a real BAML call. So a value at or above 180 000 no longer
+ * asks "does the stack survive a slow call" — it asks the client to break its
+ * own budget, and scenario 4 would go red for the one reason that is not a
+ * finding. The old advice here was `E2E_COLD_START_MS=180000` for a
+ * pre-release run; that number is now exactly the wrong one.
  */
 export const COLD_START_MS = Number.parseInt(process.env.E2E_COLD_START_MS ?? '90000', 10)
 

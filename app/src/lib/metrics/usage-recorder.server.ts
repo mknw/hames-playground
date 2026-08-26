@@ -26,10 +26,23 @@
  *
  * ## Which tier a call is attributed to
  *
- * `sample.clientName` — the client BAML actually selected — not the tier the
- * run intended. A call that says `VerdaQwen` ran on the box; everything else
- * is counted as Anthropic. This is why the Verda share is worth showing: it
- * cannot be inflated by a routing change that did not take effect.
+ * `sample.clientName` — the client BAML actually selected — not the tier the run
+ * intended. This is why the private share is worth showing: it cannot be
+ * inflated by a routing change that did not take effect.
+ *
+ * The set of names that count is DERIVED from `VERDA_CLIENT_BY_ROLE`, not a
+ * single literal, and that changed on 2026-08-26 when the private tier became
+ * two models: the heavy roles on `VerdaQwen` and `describe` on `LocalQwenSmall`.
+ * A hardcoded `=== VERDA_CLIENT_NAME` would have counted every private-tier
+ * describe call as an ANTHROPIC call — six of the twelve functions, and the
+ * highest-frequency ones — silently understating the private share on exactly
+ * the tier the number exists to report. Deriving it means a third model added to
+ * that map is counted with no edit here.
+ *
+ * The WARM CLOCK does not follow the same set, and the difference is the point:
+ * only a call naming `VerdaQwen` may stamp it, because only that deployment
+ * scales to zero and only its traffic is evidence the GPU is up. A 4B describe
+ * call proves nothing about the box (`inference/verda-activity.server.ts`).
  */
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { observeLlmUsage, type LlmUsageSample } from '../harness-patterns/llm-usage-observer.server'
@@ -37,7 +50,11 @@ import { noteVerdaCallCompleted, VERDA_CLIENT_NAME } from '../inference/verda-ac
 import { settleColdStart } from '../inference/cold-start.server'
 import { addUsage, type UsageDelta } from './preview-counters.server'
 import { noteCallLatency } from './call-latency.server'
-import { TIER_SWITCHED_FUNCTIONS, type InferenceTier } from '../harness-patterns/clients.server'
+import {
+  TIER_SWITCHED_FUNCTIONS,
+  VERDA_CLIENT_BY_ROLE,
+  type InferenceTier,
+} from '../harness-patterns/clients.server'
 
 assertServerOnImport()
 
@@ -61,15 +78,35 @@ function bucket(tier: InferenceTier): UsageDelta {
   return delta
 }
 
+/**
+ * Every client name the private tier routes to — derived from the tier map, so
+ * it cannot go short when the tier gains a model.
+ *
+ * A Set rather than a comparison because the tier is no longer one client. See
+ * the module docstring for why the warm clock deliberately does NOT use this.
+ */
+const PRIVATE_TIER_CLIENTS: ReadonlySet<string> = new Set(
+  // `Partial<Record<…>>` types its values as possibly-undefined; the map has
+  // none, and a narrowing filter says so without an assertion.
+  Object.values(VERDA_CLIENT_BY_ROLE).filter((c): c is string => c !== undefined),
+)
+
 /** The tier a sample is attributed to. See the module docstring: the selected
  *  client is the evidence, the intended routing is not. */
 export function tierOfSample(sample: LlmUsageSample): InferenceTier {
-  return sample.clientName === VERDA_CLIENT_NAME ? 'verda' : 'anthropic'
+  // A sample with no client name is a call that never named one — Anthropic by
+  // elimination, and the same answer the `===` comparison this replaced gave.
+  return PRIVATE_TIER_CLIENTS.has(sample.clientName ?? '') ? 'verda' : 'anthropic'
 }
 
 /** Fold one finished call into the pending deltas. Exported for the tests —
  *  the observer registration is what production calls. */
 export function recordSample(sample: LlmUsageSample, at: number = Date.now()): void {
+  // `=== VERDA_CLIENT_NAME`, NOT `PRIVATE_TIER_CLIENTS`. Both lines below are
+  // claims about the scale-to-zero GPU box specifically — it is awake, and this
+  // is how long its cold start took — and a 4B describe call on the same tier is
+  // evidence of neither. The tier attribution above widened; this did not, and
+  // the divergence is deliberate.
   if (sample.clientName === VERDA_CLIENT_NAME) {
     noteVerdaCallCompleted(at)
     // If this turn announced a cold start, this is the call that paid it, and

@@ -34,6 +34,10 @@ const FLOOR_CAVEAT =
  * `≥` does NOT go away, because a floor plus an exact number is still a floor.
  * That is why the marker comes from `isTimePricedStep` rather than from
  * `basis`, which names only whichever attempt happened to run last.
+ *
+ * A third basis, `local`, is an exact €0.00 rather than a floor or an estimate:
+ * the call was served by a model process with no marginal bill. It is priced —
+ * and therefore rendered — precisely so it is not read as unpriceable.
  */
 function stepCost(
   m: EventMetrics,
@@ -54,6 +58,23 @@ function stepCost(
         `Billed by the second on the self-hosted GPU at €${m.timeRate.eurPerHour}/h — ` +
         `${seconds}s of measured call time. Tokens on it are free. ` +
         FLOOR_CAVEAT,
+    }
+  }
+  // A step served entirely by a local model process: exactly €0, and the label
+  // says WHY rather than leaving a bare zero to read as a missing measurement.
+  // `basis` is enough here (it names the last priced attempt) because a step
+  // that mixed a local call with a billed one has a non-zero figure and falls
+  // through to the token/floor branches, which describe the part that cost
+  // something. Owner decision 2026-08-26 — see `LOCAL_PRICED_CLIENTS`.
+  if (!isFloor && m.basis === 'local' && cost.costEur === 0) {
+    return {
+      eur: 0,
+      isFloor: false,
+      label: 'Cost (step)',
+      title:
+        'Served by a local model on infrastructure with no per-call bill, so this is €0.00 ' +
+        'exactly rather than an unknown. Moving that endpoint onto metered infrastructure ' +
+        'means moving its client into the priced set.',
     }
   }
   const rates = m.rates

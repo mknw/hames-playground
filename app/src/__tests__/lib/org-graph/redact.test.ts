@@ -10,9 +10,11 @@
  *
  * The length half is the one that was missing. An initial-preserving,
  * length-preserving mask is a signature: on a directory of a few dozen people,
- * `M···· R··· E······` is one person, and the repo it gets pasted into is
- * public. These tests now pin the absence of that signature, so a future
- * "let's keep the initial, it reads better" fails here rather than shipping.
+ * `J·· V·· D····` is one person, and the repo it gets pasted into is public.
+ * (That is the `Jan Van Damme` fixture below, not a colleague — illustrating
+ * this defect with a real name would commit it.) These tests now pin the
+ * absence of that signature, so a future "let's keep the initial, it reads
+ * better" fails here rather than shipping.
  */
 import { describe, it, expect } from 'vitest'
 import { formatCounts, mask, maskAll, maskGraphIds } from '../../../lib/org-graph/scripts/_redact'

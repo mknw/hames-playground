@@ -26,7 +26,10 @@
  * a public repo that is a re-identifier, not a redaction: initials plus a
  * per-word length signature narrows a directory of a few dozen people to one,
  * and is trivially confirmable by a colleague. Length is the half that is easy
- * to miss — `M···· R··· E······` names somebody even with the initials gone.
+ * to miss — cover the initials in `J·· V·· D····` and the 3/3/5 word signature
+ * still picks one person out of the directory. That illustration is the
+ * `Jan Van Damme` fixture from this module's tests on purpose: writing this
+ * example with a real name would commit the very defect it describes.
  *
  * So the shape that survives is deliberately the coarsest one that still reads
  * as a shape. A caller that needs to tell two masked literals apart should

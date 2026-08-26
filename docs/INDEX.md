@@ -61,7 +61,7 @@ Records: [0001](adr/0001-anthropic-only-default-chains.md) Anthropic-only defaul
 | [harness-patterns/README.md](harness-patterns/README.md)                                   | Overview, core concepts, quick start                                                    |
 | [harness-patterns/api.md](harness-patterns/api.md)                                         | Complete API reference                                                                  |
 | [harness-patterns/frontend.md](harness-patterns/frontend.md)                               | SolidStart integration, server actions, sessions                                        |
-| [harness-patterns/examples.md](harness-patterns/examples.md)                               | Example agent catalog (7 agents)                                                        |
+| [harness-patterns/examples.md](harness-patterns/examples.md)                               | Example agent catalog (6 agents)                                                        |
 | [harness-patterns/parallel.md](harness-patterns/parallel.md)                               | Parallel pattern design notes                                                           |
 | [harness-patterns/with-references.md](harness-patterns/with-references.md)                 | `withReferences` meta-pattern + `expandPreviousResult` synthetic tool design (#30, #19) |
 | [harness-patterns/withReferences-tutorial.md](harness-patterns/withReferences-tutorial.md) | Hands-on walkthrough — search the web, attach refs at ingress, write to Neo4j           |
@@ -205,7 +205,7 @@ kg-agent/
 │   └── harness-patterns/        # Harness patterns documentation
 │       ├── README.md            # Overview
 │       ├── api.md               # API reference
-│       ├── examples.md          # Example agents (7)
+│       ├── examples.md          # Example agents (6)
 │       ├── frontend.md          # Frontend integration
 │       ├── parallel.md          # Parallel pattern design
 │       ├── prompt-caching.md    # Cache-breakpoint budget and placement (#122)

@@ -1,10 +1,26 @@
 /**
  * Prove the directory roster works as a pseudonymisation mapping source.
  *
- *   pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/smoke-pseudonymise.ts
+ *   pnpm dlx tsx --env-file=.env src/__tests__/lib/privacy/smoke-pseudonymise.ts
  *
- * Needs the roster already ingested (`ingest-roster.ts`) and Neo4j up. Makes no
- * Graph call and no model call — the whole substitution layer is pure.
+ * Needs the roster already ingested (`lib/org-graph/scripts/ingest-roster.ts`)
+ * and Neo4j up. Makes no Graph call and no model call — the whole substitution
+ * layer is pure.
+ *
+ * ## Why it lives in the test tree and not beside its sibling scripts
+ * It is the only file in the repo that composes `lib/privacy/*` outside that
+ * directory's own tests, and `egress-wiring.test.ts` — sitting right here —
+ * asserts mechanically that no such file exists outside `src/__tests__/`. That
+ * tripwire is the stop sign in front of the three open questions in
+ * `docs/plan/graph-pseudonymisation.md`, and it is meant to fail the day a
+ * *production* hook appears. This script is not that hook: it is hand-run
+ * verification that never executes in a request path, so it belongs on the
+ * verification side of the line the tripwire draws. Moving it back under
+ * `src/lib/` turns CI red, and correctly so.
+ *
+ * It is deliberately NOT named `*.test.ts`: `vitest.config.ts` collects
+ * `*.{test,spec}.{ts,tsx}` only, so the suite never runs it. It needs a live
+ * Neo4j holding a real roster, which no hermetic run has.
  *
  * ## What it demonstrates, in three cases
  * The synthetic transcript is a `tool_result`-shaped payload built **from the
@@ -24,18 +40,23 @@
  *     lost. That is limitation 3.
  *
  * ## Redaction
- * Cleartext never reaches stdout. Real literals are printed through `mask()`
- * (`J·· V·· D····`), which shows the shape and not the person; the
- * pseudonymised transcript is printed in full, because that is exactly the text
- * that would go to the model and it contains no identities. The assertion the
- * script actually makes is on the *unmasked* strings in memory.
+ * Cleartext never reaches stdout, and neither does a masked form of it. The
+ * three people are referred to by **index** — `person[0]`, `person[1]`,
+ * `person[2]` — and nothing else. An earlier version printed them through
+ * `mask()`, which at the time preserved each word's initial and exact length;
+ * on a public repo that is a signature, not a redaction, and it bought nothing
+ * the counts do not already say. The pseudonymised transcript *is* printed in
+ * full, because that is exactly the text that would go to the model and it
+ * contains no identities. Every assertion runs on the cleartext in memory.
  */
-import { extractRoster } from '../../privacy/graph-roster'
-import { buildTable, apply, reverse } from '../../privacy/pseudonymise'
-import { rosterFromDirectory, mergeRosters } from '../../privacy/org-roster'
-import { loadDirectoryRoster, type DirectoryRosterRow } from '../roster-source.server'
-import { resetDriver } from '../../neo4j/client'
-import { mask } from './_redact'
+import { extractRoster } from '../../../lib/privacy/graph-roster'
+import { buildTable, apply, reverse } from '../../../lib/privacy/pseudonymise'
+import { rosterFromDirectory, mergeRosters } from '../../../lib/privacy/org-roster'
+import {
+  loadDirectoryRoster,
+  type DirectoryRosterRow,
+} from '../../../lib/org-graph/roster-source.server'
+import { resetDriver } from '../../../lib/neo4j/client'
 
 /** Build a Graph-shaped `tool_result` payload out of three real people:
  *  two declared in labelled fields, one named only in the body prose. */
@@ -80,8 +101,10 @@ async function main(): Promise<void> {
   }
 
   const [a, b, proseOnly] = roster
-  console.log(`   declared in payload: ${mask(a.displayName)} · ${mask(b.displayName)}`)
-  console.log(`   named only in prose: ${mask(proseOnly.displayName)}`)
+  // Index, never a name and never a masked name — see the header.
+  const label = (person: DirectoryRosterRow): string => `person[${roster.indexOf(person)}]`
+  console.log(`   declared in payload: ${label(a)} · ${label(b)}`)
+  console.log(`   named only in prose: ${label(proseOnly)}`)
 
   const payload = transcript(a, b, proseOnly)
   const directoryRoster = rosterFromDirectory(roster)
@@ -114,8 +137,8 @@ async function main(): Promise<void> {
   console.log(`   roster entries: ${merged.length} (payload ${payloadRoster.length} + directory)`)
   for (const person of [a, b, proseOnly]) {
     const left = occurrences(coveredText, person.displayName)
-    console.log(`   ${mask(person.displayName)} occurrences remaining: ${left}`)
-    assert(left === 0, `${mask(person.displayName)} should be fully replaced`)
+    console.log(`   ${label(person)} occurrences remaining: ${left}`)
+    assert(left === 0, `${label(person)} should be fully replaced`)
   }
   for (const person of [a, b]) {
     assert(occurrences(coveredText, person.mail) === 0, 'address should be replaced')

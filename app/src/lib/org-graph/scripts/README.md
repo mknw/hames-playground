@@ -20,13 +20,12 @@ See the header of `../schema.server.ts`.
 Run from `app/`. The `--env-file=.env` flag is how these pick up `.env` without
 a `dotenv` import (same convention as `../../sandbox/scripts/`).
 
-## The three scripts
+## The scripts
 
-| File                    | Touches       | Destructive        |
-| ----------------------- | ------------- | ------------------ |
-| `setup-org-graph.ts`    | Neo4j schema  | only with `--wipe` |
-| `ingest-roster.ts`      | Graph → Neo4j | no (upsert)        |
-| `smoke-pseudonymise.ts` | Neo4j (read)  | no                 |
+| File                 | Touches       | Destructive        |
+| -------------------- | ------------- | ------------------ |
+| `setup-org-graph.ts` | Neo4j schema  | only with `--wipe` |
+| `ingest-roster.ts`   | Graph → Neo4j | no (upsert)        |
 
 ```sh
 # idempotent: creates missing constraints, deletes nothing
@@ -36,8 +35,21 @@ pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/setup-org-graph.ts
 pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/setup-org-graph.ts --wipe
 
 pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/ingest-roster.ts
-pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/smoke-pseudonymise.ts
 ```
+
+A third, `smoke-pseudonymise.ts`, is run the same way but lives elsewhere:
+
+```sh
+pnpm dlx tsx --env-file=.env src/__tests__/lib/privacy/smoke-pseudonymise.ts
+```
+
+It is the one script that composes `lib/privacy/*`, and
+`src/__tests__/lib/privacy/egress-wiring.test.ts` asserts that nothing outside
+`src/__tests__/` does — that tripwire is a deliberate stop sign in front of the
+open questions in `docs/plan/graph-pseudonymisation.md`, and hand-run
+verification is not the production hook it is watching for. So the script sits
+next to the tripwire rather than here; its own header carries the reasoning.
+Everything below applies to it unchanged.
 
 `--wipe` was authorised once, for the migration to an organisational-only graph.
 The wipe lives behind a required confirmation **argument** (not a flag, not an

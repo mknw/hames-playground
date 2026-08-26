@@ -42,10 +42,12 @@ export default defineConfig({
         // src/__tests__/lib/org-graph/; only the CLI wrapper is here. Named
         // one by one rather than globbed, so `_redact.ts` beside them — pure,
         // and the thing that keeps real names out of a pasted transcript —
-        // stays in the report and keeps needing its tests.
+        // stays in the report and keeps needing its tests. The third script,
+        // `smoke-pseudonymise.ts`, needs no entry: it lives under
+        // src/__tests__/lib/privacy/ (see its header — the egress tripwire is
+        // what puts it there) and the __tests__ rule above already drops it.
         'src/lib/org-graph/scripts/setup-org-graph.ts',
         'src/lib/org-graph/scripts/ingest-roster.ts',
-        'src/lib/org-graph/scripts/smoke-pseudonymise.ts',
       ],
       // Backstop floors, not aspirations. Measured on 2026-08-16 against the
       // scope above (post smoke-script exclude) and set 2pp below the

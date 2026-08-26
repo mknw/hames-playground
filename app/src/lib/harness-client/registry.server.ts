@@ -6,13 +6,25 @@
  * - name: display name
  * - description: what the agent does
  * - createPatterns: factory function that returns the pattern chain
+ *
+ * Deliberately NOT a `"use server"` module: every export of one becomes a
+ * client-callable RPC, and `registerAgent` writes the PROCESS-WIDE registry
+ * every session's `getOrBuildPatterns` then reads — so as an RPC it let an
+ * anonymous caller replace a live agent's config for everyone, and
+ * `agentUsesRedisRetriever` / `agentUsesSyncWorkspace` take a `sessionId` they
+ * do not own. Nothing needed the directive: the client reaches this only through
+ * `actions.server.ts`'s gated `getAgentList`, and the API routes import it
+ * server-side. Same reasoning as `action-runner.server.ts` / `turn.server.ts`.
  */
-'use server'
-
+import { assertServerOnImport } from '../harness-patterns/assert.server'
 import type { ConfiguredPattern } from '../harness-patterns'
 import { harnessHasRedisRetriever, harnessUsesSyncWorkspace } from '../harness-patterns'
 import type { SessionData } from './session.server'
 import type { AgentAccent } from '../agent-palette'
+
+// The directive is gone, so nothing else keeps this module off the client. The
+// import-time assertion does.
+assertServerOnImport()
 
 // ============================================================================
 // Types

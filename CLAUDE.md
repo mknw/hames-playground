@@ -7,19 +7,14 @@ Project-level guidance for Claude Code in this repository.
 **Every `pnpm` command runs from `app/`** — never npm/npx, never from the repo root. The script list itself is a one-file lookup in `app/package.json`; what is not in that file:
 
 - **`pnpm baml-generate` after any edit under `baml_src/`.** `baml_client/` is generated and gitignored; a stale or missing one surfaces as ~270 phantom test failures, not as a BAML error. Never hand-edit it.
-- **Two llama-servers, two ports, and mixing them up is the trap.** `pnpm dev:llama` starts the local _chat_ model (GLM-4.7-Flash) on **8080**. The Data Stash _embedding_ server is a different model on **8090**, started by hand:
-
-  ```bash
-  llama-server --embedding -m models/Qwen3-Embedding-0.6B-Q8_0.gguf --port 8090 --ctx-size 8192
-  ```
-
+- **Three llama-servers, three ports, and mixing them up is the trap.** `pnpm dev:llama` starts the local _chat_ model (GLM-4.7-Flash) on **8080**. The other two are `make` targets at the repo root, each running in the foreground: `make embed` serves the Data Stash _embedding_ model on **8090**, `make llm-small` serves the small summarizer (`LocalQwenSmall`, the designated describe-role model) on **8095**. Their GGUF weights live gitignored in `models/` — [`models/README.md`](models/README.md) says which file goes where, and a missing one fails the target outright instead of leaving a dead port.
 - **`pnpm dev:exposed`** binds 0.0.0.0 — required for anything in Docker (Playwright MCP, the gateway) to reach the dev server.
 
 ### Client routing: Anthropic only
 
-Every BAML call (Router / LoopController / ActorController / Critic / Synthesize / ResultDescribe) routes through the chains in `baml_src/anthropic-only.baml`. There is no second routing mode and no routing env var: the mixed-provider chains and `USE_MIXED_CHAINS` were removed 2026-08-24 (ADR-0001) — their cross-provider rate limits made dev iteration too noisy, and one provider is also one processor to paper. `LocalGLM` in `baml_src/local-client.baml` stays for manual wiring; it is in no chain.
+Every BAML function declares one of the role chains in `baml_src/anthropic-only.baml` (the cheap `DescribeAnthropic` tier's own block there enumerates which functions ride it). There is no second routing mode and no routing env var: the mixed-provider chains and `USE_MIXED_CHAINS` were removed 2026-08-24 (ADR-0001) — their cross-provider rate limits made dev iteration too noisy, and one provider is also one processor to paper. `baml_src/local-client.baml` holds the two local clients — `LocalGLM` for manual wiring, and `LocalQwenSmall` (the `make llm-small` server) as the describe role's designated owned-inference replacement. Neither is in a chain yet.
 
-Which client a role runs on: `app/src/lib/harness-patterns/clients.server.ts` (`resolveClientForRole`) — the one place to re-point a role at a different chain.
+Which client a role runs on: the `client X` line on each function in `baml_src/` — that line is the only thing that routes a call. `app/src/lib/harness-patterns/clients.server.ts` (`resolveClientForRole`) is a **mirror** of those declarations used for prompt/batch budgeting; it routes nothing, so editing it alone re-sizes prompts for a model no call reaches. Re-point both, BAML first. The canonical per-function list for the cheap tier is on the `DescribeAnthropic` block in `baml_src/anthropic-only.baml` — and re-pointing that chain would move the injection screen with it (see below).
 
 Docker services (Neo4j, MCP Gateway, Redis) come up with `docker compose up -d` from the repo root.
 
@@ -182,15 +177,15 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 
 **The chains** — declared in `baml_src/anthropic-only.baml`:
 
-| Client                 | Role                                                                                                                                    |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `RouterAnthropic`      | Intent classification                                                                                                                   |
-| `ControllerAnthropic`  | simpleLoop tool-loop controller — `*NoThink` models, and the backstop stays Sonnet-tier: no Haiku fallback on structured output         |
-| `ActorAnthropic`       | actorCritic actor — the same models as the controller, with thinking left ON                                                            |
-| `PlannerAnthropic`     | planner (#27) upfront decomposition — one call per chain, thinking left ON (the reasoning IS the deliverable)                           |
-| `CriticAnthropic`      | Evaluation/critique                                                                                                                     |
-| `SynthesizerAnthropic` | Response synthesis                                                                                                                      |
-| `DescribeAnthropic`    | Lightweight tool result summarization (one batched call per ≤8 results, `compactBulkData`), titles, intent compaction (`compactIntent`) |
+| Client                 | Role                                                                                                                                                                                                                                                                                           |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RouterAnthropic`      | Intent classification                                                                                                                                                                                                                                                                          |
+| `ControllerAnthropic`  | simpleLoop tool-loop controller — `*NoThink` models, and the backstop stays Sonnet-tier: no Haiku fallback on structured output                                                                                                                                                                |
+| `ActorAnthropic`       | actorCritic actor — the same models as the controller, with thinking left ON                                                                                                                                                                                                                   |
+| `PlannerAnthropic`     | planner (#27) upfront decomposition — one call per chain, thinking left ON (the reasoning IS the deliverable)                                                                                                                                                                                  |
+| `CriticAnthropic`      | Evaluation/critique                                                                                                                                                                                                                                                                            |
+| `SynthesizerAnthropic` | Response synthesis                                                                                                                                                                                                                                                                             |
+| `DescribeAnthropic`    | The cheap tier: six `describe` functions (batched + per-item result summaries, run titles, intent compaction, the retriever's query rewrite, the citation picker) **plus** `ScreenUntrustedContent` on its own `screen` role. Canonical list: the block on this chain in `anthropic-only.baml` |
 
 **Extended thinking (#139):** these models think by default — no request asks for
 it — and the trace is never exposed (empty string + signature), so it cannot feed
@@ -208,9 +203,11 @@ adapters.
 
 **Multi-call turns:** both loop patterns accept `multiToolCalls: 'parallel' | 'sequential' | 'off'` (default `'parallel'`) — the controller batches several tool calls into one turn via `ControllerAction.additional_calls`, saving one controller round-trip per batched call. Each advertised mode both describes AND demonstrates one batched action in its own branch of `LoopMultiCalls`/`ActorMultiCalls` (parallel: independent lookups; sequential: write-then-run), in the same JSON envelope everything else in the prompt uses — #248 was a model reaching for a field described but never shown, and inventing a YAML `additional_calls:` list for it. `'sequential'` runs in order with stop-on-failure (sandbox agents); `'off'` renders no branch, so it suppresses the demonstration along with the rest of the affordance, but still executes un-advertised batches serially (no agent uses it today). Full semantics: `app/src/lib/harness-patterns/SPEC.md`.
 
-**The injection screen has its own role** — `screen` resolves to `DescribeAnthropic` rather than riding `describe` (SA-M5). Same client today; the separation is what matters, because re-pointing summarization at a cheaper model must never drag prompt-injection screening along with it — a screen must not be talked out of reporting by the content it reviews, and must copy spans verbatim so the guard can neutralize them. Rationale on the map entry in `clients.server.ts`.
+**The injection screen has its own role** — `screen` resolves to `DescribeAnthropic` rather than riding `describe` (SA-M5). Same client today; the separation is what matters, because re-pointing summarization at a cheaper model must never drag prompt-injection screening along with it — a screen must not be talked out of reporting by the content it reviews, and must copy spans verbatim so the guard can neutralize them. Rationale on the map entry in `clients.server.ts`. **The separation lives only in that TypeScript map**: in BAML both roles name the same `DescribeAnthropic` chain, so re-pointing the chain — the one-line edit that reads like "switch the owned-inference tier on" — moves the screen too. The describe tier is moved by rewriting its six `client` lines individually, or by adding a `DescribeLocal` chain for them; `injection-screen.baml` stays on `DescribeAnthropic`.
 
-Local inference (`LocalGLM` — GLM 4.7 Flash on localhost:8080) is defined in `baml_src/local-client.baml` and available for manual wiring but not used in any chain.
+Local inference lives in `baml_src/local-client.baml` and is in no chain: `LocalGLM` (GLM 4.7 Flash, `pnpm dev:llama` on :8080) for manual wiring, and `LocalQwenSmall` (`make llm-small` on :8095) as the describe role's designated replacement, with the flip documented on its own block.
+
+**Running the small models remotely is env-vars-only.** `LocalQwenSmall` and the Data Stash embedder both speak the OpenAI-compatible wire format, and neither has a hardcoded host — "local" names the format, not the machine. Four vars move both to a remote endpoint with no code change, no rebuild, no `baml-generate`: `SMALL_LLM_BASE_URL` + `SMALL_LLM_API_KEY` for the 4B summarizer, `EMBEDDINGS_LOCAL_URL` + `EMBEDDINGS_LOCAL_API_KEY` for the 0.6B embedder. Both URLs include the `/v1` suffix; both keys are optional and are sent as `Authorization: Bearer`. The `SMALL_LLM_*` pair has no in-code default — BAML options take a bare `env.X` reference — so `app/.env.example` carries the localhost values and is the place they are documented. Changing the embedding _model_ (rather than its host) invalidates the vector index; see `docs/DATA_STASH.md`.
 
 Required env var: `ANTHROPIC_API_KEY`. (`OPENROUTER_API_KEY` is unrelated to routing — it belongs to the optional `openrouter` embedding provider; see `docs/DATA_STASH.md`.)
 
@@ -248,12 +245,18 @@ UnoCSS attributify mode — always use attribute syntax:
 <button bg="cyan-600/10 hover:cyan-600/20" text="xs cyan-400">
 ```
 
-Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secondary,tertiary}`, `dark-border-{primary,secondary}`, `neon-{cyan,magenta,purple}`, `cyber-{600,700,800}`.
+**Theming (#226 B8):** the interface palette is `ui-bg-*` / `ui-text-*` / `ui-border-*` / `ui-accent` / `ui-danger` / `ui-success`, each resolving to `var(--ui-…)`. `uno.config.ts`'s first preflight declares those variables on `:root` (dark) and redefines them on `:root.light`; `src/lib/theme.ts` decides which class `<html>` carries and exports the `THEME_BOOT_SCRIPT` that `entry-server.tsx` inlines to avoid a flash. **Write `ui-*`. Never add a `dark:` variant** — the token flips, the component does not.
+
+The switch is three-state: `light`, `dark`, `system` (the default). `system` follows `prefers-color-scheme` live; an explicit choice is persisted in `localStorage.theme` and ignores the OS. Only `light`/`dark` are ever written — `system` is the absent key.
+
+`dark-{bg,text,border}-*` and `neon-*` still exist as fixed hexes, and are now **graph-canvas data colours only** (`lib/turn-colors.ts`, `lib/agent-palette.ts`, Cytoscape's style object, xterm's theme — none of which can read a CSS variable). An `i-…` glyph aside, a `dark-*` or `neon-cyan` token in `src/components` or `src/routes` is a bug; `__tests__/lib/theme-migration.test.ts` fails on one. `cyber-{600,700,800}` (indigo) stays fixed on purpose: it reads on both grounds.
+
+Not yet on the theme, and visible in light mode: the Cytoscape canvas, `UserMenu`'s dropdown (white in both modes), the retriever citation chips (`.doc-ref*`) and the sidebar completion-flash keyframes.
 
 **Icons** — `material-symbols` (+ `material-symbols-light`) is **the** icon set; they are the only two collections registered in `presetIcons` (`app/uno.config.ts`):
 
 - Use via `class="i-material-symbols-<icon-name>"` — icon classes are the one sanctioned `class=` exception, since `presetIcons` has no attributify form
-- Example: `<span class="i-material-symbols-database-outline" w="5" h="5" text="neon-cyan" aria-hidden="true" />`
+- Example: `<span class="i-material-symbols-database-outline" w="5" h="5" text="ui-accent" aria-hidden="true" />`
 - Browse icons at [https://icones.js.org](https://icones.js.org) — filter by `material-symbols`
 - ⚠️ mdi is gone (#226 B6): `@iconify-json/mdi` is no longer a dependency and no `i-mdi-*` class survives in `app/src`. An `i-mdi-*` is a bug — the collection is not registered, so it emits no CSS and the glyph renders as an empty span
 - Full styleguide (attributify rules, house recipes, role→colour mapping, a11y + graph checklists): the `kg-dtalk-ui` skill

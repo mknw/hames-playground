@@ -24,13 +24,13 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
   const getStatusColor = () => {
     switch (props.toolCall.status) {
       case 'executed':
-        return 'neon-green'
+        return 'ui-success'
       case 'pending':
         return 'neon-yellow'
       case 'error':
         return 'red-500'
       default:
-        return 'dark-text-tertiary'
+        return 'ui-text-tertiary'
     }
   }
 
@@ -67,7 +67,7 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
         <Collapsible.Trigger
           w="full"
           p="2"
-          bg="dark-bg-tertiary/50"
+          bg="ui-bg-tertiary/50"
           border={`1 ${getStatusColor()}/30`}
           rounded="md"
           cursor="pointer"
@@ -75,7 +75,7 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
           items="center"
           gap="2"
           transition="all"
-          hover:bg="dark-bg-tertiary"
+          hover:bg="ui-bg-tertiary"
           text="left"
         >
           {/* Status indicator dot */}
@@ -94,12 +94,13 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
           </div>
 
           {/* Summary info */}
-          <div text="xs dark-text-tertiary" flex="1">
+          <div text="xs ui-text-tertiary" flex="1">
             <Show
               when={props.toolCall.status === 'executed' && props.toolCall.result}
               fallback={getStatusLabel()}
             >
-              {props.toolCall.result!.nodeCount} nodes, {props.toolCall.result!.relationshipCount} rels
+              {props.toolCall.result!.nodeCount} nodes, {props.toolCall.result!.relationshipCount}{' '}
+              rels
             </Show>
           </div>
 
@@ -122,8 +123,8 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
 
         {/* Expanded Content */}
         <Collapsible.Content
-          bg="dark-bg-secondary"
-          border="1 dark-border-secondary"
+          bg="ui-bg-secondary"
+          border="1 ui-border-secondary"
           border-t="0"
           rounded-b="md"
           overflow="hidden"
@@ -132,14 +133,14 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
             {/* Cypher Query */}
             <Show when={props.toolCall.cypher}>
               <div>
-                <div text="xs dark-text-tertiary" m="b-1" font="medium">
+                <div text="xs ui-text-tertiary" m="b-1" font="medium">
                   Cypher Query
                 </div>
                 <pre
-                  bg="dark-bg-tertiary"
+                  bg="ui-bg-tertiary"
                   p="2"
                   rounded="md"
-                  text="xs neon-cyan"
+                  text="xs ui-accent"
                   font="mono"
                   overflow-x="auto"
                   white-space="pre-wrap"
@@ -153,14 +154,14 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
             {/* Results (for executed queries) */}
             <Show when={props.toolCall.status === 'executed' && props.toolCall.result?.raw}>
               <div>
-                <div text="xs dark-text-tertiary" m="b-1" font="medium">
+                <div text="xs ui-text-tertiary" m="b-1" font="medium">
                   Results
                 </div>
                 <pre
-                  bg="dark-bg-tertiary"
+                  bg="ui-bg-tertiary"
                   p="2"
                   rounded="md"
-                  text="xs dark-text-secondary"
+                  text="xs ui-text-secondary"
                   font="mono"
                   max-h="200px"
                   overflow="auto"
@@ -196,7 +197,7 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
                 <button
                   onClick={() => props.onApprove?.()}
                   p="x-4 y-2"
-                  text="sm dark-text-primary"
+                  text="sm ui-text-primary"
                   bg="green-600/20 hover:green-600/30"
                   border="1 green-500/50"
                   rounded="md"
@@ -207,7 +208,14 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
                   items="center"
                   gap="1"
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
                     <path d="M20 6L9 17l-5-5" />
                   </svg>
                   Approve
@@ -215,7 +223,7 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
                 <button
                   onClick={() => props.onReject?.()}
                   p="x-4 y-2"
-                  text="sm dark-text-primary"
+                  text="sm ui-text-primary"
                   bg="red-600/20 hover:red-600/30"
                   border="1 red-500/50"
                   rounded="md"
@@ -226,7 +234,14 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
                   items="center"
                   gap="1"
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
                     <path d="M18 6L6 18M6 6l12 12" />
                   </svg>
                   Reject

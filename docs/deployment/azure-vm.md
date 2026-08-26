@@ -182,6 +182,7 @@ WorkingDirectory=/opt/kg-agent/app   # cwd must be app/ so ../configs resolves
 EnvironmentFile=/opt/kg-agent/app/.env
 Environment=PORT=3444
 Environment=HOST=127.0.0.1
+Environment=NODE_ENV=production     # `vinxi start` does NOT set it — see below
 ExecStart=/usr/bin/pnpm start       # vinxi start — serves .output/
 Restart=on-failure
 RestartSec=3
@@ -189,6 +190,15 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 ```
+
+**`NODE_ENV` is on the unit because nothing else sets it.** `vinxi start` sets
+`PORT`, `HOST` and `SERVER_PRESET` and stops there — only `vinxi build` sets
+`NODE_ENV` — so this unit ran the server with it unset. Nothing about the app
+should key security behaviour off it for that reason (the session cookie's
+`Secure` flag used to, and now keys off `import.meta.env.DEV`, which the bundler
+fixes at build time), but any dependency that reads it still sees "not
+production", so set it here. The `app` compose service gets it from the image
+(`app/Dockerfile`) and needs nothing.
 
 ```bash
 sudo systemctl daemon-reload && sudo systemctl enable --now kg-agent

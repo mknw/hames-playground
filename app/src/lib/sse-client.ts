@@ -33,11 +33,17 @@ import type { ContextEvent, UnifiedContext } from './harness-patterns'
  * The value: a turn can legitimately write nothing for many minutes — one call
  * to the self-hosted deployment blocks for its whole `request_timeout_ms`
  * (600s), and a cold start alone measured 146s on 2026-08-26. Zero bytes for
- * that long is indistinguishable from a dead connection, both to a proxy with
- * an idle read timeout (the preview runs behind Caddy) and to the user, whose
- * reload destroys the in-flight turn's only record of itself. 15s is the
- * conventional heartbeat: under every default idle timeout worth surviving
- * (nginx / ELB use 60s) without being chatty.
+ * that long is indistinguishable from a dead connection to any intermediary
+ * with an idle read timeout. This is DEFENCE IN DEPTH, not the fix for a
+ * measured drop: the proxy actually in front of the preview is Caddy, and
+ * `configs/Caddyfile` says in as many words that Caddy's default has no
+ * response timeout. What the frame buys is "provably alive on the wire" —
+ * against a future intermediary, against NAT idle eviction, and as a property
+ * worth having on its own. What it does NOT buy is a user-visible signal: a
+ * comment frame is invisible to a human by construction, so the silence a
+ * person reloads out of is untouched and remains an open owner decision.
+ * 15s is the conventional heartbeat: under every default idle timeout worth
+ * surviving (nginx / ELB use 60s) without being chatty.
  */
 export const SSE_KEEPALIVE_MS = 15_000
 

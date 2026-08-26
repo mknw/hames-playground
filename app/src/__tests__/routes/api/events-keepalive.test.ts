@@ -5,9 +5,12 @@
  * self-hosted deployment blocks for its whole `request_timeout_ms` (600s), and
  * a cold start alone measured 146s on 2026-08-26. The stream used to send zero
  * bytes for that entire window, which is indistinguishable from a dead
- * connection — to a proxy with an idle read timeout (the preview runs behind
- * Caddy) and to the user, whose reload destroys the in-flight turn's only
- * record of itself.
+ * connection to any intermediary with an idle read timeout — defence in depth
+ * rather than a measured fix, since the preview's own proxy is Caddy and
+ * `configs/Caddyfile` records that Caddy's default has no response timeout.
+ * The heartbeat proves the WIRE is alive; it says nothing to the human whose
+ * reload destroys the in-flight turn's only record of itself, which is a
+ * separate and still-open problem.
  *
  * Two halves, and both matter: the route must WRITE something, and the client
  * parser must IGNORE it. A heartbeat that reached `ChatStreamEvent` consumers

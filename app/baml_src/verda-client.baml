@@ -41,20 +41,29 @@
 // WHAT THAT GENEROSITY ACTUALLY COSTS, measured the same day and worse than
 // the "a hung warm call also waits it out" this comment used to claim. Three
 // chats sent in quick succession into a sleeping box are ONE replica's queue,
-// not three cold starts in parallel: two of them were still unanswered at
-// 600 000ms and ended as `BamlTimeoutError`, while the deployment's own
-// gateway had meanwhile answered a sibling call with
-// `504 {"error":"inference request was canceled"}` after 55s. So the platform
-// gives up on a queued request long before this timeout does, and every second
-// past that point is spent waiting for a reply that will never arrive — ten
-// minutes of it, per call, twice per turn (controller then synthesizer).
-// Lowering it is a real option and an OWNER decision, because the number
-// trades "survive a cold start" against "notice a cancelled request", and
-// nothing in this repo has measured where the platform's own ceiling sits.
+// not three cold starts in parallel, so a burst multiplies its own wait.
+// Under that queueing TWO DISTINCT platform behaviours were observed, and they
+// are mutually exclusive readings rather than two halves of one story:
+//   - two calls returned NOTHING, were still unanswered at 600 000ms and ended
+//     as `BamlTimeoutError` — on the evidence they were either never cancelled
+//     or the cancellation never reached the client;
+//   - a different call WAS given up on by the deployment's own gateway, and
+//     said so PROMPTLY: `504 {"error":"inference request was canceled"}` at
+//     55s. That client learned within a minute and burned no timeout.
+// Which behaviour applies when is UNMEASURED; 55s is one observation under
+// queueing, not a contract. The two readings point opposite ways on this
+// number, which is why it stays an OWNER decision: if a cancel always surfaces
+// as a prompt 504, a generous timeout costs nothing and is exactly what lets a
+// 146s cold start finish; if instead the silent pair were cancelled and the
+// reply was dropped, that is a worse platform defect and the case for lowering
+// is strong. The floor either way is ~150s — below that the first call of
+// every session reliably fails, by the 146s measured above.
 // What is NOT a judgement call, and is fixed: a turn that spends that time and
 // comes back with nothing is no longer recorded as a success (`settleTurn` in
 // `harness-patterns/harness.server.ts`), and the SSE stream no longer goes
-// byte-silent for the whole wait (`SSE_KEEPALIVE_MS` in `routes/api/events.ts`).
+// byte-silent for the whole wait (`SSE_KEEPALIVE_MS`, declared in
+// `lib/sse-client.ts` beside the parser that drops it — NOT in
+// `routes/api/events.ts`, which is the one module it cannot live in).
 client<llm> VerdaQwen {
   provider openai-generic
   options {

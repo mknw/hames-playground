@@ -37,7 +37,11 @@
  * request this repo never makes.
  *
  * Two honesty notes that belong with the numbers, not in a footnote:
- *   - p95 over 16 samples is the second-worst sample. It is reported as p95
+ *   - p95 here is usually the MAXIMUM, not a tail estimate. `pct` is
+ *     nearest-rank with a ceiling, so its index is `ceil(0.95n) - 1`: at
+ *     n = 3 (sequential), n = 8 (4-way) and n = 16 (8-way) that is the last
+ *     element, i.e. the worst observation. Only the 20-call reliability phase
+ *     has enough samples for it to be the second-worst. It is reported as p95
  *     because that is what it approximates, not because n justifies the name.
  *   - The user message is varied per call. The deployment may run vLLM's
  *     prefix cache (a server flag, outside this repo), and a fixed prompt

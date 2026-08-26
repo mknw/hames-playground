@@ -36,11 +36,39 @@
  *    identically and which leaves the cached prefix ending at the same byte.
  *    The assertions below are what a future edit has to keep true.
  *
- * On the OpenAI wire that same grouping concatenates the blocks into one string
- * with a space where the message boundary used to be (`---\nCONTEXT:` becomes
- * `--- CONTEXT:`). That is BAML's joiner, not this change: `LoopController`'s
- * two cached user tiers have always merged that way, on the route measured
- * 47/47 envelopes parsed.
+ * On the OpenAI wire that same grouping merges the blocks, and it does so in
+ * two different ways depending on `cache_control` — a distinction the record
+ * originally missed, and the third thing this file pins.
+ *
+ * 3. **Where the merged blocks are joined, and by whom.** BAML concatenates
+ *    adjacent same-role blocks carrying NO metadata into a single string with
+ *    a space where the message boundary used to be (`---\nCONTEXT:` becomes
+ *    `--- CONTEXT:`) — `LoopController`'s two cached user tiers have always
+ *    merged that way. A block carrying a #122 `cache_control` marker is NOT
+ *    merged like that: it stays its own entry in a content-part ARRAY, even
+ *    on `VerdaQwen`, which declares no `allowed_role_metadata` and so drops
+ *    the marker itself from the body. That array boundary is the one at the
+ *    end of every controller prompt — the newest tool result carries the
+ *    rolling marker and the volatile tail follows it — so nothing in this
+ *    repo joins those two. The SERVER does.
+ *
+ *    BAML also trims leading and trailing whitespace off each part, verified
+ *    by mutation: a trailing newline at the end of `ActorAttemptLog`, an
+ *    explicit newline expression in the same place, and a leading blank line
+ *    in `ActorClosing` each render byte-identically to HEAD, while a visible
+ *    token in that position does appear. So a template CANNOT place a
+ *    separator at this boundary — the obvious one-line fix is a guaranteed
+ *    no-op, which is why none is applied.
+ *
+ *    On the deployment this PR routes to that is harmless: vLLM joins text
+ *    parts with a newline (`vllm/entrypoints/chat_utils.py` —
+ *    `text_prompt = "\n".join(texts)`), so the actor reads
+ *    `rows 3` NEWLINE `You MUST address…`, not a fused token. A different
+ *    OpenAI-compatible server that joined parts with an empty string WOULD
+ *    fuse the last result into the instruction after it, and since no
+ *    template edit can defend against that, the test below pins the shape
+ *    instead: the boundary must stay two parts, so a change that flattens it
+ *    into one — where the space-joiner would apply — is visible here.
  *
  * Rendered offline via `b.request.*` — no socket is opened, so this runs in CI
  * where the endpoint is unreachable. Live counterpart:
@@ -211,6 +239,33 @@ describe('system-role placement on an OpenAI-compatible wire', () => {
       'user',
     ])
   })
+})
+
+/** The first text of the volatile tail that follows the last result block. */
+const VOLATILE_TAIL_HEAD: Record<string, string> = {
+  ActorController: 'You MUST address the CRITIC FEEDBACK above.',
+  LoopController: 'Turn 2. Decide the next action.',
+}
+
+describe('the controller prompts end in two content parts, joined by the server', () => {
+  it.each(Object.keys(VOLATILE_TAIL_HEAD))(
+    '%s keeps the newest result and the volatile tail as separate parts',
+    async (name) => {
+      const render = FUNCTIONS.find(([n]) => n === name)![1]
+      const body = (await render(OPENAI)()).body.json() as Body
+      const parts = body.messages!.at(-1)!.content as { text: string }[]
+      // An ARRAY, not a string: the #122 marker on the newest result is what
+      // stops BAML merging it with the tail. Flatten these into one string and
+      // the space-joiner applies instead, which is a prompt change — fail here.
+      expect(Array.isArray(parts)).toBe(true)
+      expect(parts.length).toBeGreaterThanOrEqual(2)
+      expect(parts.at(-1)!.text.startsWith(VOLATILE_TAIL_HEAD[name])).toBe(true)
+      // No part can rely on edge whitespace to separate it from its neighbour:
+      // BAML trims both edges (see the header). A server that joins parts with
+      // '' therefore fuses them, and no template edit can prevent it.
+      for (const part of parts) expect(part.text).toBe(part.text.trim())
+    },
+  )
 })
 
 describe('the Anthropic path is unchanged by the reorder', () => {

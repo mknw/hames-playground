@@ -144,8 +144,15 @@ export function verdaInferenceEnabled(): boolean {
  * FAIL CLOSED, and deliberately: the alternative — warn, then let BAML fall
  * through to the declared Anthropic client — would silently route
  * confidential-compute traffic to the provider the flag exists to avoid, and
- * nothing downstream would look wrong. A boot-time throw is the loud version
- * of the same information.
+ * nothing downstream would look wrong. Throwing is the loud version of the
+ * same information.
+ *
+ * WHEN it throws is narrower than "startup": nothing on the server-boot path
+ * imports this module. `src/middleware.ts` arms only the routine scheduler,
+ * and every importer of this file (`baml-adapters.server.ts`, the patterns,
+ * `compactBulkData`) is reached from a server function or a routine's dynamic
+ * `import()`. So a flag-on deployment with a typo'd endpoint BOOTS GREEN and
+ * throws on the first call that touches the harness — not on `start`.
  *
  * `base_url` is handed to `openai-generic` verbatim (BAML options take an
  * `env.X` reference, not an expression, so nothing can append a path for us),
@@ -178,8 +185,11 @@ export function assertVerdaConfigured(): void {
 }
 
 // Checked once, at module load, and only when the flag is on: a misconfigured
-// endpoint should stop the process rather than surface as a 404 on the first
-// controller turn of someone's conversation. Costs nothing on the default path.
+// endpoint should fail loudly and closed rather than surface as a 404 mid-
+// conversation. Module load is the FIRST use of the harness, not process
+// start (see the note on `assertVerdaConfigured` above), so this refuses the
+// first agent call — it does not refuse the boot. Costs nothing on the
+// default path.
 if (verdaInferenceEnabled()) assertVerdaConfigured()
 
 /**

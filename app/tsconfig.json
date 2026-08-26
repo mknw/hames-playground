@@ -20,5 +20,5 @@
     "baseUrl": "./"
   },
   "exclude": ["./node_modules", ".output", ".vinxi"],
-  "include": ["src", "evals", "e2e"]
+  "include": ["src", "evals", "e2e", "e2e-browser"]
 }

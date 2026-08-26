@@ -78,3 +78,9 @@ models/*
 # `**/.env` rule below never applied to them because tracking predates it.
 neo4j_password.txt
 .env.local
+
+# Browser e2e runtime state (`app/e2e-browser/`): the handles global setup
+# parks for its workers, plus Playwright's traces/screenshots for a red run.
+# Regenerated on every invocation and meaningless outside the run that wrote it.
+app/e2e-browser/.runtime/
+app/playwright-report/

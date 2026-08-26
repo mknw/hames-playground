@@ -21,6 +21,7 @@
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { query } from './client.server'
+import { SETTINGS_BOUNDS } from '../settings'
 import {
   decryptFieldOrNull,
   decryptJsonb,
@@ -241,26 +242,86 @@ export async function setConversationStatus(
 }
 
 /**
+ * The per-LLM-call ceiling in force on this branch: `VerdaQwen`'s
+ * `request_timeout_ms` of 600_000 (`baml_src/verda-client.baml`), which is the
+ * only declared one and belongs to the DEPLOYMENT DEFAULT tier. It is generous
+ * on purpose — the box scales to zero and a cold start was measured at 146s
+ * (#273) — and it is the single term below that dominates everything else.
+ *
+ * **This is the number that tightens.** #279 (unmerged at the time of writing)
+ * drops the ceiling to ~120s; changing this constant to `2` re-derives
+ * {@link STUCK_RUN_TIMEOUT_MINUTES} to 48 minutes with no other edit.
+ */
+const PER_CALL_TIMEOUT_MINUTES = 10
+
+/**
+ * The most sequential LLM calls one turn can make, on the longest chain a
+ * BROWSER can ask for.
+ *
+ * `SETTINGS_BOUNDS.maxToolTurns[1]` is the tool loop's ceiling and it is
+ * client-settable (`SettingsPanel`, clamped server-side), so the reachable
+ * bound is the ceiling and not the default of 5. `CHAIN_OVERHEAD_CALLS` covers
+ * the single-call patterns a registered chain wraps around that loop — router,
+ * compactIntent, planner, compactExecution — plus one spare, because the count
+ * is a property of whichever agent is registered and a new one must not
+ * silently invalidate the arithmetic.
+ *
+ * `actorCritic` is the other loop shape and is bounded by
+ * `SETTINGS_BOUNDS.maxRetries[1]` at an actor call plus a critic call per
+ * attempt; `Math.max` takes whichever loop is worse rather than assuming.
+ */
+const CHAIN_OVERHEAD_CALLS = 5
+const MAX_SEQUENTIAL_LLM_CALLS =
+  Math.max(SETTINGS_BOUNDS.maxToolTurns[1], 2 * SETTINGS_BOUNDS.maxRetries[1]) +
+  CHAIN_OVERHEAD_CALLS
+
+/**
  * How long a row may sit at `status='running'` with NO write of its own before
  * the sweep below calls it abandoned.
  *
- * It has to exceed the longest turn that is still legitimately in flight,
- * because a running row is not touched again between the pre-seed and the
- * final `saveSession` — there is no mid-turn heartbeat, so "no state change"
- * cannot distinguish a slow turn from a dead process. The longest measured
- * legitimate wait is the self-hosted tier's cold start plus a queued burst:
- * 146s of boot (#273) against a 600s per-call `request_timeout_ms`, and a turn
- * makes several calls. 20 minutes clears that with room, and is still short
- * enough that a person who left a spinner running comes back to an answer or
- * an error rather than to the spinner.
+ * **Derived, not chosen** — the arithmetic is right here because the previous
+ * value was not supported by its own stated rationale. A running row is not
+ * touched again between the pre-seed and the final `saveSession`, so there is
+ * no mid-turn heartbeat and "no state change" cannot distinguish a slow turn
+ * from a dead process. The ONLY protection a live turn has is that this
+ * threshold outlasts it, which makes the number a bound and not a preference:
  *
- * Lower it and a long turn is reaped out from under itself: the reap writes
- * `error`, the turn finishes and writes `done` over it, and the row lies in
- * whichever order they land. Raise it and an abandoned row spins for longer.
- * Both are worse than the current value; change it against a measurement, not
- * a hunch.
+ *     worst legitimate turn = MAX_SEQUENTIAL_LLM_CALLS × PER_CALL_TIMEOUT_MINUTES
+ *                           = (max(15, 2 × 10) + 5) × 10 min
+ *                           = 250 min
+ *     threshold             = worst × MARGIN (1.2) = 300 min
+ *
+ * The value it replaces was 20 minutes, and 20 minutes is exactly 2 × the 600s
+ * per-call ceiling — while CLAUDE.md's own measurement of a burst into a
+ * sleeping box is that ceiling being hit *twice in one turn* (controller, then
+ * synthesizer). It was therefore a coin flip on the shape it was written
+ * against, and a 21-minute turn was in fact reaped out from under itself in
+ * review: the reap wrote `error`, the turn later wrote its own outcome over it,
+ * and in between the row lied and `sweepStuckRuns` logged an abandonment that
+ * had not happened. The owner's "~20 min" was policy intent — reap STUCK runs,
+ * never live ones — and the intent is what this honours; the number was never
+ * the thing being asked for.
+ *
+ * **The margin is 1.2 and does no other work.** It is not a fudge for an
+ * unaccounted term: every term above is a hard ceiling the app enforces, and
+ * the margin exists only so that a turn sitting exactly at the bound is not a
+ * race with the sweep.
+ *
+ * The cost of the larger number is bounded and small: an abandoned row is
+ * reconciled later, and nothing else changes — reaping was never what a WAITING
+ * user sees (a live run's spinner is `session-registry`'s per-tab
+ * `isProcessing` signal, which a reload clears whatever the row says). What the
+ * reap buys is honest data at rest, and honest data late beats a wrong status
+ * early.
+ *
+ * It tightens when the per-call ceiling does: see
+ * {@link PER_CALL_TIMEOUT_MINUTES} — #279 takes it to ~2 minutes, and this
+ * expression then yields 48.
  */
-export const STUCK_RUN_TIMEOUT_MINUTES = 20
+const STUCK_RUN_MARGIN = 1.2
+export const STUCK_RUN_TIMEOUT_MINUTES = Math.ceil(
+  MAX_SEQUENTIAL_LLM_CALLS * PER_CALL_TIMEOUT_MINUTES * STUCK_RUN_MARGIN,
+)
 
 /**
  * Reconcile abandoned runs: every row still at `status='running'` whose last
@@ -269,10 +330,19 @@ export const STUCK_RUN_TIMEOUT_MINUTES = 20
  *
  * The rows this exists for are the ones no code path will ever finish: the
  * process died mid-turn, so the `catch` in `turn.server.ts#runAndSave` that
- * normally flips a failed row out of `running` (sf-M2/sf-M3) never ran. In the
- * sidebar such a row is a spinner nothing can clear, which is the same
- * dishonesty the app-path e2e suite exists to forbid — just at rest rather
- * than in a turn.
+ * normally flips a failed row out of `running` (sf-M2/sf-M3) never ran. Such a
+ * row claims to be working and is not, which is the same dishonesty the
+ * app-path e2e suite exists to forbid — just at rest rather than in a turn.
+ *
+ * **What it is NOT is "a spinner nothing can clear"** — an earlier version of
+ * this docstring said that and it was wrong (F4 on #278). A live run's spinner
+ * is `session-registry`'s client-side `isProcessing` signal, per browser tab; it
+ * is never seeded from the persisted status and a reload clears it whatever the
+ * row says. What the reap actually buys is honest data AT REST — a
+ * `kind='action'` row's badge, the row's own status wherever it is read, and a
+ * conversation that no longer reports itself as running to anything that asks.
+ * `rowIndicator` shows a conversation's `error` since F4, so the correction is
+ * "a reaped row now says so", not "a spinner stops".
  *
  * **Multi-instance safe, and it has to be, because nothing elects a leader.**
  * Every input is in the database:

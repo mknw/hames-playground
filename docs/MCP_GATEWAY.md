@@ -137,13 +137,35 @@ What happens now, all of it in `app/src/lib/harness-patterns/`:
    it: a failing tool CALL is ordinary (the controller sees the error and
    decides), while a catalog that cannot be fetched means no tool can be chosen
    at all. One successful read clears it.
-3. **The loops refuse instead of guessing.** `simpleLoop` / `actorCritic` handed
-   an empty tool list _while the gateway is known unreachable_ record an
+3. **The loops refuse instead of guessing.** `simpleLoop` / `actorCritic` that
+   lost the gateway's tools _while the gateway is known unreachable_ record an
    `irrecoverable` error naming the outage, which stops the chain
    (`errorSeverity`, see the harness SPEC) so the synthesizer never answers
    around the hole. An empty list with a healthy gateway is left alone — the
    sandbox agents pass one deliberately, since their tools arrive over
    `docker exec`.
+
+   **"Lost the gateway's tools" is not the same as "has no tools", and reading
+   it as the latter left the default agent uncovered** (#278 F1). `listTools`
+   degrades to the app-side tools, so a pattern handed `tools.all` gets the nine
+   `graph_*` tools rather than `[]`: `general`'s surface is amputated, not
+   empty, and a length check let it answer a dead gateway with a confident
+   `done`. It cannot be settled by inspecting the NAMES either — every app-side
+   tool is in the `graph` namespace, so a robbed `general` holds exactly the list
+   `microsoft-365` composes on purpose from `tools.graph`, and that agent needs
+   no gateway at all. The distinction is provenance: `tools.server.ts` marks the
+   `all` array when the catalog read behind it did not reach the gateway, and
+   the guard fires on an empty list OR a marked one. Per-namespace lists are
+   deliberately unmarked — a gateway namespace has no key at all under an
+   outage, so it already arrives as `[]`.
+
+4. **A degraded catalog is not cached.** The adapters' tool-description cache is
+   module-level with no expiry and no invalidation on recovery, so one read
+   taken during an outage used to make the controller's AVAILABLE TOOLS block
+   empty for the rest of the PROCESS — long after the gateway came back. The
+   loop still held its allowlist, so nothing refused: the model was shown no
+   tools, picked one it had never been offered, and was rejected. It now returns
+   the degraded list without storing it.
 
 **The app does not restart the gateway container, deliberately.** It could — the
 docker socket is reachable in both shapes the app runs in — and it should not:

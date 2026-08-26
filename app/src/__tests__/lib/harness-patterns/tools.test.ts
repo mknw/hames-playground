@@ -375,5 +375,58 @@ describe('tools', () => {
         expect(tools.all).toHaveLength(15)
       })
     })
+
+    describe('provenance for the outage guard (#278 F1)', () => {
+      /**
+       * `all` means "every tool this app can reach", and the gateway is part of
+       * that surface whether or not it answered. Grouping is therefore the one
+       * place that knows an `all` is AMPUTATED rather than small — the pattern
+       * that receives it only sees names, and the app-side survivors are
+       * byte-identical to the list `microsoft-365` composes on purpose.
+       */
+      it('marks `all` as degraded when the catalog read did not reach the gateway', async () => {
+        const health = await import('../../../lib/harness-patterns/gateway-health.server')
+        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
+        health.__resetGatewayHealth()
+        health.markGatewayUnreachable('ECONNREFUSED 127.0.0.1:8811')
+
+        // What `listTools` returns on its failure path: the app-side survivors.
+        const tools = ToolsFrom([{ name: 'graph_me', description: 'Me', inputSchema: {} }])
+
+        expect(health.isDegradedToolSurface(tools.all)).toBe(true)
+        expect(health.toolSurfaceOutage(tools.all)).not.toBeNull()
+      })
+
+      it('leaves `all` unmarked while the gateway is answering', async () => {
+        const health = await import('../../../lib/harness-patterns/gateway-health.server')
+        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
+        health.__resetGatewayHealth()
+
+        const tools = ToolsFrom([
+          { name: 'read_neo4j_cypher', description: 'Read', inputSchema: {} },
+          { name: 'graph_me', description: 'Me', inputSchema: {} },
+        ])
+
+        expect(health.isDegradedToolSurface(tools.all)).toBe(false)
+      })
+
+      it('does not mark a per-namespace list, so an app-side agent is untouched', async () => {
+        // `microsoft-365` reads `tools.graph`. Marking the surviving namespaces
+        // would refuse it for an outage it does not depend on; a GATEWAY
+        // namespace has no key at all under an outage, so `tools.neo4j ?? []`
+        // still reaches the guard as the empty array it already handles.
+        const health = await import('../../../lib/harness-patterns/gateway-health.server')
+        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
+        health.__resetGatewayHealth()
+        health.markGatewayUnreachable('ECONNREFUSED 127.0.0.1:8811')
+
+        const tools = ToolsFrom([{ name: 'graph_me', description: 'Me', inputSchema: {} }])
+
+        expect(health.isDegradedToolSurface(tools.graph)).toBe(false)
+        expect(health.toolSurfaceOutage(tools.graph)).toBeNull()
+        expect(tools.neo4j).toBeUndefined()
+        expect(health.toolSurfaceOutage(tools.neo4j ?? [])).not.toBeNull()
+      })
+    })
   })
 })

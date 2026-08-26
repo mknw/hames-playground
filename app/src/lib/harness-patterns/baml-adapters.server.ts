@@ -35,6 +35,7 @@ import type {
 } from '../../../baml_client/types'
 import type { InjectionScreen } from './injection-guard'
 import { listTools as mcpListTools } from './mcp-client.server'
+import { gatewayDegradation } from './gateway-health.server'
 import { getActiveSandbox } from '../sandbox/scope.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
@@ -759,11 +760,25 @@ async function getToolDescriptions(refresh = false): Promise<ToolDescription[]> 
   if (refresh) toolDescCache = null
   if (!toolDescCache) {
     const tools = await mcpListTools()
-    toolDescCache = tools.map((t) => ({
+    const descriptions = tools.map((t) => ({
       name: t.name,
       description: t.description ?? '',
       args_schema: t.inputSchema ? JSON.stringify(t.inputSchema) : undefined,
     }))
+    // A catalog the gateway did not answer is NOT cacheable (#278 F1).
+    // `listTools` degrades to the app-side tools rather than throwing, and this
+    // cache has no expiry and no invalidation hook on recovery — so one
+    // degraded read used to make the controller's AVAILABLE TOOLS block empty
+    // for the rest of the PROCESS, long after the gateway came back. The loop
+    // still held its allowlist, so the turn did not refuse; it advertised no
+    // tools, the model picked one it had not been shown, and the allowlist
+    // check rejected it. Scenario 9's control case ("answers normally again
+    // once the gateway is back") is what catches this, and it only started
+    // catching it once the file drove an agent that reaches the controller
+    // during the outage — `general`, whose planner asks for descriptions
+    // before the loop's guard has a chance to refuse.
+    if (gatewayDegradation()) return descriptions
+    toolDescCache = descriptions
   }
   return toolDescCache
 }

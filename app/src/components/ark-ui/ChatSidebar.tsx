@@ -141,18 +141,30 @@ export function rowFlashClass(completion?: CompletionMark): string {
 /**
  * Which leading badge a thread row shows.
  *
- * Badges are the *persisted* action-row set only (POST-triggered runs have no
- * client-side stream, so their persisted `status` is the freshest signal we
- * have). A live run in THIS browser is indicated by the per-row progress
- * strip instead — see {@link progressPercent} — so conversations never take
- * a badge.
+ * Badges are otherwise the *persisted* action-row set (POST-triggered runs have
+ * no client-side stream, so their persisted `status` is the freshest signal we
+ * have). A live run in THIS browser is indicated by the per-row progress strip
+ * instead — see {@link progressPercent} — which is why a conversation takes no
+ * badge for `running`, `paused` or `done`.
+ *
+ * **`error` is the exception, and it is the one that matters at rest** (F4 on
+ * #278). A conversation row that ended badly — a turn that failed, or one the
+ * stuck-run reaper reconciled hours after the process behind it died — used to
+ * render identically to one that answered: this function opened with
+ * `if (args.kind !== 'action') return 'none'` and the repo's own test pinned
+ * `'none'` for every status. So the reaper's whole visible effect was an
+ * action-row badge, and for the three abandoned CONVERSATIONS in the dev
+ * database that motivated it, a reap changed nothing anyone could see. The
+ * progress strip cannot cover this: it reports a run happening now, and the
+ * rows in question are ones where nothing is happening at all.
  *
  * Pure so the precedence rules can be unit-tested without rendering.
  */
-export type RowIndicator = 'running' | 'action-error' | 'action-paused' | 'action-done' | 'none'
+export type RowIndicator =
+  'running' | 'error' | 'action-error' | 'action-paused' | 'action-done' | 'none'
 
 export function rowIndicator(args: { kind: ThreadKind; status: ThreadStatus }): RowIndicator {
-  if (args.kind !== 'action') return 'none'
+  if (args.kind !== 'action') return args.status === 'error' ? 'error' : 'none'
   if (args.status === 'running') return 'running'
   if (args.status === 'error') return 'action-error'
   if (args.status === 'paused') return 'action-paused'
@@ -363,7 +375,12 @@ const StatusBadge = (props: { indicator: RowIndicator }) => (
         style={{ 'flex-shrink': 0 }}
       />
     </Match>
-    <Match when={props.indicator === 'action-error'}>
+    {/* Both failure states share a glyph: what the row is telling the reader is
+        "this ended badly", and whether it was triggered over POST is what the
+        `action-done` bolt is for. The conversation half arrived with F4 on
+        #278 — before it, a reaped or failed conversation was indistinguishable
+        from one that answered. */}
+    <Match when={props.indicator === 'error' || props.indicator === 'action-error'}>
       <span
         title="Failed"
         role="img"

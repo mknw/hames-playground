@@ -30,6 +30,17 @@
  *     answers normally once the gateway is listening again, which is what
  *     separates "reports an outage" from "broke the agent".
  *
+ * **Two agents, deliberately, because the tool list they are handed has two
+ * different shapes** (F1 on #278). `search` reads `tools.neo4j ?? []`, and a
+ * gateway namespace has no key at all under an outage, so its loop is handed
+ * `[]`. `general` reads `tools.all` — and `listTools` degrades to the app-side
+ * tools, so its loop is handed the NINE `graph_*` tools instead. That surface
+ * is amputated, not empty, and while the guard opened with `tools.length > 0`
+ * this suite's only agent was the one that happened to be covered: `general`
+ * still answered a dead gateway with `E2E-FAKE-ANSWER: the graph reports 42
+ * nodes.` on a `done` row. Driving both is what makes the coverage designed
+ * rather than lucky.
+ *
  * HERMETIC ONLY. The gateway is faked in both modes, but taking it down is an
  * injected fault, and the live run exists to measure the inference route.
  */
@@ -66,14 +77,23 @@ function admitsTheOutage(serializedContext: string, response: string | undefined
   return inTranscript || /unavailable|gateway/i.test(response ?? '')
 }
 
+/**
+ * The two tool-list shapes an outage produces, and the agent that carries each.
+ * Both are registered agents a user can pick from the header.
+ */
+const AGENTS = [
+  { id: 'search', surface: 'an empty namespace list (`tools.neo4j ?? []`)' },
+  { id: 'general', surface: 'a whole surface amputated to its app-side tools (`tools.all`)' },
+] as const
+
 describe.runIf(IS_HERMETIC)('the tool surface collapses', () => {
-  it('does not answer as if the tools had been consulted', async () => {
+  it.each(AGENTS)('$id does not answer as if the tools had been consulted', async (agent) => {
     await app.fakeGateway.goDown()
-    const sessionId = newSessionId('gateway-down')
+    const sessionId = newSessionId(`gateway-down-${agent.id}`)
 
     let response: string | undefined
     try {
-      const result = await app.runTurn(sessionId, 'How many nodes are in the graph?')
+      const result = await app.runTurn(sessionId, 'How many nodes are in the graph?', agent.id)
       response = result.response
     } catch {
       // A throw is an acceptable shape — the UI renders the rejection. What is
@@ -86,13 +106,14 @@ describe.runIf(IS_HERMETIC)('the tool surface collapses', () => {
 
     expect(
       admitsTheOutage(row!.serializedContext, response),
-      `the turn said nothing about the gateway. status=${row!.status}, ` +
-        `response=${JSON.stringify(response)}`,
+      `${agent.id} said nothing about the gateway, with ${agent.surface}. ` +
+        `status=${row!.status}, response=${JSON.stringify(response)}`,
     ).toBe(true)
 
     // The specific dishonest outcome: the fake's canned answer, delivered as
     // though the graph had been queried. Before #276 this is exactly what came
-    // back, on a `done` row.
+    // back on `search`, on a `done` row — and it is still exactly what came
+    // back on `general` until F1 on #278, verbatim.
     if (response) expect(response).not.toContain(FAKE_ANSWER_MARK)
     expect(row!.status, 'a turn with no tools was persisted as a completed answer').not.toBe('done')
     expect(row!.status, 'the row was left spinning at running').not.toBe('running')
@@ -123,6 +144,42 @@ describe.runIf(IS_HERMETIC)('the tool surface collapses', () => {
       answers.every((a) => !String(a.content ?? '').includes(FAKE_ANSWER_MARK)),
       'an assistant message carried a fabricated answer',
     ).toBe(true)
+  })
+
+  it('refuses the general agent, whose surface was amputated rather than emptied', async () => {
+    // The reviewer's exact reproduction: `general` passes `tools.all` to both
+    // the planner and the executor, and under an outage `tools.all` is the nine
+    // app-side `graph_*` tools. Nothing about that list is empty, which is why
+    // a length check never fired — and the `graph_*` tools cannot answer a
+    // question about the Neo4j graph, so the plan was a plan for tools the loop
+    // did not have.
+    await app.fakeGateway.goDown()
+    const sessionId = newSessionId('gateway-down-general-events')
+
+    await app
+      .runTurn(sessionId, 'How many nodes are in the graph?', 'general')
+      .catch(() => undefined)
+
+    const row = await app.readRow(sessionId)
+    expect(row!.agentId).toBe('general')
+
+    const errors = eventsOfType(row!.serializedContext, 'error')
+    const outage = errors.find((e) => /unavailable/i.test(String(e.error ?? '')))
+    expect(
+      outage,
+      `no unavailability error in the transcript; got ${JSON.stringify(errors)}`,
+    ).toBeDefined()
+    expect(outage!.severity).toBe('irrecoverable')
+
+    // The chain stopped AT the executor, so the compactExecution after it never
+    // ran — that is the pattern that composed the confident answer out of an
+    // empty execution.
+    const answers = eventsOfType(row!.serializedContext, 'assistant_message')
+    expect(
+      answers.every((a) => !String(a.content ?? '').includes(FAKE_ANSWER_MARK)),
+      'an assistant message carried a fabricated answer',
+    ).toBe(true)
+    expect(row!.status).toBe('error')
   })
 
   it('tells an SSE client rather than streaming a healthy-looking answer', async () => {

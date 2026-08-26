@@ -6,16 +6,23 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockFinalAction, mockCriticResult } from '../../mocks/baml'
-import { mockListTools } from '../../mocks/mcp'
 
 // Mock server-only imports
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-// Mock MCP listTools
+// Mock MCP listTools.
+//
+// The catalog is mutable so one test can model what `listTools` ACTUALLY does
+// under a dead gateway: it degrades to the app-side tools rather than throwing
+// (#278 F1). Every other test leaves it at the default three.
+const mockCatalog = { names: ['read_neo4j_cypher', 'write_neo4j_cypher', 'Return'] }
+const MOCK_CATALOG_DEFAULT = [...mockCatalog.names]
 vi.mock('../../../lib/harness-patterns/mcp-client.server', () => ({
-  listTools: mockListTools(['read_neo4j_cypher', 'write_neo4j_cypher', 'Return']),
+  listTools: vi.fn(async () =>
+    mockCatalog.names.map((name) => ({ name, description: `Mock ${name} tool` })),
+  ),
 }))
 
 // Mock BAML client
@@ -256,6 +263,47 @@ describe('createPlannerAdapter', () => {
     expect(intent).toBe('intent')
     expect((tools as Array<{ name: string }>).map((t) => t.name)).toEqual(['read_neo4j_cypher'])
     expect(context).toBe('Node: Person')
+  })
+
+  it('does not let a degraded catalog outlive the outage', async () => {
+    // #278 F1, second order. The tool-description cache is module-level with no
+    // expiry and no invalidation on recovery, and `listTools` degrades to the
+    // app-side tools instead of throwing — so one read taken while the gateway
+    // was unreachable used to pin an amputated catalog for the rest of the
+    // PROCESS. The loop still held its allowlist, so nothing refused: the
+    // controller was simply shown no tools, picked one it had never been
+    // offered, and was rejected by the allowlist check. Found by scenario 9's
+    // control case ("answers normally again once the gateway is back") once the
+    // file drove `general`, whose planner reaches the catalog before the loop's
+    // outage guard gets a chance to refuse.
+    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    const { createPlannerAdapter, invalidateToolDescriptions } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    invalidateToolDescriptions()
+    health.__resetGatewayHealth()
+    health.markGatewayUnreachable('ECONNREFUSED 127.0.0.1:8811')
+    // What the failure path returns: the app-side survivors, no gateway tools.
+    mockCatalog.names = ['graph_me']
+
+    await createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent')
+    expect(mockPlanner.mock.calls[0][2], 'the degraded read showed a tool it did not have').toEqual(
+      [],
+    )
+
+    health.markGatewayReachable()
+    mockCatalog.names = [...MOCK_CATALOG_DEFAULT]
+    const after = await createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent')
+
+    expect(after.plan).toEqual(PLAN)
+    expect(
+      (mockPlanner.mock.calls[1][2] as Array<{ name: string }>).map((t) => t.name),
+      'the catalog cached during the outage survived the recovery',
+    ).toEqual(['read_neo4j_cypher'])
+
+    health.__resetGatewayHealth()
+    mockCatalog.names = [...MOCK_CATALOG_DEFAULT]
+    invalidateToolDescriptions()
   })
 
   it('propagates a non-recoverable failure as an LLMCallError', async () => {

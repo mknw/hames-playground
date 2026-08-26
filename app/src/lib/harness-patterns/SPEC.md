@@ -1354,11 +1354,25 @@ Two levels, and the finer one wins:
 | `ErrorEventData.severity`                                               | this FAILURE                                              | always, and it overrides the pattern |
 
 The event level exists because a pattern that is recoverable in general can hit
-something it cannot come back from. `simpleLoop` is `recoverable`, but a loop
-handed a **collapsed tool surface** (the gateway is unreachable, so its
-allowlist is empty) stamps `irrecoverable` on that one event: no further
-iteration can bring the tools back, so continuing would answer around the hole.
-See `gateway-health.server.ts`.
+something it cannot come back from. Three do today, and they are all the same
+shape — _this run produced nothing for a later pattern to work with_:
+
+- `simpleLoop` / `actorCritic` handed a **collapsed tool surface** (the gateway
+  is unreachable, so the pattern lost the tools it would have had). No further
+  iteration can bring them back. See `gateway-health.server.ts` — and note the
+  guard fires on an amputated list as well as an empty one, because `listTools`
+  degrades to the app-side tools rather than to `[]`.
+- `guardrail` when an input rail **blocks** or the **circuit breaker trips**.
+  Both `return scope` without running the wrapped pattern, so the execution the
+  chain is composing from does not exist. The pattern default stays
+  `recoverable`, which is correct for the case it was written against: an output
+  rail with `action: 'warn'` records an `error` event BY DESIGN.
+- `parallel` when **no branch survived**, and when the fan-out itself throws.
+  The default is right while one branch came back — the survivors are what the
+  rest of the chain is for — and says nothing about zero.
+
+In every case the classification is stamped on the EVENT rather than moved to
+the pattern default, because only the failure knows which of the two it is.
 
 Severity also drives presentation — `errorBubble` paints `recoverable` as a
 warning and everything else as an error — and the gate only ever considers

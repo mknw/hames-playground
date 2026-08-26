@@ -69,11 +69,15 @@ Precedent: `routes/api/events.ts` already fires post-response async work
 
 **Caveat (be honest):** a process restart mid-run orphans a `running` row.
 Since #273 D-a the row no longer spins forever — the routines tick sweeps rows
-stuck at `running` with no write for `STUCK_RUN_TIMEOUT_MINUTES` (20) to
-`error`, on boot and every 30s (see ROUTINES.md → "Trigger evaluation"). That
-reconciles the ROW, not the run: nothing resumes the work, and crash-recovery /
-retries are still an upgrade path — a Postgres-polling worker. Assumes a
-**persistent node server** (not serverless).
+stuck at `running` with no write for `STUCK_RUN_TIMEOUT_MINUTES` to `error`, on
+boot and every 30s (see ROUTINES.md → "Trigger evaluation"). That threshold is
+**derived from the longest turn a browser can ask for** rather than picked, and
+is therefore long (five hours at the 600s per-call ceiling this branch runs
+with); the alternative is reaping a turn that is still legitimately in flight,
+which a 20-minute threshold demonstrably did. It reconciles the ROW, not the
+run: nothing resumes the work, and crash-recovery / retries are still an upgrade
+path — a Postgres-polling worker. Assumes a **persistent node server** (not
+serverless).
 
 ## Data model — ONE table (`conversations`)
 

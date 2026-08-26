@@ -48,6 +48,15 @@ export function parallel<T extends Record<string, unknown>>(
           ),
         )
 
+        // Did anything survive? `parallel: 'recoverable'` is right while at
+        // least one branch did — "the surviving branches are exactly what the
+        // rest of the chain is for" — and says nothing about zero survivors,
+        // which leaves the chain with an empty execution and a synthesizer
+        // willing to compose an answer out of it (F5 on #278). Stamped on the
+        // EVENTS rather than moved to the pattern default, because only this
+        // run knows which case it is.
+        const noBranchSurvived = results.length > 0 && results.every((r) => r.status === 'rejected')
+
         // Merge fulfilled events; log rejected branches.
         // Branch boundary events also fire live so progress UIs see them.
         for (const [i, r] of results.entries()) {
@@ -71,6 +80,7 @@ export function parallel<T extends Record<string, unknown>>(
               'error',
               {
                 error: `Branch ${patterns[i].name} failed: ${r.reason}`,
+                ...(noBranchSurvived ? { severity: 'irrecoverable' as const } : {}),
               },
               true,
             )
@@ -80,7 +90,10 @@ export function parallel<T extends Record<string, unknown>>(
         return scope
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
-        trackEvent(scope, 'error', { error: msg }, true)
+        // The outer catch is not a branch failing — it is the fan-out itself
+        // failing, so no branch ran and nothing was merged. Nothing survived by
+        // construction (F5 on #278).
+        trackEvent(scope, 'error', { error: msg, severity: 'irrecoverable' }, true)
         return scope
       }
     },

@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock server-only imports
 vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
-  assertServerOnImport: vi.fn()
+  assertServerOnImport: vi.fn(),
 }))
 
 describe('parallel', () => {
@@ -33,7 +33,8 @@ describe('parallel', () => {
   it('should execute patterns concurrently', async () => {
     const { parallel } = await import('../../../../lib/harness-patterns/patterns/parallel.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
     const executionOrder: string[] = []
 
@@ -41,12 +42,12 @@ describe('parallel', () => {
       name: 'first',
       fn: vi.fn(async (scope) => {
         executionOrder.push('first-start')
-        await new Promise(resolve => setTimeout(resolve, 10))
+        await new Promise((resolve) => setTimeout(resolve, 10))
         executionOrder.push('first-end')
         scope.data = { ...scope.data, first: true }
         return scope
       }),
-      config: { patternId: 'first' }
+      config: { patternId: 'first' },
     }
 
     const pattern2 = {
@@ -57,7 +58,7 @@ describe('parallel', () => {
         executionOrder.push('second-end')
         return scope
       }),
-      config: { patternId: 'second' }
+      config: { patternId: 'second' },
     }
 
     const ctx = createContext<{ first?: boolean; second?: boolean }>('test')
@@ -66,7 +67,7 @@ describe('parallel', () => {
     const parallelPattern = parallel([pattern1, pattern2])
     const result = await parallelPattern.fn(
       { id: 'parallel', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     // Both should have executed
@@ -81,7 +82,8 @@ describe('parallel', () => {
   it('should merge events from all patterns', async () => {
     const { parallel } = await import('../../../../lib/harness-patterns/patterns/parallel.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
     const pattern1 = {
       name: 'first',
@@ -90,11 +92,11 @@ describe('parallel', () => {
           type: 'tool_call' as const,
           ts: Date.now(),
           patternId: 'first',
-          data: { tool: 'test1' }
+          data: { tool: 'test1' },
         })
         return scope
       }),
-      config: { patternId: 'first' }
+      config: { patternId: 'first' },
     }
 
     const pattern2 = {
@@ -104,11 +106,11 @@ describe('parallel', () => {
           type: 'tool_call' as const,
           ts: Date.now(),
           patternId: 'second',
-          data: { tool: 'test2' }
+          data: { tool: 'test2' },
         })
         return scope
       }),
-      config: { patternId: 'second' }
+      config: { patternId: 'second' },
     }
 
     const ctx = createContext('test')
@@ -117,18 +119,19 @@ describe('parallel', () => {
     const parallelPattern = parallel([pattern1, pattern2])
     const result = await parallelPattern.fn(
       { id: 'parallel', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     // Events from both branches should be merged
-    const toolCalls = result.events.filter(e => e.type === 'tool_call')
+    const toolCalls = result.events.filter((e) => e.type === 'tool_call')
     expect(toolCalls.length).toBe(2)
   })
 
   it('should wrap branch events with pattern_enter/exit', async () => {
     const { parallel } = await import('../../../../lib/harness-patterns/patterns/parallel.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
     const pattern1 = {
       name: 'first',
@@ -137,11 +140,11 @@ describe('parallel', () => {
           type: 'tool_call' as const,
           ts: Date.now(),
           patternId: 'first',
-          data: { tool: 'test1' }
+          data: { tool: 'test1' },
         })
         return scope
       }),
-      config: { patternId: 'branch-a' }
+      config: { patternId: 'branch-a' },
     }
 
     const pattern2 = {
@@ -151,11 +154,11 @@ describe('parallel', () => {
           type: 'tool_call' as const,
           ts: Date.now(),
           patternId: 'second',
-          data: { tool: 'test2' }
+          data: { tool: 'test2' },
         })
         return scope
       }),
-      config: { patternId: 'branch-b' }
+      config: { patternId: 'branch-b' },
     }
 
     const ctx = createContext('test')
@@ -164,12 +167,12 @@ describe('parallel', () => {
     const parallelPattern = parallel([pattern1, pattern2])
     const result = await parallelPattern.fn(
       { id: 'parallel', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     // Should have pattern_enter, tool_call, pattern_exit for each branch
-    const enters = result.events.filter(e => e.type === 'pattern_enter')
-    const exits = result.events.filter(e => e.type === 'pattern_exit')
+    const enters = result.events.filter((e) => e.type === 'pattern_enter')
+    const exits = result.events.filter((e) => e.type === 'pattern_exit')
     expect(enters.length).toBe(2)
     expect(exits.length).toBe(2)
 
@@ -184,7 +187,8 @@ describe('parallel', () => {
   it('should handle rejected branches gracefully', async () => {
     const { parallel } = await import('../../../../lib/harness-patterns/patterns/parallel.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
     const pattern1 = {
       name: 'success',
@@ -192,7 +196,7 @@ describe('parallel', () => {
         scope.data = { ...scope.data, success: true }
         return scope
       }),
-      config: { patternId: 'success' }
+      config: { patternId: 'success' },
     }
 
     const pattern2 = {
@@ -200,7 +204,7 @@ describe('parallel', () => {
       fn: vi.fn(async () => {
         throw new Error('Branch failed')
       }),
-      config: { patternId: 'failure' }
+      config: { patternId: 'failure' },
     }
 
     const ctx = createContext<{ success?: boolean }>('test')
@@ -209,22 +213,70 @@ describe('parallel', () => {
     const parallelPattern = parallel([pattern1, pattern2])
     const result = await parallelPattern.fn(
       { id: 'parallel', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     // Successful branch data should be present
     expect(result.data.success).toBe(true)
 
     // Error event should be tracked for failed branch
-    const errorEvents = result.events.filter(e => e.type === 'error')
+    const errorEvents = result.events.filter((e) => e.type === 'error')
     expect(errorEvents.length).toBeGreaterThan(0)
     expect(JSON.stringify(errorEvents[0].data)).toContain('Branch failure failed')
+  })
+
+  /**
+   * `parallel: 'recoverable'` is the pattern default and it is right while a
+   * branch survived — "the surviving branches are exactly what the rest of the
+   * chain is for". It says nothing about ZERO survivors, and until F5 on #278
+   * the all-rejected case inherited it: the chain continued with an empty
+   * execution and the synthesizer answered around the hole, which is the exact
+   * shape the owner's rule was written for. Fixed on the EVENT, not the pattern
+   * default, because only the run knows which case it is.
+   */
+  describe('severity when nothing survived (F5 #278)', () => {
+    const branch = (name: string, throws: boolean) => ({
+      name,
+      fn: vi.fn(async (scope: { data: unknown; events: unknown[] }) => {
+        if (throws) throw new Error(`${name} failed`)
+        return scope
+      }),
+      config: { patternId: name },
+    })
+
+    async function run(patterns: unknown[]) {
+      const { parallel } = await import('../../../../lib/harness-patterns/patterns/parallel.server')
+      const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+      const { createEventView } =
+        await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      const ctx = createContext('test')
+      const view = createEventView(ctx)
+      const result = await parallel(patterns as any).fn(
+        { id: 'parallel', data: ctx.data, events: [], startTime: Date.now() },
+        view,
+      )
+      return result.events
+        .filter((e) => e.type === 'error')
+        .map((e) => (e.data as { severity?: string }).severity)
+    }
+
+    it('leaves a branch failure recoverable while another branch survived', async () => {
+      expect(await run([branch('ok', false), branch('bad', true)])).toEqual([undefined])
+    })
+
+    it('marks every branch failure irrecoverable when none survived', async () => {
+      expect(await run([branch('bad-a', true), branch('bad-b', true)])).toEqual([
+        'irrecoverable',
+        'irrecoverable',
+      ])
+    })
   })
 
   it('should handle empty patterns array', async () => {
     const { parallel } = await import('../../../../lib/harness-patterns/patterns/parallel.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext('test')
     const view = createEventView(ctx)
@@ -232,7 +284,7 @@ describe('parallel', () => {
     const parallelPattern = parallel([])
     const result = await parallelPattern.fn(
       { id: 'parallel', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     expect(result).toBeDefined()
@@ -242,7 +294,8 @@ describe('parallel', () => {
   it('should use isolated scopes for each branch', async () => {
     const { parallel } = await import('../../../../lib/harness-patterns/patterns/parallel.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
     let scope1Id: string | undefined
     let scope2Id: string | undefined
@@ -253,7 +306,7 @@ describe('parallel', () => {
         scope1Id = scope.id
         return scope
       }),
-      config: { patternId: 'first' }
+      config: { patternId: 'first' },
     }
 
     const pattern2 = {
@@ -262,7 +315,7 @@ describe('parallel', () => {
         scope2Id = scope.id
         return scope
       }),
-      config: { patternId: 'second' }
+      config: { patternId: 'second' },
     }
 
     const ctx = createContext('test')
@@ -271,7 +324,7 @@ describe('parallel', () => {
     const parallelPattern = parallel([pattern1, pattern2])
     await parallelPattern.fn(
       { id: 'parallel', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     // Each branch should have its own scope ID
@@ -283,7 +336,8 @@ describe('parallel', () => {
   it('should handle catch block errors', async () => {
     const { parallel } = await import('../../../../lib/harness-patterns/patterns/parallel.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext('test')
     const view = createEventView(ctx)
@@ -297,14 +351,18 @@ describe('parallel', () => {
 
     const result = await parallelPattern.fn(
       { id: 'parallel', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     // Restore
     Promise.allSettled = originalAllSettled
 
     // Error should be tracked
-    const errorEvents = result.events.filter(e => e.type === 'error')
+    const errorEvents = result.events.filter((e) => e.type === 'error')
     expect(errorEvents.length).toBeGreaterThan(0)
+    // The fan-out itself failed, so no branch ran and nothing was merged —
+    // there is nothing behind this pattern for a later one to answer from
+    // (F5 on #278).
+    expect((errorEvents[0].data as { severity?: string }).severity).toBe('irrecoverable')
   })
 })

@@ -190,6 +190,38 @@ describe('the event outranks the pattern', () => {
   })
 })
 
+describe('a gated turn does not poison the next one', () => {
+  it('lets the following turn run, and its patterns with it', async () => {
+    // Insurance on a property two separate mechanisms currently happen to
+    // guarantee (F7 on #278): `continueSession` resets `ctx.status` and clears
+    // `ctx.error`, AND `firstIrrecoverable` scans only from this pattern's
+    // commit offset. Either one alone would do it, so nothing fails if one of
+    // them quietly stops — and the failure mode would be a conversation that is
+    // permanently wedged after one irrecoverable error, with every later turn
+    // ending before its first pattern.
+    const { continueSession } = await import('../../../lib/harness-patterns/harness.server')
+    const ran: string[] = []
+    const ctx = createContext<Data>('q')
+
+    await runChain(ctx, [
+      failing('router', { error: 'no route' }, { patternId: 'router' }),
+      marker('never', ran),
+    ])
+    expect(ctx.status).toBe('error')
+    expect(ran).toEqual([])
+
+    const { serializeContext } = await import('../../../lib/harness-patterns/context.server')
+    const next = await continueSession(
+      serializeContext(ctx) as any,
+      [marker('synth', ran)] as any,
+      'q2',
+    )
+
+    expect(ran).toEqual(['synth'])
+    expect(next.context.status).not.toBe('error')
+  })
+})
+
 describe('an unknown pattern type', () => {
   it('is recoverable, so a custom pattern cannot end turns it never used to', async () => {
     const ran: string[] = []
@@ -211,6 +243,68 @@ describe('an unknown pattern type', () => {
 })
 
 describe('the classification map', () => {
+  /**
+   * Every entry, by value, in one table (F2 on #278).
+   *
+   * The source scan below pins that each pattern type HAS an entry; nothing
+   * pinned what the entry SAID, and the map is the load-bearing half now. The
+   * mutations that went green against the full 3972-test suite:
+   * `compactExecution → recoverable`; all four chain-fatal types → recoverable,
+   * i.e. the gate switched off entirely; and the five best-effort types →
+   * irrecoverable, i.e. a warning ending every turn. Only `guardrail` and
+   * `simpleLoop` were asserted at all, and only in one direction, because two
+   * behaviour tests happened to name them.
+   *
+   * The rule each value answers is the owner's, stated on the map itself:
+   *
+   *   **can this turn still produce an honest answer after this failure?**
+   *
+   * Yes → `recoverable`. No → `irrecoverable`, because the alternative is a
+   * downstream synthesizer composing a confident answer out of nothing. The
+   * table is exhaustive in BOTH directions on purpose — a new type added to
+   * neither list fails here as well as in the scan, and a value flipped in
+   * either direction fails here rather than shipping as a silent policy change.
+   *
+   * Same shape as `client-output-caps.test.ts`'s mirror check, and for the same
+   * reason: the dangerous edit is one that reads like a tidy-up.
+   */
+  const IRRECOVERABLE = [
+    // Each of these leaves NOTHING for a later pattern to work with.
+    'compactExecution', // it IS the answer; a failure means there is nothing to show
+    'router', // clears data.route, and routes() then throws one pattern later
+    'routes', // "the router named a route I do not have" — nothing ran
+    'chain', // the chain itself failed
+  ] as const
+
+  const RECOVERABLE = [
+    'simpleLoop', // self-heals next iteration, or returns partial results (#83)
+    'actorCritic', // same
+    'compactIntent', // leaves intent unset; the actor falls back to the raw message
+    'planner', // clears the plan; the loop runs unplanned
+    'retriever', // empty matches; the compactExecution answers from the rest
+    'guardrail', // a `warn` rail records an `error` event BY DESIGN
+    'judge', // advisory ranking; "no candidates" is a normal outcome
+    'parallel', // per-branch; the surviving branches are what the chain is for
+    'hook', // costs the side effect, never the answer
+    'withReferences', // the inner pattern ran without curated prior results
+  ] as const
+
+  it.each(IRRECOVERABLE)('classifies %s as irrecoverable — it leaves nothing behind', (type) => {
+    expect(DEFAULT_ERROR_SEVERITY[type]).toBe('irrecoverable')
+  })
+
+  it.each(RECOVERABLE)('classifies %s as recoverable — the turn can still answer', (type) => {
+    expect(DEFAULT_ERROR_SEVERITY[type]).toBe('recoverable')
+  })
+
+  it('has no entry the table above does not account for', () => {
+    // Exhaustive, so a new pattern type cannot be added to the map with an
+    // unreviewed value: it has to be argued into one of the two lists.
+    expect(Object.keys(DEFAULT_ERROR_SEVERITY).sort()).toEqual(
+      [...IRRECOVERABLE, ...RECOVERABLE].slice().sort(),
+    )
+  })
+
   it('has an entry for every pattern type in the package', async () => {
     const dir = resolve(process.cwd(), 'src/lib/harness-patterns/patterns')
     const declared = new Set<string>()

@@ -24,9 +24,18 @@
  *
  * `[]` on its own is not the signal: the two sandbox agents pass `[]` to
  * `actorCritic` deliberately, because their tools come from the VM over
- * `docker exec` rather than from the gateway. The signal is an empty list
- * *while the gateway is known to be unreachable*, which is why this module
- * exists rather than a length check at each call site.
+ * `docker exec` rather than from the gateway. The signal is a pattern that lost
+ * the gateway's tools *while the gateway is known to be unreachable*, which is
+ * why this module exists rather than a length check at each call site.
+ *
+ * And a length check is not even the right shape, which is the correction F1 on
+ * #278 forced. `listTools` returns the app-side tools on its failure path, so a
+ * pattern handed `tools.all` gets the nine `graph_*` tools rather than `[]`:
+ * the `general` agent's surface is amputated, not empty, and it answered a dead
+ * gateway with a confident `done` for as long as the guard opened with
+ * `tools.length > 0`. The distinction the guard needs is provenance — see
+ * {@link markDegradedToolSurface} — because "robbed of the gateway" and
+ * "app-side by choice" are the same nine names.
  *
  * ## What it is not
  *
@@ -117,30 +126,93 @@ export function gatewayDegradation(): GatewayDegradation | null {
   return degradation
 }
 
+/**
+ * The `all` arrays of every {@link ToolSet} this process built while the
+ * gateway was unreachable — i.e. every "whole tool surface" that is missing the
+ * gateway's half of itself.
+ *
+ * This is the provenance {@link toolSurfaceOutage} cannot recover from a
+ * `string[]`, and without it the guard is blind on the agent that needs it most
+ * (F1 on #278). `listTools` returns the app-side tools on its failure path, so
+ * under a dead gateway `tools.all` is the NINE `graph_*` tools rather than
+ * `[]` — and a length check therefore let the `general` agent (`tools.all` into
+ * a planner and a `simpleLoop`) run its whole chain and answer `done` from a
+ * tool surface that had collapsed. The list is not empty; it is amputated, and
+ * the two look identical from inside the pattern.
+ *
+ * It has to be provenance rather than a property of the NAMES, because the two
+ * cases are byte-identical: every app-side tool registered today is in the
+ * `graph` namespace, so a `general` agent robbed of the gateway holds exactly
+ * the list a `microsoft-365` agent composes on purpose (`tools.graph`, which
+ * needs no gateway and must not be refused for an outage that costs it
+ * nothing). Only "where did this array come from" separates them.
+ *
+ * Keyed by array IDENTITY, in a `WeakSet`, which is the honest strictness:
+ * `tools.all` reaches the pattern as the same object `Tools()` built, while a
+ * hand-composed list (`MICROSOFT_365_TOOLS.filter(...)`) is a new array and is
+ * therefore treated as what it is — a deliberate selection, which this module
+ * has no standing to second-guess.
+ */
+let degradedSurfaces = new WeakSet<readonly string[]>()
+
+/**
+ * Record that `all` was built from a catalog read that did not reach the
+ * gateway. Called by `tools.server.ts` at grouping time, which is the only
+ * place that knows both facts at once.
+ */
+export function markDegradedToolSurface(all: readonly string[]): void {
+  degradedSurfaces.add(all)
+}
+
+/** Was this array built as a whole tool surface while the gateway was down? */
+export function isDegradedToolSurface(tools: readonly string[]): boolean {
+  return degradedSurfaces.has(tools)
+}
+
 /** Test-only reset of the recorded state. */
 export function __resetGatewayHealth(): void {
   degradation = null
+  // A WeakSet cannot be cleared, so replace it — otherwise one test's branded
+  // array would still read as degraded in the next.
+  degradedSurfaces = new WeakSet()
 }
 
 /**
- * Why this pattern's tool list is empty, phrased for the person waiting — or
- * null when there is nothing wrong (the list is non-empty, or it is empty for
- * a reason that has nothing to do with the gateway).
+ * Why this pattern cannot call the gateway's tools, phrased for the person
+ * waiting — or null when there is nothing wrong.
  *
- * Both halves of the condition matter and neither is sufficient: an empty list
- * with a healthy gateway is a deliberately tool-less pattern, and a degraded
- * gateway with a non-empty list is a pattern whose tools came from somewhere
- * else (an app-side tool, a sandbox) and which can still do its job.
+ * The question is **"did the GATEWAY's surface collapse under this pattern?"**,
+ * not "is this list empty". Two shapes answer yes, and the second is the one
+ * this guard was blind to until F1 on #278:
+ *
+ *   - an **empty** list while the gateway is unreachable — `tools.neo4j ?? []`
+ *     for every agent that names a gateway namespace, since `groupTools` makes
+ *     no key for a namespace with no tools in it;
+ *   - a list that IS the whole tool surface and was built while the gateway was
+ *     unreachable ({@link markDegradedToolSurface}) — `tools.all`, which comes
+ *     back holding the app-side survivors rather than nothing at all. The
+ *     `general` agent runs on exactly this and answered a dead gateway with a
+ *     confident `done`.
+ *
+ * Everything else is left alone, and each exclusion is load-bearing:
+ *
+ *   - a **healthy** gateway makes both shapes ordinary — a deliberately
+ *     tool-less pattern, or a full one;
+ *   - a **non-empty list that is not the whole surface** is an agent's own
+ *     composition (`microsoft-365`'s eight app-side `graph_*` tools) and can
+ *     still do its job with the gateway on fire;
+ *   - a **sandbox** scope never reaches here: its tools arrive over
+ *     `docker exec` and the call sites check `getActiveSandbox()` first.
  */
 export function toolSurfaceOutage(tools: string[]): { error: string; hint: string } | null {
-  if (tools.length > 0) return null
   const outage = degradation
   if (!outage) return null
+  if (tools.length > 0 && !isDegradedToolSurface(tools)) return null
   const seconds = Math.round((Date.now() - outage.since) / 1000)
   return {
     error:
-      'Tools unavailable: the MCP gateway could not be reached, so this step has no tools to ' +
-      `call (unreachable for ~${seconds}s; last error: ${outage.error}).`,
+      'Tools unavailable: the MCP gateway could not be reached, so this step has no gateway ' +
+      `tools to call (unreachable for ~${seconds}s; last error: ${outage.error}).`,
     hint:
       'The gateway is down or misconfigured — check the mcp-gateway service and MCP_GATEWAY_URL. ' +
       'Retry once it answers; nothing about the question needs changing.',

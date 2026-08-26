@@ -73,12 +73,30 @@ what's due. One bad routine is logged and skipped; the sweep continues.
 
 **The tick has a second job** (#273 D-a): it reconciles abandoned runs —
 conversations still at `status='running'` whose last write is older than
-`STUCK_RUN_TIMEOUT_MINUTES` (20) become `error`, so a row whose process died
-mid-turn stops spinning in the sidebar. It runs here because this is the only
-periodic wake-up the server has, and ALSO once at arming, since the rows to
-reconcile are usually the previous process's. The two halves are independent: a
-reap that fails (a database that is not up yet at boot) is logged and the
-routines still fire.
+`STUCK_RUN_TIMEOUT_MINUTES` become `error`, so a row whose process died mid-turn
+stops claiming to be working. It runs here because this is the only periodic
+wake-up the server has, and ALSO once at arming, since the rows to reconcile are
+usually the previous process's. The two halves are independent: a reap that
+fails (a database that is not up yet at boot) is logged and the routines still
+fire.
+
+**The threshold is derived, not chosen** (#278 F3). A running row gets no write
+between the pre-seed and the final save, so "no state change" cannot tell a slow
+turn from a dead process and the only protection a live turn has is that the
+threshold outlasts it. The arithmetic is on the constant in
+`lib/db/conversations.server.ts`: the tool loop at `SETTINGS_BOUNDS`' ceiling
+plus the single-call patterns around it, times the 600s per-call timeout, times
+a 1.2 margin — five hours on this branch. The 20 minutes it replaces was exactly
+two of those per-call ceilings, which is what CLAUDE.md measures a burst into a
+sleeping box spending in ONE turn; a 21-minute live turn was duly reaped. The
+number tightens on its own when the per-call ceiling drops (#279).
+
+**What the reap is visible AS** is honest data at rest, not a spinner stopping —
+a live run's spinner is `session-registry`'s per-tab `isProcessing` signal,
+which a reload clears whatever the row says. Since #278 F4 the sidebar shows a
+failure glyph for a CONVERSATION row at `error` (it previously showed one only
+for `kind='action'` rows), so a reaped conversation is at least distinguishable
+from one that answered.
 
 The threshold is one named constant in `lib/db/conversations.server.ts`, and it
 has to exceed the longest legitimate turn — nothing writes to a running row
@@ -113,8 +131,9 @@ fires an hourly routine once on the way back up, not sixty times.
 
 Same persistent-node-server assumption as the agent-trigger endpoint: a restart
 mid-run orphans a `running` row (see AGENT_TRIGGER.md's caveat) — which the
-reaper above now reconciles to `error` within 20 minutes. It does not recover the
-run; it stops the row from lying about being in flight.
+reaper above reconciles to `error` once the row is older than any turn could
+legitimately be. It does not recover the run; it stops the row from lying about
+being in flight.
 
 ## Execution
 

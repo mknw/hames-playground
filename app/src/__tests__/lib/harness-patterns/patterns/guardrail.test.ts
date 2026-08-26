@@ -365,6 +365,71 @@ describe('guardrail', () => {
     const errorEvents = result.events.filter((e) => e.type === 'error')
     expect(errorEvents.length).toBeGreaterThan(0)
     expect(JSON.stringify(errorEvents[0].data)).toContain('Circuit breaker')
+    // F5 on #278. The wrapped pattern never ran, so the turn has no execution
+    // to answer from — stamped on the event, because the pattern DEFAULT
+    // (`guardrail: 'recoverable'`) is right for the `warn` case just above and
+    // must stay that way.
+    expect((errorEvents[0].data as { severity?: string }).severity).toBe('irrecoverable')
+  })
+
+  /**
+   * The three exits a guardrail has, and why they are not one severity (F5 on
+   * #278). `guardrail: 'recoverable'` was classified against the `warn` case,
+   * which records an `error` event BY DESIGN and must never end a turn. But two
+   * other paths `return scope` WITHOUT running the wrapped pattern, and those
+   * leave the chain composing an answer from nothing — the exact shape the
+   * owner's rule exists for. Neither is reachable from a registered agent
+   * today, which is why this is about the map being right before someone wires
+   * it rather than about a live bug.
+   */
+  describe('what a blocked rail leaves behind (F5 #278)', () => {
+    async function runWithRail(action: 'block' | 'warn', kind: 'input' | 'output') {
+      const { guardrail } =
+        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+      const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+      const { createEventView } =
+        await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const innerPattern = {
+        name: 'inner',
+        fn: vi.fn(async (scope: unknown) => scope),
+        config: { patternId: 'inner' },
+      }
+      const ctx = createContext<{ input: string }>('test')
+      ctx.data = { input: 'test' }
+      const view = createEventView(ctx)
+
+      const rail = {
+        name: 'rail',
+        phase: kind,
+        check: async () => ({ ok: false, action, reason: 'nope' }),
+      }
+      const pattern = guardrail(innerPattern as any, { rails: [rail as any] })
+      const result = await pattern.fn(
+        { id: 'guardrail', data: ctx.data, events: [], startTime: Date.now() },
+        view,
+      )
+      return {
+        ran: innerPattern.fn.mock.calls.length > 0,
+        severities: result.events
+          .filter((e) => e.type === 'error')
+          .map((e) => (e.data as { severity?: string }).severity),
+      }
+    }
+
+    it('an input rail that BLOCKS is irrecoverable — the pattern never ran', async () => {
+      const { ran, severities } = await runWithRail('block', 'input')
+      expect(ran).toBe(false)
+      expect(severities).toEqual(['irrecoverable'])
+    })
+
+    it('an output rail that WARNS is not — the execution happened', async () => {
+      const { ran, severities } = await runWithRail('warn', 'output')
+      expect(ran).toBe(true)
+      // No severity on the event, so the pattern default (`recoverable`)
+      // decides — which is the classification this must not disturb.
+      expect(severities).toEqual([undefined])
+    })
   })
 
   // sf-M1. Failing OPEN is the right call (a breaker outage must not block

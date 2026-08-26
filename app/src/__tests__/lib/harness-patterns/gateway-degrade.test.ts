@@ -188,6 +188,49 @@ describe('toolSurfaceOutage', () => {
     expect(outage!.hint).toContain('MCP_GATEWAY_URL')
   })
 
+  it('explains a whole tool surface the gateway amputated, app-side survivors and all', async () => {
+    // F1 on #278, at unit scale. `listTools` returns the app-side tools on its
+    // failure path, so `tools.all` under a dead gateway is the nine `graph_*`
+    // tools rather than `[]` — and while this guard opened with
+    // `tools.length > 0`, the `general` agent (which passes `tools.all` to a
+    // planner and a `simpleLoop`) sailed straight past it and answered `done`.
+    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    health.__resetGatewayHealth()
+    health.markGatewayUnreachable('ECONNREFUSED 127.0.0.1:8811')
+
+    const amputated = ['graph_me', 'graph_calendar_today', 'graph_mail_recent']
+    health.markDegradedToolSurface(amputated)
+
+    const outage = health.toolSurfaceOutage(amputated)
+    expect(outage, 'an amputated whole surface read as healthy').not.toBeNull()
+    expect(outage!.error).toContain('ECONNREFUSED')
+  })
+
+  it('leaves an agent that composed an app-side list alone', async () => {
+    // The same three names, and the reason a name-based test would be wrong:
+    // every app-side tool registered today is in the `graph` namespace, so a
+    // `general` agent robbed of the gateway holds exactly the list
+    // `microsoft-365` builds on purpose out of `tools.graph`. That agent needs
+    // no gateway, so refusing it would break a working agent over an outage
+    // that costs it nothing. Only provenance separates the two.
+    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    health.__resetGatewayHealth()
+    health.markGatewayUnreachable('ECONNREFUSED 127.0.0.1:8811')
+
+    const composed = ['graph_me', 'graph_calendar_today', 'graph_mail_recent']
+    expect(health.toolSurfaceOutage(composed)).toBeNull()
+  })
+
+  it('forgets the provenance on reset, so one test cannot brand another', async () => {
+    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    const surface = ['graph_me']
+    health.markDegradedToolSurface(surface)
+    health.__resetGatewayHealth()
+    health.markGatewayUnreachable('down')
+
+    expect(health.toolSurfaceOutage(surface)).toBeNull()
+  })
+
   it('keeps the first failure time, so `since` measures the outage', async () => {
     const health = await import('../../../lib/harness-patterns/gateway-health.server')
     health.__resetGatewayHealth()

@@ -315,7 +315,7 @@ Detail and rationale: [`deployment/entra-setup.md`](deployment/entra-setup.md).
 
 ## 6. Boot
 
-**Preflight, one command.** The env template ships `preview.example.com` and
+**Preflight — three greps before the one command.** The env template ships `preview.example.com` and
 `ops@example.com` pre-filled in four places, and two of them —
 `AUTH_REDIRECT_URI` and `AUTH_POST_LOGOUT_REDIRECT_URI` — are the ones an
 operator who edits `APP_DOMAIN` most easily forgets. They do not fail loudly:

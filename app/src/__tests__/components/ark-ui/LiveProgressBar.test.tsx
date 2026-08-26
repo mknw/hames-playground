@@ -216,6 +216,14 @@ describe('LiveProgressBar — the cold-start notice', () => {
     expect(box!.textContent).toContain('starting GPU')
     expect(box!.textContent).toContain('estimated time to first token: ~2 min')
     expect(container.querySelector('.cold-start-spin'), 'no spinner glyph').toBeTruthy()
+    // The countdown is the notice's only informational line, so it clears the
+    // BODY-COPY contrast floor: `A11Y-CHECKLIST.md`'s `color-contrast` row
+    // names `ui-text-tertiary`'s dark value (`#71717a`, ≈4.06:1 on
+    // `dark-bg-primary`) a muted-label colour, not a text colour.
+    const detail = [...box!.querySelectorAll('span')].find((s) =>
+      s.textContent?.includes('estimated time to first token'),
+    )
+    expect(detail?.getAttribute('text')).toBe('xs ui-text-secondary')
     // The suppression that is the whole point.
     expect(
       container.querySelector('[data-part="range"]'),

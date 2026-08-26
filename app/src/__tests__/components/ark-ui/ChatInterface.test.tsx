@@ -101,6 +101,31 @@ const sseResponse = (frames: Frame[], init: { ok?: boolean; status?: number } = 
   } as unknown as Response
 }
 
+/**
+ * A response the test feeds frame by frame, so a MID-stream state can be
+ * observed. `sseResponse` closes the body before the component has rendered
+ * anything, which is fine for end-state assertions and useless for a notice
+ * that exists only while the turn is still waiting.
+ *
+ * A caller must let the stream be READ between a `push` and a `fail`: a
+ * ReadableStream discards its queue on `error()`, so a frame that has not been
+ * consumed yet is lost rather than delivered-then-failed.
+ */
+const drivenSseResponse = () => {
+  const enc = new TextEncoder()
+  let ctrl!: ReadableStreamDefaultController<Uint8Array>
+  const body = new ReadableStream<Uint8Array>({
+    start: (controller) => void (ctrl = controller),
+  })
+  return {
+    response: { ok: true, status: 200, body } as unknown as Response,
+    push: (frame: Frame) =>
+      ctrl.enqueue(enc.encode(`event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`)),
+    fail: (error: unknown) => ctrl.error(error),
+    close: () => ctrl.close(),
+  }
+}
+
 /** A `tool_result` event the graph extractor turns into real elements. */
 const toolResult = (result: unknown) => ({
   type: 'tool_result' as const,
@@ -516,6 +541,64 @@ describe('ChatInterface — sending a message', () => {
     await settle()
 
     expect(onTitleUpdated).toHaveBeenCalledWith('s1', 'Node inventory')
+  })
+
+  /**
+   * The seam between `turn-stream` and `LiveProgressBar`, which is the half
+   * that decides whether a human sees anything.
+   *
+   * `turn-stream.test.ts` pins that the sink is called in the right order and
+   * `LiveProgressBar.test.tsx` pins that a `warming` prop renders a notice and
+   * suppresses the bar — and BOTH stay green with this component's wiring
+   * removed. Two mutations that kill the feature end to end:
+   *
+   *  - `onWarming: () => {}` in the sink — nothing ever reaches the registry;
+   *  - dropping `!!warming() ||` from the bar's `visible` condition — the
+   *    notice cannot mount, because during a cold start no chain event has
+   *    arrived yet and `maxProjection` is still 0. That guard is what makes the
+   *    notice deterministic rather than dependent on which agent seeded the
+   *    denominator first, so it is exactly the line that gets "simplified" away.
+   */
+  it('puts a warming frame on screen instead of the bar, and clears it on the next frame', async () => {
+    const stream = drivenSseResponse()
+    fetchMock.mockResolvedValue(stream.response)
+    const host = makeHost()
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
+    await settle()
+
+    send(container, 'go')
+    await settle()
+
+    stream.push({
+      event: 'warming',
+      data: { sessionId: 's1', estimateMs: 146_000, basis: 'default', samples: 0 },
+    })
+    // Past the bar's 350ms mount delay — the notice shares the shell with it.
+    await tick(450)
+
+    expect(host.registry.runState('s1').warming).toMatchObject({
+      estimateMs: 146_000,
+      basis: 'default',
+    })
+    expect(
+      container.querySelector('[data-testid="cold-start-notice"]'),
+      'the notice never reached the screen',
+    ).toBeTruthy()
+    expect(transcript(container)).toContain('starting GPU')
+    // The suppression is the point: a bar seeded at 0/N for 146s is the "is it
+    // stuck?" reading this replaces.
+    expect(
+      container.querySelector('[data-part="range"]'),
+      'the progress bar rendered during the cold start',
+    ).toBeNull()
+
+    stream.push(doneFrame())
+    stream.close()
+    await settle()
+
+    expect(host.registry.runState('s1').warming).toBeNull()
+    expect(container.querySelector('[data-testid="cold-start-notice"]')).toBeNull()
+    expect(transcript(container)).toContain('Here is your answer.')
   })
 
   it('ignores an SSE event name it does not know', async () => {

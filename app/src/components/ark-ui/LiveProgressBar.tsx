@@ -220,7 +220,6 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
           min-h="10"
           style={{ 'min-width': 0 }}
           data-testid="progress-shell"
-          data-warming={props.warming ? '' : undefined}
         >
           <Show
             when={props.warming}
@@ -309,8 +308,16 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
                     {COLD_START_HEADLINE}
                   </span>
                 </div>
+                {/* `ui-text-secondary`, not tertiary: this is the only line in
+                    the notice carrying information — the countdown — and
+                    `A11Y-CHECKLIST.md`'s `color-contrast` row names
+                    `#71717a` (the tertiary token's dark value) as a muted
+                    LABEL colour, not a text colour. It measures ≈4.06:1 on
+                    `#0a0a0f` and ≈3.83:1 on `#12121a` against a 4.5:1 floor;
+                    secondary (`#a1a1aa`) is ≈7.7:1, and is what the headline
+                    a line above already uses. */}
                 <span
-                  text="xs ui-text-tertiary"
+                  text="xs ui-text-secondary"
                   truncate=""
                   title={coldStartBasisHint(notice().basis, notice().samples)}
                   aria-hidden="true"

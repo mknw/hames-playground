@@ -39,6 +39,28 @@ const sseResponse = (frames: Frame[], init: { ok?: boolean; status?: number } = 
   return { ok: init.ok ?? true, status: init.status ?? 200, body } as unknown as Response
 }
 
+/**
+ * A stream that delivers `frames` and then FAILS mid-iteration, which
+ * `sseResponse` cannot express: it closes cleanly, so the loop is left
+ * normally and the `catch` path is unreachable.
+ *
+ * The failure is raised from a LATER `pull` rather than beside the enqueue,
+ * because `error()` discards whatever is still queued — enqueueing and erroring
+ * in one go delivers no frames at all.
+ */
+const sseThenFailure = (frames: Frame[], error: unknown) => {
+  const text = frames.map((f) => `event: ${f.event}\ndata: ${JSON.stringify(f.data)}\n\n`).join('')
+  let sent = false
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent) return controller.error(error)
+      sent = true
+      controller.enqueue(new TextEncoder().encode(text))
+    },
+  })
+  return { ok: true, status: 200, body } as unknown as Response
+}
+
 const recorder = () => {
   const messages: Message[] = []
   const events: ContextEvent[] = []
@@ -507,6 +529,22 @@ describe('runTurn — the cold-start notice', () => {
     fetchMock.mockResolvedValue(sseResponse([warmingFrame()]))
     await runTurn(request(), rec.sink)
 
+    expect(rec.warmings).toEqual([expect.objectContaining({ estimateMs: 146_000 }), null])
+  })
+
+  it('clears it when the wait is torn down mid-stream, not just when it ends', async () => {
+    // Stop pressed during a 146s wait, or a dropped connection: the loop throws
+    // with the notice still up, so the `catch` is the ONLY exit that can take it
+    // down — its two siblings (the in-loop clear and the post-loop one) are
+    // never reached. This is the exact case the no-clear-frame design has to
+    // answer for, and the one exit that had no pin of its own.
+    const rec = recorder()
+    fetchMock.mockResolvedValue(
+      sseThenFailure([warmingFrame()], new DOMException('aborted', 'AbortError')),
+    )
+    const result = await runTurn(request(), rec.sink)
+
+    expect(result).toMatchObject({ state: { status: 'stopped' }, aborted: true })
     expect(rec.warmings).toEqual([expect.objectContaining({ estimateMs: 146_000 }), null])
   })
 

@@ -27,8 +27,8 @@ closing the tab.
 You chat with it, and it can use tools on your behalf while it answers:
 
 - search and read your **Outlook mail, calendar, and SharePoint / OneDrive
-  files** — as you, with your permissions, so it can never see anything you
-  could not open yourself;
+  files** — as you, with your permissions, so in Microsoft 365 it can never
+  reach anything you could not open yourself;
 - search the **web**;
 - read and write a **knowledge graph**, and draw it for you;
 - **upload documents** and ask questions about them;
@@ -67,6 +67,12 @@ is limited to the small group running the preview.
 Uploaded documents are removed after seven days; conversations are not removed
 at all. If you want something erased, ask — it can be done by hand.
 
+**Nothing is copied off that server.** There is no second copy of your
+conversations or your uploads anywhere — no cloud backup, no archive. That
+protects your privacy and it means the other thing too: if the machine is lost
+or reset, everything in it goes with it, and none of it comes back. Keep
+anything you would miss somewhere of your own.
+
 ### What that means in practice
 
 Use it for your ordinary work. Do not use it for:
@@ -87,15 +93,24 @@ a spelling mistake. There is no triage overhead to spare you from.
 
 **Open a GitHub issue on `mknw/hames-playground` with the `preview` label.**
 
-Useful things to include, none of them mandatory:
+> ⚠️ **That repository is public.** Anything you put in an issue — the text, a
+> screenshot, an error message — is readable by anyone on the internet, and
+> stays readable in the history even if the issue is edited or deleted later.
+> Given what the previous section says about what this assistant reads on your
+> behalf, assume a screenshot of a conversation contains mail content, names or
+> file contents that should not go there.
 
-- what you asked, and what you expected instead;
+So: **describe the problem, do not paste the conversation.** Useful things to
+include, none of them mandatory:
+
+- what you asked and what you expected instead, in your own words;
 - roughly when it happened (the server keeps logs by time);
 - which agent you had selected;
-- a screenshot.
+- a screenshot **only if you have checked what is in it**.
 
-If you would rather not put the content of a conversation in an issue — a good
-instinct — describe what happened and send the details directly to Michael.
+Anything you would rather not make public — the actual text of a conversation,
+a screenshot you are unsure about, anything involving a client or a colleague —
+send directly to Michael instead. That is the normal route, not the exception.
 
 **If something looks like a security or privacy problem** — you can see someone
 else's conversation, the assistant returns data you should not have access to,
@@ -105,10 +120,10 @@ directly and immediately.
 ## What to expect
 
 It will break sometimes. It is one server with no redundancy, so if it is
-restarted mid-answer, that answer is lost — reload and ask again. It is backed
-up nightly, which means a bad day could cost up to a day of conversations, so do
-not treat it as the only copy of anything. Expect short interruptions with no
-notice — including a couple of minutes each night while the backup runs — and
-expect the preview to be reset or reshaped based on what you tell us.
+restarted mid-answer, that answer is lost — reload and ask again. **Treat
+everything in it as temporary**: nothing is copied off that machine, so losing
+it loses the contents with it, and the preview may be wiped and rebuilt at any
+point anyway. Expect short interruptions with no notice, and expect it to be
+reset or reshaped based on what you tell us.
 
 Thank you for trying it.

@@ -77,6 +77,13 @@ nowhere else.
 > **regardless of `ufw`** — the NSG is then the only thing left. Run
 > `docker compose config | grep -A3 ports:` and confirm every `host_ip` is
 > `127.0.0.1` except Caddy's.
+>
+> That is Compose's _rendered intent_, which is not the same as what the kernel
+> ended up listening on. Prove it at the host level too, once the stack is up
+> (§8 step 1a): `ss -ltnp` must show nothing on a non-loopback address except
+> `22`, `80` and `443`. Better still, run one port scan from off the box —
+> that is the only check that tests the NSG rather than the VM's own view of
+> itself.
 
 ## 3. Provision the box
 
@@ -87,15 +94,23 @@ sudo usermod -aG docker "$USER"     # then log out and back in
 docker compose version              # must be >= 2.24
 
 sudo git clone https://github.com/mknw/hames-playground /opt/kg-agent
+sudo chown -R "$USER":"$USER" /opt/kg-agent      # NOT optional — see below
 cd /opt/kg-agent
 ```
+
+**The `chown` is load-bearing.** `sudo git clone` leaves the tree `root:root`,
+and everything after this point runs as you: writing `.env`, `mkdir -p backups`
+inside `scripts/backup-preview.sh` (§9, and its cron entry, which is installed
+as your user), and `git checkout <good-sha>` in the rollback (§10). Skip it and
+those fail with a permission error at the worst possible moment rather than here.
 
 Keep the repo layout intact: `app/` and `configs/` must stay siblings.
 
 Three git-ignored files have to exist before first boot:
 
-1. **`configs/mcp-config.yaml`** — from `configs/template.mcp-config.yaml`; the
-   enabled MCP servers and their credentials.
+1. **`configs/mcp-config.yaml`** — connection parameters for the MCP servers.
+   Write it explicitly, from §3a below. **Do not copy
+   `configs/template.mcp-config.yaml`** — that template is the development set.
 2. **`docker-config.json`** — Docker registry auth, mounted read-only into the
    gateway so it can pull MCP server images.
 3. **`.env`** — the one below.
@@ -123,6 +138,94 @@ COMPOSE_PROFILES=app
 Setting `COMPOSE_FILE` also stops Compose auto-loading
 `docker-compose.override.yml`, so the laptop-only Arm redis workaround can never
 apply here.
+
+### 3a. The agent-reachable tool surface
+
+Everything the MCP gateway lists reaches an agent controller: the `general`
+agent passes `tools.all` — literally every listed tool
+(`app/src/lib/harness-patterns/tools.server.ts:41-48`) — into one loop
+(`app/src/lib/harness-client/agents/general.server.ts:37,44,51-52`). An agent's
+declared `servers: [...]` array is display metadata for the agent picker
+(`AgentSelector.tsx:148,161`); **it filters nothing**. So the gateway's enabled
+set _is_ the preview's tool surface, and it has to be chosen rather than
+inherited.
+
+**Two things decide it, and only one of them is the control.**
+
+`docker-compose.prod.yaml` replaces the base file's `--enable-all-servers` with
+an explicit allow-list:
+
+```
+--servers=neo4j-cypher,fetch,web_search,context7,memory
+```
+
+That is the control. `--enable-all-servers` means _every server in the
+catalog_, so `configs/mcp-config.yaml` is a **connection-parameter file, not an
+enablement list** — deleting an entry from it changes nothing while the flag is
+set. Verified on this stack, same config file both times: with the flag, nine
+servers and 134 tools; with the allow-list, five servers and 17 tools. A trimmed
+config file on its own would read like protection and match nothing.
+
+Write `configs/mcp-config.yaml` with exactly the five, so the file and the
+allow-list say the same thing and nobody has to reconcile them later:
+
+```yaml
+# /opt/kg-agent/configs/mcp-config.yaml — preview. Deliberately NOT a copy of
+# configs/template.mcp-config.yaml (that is the development set).
+neo4j-cypher:
+  enabled: true
+  uri: bolt://neo4j:7687
+  username: neo4j
+  password: <the NEO4J_PASSWORD you set in .env>
+  database: neo4j
+  read_only: false
+
+fetch:
+  enabled: true
+
+web_search:
+  enabled: true
+
+context7:
+  enabled: true
+
+memory:
+  enabled: true
+```
+
+**What is left out, and why:**
+
+| Omitted               | Why                                                                                                                                                                                                                                                                                                  |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `redis`               | 45 tools including `scan_keys` and `json_get`. Data Stash keys are `stash:doc:{sessionId}:{docId}` (`app/src/lib/document-store.server.ts:156-161`) — scoped by **session, never by owner** — so this is a read of every colleague's uploaded documents from any signed-in account's controller turn |
+| `database-server`     | arbitrary SQL over the app's own Postgres, i.e. `conversations.context`, which is plain `JSONB` holding verbatim tool results (`app/src/lib/db/client.server.ts:38`)                                                                                                                                 |
+| `rust-mcp-filesystem` | 24 tools with `allow_write: true`. No registered agent uses them                                                                                                                                                                                                                                     |
+| `playwright`          | a browser with `browser_evaluate` / `browser_run_code`. A development and E2E tool; no registered agent uses it                                                                                                                                                                                      |
+| `github`              | never in the tracked template, and the allow-list makes a stray block inert anyway — but check for it explicitly, below                                                                                                                                                                              |
+
+**Dropping `redis` costs nothing, on one condition.** Uploads, ingestion and
+search do not use the redis MCP server: `STASH_DIRECT_REDIS='1'` in `.env`
+routes the whole Data Stash app path through a direct `ioredis` connection
+(`app/src/lib/redis-direct.server.ts:286-288`), and the retriever's backend is
+an app-side object, not a gateway tool. **Leave that variable set.** Unset it
+and the stash falls back to the gateway path you just removed.
+
+**Pre-launch check — the GitHub MCP server and its token (#261 P0-2).** The
+tracked template carries no `github:` block, so a from-scratch provision is
+clean. The hazard is the realistic move: copying a working development
+`mcp-config.yaml` onto the VM. Before inviting anyone:
+
+```bash
+grep -n 'github' configs/mcp-config.yaml      # must return nothing
+grep -rnE 'ghp_|github_pat_' configs/ .env    # must return nothing
+```
+
+The allow-list is the second layer here — a `github:` block that survives is
+never started, verified against a config that still had one. **Revoking the
+classic PAT that #261 confirmed live is a separate action and is not covered by
+anything in this runbook**: it is the owner's, on github.com, and it stays open
+in #261 until done. Nothing on this VM ships it; that is not the same as it
+being dead.
 
 ## 4. DNS
 
@@ -186,6 +289,19 @@ Detail and rationale: [`deployment/entra-setup.md`](deployment/entra-setup.md).
 
 ## 6. Boot
 
+**Preflight, one command.** The env template ships `preview.example.com` and
+`ops@example.com` pre-filled in four places, and two of them —
+`AUTH_REDIRECT_URI` and `AUTH_POST_LOGOUT_REDIRECT_URI` — are the ones an
+operator who edits `APP_DOMAIN` most easily forgets. They do not fail loudly:
+unset, they silently default to `http://localhost:3444/…`
+(`app/src/lib/auth/entra-config.server.ts:39-40,119-121`), and left at the
+placeholder they surface as an opaque Entra error at §8 step 4 rather than as a
+configuration error here.
+
+```bash
+grep -n 'example\.com' .env       # must return nothing
+```
+
 ```bash
 cd /opt/kg-agent
 
@@ -241,23 +357,62 @@ the VM is what you lose, a restored database without these values is
 undecryptable — the backup script deliberately does not copy `.env`, because a
 backup carrying both the ciphertext and its key protects nothing.
 
+**It becomes three keys the day PR #260 lands.** `DATA_ENCRYPTION_KEY` is the
+one with the expensive rotation: it makes every stored conversation unreadable,
+not just the token cache, and it has no fallback to derive from. Escrow it here
+with the other two the moment you set it (§"What is not true yet").
+
 ## 8. Smoke checklist
 
 Run all of it yourself before inviting anyone, from a browser that has never
 seen the host.
 
-| #   | Step                                                                                                       | Pass looks like                                                                                                                                                         |
-| --- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `curl -sI http://<APP_DOMAIN>/`                                                                            | `301` to `https://` — Caddy's automatic redirect                                                                                                                        |
-| 2   | `curl -s https://<APP_DOMAIN>/api/health`                                                                  | `{"status":"ok","uptimeSeconds":…}` over a **valid** certificate (no `-k`)                                                                                              |
-| 3   | Open `https://<APP_DOMAIN>/` **in a browser**, private window                                              | lands on `/auth/signin`, no session. Use a browser, not `curl`: the redirect is client-side, so `curl /` returns `200 text/html` — that is the SSR shell, not a session |
-| 4   | Click **Sign in with Microsoft**, use your `@dtsc.be` account                                              | Entra prompt → back to `/` signed in. A redirect-URI mismatch shows as an Entra error page, not an app error                                                            |
-| 5   | Sign in with an account **outside** the allow-list (a personal MS account, or temporarily narrow the list) | lands on `/auth/access-denied` with no session. **Do not skip this** — it is the only test of the gate itself                                                           |
-| 6   | Send a message in a chat and wait for a full answer                                                        | tokens stream in; the turn completes. Failure here is usually `ANTHROPIC_API_KEY`                                                                                       |
-| 7   | Ask something that touches the graph, then open the graph panel                                            | nodes render. Failure here is usually the Neo4j password (§11)                                                                                                          |
-| 8   | Upload a document in the Data Stash panel                                                                  | it appears and can be downloaded. Semantic **search** over it is expected to be unavailable — see §11                                                                   |
-| 9   | Sign out                                                                                                   | back at `/auth/signin`, and the session is gone (revisiting `/` does not restore it)                                                                                    |
-| 10  | `docker compose logs app \| grep -i "dev-bypass\|warn"`                                                    | no dev-bypass warning                                                                                                                                                   |
+Two of the checks are multi-line and neither has an in-app symptom when it
+fails, so they come first, on the box:
+
+```bash
+# 1a. What the kernel is actually listening on (§2). Compose's rendered view is
+#     intent; this is the result. Nothing on a non-loopback address but 22/80/443.
+ss -ltnp
+
+# 1b. The agent-reachable tool surface (§3a). Nothing else asserts this — a
+#     regression here is invisible in the app and looks like a working deploy.
+docker compose logs mcp-gateway | grep -E 'Those servers are enabled|tools listed'
+```
+
+Step 1b must print exactly:
+
+```
+- Those servers are enabled: neo4j-cypher, fetch, web_search, context7, memory
+> 17 tools listed in …
+```
+
+Order varies; the **set** and the **count** do not. `redis`,
+`database-server`, `rust-mcp-filesystem`, `playwright` or `github` in that line
+means the overlay's `--servers` allow-list did not apply — stop and fix it
+before anyone signs in. A count materially above 17 means the same thing (the
+exact number tracks the pinned MCP images, so treat a ±1 drift after an image
+bump as a re-check, not an alarm; 134 is the un-narrowed surface).
+
+Two things that are _not_ failures here: the gateway prints those lines only at
+startup, so on a long-running box `docker compose restart mcp-gateway` first if
+the grep comes back empty; and
+`Warning: Secret 'neo4j-cypher.password' not found` is expected — the catalog
+declares the password both as a secret and as a config-substituted env var
+(`configs/custom-catalog.yaml:13-23`), and it is the latter that is used.
+
+| #   | Step                                                                                                       | Pass looks like                                                                                                                                                                                                                          |
+| --- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `curl -sI http://<APP_DOMAIN>/`                                                                            | `301` to `https://` — Caddy's automatic redirect                                                                                                                                                                                         |
+| 2   | `curl -s https://<APP_DOMAIN>/api/health`                                                                  | `{"status":"ok","uptimeSeconds":…}` over a **valid** certificate (no `-k`)                                                                                                                                                               |
+| 3   | Open `https://<APP_DOMAIN>/` **in a browser**, private window                                              | lands on `/auth/signin`, no session. Use a browser, not `curl`: the redirect is client-side, so `curl /` returns `200 text/html` — that is the SSR shell, not a session                                                                  |
+| 4   | Click **Sign in with Microsoft**, use your `@dtsc.be` account                                              | Entra prompt → back to `/` signed in. A redirect-URI mismatch shows as an Entra error page, not an app error                                                                                                                             |
+| 5   | Sign in with an account **outside** the allow-list (a personal MS account, or temporarily narrow the list) | lands on `/auth/access-denied` with no session. **Do not skip this** — it is the only test of the gate itself                                                                                                                            |
+| 6   | Send a message in a chat and wait for a full answer                                                        | tokens stream in; the turn completes. Failure here is usually `ANTHROPIC_API_KEY`                                                                                                                                                        |
+| 7   | Ask something that touches the graph, then open the graph panel                                            | nodes render. Failure here is usually the Neo4j password (§11)                                                                                                                                                                           |
+| 8   | Upload a document in the Data Stash panel                                                                  | it appears and can be downloaded. Semantic **search** over it is expected to be unavailable — see §11                                                                                                                                    |
+| 9   | Sign out                                                                                                   | back at `/auth/signin`, and the session is gone (revisiting `/` does not restore it)                                                                                                                                                     |
+| 10  | `docker compose logs app \| grep -Ei 'dev-bypass\|warn'`                                                   | no dev-bypass warning. **`-E` is not optional**: a basic `grep` treats `\|` as a literal pipe character, so `grep -i "dev-bypass\|warn"` matches nothing and exits 1 against input that _does_ carry the warning — which reads as a pass |
 
 > **`curl https://<APP_DOMAIN>/` answering `200` with HTML is not evidence that
 > anything is unprotected.** Every route serves the same SolidStart shell; the
@@ -265,10 +420,26 @@ seen the host.
 > their own authenticated-and-allow-listed check) and on the session cookie.
 > Step 5 is the test of the gate. Step 3 only confirms the app renders.
 
-Then, before you consider the deployment done, run **§9's backup and its restore
-drill once**. A backup nobody has restored is a hypothesis.
+§9's backup is **optional for this alpha** (see the box at the top of it). If
+you do run it, run its restore drill once as well — a backup nobody has restored
+is a hypothesis.
 
-## 9. Backups
+## 9. Backups — optional for this alpha
+
+> **Owner decision, 2026-08-25: backups are not required to open this preview.**
+> The database is spun from scratch and the data in it is disposable. What
+> follows is a working extra, not a gate. Revisit it before anything outgrows
+> "alpha"; until then a lost VM means a lost preview, and that is an accepted
+> outcome rather than an oversight.
+>
+> **What this script is not.** It writes to `/opt/kg-agent/backups`, on the same
+> disk as the data it copies, and **nothing moves it off the box**. It protects
+> against a bad migration, a wrong `DELETE`, or a corrupted volume. It does not
+> protect against losing the VM — which is the threat §1 and §7 are about, and
+> the one the key escrow in §7 exists for. Off-box copies (a blob upload, an
+> `rsync`, an Azure Disk snapshot schedule) are deliberately not built here.
+> Say it that way to anyone who asks whether their conversations are safe;
+> `PREVIEW-WELCOME.md` says it that way to the preview circle.
 
 `scripts/backup-preview.sh` writes a timestamped directory under `backups/`
 containing a Postgres dump, a Neo4j dump and a Redis RDB, verifies each one, and
@@ -287,21 +458,47 @@ own startup, so it does not shrink with a small graph. Neo4j Community has no
 online backup (`neo4j-admin database backup` is Enterprise), and copying a live
 store directory produces a file that restores _sometimes_ — a short scheduled
 outage is the honest trade. Schedule it when nobody is using the app; use
-`--no-neo4j` for an ad-hoc run that must not interrupt anyone. The script
-restarts Neo4j from an `EXIT` trap, so a failed dump or a Ctrl-C still brings
-the graph back.
+`--no-neo4j` for an ad-hoc run that must not interrupt anyone.
+
+**The script will not leave the graph down quietly.** A failed dump or a Ctrl-C
+restarts Neo4j from an `EXIT` trap, best-effort, so the already-visible failure
+keeps the screen. On the successful path it does the opposite: it starts Neo4j,
+polls the service's own healthcheck for up to `NEO4J_RESTART_TIMEOUT` seconds
+(default 180 — the measured startup is ~80), and **aborts non-zero with `THE
+GRAPH IS DOWN`** if it never goes healthy. A restart that fails there used to be
+swallowed and followed by a green MANIFEST; the run now stops so somebody looks
+at it.
 
 Install the cron entry as the user in the `docker` group:
 
 ```cron
-# /opt/kg-agent — nightly at 03:30 local time
-30 3 * * * cd /opt/kg-agent && ./scripts/backup-preview.sh >> /var/log/kg-agent-backup.log 2>&1
+MAILTO=you@dtsc.be
+# /opt/kg-agent — nightly at 03:30 local time.
+# stdout to the log; stderr deliberately NOT redirected, so cron mails you the
+# failure and only the failure.
+30 3 * * * cd /opt/kg-agent && ./scripts/backup-preview.sh >> /var/log/kg-agent-backup.log
 ```
 
 ```bash
-crontab -e                                    # paste the line above
+crontab -e                                    # paste the lines above
 sudo touch /var/log/kg-agent-backup.log && sudo chown "$USER" /var/log/kg-agent-backup.log
 ```
+
+> **`>> log 2>&1` is the version that fails silently.** With stderr in the log
+> too, cron has no output, sends no mail, and a backup that stopped working
+> stops working quietly — the failure is visible only to whoever thinks to read
+> a log about a job they believe is fine. The form above keeps the progress
+> lines in the log and lets the `FAILED:` line reach you.
+>
+> If the box has no MTA, cron mail goes nowhere either. The fallback needs no
+> mail: a run that does not finish leaves an `INCOMPLETE` marker in its output
+> directory, so one command tells you whether the last week is sound —
+>
+> ```bash
+> ls -d backups/*/ | tail -7 ; find backups -name INCOMPLETE
+> ```
+>
+> — and any path printed by the `find` is a run that did not complete.
 
 ### Verifying a backup
 
@@ -311,8 +508,8 @@ contain `conversations` table data, and the Redis file must carry the `REDIS`
 magic header. The Neo4j dump is only checked for being non-empty, which the
 manifest says plainly — there is no offline integrity check for that format.
 
-So the Neo4j half is proved by **restoring it**, and that drill is worth running
-once on this VM before the preview opens:
+So the Neo4j half is proved by **restoring it**, and if you intend to rely on
+these files at all, that drill is the thing to run once on this VM:
 
 ```bash
 BK=backups/<timestamp>
@@ -324,14 +521,23 @@ docker compose exec -T postgres psql -U postgres -d restorecheck -c 'select coun
 docker compose exec -T postgres dropdb -U postgres restorecheck
 
 # 2. Neo4j — load into a scratch VOLUME, never over the live one.
+#    Create it explicitly: `docker run -v <name>:/data` auto-creates a volume, so
+#    a typo here would silently seed an empty one and fail further down.
 docker volume create neo4j_restorecheck
 docker run --rm --user root -v neo4j_restorecheck:/data -v "$PWD/$BK":/backups \
   --entrypoint sh neo4j:5.26 -c \
   'neo4j-admin database load neo4j --from-path=/backups --overwrite-destination=true'
 docker run -d --name neo4j-restorecheck -v neo4j_restorecheck:/data \
   -e NEO4J_AUTH=neo4j/restorecheck neo4j:5.26
-sleep 30
-docker exec neo4j-restorecheck cypher-shell -u neo4j -p restorecheck 'MATCH (n) RETURN count(n);'
+# Poll rather than guess: a fixed `sleep 30` is short on a busy box (~45 s was
+# needed once) and the resulting timeout reads as a bad backup. Bounded at 2
+# min, so a genuinely broken restore stops instead of spinning.
+for i in $(seq 1 24); do
+  docker exec neo4j-restorecheck cypher-shell -u neo4j -p restorecheck \
+    'MATCH (n) RETURN count(n);' 2>/dev/null && break
+  [ "$i" = 24 ] && docker logs --tail 30 neo4j-restorecheck
+  sleep 5
+done
 docker rm -f neo4j-restorecheck && docker volume rm neo4j_restorecheck
 
 # 3. Redis — seed a scratch volume, then let redis-stack start on it normally.
@@ -357,7 +563,9 @@ with `docker compose stop app` first so nothing writes underneath you.
 `TOKEN_ENCRYPTION_KEY` (§7). Restore the database onto a rebuilt VM with
 different values and every user's stored Microsoft token cache is lost — which
 degrades gracefully (people sign in again) but silently breaks background runs
-until they do.
+until they do. Once PR #260 lands, `DATA_ENCRYPTION_KEY` joins that list and
+stops degrading gracefully: without it the restored conversations are ciphertext
+nothing can read, and the app refuses to boot rather than pretending otherwise.
 
 ## 10. Rollback
 
@@ -371,6 +579,14 @@ docker compose up -d --build app          # Caddy and the data tier keep running
 docker compose logs -f app
 ```
 
+> **This stops being data-safe once PR #260 lands.** Today the app tier is
+> stateless with respect to the database, so checking out an older commit is a
+> rebuild and nothing more. After conversation encryption at rest ships,
+> `conversations.context` holds ciphertext the pre-#260 code cannot read, and a
+> checkout that crosses that commit is a data migration wearing a rollback's
+> clothes. Re-read this section against `docs/data-privacy/plan.md` when #260
+> merges.
+
 Faster, if the previous image is still on the box: `docker images kg-agent-app`,
 then `docker tag <old-id> kg-agent-app:local && docker compose up -d app` — no
 build. Tag a known-good image (`docker tag kg-agent-app:local kg-agent-app:rollback`)
@@ -379,7 +595,8 @@ right after a successful deploy and this stays available.
 **A bad configuration** — `.env` edits need only a recreate:
 `docker compose up -d --force-recreate app caddy`.
 
-**Bad data** — stop the app first, restore per §9, then start it:
+**Bad data** — only an option if you took a backup, which §9 says is optional
+for this alpha. If you did: stop the app first, restore per §9, then start it.
 
 ```bash
 docker compose stop app
@@ -414,6 +631,19 @@ diagnosis, and nothing is reachable from outside.
   both places:
   `docker compose exec neo4j cypher-shell -u neo4j -p <old> "ALTER CURRENT USER SET PASSWORD FROM '<old>' TO '<new>'"`,
   then update `.env` and `docker compose up -d --force-recreate app`.
+- **Postgres has the same one-shot trap.** `POSTGRES_PASSWORD` is applied only
+  when the data volume is initialised. It only bites on a reused volume, which
+  a from-scratch preview does not have — but it is the same footgun, and worth
+  knowing before you reuse a volume from an earlier attempt.
+- **No off-box backups.** `backups/` sits on the VM's own disk and nothing
+  copies it away (§9). Losing the VM loses the data with it. Accepted for this
+  alpha by owner decision; not a posture to carry past it.
+- **The `memory` MCP server is one graph for everybody.** It is backed by a
+  single named volume (`claude-memory:/app/dist`,
+  `configs/custom-catalog.yaml:88-104`) with no per-user or per-session
+  scoping, so anything an agent writes there is readable by every other
+  signed-in user's agent. It is in the preview's server set (§3a) because
+  `general` advertises it; nothing in the preview writes to it on its own.
 - **The sandbox containers are not hardened.** They run as root with no
   capability drops, no read-only root and no seccomp profile, and only the
   strict egress profile is actually enforced — the other profile names fall
@@ -434,11 +664,11 @@ Two things a reader might reasonably assume are in place, and are not. Both are
 enumerated in `.env.production.example` so the variable is ready when the work
 lands; neither is required to deploy.
 
-| Claim                                            | Reality today                                                                                                                                                                                                                      | Lands with                                                                                                                     |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| "Conversations are encrypted at rest."           | `conversations.context` is plain `JSONB` (`app/src/lib/db/client.server.ts:37`) — the full event stream, including verbatim tool results. Only the per-user Microsoft token cache is encrypted. Disk encryption is the only layer. | the `mknw/db-encryption-at-rest` work. **That branch has no commits yet**, so the env-var name in the template is provisional. |
-| "Names are pseudonymised before prompts go out." | The roster-based substitution modules exist and are tested, but nothing in production imports them — verified by grep, and independently mapped path-by-path in PR #258. Every egress path is unhooked.                            | a decision that has not been taken yet (see PR #258 and `docs/plan/graph-pseudonymisation.md`).                                |
-| "Inference runs on our own hardware."            | Every BAML chain routes to Anthropic. The self-hosted Verda route is written but unmerged, and even with it on, four roles stay on Anthropic — so it is a routing switch, never a "nothing leaves the building" claim.             | the `mknw/verda-inference-client` work (no PR yet).                                                                            |
+| Claim                                            | Reality today                                                                                                                                                                                                                      | Lands with                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "Conversations are encrypted at rest."           | `conversations.context` is plain `JSONB` (`app/src/lib/db/client.server.ts:38`) — the full event stream, including verbatim tool results. Only the per-user Microsoft token cache is encrypted. Disk encryption is the only layer. | **PR #260, open.** The key is `DATA_ENCRYPTION_KEY` (`app/src/lib/db/crypto.server.ts:73` **on that branch**, not this one) — deliberately no fallback to `AUTH_SESSION_SECRET` or `TOKEN_ENCRYPTION_KEY`, and encrypted rows present with no key is a hard boot failure. Escrow it with the other two (§7) the day it lands, and re-read §10 |
+| "Names are pseudonymised before prompts go out." | The roster-based substitution modules exist and are tested, but nothing in production imports them — verified by grep, and independently mapped path-by-path in PR #258. Every egress path is unhooked.                            | a decision that has not been taken yet (see PR #258 and `docs/plan/graph-pseudonymisation.md`)                                                                                                                                                                                                                                                |
+| "Inference runs on our own hardware."            | Every BAML chain routes to Anthropic. The self-hosted Verda route is written but unmerged, and even with it on, four roles stay on Anthropic — so it is a routing switch, never a "nothing leaves the building" claim.             | **PR #263, open.** `USE_VERDA_INFERENCE='1'` re-points the controller / actor / critic / synthesizer only; router, describe, screen and planner stay on Anthropic                                                                                                                                                                             |
 
 [`PREVIEW-WELCOME.md`](PREVIEW-WELCOME.md) says all of this to the preview
 circle in plain language. **Keep the two documents in step**: if you deploy
@@ -454,7 +684,16 @@ means concretely:
 - The merged production configuration (`docker compose config`): every data-tier
   port on `127.0.0.1`, both passwords substituted into the services _and_ into
   the app's `DATABASE_URL`, a stray `app/.env` correctly contributing nothing,
-  n8n parked, and no Arm redis override loaded.
+  n8n parked, no Arm redis override loaded, and the gateway's merged `command:`
+  carrying `--servers=…` with no `--enable-all-servers` left in it.
+- **§3a's tool surface, by running the gateway three ways against the same
+  catalog.** `--enable-all-servers` with a five-server `mcp-config.yaml`:
+  _nine_ servers enabled, 134 tools — the config file does not narrow anything,
+  which is why the allow-list and not the config file is the control.
+  `--servers=neo4j-cypher,fetch,web_search,context7,memory`: five servers, 17
+  tools. The same allow-list against the development `mcp-config.yaml` that
+  still carries a `github:` block: still five servers, still 17 tools, no
+  `github`.
 - Fail-closed substitution: removing `POSTGRES_PASSWORD` aborts with
   `required variable POSTGRES_PASSWORD is missing a value` rather than silently
   falling back to the base file's `password`.

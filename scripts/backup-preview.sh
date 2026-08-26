@@ -14,7 +14,20 @@
 #   neo4j.dump     neo4j-admin dump of the `neo4j` database (graph content)
 #   redis.rdb      a forced RDB snapshot (Data Stash documents, chunks, vectors)
 #   MANIFEST       sizes + sha256 of each file, and the verification verdicts
+#   INCOMPLETE     present only while the run is unfinished — see below
 # with directories older than RETENTION_DAYS removed.
+#
+# ⚠️  THESE FILES NEVER LEAVE THE VM. They land on the same disk as the data
+#     they copy, and nothing here uploads them anywhere. That covers a bad
+#     migration or a corrupted volume; it does NOT cover losing the box, which
+#     is the threat the key escrow below is about. Backups are optional for the
+#     alpha preview by owner decision — see docs/PREVIEW.md §9.
+#
+# ⚠️  EXIT STATUS IS THE SIGNAL. Every failure path writes to stderr and exits
+#     non-zero, and an unfinished run leaves an `INCOMPLETE` file in its output
+#     directory so a partial set cannot be mistaken for a good one in `ls`. Do
+#     not run this from cron as `>> log 2>&1` — that redirects the failure into
+#     a file nobody reads. docs/PREVIEW.md §9 has the cron line that mails it.
 #
 # ⚠️  THIS SCRIPT DELIBERATELY DOES NOT BACK UP `.env`.
 #     `user_tokens` is AES-256-GCM ciphertext whose key is TOKEN_ENCRYPTION_KEY
@@ -49,13 +62,19 @@ POSTGRES_USER="${POSTGRES_USER:-postgres}"
 # to upgrade the store format rather than read it.
 NEO4J_IMAGE="${NEO4J_IMAGE:-neo4j:5.26}"
 NEO4J_DATA_VOLUME="${NEO4J_DATA_VOLUME:-kg-agent_neo4j_data}"
+# Seconds to wait for Neo4j's healthcheck after the dump before declaring the
+# graph down. Measured startup on a preview-sized graph is ~80s; this is that
+# with room, not a guess to tune down.
+NEO4J_RESTART_TIMEOUT="${NEO4J_RESTART_TIMEOUT:-180}"
 
 SKIP_NEO4J=0
 for arg in "$@"; do
   case "$arg" in
     --no-neo4j) SKIP_NEO4J=1 ;;
     -h | --help)
-      sed -n '2,36p' "${BASH_SOURCE[0]}"
+      # The header block above, minus the shebang. Keep this range in step with
+      # it — the last line is the `--no-neo4j` sentence.
+      sed -n '2,49p' "${BASH_SOURCE[0]}"
       exit 0
       ;;
     *)
@@ -92,6 +111,11 @@ esac
 mkdir -p "$OUT"
 # The dumps are a full copy of every conversation, the graph, and the stash.
 chmod 700 "$BACKUP_DIR" "$OUT"
+# A run that dies part-way leaves a directory `ls` cannot tell from a good one.
+# This marker is written first and removed last, so an unfinished set is
+# identifiable without reading MANIFEST — and `find backups -name INCOMPLETE`
+# is the no-MTA way to notice a cron run that quietly stopped working.
+echo "this backup did not finish — do not restore from it" >"$OUT/INCOMPLETE"
 log "writing to $OUT"
 
 # sha256sum on Linux, shasum on a macOS box running this by hand.
@@ -142,10 +166,15 @@ else
   log "neo4j: stopping (brief outage)"
   compose stop neo4j >/dev/null
 
-  # Always restart neo4j, including on a dump failure or a Ctrl-C: leaving the
-  # graph down until someone notices is worse than a missing night's backup.
-  restart_neo4j() { compose start neo4j >/dev/null 2>&1 || true; }
-  trap restart_neo4j EXIT
+  # Two different jobs, and they must not share one function.
+  #
+  # On the way out of a FAILED run — a dump error, a Ctrl-C — this is
+  # best-effort: we are already exiting non-zero for a reason the operator will
+  # see, and swallowing a second error here keeps that reason on screen.
+  # Leaving the graph down until someone notices is worse than a missing
+  # night's backup, so it is attempted whatever happened.
+  restart_neo4j_besteffort() { compose start neo4j >/dev/null 2>&1 || true; }
+  trap restart_neo4j_besteffort EXIT
 
   log "neo4j: neo4j-admin database dump"
   # --user root so the throwaway container can read the store (owned by the
@@ -168,9 +197,31 @@ else
   fi
   rm -f "$NEO4J_LOG"
 
+  # On the HAPPY path it is the opposite: nothing else is going to report a
+  # failure, so a swallowed `compose start` would leave the graph down, let the
+  # script run on, and finish with a green MANIFEST that says the opposite.
+  # Start it, then wait for the service to actually be back, and fail loudly if
+  # it is not — the outage this script causes is only acceptable because it
+  # ends.
+  #
+  # `compose ps --status running` is NOT the check: the container is "running"
+  # the instant `start` returns, while Neo4j itself needs ~80s more. The
+  # service's healthcheck (`wget --spider localhost:7474`) is what "the graph is
+  # back" means, so that is what is polled.
   trap - EXIT
-  restart_neo4j
-  log "neo4j: restarted"
+  compose start neo4j >/dev/null || fail "neo4j did not restart after the dump — THE GRAPH IS DOWN"
+  log "neo4j: started, waiting up to ${NEO4J_RESTART_TIMEOUT}s for its healthcheck"
+  NEO4J_UP=0
+  for _ in $(seq 1 "$NEO4J_RESTART_TIMEOUT"); do
+    if [ "$(compose ps neo4j --format '{{.Health}}' 2>/dev/null)" = healthy ]; then
+      NEO4J_UP=1
+      break
+    fi
+    sleep 1
+  done
+  [ "$NEO4J_UP" -eq 1 ] \
+    || fail "neo4j is still not healthy ${NEO4J_RESTART_TIMEOUT}s after the dump — THE GRAPH IS DOWN"
+  log "neo4j: restarted and healthy"
 
   [ -s "$OUT/neo4j.dump" ] || fail "neo4j dump is empty"
   record neo4j "$OUT/neo4j.dump"
@@ -212,6 +263,10 @@ log "rotating: removed $REMOVED old backup(s)"
   echo "TOKEN_ENCRYPTION_KEY must be escrowed separately, or the per-user"
   echo "Microsoft token cache in postgres.dump cannot be decrypted on restore."
 } >>"$MANIFEST"
+
+# Last, and only here: every store is captured, verified and recorded. Anything
+# that exits before this point leaves the marker behind on purpose.
+rm -f "$OUT/INCOMPLETE"
 
 log "done"
 cat "$MANIFEST"

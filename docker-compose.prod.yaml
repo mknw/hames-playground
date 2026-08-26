@@ -65,6 +65,40 @@ services:
   mcp-gateway:
     ports: !override ['127.0.0.1:8811:8811']
 
+    # The agent-reachable tool surface, and the ONLY place it can be narrowed.
+    #
+    # The `general` agent hands `tools.all` — every tool the gateway lists — to
+    # one controller loop, so whatever is enabled here is reachable in a turn
+    # that also fetches web pages. Three of the base file's servers do not
+    # belong in that set on a shared host: `redis` (45 tools, including
+    # `scan_keys` + `json_get` over the Data Stash, whose keys are scoped by
+    # SESSION and not by owner — so it is a cross-user read of every
+    # colleague's uploads), `database-server` (arbitrary SQL over the app's own
+    # Postgres, i.e. `conversations.context` verbatim), and
+    # `rust-mcp-filesystem` (write access). `playwright` is a dev/test tool and
+    # is not in any registered agent's set either.
+    #
+    # Trimming `configs/mcp-config.yaml` does NOT do this. `--enable-all-servers`
+    # means "every server in the CATALOG", so the config file's entries are
+    # connection parameters, not an enablement list — a five-server config still
+    # brings up all nine (verified: 9 enabled / 134 tools with the flag, 5
+    # enabled / 17 tools with the allow-list below, same config file). An
+    # allow-list here is therefore the control; a trimmed config file alone
+    # would read like protection and match nothing.
+    #
+    # The allow-list is also what makes a stray `github:` block on the host
+    # inert: an entry the flag does not name is never started, whatever the
+    # config carries (#261 P0-2, verified against a config that still has one).
+    #
+    # Adding an agent that needs another server means adding it here as well.
+    command: !override
+      - --servers=neo4j-cypher,fetch,web_search,context7,memory
+      - --config=/mcp/config.yaml
+      - --catalog=/mcp/custom-catalog.yaml
+      - --transport=streaming
+      - --port=8811
+      - --verbose
+
   doc-convert:
     ports: !override ['127.0.0.1:8000:8000']
 

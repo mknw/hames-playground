@@ -139,12 +139,13 @@ Source-level index: see [app/README.md](../app/README.md#documentation-index).
 
 ## Data Management
 
-| Document                                             | Description                                                                                                                                                                                                                                                        |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [../neo4j_dumps/README.md](../neo4j_dumps/README.md) | Database versioning: export, import, reset                                                                                                                                                                                                                         |
-| [../models/README.md](../models/README.md)           | **The local GGUF weights** — which file each `make` target (`embed` :8090, `llm-small` :8095) expects under `models/`, why the directory is gitignored, the `MODELS_DIR` override a git worktree needs, and how to point either model at a remote endpoint instead |
+| Document                                             | Description                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [org-graph.md](org-graph.md)                         | **The organizational graph**: the ontology (4 labels, 6 relations, no reports-to and why), which rules Neo4j Community can enforce and which the app has to, the one authorised wipe vs the idempotent setup path, the app-only Graph roster ingest and its exclusions, why Teams are blocked on a tenant permission, and the roster as a pseudonymisation mapping source |
+| [../neo4j_dumps/README.md](../neo4j_dumps/README.md) | Database versioning: export, import, reset                                                                                                                                                                                                                                                                                                                                |
+| [../models/README.md](../models/README.md)           | **The local GGUF weights** — which file each `make` target (`embed` :8090, `llm-small` :8095) expects under `models/`, why the directory is gitignored, the `MODELS_DIR` override a git worktree needs, and how to point either model at a remote endpoint instead                                                                                                        |
 
-Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/reset-neo4j.sh`
+Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/reset-neo4j.sh` · `app/src/lib/org-graph/scripts/` ([README](../app/src/lib/org-graph/scripts/README.md))
 
 ---
 

@@ -24,6 +24,15 @@ wheels/
 # neo4j db
 neo4j_data/
 
+# Graph exports. `scripts/export-neo4j.sh` writes here by default, and since the
+# org-graph roster ingest that graph holds the whole staff directory — names,
+# addresses, job titles — in a PUBLIC repo. Nothing but the timestamped exports
+# is ignored: `README.md` and the `seed-data.cypher` fixtures stay tracked.
+# The four dumps committed before this rule predate the ingest and hold no
+# personal data; an ignore rule does not untrack them, so leave them or remove
+# them deliberately — it is not this line's job either way.
+neo4j_dumps/export-*.cypher
+
 # n8n data
 n8n_data/
 

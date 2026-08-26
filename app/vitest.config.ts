@@ -37,9 +37,23 @@ export default defineConfig({
         // dropped from the report — naming it just keeps the stack trace out
         // of the log. Drop this line if a test ever mounts the app shell.
         'src/app.tsx',
-        // Manual smoke-test scripts (run by hand against a live sandbox),
-        // not unit-testable — recommendation from the sandbox coverage lane.
-        'src/lib/sandbox/scripts/smoke-*.ts',
+        // Manual smoke-test scripts (run by hand against live infrastructure
+        // — a container engine, a self-hosted inference endpoint), not
+        // unit-testable: recommendation from the sandbox coverage lane,
+        // widened from `src/lib/sandbox/scripts/` when the same convention
+        // grew a second home under `src/lib/harness-patterns/scripts/`.
+        'src/lib/**/scripts/smoke-*.ts',
+        // Same reason: run by hand against the live tenant and the live Neo4j.
+        // The logic they drive is covered by the hermetic suites under
+        // src/__tests__/lib/org-graph/; only the CLI wrapper is here. Named
+        // one by one rather than globbed, so `_redact.ts` beside them — pure,
+        // and the thing that keeps real names out of a pasted transcript —
+        // stays in the report and keeps needing its tests. The third script,
+        // `smoke-pseudonymise.ts`, needs no entry: it lives under
+        // src/__tests__/lib/privacy/ (see its header — the egress tripwire is
+        // what puts it there) and the __tests__ rule above already drops it.
+        'src/lib/org-graph/scripts/setup-org-graph.ts',
+        'src/lib/org-graph/scripts/ingest-roster.ts',
       ],
       // Backstop floors, not aspirations. Measured on 2026-08-16 against the
       // scope above (post smoke-script exclude) and set 2pp below the

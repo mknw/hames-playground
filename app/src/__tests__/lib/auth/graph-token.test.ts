@@ -170,7 +170,7 @@ describe('graphFetch', () => {
 
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe(`${GRAPH_BASE}/me`)
-    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok-abc')
+    expect((init.headers as Headers).get('authorization')).toBe('Bearer tok-abc')
   })
 
   it('accepts an absolute URL (nextLink pagination)', async () => {
@@ -228,9 +228,9 @@ describe('graphFetch', () => {
     vi.stubGlobal('fetch', fetchMock)
     await graphFetch(USER, '/me')
     const headers = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]
-      .headers as Record<string, string>
-    expect(headers.Accept).toBe('application/json')
-    expect(headers['Content-Type']).toBeUndefined()
+      .headers as Headers
+    expect(headers.get('accept')).toBe('application/json')
+    expect(headers.get('content-type')).toBeNull()
   })
 
   describe("responseType: 'base64'", () => {
@@ -263,12 +263,12 @@ describe('graphFetch', () => {
         scopes: ['Files.Read.All'],
       })
       const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
-      const headers = init.headers as Record<string, string>
+      const headers = init.headers as Headers
       expect(url).toBe(`${GRAPH_BASE}/me/drive/items/01ABC/content`)
-      expect(headers.Accept).toBe('*/*')
+      expect(headers.get('accept')).toBe('*/*')
       // Still delegated, and the 302 to the CDN is followed by fetch itself —
       // which drops Authorization cross-origin (see graphFetch's doc comment).
-      expect(headers.Authorization).toBe('Bearer tok-abc')
+      expect(headers.get('authorization')).toBe('Bearer tok-abc')
       expect(init.redirect).toBeUndefined()
       expect(acquireTokenSilent).toHaveBeenCalledWith(
         expect.objectContaining({ scopes: ['Files.Read.All'] }),

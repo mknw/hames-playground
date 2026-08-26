@@ -1,0 +1,50 @@
+# Caddy config for the preview deployment (docs/PREVIEW.md).
+#
+# Tenant-agnostic on purpose: the hostname and the ACME contact arrive as
+# environment variables from the repo-root `.env` (wired in
+# docker-compose.prod.yaml), so this file is tracked and the same for every
+# deployment. `{$VAR}` is Caddy's own env substitution, evaluated at start.
+#
+# Caddy provisions and renews the Let's Encrypt certificate itself, and
+# redirects :80 -> :443 automatically for any site block with a real hostname.
+# Both require port 80 and 443 to be reachable from the internet and
+# {$APP_DOMAIN} to resolve to this VM *before* the container starts — see
+# docs/PREVIEW.md §DNS.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$APP_DOMAIN} {
+	# `app` is the compose service name on app-network. The container publishes
+	# 3444 only on 127.0.0.1, so this reverse proxy is the sole public path in.
+	reverse_proxy app:3444 {
+		# The app builds the OIDC redirect from AUTH_REDIRECT_URI, not from
+		# request headers, so these are for logging and any future
+		# scheme-sensitive code rather than for sign-in correctness.
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+
+		# Agent turns stream over SSE and a single turn can run for minutes
+		# with no bytes in between. Caddy's default has no response timeout,
+		# but flush_interval -1 disables response buffering, which is what
+		# keeps SSE frames arriving as they are produced instead of in a lump
+		# at the end of the turn.
+		flush_interval -1
+	}
+
+	encode zstd gzip
+
+	# Sent on every response, including the SSE stream. HSTS is deliberately
+	# absent: it is a one-way commitment for the whole hostname, and this is a
+	# preview host whose domain may be reused.
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

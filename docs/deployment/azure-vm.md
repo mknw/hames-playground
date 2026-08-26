@@ -11,6 +11,14 @@
 > materialized at boot via the VM's managed identity (§11, §12). Do not design
 > anything around the plaintext-file layout surviving.
 
+> **For the colleague preview, start at [`../PREVIEW.md`](../PREVIEW.md)
+> instead.** It is the container run shape of this same box, wired end to end
+> and reduced to an executable sequence: `docker-compose.prod.yaml`,
+> `.env.production.example`, a Caddy service, `scripts/backup-preview.sh`, a
+> smoke checklist and a rollback. This document stays the reference for the
+> architecture and for the systemd run shape; where the two disagree about the
+> container path, PREVIEW.md is the newer one.
+
 Lift-and-shift runbook for the current architecture. It maps 1:1 to what the
 app needs at runtime, so it works on a plain VPS or an Azure VM identically —
 "push to Azure" here just means "an Azure Linux VM running this stack."
@@ -125,6 +133,14 @@ Create the git-ignored config files with **real** values:
 
 The committed `docker-compose.yaml` publishes Postgres, Redis, Neo4j, and the
 gateway on `0.0.0.0`. **On a public VM that is an internet-exposed database.**
+
+> The tracked `docker-compose.prod.yaml` now does this, and does it better than
+> the git-ignored override below: an untracked file on the server cannot be
+> reviewed, and the passwords in it are literals rather than `${VAR:?}`
+> substitutions that fail the bring-up when unset. Prefer it — see
+> [`../PREVIEW.md` §3](../PREVIEW.md). What follows is the older hand-rolled
+> equivalent, kept for the systemd shape.
+
 Add a server-side `docker-compose.override.yml` (git-ignored) binding every
 published port to loopback, and change the default passwords:
 
@@ -346,9 +362,15 @@ docker compose pull && docker compose up -d   # only if the gateway image moved
 
 **Logs:** `journalctl -u kg-agent` (UI) · `docker compose logs -f mcp-gateway` (gateway).
 
-**Backups:** snapshot the three named volumes — `neo4j_data`, `postgres_data`,
-`redis_data` — on a schedule (Azure Disk snapshots, or `pg_dump` + `neo4j-admin
-dump` + Redis RDB). These hold all conversations, the graph, and the Data Stash.
+**Backups:** `scripts/backup-preview.sh` does this — `pg_dump` + `neo4j-admin
+dump` + a forced Redis RDB into `backups/<timestamp>/`, verified, with 7-day
+rotation and no cloud dependency. Cron line and a restore drill:
+[`../PREVIEW.md` §9](../PREVIEW.md). Azure Disk snapshots of the three named
+volumes (`neo4j_data`, `postgres_data`, `redis_data`) are the managed
+alternative. These hold all conversations, the graph, and the Data Stash — and
+note that neither path captures `AUTH_SESSION_SECRET` /
+`TOKEN_ENCRYPTION_KEY`, which must be escrowed separately or the restored
+`user_tokens` rows are undecryptable.
 
 **Sandbox hygiene:** the startup reaper (#97) force-removes orphaned
 `kg-sandbox=1` containers on boot; check with
@@ -372,7 +394,10 @@ dump` + Redis RDB). These hold all conversations, the graph, and the Data Stash.
   or one anybody can.
 - **Two supported run shapes.** Host `systemd` (this guide) or the `app` compose
   service (#197). The container shape has not yet been exercised on a real
-  deployment — the `systemd` path is the one with mileage.
+  deployment — the `systemd` path is the one with mileage — but it is now the
+  one that is fully wired: [`../PREVIEW.md`](../PREVIEW.md) carries the
+  production overlay, env template, proxy and backups for it, and states which
+  of its steps were rehearsed and which only a real VM can prove.
 
 ## 12. Azure niceties (optional)
 

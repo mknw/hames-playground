@@ -7,16 +7,19 @@
  * value is measured rather than estimated (see
  * `metrics/preview-counters.server.ts` for what each one counts), and nothing
  * here opens a conversation blob — the whole strip is one round trip over two
- * small indexed reads, which is what makes it safe to poll beside a live chat.
+ * small indexed reads and two process-local readings, which is what makes it
+ * safe to poll beside a live chat. Two of the numbers are what THIS server has
+ * seen (the warm state and the latency median) rather than deployment-wide, and
+ * both say so in their tooltip.
  *
  * ## No layout shift
  *
  * The strip sits next to controls a user clicks, so a value that widens as it
  * ticks would shove them sideways once a second. Three things prevent that:
  * every numeric field is `font="mono"` (fixed-width digits), the countdown is
- * always `m:ss` and compact numbers keep one decimal
- * (`lib/preview-header-format.ts`), and each field reserves its width with
- * `min-w`.
+ * always `m:ss`, and compact numbers and the latency figure keep one decimal
+ * and a fixed unit width (`lib/preview-header-format.ts`), and each field
+ * reserves its width with `min-w`.
  *
  * ## Polling
  *
@@ -43,7 +46,11 @@
  *
  * The fixed hues (`cyan-400`, `amber-500`, `violet-400`, `emerald-500`) stay,
  * matching the rest of the chrome: they are mid-tone GLYPH colours that read on
- * both grounds. Nothing that has to be read is one of them — the values, the
+ * both grounds. They are grandfathered, not a precedent — the latency glyph
+ * added after them is `ui-text-secondary`, because the styleguide's rule is
+ * token before hex and a duration has no status hue to claim.
+ *
+ * Nothing that has to be read is one of the fixed hues — the values, the
  * labels, the warm-state word and both degradation chips are `ui-text-*` /
  * `ui-danger`, because `amber-500` on the light ground is about 2:1.
  *
@@ -64,6 +71,7 @@ import {
   TIER_LABELS,
   formatCompactNumber,
   formatCountdown,
+  formatLatency,
   formatShare,
   remainingSeconds,
 } from '~/lib/preview-header-format'
@@ -438,6 +446,28 @@ export const PreviewHeaderStrip = () => {
                   w="3.5"
                   h="3.5"
                   text="violet-400"
+                  aria-hidden="true"
+                />
+              </Metric>
+              <Metric
+                label="p50"
+                value={formatLatency(s().latency.p50Ms)}
+                hint={
+                  s().latency.samples === 0
+                    ? `No model call on ${TIER_LABELS[s().tier]} has completed on this server yet, so there is no median to show.`
+                    : `Median duration of the last ${s().latency.samples} model call(s) on ${TIER_LABELS[s().tier]} — the tier your next message runs on. One model call, not one reply: a turn makes several. Counted by this server only, so another instance may show a different figure, and a restart clears it. A cold start is included, because it is time someone waited.`
+                }
+              >
+                {/* A NEW glyph takes a theme token, not a fifth fixed hue: §4
+                    of the styleguide is token-before-hex, and the four literal
+                    mid-tones above predate the `ui-*` palette. There is also
+                    nothing to say with a hue here — a duration is not a status,
+                    and amber is the warm indicator's. */}
+                <span
+                  class="i-material-symbols-speed-outline"
+                  w="3.5"
+                  h="3.5"
+                  text="ui-text-secondary"
                   aria-hidden="true"
                 />
               </Metric>

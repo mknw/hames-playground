@@ -25,6 +25,23 @@
  * would make one user's total disagree with another's on the same screen. The
  * UI labels it as UTC rather than pretending otherwise.
  *
+ * ## Why no encrypted table is named here
+ *
+ * This module runs SQL against `usage_counters` and **nothing else**. Every
+ * column of it is an integer count, a tier name or a UTC date: no user id, no
+ * conversation id, no content — nothing personal, which is why the table is
+ * unencrypted and outside #260's scope entirely.
+ *
+ * That is a property to keep rather than a coincidence. The header's "active
+ * people" number is an aggregate over `conversations`, and reading it from here
+ * would have made this file the fifth module naming an encrypted table in SQL —
+ * the thing `__tests__/lib/db/encryption-coverage.test.ts` pins against, because
+ * encryption lives in the four repositories that own those tables and not in
+ * `query()`. So the aggregate lives at that seam instead
+ * (`db/conversations.server.ts`, `countActiveUsers`) and this module imports the
+ * number. A counter that needs a personal table goes to that table's repository;
+ * it does not bring the table here (SD-10).
+ *
  * ## What it is NOT
  *
  * Not billing, not an audit trail, and not a backfill of history that predates
@@ -168,39 +185,4 @@ export async function getUsageToday(now: number = Date.now()): Promise<UsageToda
     [utcDay(now)],
   )
   return foldUsageRows(rows)
-}
-
-/** How recently a conversation must have been touched to count its owner as
- *  active. 15 minutes — long enough to cover a user reading an answer, short
- *  enough that the number means "right now". */
-export const ACTIVE_WINDOW_MINUTES = 15
-
-/**
- * Distinct users whose conversations were touched in the last
- * {@link ACTIVE_WINDOW_MINUTES} minutes.
- *
- * `conversations.updated_at` is bumped by every `saveSession`, so it is the
- * app's existing record of "this user did something", with no new write path
- * and no new table. It is a *chat* activity signal specifically: a signed-in
- * user staring at the dashboard is not counted, which is the honest reading of
- * "active" for this app and is how the label is worded.
- *
- * The interval is inlined rather than parameterised because it is a constant,
- * and `make_interval` with a bound parameter is the alternative — this keeps
- * the SQL readable; the value never comes from a caller, let alone a client.
- *
- * **This is only cheap because of `conversations_updated_idx`** (`db/
- * client.server.ts`), which leads on `updated_at`. The two composite indexes
- * on that table lead on `user_id`, so without the recency-only one this
- * degrades to a full index-only scan — O(every conversation ever) rather than
- * O(the 15-minute window) — on a query that runs per poll, per tab, per user,
- * on every route. Do not drop it while this surface polls.
- */
-export async function countActiveUsers(): Promise<number> {
-  const { rows } = await query<{ active: string | number }>(
-    `SELECT COUNT(DISTINCT user_id) AS active
-       FROM conversations
-      WHERE updated_at > NOW() - INTERVAL '${ACTIVE_WINDOW_MINUTES} minutes'`,
-  )
-  return num(rows[0]?.active)
 }

@@ -53,6 +53,19 @@ export interface LlmUsageSample {
   /** Step accounting across every attempt of this call; absent when the call
    *  spent no tokens at all (a pre-flight network failure). */
   metrics?: EventMetrics
+  /**
+   * Wall-clock milliseconds BAML measured for this function call, across every
+   * attempt it made (a truncation retry or a fallback hop is inside the number,
+   * because the caller waited for those too).
+   *
+   * It is BAML's own `FunctionLog.timing`, not a stopwatch around the adapter:
+   * the adapter's own JSON parse and event bookkeeping are not latency anyone
+   * is waiting on a model for. Absent when the collector reported none — which
+   * is the honest reading of "not measured", and is why every consumer treats
+   * it as optional rather than defaulting it to 0. A 0 would drag a rolling
+   * median down with a measurement that never happened.
+   */
+  durationMs?: number
 }
 
 export type LlmUsageListener = (sample: LlmUsageSample) => void

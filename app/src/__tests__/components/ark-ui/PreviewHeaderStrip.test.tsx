@@ -41,6 +41,8 @@ const state = (over: Partial<State> = {}): State =>
     activeUsers: 3,
     activeWindowMinutes: 15,
     usage: { totalTokens: 12_500, llmCalls: 40, turns: 9, verdaCallShare: 0.75 },
+    latency: { p50Ms: 4123, samples: 12 },
+    latencyWindow: 32,
     generatedAt: Date.now(),
     ...over,
   }) as State
@@ -140,6 +142,26 @@ describe('the warm indicator', () => {
     expect(container.textContent).toContain('2:00')
   })
 
+  it('counts down from the payload, not from the server clock it was stamped on', async () => {
+    // The countdown ticks against THIS browser's receipt time. Every other
+    // fixture in this file stamps `generatedAt: Date.now()`, i.e. equal to
+    // receipt, so none of them can tell the two clocks apart — which is how a
+    // revert to `s.generatedAt` survived a whole round green. Here the server
+    // stamp is a minute stale (a skewed clock, or a slow hop), so reading it
+    // instead of the local one would open the countdown at 1:00.
+    getPreviewHeaderState.mockResolvedValue(
+      state({
+        generatedAt: Date.now() - 60_000,
+        warmth: { state: 'warm', secondsUntilScaledown: 120, scaledownSeconds: 180 },
+      }),
+    )
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await mounted(container)
+
+    expect(container.textContent).toContain('2:00')
+    expect(container.textContent).not.toContain('1:00')
+  })
+
   it('announces the state but NOT the ticking number', async () => {
     const { container } = render(() => <PreviewHeaderStrip />)
     await mounted(container)
@@ -231,6 +253,48 @@ describe('the metrics', () => {
     expect(container.textContent).toContain('75%') // self-hosted share
     expect(container.textContent).toContain('active')
     expect(container.textContent).toContain('turns')
+  })
+
+  it('renders the rolling median call latency for the active tier', async () => {
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await mounted(container)
+
+    expect(container.textContent).toContain('4.1s')
+    expect(container.textContent).toContain('p50')
+  })
+
+  it('renders an unmeasured latency as "—", never as 0.0s', async () => {
+    // Before this server has completed a call on the tier there is nothing to
+    // report, and a plausible "0.0s" would be a fabricated measurement.
+    getPreviewHeaderState.mockResolvedValue(state({ latency: { p50Ms: null, samples: 0 } }))
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await mounted(container)
+
+    expect(container.textContent).not.toContain('0.0s')
+    const p50 = [...container.querySelectorAll('div[title]')].find((el) =>
+      el.textContent?.includes('p50'),
+    )!
+    expect(p50.textContent).toContain('—')
+    // And it says why, rather than leaving a dash to be read as an error.
+    expect(p50.getAttribute('title')).toContain('no median')
+  })
+
+  it('says how many calls the median is over, and whose measurement it is', async () => {
+    // "p50" over 3 calls on one instance is a different claim from a settled
+    // figure, and the tooltip is where the strip has room to say so.
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await mounted(container)
+
+    const p50 = [...container.querySelectorAll('div[title]')].find((el) =>
+      el.textContent?.includes('p50'),
+    )!
+    const hint = p50.getAttribute('title')!
+    expect(hint).toContain('last 12 model call')
+    // The tier the number belongs to, in the same words as the switch above it.
+    expect(hint).toContain('Private (Verda)')
+    // The two caveats: per call rather than per reply, and this server only.
+    expect(hint).toContain('not one reply')
+    expect(hint).toContain('another instance')
   })
 
   it('renders an unmeasurable share as "—", never as 0%', async () => {

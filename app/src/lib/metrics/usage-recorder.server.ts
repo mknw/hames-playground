@@ -1,9 +1,10 @@
 /**
  * Usage recorder — Server Only.
  *
- * Bridges `harness-patterns`' LLM-usage observer to the two things the preview
- * header shows: the global counters (`preview-counters.server.ts`) and the
- * self-hosted box's warm clock (`inference/verda-activity.server.ts`).
+ * Bridges `harness-patterns`' LLM-usage observer to the three things the
+ * preview header shows: the global counters (`preview-counters.server.ts`), the
+ * self-hosted box's warm clock (`inference/verda-activity.server.ts`), and the
+ * rolling per-tier call latency (`call-latency.server.ts`).
  *
  * It lives on the APP side of that seam on purpose. The framework must not
  * import a database — `harness-patterns` is on its way to being published as a
@@ -31,6 +32,7 @@ import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { observeLlmUsage, type LlmUsageSample } from '../harness-patterns/llm-usage-observer.server'
 import { noteVerdaCallCompleted, VERDA_CLIENT_NAME } from '../inference/verda-activity.server'
 import { addUsage, type UsageDelta } from './preview-counters.server'
+import { noteCallLatency } from './call-latency.server'
 import type { InferenceTier } from '../harness-patterns/clients.server'
 
 assertServerOnImport()
@@ -65,6 +67,15 @@ export function tierOfSample(sample: LlmUsageSample): InferenceTier {
  *  the observer registration is what production calls. */
 export function recordSample(sample: LlmUsageSample, at: number = Date.now()): void {
   if (sample.clientName === VERDA_CLIENT_NAME) noteVerdaCallCompleted(at)
+
+  // Latency is recorded on its own condition, BEFORE the metrics gate below: a
+  // call that failed after reaching the model spent the user's wall-clock time
+  // whether or not it reported tokens, and dropping those would bias the median
+  // towards the calls that went well. `durationMs` is absent when BAML measured
+  // nothing, which is the only case there is nothing to record.
+  if (sample.durationMs !== undefined) {
+    noteCallLatency(tierOfSample(sample), sample.durationMs)
+  }
 
   const m = sample.metrics
   // No accounting means the call never reached a model (a pre-flight throw).

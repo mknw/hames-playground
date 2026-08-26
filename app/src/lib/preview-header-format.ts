@@ -65,6 +65,31 @@ export function formatShare(share: number | null): string {
 }
 
 /**
+ * A duration in milliseconds as the strip's latency value, or `—`.
+ *
+ * `null` — this process has recorded no call on the tier — is `—`, never `0`:
+ * "not measured yet" and "instant" are different claims and only one of them
+ * would be a measurement. Same rule as {@link formatShare}.
+ *
+ * Fixed-width by construction, because this field sits beside a control and
+ * ticks with every poll: seconds to one decimal up to `99.9s`, then minutes to
+ * one decimal (a cold start on the self-hosted box really is minutes), capped
+ * at `99.9m`. Five characters at the widest, and `min-w` reserves that.
+ *
+ * Rounds to NEAREST rather than down, unlike the counters. A counter that
+ * rounds down never claims more was spent than was; a latency that rounded down
+ * would claim a call was faster than it was, and understating a wait is the
+ * dishonest direction for this number.
+ */
+export function formatLatency(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms) || ms < 0) return '—'
+  const seconds = ms / 1000
+  if (seconds < 99.95) return `${(Math.round(seconds * 10) / 10).toFixed(1)}s`
+  const minutes = Math.min(99.9, Math.round((seconds / 60) * 10) / 10)
+  return `${minutes.toFixed(1)}m`
+}
+
+/**
  * The countdown the header shows *between* polls.
  *
  * The client subtracts the elapsed wall-clock since the payload arrived rather

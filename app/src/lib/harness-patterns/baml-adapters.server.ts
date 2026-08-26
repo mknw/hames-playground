@@ -157,8 +157,8 @@ export function extractLLMCallData(
   if (!last) {
     // Not a benign miss — see warnIfCollectorEmpty. This is the shared choke
     // point for LoopController / ActorController / Critic / Router /
-    // RetrieveQuery / CompactIntent; the sites that build their own
-    // LLMCallData call the helper directly.
+    // RetrieveQuery / CompactIntent / Synthesize; the sites that build their
+    // own LLMCallData call the helper directly.
     warnIfCollectorEmpty(collector, functionName)
     return undefined
   }
@@ -200,7 +200,22 @@ export function accountBamlCall(
     functionName,
     clientName: selectedCall?.clientName,
     metrics: metrics ?? computeEventMetrics(collector),
+    durationMs: functionDurationMs(last),
   })
+}
+
+/** How long BAML measured this function call to take, across every attempt.
+ *
+ *  Read off the collector rather than timed around the call: the number a user
+ *  waits on is the model round trip, and a stopwatch here would also fold in
+ *  the adapter's parse and event bookkeeping. `timing` is a getter on a native
+ *  class and is absent from the collector stubs the tests build, so it is read
+ *  defensively — and a non-finite or negative reading is reported as "not
+ *  measured" (undefined) rather than as a 0 that would look like a fast call.
+ */
+function functionDurationMs(last: { timing?: { durationMs?: number | null } }): number | undefined {
+  const raw = last.timing?.durationMs
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : undefined
 }
 
 /**

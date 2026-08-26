@@ -13,6 +13,7 @@ import {
   TIER_LABELS,
   formatCompactNumber,
   formatCountdown,
+  formatLatency,
   formatShare,
   remainingSeconds,
 } from '../../lib/preview-header-format'
@@ -115,6 +116,51 @@ describe('formatShare', () => {
   it('clamps out-of-range input rather than rendering 140%', () => {
     expect(formatShare(1.4)).toBe('100%')
     expect(formatShare(-0.2)).toBe('0%')
+  })
+})
+
+describe('formatLatency', () => {
+  it('renders seconds to one decimal', () => {
+    expect(formatLatency(450)).toBe('0.5s')
+    expect(formatLatency(1000)).toBe('1.0s')
+    expect(formatLatency(4123)).toBe('4.1s')
+    expect(formatLatency(12_345)).toBe('12.3s')
+  })
+
+  it('switches to minutes before the field would widen', () => {
+    // A cold start on the self-hosted box is minutes, and "180.0s" is a
+    // character wider than anything else this field can render.
+    expect(formatLatency(99_949)).toBe('99.9s')
+    expect(formatLatency(99_950)).toBe('1.7m')
+    expect(formatLatency(180_000)).toBe('3.0m')
+  })
+
+  it('never exceeds five characters, whatever it is handed', () => {
+    // The field sits beside a control and re-renders on every poll: one wide
+    // value shoves the controls sideways. `min-w` reserves this width.
+    for (const ms of [0, 999, 9_999, 99_949, 100_000, 3_600_000, 86_400_000, 1e15]) {
+      expect(formatLatency(ms).length).toBeLessThanOrEqual(5)
+    }
+  })
+
+  it('caps at 99.9m rather than rendering a nonsense width', () => {
+    expect(formatLatency(1e15)).toBe('99.9m')
+  })
+
+  it('distinguishes "not measured" from "instant" — null is not 0.0s', () => {
+    // Same rule as formatShare: presenting an absent measurement as a fast
+    // call is the failure this strip is written to avoid.
+    expect(formatLatency(null)).toBe('—')
+    expect(formatLatency(Number.NaN)).toBe('—')
+    expect(formatLatency(-1)).toBe('—')
+  })
+
+  it('rounds to nearest, not down like the counters', () => {
+    // A counter rounds down so it never claims more was spent than was. A
+    // latency rounding down would claim a call was faster than it was, and
+    // understating a wait is the dishonest direction for this number.
+    expect(formatLatency(4_160)).toBe('4.2s')
+    expect(formatLatency(4_149)).toBe('4.1s')
   })
 })
 

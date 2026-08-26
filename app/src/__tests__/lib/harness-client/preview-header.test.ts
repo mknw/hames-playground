@@ -55,9 +55,11 @@ const getUsageToday = vi.fn(async () => ({
   turns: 4,
   verdaCallShare: 0.5,
 }))
-vi.mock('../../../lib/metrics/preview-counters.server', () => ({
+vi.mock('../../../lib/db/conversations.server', () => ({
   ACTIVE_WINDOW_MINUTES: 15,
   countActiveUsers: () => countActiveUsers(),
+}))
+vi.mock('../../../lib/metrics/preview-counters.server', () => ({
   getUsageToday: () => getUsageToday(),
 }))
 
@@ -65,6 +67,11 @@ import {
   getPreviewHeaderState,
   setPreviewInferenceTier,
 } from '../../../lib/harness-client/preview-header.server'
+import {
+  LATENCY_WINDOW,
+  noteCallLatency,
+  resetCallLatency,
+} from '../../../lib/metrics/call-latency.server'
 
 const ENV_KEYS = ['VERDA_INFERENCE_ENDPOINT', 'VERDA_INFERENCE_API_KEY'] as const
 let saved: Record<string, string | undefined>
@@ -81,6 +88,7 @@ beforeEach(() => {
   isBypassEnabled.mockReturnValue(false)
   getAuthenticatedUser.mockResolvedValue({ id: 'user-1', email: 'a@example.invalid' })
   getStoredInferenceTier.mockResolvedValue(null)
+  resetCallLatency()
 })
 
 afterEach(() => {
@@ -106,6 +114,31 @@ describe('getPreviewHeaderState', () => {
       usage: { totalTokens: 1234, turns: 4, verdaCallShare: 0.5 },
     })
     expect(state.generatedAt).toBeGreaterThan(0)
+  })
+
+  it('reports the latency of the tier this user is ON, not of the other one', async () => {
+    // The number sits beside the switch, so the two have to describe the same
+    // thing: reading the wrong tier's window would tell a user on Anthropic how
+    // fast the self-hosted box is, which is an answer to a question the strip
+    // is not asking.
+    configureVerda()
+    noteCallLatency('verda', 30_000)
+    noteCallLatency('anthropic', 900)
+
+    getStoredInferenceTier.mockResolvedValue('anthropic')
+    expect((await getPreviewHeaderState()).latency).toEqual({ p50Ms: 900, samples: 1 })
+
+    getStoredInferenceTier.mockResolvedValue('verda')
+    expect((await getPreviewHeaderState()).latency).toEqual({ p50Ms: 30_000, samples: 1 })
+  })
+
+  it('says "not measured" rather than 0 before any call has completed', async () => {
+    configureVerda()
+    const state = await getPreviewHeaderState()
+    expect(state.latency).toEqual({ p50Ms: null, samples: 0 })
+    // The client needs the window size to word the tooltip without hardcoding
+    // a server constant.
+    expect(state.latencyWindow).toBe(LATENCY_WINDOW)
   })
 
   it('falls back to the preview default when the user has never chosen', async () => {

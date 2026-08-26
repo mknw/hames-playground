@@ -32,6 +32,7 @@ import {
   resetLlmUsageObservers,
 } from '../../../lib/harness-patterns/llm-usage-observer.server'
 import { resetVerdaActivity, verdaWarmth } from '../../../lib/inference/verda-activity.server'
+import { resetCallLatency, tierLatency } from '../../../lib/metrics/call-latency.server'
 import type { EventMetrics } from '../../../lib/harness-patterns/types'
 
 const metrics = (over: Partial<EventMetrics> = {}): EventMetrics => ({
@@ -47,6 +48,7 @@ beforeEach(async () => {
   addUsage.mockReset()
   addUsage.mockResolvedValue(undefined)
   resetVerdaActivity()
+  resetCallLatency()
   await flushUsage() // drain anything a previous case left pending
   addUsage.mockReset()
 })
@@ -137,6 +139,31 @@ describe('recordSample', () => {
     const NOW = 1_700_000_000_000
     recordSample({ functionName: 'B', clientName: 'VerdaQwen' }, NOW)
     expect(verdaWarmth(NOW).state).toBe('warm')
+  })
+})
+
+describe('recordSample — the latency window', () => {
+  it('records the call duration against the tier the client proves', () => {
+    recordSample({ functionName: 'A', clientName: 'VerdaQwen', durationMs: 4100 })
+    recordSample({ functionName: 'B', clientName: 'AnthropicSonnet5', durationMs: 900 })
+
+    expect(tierLatency('verda')).toEqual({ p50Ms: 4100, samples: 1 })
+    expect(tierLatency('anthropic')).toEqual({ p50Ms: 900, samples: 1 })
+  })
+
+  it('records the wait for a call that spent no tokens', () => {
+    // The metrics gate below it drops this sample from the token counters — it
+    // reached a model and failed. But the user waited for it, and keeping only
+    // the calls that went well would bias the median towards the good ones.
+    recordSample({ functionName: 'A', clientName: 'VerdaQwen', durationMs: 30_000 })
+    expect(tierLatency('verda')).toEqual({ p50Ms: 30_000, samples: 1 })
+  })
+
+  it('records nothing when BAML measured nothing', () => {
+    // Absent, not zero: a pre-flight failure has no duration, and a 0 would
+    // read as an instant call.
+    recordSample({ functionName: 'A', clientName: 'VerdaQwen', metrics: metrics() })
+    expect(tierLatency('verda')).toEqual({ p50Ms: null, samples: 0 })
   })
 })
 

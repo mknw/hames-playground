@@ -37,7 +37,12 @@ import {
 
 /** A collector as `accountBamlCall` reads it: one log, one selected call with
  *  usage. Enough for `computeEventMetrics` to count one attempt. */
-function stubCollector(clientName: string, inputTokens = 10, outputTokens = 5): Collector {
+function stubCollector(
+  clientName: string,
+  inputTokens = 10,
+  outputTokens = 5,
+  timing?: { durationMs: number | null },
+): Collector {
   const call = {
     selected: true,
     provider: 'anthropic',
@@ -45,7 +50,11 @@ function stubCollector(clientName: string, inputTokens = 10, outputTokens = 5): 
     httpResponse: null,
     usage: { inputTokens, outputTokens, cachedInputTokens: 0 },
   }
-  const log = { calls: [call], usage: { inputTokens, outputTokens, cachedInputTokens: 0 } }
+  const log = {
+    calls: [call],
+    usage: { inputTokens, outputTokens, cachedInputTokens: 0 },
+    ...(timing ? { timing } : {}),
+  }
   return { last: log, logs: [log] } as unknown as Collector
 }
 
@@ -134,6 +143,23 @@ describe('accountBamlCall — the one place usage is stamped', () => {
     expect(samples[0].metrics).toMatchObject({ inputUncachedTokens: 7, outputTokens: 3 })
   })
 
+  it('reports the duration BAML measured, so a rolling latency can be taken', () => {
+    accountBamlCall(stubCollector('VerdaQwen', 100, 40, { durationMs: 4123 }), 'LoopController')
+    expect(samples[0].durationMs).toBe(4123)
+  })
+
+  it('leaves the duration ABSENT when BAML measured none', () => {
+    // A 0 here would enter a rolling median as an instant call. Undefined is
+    // the honest reading of "not measured", and the consumer drops it.
+    accountBamlCall(stubCollector('VerdaQwen', 100, 40, { durationMs: null }), 'LoopController')
+    expect(samples[0].durationMs).toBeUndefined()
+
+    // Same for a collector with no timing at all, which is what a stub — and a
+    // client version that stops reporting it — looks like.
+    accountBamlCall(stubCollector('VerdaQwen'), 'Critic')
+    expect(samples[1].durationMs).toBeUndefined()
+  })
+
   it('stays silent when the call never reached a model', () => {
     // A pre-flight failure spent nothing; a sample here would add a call to the
     // denominator that no provider ever saw.
@@ -196,10 +222,12 @@ describe('accounting coverage across roles', () => {
   }
 
   /**
-   * Call sites deliberately NOT accounted, each with the reason. Empty today —
-   * an entry here is a decision, not a default, because the cost of forgetting
-   * is invisible: an uncounted role does not lose detail, it silently biases
-   * the on-prem share the whole preview exists to show.
+   * Call sites deliberately NOT accounted, each with the reason. One entry
+   * today, and it is the manual load-measurement script below — every path a
+   * turn can take is accounted. An entry here is a decision, not a default,
+   * because the cost of forgetting is invisible: an uncounted role does not
+   * lose detail, it silently biases the on-prem share the whole preview exists
+   * to show.
    */
   const UNACCOUNTED: Record<string, string> = {
     'src/lib/harness-patterns/scripts/smoke-verda-load.ts:LoopController':

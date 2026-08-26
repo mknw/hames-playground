@@ -31,12 +31,9 @@ import {
 } from '../db/user-prefs.server'
 import { verdaConfigured, type InferenceTier } from '../harness-patterns/clients.server'
 import { verdaWarmth, type VerdaWarmth } from '../inference/verda-activity.server'
-import {
-  ACTIVE_WINDOW_MINUTES,
-  countActiveUsers,
-  getUsageToday,
-  type UsageToday,
-} from '../metrics/preview-counters.server'
+import { ACTIVE_WINDOW_MINUTES, countActiveUsers } from '../db/conversations.server'
+import { getUsageToday, type UsageToday } from '../metrics/preview-counters.server'
+import { LATENCY_WINDOW, tierLatency, type TierLatency } from '../metrics/call-latency.server'
 
 async function requireUser(): Promise<{ id: string }> {
   if (isBypassEnabled()) return { id: BYPASS_USER.id }
@@ -57,6 +54,14 @@ export interface PreviewHeaderState {
   activeUsers: number
   activeWindowMinutes: number
   usage: UsageToday
+  /** Rolling median duration of recent model calls **on `tier`** — the tier
+   *  this user's next turn will run on, so the switch above it and the number
+   *  beside it describe the same thing. Process-local, with the same
+   *  multi-instance caveat as `warmth` (`metrics/call-latency.server.ts`). */
+  latency: TierLatency
+  /** The window `latency` is taken over, so the client can word the tooltip
+   *  without hardcoding a constant that lives on the server. */
+  latencyWindow: number
   /** When the server computed this payload. Informational: the strip ticks its
    *  countdown against its OWN receipt time, because subtracting a server stamp
    *  from a client `Date.now()` would measure clock skew as well as elapsed
@@ -64,11 +69,12 @@ export interface PreviewHeaderState {
   generatedAt: number
 }
 
-/** The strip's whole payload. Cheap by construction: two indexed reads and a
- *  process-local clock — no event blob is opened, which is what makes it safe
- *  to poll. "Indexed" is load-bearing for the active-user read and was not true
- *  when this shipped: it needs `conversations_updated_idx` (`db/client.server.ts`),
- *  the only index on that table that leads on `updated_at`. */
+/** The strip's whole payload. Cheap by construction: two indexed reads and two
+ *  process-local readings (the warm clock and the latency window) — no event
+ *  blob is opened, which is what makes it safe to poll. "Indexed" is
+ *  load-bearing for the active-user read and was not true when this shipped: it
+ *  needs `conversations_updated_idx` (`db/client.server.ts`), the only index on
+ *  that table that leads on `updated_at`. */
 export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
   const user = await requireUser()
   const [stored, activeUsers, usage] = await Promise.all([
@@ -76,13 +82,19 @@ export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
     countActiveUsers(),
     getUsageToday(),
   ])
+  const tier = stored ?? defaultInferenceTier()
   return {
-    tier: stored ?? defaultInferenceTier(),
+    tier,
     verdaAvailable: verdaConfigured(),
     warmth: verdaWarmth(),
     activeUsers,
     activeWindowMinutes: ACTIVE_WINDOW_MINUTES,
     usage,
+    // Read for the ACTIVE tier, and after it is resolved: the latency of a tier
+    // the user is not on answers a question nobody asked, and the strip has one
+    // slot for it.
+    latency: tierLatency(tier),
+    latencyWindow: LATENCY_WINDOW,
     generatedAt: Date.now(),
   }
 }

@@ -101,13 +101,15 @@ Source-level index: see [app/README.md](../app/README.md#documentation-index).
 
 ### Auth & Deployment
 
-| Document                                                         | Description                                                                                                                                                                                                                                                                                                                     |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [deployment/entra-setup.md](deployment/entra-setup.md)           | **Entra tenant setup** (#119): provisioning checklist (app registration, redirect URIs, client secret), the delegated Graph scope set + consent ordering trap, app env vars and key rotation, the `oid`-based identity model. Operator-facing — in-app architecture is below and in [UI_ARCHITECTURE.md §3](UI_ARCHITECTURE.md) |
-| [MICROSOFT_GRAPH.md](MICROSOFT_GRAPH.md)                         | **Per-user Graph access** (Pattern C, #110): what the Microsoft 365 agent can do, the app-side tool transport + dispatch order, cross-user isolation guarantees, the encrypted per-user token lifecycle, and how to add a connector                                                                                             |
-| [graph-api-notes.md](graph-api-notes.md)                         | **Microsoft Graph API field notes**: what Graph actually returns — the endpoint map incl. deprecations, identifier formats, response envelopes, field-reliability table, query-language traps, what each error really means, and an explicit "not verified" list. Open this when a Graph response surprises you                 |
-| [user-guides/microsoft-graph.md](user-guides/microsoft-graph.md) | **User guide — Microsoft 365 agent**: example questions that work, the ones that don't (and why), reading its answers. The living record of user-askable expressions; update it when a connector lands                                                                                                                          |
-| [data-privacy/plan.md](data-privacy/plan.md)                     | **Data protection findings + plan**: what personal data the app holds and where, retention (and its absence), third-country transfers to the LLM providers, erasure gaps, Belgium-specific obligations (CAO 81, works council, GBA/APD), and the ordered action list. Read before production rollout                            |
+| Document                                                         | Description                                                                                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [deployment/entra-setup.md](deployment/entra-setup.md)           | **Entra tenant setup** (#119): provisioning checklist (app registration, redirect URIs, client secret), the delegated Graph scope set + consent ordering trap, app env vars and key rotation, the `oid`-based identity model. Operator-facing — in-app architecture is below and in [UI_ARCHITECTURE.md §3](UI_ARCHITECTURE.md)        |
+| [PREVIEW.md](PREVIEW.md)                                         | **Preview deployment runbook**: the executable sequence for putting the app in front of the preview circle on one Azure VM — sizing, NSG ports, DNS, the exact Entra redirect URI, the one-command container bring-up, a smoke checklist, backups + a verified restore drill, rollback, and an explicit list of what is _not_ true yet |
+| [PREVIEW-WELCOME.md](PREVIEW-WELCOME.md)                         | **Onboarding note for the preview circle**: how to sign in, what the assistant can do, what is stored and what is sent to Anthropic (written to be accurate rather than reassuring), what not to type into it, and how to report problems (`preview`-labelled issue)                                                                   |
+| [MICROSOFT_GRAPH.md](MICROSOFT_GRAPH.md)                         | **Per-user Graph access** (Pattern C, #110): what the Microsoft 365 agent can do, the app-side tool transport + dispatch order, cross-user isolation guarantees, the encrypted per-user token lifecycle, and how to add a connector                                                                                                    |
+| [graph-api-notes.md](graph-api-notes.md)                         | **Microsoft Graph API field notes**: what Graph actually returns — the endpoint map incl. deprecations, identifier formats, response envelopes, field-reliability table, query-language traps, what each error really means, and an explicit "not verified" list. Open this when a Graph response surprises you                        |
+| [user-guides/microsoft-graph.md](user-guides/microsoft-graph.md) | **User guide — Microsoft 365 agent**: example questions that work, the ones that don't (and why), reading its answers. The living record of user-askable expressions; update it when a connector lands                                                                                                                                 |
+| [data-privacy/plan.md](data-privacy/plan.md)                     | **Data protection findings + plan**: what personal data the app holds and where, retention (and its absence), third-country transfers to the LLM providers, erasure gaps, Belgium-specific obligations (CAO 81, works council, GBA/APD), and the ordered action list. Read before production rollout                                   |
 
 ---
 
@@ -120,10 +122,14 @@ Source-level index: see [app/README.md](../app/README.md#documentation-index).
 | [sandbox-flavours.md](sandbox-flavours.md)       | Sandbox rootfs flavours (#78) — the `image-processing` + `data` + `office` images, the router-over-flavoured-sandboxes recipe, ephemeral vs persistent, and deferred hardening (#116) |
 | [sandbox/README.md](sandbox/README.md)           | Sandbox debugging — identify/inspect/reap containers, `/work` durable-workspace layout, `.harness-logs` jq recipes                                                                    |
 | [deployment/azure-vm.md](deployment/azure-vm.md) | Single-VM deployment runbook (Azure VM or any VPS): compose hardening (loopback binds), UI as systemd host service, Caddy TLS, env reference, ops                                     |
+| [PREVIEW.md](PREVIEW.md)                         | The container run shape of the same box, wired end to end for the preview: `docker-compose.prod.yaml`, `.env.production.example`, Caddy, `scripts/backup-preview.sh`                  |
 
 **Key config files:**
 
 - `docker-compose.yaml` — service orchestration
+- `docker-compose.prod.yaml` — production overlay for the preview VM (loopback binds, `${VAR:?}` credentials, Caddy); selected via `COMPOSE_FILE` in the repo-root `.env` — see [PREVIEW.md](PREVIEW.md)
+- `.env.production.example` — every production environment variable, one line of why each; copy to the repo-root `.env`
+- `configs/Caddyfile` — TLS termination + reverse proxy for the preview (hostname arrives as `$APP_DOMAIN`)
 - `configs/mcp-config.yaml` — MCP server connection params
 - `configs/custom-catalog.yaml` — custom MCP server definitions (Docker image-based)
 - `configs/action-tokens.yaml` — Bearer secret → userId map for `POST /api/agents/:id` (git-ignored; see `template.action-tokens.yaml` and [AGENT_TRIGGER.md](AGENT_TRIGGER.md))
@@ -199,6 +205,8 @@ kg-agent/
 │   ├── deployment/
 │   │   ├── azure-vm.md          # Single-VM deployment runbook
 │   │   └── entra-setup.md       # Entra tenant provisioning + consent (#119)
+│   ├── PREVIEW.md               # Preview deployment runbook (container shape, one VM)
+│   ├── PREVIEW-WELCOME.md       # Onboarding note handed to the preview circle
 │   ├── sandbox/
 │   │   └── README.md            # Sandbox operational debugging
 │   ├── user-guides/

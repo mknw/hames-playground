@@ -9,17 +9,25 @@
  * ## What is measured, precisely
  *
  * The **median of the last {@link LATENCY_WINDOW} completed model calls on that
- * tier**, where a call is one BAML function call and its duration is BAML's own
- * `FunctionLog.timing` (`LlmUsageSample.durationMs`, stamped at the single
- * accounting chokepoint). Three consequences the UI has to say out loud rather
- * than round off:
+ * tier that the tier decision actually moves**, where a call is one BAML
+ * function call and its duration is BAML's own `FunctionLog.timing`
+ * (`LlmUsageSample.durationMs`, stamped at the single accounting chokepoint).
+ * Three consequences the UI has to say out loud rather than round off:
  *
  * - It is **per call, not per turn.** A turn makes several calls; the number
  *   here is not how long a message takes to answer.
- * - Every role is in it — the controller, the critic, the cheap summarizer —
- *   because the tier is what the window is keyed on, not the role. A tier
- *   running many small describe calls therefore reads faster than the same tier
- *   answering one controller turn. The tooltip says "model call", not "reply".
+ * - It is **the switched roles only** — `LoopController`, `ActorController`,
+ *   `Critic`, `Synthesize`, i.e. `TIER_SWITCHED_FUNCTIONS` in
+ *   `harness-patterns/clients.server.ts`. This is what makes the two tiers'
+ *   figures comparable, which is the whole point of a number that sits beside
+ *   a switch: `router`, `describe`, `screen` and `planner` run on Anthropic in
+ *   BOTH positions, so counting them would leave each window holding a
+ *   different role mix — on a verda-tier turn the heavy calls land in the
+ *   `verda` window while that same turn's cheap side-roles land in the
+ *   `anthropic` one, and a user comparing the two medians would read a role-mix
+ *   difference as a model difference. The filter is at the recording site
+ *   (`usage-recorder.server.ts`), not here: this module is "the median of what
+ *   it was given". The tooltip says "model call", not "reply".
  * - **A cold start is inside it.** The self-hosted deployment scales to zero,
  *   so the first call after idle is minutes rather than seconds and drags the
  *   window with it — which is the honest reading, not a distortion to filter
@@ -84,6 +92,10 @@ const state: LatencyState = ((globalThis as LatencyGlobal)[STATE_KEY] ??= {
  * Non-finite and negative readings are DROPPED rather than clamped: they mean
  * the call was not measured, and a 0 in the window is a fast call that never
  * happened. Same rule the sample field itself follows.
+ *
+ * WHICH calls are eligible is the caller's rule, not this function's — see the
+ * switched-roles bullet in the module docstring and the filter in
+ * `usage-recorder.server.ts`.
  */
 export function noteCallLatency(tier: InferenceTier, durationMs: number): void {
   if (!Number.isFinite(durationMs) || durationMs < 0) return

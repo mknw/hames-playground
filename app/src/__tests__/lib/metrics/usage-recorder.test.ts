@@ -144,25 +144,53 @@ describe('recordSample', () => {
 
 describe('recordSample — the latency window', () => {
   it('records the call duration against the tier the client proves', () => {
-    recordSample({ functionName: 'A', clientName: 'VerdaQwen', durationMs: 4100 })
-    recordSample({ functionName: 'B', clientName: 'AnthropicSonnet5', durationMs: 900 })
+    recordSample({ functionName: 'LoopController', clientName: 'VerdaQwen', durationMs: 4100 })
+    recordSample({ functionName: 'Critic', clientName: 'AnthropicSonnet5', durationMs: 900 })
 
     expect(tierLatency('verda')).toEqual({ p50Ms: 4100, samples: 1 })
     expect(tierLatency('anthropic')).toEqual({ p50Ms: 900, samples: 1 })
+  })
+
+  it('counts only the roles a tier decision moves, so the two windows compare', () => {
+    // The number sits beside the switch and is read as "this tier vs the other
+    // one". `router`, `describe`, `screen` and `planner` run on Anthropic in
+    // BOTH positions, so counting them would leave the anthropic window holding
+    // a different role mix from the verda one — and in a verda-default
+    // deployment, NOTHING BUT the cheap side-roles. A user would then read a
+    // role-mix difference as a model difference.
+    recordSample({ functionName: 'Router', clientName: 'RouterAnthropic', durationMs: 300 })
+    recordSample({
+      functionName: 'ResultDescribe',
+      clientName: 'DescribeAnthropic',
+      durationMs: 400,
+    })
+    recordSample({
+      functionName: 'ScreenUntrustedContent',
+      clientName: 'DescribeAnthropic',
+      durationMs: 500,
+    })
+    recordSample({ functionName: 'Planner', clientName: 'PlannerAnthropic', durationMs: 9000 })
+    expect(tierLatency('anthropic')).toEqual({ p50Ms: null, samples: 0 })
+
+    // ...and all four switched functions do land, on whichever tier ran them.
+    for (const fn of ['LoopController', 'ActorController', 'Critic', 'Synthesize']) {
+      recordSample({ functionName: fn, clientName: 'AnthropicSonnet5', durationMs: 1000 })
+    }
+    expect(tierLatency('anthropic').samples).toBe(4)
   })
 
   it('records the wait for a call that spent no tokens', () => {
     // The metrics gate below it drops this sample from the token counters — it
     // reached a model and failed. But the user waited for it, and keeping only
     // the calls that went well would bias the median towards the good ones.
-    recordSample({ functionName: 'A', clientName: 'VerdaQwen', durationMs: 30_000 })
+    recordSample({ functionName: 'LoopController', clientName: 'VerdaQwen', durationMs: 30_000 })
     expect(tierLatency('verda')).toEqual({ p50Ms: 30_000, samples: 1 })
   })
 
   it('records nothing when BAML measured nothing', () => {
     // Absent, not zero: a pre-flight failure has no duration, and a 0 would
     // read as an instant call.
-    recordSample({ functionName: 'A', clientName: 'VerdaQwen', metrics: metrics() })
+    recordSample({ functionName: 'LoopController', clientName: 'VerdaQwen', metrics: metrics() })
     expect(tierLatency('verda')).toEqual({ p50Ms: null, samples: 0 })
   })
 })

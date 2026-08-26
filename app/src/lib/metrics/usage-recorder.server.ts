@@ -33,7 +33,7 @@ import { observeLlmUsage, type LlmUsageSample } from '../harness-patterns/llm-us
 import { noteVerdaCallCompleted, VERDA_CLIENT_NAME } from '../inference/verda-activity.server'
 import { addUsage, type UsageDelta } from './preview-counters.server'
 import { noteCallLatency } from './call-latency.server'
-import type { InferenceTier } from '../harness-patterns/clients.server'
+import { TIER_SWITCHED_FUNCTIONS, type InferenceTier } from '../harness-patterns/clients.server'
 
 assertServerOnImport()
 
@@ -73,7 +73,17 @@ export function recordSample(sample: LlmUsageSample, at: number = Date.now()): v
   // whether or not it reported tokens, and dropping those would bias the median
   // towards the calls that went well. `durationMs` is absent when BAML measured
   // nothing, which is the only case there is nothing to record.
-  if (sample.durationMs !== undefined) {
+  //
+  // And only the SWITCHED roles, unlike the counters above and below, which
+  // count every call. The latency is read as a comparison between the two
+  // switch positions, and `router` / `describe` / `screen` / `planner` run on
+  // Anthropic in both — so counting them would leave each window holding a
+  // different role mix: on a verda-tier turn the heavy calls land in the
+  // `verda` window while that same turn's cheap side-roles land in the
+  // `anthropic` one. Filtering here rather than in the store keeps the store's
+  // job "median of what it was given" and puts the eligibility rule next to the
+  // map it comes from.
+  if (sample.durationMs !== undefined && TIER_SWITCHED_FUNCTIONS.has(sample.functionName)) {
     noteCallLatency(tierOfSample(sample), sample.durationMs)
   }
 

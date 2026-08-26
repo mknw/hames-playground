@@ -74,7 +74,9 @@ export function formatShare(share: number | null): string {
  * Fixed-width by construction, because this field sits beside a control and
  * ticks with every poll: seconds to one decimal up to `99.9s`, then minutes to
  * one decimal (a cold start on the self-hosted box really is minutes), capped
- * at `99.9m`. Five characters at the widest, and `min-w` reserves that.
+ * at `99.9m`. Five characters at the widest, and `Metric`'s `min-w="9"`
+ * reserves exactly that — 2.25rem, or 3.0em at `text-xs`, which is five
+ * characters at the 0.6em advance of the `font-mono` stack.
  *
  * Rounds to NEAREST rather than down, unlike the counters. A counter that
  * rounds down never claims more was spent than was; a latency that rounded down

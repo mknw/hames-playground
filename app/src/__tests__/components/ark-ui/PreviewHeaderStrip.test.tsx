@@ -42,7 +42,6 @@ const state = (over: Partial<State> = {}): State =>
     activeWindowMinutes: 15,
     usage: { totalTokens: 12_500, llmCalls: 40, turns: 9, verdaCallShare: 0.75 },
     latency: { p50Ms: 4123, samples: 12 },
-    latencyWindow: 32,
     generatedAt: Date.now(),
     ...over,
   }) as State
@@ -261,6 +260,19 @@ describe('the metrics', () => {
 
     expect(container.textContent).toContain('4.1s')
     expect(container.textContent).toContain('p50')
+  })
+
+  it('reserves the full five characters every metric value can render', async () => {
+    // `min-w="9"` is 2.25rem = 3.0em at `text-xs`, which is five monospace
+    // characters; `min-w="8"` was 2.67em and let `12.5k` or `99.9m` widen the
+    // field on a poll. The claim lives in `formatLatency`'s docstring, so it is
+    // pinned rather than left as prose.
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await mounted(container)
+
+    const values = [...container.querySelectorAll('span[font="mono"][min-w]')]
+    expect(values.length).toBeGreaterThan(0)
+    for (const value of values) expect(value.getAttribute('min-w')).toBe('9')
   })
 
   it('renders an unmeasured latency as "—", never as 0.0s', async () => {

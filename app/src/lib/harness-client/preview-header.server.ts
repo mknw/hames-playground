@@ -33,7 +33,7 @@ import { verdaConfigured, type InferenceTier } from '../harness-patterns/clients
 import { verdaWarmth, type VerdaWarmth } from '../inference/verda-activity.server'
 import { ACTIVE_WINDOW_MINUTES, countActiveUsers } from '../db/conversations.server'
 import { getUsageToday, type UsageToday } from '../metrics/preview-counters.server'
-import { LATENCY_WINDOW, tierLatency, type TierLatency } from '../metrics/call-latency.server'
+import { tierLatency, type TierLatency } from '../metrics/call-latency.server'
 
 async function requireUser(): Promise<{ id: string }> {
   if (isBypassEnabled()) return { id: BYPASS_USER.id }
@@ -56,12 +56,11 @@ export interface PreviewHeaderState {
   usage: UsageToday
   /** Rolling median duration of recent model calls **on `tier`** — the tier
    *  this user's next turn will run on, so the switch above it and the number
-   *  beside it describe the same thing. Process-local, with the same
+   *  beside it describe the same thing. Over the roles a tier decision actually
+   *  moves and no others, which is what makes the figure comparable with the
+   *  other switch position; the tooltip says so. Process-local, with the same
    *  multi-instance caveat as `warmth` (`metrics/call-latency.server.ts`). */
   latency: TierLatency
-  /** The window `latency` is taken over, so the client can word the tooltip
-   *  without hardcoding a constant that lives on the server. */
-  latencyWindow: number
   /** When the server computed this payload. Informational: the strip ticks its
    *  countdown against its OWN receipt time, because subtracting a server stamp
    *  from a client `Date.now()` would measure clock skew as well as elapsed
@@ -94,7 +93,6 @@ export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
     // the user is not on answers a question nobody asked, and the strip has one
     // slot for it.
     latency: tierLatency(tier),
-    latencyWindow: LATENCY_WINDOW,
     generatedAt: Date.now(),
   }
 }

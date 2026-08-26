@@ -67,11 +67,7 @@ import {
   getPreviewHeaderState,
   setPreviewInferenceTier,
 } from '../../../lib/harness-client/preview-header.server'
-import {
-  LATENCY_WINDOW,
-  noteCallLatency,
-  resetCallLatency,
-} from '../../../lib/metrics/call-latency.server'
+import { noteCallLatency, resetCallLatency } from '../../../lib/metrics/call-latency.server'
 
 const ENV_KEYS = ['VERDA_INFERENCE_ENDPOINT', 'VERDA_INFERENCE_API_KEY'] as const
 let saved: Record<string, string | undefined>
@@ -136,9 +132,6 @@ describe('getPreviewHeaderState', () => {
     configureVerda()
     const state = await getPreviewHeaderState()
     expect(state.latency).toEqual({ p50Ms: null, samples: 0 })
-    // The client needs the window size to word the tooltip without hardcoding
-    // a server constant.
-    expect(state.latencyWindow).toBe(LATENCY_WINDOW)
   })
 
   it('falls back to the preview default when the user has never chosen', async () => {

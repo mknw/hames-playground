@@ -165,6 +165,15 @@ type WarmthKey = keyof typeof WARMTH_PRESENTATION
 /** One glanceable number. `min-w` on the value is what keeps the row still
  *  while the value changes width.
  *
+ *  `min-w="9"` is 2.25rem, which is 3.0em at `text-xs` — five monospace
+ *  characters at the 0.6em advance every face in the `font-mono` stack has, and
+ *  the same value the `m:ss` countdown beside it uses for the same maximum.
+ *  `min-w="8"` was one step short of the five characters `formatLatency` and
+ *  `formatCompactNumber` can both render (`99.9m`, `12.5k`). One value can
+ *  still exceed it — `formatCompactNumber` reaches six at `999.9k` — and that
+ *  is a field widening, not a control moving: the metrics cluster sits after the
+ *  tier switch and `Nav`'s icon row is pinned by `m="l-auto"`.
+ *
  *  The glyph is passed in as a CHILD rather than as `icon` + `tone` props on
  *  purpose. UnoCSS extracts attributify utilities from literal `attr="value"`
  *  text in the source, so a runtime-resolved `text={props.tone}` produces no
@@ -177,7 +186,7 @@ type WarmthKey = keyof typeof WARMTH_PRESENTATION
 const Metric = (props: { label: string; value: string; hint: string; children: JSX.Element }) => (
   <div flex="~" items="center" gap="1" title={props.hint}>
     {props.children}
-    <span text="xs ui-text-primary right" font="mono" min-w="8">
+    <span text="xs ui-text-primary right" font="mono" min-w="9">
       {props.value}
     </span>
     <span text="xs ui-text-tertiary">{props.label}</span>
@@ -454,8 +463,8 @@ export const PreviewHeaderStrip = () => {
                 value={formatLatency(s().latency.p50Ms)}
                 hint={
                   s().latency.samples === 0
-                    ? `No model call on ${TIER_LABELS[s().tier]} has completed on this server yet, so there is no median to show.`
-                    : `Median duration of the last ${s().latency.samples} model call(s) on ${TIER_LABELS[s().tier]} — the tier your next message runs on. One model call, not one reply: a turn makes several. Counted by this server only, so another instance may show a different figure, and a restart clears it. A cold start is included, because it is time someone waited.`
+                    ? `No controller, critic or synthesis call on ${TIER_LABELS[s().tier]} has completed on this server yet, so there is no median to show.`
+                    : `Median duration of the last ${s().latency.samples} model call(s) on ${TIER_LABELS[s().tier]} — the tier your next message runs on. Counting only the controller, critic and synthesis calls the switch actually moves, so the two positions are comparable; the cheap side-roles run on Anthropic either way and are left out. One model call, not one reply: a turn makes several. Counted by this server only, so another instance may show a different figure, and a restart clears it. A cold start is included, because it is time someone waited.`
                 }
               >
                 {/* A NEW glyph takes a theme token, not a fifth fixed hue: §4

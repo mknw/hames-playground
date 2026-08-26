@@ -137,7 +137,8 @@ describe('formatLatency', () => {
 
   it('never exceeds five characters, whatever it is handed', () => {
     // The field sits beside a control and re-renders on every poll: one wide
-    // value shoves the controls sideways. `min-w` reserves this width.
+    // value shoves the controls sideways. `Metric`'s `min-w="9"` reserves this
+    // width exactly (2.25rem = 3.0em at `text-xs`); `min-w="8"` did not.
     for (const ms of [0, 999, 9_999, 99_949, 100_000, 3_600_000, 86_400_000, 1e15]) {
       expect(formatLatency(ms).length).toBeLessThanOrEqual(5)
     }

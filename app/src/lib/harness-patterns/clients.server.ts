@@ -140,6 +140,43 @@ const VERDA_CLIENT_BY_ROLE: Partial<Record<BamlRole, string>> = {
 }
 
 /**
+ * The BAML functions behind each role the map above re-points.
+ *
+ * It exists so a consumer can ask "is THIS call one a tier decision moves?" —
+ * the header's rolling latency compares the two tiers, and a window that also
+ * held the roles running on Anthropic in *both* switch positions would compare
+ * different role mixes rather than two models (`metrics/call-latency.server.ts`).
+ *
+ * Roles the switch never moves are deliberately ABSENT rather than listed as
+ * unmoved: nothing derived from this needs them, and writing out the describe
+ * tier here would be a second copy of a list whose canonical home is the
+ * `DescribeAnthropic` block in `baml_src/anthropic-only.baml`. The key set is
+ * pinned equal to `VERDA_CLIENT_BY_ROLE`'s by `clients-verda.test.ts`, so a
+ * role added there without its functions here fails CI instead of quietly
+ * dropping out of the comparison.
+ */
+export const SWITCHED_FUNCTIONS_BY_ROLE: Partial<Record<BamlRole, readonly string[]>> = {
+  controller: ['LoopController', 'ActorController'],
+  critic: ['Critic'],
+  compactExecution: ['Synthesize'],
+}
+
+/**
+ * BAML function names a tier decision re-points, and therefore the only calls
+ * whose duration means the same thing in both switch positions.
+ *
+ * Derived from `VERDA_CLIENT_BY_ROLE` — the authority on what moves — rather
+ * than written out again, and independent of whether the flag or a scope is on:
+ * the two windows have to hold the same role mix in every position, or neither
+ * figure is comparable with the other.
+ */
+export const TIER_SWITCHED_FUNCTIONS: ReadonlySet<string> = new Set(
+  (Object.keys(VERDA_CLIENT_BY_ROLE) as BamlRole[]).flatMap(
+    (role) => SWITCHED_FUNCTIONS_BY_ROLE[role] ?? [],
+  ),
+)
+
+/**
  * Which inference tier a run is on.
  *
  * `'verda'` is the self-hosted deployment (`VERDA_CLIENT_BY_ROLE` above);

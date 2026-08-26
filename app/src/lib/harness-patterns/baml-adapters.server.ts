@@ -39,6 +39,7 @@ import { getActiveSandbox } from '../sandbox/scope.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
 import { CLIENT_MAX_OUTPUT_TOKENS, estimateLlmCostUsd } from '../settings'
+import { clientOverrideFor } from './clients.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 
 assertServerOnImport()
@@ -719,12 +720,18 @@ export function createLoopControllerAdapter(
     }
 
     // Call with or without collector. BAML routes the call to
-    // `ControllerAnthropic` — its declared client in `actorCritic.baml` /
-    // `simpleLoop.baml`. A structured-output failure that is not a truncation
-    // or an empty completion propagates: there is no second provider to
-    // escalate to, and Anthropic models rarely fail structured output anyway.
-    const baseOpts = collector ? { collector } : {}
-    const hasBaseOpts = collector !== undefined
+    // `ControllerAnthropic` — its declared client in `simpleLoop.baml` —
+    // unless `USE_VERDA_INFERENCE=1` overrides the `controller` role onto the
+    // self-hosted deployment (`clients.server.ts`). A structured-output
+    // failure that is not a truncation or an empty completion propagates:
+    // there is no second provider to escalate to on either route.
+    //
+    // The bag decides whether to pass options at all, NOT `collector`: with
+    // the override active there is something to pass even when no collector
+    // was handed in, and the generated functions take their arguments
+    // positionally, so an empty `{}` is not the same as omitting it (#154).
+    const baseOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('controller') }
+    const hasBaseOpts = Object.keys(baseOpts).length > 0
     let action: ControllerAction
     try {
       action = hasBaseOpts
@@ -1094,15 +1101,17 @@ export function createActorControllerAdapter(
       multi_call_mode: multiCallMode,
     }
 
-    // Call with or without collector. BAML routes to `ControllerAnthropic`
-    // (declared in `actorCritic.baml`), mirroring
-    // `createLoopControllerAdapter` above: a truncated or empty completion
-    // takes one corrective retry, anything else — including a genuine
-    // structured-output failure, a network error or a pre-call throw — is
-    // wrapped as `LLMCallError` so the observability panel keeps the captured
-    // prompt/variables drill-down.
-    const baseOpts = collector ? { collector } : {}
-    const hasBaseOpts = collector !== undefined
+    // Call with or without collector. BAML routes to `ActorAnthropic`
+    // (declared in `actorCritic.baml`) — or to the self-hosted deployment when
+    // `USE_VERDA_INFERENCE=1` re-points the `controller` role, which covers the
+    // actor too. Mirrors `createLoopControllerAdapter` above: a truncated or
+    // empty completion takes one corrective retry, anything else — including a
+    // genuine structured-output failure, a network error or a pre-call throw —
+    // is wrapped as `LLMCallError` so the observability panel keeps the
+    // captured prompt/variables drill-down. Same bag-not-collector branch as
+    // the loop controller, for the same positional-argument reason.
+    const baseOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('controller') }
+    const hasBaseOpts = Object.keys(baseOpts).length > 0
     let action: ControllerAction
     try {
       action = hasBaseOpts
@@ -1218,9 +1227,11 @@ export function createCriticAdapter(): CriticFnWithLLMData {
 
     const variables = { intent, attempts }
 
-    // Call with or without collector — `critic.baml` declares `CriticAnthropic`.
-    const criticOpts = collector ? { collector } : {}
-    const hasCriticOpts = collector !== undefined
+    // Call with or without collector — `actorCritic.baml` declares
+    // `CriticAnthropic`, overridden onto the self-hosted deployment when
+    // `USE_VERDA_INFERENCE=1` re-points the `critic` role.
+    const criticOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('critic') }
+    const hasCriticOpts = Object.keys(criticOpts).length > 0
     let result: CriticResult
     try {
       result = hasCriticOpts

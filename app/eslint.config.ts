@@ -26,7 +26,7 @@ export default tseslint.config(
   },
   unocss,
   {
-    files: ['src/**/*.ts', 'src/**/*.tsx', 'evals/**/*.ts', 'eslint.config.ts'],
+    files: ['src/**/*.ts', 'src/**/*.tsx', 'evals/**/*.ts', 'e2e/**/*.ts', 'eslint.config.ts'],
     rules: {
       'prefer-const': 'warn',
       'no-constant-binary-expression': 'error',
@@ -47,8 +47,10 @@ export default tseslint.config(
     },
   },
   {
-    // Tests reach into internals and build partial fixtures on purpose.
-    files: ['src/__tests__/**/*.{ts,tsx}'],
+    // Tests reach into internals and build partial fixtures on purpose. The
+    // e2e suite does the same, and additionally has to describe a generated
+    // client's untyped options field (e2e/lib/baml-route.ts).
+    files: ['src/__tests__/**/*.{ts,tsx}', 'e2e/**/*.ts'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
     },

@@ -62,6 +62,7 @@ import { activeInferenceTier, runWithInferenceTier } from '../harness-patterns/c
 import { resolveInferenceTier } from '../db/user-prefs.server'
 import { beginVerdaTurn, endVerdaTurn } from '../inference/verda-activity.server'
 import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold-start.server'
+import { ensureVerdaAwake } from '../inference/wake.server'
 import { recordTurn } from '../metrics/usage-recorder.server'
 import type { HarnessSettings } from '../settings'
 import { runFirstTurnTitleGen } from './agents/title-generator.server'
@@ -162,17 +163,15 @@ export async function runTurnAndPersist(
   // the BAML options bag, which is the seam `clients.server.ts` owns.
   //
   // It is emphatically NOT a re-pointing of the chains in `baml_src/`. That
-  // class of edit moves whole ROLES at once, and the injection screen is the
-  // role that must never move: `screen` resolves to `DescribeAnthropic` and
-  // stays there in BOTH switch positions, because a screen is only worth
-  // running on a model that cannot be talked out of reporting by the content it
-  // reviews and that copies matched spans verbatim (SA-M5, and the note on
-  // `CLIENT_BY_ROLE`). Since 2026-08-26 it is the ONLY role that stays — the
-  // switch moves exactly the roles `VERDA_CLIENT_BY_ROLE` lists, which is now
-  // every other one, `router` and `describe` included. The BAML-level hazard is
-  // therefore sharper than it was, not softer: `screen` and `describe` still
-  // name the same chain in `baml_src/`, and re-pointing that chain would move
-  // the screen the one way this switch cannot.
+  // class of edit moves whole ROLES at once and would move the injection screen
+  // along with summarization, because the two declare the same chain in BAML and
+  // are separate only in `CLIENT_BY_ROLE`. The switch moves exactly the roles
+  // `VERDA_CLIENT_BY_ROLE` lists, which since 2026-08-26 is every one of them —
+  // the screen included, on the owner's rule that no call made under the private
+  // tier may be sent to any public AI provider. Two decisions, two lines, and
+  // that is the whole point of the seam: on the same day `describe` was moved to
+  // a 4B summarizer and the `screen` was NOT, which a chain edit could not have
+  // expressed at all.
   //
   // The scope also covers what the turn STARTS and does not await — the title
   // and the detached `compactAndSave` below both make describe-tier calls, and
@@ -206,16 +205,32 @@ export async function runTurnAndPersist(
         if (tier === 'verda') beginVerdaTurn()
         recordTurn(tier)
         try {
+          // WAKE THEN RUN. The self-hosted box scales to zero, so on the private
+          // tier the turn's first job is to get it up — one throwaway request,
+          // shared with any concurrent turn, and the harness does not start until
+          // it answers (`inference/wake.server.ts` carries the reasoning, and it
+          // is what let the BAML client's timeout drop from ten minutes to two).
+          //
+          // Inside the watch scope, before `runOneTurn`, and both halves of that
+          // are load-bearing: the wake is what announces the wait now, through
+          // the same `noteVerdaCallStarting` seam a verda-bound BAML call uses,
+          // so the notice has to be able to see the listener. A wake that fails
+          // THROWS, which ends the turn as a visible error rather than handing
+          // the harness a box that is not there — see the SSE route's `catch`.
+          //
           // The cold-start watch is armed HERE rather than at the first
-          // verda-bound call, because the thing that detects one
-          // (`clientOverrideFor`) is several layers down and takes no
-          // parameters. Only for a verda-tier turn whose caller wants the
-          // notice — the SSE route is the only one that does, since it is the
-          // only entry point with a live wire to a person waiting.
+          // verda-bound call, because the thing that detects one is several
+          // layers down and takes no parameters. Only for a verda-tier turn whose
+          // caller wants the notice — the SSE route is the only one that does,
+          // since it is the only entry point with a live wire to a person
+          // waiting. A turn with no watch still wakes; the ping is not a UI
+          // feature.
+          const run = async (): Promise<HarnessResultScoped<SessionData>> => {
+            if (tier === 'verda') await ensureVerdaAwake()
+            return runOneTurn(req)
+          }
           const watched = tier === 'verda' && req.onWarming
-          return watched
-            ? await runWithColdStartWatch(watched, () => runOneTurn(req))
-            : await runOneTurn(req)
+          return watched ? await runWithColdStartWatch(watched, run) : await run()
         } finally {
           if (tier === 'verda') endVerdaTurn()
         }

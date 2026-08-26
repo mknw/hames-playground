@@ -33,6 +33,7 @@
  * | shape        | what the socket sees                                          |
  * | ------------ | ------------------------------------------------------------- |
  * | `cold-start` | nothing at all for N ms, then a normal 200                    |
+ * |              | (on the private tier the WAKE PING is what absorbs this)      |
  * | `status`     | an immediate 4xx/5xx with an OpenAI-shaped error body         |
  * | `mid-stream` | 200, headers, half the body, then the connection destroyed    |
  *
@@ -73,6 +74,11 @@ import {
   type ChatMessage,
 } from './baml-functions'
 import { VERDA_MODEL } from './mode'
+// The wake ping's message text, imported rather than copied: this fake
+// hard-fails on a prompt it cannot classify, so a drift between the constant and
+// the literal here would turn every private-tier turn into a 400 from the fake
+// and read like an app bug.
+import { VERDA_WAKE_PROMPT } from '../../src/lib/inference/wake.server'
 
 // ============================================================================
 // Recorded traffic
@@ -90,8 +96,10 @@ export interface FakeCall {
   /** The flattened prompt, so a scenario can assert on what the model saw
    *  (e.g. that turn 3 carried turn 1's answer in its history). */
   prompt: string
-  /** How the fake answered: a normal reply, or the fault it injected. */
-  outcome: 'ok' | 'unrecognised' | 'status' | 'mid-stream' | 'bad-role-order'
+  /** How the fake answered: a normal reply, the wake ping, or the fault it
+   *  injected. `wake` is its own outcome so a scenario can assert that the box
+   *  was woken by the wake request rather than by a real call. */
+  outcome: 'ok' | 'wake' | 'unrecognised' | 'status' | 'mid-stream' | 'bad-role-order'
   /** Milliseconds the fake deliberately withheld the response. */
   delayedMs: number
 }
@@ -174,9 +182,13 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
   }
 
   async function serve(raw: string, res: http.ServerResponse): Promise<void> {
-    let body: { model?: string; messages?: ChatMessage[] }
+    let body: { model?: string; messages?: ChatMessage[]; max_tokens?: number }
     try {
-      body = JSON.parse(raw || '{}') as { model?: string; messages?: ChatMessage[] }
+      body = JSON.parse(raw || '{}') as {
+        model?: string
+        messages?: ChatMessage[]
+        max_tokens?: number
+      }
     } catch {
       json(res, 400, { error: { message: 'fake-llm: request body was not JSON' } })
       return
@@ -189,10 +201,22 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       calls.push({ at: Date.now() - startedAt, model, fn, prompt, outcome, delayedMs })
     }
 
+    // THE WAKE PING is not a BAML call, so the two checks below do not apply to
+    // it — it has no output type to satisfy and only one message. Everything
+    // AFTER them does apply, deliberately and by falling through rather than by a
+    // branch of its own: the wake is the request that pays the cold start on a
+    // private-tier turn, so a scenario arming `cold-start` must see it land here,
+    // and a scenario arming `status` or `mid-stream` must be able to break the
+    // wake itself. A separate early-return branch was the first version of this
+    // and it silently swallowed the mid-stream fault — the ping consumed the
+    // armed fault and answered 200, so the fault never reached the call the
+    // scenario meant to break, and nothing was red.
+    const wake = isWakePing(prompt, body)
+
     // An unrecognised prompt is a HARD failure, never a guess. A canned reply
     // for the wrong output type would surface three layers away as a
     // BamlValidationError and read like an app bug.
-    if (!fn) {
+    if (!wake && !fn) {
       record('unrecognised', 0)
       json(res, 400, {
         error: {
@@ -209,7 +233,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     // vLLM's ordering rule, enforced only for the self-hosted model — see the
     // header. Checked BEFORE any injected fault, so a scenario that also armed
     // a cold start still gets the 400 production would give it.
-    if (model === VERDA_MODEL && hasLateSystemMessage(body.messages ?? [])) {
+    if (!wake && model === VERDA_MODEL && hasLateSystemMessage(body.messages ?? [])) {
       record('bad-role-order', 0)
       json(res, 400, {
         object: 'error',
@@ -239,7 +263,9 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       await sleep(fault.ms)
     }
 
-    const payload = JSON.stringify(completion(model, replyFor(fn, prompt)))
+    // `fn` is non-null for everything but the wake ping, which the `!wake` guard
+    // above let through — it wants a token, not a parseable envelope.
+    const payload = JSON.stringify(completion(model, wake ? 'ok' : replyFor(fn!, prompt)))
 
     if (fault?.kind === 'mid-stream') {
       record('mid-stream', delayedMs)
@@ -251,7 +277,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       return
     }
 
-    record('ok', delayedMs)
+    record(wake ? 'wake' : 'ok', delayedMs)
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(payload)
   }
@@ -462,6 +488,26 @@ function json(res: http.ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body)
   res.writeHead(status, { 'Content-Type': 'application/json' })
   res.end(payload)
+}
+
+/**
+ * True for the wake ping: one user message carrying the fixed literal, asking
+ * for a single token.
+ *
+ * Matched on THREE fields rather than on the content alone. A scenario's own
+ * prompt could contain the word by accident, and the ping's whole identity is
+ * "a request that generates nothing" — so `max_tokens` and the single-message
+ * shape are part of what it is, not incidental.
+ */
+function isWakePing(
+  prompt: string,
+  body: { max_tokens?: number; messages?: ChatMessage[] },
+): boolean {
+  return (
+    body.max_tokens === 1 &&
+    (body.messages ?? []).length === 1 &&
+    prompt.trim() === VERDA_WAKE_PROMPT
+  )
 }
 
 /** True when a `system` message follows a non-system one — the ordering vLLM

@@ -46,6 +46,20 @@ assertServerOnImport()
 /** BAML client name that means "this call reached the self-hosted box". */
 export const VERDA_CLIENT_NAME = 'VerdaQwen'
 
+/**
+ * The model id the deployment serves, copied from the `model` line on
+ * `VerdaQwen` in `baml_src/verda-client.baml`.
+ *
+ * A COPY, and the copy is the smaller evil. It exists for the wake ping
+ * (`wake.server.ts`), which is a hand-rolled `fetch` rather than a BAML call —
+ * it has to name a model, vLLM 400s any other id, and BAML exports nothing that
+ * would let this be read from the declaration. `verda-wake.test.ts` parses that
+ * line out of the `.baml` file and pins it equal to this constant, so the
+ * failure mode of a re-deployment under a new id is a red test rather than a
+ * wake ping that 400s on every first turn of every session.
+ */
+export const VERDA_MODEL_ID = 'Qwen/Qwen3.8-27B-FP8'
+
 /** Default scale-down delay, in seconds — the live deployment's setting. The
  *  committed default used to sit at 180 on the argument that a default tracking
  *  one deployment's current setting is a claim the repo cannot keep true; the

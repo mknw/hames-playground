@@ -1,5 +1,6 @@
 /**
- * Scenario 8 — the user is told the box is starting, while it is starting.
+ * Scenario 8 — the user is told the box is starting, while it is starting, and
+ * the box is started before the harness runs.
  *
  * Scenario 4 pins that a cold start does not KILL the turn. This one pins the
  * other half of the same wait, which #273 left open as owner decision D-c:
@@ -13,6 +14,16 @@
  * alongside the answer is not a notice. `readSse` stamps each frame with its
  * arrival time for exactly this claim, which is why the assertions below are
  * about `frame.at` and not only about frame order.
+ *
+ * WHO PAYS THE WAIT changed with wake-then-run. A private-tier turn now sends one
+ * throwaway `max_tokens: 1` request FIRST and starts the harness only once it
+ * answers (`inference/wake.server.ts`), which is what let the BAML client's
+ * timeout drop from ten minutes to two. So the cold start this scenario injects
+ * is absorbed by the WAKE PING, and the fake records that request with its own
+ * `wake` outcome — which makes the ordering assertable in a way it was not
+ * before: the notice, then the wake, then any model call at all. Previously the
+ * notice merely preceded the first controller call, and "the harness started
+ * against a sleeping box" was indistinguishable from "the harness waited".
  *
  * The client half — the spinner replacing the progress bar, and the bar coming
  * back on the first frame after — is `turn-stream.test.ts` and
@@ -64,6 +75,11 @@ function firstVerdaAnswer(frames: SseFrame[]): number {
     const call = (f.data as { llmCall?: { clientName?: string } }).llmCall
     return call?.clientName === 'VerdaQwen'
   })
+}
+
+/** Requests the fake served as wake pings, oldest first. */
+function wakePings(app: AppHandles): readonly { at: number; delayedMs: number }[] {
+  return app.fakeLlm.calls.filter((c) => c.outcome === 'wake')
 }
 
 describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
@@ -124,6 +140,62 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     // Something follows it, which is what the client clears the spinner on —
     // there is no dedicated clear frame by design.
     expect(frames.length - 1).toBeGreaterThan(warmingIdx)
+
+    // WAKE THEN RUN. Exactly one throwaway request, it is the one that absorbed
+    // the injected cold start, and it was the FIRST thing on the wire — which is
+    // the whole reason the BAML client's timeout could drop to 120s. A harness
+    // that started against the sleeping box would show the delay on a
+    // LoopController call instead, and every such call would now be aborted at
+    // 120s against this 90s+ fault.
+    const pings = wakePings(app)
+    expect(pings, 'the turn did not wake the box before running').toHaveLength(1)
+    expect(pings[0].delayedMs).toBe(COLD_START_MS)
+    expect(
+      app.fakeLlm.calls[0].outcome,
+      `the first request was a ${app.fakeLlm.calls[0].fn ?? 'non-BAML'} call, not the wake ping`,
+    ).toBe('wake')
+    // Nothing else was delayed: the wake paid the whole cold start, so every
+    // model call that followed it was a warm call.
+    expect(app.fakeLlm.calls.filter((c) => c.delayedMs > 0)).toHaveLength(1)
+  })
+
+  it('ends the turn as a visible error when the box refuses to wake', async () => {
+    // THE OTHER HALF of #273's D-b, and the property the owner asked for by name:
+    // never a silent hang. A wake that fails must not fall through to the harness
+    // (same wait, now against a 120s timeout) and must not fall back to Anthropic
+    // (confidential prompts to the provider the tier exists to avoid). It ends the
+    // turn, and the user is TOLD.
+    await app.setTier('verda')
+    const sessionId = newSessionId('coldux-wake-fails')
+    app.fakeLlm.arm({ kind: 'status', status: 503, message: 'no capacity', model: VERDA_MODEL })
+
+    const { status, frames } = await app.runTurnOverSse({
+      sessionId,
+      message: 'How many nodes are in the graph?',
+      agentId: 'search',
+    })
+
+    expect(status).toBe(200)
+    const error = frames.find((f) => f.event === 'error')
+    expect(
+      error,
+      `no error frame; frames were [${frames.map((f) => f.event).join(', ')}]`,
+    ).toBeDefined()
+    // The sentence a person reads. It names the box rather than a status code,
+    // and says the prompt went nowhere else.
+    const message = (error!.data as { error?: string }).error ?? ''
+    expect(message).toContain('the private inference box did not wake')
+    expect(message).toContain('nothing was sent to any other provider')
+
+    // And the harness never ran. Named FUNCTIONS rather than "no BAML call at
+    // all": the previous test's post-turn summarization is detached by design
+    // (`compactAndSave`), so its `ResultDescribe` can land in this test's window
+    // after `reset()` and has nothing to do with this turn. `Router` is the first
+    // call any turn makes and `LoopController` is the first one inside the loop —
+    // either of them here would mean the turn half-ran against a box that is not
+    // there.
+    const started = app.fakeLlm.calls.filter((c) => c.fn === 'Router' || c.fn === 'LoopController')
+    expect(started, 'the harness ran anyway, against a box that never woke').toEqual([])
   })
 
   it('is not sent on the anthropic tier, which has no box to start', async () => {
@@ -145,5 +217,10 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
       frames.filter((f) => f.event === 'warming'),
       'the anthropic tier was told the GPU was starting',
     ).toEqual([])
+    // And it sent no wake ping. A metered always-on API has no box to start, so a
+    // ping here would be a request to a deployment this turn is not using — and,
+    // on the private tier's endpoint, one that would WAKE and start billing a GPU
+    // for a turn that never touches it.
+    expect(wakePings(app), 'the anthropic tier woke the GPU box').toEqual([])
   })
 })

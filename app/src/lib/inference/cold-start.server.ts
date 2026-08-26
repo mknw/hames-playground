@@ -137,6 +137,23 @@ export const COLD_START_PLAUSIBILITY_FLOOR_MS = COLD_START_FALLBACK_MS / 4
  *  `cold`, `unknown` — shows the notice. */
 const PROVEN_WARM = new Set(['warm', 'running'])
 
+/**
+ * Is the box PROVABLY up right now?
+ *
+ * The one predicate behind two decisions that must never disagree: whether to
+ * show the notice ({@link noteVerdaCallStarting}) and whether to send a wake
+ * ping at all (`wake.server.ts`). Two copies of "warm or running" would be one
+ * edit away from a turn that pings without telling anyone, or tells someone
+ * without pinging.
+ *
+ * Note which way it errs, and that the direction is the same for both callers:
+ * anything short of proof costs a wake ping and a spinner that clears in
+ * seconds, where the opposite error costs a user a silent 146-second wait.
+ */
+export function verdaProvenWarm(now: number = Date.now()): boolean {
+  return PROVEN_WARM.has(verdaWarmth(now).state)
+}
+
 const HISTORY_KEY = Symbol.for('kg-agent.cold-start-history')
 type HistoryGlobal = typeof globalThis & { [HISTORY_KEY]?: number[] }
 const history: number[] = ((globalThis as HistoryGlobal)[HISTORY_KEY] ??= [])
@@ -246,7 +263,7 @@ export function runWithColdStartWatch<T>(
 export function noteVerdaCallStarting(now: number = Date.now()): void {
   const watch = watchStore.getStore()
   if (!watch || watch.fired) return
-  if (PROVEN_WARM.has(verdaWarmth(now).state)) return
+  if (verdaProvenWarm(now)) return
 
   const last = verdaLastCallCompletedAt()
   watch.fired = true

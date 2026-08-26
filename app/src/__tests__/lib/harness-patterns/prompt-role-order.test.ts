@@ -218,21 +218,26 @@ describe('the Anthropic path is unchanged by the reorder', () => {
   function chunks(body: Record<string, unknown>) {
     const text: [string, string][] = []
     const cache: [string, unknown][] = []
+    /** Indices into `text` of the blocks carrying a breakpoint. */
+    const markedAt: number[] = []
+    const push = (role: string, blk: { text: string; cache_control?: unknown }) => {
+      if (blk.cache_control) {
+        cache.push([role, blk.cache_control])
+        markedAt.push(text.length)
+      }
+      text.push([role, blk.text])
+    }
     for (const blk of (body.system as { text: string; cache_control?: unknown }[]) ?? []) {
-      text.push(['system-field', blk.text])
-      if (blk.cache_control) cache.push(['system-field', blk.cache_control])
+      push('system-field', blk)
     }
     for (const m of (body.messages as { role: string; content: unknown }[]) ?? []) {
       const content = (typeof m.content === 'string' ? [{ text: m.content }] : m.content) as {
         text: string
         cache_control?: unknown
       }[]
-      for (const blk of content) {
-        text.push([m.role, blk.text])
-        if (blk.cache_control) cache.push([m.role, blk.cache_control])
-      }
+      for (const blk of content) push(m.role, blk)
     }
-    return { text, cache }
+    return { text, cache, markedAt }
   }
 
   it('lifts only the leading system block and coerces the rest — the reason the fix is free', async () => {
@@ -278,5 +283,30 @@ describe('the Anthropic path is unchanged by the reorder', () => {
     expect(cache).toEqual([['user', { type: 'ephemeral' }]])
     const marked = text.findIndex(([, t]) => t?.includes('Attempt 3 result:'))
     expect(marked).toBe(text.length - 2)
+  })
+
+  it('keeps ActorTaskFrame’s call-1 breakpoint ending at USER REQUEST', async () => {
+    // The other half of #122, and the half the reorder could plausibly have
+    // broken: CONTEXT is now the same role as the blocks either side of it, so
+    // if BAML had merged the three into one content block the cached prefix
+    // would have swallowed USER REQUEST's neighbours. It does not — Anthropic
+    // keeps them as separate blocks within one message, and the marker still
+    // lands on the block that ENDS the run-static prefix.
+    const render = () =>
+      b.request.ActorController('QQ', 'i', TOOLS, [], 'CONTEXT BLOCK', FEW_SHOTS, 1, 5, null, {
+        ...ANTHROPIC,
+      })
+    const { text, cache, markedAt } = chunks(
+      (await render()).body.json() as Record<string, unknown>,
+    )
+    expect(cache).toEqual([['user', { type: 'ephemeral' }]])
+    // Bind the breakpoint to the block, not merely to its existence: the block
+    // it sits on must be the one that ENDS on USER REQUEST, and it must not
+    // have absorbed USER INTENT or the volatile tail.
+    const marked = text[markedAt[0]][1]
+    expect(marked).toContain('USER REQUEST: QQ')
+    expect(marked).not.toContain('USER INTENT')
+    expect(marked).not.toContain('Respond with the next action')
+    expect(markedAt[0]).toBeLessThan(text.length - 1)
   })
 })

@@ -213,7 +213,7 @@ self-hosted tier — the deployment default — none of those five roles thinks,
 the five had been stale here since #263; the widening moved the last two. The
 role this matters most for is the **planner**, whose chain's whole documented
 justification is "the reasoning IS the deliverable": its composite consequence
-on that tier (no thinking, a halved output ceiling, one retry, then a silently
+on that tier (no thinking, an output ceiling cut 32 768 → 4 096, one retry, then a silently
 unplanned chain, over an untrimmed tool catalog) is stated in one place — the `planner:` entry in
 `VERDA_CLIENT_BY_ROLE`, `app/src/lib/harness-patterns/clients.server.ts` — and
 is measured by the eval suite's `planner-plan-shape` scenario. Do not re-derive

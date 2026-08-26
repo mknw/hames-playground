@@ -236,7 +236,8 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   //     `chat_template_kwargs { enable_thinking false }`, so on this tier that
   //     justification does not hold: the planner reasons without a thinking
   //     budget, in the same tokens as its output.
-  //  2. Its output ceiling HALVES — `AnthropicSonnet5`'s 32 768 to 16 384 — on
+  //  2. Its output ceiling drops EIGHTFOLD — `AnthropicSonnet5`'s 32 768 to
+  //     `VerdaQwen`'s 4 096 (the F2 timeout derivation on PR #279) — on
   //     the role whose output is longest, over the largest tool catalog in the
   //     repo (~134 tools in the preview deployment).
   //  3. Cap-hits are detected (`VerdaQwen` is in `CLIENT_MAX_OUTPUT_TOKENS`, so

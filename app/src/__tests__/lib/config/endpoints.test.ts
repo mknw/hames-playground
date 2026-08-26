@@ -10,7 +10,7 @@
 
 import { describe, it, expect, afterEach } from 'vitest'
 
-import { getEndpoints, getEndpoint } from '../../../lib/config/endpoints'
+import { getEndpoints, getEndpoint, resolveIsDev } from '../../../lib/config/endpoints'
 
 const env = import.meta.env as Record<string, unknown>
 const originalDev = env.DEV
@@ -52,5 +52,29 @@ describe('getEndpoint', () => {
       expect(getEndpoint('neo4jHttp')).toBe(all.neo4j.http)
       expect(getEndpoint('neo4jBolt')).toBe(all.neo4j.bolt)
     }
+  })
+})
+
+describe('resolveIsDev', () => {
+  // `import.meta.env` is Vite's injection and is absent outside a Vite
+  // pipeline — the CLI scripts under `lib/org-graph/scripts/` run under `tsx`,
+  // where reading `.DEV` off `undefined` threw before any caller of
+  // `getNeo4jDriver` reached the database. The decision is a pure function
+  // precisely so this case is assertable: each module has its own
+  // `import.meta`, so no test file can make the source's read see `undefined`.
+  it('treats an absent env as dev, so a hand-run script gets localhost', () => {
+    expect(resolveIsDev(undefined)).toBe(true)
+  })
+
+  it('honours an explicit flag either way', () => {
+    expect(resolveIsDev({ DEV: true })).toBe(true)
+    expect(resolveIsDev({ DEV: false })).toBe(false)
+  })
+
+  it('treats a present env with no DEV flag as a build, not as dev', () => {
+    // An env object that exists means Vite ran; a missing DEV there is a
+    // production bundle, and defaulting it to dev would point the app at
+    // localhost from inside the compose network.
+    expect(resolveIsDev({})).toBe(false)
   })
 })

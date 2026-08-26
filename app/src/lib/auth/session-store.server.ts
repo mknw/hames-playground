@@ -11,9 +11,21 @@
  *
  * Schema is bootstrapped idempotently on first use (mirrors
  * `db/client.server.ts`), so no shared migration file is touched.
+ *
+ * `email` and `display_name` are encrypted at rest (`db/crypto.server.ts`).
+ * The row's `id` is NOT: it is the opaque cookie value this table is looked up
+ * by, so encrypting it would break the lookup — and it is already unguessable
+ * random rather than personal data. `user_id` (the Entra `oid`) and
+ * `home_account_id` stay plaintext too; see the PR inventory for why.
  */
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { query } from '../db/client.server'
+import {
+  decryptField,
+  decryptFieldOrNull,
+  encryptField,
+  encryptFieldOrNull,
+} from '../db/crypto.server'
 import { newOpaqueId } from './cookie-signing.server'
 
 assertServerOnImport()
@@ -92,8 +104,8 @@ function toRecord(row: DbRow): SessionRecord {
   return {
     id: row.id,
     userId: row.user_id,
-    email: row.email,
-    displayName: row.display_name,
+    email: decryptField(row.email, 'auth_sessions.email'),
+    displayName: decryptFieldOrNull(row.display_name, 'auth_sessions.display_name'),
     homeAccountId: row.home_account_id,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
@@ -116,7 +128,14 @@ export async function createSession(
     `INSERT INTO auth_sessions
        (id, user_id, email, display_name, home_account_id, expires_at)
      VALUES ($1, $2, $3, $4, $5, NOW() + ($6 || ' seconds')::interval)`,
-    [id, claims.userId, claims.email, claims.displayName, claims.homeAccountId, String(ttl)],
+    [
+      id,
+      claims.userId,
+      encryptField(claims.email),
+      encryptFieldOrNull(claims.displayName),
+      claims.homeAccountId,
+      String(ttl),
+    ],
   )
   return id
 }

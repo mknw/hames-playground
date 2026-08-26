@@ -198,6 +198,7 @@ WorkingDirectory=/opt/kg-agent/app   # cwd must be app/ so ../configs resolves
 EnvironmentFile=/opt/kg-agent/app/.env
 Environment=PORT=3444
 Environment=HOST=127.0.0.1
+Environment=NODE_ENV=production     # `vinxi start` does NOT set it — see below
 ExecStart=/usr/bin/pnpm start       # vinxi start — serves .output/
 Restart=on-failure
 RestartSec=3
@@ -205,6 +206,15 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 ```
+
+**`NODE_ENV` is on the unit because nothing else sets it.** `vinxi start` sets
+`PORT`, `HOST` and `SERVER_PRESET` and stops there — only `vinxi build` sets
+`NODE_ENV` — so this unit ran the server with it unset. Nothing about the app
+should key security behaviour off it for that reason (the session cookie's
+`Secure` flag used to, and now keys off `import.meta.env.DEV`, which the bundler
+fixes at build time), but any dependency that reads it still sees "not
+production", so set it here. The `app` compose service gets it from the image
+(`app/Dockerfile`) and needs nothing.
 
 ```bash
 sudo systemctl daemon-reload && sudo systemctl enable --now kg-agent
@@ -243,25 +253,61 @@ sudo systemctl reload caddy    # auto-provisions a Let's Encrypt cert
 
 Every var the server reads (`grep process.env src/`), with its localhost default:
 
-| Var                                                                       | Purpose                                                 | Default / note                                                                                                                          |
-| ------------------------------------------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY`                                                       | **Required** — every BAML chain, and the only LLM key   | —                                                                                                                                       |
-| `OPENROUTER_API_KEY`                                                      | the `openrouter` embedding provider only                | needed iff `EMBEDDINGS_PROVIDER=openrouter`                                                                                             |
-| `DATABASE_URL`                                                            | Postgres (conversations)                                | `postgresql://postgres:password@localhost:5432/kgagent` — **override the password**                                                     |
-| `MCP_GATEWAY_URL`                                                         | MCP gateway endpoint                                    | `http://localhost:8811/mcp`                                                                                                             |
-| `MCP_GATEWAY_POOL_SIZE`                                                   | warm gateway connections kept in the client pool (#120) | `4` — leases isolate reconnects; extra concurrent calls open a short-lived overflow connection rather than queueing                     |
-| `NEO4J_USER` / `NEO4J_PASSWORD`                                           | direct Neo4j driver                                     | resolves to `bolt://localhost:7687` on host (`config/endpoints.ts:37`)                                                                  |
-| `COMPUTE_BACKEND`                                                         | sandbox backend                                         | `docker` (firecracker `#78` not implemented)                                                                                            |
-| `SANDBOX_IMAGE`                                                           | sandbox container image                                 | `kg-sandbox:base` (built in step 5)                                                                                                     |
-| `DOCKER_BIN`                                                              | docker CLI path                                         | `docker`                                                                                                                                |
-| `EMBEDDINGS_PROVIDER` / `EMBEDDINGS_LOCAL_URL` / `EMBEDDINGS_LOCAL_MODEL` | DataStash embedder                                      | see step 7                                                                                                                              |
-| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET`             | **Required** — Microsoft Entra sign-in (#119)           | from the app registration; see [`entra-setup.md`](entra-setup.md)                                                                       |
-| `AUTH_SESSION_SECRET`                                                     | **Required** — HMAC key signing the auth cookies        | `openssl rand -base64 32`                                                                                                               |
-| `TOKEN_ENCRYPTION_KEY`                                                    | encrypts the per-user MSAL token cache at rest (#110)   | HKDF-derived from `AUTH_SESSION_SECRET` when unset; **set it explicitly in prod** so the two can rotate independently                   |
-| `AUTH_REDIRECT_URI` / `AUTH_POST_LOGOUT_REDIRECT_URI`                     | OIDC redirect / post-logout URIs                        | default to port **3444**; the redirect MUST match one registered on the app (Web platform)                                              |
-| `AZURE_GRAPH_SCOPES`                                                      | override the delegated Graph scope set                  | defaults to the full connector set; every scope must be consented under API permissions **first**, or sign-in fails                     |
-| `VITE_ALLOWED_EMAILS`                                                     | email allow-list for real auth                          | comma-separated; supports `*@domain.com`                                                                                                |
-| `VITE_DEV_BYPASS_AUTH`                                                    | skips sign-in entirely                                  | `'true'` in `.env.example`. **Must be `'false'` in prod** — and note the name: `DEV_BYPASS_AUTH` (no `VITE_` prefix) is read by nothing |
+| Var                                                                       | Purpose                                                                | Default / note                                                                                                                          |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`                                                       | **Required** — every BAML chain, and the only LLM key                  | —                                                                                                                                       |
+| `OPENROUTER_API_KEY`                                                      | the `openrouter` embedding provider only                               | needed iff `EMBEDDINGS_PROVIDER=openrouter`                                                                                             |
+| `DATABASE_URL`                                                            | Postgres (conversations)                                               | `postgresql://postgres:password@localhost:5432/kgagent` — **override the password**                                                     |
+| `MCP_GATEWAY_URL`                                                         | MCP gateway endpoint                                                   | `http://localhost:8811/mcp`                                                                                                             |
+| `MCP_GATEWAY_POOL_SIZE`                                                   | warm gateway connections kept in the client pool (#120)                | `4` — leases isolate reconnects; extra concurrent calls open a short-lived overflow connection rather than queueing                     |
+| `NEO4J_USER` / `NEO4J_PASSWORD`                                           | direct Neo4j driver                                                    | resolves to `bolt://localhost:7687` on host (`config/endpoints.ts:37`)                                                                  |
+| `COMPUTE_BACKEND`                                                         | sandbox backend                                                        | `docker` (firecracker `#78` not implemented)                                                                                            |
+| `SANDBOX_IMAGE`                                                           | sandbox container image                                                | `kg-sandbox:base` (built in step 5)                                                                                                     |
+| `DOCKER_BIN`                                                              | docker CLI path                                                        | `docker`                                                                                                                                |
+| `EMBEDDINGS_PROVIDER` / `EMBEDDINGS_LOCAL_URL` / `EMBEDDINGS_LOCAL_MODEL` | DataStash embedder                                                     | see step 7                                                                                                                              |
+| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET`             | **Required** — Microsoft Entra sign-in (#119)                          | from the app registration; see [`entra-setup.md`](entra-setup.md)                                                                       |
+| `AUTH_SESSION_SECRET`                                                     | **Required** — HMAC key signing the auth cookies                       | `openssl rand -base64 32`                                                                                                               |
+| `TOKEN_ENCRYPTION_KEY`                                                    | encrypts the per-user MSAL token cache at rest (#110)                  | HKDF-derived from `AUTH_SESSION_SECRET` when unset; **set it explicitly in prod** so the two can rotate independently                   |
+| `DATA_ENCRYPTION_KEY`                                                     | **Required** — encrypts stored conversations and personal data at rest | `openssl rand -base64 32`. No fallback, by design. See the escrow warning below                                                         |
+| `AUTH_REDIRECT_URI` / `AUTH_POST_LOGOUT_REDIRECT_URI`                     | OIDC redirect / post-logout URIs                                       | default to port **3444**; the redirect MUST match one registered on the app (Web platform)                                              |
+| `AZURE_GRAPH_SCOPES`                                                      | override the delegated Graph scope set                                 | defaults to the full connector set; every scope must be consented under API permissions **first**, or sign-in fails                     |
+| `VITE_ALLOWED_EMAILS`                                                     | email allow-list for real auth                                         | comma-separated; supports `*@domain.com`                                                                                                |
+| `VITE_DEV_BYPASS_AUTH`                                                    | skips sign-in entirely                                                 | `'true'` in `.env.example`. **Must be `'false'` in prod** — and note the name: `DEV_BYPASS_AUTH` (no `VITE_` prefix) is read by nothing |
+
+> **`DATA_ENCRYPTION_KEY` is not recoverable from the database.** It encrypts
+> `conversations.title` / `conversations.context`, the `users` and
+> `auth_sessions` profile columns, and the `routines` prompt. A restored dump
+> without it is ciphertext forever — so back the key up **somewhere other than
+> the machine holding the data**, alongside `TOKEN_ENCRYPTION_KEY`. Starting the
+> app with encrypted rows present and the key absent — or with the wrong key —
+> is a deliberate refusal to serve rather than a return of empty conversations
+> that the next write would overwrite, so a lost key shows up as an outage, not
+> as silent data loss. Rotating it needs a re-encryption pass, not just a
+> restart: the ciphertext carries a `v1.` version prefix so that pass can be
+> lazy, but it has not been written yet.
+>
+> **What that refusal looks like on this VM**, because it is not a crash: the
+> schema init is lazy, so the process starts, binds the port and stays
+> `active`. The key check runs on the first database query, logs
+> `[db] DATA_ENCRYPTION_KEY …` at error level, and is **not retried** — every
+> request from then on fails with it until you restart. `systemctl is-active
+kg-agent` therefore says `active` on a deploy that serves nothing: verify by
+> the log, never by the unit state.
+
+> **Snapshot the database before the first boot with `DATA_ENCRYPTION_KEY`
+> set.** That boot rewrites every existing `conversations` /
+> `users` / `auth_sessions` / `routines` row in place, and there is no
+> down-migration, no dry run and no decrypt-back script — the rollback advice
+> above ("drop the old tree — it is the rollback copy until then") is true of
+> the code and false of the data. Reverting to an earlier build does **not**
+> revert the rows; it produces a build that cannot read them. So:
+>
+> ```bash
+> docker compose exec -T postgres pg_dump -U postgres kgagent > ~/kgagent-preencrypt.sql
+> ```
+>
+> Keep that dump until you are satisfied, and keep the key somewhere else — a
+> dump taken _after_ the cutover is worthless without it.
 
 > **Redis has two paths.** The agentic one goes through the gateway's redis MCP
 > server (configured in `configs/mcp-config.yaml`, no app env var). The direct
@@ -293,6 +339,10 @@ restart) and confirm the service is actually up:
 ```bash
 systemctl is-active kg-agent && journalctl -u kg-agent -n 20 --no-pager
 ```
+
+`is-active` alone is not the check — a bad `DATA_ENCRYPTION_KEY` leaves the
+unit `active` and every request failing (see the warning above). Read the
+`journalctl` output for `[db] schema ready`.
 
 Only once that restart is verified, drop the old tree — it is the rollback copy
 until then:

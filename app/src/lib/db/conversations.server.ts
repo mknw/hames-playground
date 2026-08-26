@@ -3,10 +3,31 @@
  *
  * One table, one JSONB blob per conversation. The blob is the full
  * `serializeContext()` output; we don't normalize events or messages here.
+ *
+ * `title` and `context` are encrypted at rest (`crypto.server.ts`): the blob
+ * carries verbatim tool results, which since per-user Graph access can include
+ * mail bodies and file contents, and the title is derived from the user's first
+ * message. Everything else on the row — ids, the agent id, the lifted enums,
+ * the timestamps — stays plaintext so the owner scoping, the indexes and the
+ * list ordering keep working in SQL.
+ *
+ * The seam is this module, not `query()`: `query()` takes opaque SQL and an
+ * untyped parameter array, so it cannot know which parameter is which column.
+ * Encryption therefore happens in the parameter lists and decryption in the row
+ * mappers below, which between them cover every statement that touches the
+ * table — `encryption-coverage.test.ts` pins that no other production module
+ * runs SQL against it.
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { query } from './client.server'
+import {
+  decryptFieldOrNull,
+  decryptJsonb,
+  encryptField,
+  encryptFieldOrNull,
+  encryptJsonb,
+} from './crypto.server'
 
 assertServerOnImport()
 
@@ -77,8 +98,8 @@ function rowToConversation(row: DbRow): ConversationRow {
     id: row.id,
     userId: row.user_id,
     agentId: row.agent_id,
-    title: row.title,
-    serializedContext: JSON.stringify(row.context),
+    title: decryptFieldOrNull(row.title, 'conversations.title'),
+    serializedContext: decryptJsonb(row.context, 'conversations.context'),
     kind: row.kind,
     source: row.source,
     status: row.status,
@@ -180,8 +201,8 @@ export async function saveConversation(input: SaveConversationInput): Promise<vo
       input.id,
       input.userId,
       input.agentId,
-      input.title,
-      input.serializedContext,
+      encryptFieldOrNull(input.title),
+      encryptJsonb(input.serializedContext),
       input.kind ?? 'conversation',
       input.source ?? 'chat',
       input.status ?? 'running',
@@ -236,7 +257,7 @@ export async function listConversations(userId: string): Promise<ConversationLis
   return rows.map((r) => ({
     id: r.id,
     agentId: r.agent_id,
-    title: r.title,
+    title: decryptFieldOrNull(r.title, 'conversations.title'),
     kind: r.kind,
     source: r.source,
     status: r.status,
@@ -255,17 +276,30 @@ export interface ConversationEventsRow {
 }
 
 /** Row ceiling for {@link listConversationEvents}. Exported so the dashboard can
- *  say "most recent N" instead of implying it folded everything. */
+ *  say "most recent N" instead of implying it folded everything.
+ *
+ *  Since encryption it is a **memory** ceiling too, not only a row one: the
+ *  whole blob is now materialised in this process, so at the dev table's
+ *  average 249 KiB per `context` this bounds one dashboard load at ~65 MB read
+ *  and ~150 MiB of heap churn. Raising it is a memory decision. */
 export const CONVERSATION_EVENTS_SCAN_LIMIT = 200
 
 /**
  * Load every conversation's event stream for a user (#132).
  *
- * Projects `context -> 'events'` in SQL rather than selecting the whole blob:
- * the dashboard only folds events, and pattern `data` payloads (graph
- * elements, tool outputs) can dwarf them. Same 200-row ceiling as
- * {@link listConversations} so a long-lived account can't turn one page load
- * into an unbounded read.
+ * This used to project `context -> 'events'` in SQL so the dashboard never
+ * pulled the whole blob — pattern `data` payloads (graph elements, tool
+ * outputs) can dwarf the events. **At-rest encryption removes that option**:
+ * the column now holds one opaque envelope, so there is no sub-path for
+ * Postgres to reach into and the projection has to move into this process. The
+ * cost is real and is the price of the column being unreadable in a dump; the
+ * 200-row ceiling from {@link listConversations} is what keeps it bounded, and
+ * it is the only reason this is a bounded regression rather than a structural
+ * one. Measured at the dev table's own average blob size (249 KiB x 200 rows,
+ * the PR that introduced encryption has the table): ~1.1x the old SQL
+ * projection in wall clock, both dominated by the JSON parse — but ~200 ms and
+ * ~65 MB read in absolute terms, which is the number that matters on a small
+ * VM. See {@link CONVERSATION_EVENTS_SCAN_LIMIT}.
  */
 export async function listConversationEvents(userId: string): Promise<ConversationEventsRow[]> {
   const { rows } = await query<{
@@ -273,19 +307,24 @@ export async function listConversationEvents(userId: string): Promise<Conversati
     agent_id: string
     title: string | null
     updated_at: Date
-    events: unknown
+    context: unknown
   }>(
-    `SELECT id, agent_id, title, updated_at, context -> 'events' AS events
+    `SELECT id, agent_id, title, updated_at, context
      FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT ${CONVERSATION_EVENTS_SCAN_LIMIT}`,
     [userId],
   )
-  return rows.map((r) => ({
-    id: r.id,
-    agentId: r.agent_id,
-    title: r.title,
-    updatedAt: r.updated_at,
-    events: r.events,
-  }))
+  return rows.map((r) => {
+    const context = JSON.parse(decryptJsonb(r.context, 'conversations.context')) as {
+      events?: unknown
+    } | null
+    return {
+      id: r.id,
+      agentId: r.agent_id,
+      title: decryptFieldOrNull(r.title, 'conversations.title'),
+      updatedAt: r.updated_at,
+      events: context?.events ?? null,
+    }
+  })
 }
 
 /**
@@ -327,7 +366,7 @@ export async function updateConversationTitle(
   await query(
     `UPDATE conversations SET title = $1, updated_at = NOW()
      WHERE id = $2 AND user_id = $3`,
-    [title, id, userId],
+    [encryptField(title), id, userId],
   )
 }
 

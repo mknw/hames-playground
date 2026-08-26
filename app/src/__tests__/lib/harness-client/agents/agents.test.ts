@@ -317,58 +317,6 @@ describe('Agent Harnesses', () => {
       }
     })
   })
-
-  describe('multiSourceResearchAgent', () => {
-    it('should have valid config', async () => {
-      const { multiSourceResearchAgent } =
-        await import('../../../../lib/harness-client/agents/multi-source-research.server')
-      validateAgentConfig(multiSourceResearchAgent)
-      expect(multiSourceResearchAgent.id).toBe('multi-source-research')
-    })
-
-    it('should create valid patterns', async () => {
-      const { multiSourceResearchAgent } =
-        await import('../../../../lib/harness-client/agents/multi-source-research.server')
-      const patterns = await validatePatterns(multiSourceResearchAgent)
-
-      // Should have parallel, judge, compactExecution
-      expect(patterns.length).toBe(3)
-    })
-  })
-})
-
-// ============================================================================
-// Judge Evaluator Tests
-// ============================================================================
-
-describe('Judge Evaluators', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  afterEach(async () => {
-    vi.resetModules()
-  })
-
-  describe('multiSourceResearchAgent judgeEvaluator', () => {
-    it('should have quality judge pattern', async () => {
-      const { multiSourceResearchAgent } =
-        await import('../../../../lib/harness-client/agents/multi-source-research.server')
-      const patterns = (await multiSourceResearchAgent.createPatterns('test-session')) as Pattern[]
-
-      const judgePattern = patterns.find((p) => p.config.patternId === 'quality-judge')
-      expect(judgePattern).toBeDefined()
-    })
-
-    it('should have parallel research pattern', async () => {
-      const { multiSourceResearchAgent } =
-        await import('../../../../lib/harness-client/agents/multi-source-research.server')
-      const patterns = (await multiSourceResearchAgent.createPatterns('test-session')) as Pattern[]
-
-      const parallelPattern = patterns.find((p) => p.config.patternId === 'parallel-research')
-      expect(parallelPattern).toBeDefined()
-    })
-  })
 })
 
 // ============================================================================
@@ -381,10 +329,9 @@ describe('Agent Consistency', () => {
     const { searchAgent } = await import('../../../../lib/harness-client/agents/search.server')
     const { sandboxSessionAgent } =
       await import('../../../../lib/harness-client/agents/sandbox-session.server')
-    const { multiSourceResearchAgent } =
-      await import('../../../../lib/harness-client/agents/multi-source-research.server')
+    const { generalAgent } = await import('../../../../lib/harness-client/agents/general.server')
 
-    const ids = [searchAgent.id, sandboxSessionAgent.id, multiSourceResearchAgent.id]
+    const ids = [searchAgent.id, sandboxSessionAgent.id, generalAgent.id]
 
     const uniqueIds = new Set(ids)
     expect(uniqueIds.size).toBe(ids.length)
@@ -392,10 +339,9 @@ describe('Agent Consistency', () => {
 
   it('all agents should contain compactExecution pattern', async () => {
     const { searchAgent } = await import('../../../../lib/harness-client/agents/search.server')
-    const { multiSourceResearchAgent } =
-      await import('../../../../lib/harness-client/agents/multi-source-research.server')
+    const { generalAgent } = await import('../../../../lib/harness-client/agents/general.server')
 
-    const agents = [searchAgent, multiSourceResearchAgent]
+    const agents = [searchAgent, generalAgent]
 
     for (const config of agents) {
       const patterns = (await config.createPatterns('test-session')) as Pattern[]

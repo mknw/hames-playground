@@ -27,14 +27,25 @@ no pseudonymisation anywhere in the stack.
 
 Measured on the live dev database, 2026-08-15.
 
-| Store                    | Contents                                                                                                     | Retention                          | Rows now |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------ | ---------------------------------- | -------- |
-| Postgres `conversations` | `context` JSONB — the **full event stream**: `user_message`, `assistant_message`, `tool_call`, `tool_result` | **none**                           | 28       |
-| Postgres `users`         | Entra `oid`, email, display name, tenant id, first/last login                                                | none                               | 1        |
-| Postgres `auth_sessions` | oid, email, display name, 8h expiry                                                                          | lazy, per-id only                  | 22       |
-| Postgres `user_tokens`   | MSAL cache, **AES-256-GCM encrypted**, fails closed                                                          | deleted on logout                  | 1        |
-| Redis Data Stash         | uploaded and Microsoft 365-ingested documents, chunks, embeddings                                            | **7 days** (`DEFAULT_TTL_SECONDS`) | —        |
-| Neo4j                    | graph content                                                                                                | none                               | —        |
+| Store                     | Contents                                                                                                     | Encrypted at rest          | Retention                           | Rows now |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------- | ----------------------------------- | -------- |
+| Postgres `conversations`  | `context` JSONB — the **full event stream**: `user_message`, `assistant_message`, `tool_call`, `tool_result` | `title` + `context`        | **none**                            | 28       |
+| Postgres `users`          | Entra `oid`, email, display name, tenant id, first/last login                                                | `email` + `display_name`   | none                                | 1        |
+| Postgres `auth_sessions`  | oid, email, display name, 8h expiry                                                                          | `email` + `display_name`   | lazy, per-id + hourly sweep         | 22       |
+| Postgres `routines`       | agent id, trigger kind/config, the input prompt, label (#131)                                                | `input` + `label`          | none                                | —        |
+| Postgres `user_tokens`    | MSAL cache, **AES-256-GCM encrypted**, fails closed                                                          | `token_cache`              | deleted on logout                   | 1        |
+| Postgres `session_claims` | session id -> owner id, for the pre-persistence window                                                       | nothing (holds no content) | `expires_at`, mirrors the stash TTL | —        |
+| Redis Data Stash          | uploaded and Microsoft 365-ingested documents, chunks, embeddings                                            | **no**                     | **7 days** (`DEFAULT_TTL_SECONDS`)  | —        |
+| Neo4j                     | graph content                                                                                                | **no**                     | none                                | —        |
+
+The Postgres column encryption is AES-256-GCM under `DATA_ENCRYPTION_KEY`
+(`app/src/lib/db/crypto.server.ts`), applied in the repository modules on write
+and read; identifiers, the lifted enums and the timestamps stay plaintext so
+owner scoping, indexes and list ordering still happen in SQL. It closes the
+"conversation content sits in plaintext" half of finding 4 and the second half
+of plan item 3. It does **not** cover Redis or Neo4j, and it is not a substitute
+for retention (finding 2) or erasure (finding 3): encrypted-and-kept-forever is
+still kept forever.
 
 Conversation data spans 2026-07-27 → 2026-08-15. Nothing has ever been deleted
 by a retention process, because none exists.
@@ -87,10 +98,14 @@ Two things follow that _are_ in our control:
 expire after 7 days — an odd asymmetry, since conversations now hold richer
 personal data than the stash does.
 
-**Evidence:** of 22 `auth_sessions` rows, **21 are already past `expires_at` and
-still present**. `deleteExpiredSessions()` exists in
-`app/src/lib/auth/session-store.server.ts` and is called from nowhere; expiry is
-enforced lazily per-id on access only.
+**Evidence (as audited 2026-08-15):** of 22 `auth_sessions` rows, **21 were
+already past `expires_at` and still present**, because
+`deleteExpiredSessions()` in `app/src/lib/auth/session-store.server.ts` was
+called from nowhere and expiry was enforced lazily per-id on access only. That
+half has since been fixed: `startSessionSweepTimer()` is armed from
+`ensureSchema()` in the same module, on an hourly self-unref'ing interval with
+an immediate first sweep. `conversations` still has no expiry at all, which is
+what the finding is now about.
 
 ### 3. Erasure is incomplete (Art. 17)
 
@@ -111,19 +126,26 @@ mutation-tested.
 
 Against that:
 
-- **Conversation content sits in plaintext**, including the Graph-derived
-  material above.
+- ~~**Conversation content sits in plaintext**, including the Graph-derived
+  material above.~~ Addressed: `conversations.title` / `conversations.context`,
+  the `users` and `auth_sessions` profile columns and the `routines` prompt are
+  AES-256-GCM encrypted under `DATA_ENCRYPTION_KEY`, so a dump yields
+  ciphertext. Redis and Neo4j are unchanged.
 - The committed compose publishes Postgres, Redis and Neo4j on `0.0.0.0` with
   password `password`. Fine on a laptop, unacceptable on a VM — which is why
   `docs/deployment/azure-vm.md` overrides it. That override is now load-bearing.
 - **No Postgres backups exist.** This is an Art. 32(1)(c) obligation ("ability
   to restore availability and access to personal data in a timely manner"), not
   merely ops hygiene.
-- A **key-escrow trap**: `user_tokens` is encrypted with `TOKEN_ENCRYPTION_KEY`,
-  which HKDF-derives from `AUTH_SESSION_SECRET` when unset. If both live only in
-  the VM's systemd `EnvironmentFile` and the VM is what was lost, the restored
-  database cannot be decrypted. The key must be backed up **separately from the
-  data**.
+- A **key-escrow trap**, now larger: `user_tokens` is encrypted with
+  `TOKEN_ENCRYPTION_KEY`, which HKDF-derives from `AUTH_SESSION_SECRET` when
+  unset, and conversation content is encrypted with `DATA_ENCRYPTION_KEY`, which
+  has no fallback at all. If those live only in the VM's systemd
+  `EnvironmentFile` and the VM is what was lost, the restored database cannot be
+  decrypted — and for `DATA_ENCRYPTION_KEY` that means the conversations
+  themselves, not just a re-obtainable token cache. The keys must be backed up
+  **separately from the data**. This is the cost side of the encryption above and
+  it is not optional.
 - `auth_sessions.token_cache` — the legacy plaintext column from #119 — still
   exists in the schema. It is no longer written and currently holds **0 non-null
   rows**, so the exposure is remediated in data; dropping the column is
@@ -181,15 +203,15 @@ explicit out-of-scope commitment now, while it is free, is worthwhile.
 Ordered by a mix of risk and cost. Items 1–3 and 5 are independent of the legal
 questions and can start immediately; only item 4 blocks on someone else.
 
-| #   | Action                                                                                                                                                                                                                      | Depends on               |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| 1   | **ROPA + employee privacy notice.** One page each. Draftable from the data map above; the parts needing DTSC input are legal basis and retention period.                                                                    | DTSC input on two fields |
-| 2   | **Decide and enforce a retention period for `conversations`.** A dated sweep is a small amount of code; the number is a business decision. Resolves the asymmetry with the stash's 7 days.                                  | retention decision       |
-| 3   | **Arm the session sweep** (issue #129 already scopes it — the 21 stale rows are the evidence), and **encrypt or exclude Graph-derived `tool_result` content**. The `user_tokens` encryption pattern already exists to copy. | —                        |
-| 4   | **Confirm DPAs and the transfer mechanism** for Anthropic — now the only LLM processor. Gates production rollout more than any code here.                                                                                   | counsel                  |
-| 5   | **Postgres backups, with the encryption key escrowed separately.** Now doubly justified: Art. 32(1)(c) as well as ops.                                                                                                      | —                        |
-| 6   | **Before rollout:** works council information, and the CAO 81 purpose statement.                                                                                                                                            | HR / works council       |
-| 7   | Drop the dead `auth_sessions.token_cache` column.                                                                                                                                                                           | —                        |
+| #   | Action                                                                                                                                                                                                                                                       | Depends on               |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------ |
+| 1   | **ROPA + employee privacy notice.** One page each. Draftable from the data map above; the parts needing DTSC input are legal basis and retention period.                                                                                                     | DTSC input on two fields |
+| 2   | **Decide and enforce a retention period for `conversations`.** A dated sweep is a small amount of code; the number is a business decision. Resolves the asymmetry with the stash's 7 days.                                                                   | retention decision       |
+| 3   | ~~**Arm the session sweep**~~ (done — `startSessionSweepTimer`) and ~~**encrypt Graph-derived `tool_result` content**~~ (done — the whole `context` blob is encrypted, following the `user_tokens` pattern). Remaining: Redis and Neo4j are still plaintext. | —                        |
+| 4   | **Confirm DPAs and the transfer mechanism** for Anthropic — now the only LLM processor. Gates production rollout more than any code here.                                                                                                                    | counsel                  |
+| 5   | **Postgres backups, with the encryption keys escrowed separately.** Now triply justified: Art. 32(1)(c), ops, and the fact that a dump without `DATA_ENCRYPTION_KEY` is unrecoverable ciphertext.                                                            | —                        |
+| 6   | **Before rollout:** works council information, and the CAO 81 purpose statement.                                                                                                                                                                             | HR / works council       |
+| 7   | Drop the dead `auth_sessions.token_cache` column.                                                                                                                                                                                                            | —                        |
 
 ## Related
 

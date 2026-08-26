@@ -15,6 +15,7 @@ import type {
   ConfiguredPattern,
   AssistantMessageEventData,
   UserMessageEventData,
+  ErrorEventData,
   TurnEstimateSettings,
 } from './types'
 import {
@@ -58,6 +59,88 @@ function stampChainEstimate<T>(ctx: UnifiedContext<T>, patterns: ConfiguredPatte
   if (!userMsg) return
   const data = userMsg.data as UserMessageEventData
   data.chainTurnEstimate = estimateChainTurns(patterns, turnEstimateSettings())
+}
+
+/**
+ * Decide how a turn ENDED, from what the chain actually produced.
+ *
+ * Shared by all three entry points below, because the answer must not depend
+ * on which one ran — and it used to: each carried its own copy of this
+ * epilogue and all three read "the chain returned without throwing" as
+ * success. `runChain` almost never throws (every pattern catches internally
+ * and records an `error` event instead), so a turn whose LLM calls ALL failed
+ * came back `status: 'running'` with `response: ''`, which every consumer
+ * reads as a completed turn: the SSE route sends `event: done`, the client
+ * paints no assistant bubble and marks the run `done` (a green completion
+ * mark in the sidebar), and `extractStatusFromContext` maps 'running' → 'done'
+ * so the persisted row's badge agrees. Measured live on 2026-08-26 against the
+ * self-hosted deployment: a `BamlTimeoutError` on `LoopController` followed by
+ * a `504 inference request was canceled` on `Synthesize` was recorded as a
+ * successful, empty conversation.
+ *
+ * The predicate is deliberately the CONJUNCTION "nothing to show AND something
+ * went wrong", not either half:
+ *
+ * - An error with a response is not a failed turn. A loop that exhausts
+ *   `maxTurns` records a recoverable error and the synthesizer still answers
+ *   from the partial results — that is the designed behaviour (#83), and
+ *   flipping it to `error` would report every partial answer as a failure.
+ * - No response and no error is not a failure either: a chain with no
+ *   synthesizer, or a router that resolved to a direct response, legitimately
+ *   leaves `data.response` unset without anything having gone wrong.
+ * - `paused` is excluded because an approval gate ends a turn with no response
+ *   ON PURPOSE, and that is the one status a caller must be able to resume.
+ *
+ * Severity is not consulted. `errorSeverity` classifies whether a PATTERN can
+ * self-heal, and the controller timeout above is classified `recoverable` even
+ * though nothing downstream recovered from it; what makes a turn failed is that
+ * it reached the user with nothing, whatever the pattern thought.
+ *
+ * `eventsBefore` is the turn boundary: `continueSession` and `resumeHarness`
+ * run against a context that already holds every previous turn's events, so a
+ * failure two turns ago must not condemn this one.
+ */
+function settleTurn<T extends HarnessData & Record<string, unknown>>(
+  ctx: UnifiedContext<T>,
+  eventsBefore: number,
+): { response: string; status: CtxStatus } {
+  const response = ctx.data.response ?? ''
+  const status = ctx.status as CtxStatus // chain may mutate ctx.status
+
+  if (status === 'done' && response) {
+    ctx.events.push({
+      id: generateId('ev'),
+      type: 'assistant_message',
+      ts: Date.now(),
+      patternId: 'harness',
+      data: { content: response } as AssistantMessageEventData,
+    })
+  }
+
+  if (response || status === 'error' || status === 'paused') return { response, status }
+
+  const failure = lastTurnError(ctx, eventsBefore)
+  if (!failure) return { response, status }
+
+  // Deliberately NOT `setError()`: that pushes a second `error` event, and the
+  // pattern that failed already emitted one carrying the LLM call detail the
+  // observability drill-down needs. A duplicate would double the error bubble
+  // in the transcript and in every replay of it.
+  ctx.status = 'error'
+  ctx.error = failure
+  return { response: `Error: ${failure}`, status: 'error' }
+}
+
+/** The message of the last `error` event recorded during this turn, or
+ *  undefined when the turn recorded none. */
+function lastTurnError<T>(ctx: UnifiedContext<T>, eventsBefore: number): string | undefined {
+  for (let i = ctx.events.length - 1; i >= eventsBefore; i--) {
+    const event = ctx.events[i]
+    if (event.type !== 'error') continue
+    const message = (event.data as ErrorEventData | undefined)?.error
+    if (message) return message
+  }
+  return undefined
 }
 
 export interface HarnessData {
@@ -111,30 +194,24 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
     const initial = ctx.events[ctx.events.length - 1]
     if (initial?.type === 'user_message' && onEvent) onEvent(initial)
 
+    // Where this turn's events start. A fresh context holds only the
+    // user_message, but `settleTurn` takes the boundary from all three entry
+    // points for the same reason — see its docstring.
+    const eventsBefore = ctx.events.length
+
     try {
       // Execute patterns using chain inside a live-event frame so that any
       // pattern with `liveEvents: true` streams events to `onEvent` as they
       // happen, not at commit time.
       await runWithLiveListener(onEvent, () => runChain(ctx, patterns, onEvent))
 
-      // Extract response from final data
-      const response = ctx.data.response ?? ''
-
-      // Add assistant message event if we have a response
-      if (ctx.status === 'done' && response) {
-        ctx.events.push({
-          id: generateId('ev'),
-          type: 'assistant_message',
-          ts: Date.now(),
-          patternId: 'harness',
-          data: { content: response } as AssistantMessageEventData,
-        })
-      }
+      // How this turn ended — one shared decision, see `settleTurn`.
+      const settled = settleTurn(ctx, eventsBefore)
 
       return {
-        response,
+        response: settled.response,
         data: ctx.data,
-        status: ctx.status,
+        status: settled.status,
         duration_ms: Date.now() - startTime,
         context: ctx,
         serialized: serializeContext(ctx),
@@ -193,27 +270,22 @@ export async function resumeHarness<
     data: { approved },
   })
 
+  // Where THIS resume's events start — the restored context already holds
+  // every previous turn's, including any error they recorded.
+  const eventsBefore = ctx.events.length
+
   try {
     // Re-run patterns from the restored (now-running) context. The `approved`
     // flag rides on ctx.data for a resume-aware gating pattern to consume.
     await runWithLiveListener(onEvent, () => runChain(ctx, patterns, onEvent))
 
-    const response = ctx.data.response ?? ''
-    const finalStatus = ctx.status as CtxStatus // chain may mutate ctx.status
-
-    if (finalStatus === 'done' && response) {
-      ctx.events.push({
-        type: 'assistant_message',
-        ts: Date.now(),
-        patternId: 'harness',
-        data: { content: response } as AssistantMessageEventData,
-      })
-    }
+    // How this turn ended — one shared decision, see `settleTurn`.
+    const settled = settleTurn(ctx, eventsBefore)
 
     return {
-      response,
+      response: settled.response,
       data: ctx.data,
-      status: finalStatus,
+      status: settled.status,
       duration_ms: Date.now() - startTime,
       context: ctx,
       serialized: serializeContext(ctx),
@@ -283,26 +355,21 @@ export async function continueSession<T extends HarnessData & Record<string, unk
   const continuedMsg = ctx.events[ctx.events.length - 1]
   if (continuedMsg?.type === 'user_message' && onEvent) onEvent(continuedMsg)
 
+  // Where THIS turn's events start — the restored context already holds every
+  // previous turn's, including any error they recorded.
+  const eventsBefore = ctx.events.length
+
   try {
     // Execute patterns
     await runWithLiveListener(onEvent, () => runChain(ctx, patterns, onEvent))
 
-    const response = ctx.data.response ?? ''
-    const finalStatus = ctx.status as CtxStatus // chain may mutate ctx.status
-
-    if (finalStatus === 'done' && response) {
-      ctx.events.push({
-        type: 'assistant_message',
-        ts: Date.now(),
-        patternId: 'harness',
-        data: { content: response } as AssistantMessageEventData,
-      })
-    }
+    // How this turn ended — one shared decision, see `settleTurn`.
+    const settled = settleTurn(ctx, eventsBefore)
 
     return {
-      response,
+      response: settled.response,
       data: ctx.data,
-      status: finalStatus,
+      status: settled.status,
       duration_ms: Date.now() - startTime,
       context: ctx,
       serialized: serializeContext(ctx),

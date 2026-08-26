@@ -14,6 +14,10 @@ import { runTurnAndPersist } from '../../lib/harness-client/turn.server'
 import { getAuthenticatedUser } from '../../lib/auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../../lib/auth/dev-bypass'
 import { sanitizeHarnessSettings } from '../../lib/settings'
+// The heartbeat's interval and frame live in `sse-client.ts`, beside the
+// parser that has to ignore them — and because a non-handler export declared
+// in a route module is stripped from the build (see SSE_KEEPALIVE_MS there).
+import { SSE_KEEPALIVE_FRAME, SSE_KEEPALIVE_MS } from '../../lib/sse-client'
 
 async function requireUserId(): Promise<string> {
   if (isBypassEnabled()) return BYPASS_USER.id
@@ -60,7 +64,18 @@ export async function POST(event: APIEvent) {
 
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (frame: string) => controller.enqueue(encoder.encode(frame))
+      // `closed` guards every write after `onSettled`: the keep-alive timer
+      // and the error path below both outlive the close, and `enqueue` on a
+      // closed controller throws.
+      let closed = false
+      const send = (frame: string) => {
+        if (closed) return
+        controller.enqueue(encoder.encode(frame))
+      }
+      // Keeps the connection provably alive across a silent LLM call — see
+      // SSE_KEEPALIVE_MS. Cleared in the `finally`, so a turn that throws
+      // cannot leave a timer writing into a closed stream.
+      const keepalive = setInterval(() => send(SSE_KEEPALIVE_FRAME), SSE_KEEPALIVE_MS)
       try {
         await runTurnAndPersist({
           mode: 'interactive',
@@ -97,12 +112,20 @@ export async function POST(event: APIEvent) {
 
           // Everything the client waits for has been sent. The turn's trailing
           // summarization runs after this, with the user already served.
-          onSettled: () => controller.close(),
+          onSettled: () => {
+            closed = true
+            controller.close()
+          },
         })
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
         send(`event: error\ndata: ${JSON.stringify({ sessionId, error: msg })}\n\n`)
-        controller.close()
+        if (!closed) {
+          closed = true
+          controller.close()
+        }
+      } finally {
+        clearInterval(keepalive)
       }
     },
   })

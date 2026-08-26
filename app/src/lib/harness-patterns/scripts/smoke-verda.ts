@@ -54,6 +54,7 @@
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Collector } from '@boundaryml/baml'
 import type { Attempt, ToolDescription } from '../../../../baml_client/types'
 import { createCriticAdapter, extractLLMCallData } from '../baml-adapters.server'
@@ -79,13 +80,52 @@ const TOOLS: ToolDescription[] = [
   },
 ]
 
-/** The ids `GET /v1/models` reports. A plain fetch, not a BAML call: this runs
- *  before the first billed completion and only needs the served id list. */
-async function servedModelIds(): Promise<string[]> {
+/**
+ * How long the preflight waits for the model list.
+ *
+ * It is NOT sized for a cold start, deliberately — see {@link servedModelIds}
+ * for why this request is not one. Measured on 2026-08-26: a healthy answer
+ * took 1.2s; a bad minute on the same endpoint hung this fetch for ~4 minutes
+ * before Node gave up with the bare string `fetch failed`, which reads as a
+ * repo bug rather than as the endpoint being unreachable. Anything past a few
+ * seconds here is a reachability problem worth reporting AS one.
+ */
+const MODELS_TIMEOUT_MS = 15_000
+
+/**
+ * The ids `GET /v1/models` reports. A plain fetch, not a BAML call: this runs
+ * before the first billed completion and only needs the served id list.
+ *
+ * NOT A READINESS PROBE, and the distinction is load-bearing: measured on
+ * 2026-08-26, this endpoint answered `/models` with a full vLLM payload in
+ * 1.2s while a 21-token completion on the same deployment took 146s, because
+ * the container was still cold. So a 200 here says "the deployment exists and
+ * the key is accepted", never "the next completion will be quick" — the three
+ * calls below are what measure that.
+ *
+ * The timeout is explicit because Node's `fetch` has none for this shape, and
+ * an un-bounded preflight fails the smoke exactly when the endpoint is having
+ * the trouble the smoke was run to investigate.
+ */
+export async function servedModelIds(timeoutMs: number = MODELS_TIMEOUT_MS): Promise<string[]> {
   const base = process.env.VERDA_INFERENCE_ENDPOINT ?? ''
-  const res = await fetch(`${base}/models`, {
-    headers: { Authorization: `Bearer ${process.env.VERDA_INFERENCE_API_KEY ?? ''}` },
-  })
+  let res: Response
+  try {
+    res = await fetch(`${base}/models`, {
+      headers: { Authorization: `Bearer ${process.env.VERDA_INFERENCE_API_KEY ?? ''}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (err) {
+    // `fetch failed` / `The operation was aborted` on their own name neither
+    // the URL nor the cause, and this is the first thing the operator sees.
+    throw new Error(
+      `GET ${base}/models did not answer within ${timeoutMs / 1000}s ` +
+        `(${err instanceof Error ? err.message : String(err)}). The deployment is unreachable ` +
+        'from here, or VERDA_INFERENCE_ENDPOINT is wrong — check the host and that the value ' +
+        'ends in `/v1`. A cold container does NOT cause this: it still answers /models fast.',
+      { cause: err },
+    )
+  }
   if (!res.ok) throw new Error(`GET ${base}/models → ${res.status} ${res.statusText}`)
   const body = (await res.json()) as { data?: Array<{ id?: string }> }
   return (body.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === 'string')
@@ -284,7 +324,16 @@ async function main(): Promise<void> {
   console.log('\n✅ all three calls served by VerdaQwen and parsed into their declared types')
 }
 
-main().catch((err) => {
-  console.error('\n❌ smoke failed:', err instanceof Error ? err.message : err)
-  process.exit(1)
-})
+// Run only when this file IS the process entry point, so a test can import
+// `servedModelIds` without firing three billed calls at a GPU. Resolved paths
+// rather than URL strings, because tsx passes `argv[1]` exactly as it was typed
+// and that is normally relative. Defaults to RUNNING when there is no `argv[1]`
+// to compare: a launcher this check does not recognise must still execute the
+// smoke, never silently do nothing.
+const entryPoint = process.argv[1]
+if (!entryPoint || path.resolve(entryPoint) === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error('\n❌ smoke failed:', err instanceof Error ? err.message : err)
+    process.exit(1)
+  })
+}

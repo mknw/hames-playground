@@ -31,12 +31,39 @@
 //
 // SCALE TO ZERO. The endpoint sleeps when idle, bills only while awake, and
 // pays a cold start (container + 27B weight load) before answering the first
-// request after a sleep — measured in minutes, not seconds. Hence the
-// deliberately generous `request_timeout_ms`: the timeout has to survive a
-// cold start, because the alternative is a client that reliably fails exactly
-// the first call of every session. The cost of that generosity is that a
-// genuinely hung warm call also waits it out, which is why the flag is
-// all-or-nothing (one warm box per session) rather than per-call.
+// request after a sleep. Measured 2026-08-26: 146s for a 21-token completion
+// on a single request to a sleeping box. Hence the deliberately generous
+// `request_timeout_ms`: the timeout has to survive a cold start, because the
+// alternative is a client that reliably fails exactly the first call of every
+// session. Which is why the flag is all-or-nothing (one warm box per session)
+// rather than per-call.
+//
+// WHAT THAT GENEROSITY ACTUALLY COSTS, measured the same day and worse than
+// the "a hung warm call also waits it out" this comment used to claim. Three
+// chats sent in quick succession into a sleeping box are ONE replica's queue,
+// not three cold starts in parallel, so a burst multiplies its own wait.
+// Under that queueing TWO DISTINCT platform behaviours were observed, and they
+// are mutually exclusive readings rather than two halves of one story:
+//   - two calls returned NOTHING, were still unanswered at 600 000ms and ended
+//     as `BamlTimeoutError` — on the evidence they were either never cancelled
+//     or the cancellation never reached the client;
+//   - a different call WAS given up on by the deployment's own gateway, and
+//     said so PROMPTLY: `504 {"error":"inference request was canceled"}` at
+//     55s. That client learned within a minute and burned no timeout.
+// Which behaviour applies when is UNMEASURED; 55s is one observation under
+// queueing, not a contract. The two readings point opposite ways on this
+// number, which is why it stays an OWNER decision: if a cancel always surfaces
+// as a prompt 504, a generous timeout costs nothing and is exactly what lets a
+// 146s cold start finish; if instead the silent pair were cancelled and the
+// reply was dropped, that is a worse platform defect and the case for lowering
+// is strong. The floor either way is ~150s — below that the first call of
+// every session reliably fails, by the 146s measured above.
+// What is NOT a judgement call, and is fixed: a turn that spends that time and
+// comes back with nothing is no longer recorded as a success (`settleTurn` in
+// `harness-patterns/harness.server.ts`), and the SSE stream no longer goes
+// byte-silent for the whole wait (`SSE_KEEPALIVE_MS`, declared in
+// `lib/sse-client.ts` beside the parser that drops it — NOT in
+// `routes/api/events.ts`, which is the one module it cannot live in).
 client<llm> VerdaQwen {
   provider openai-generic
   options {
@@ -93,7 +120,9 @@ client<llm> VerdaQwen {
     http {
       connect_timeout_ms 30000
       // ~10 minutes: sized for the cold start described above, NOT for a
-      // healthy call (a warm turn answers in seconds).
+      // healthy call (a warm turn answers in seconds). See the SCALE TO ZERO
+      // note above before changing it — it is longer than the deployment's own
+      // request ceiling, which is a measured trade-off, not an oversight.
       request_timeout_ms 600000
     }
   }

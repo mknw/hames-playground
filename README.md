@@ -149,8 +149,7 @@ are for. Registered in
 | **Retriever**           | `router` → `withInjectionGuard(routes(retriever \| withReferences(simpleLoop)))` → `compactExecution` | Semantic retrieval over uploaded documents (Data Stash) as a peer route beside Neo4j and web. The guard covers both untrusted routes — `web` and `retriever`, whose chunks come from ingested files — while `neo4j` stays unguarded |
 | **Microsoft 365**       | `withInjectionGuard(simpleLoop)` → `compactExecution`                             | Per-user identity end to end — answers from the signed-in user's own mailbox, calendar and files via delegated Graph scopes                |
 
-`multi-source-research` (a worked `parallel` example) ships unregistered and
-untested — see its file header. Writing a new agent is two steps:
+Writing a new agent is two steps:
 [`app/src/lib/harness-client/agents/README.md`](app/src/lib/harness-client/agents/README.md).
 
 ## Quickstart

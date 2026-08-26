@@ -25,8 +25,6 @@ vi.mock('../../../lib/harness-patterns', () => ({
 
 // The module registers the six agents on import; each one pulls in the whole
 // pattern/tool graph, so stub them down to bare configs.
-// `multi-source-research` is NOT among them — it is unregistered and NOT LIVE
-// TESTED (PR #234) — so it is neither stubbed nor expected below.
 function stubAgent(id: string): AgentConfig {
   return {
     id,
@@ -105,13 +103,6 @@ describe('registration + lookup', () => {
         'microsoft-365',
       ]),
     )
-  })
-
-  // PR #234: the agent is kept on disk but NOT LIVE TESTED, so it must not
-  // reach the dropdown. A stray `registerAgent` would otherwise ship it.
-  it('does not register multi-source-research', () => {
-    expect(getAllAgents().map((a) => a.id)).not.toContain('multi-source-research')
-    expect(getAgent('multi-source-research')).toBeUndefined()
   })
 
   it('returns undefined for an unknown id rather than throwing', () => {

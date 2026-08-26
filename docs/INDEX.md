@@ -61,7 +61,7 @@ Records: [0001](adr/0001-anthropic-only-default-chains.md) Anthropic-only defaul
 | [harness-patterns/README.md](harness-patterns/README.md)                                   | Overview, core concepts, quick start                                                    |
 | [harness-patterns/api.md](harness-patterns/api.md)                                         | Complete API reference                                                                  |
 | [harness-patterns/frontend.md](harness-patterns/frontend.md)                               | SolidStart integration, server actions, sessions                                        |
-| [harness-patterns/examples.md](harness-patterns/examples.md)                               | Example agent catalog (7 agents)                                                        |
+| [harness-patterns/examples.md](harness-patterns/examples.md)                               | Example agent catalog (6 agents)                                                        |
 | [harness-patterns/parallel.md](harness-patterns/parallel.md)                               | Parallel pattern design notes                                                           |
 | [harness-patterns/with-references.md](harness-patterns/with-references.md)                 | `withReferences` meta-pattern + `expandPreviousResult` synthetic tool design (#30, #19) |
 | [harness-patterns/withReferences-tutorial.md](harness-patterns/withReferences-tutorial.md) | Hands-on walkthrough — search the web, attach refs at ingress, write to Neo4j           |
@@ -157,6 +157,8 @@ Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/rese
 | `AZURE_CLIENT_ID`                                     | Entra app registration (client) id                                                                                                                                                            |
 | `AZURE_CLIENT_SECRET`                                 | Entra client secret (server-side; resolves sign-in server-side, see `lib/auth/entra.server.ts`)                                                                                               |
 | `AUTH_SESSION_SECRET`                                 | HMAC key signing the auth cookies (`openssl rand -base64 32`)                                                                                                                                 |
+| `TOKEN_ENCRYPTION_KEY`                                | Encrypts the per-user MSAL token cache at rest; HKDF-derived from `AUTH_SESSION_SECRET` when unset                                                                                            |
+| `DATA_ENCRYPTION_KEY`                                 | **Required.** Encrypts stored conversations and personal data at rest. No fallback — see `app/src/lib/db/crypto.server.ts`                                                                    |
 | `AUTH_REDIRECT_URI` / `AUTH_POST_LOGOUT_REDIRECT_URI` | Optional OIDC redirect / post-logout overrides (default dev port 3444)                                                                                                                        |
 | `VITE_ALLOWED_EMAILS`                                 | Comma-separated allow-list; supports `*@domain.com` wildcards                                                                                                                                 |
 | `VITE_DEV_BYPASS_AUTH`                                | `'true'` to skip auth in dev (gated on `import.meta.env.DEV`; ignored in prod builds). See `app/.env.example` and `lib/auth/dev-bypass.ts`                                                    |
@@ -204,7 +206,7 @@ kg-agent/
 │   └── harness-patterns/        # Harness patterns documentation
 │       ├── README.md            # Overview
 │       ├── api.md               # API reference
-│       ├── examples.md          # Example agents (7)
+│       ├── examples.md          # Example agents (6)
 │       ├── frontend.md          # Frontend integration
 │       ├── parallel.md          # Parallel pattern design
 │       ├── prompt-caching.md    # Cache-breakpoint budget and placement (#122)

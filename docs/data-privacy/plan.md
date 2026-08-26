@@ -27,17 +27,35 @@ no pseudonymisation anywhere in the stack.
 
 Measured on the live dev database, 2026-08-15.
 
-| Store                    | Contents                                                                                                     | Retention                          | Rows now |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------ | ---------------------------------- | -------- |
-| Postgres `conversations` | `context` JSONB — the **full event stream**: `user_message`, `assistant_message`, `tool_call`, `tool_result` | **none**                           | 28       |
-| Postgres `users`         | Entra `oid`, email, display name, tenant id, first/last login                                                | none                               | 1        |
-| Postgres `auth_sessions` | oid, email, display name, 8h expiry                                                                          | lazy, per-id only                  | 22       |
-| Postgres `user_tokens`   | MSAL cache, **AES-256-GCM encrypted**, fails closed                                                          | deleted on logout                  | 1        |
-| Redis Data Stash         | uploaded and Microsoft 365-ingested documents, chunks, embeddings                                            | **7 days** (`DEFAULT_TTL_SECONDS`) | —        |
-| Neo4j                    | graph content                                                                                                | none                               | —        |
+| Store                    | Contents                                                                                                       | Retention                          | Rows now |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------- | ---------------------------------- | -------- |
+| Postgres `conversations` | `context` JSONB — the **full event stream**: `user_message`, `assistant_message`, `tool_call`, `tool_result`   | **none**                           | 28       |
+| Postgres `users`         | Entra `oid`, email, display name, tenant id, first/last login                                                  | none                               | 1        |
+| Postgres `auth_sessions` | oid, email, display name, 8h expiry                                                                            | lazy, per-id only                  | 22       |
+| Postgres `user_tokens`   | MSAL cache, **AES-256-GCM encrypted**, fails closed                                                            | deleted on logout                  | 1        |
+| Redis Data Stash         | uploaded and Microsoft 365-ingested documents, chunks, embeddings                                              | **7 days** (`DEFAULT_TTL_SECONDS`) | —        |
+| Neo4j                    | **the staff directory**: per `Member` — `entraId`, `displayName`, `mail`, `department`, `jobTitle`, `syncedAt` | **none**                           | 49       |
 
 Conversation data spans 2026-07-27 → 2026-08-15. Nothing has ever been deleted
 by a retention process, because none exists.
+
+The Neo4j row is dated differently from the rest of the table and reads across
+from a different measurement: until the org-graph roster ingest shipped, that
+store held disposable `Concept`/`Class` sketches and "graph content / none /
+—" was an accurate way to leave it. It now holds one node per enabled member of
+the tenant. The 49 is the count that ingest reported on 2026-08-25 against the
+compose Neo4j, not a fresh reading of the live one; the row's shape is from
+`NODE_LABELS` in `app/src/lib/org-graph/ontology.ts`, which is authoritative and
+does not go stale. The other three labels the ontology declares — `Team`,
+`Resource`, `Knowledge` — are empty, and `Team` is empty because the app
+registration lacks the tenant permission rather than because nothing writes it.
+
+Two things follow, and neither is decided: the retention column says `none` for
+the same reason it does two rows up, and this store now contains personal data
+that arrived from an **automated upsert** rather than from anything a user
+typed, so a departed colleague's node persists until an ingest counts it stale
+and a human acts on the count. That interaction is the open decision (b) on
+PR #264.
 
 ### The part that changes the risk profile
 
@@ -98,7 +116,11 @@ enforced lazily per-id on access only.
 
 - Data Stash keys are `stash:doc:{sessionId}:{docId}` — scoped by **session, not
   user** — so "delete everything about me" has no implementation path.
-- Neo4j content is not covered at all.
+- Neo4j content is not covered at all — and since the roster ingest that is no
+  longer an abstract gap: the graph holds a name, an address, a department and a
+  job title per member of staff, written by a scheduled-shaped job with no
+  deletion path of any kind. Erasing a colleague from this system today means
+  hand-written Cypher.
 - There is no export path for a subject access request (Art. 15).
 
 ### 4. Security (Art. 32) — mixed, with real strengths

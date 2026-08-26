@@ -74,6 +74,33 @@ client<llm> SynthesizerAnthropic {
   }
 }
 
+// The cheap tier — and THE canonical list of what rides it. Every other
+// mention (local-client.baml, clients.server.ts, CLAUDE.md, models/README.md)
+// points here instead of repeating a subset that goes stale; three of them
+// already had three different incomplete subsets.
+//
+// SEVEN functions declare `client DescribeAnthropic`. Six are the `describe`
+// role, all summarization-shaped:
+//
+//   ResultDescribe             describe.baml         per-tool-result summary
+//   ResultDescribeBatch        describe-batch.baml   compactBulkData's batches
+//   GenerateConversationTitle  title.baml            run titles
+//   CompactIntent              compact-intent.baml   cross-turn intent compaction
+//   RetrieveQuery              retrieve-query.baml   the retriever's query rewrite
+//   ReferenceSelector          with-references.baml  the citation picker
+//
+// The seventh is the `screen` role, and it is NOT summarization:
+//
+//   ScreenUntrustedContent     injection-screen.baml withInjectionGuard's opt-in
+//                                                    LLM layer
+//
+// The two roles are held apart in clients.server.ts (SA-M5) but share this
+// chain HERE — the separation lives in the TypeScript mirror, not in BAML. So
+// re-pointing THIS BLOCK moves the injection screen onto whatever summarization
+// lands on: the one edit to avoid. To move the describe tier, rewrite its SIX
+// `client DescribeAnthropic` lines individually, or declare a separate chain
+// (e.g. `DescribeLocal`) and point those six at it. The owned-inference flip is
+// documented on LocalQwenSmall in local-client.baml.
 client<llm> DescribeAnthropic {
   provider fallback
   options {

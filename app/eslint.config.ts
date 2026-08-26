@@ -26,7 +26,7 @@ export default tseslint.config(
   },
   unocss,
   {
-    files: ['src/**/*.ts', 'src/**/*.tsx', 'eslint.config.ts'],
+    files: ['src/**/*.ts', 'src/**/*.tsx', 'evals/**/*.ts', 'eslint.config.ts'],
     rules: {
       'prefer-const': 'warn',
       'no-constant-binary-expression': 'error',

@@ -435,6 +435,23 @@ export default defineConfig({
           }
         }
 
+        /* Cold-start spinner (D-c) — the chat's notice that a turn is waiting
+           on the self-hosted box to start. Hand-written rather than
+           an animate= utility, for the reduced-motion branch below, which
+           attributify has nowhere to put. */
+        @keyframes cold-start-spin {
+          to { transform: rotate(360deg); }
+        }
+        .cold-start-spin {
+          animation: cold-start-spin 1.4s linear infinite;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          /* Motionless fallback: the glyph stays, and the state was never
+             carried by its rotation — the headline and the counting-down
+             estimate beside it say what is happening in words. */
+          .cold-start-spin { animation: none; }
+        }
+
         /* Graph entity interactive spans in chat messages */
         .graph-entity {
           cursor: pointer;

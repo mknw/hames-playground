@@ -19,6 +19,7 @@ import {
 import type { Message } from '~/components/ark-ui/ChatMessages'
 import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns'
 import type { GraphElement } from '~/lib/harness-client/types'
+import type { WarmingEventData } from '~/lib/sse-client'
 import type { HarnessSettings } from '~/lib/settings'
 import singleNodeFixture from './harness-client/fixtures/cypher-single-node.json'
 
@@ -38,6 +39,28 @@ const sseResponse = (frames: Frame[], init: { ok?: boolean; status?: number } = 
   return { ok: init.ok ?? true, status: init.status ?? 200, body } as unknown as Response
 }
 
+/**
+ * A stream that delivers `frames` and then FAILS mid-iteration, which
+ * `sseResponse` cannot express: it closes cleanly, so the loop is left
+ * normally and the `catch` path is unreachable.
+ *
+ * The failure is raised from a LATER `pull` rather than beside the enqueue,
+ * because `error()` discards whatever is still queued — enqueueing and erroring
+ * in one go delivers no frames at all.
+ */
+const sseThenFailure = (frames: Frame[], error: unknown) => {
+  const text = frames.map((f) => `event: ${f.event}\ndata: ${JSON.stringify(f.data)}\n\n`).join('')
+  let sent = false
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent) return controller.error(error)
+      sent = true
+      controller.enqueue(new TextEncoder().encode(text))
+    },
+  })
+  return { ok: true, status: 200, body } as unknown as Response
+}
+
 const recorder = () => {
   const messages: Message[] = []
   const events: ContextEvent[] = []
@@ -46,6 +69,11 @@ const recorder = () => {
   const states: TurnState[] = []
   const progress: ContextEvent[] = []
   const titles: Array<[string, string]> = []
+  const warmings: Array<WarmingEventData | null> = []
+  /** Interleaved log of the calls whose ORDER carries meaning — the notice has
+   *  to come down before the answer is painted, not at the end of the turn, and
+   *  nothing else in this recorder can tell those apart. */
+  const order: string[] = []
   let started = 0
   let finished = 0
 
@@ -54,8 +82,18 @@ const recorder = () => {
     pushEvents: (e) => events.push(...e),
     pushGraph: (g) => graph.push(...g),
     setContext: (c) => contexts.push(c),
-    ingestProgress: (e) => progress.push(e),
-    finishProgress: () => finished++,
+    ingestProgress: (e) => {
+      order.push('progress')
+      return progress.push(e)
+    },
+    finishProgress: () => {
+      order.push('finish')
+      finished++
+    },
+    onWarming: (n) => {
+      order.push(n ? 'warming:on' : 'warming:off')
+      warmings.push(n)
+    },
     onStarted: () => started++,
     onTitleUpdated: (sid, title) => titles.push([sid, title]),
     onState: (s) => states.push(s),
@@ -68,6 +106,8 @@ const recorder = () => {
     contexts,
     states,
     progress,
+    warmings,
+    order,
     titles,
     get started() {
       return started
@@ -425,5 +465,105 @@ describe('applyApprovalResult', () => {
       rec.sink,
     )
     expect(rec.graph.map((e) => e.data?.id)).toEqual(['Redis'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The cold-start notice (D-c)
+// ---------------------------------------------------------------------------
+
+/** A `warming` frame as the SSE route emits it. */
+const warmingFrame = (over: Partial<WarmingEventData> = {}): Frame => ({
+  event: 'warming',
+  data: { sessionId: 's1', estimateMs: 146_000, basis: 'default', samples: 0, ...over },
+})
+
+describe('runTurn — the cold-start notice', () => {
+  it('raises the notice when the server says the box is starting', async () => {
+    const rec = recorder()
+    fetchMock.mockResolvedValue(sseResponse([warmingFrame(), controllerAction({}), done()]))
+    await runTurn(request(), rec.sink)
+
+    expect(rec.warmings[0]).toMatchObject({ estimateMs: 146_000, basis: 'default', samples: 0 })
+  })
+
+  it('clears it on the next frame of ANY kind — that is what "first token" means here', async () => {
+    // No dedicated clear frame exists on purpose: one more frame is one more
+    // frame that can be dropped, and a dropped clear leaves a spinner up
+    // forever. The next `message` is the box answering.
+    //
+    // The ORDER is the assertion, not the pair of calls: clearing only once the
+    // turn ends would produce the same two calls while leaving a spinner up
+    // across the whole answer.
+    const rec = recorder()
+    fetchMock.mockResolvedValue(sseResponse([warmingFrame(), controllerAction({}), done()]))
+    await runTurn(request(), rec.sink)
+
+    expect(rec.warmings).toEqual([expect.objectContaining({ estimateMs: 146_000 }), null])
+    expect(rec.order).toEqual(['warming:on', 'warming:off', 'progress', 'finish'])
+  })
+
+  it('clears it on `done` when the cold call was the turn’s last', async () => {
+    const rec = recorder()
+    fetchMock.mockResolvedValue(sseResponse([warmingFrame(), done()]))
+    await runTurn(request(), rec.sink)
+
+    expect(rec.warmings.at(-1)).toBeNull()
+  })
+
+  it('clears it on an `error` frame — a failed wait is still over', async () => {
+    const rec = recorder()
+    fetchMock.mockResolvedValue(
+      sseResponse([warmingFrame(), { event: 'error', data: { error: 'boom' } }]),
+    )
+    await runTurn(request(), rec.sink)
+
+    expect(rec.warmings.at(-1)).toBeNull()
+  })
+
+  it('clears it when the stream just ends mid-wait, rather than leaving a spinner behind', async () => {
+    // A stream that closes with no `done` (a teardown, a dropped connection)
+    // still leaves the loop, and the notice has to come down with it — the
+    // whole turn is over and there is nothing behind the spinner.
+    const rec = recorder()
+    fetchMock.mockResolvedValue(sseResponse([warmingFrame()]))
+    await runTurn(request(), rec.sink)
+
+    expect(rec.warmings).toEqual([expect.objectContaining({ estimateMs: 146_000 }), null])
+  })
+
+  it('clears it when the wait is torn down mid-stream, not just when it ends', async () => {
+    // Stop pressed during a 146s wait, or a dropped connection: the loop throws
+    // with the notice still up, so the `catch` is the ONLY exit that can take it
+    // down — its two siblings (the in-loop clear and the post-loop one) are
+    // never reached. This is the exact case the no-clear-frame design has to
+    // answer for, and the one exit that had no pin of its own.
+    const rec = recorder()
+    fetchMock.mockResolvedValue(
+      sseThenFailure([warmingFrame()], new DOMException('aborted', 'AbortError')),
+    )
+    const result = await runTurn(request(), rec.sink)
+
+    expect(result).toMatchObject({ state: { status: 'stopped' }, aborted: true })
+    expect(rec.warmings).toEqual([expect.objectContaining({ estimateMs: 146_000 }), null])
+  })
+
+  it('never raises one on a turn the server said nothing about', async () => {
+    const rec = recorder()
+    fetchMock.mockResolvedValue(
+      sseResponse([controllerAction({}), toolResult(singleNodeFixture), done()]),
+    )
+    await runTurn(request(), rec.sink)
+
+    expect(rec.warmings).toEqual([])
+  })
+
+  it('does not feed the notice to the progress controller — it is not a chain event', async () => {
+    const rec = recorder()
+    fetchMock.mockResolvedValue(sseResponse([warmingFrame(), controllerAction({}), done()]))
+    await runTurn(request(), rec.sink)
+
+    expect(rec.progress).toHaveLength(1)
+    expect(rec.progress[0].type).toBe('controller_action')
   })
 })

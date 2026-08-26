@@ -25,7 +25,7 @@ import { extractReferences } from '~/lib/harness-client/reference-extractor'
 // dependency-free (no server-only imports), and the stream handler wants
 // exactly that guarantee.
 import { errorBubble } from '~/lib/harness-client/replay'
-import { parseChatStream, type DoneEventData } from '~/lib/sse-client'
+import { parseChatStream, type DoneEventData, type WarmingEventData } from '~/lib/sse-client'
 import { openChatStream } from '~/lib/api-client'
 import type { Message } from '~/components/ark-ui/ChatMessages'
 import type { GraphElement } from '~/lib/harness-client/types'
@@ -86,6 +86,15 @@ export interface TurnSink {
   ingestProgress(event: ContextEvent): void
   /** The bar fills, fades and unmounts. Fired exactly once per turn. */
   finishProgress(): void
+  /**
+   * The turn is waiting on a cold self-hosted box (payload), or is not any more
+   * (`null`). While a payload is set the caller shows a spinner and an estimate
+   * INSTEAD of the progress bar — the bar's denominator is seeded by the first
+   * event of the turn, so without this it would appear at 0/N and sit there for
+   * the whole cold start, which is the "is it stuck?" reading this exists to
+   * prevent.
+   */
+  onWarming(notice: WarmingEventData | null): void
   /** First frame of the stream — the server has persisted the row by now. */
   onStarted(): void
   /** The server regenerated a conversation's title mid-stream. Carries its own
@@ -124,6 +133,16 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
 
   transition({ status: 'streaming', runningTool: null })
 
+  // Declared outside the try so both exits below can retract a notice the
+  // stream left standing — a turn that is torn down or throws mid-cold-start
+  // would otherwise leave a spinner on screen with nothing behind it.
+  let warming = false
+  const clearWarming = () => {
+    if (!warming) return
+    warming = false
+    sink.onWarming(null)
+  }
+
   try {
     const response = await openChatStream(
       {
@@ -147,6 +166,21 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
         runAnnounced = true
         sink.onStarted()
       }
+
+      // The wait ends when the box answers, and any frame at all is evidence
+      // of that — the answer's own `message` frames, or `done`/`error` when the
+      // cold call was the turn's last. Clearing on "anything except another
+      // warming frame" rather than on a dedicated clear frame is deliberate: a
+      // dropped clear frame would leave a spinner up forever, and there is no
+      // frame here to drop. Checked BEFORE the per-type dispatch below so a
+      // frame that `continue`s still clears.
+      if (sseEvt.event === 'warming') {
+        warming = true
+        sink.onWarming(sseEvt.data)
+        continue
+      }
+      clearWarming()
+
       if (sseEvt.event === 'done') {
         finalResult = sseEvt.data
         continue
@@ -203,6 +237,7 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
     }
 
     sink.finishProgress()
+    clearWarming()
 
     if (finalResult?.context) sink.setContext(finalResult.context)
 
@@ -251,6 +286,7 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
     return { state: transition({ status: 'done' }), outcome: 'done', aborted: false }
   } catch (error) {
     sink.finishProgress()
+    clearWarming()
     // An AbortError is a torn-down stream, not a failed run: the chain keeps
     // going server-side and persists its result.
     if (error instanceof DOMException && error.name === 'AbortError') {

@@ -4,7 +4,10 @@
  * Bridges `harness-patterns`' LLM-usage observer to the three things the
  * preview header shows: the global counters (`preview-counters.server.ts`), the
  * self-hosted box's warm clock (`inference/verda-activity.server.ts`), and the
- * rolling per-tier call latency (`call-latency.server.ts`).
+ * rolling per-tier call latency (`call-latency.server.ts`) — plus a fourth
+ * consumer that is not on the header at all: the chat's cold-start notice
+ * (`inference/cold-start.server.ts`), which closes the loop on the wait it
+ * announced by turning its duration into the next estimate.
  *
  * It lives on the APP side of that seam on purpose. The framework must not
  * import a database — `harness-patterns` is on its way to being published as a
@@ -31,6 +34,7 @@
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { observeLlmUsage, type LlmUsageSample } from '../harness-patterns/llm-usage-observer.server'
 import { noteVerdaCallCompleted, VERDA_CLIENT_NAME } from '../inference/verda-activity.server'
+import { settleColdStart } from '../inference/cold-start.server'
 import { addUsage, type UsageDelta } from './preview-counters.server'
 import { noteCallLatency } from './call-latency.server'
 import { TIER_SWITCHED_FUNCTIONS, type InferenceTier } from '../harness-patterns/clients.server'
@@ -66,7 +70,14 @@ export function tierOfSample(sample: LlmUsageSample): InferenceTier {
 /** Fold one finished call into the pending deltas. Exported for the tests —
  *  the observer registration is what production calls. */
 export function recordSample(sample: LlmUsageSample, at: number = Date.now()): void {
-  if (sample.clientName === VERDA_CLIENT_NAME) noteVerdaCallCompleted(at)
+  if (sample.clientName === VERDA_CLIENT_NAME) {
+    noteVerdaCallCompleted(at)
+    // If this turn announced a cold start, this is the call that paid it, and
+    // BAML's own timing for it is the next estimate's raw material. No-op on
+    // every other sample, and on a turn that announced nothing — so the
+    // history only ever grows from a wait a user actually sat through.
+    settleColdStart(sample.durationMs)
+  }
 
   // Latency is recorded on its own condition, BEFORE the metrics gate below: a
   // call that failed after reaching the model spent the user's wall-clock time

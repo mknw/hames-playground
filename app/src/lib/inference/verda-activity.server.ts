@@ -46,13 +46,20 @@ assertServerOnImport()
 /** BAML client name that means "this call reached the self-hosted box". */
 export const VERDA_CLIENT_NAME = 'VerdaQwen'
 
-/** Default scale-down delay, in seconds — the live deployment's setting, which
- *  the owner confirmed as 300 on 2026-08-26. It stays an env var because the
- *  app cannot read the deployment's own value, so a host that changes it must
- *  be able to correct the countdown without a rebuild; the default is here so
- *  that an UNSET var describes the deployment we actually run rather than one
- *  we used to. `app/.env.example` carries the same number, uncommented, and a
- *  disagreement between the two is a confidently wrong countdown. */
+/** Default scale-down delay, in seconds — the live deployment's setting. The
+ *  committed default used to sit at 180 on the argument that a default tracking
+ *  one deployment's current setting is a claim the repo cannot keep true; the
+ *  owner settled that question directly on 2026-08-26 — "This is not worth my
+ *  intervention. change it to 300, sure. This is what the value is now" — and
+ *  deferred any operator-facing abstraction of it to post-alpha. So an UNSET var
+ *  now describes the deployment we actually run rather than one we used to. It
+ *  stays an env var because the app cannot read the deployment's own value, so a
+ *  host that changes it must be able to correct the countdown without a rebuild;
+ *  `app/.env.example` carries the same number, uncommented, and a disagreement
+ *  between the two is a confidently wrong countdown. A host whose box differs
+ *  from this default can still no longer poison the cold-start ESTIMATE —
+ *  `inference/cold-start.server.ts` carries its own plausibility floor for
+ *  exactly that gap. */
 export const DEFAULT_VERDA_SCALEDOWN_SECONDS = 300
 
 /**
@@ -179,4 +186,18 @@ export function verdaWarmth(now: number = Date.now()): VerdaWarmth {
     secondsUntilScaledown: Math.ceil(remainingMs / 1000),
     scaledownSeconds,
   }
+}
+
+/**
+ * When this process last saw a call to the box FINISH, or `null` if it never
+ * has. The narrow accessor exists for one caller — `inference/cold-start.server.ts`
+ * — which needs a claim {@link verdaWarmth} deliberately collapses: `starting`
+ * covers both "we have seen the box go cold" and "we have never seen it at
+ * all", and only the first is evidence a cold start is actually being paid.
+ * Reporting a measurement taken under the second would let "the box was warm
+ * and this process had not noticed" enter the cold-start history as a
+ * four-second cold start.
+ */
+export function verdaLastCallCompletedAt(): number | null {
+  return state.lastCompletedAt
 }

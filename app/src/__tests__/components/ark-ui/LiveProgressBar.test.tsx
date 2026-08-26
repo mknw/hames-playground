@@ -167,3 +167,147 @@ describe('LiveProgressBar — fill', () => {
     expect(widthOf(container)).toBe('0%')
   })
 })
+
+// ---------------------------------------------------------------------------
+// The cold-start notice (D-c)
+// ---------------------------------------------------------------------------
+
+/**
+ * The warming variant, and the three things about it that a reader cannot
+ * check by looking at the markup:
+ *
+ *  - the PROGRESS BAR is gone while the box is starting. The chain's
+ *    denominator is seeded by the turn's first event, so the bar is already
+ *    projectable during a cold start and would sit at 0/N for the whole 146s —
+ *    which reads as a hung chat, not as a wait. That suppression is the point
+ *    of the feature, so it is the first thing pinned.
+ *  - the SHELL does not resize when the notice gives way to the bar. Both
+ *    variants render inside a column reserving the same `min-h`, so the
+ *    trailing slot does not shift the transcript under the reader.
+ *  - the estimate TICKS DOWN and is `aria-hidden`, while the announcement is a
+ *    complete phrase that does not change with it. A live region carrying the
+ *    countdown would interrupt a screen-reader user once a second for two
+ *    minutes.
+ */
+const notice = (over: Partial<{ estimateMs: number; receivedAt: number }> = {}) => ({
+  sessionId: 's1',
+  estimateMs: 146_000,
+  basis: 'default' as const,
+  samples: 0,
+  receivedAt: 1_000_000,
+  ...over,
+})
+
+const coldNotice = (root: HTMLElement) =>
+  root.querySelector<HTMLElement>('[data-testid="cold-start-notice"]')
+const shell = (root: HTMLElement) =>
+  root.querySelector<HTMLElement>('[data-testid="progress-shell"]')
+const liveRegion = (root: HTMLElement) => root.querySelector<HTMLElement>('[aria-live="polite"]')
+
+describe('LiveProgressBar — the cold-start notice', () => {
+  it('shows the spinner and the estimate, and NO progress bar', async () => {
+    const { container } = render(() => (
+      <LiveProgressBar {...props({ warming: notice(), now: () => 1_000_000 })} />
+    ))
+    await pastDelay()
+
+    const box = coldNotice(container)
+    expect(box, 'the notice did not render').toBeTruthy()
+    expect(box!.textContent).toContain('starting GPU')
+    expect(box!.textContent).toContain('estimated time to first token: ~2 min')
+    expect(container.querySelector('.cold-start-spin'), 'no spinner glyph').toBeTruthy()
+    // The countdown is the notice's only informational line, so it clears the
+    // BODY-COPY contrast floor: `A11Y-CHECKLIST.md`'s `color-contrast` row
+    // names `ui-text-tertiary`'s dark value (`#71717a`, ≈4.06:1 on
+    // `dark-bg-primary`) a muted-label colour, not a text colour.
+    const detail = [...box!.querySelectorAll('span')].find((s) =>
+      s.textContent?.includes('estimated time to first token'),
+    )
+    expect(detail?.getAttribute('text')).toBe('xs ui-text-secondary')
+    // The suppression that is the whole point.
+    expect(
+      container.querySelector('[data-part="range"]'),
+      'the progress bar rendered during a cold start',
+    ).toBeNull()
+  })
+
+  it('gives the bar back the moment the notice clears, in the same box', async () => {
+    const [warming, setWarming] = createSignal<ReturnType<typeof notice> | null>(notice())
+    const { container } = render(() => (
+      <LiveProgressBar {...props({ warming: warming(), now: () => 1_000_000 })} />
+    ))
+    await pastDelay()
+
+    // Reserved height is the same in both variants, so the swap cannot move
+    // the transcript above it. Asserted as the attribute the column carries
+    // rather than a computed pixel height: jsdom lays nothing out, and the
+    // reservation IS the literal utility (a runtime value would emit no CSS).
+    const beforeShell = shell(container)
+    expect(beforeShell?.getAttribute('min-h')).toBe('10')
+
+    setWarming(null)
+    await wait(50)
+
+    expect(coldNotice(container)).toBeNull()
+    expect(container.querySelector('[data-part="range"]'), 'the bar did not come back').toBeTruthy()
+    // Same element, same reservation — not a remount into a different box.
+    expect(shell(container)?.getAttribute('min-h')).toBe('10')
+    expect(shell(container)).toBe(beforeShell)
+  })
+
+  it('counts the estimate down against the browser’s own clock', async () => {
+    const [now, setNow] = createSignal(1_000_000)
+    const { container } = render(() => (
+      <LiveProgressBar {...props({ warming: notice({ receivedAt: 1_000_000 }), now: now })} />
+    ))
+    await pastDelay()
+    expect(coldNotice(container)!.textContent).toContain('~2 min')
+
+    // 100s in: ~46s left, rounded up to fifty.
+    setNow(1_100_000)
+    await wait(1100)
+    expect(coldNotice(container)!.textContent).toContain('~50 sec')
+
+    // Past the estimate it stops counting rather than showing zero.
+    setNow(1_300_000)
+    await wait(1100)
+    const text = coldNotice(container)!.textContent!
+    expect(text).toContain('longer than the usual ~2 min')
+    expect(text).not.toContain('~0 sec')
+  })
+
+  it('announces one complete phrase, and hides the ticking figure from it', async () => {
+    const { container } = render(() => (
+      <LiveProgressBar {...props({ warming: notice(), now: () => 1_000_000 })} />
+    ))
+    await pastDelay()
+
+    const live = liveRegion(container)
+    expect(live?.textContent).toBe(
+      'Waiting for the self-hosted model to start. Estimated time to first token: about 2 min.',
+    )
+    // Everything that ticks is aria-hidden, so the region above is the only
+    // thing announced and it does not change while the wait runs.
+    const ticking = [...container.querySelectorAll<HTMLElement>('[aria-hidden="true"]')]
+      .map((n) => n.textContent ?? '')
+      .join(' ')
+    expect(ticking).toContain('estimated time to first token')
+  })
+
+  it('says where the estimate came from, without dressing a fallback as a reading', async () => {
+    const { container } = render(() => (
+      <LiveProgressBar
+        {...props({
+          warming: { ...notice(), basis: 'measured' as const, samples: 3 },
+          now: () => 1_000_000,
+        })}
+      />
+    ))
+    await pastDelay()
+
+    const hint = [...container.querySelectorAll<HTMLElement>('[title]')]
+      .map((n) => n.getAttribute('title'))
+      .join(' ')
+    expect(hint).toContain('3 most recent cold starts')
+  })
+})

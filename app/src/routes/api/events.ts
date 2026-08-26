@@ -91,6 +91,15 @@ export async function POST(event: APIEvent) {
           // envelope-only field.
           onEvent: (evt) => send(`data: ${JSON.stringify({ ...evt, sessionId })}\n\n`),
 
+          // The turn is now waiting on a self-hosted box that is not up, and
+          // will produce nothing for minutes. A turn-level frame rather than a
+          // harness `ContextEvent`: it is a property of this wait, not of the
+          // conversation, and must not be persisted into the blob or replayed
+          // on reload. The client clears it on the next frame of any kind —
+          // see `WarmingEventData`.
+          onWarming: (estimate) =>
+            send(`event: warming\ndata: ${JSON.stringify({ sessionId, ...estimate })}\n\n`),
+
           // The final result, as a named event.
           onResult: (result) =>
             send(

@@ -78,6 +78,11 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { assertServerOnImport } from './assert.server'
+// App-side, and in the same direction the patterns already import
+// `settings-context.server` / `sandbox/scope.server`: a process-local clock
+// with no database behind it, which is the boundary the library extraction
+// actually cares about (see `llm-usage-observer.server.ts`).
+import { noteVerdaCallStarting } from '../inference/cold-start.server'
 
 assertServerOnImport()
 
@@ -450,9 +455,31 @@ if (verdaInferenceEnabled()) assertVerdaConfigured()
  * the branch (#154).
  */
 export function clientOverrideFor(role: BamlRole): { client: string } | undefined {
+  const client = verdaClientFor(role)
+  if (!client) return undefined
+  // A bag with a `client` key in it is a call about to be made, which is the
+  // moment the cold-start notice exists to catch. #274 wrote this hook when the
+  // `router` still answered on Anthropic, so the first bag of a turn belonged to
+  // the controller; since the 2026-08-26 widening the router is on the tier too
+  // and the notice fires one call earlier, from the router. That is the same
+  // rule, not a new one — the hook is on the SEAM, never on a role or a position
+  // in the chain, so the map can move again without touching this.
+  // `resolveClientForRole` below deliberately
+  // does NOT come through here — it is asked the same question for prompt
+  // budgeting, potentially more than once and without a call following, and a
+  // notice fired from a budgeting lookup would be announcing a wait nobody is
+  // paying. No-op unless a turn armed a watch (`runWithColdStartWatch`).
+  noteVerdaCallStarting()
+  return { client }
+}
+
+/** The Verda client for `role` while the active tier says so, with no side
+ *  effect — the shared half of {@link clientOverrideFor} and
+ *  {@link resolveClientForRole}, which differ only in whether asking counts as
+ *  a call. */
+function verdaClientFor(role: BamlRole): string | undefined {
   if (activeInferenceTier() !== 'verda') return undefined
-  const client = VERDA_CLIENT_BY_ROLE[role]
-  return client ? { client } : undefined
+  return VERDA_CLIENT_BY_ROLE[role]
 }
 
 /**
@@ -467,5 +494,5 @@ export function clientOverrideFor(role: BamlRole): { client: string } | undefine
  * costs context, under-trimming costs the whole call.
  */
 export function resolveClientForRole(role: BamlRole): string {
-  return clientOverrideFor(role)?.client ?? CLIENT_BY_ROLE[role]
+  return verdaClientFor(role) ?? CLIENT_BY_ROLE[role]
 }

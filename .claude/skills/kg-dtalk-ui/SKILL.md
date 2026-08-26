@@ -48,8 +48,8 @@ Every utility goes in an attribute. Never `class=`.
    `preflights` block — `prose-chat`, `graph-entity`, `doc-ref`, `doc-ref-mark`,
    `doc-ref-chip`, `doc-ref-footer`, `think-root`/`-trigger`/`-preview`/
    `-content`/`-body`, `thread-flash-done`/`-error`,
-   `thread-progress-indeterminate`, `agent-glyph`. These are hand-written CSS,
-   not utilities. Use them by name with `class=`.
+   `thread-progress-indeterminate`, `cold-start-spin`, `agent-glyph`. These are
+   hand-written CSS, not utilities. Use them by name with `class=`.
 3. **Strings crossing the HTML sanitiser.** `ChatMessages.tsx` builds markup as
    a string for sanitised chat HTML; those carry preflight class names by
    necessity. Do not introduce new ones without a preflight rule to back them.

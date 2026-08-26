@@ -162,6 +162,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const currentRunState = () => registry.runState(props.sessionId)
   const isProcessing = () => currentRunState().isProcessing
   const runningTool = () => currentRunState().runningTool
+  /** The cold-start notice for the thread on screen, if its turn hit one. */
+  const warming = () => currentRunState().warming
 
   // Sessions the user explicitly stopped. `runSend`'s catch cannot otherwise
   // tell a deliberate cancel from the page-unload abort, and the two want
@@ -331,6 +333,13 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       },
       ingestProgress: (event) => progress.ingest(event),
       finishProgress: () => progress.finish(),
+      // Stamped on ARRIVAL, in this browser's clock: the countdown ticks
+      // against `receivedAt`, and mixing a server stamp into that subtraction
+      // would measure clock skew as well as elapsed time.
+      onWarming: (notice) =>
+        registry.updateRunState(runSessionId, {
+          warming: notice ? { ...notice, receivedAt: Date.now() } : null,
+        }),
       onStarted: () => props.onRunStarted?.(runSessionId),
       onTitleUpdated: (sid, title) => props.onTitleUpdated?.(sid, title),
       // Run state is a projection of the turn state: streaming means the
@@ -394,7 +403,11 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       // reported, and a stale flag here would put a spurious "stopped" bubble
       // on the NEXT teardown of this session.
       stoppedSessions.delete(runSessionId)
-      registry.updateRunState(runSessionId, { isProcessing: false, runningTool: null })
+      registry.updateRunState(runSessionId, {
+        isProcessing: false,
+        runningTool: null,
+        warming: null,
+      })
       registry.unregisterAbort(runSessionId)
     }
   }
@@ -539,8 +552,16 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
             current={currentSnapshot().currentTurn}
             pathProjection={currentSnapshot().pathProjection}
             maxProjection={currentSnapshot().maxProjection}
+            warming={warming()}
             visible={
-              isProcessing() && !currentSnapshot().done && currentSnapshot().maxProjection > 0
+              isProcessing() &&
+              !currentSnapshot().done &&
+              // A cold start has its own reason to be on screen and its own
+              // reason not to show a bar: the chain's denominator is seeded by
+              // the turn's FIRST event, so the bar is already projectable while
+              // the box is still starting, and would sit at 0/N for the whole
+              // wait. The notice takes the slot until the box answers.
+              (!!warming() || currentSnapshot().maxProjection > 0)
             }
           />
         )}

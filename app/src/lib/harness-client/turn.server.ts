@@ -61,6 +61,7 @@ import { runWithSettings } from '../settings-context.server'
 import { activeInferenceTier, runWithInferenceTier } from '../harness-patterns/clients.server'
 import { resolveInferenceTier } from '../db/user-prefs.server'
 import { beginVerdaTurn, endVerdaTurn } from '../inference/verda-activity.server'
+import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold-start.server'
 import { recordTurn } from '../metrics/usage-recorder.server'
 import type { HarnessSettings } from '../settings'
 import { runFirstTurnTitleGen } from './agents/title-generator.server'
@@ -79,13 +80,21 @@ assertServerOnImport()
 export const TITLE_GEN_TIMEOUT_MS = 3000
 
 /**
- * Optional callbacks, in the order they fire. The SSE route implements all four
+ * Optional callbacks, in the order they fire. The SSE route implements all five
  * (they are its wire); every other caller passes none and gets the same turn
  * without the frames.
  */
 export interface TurnHooks {
   /** Every harness event, live, as it is committed. Threaded into the run. */
   onEvent?: (event: ContextEvent) => void
+  /**
+   * This turn has started waiting on a self-hosted box that is not up, and the
+   * next thing the user sees will be minutes away. Fires at most once per turn,
+   * only on the verda tier, and only when nothing says the box is warm — see
+   * `inference/cold-start.server.ts`. Absent means "do not compute it": no
+   * hook, no watch.
+   */
+  onWarming?: (estimate: ColdStartEstimate) => void
   /** The finished result, once the turn is persisted. */
   onResult?: (result: HarnessResultScoped<SessionData>) => void
   /** An LLM-authored title, when this turn generated one. */
@@ -197,7 +206,16 @@ export async function runTurnAndPersist(
         if (tier === 'verda') beginVerdaTurn()
         recordTurn(tier)
         try {
-          return await runOneTurn(req)
+          // The cold-start watch is armed HERE rather than at the first
+          // verda-bound call, because the thing that detects one
+          // (`clientOverrideFor`) is several layers down and takes no
+          // parameters. Only for a verda-tier turn whose caller wants the
+          // notice — the SSE route is the only one that does, since it is the
+          // only entry point with a live wire to a person waiting.
+          const watched = tier === 'verda' && req.onWarming
+          return watched
+            ? await runWithColdStartWatch(watched, () => runOneTurn(req))
+            : await runOneTurn(req)
         } finally {
           if (tier === 'verda') endVerdaTurn()
         }

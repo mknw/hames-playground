@@ -90,10 +90,9 @@ view.fromLastPattern().tools().last(3).get()
 
 ## Available Agents
 
-6 pre-built agents in the registry:
+4 pre-built agents in the registry:
 
 1. **Default** - Router with Neo4j and Web
-3. **Multi-Source Research** - Parallel search + Judge
 4. **Conversational Memory** - Scratchpad + KB distillation
 5. **KG Builder** - Research → Extract → Persist
 6. **Sandbox · Session** - Persistent VM workspace + xterm

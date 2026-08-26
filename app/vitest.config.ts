@@ -9,6 +9,9 @@ export default defineConfig({
     globals: true,
     include: ['src/**/__tests__/**/*.{test,spec}.{ts,tsx}'],
     setupFiles: ['./src/__tests__/setup.ts'],
+    // Provisions the throwaway test database once per run; see the file header
+    // for why the suite must not share the dev database any more.
+    globalSetup: ['./src/__tests__/global-setup.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text-summary', 'json-summary'],

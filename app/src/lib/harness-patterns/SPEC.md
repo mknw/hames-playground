@@ -792,12 +792,11 @@ There is deliberately no way to ask for narrowing.
 **Wired agents** (their untrusted namespaces are declared at each agent
 definition, deliberately not in a shared default):
 
-| Agent                                    | Untrusted namespaces    | Not guarded             |
-| ---------------------------------------- | ----------------------- | ----------------------- |
-| `search`                                 | `web` (that route only) | `neo4j` — our own graph |
-| `microsoft-365`                          | `graph`                 | —                       |
-| `retriever`                              | `web`, `retriever`      | `neo4j`                 |
-| `multi-source-research` _(unregistered)_ | `web`, `context7`       | —                       |
+| Agent           | Untrusted namespaces    | Not guarded             |
+| --------------- | ----------------------- | ----------------------- |
+| `search`        | `web` (that route only) | `neo4j` — our own graph |
+| `microsoft-365` | `graph`                 | —                       |
+| `retriever`     | `web`, `retriever`      | `neo4j`                 |
 
 > Compare [`guardrail()`](#guardrailpattern-config): that pattern's output rails
 > run only AFTER the inner pattern completes, and a `RailResult` can block, warn

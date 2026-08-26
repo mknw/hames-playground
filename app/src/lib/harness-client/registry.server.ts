@@ -228,9 +228,6 @@ export async function agentUsesSyncWorkspace(agentId: string, sessionId: string)
 // ============================================================================
 
 // Import and register all example agents
-// `agents/multi-source-research.server.ts` is deliberately NOT imported here —
-// it is unregistered and NOT LIVE TESTED (owner decision 2026-08-23, PR #234).
-// See that file's header before re-adding it.
 import { searchAgent } from './agents/search.server'
 import { generalAgent } from './agents/general.server'
 import { sandboxSessionAgent } from './agents/sandbox-session.server'

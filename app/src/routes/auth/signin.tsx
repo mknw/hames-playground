@@ -8,23 +8,66 @@ import { useSearchParams } from '@solidjs/router'
  *
  * `?error=…` is set by the callback route on a failed sign-in so we can show a
  * hint here without leaking details.
+ *
+ * On the house design language since #226 B8: attributify only, the `ui-*`
+ * theme-aware tokens (so the page follows the switcher in `Nav`), the
+ * `cyber-button` shortcut for the primary action, and material-symbols glyphs.
  */
 export default function SignIn() {
   const [params] = useSearchParams()
 
   return (
-    <div class="px-4 py-12 bg-gray-50 flex min-h-screen items-center justify-center lg:px-8 sm:px-6">
-      <div class="p-8 rounded-lg bg-white max-w-md w-full shadow-md">
-        <div class="mb-8 text-center">
-          <h2 class="text-3xl text-gray-900 font-bold">DTalk.ai Knowledge System</h2>
-          <p class="text-sm text-gray-600 mt-2">
-            Sign in with your Microsoft work account to continue
-          </p>
+    <div
+      flex="~ col"
+      items="center"
+      justify="center"
+      p="x-4 y-12 sm:x-6 lg:x-8"
+      min-h="screen"
+      bg="ui-bg-primary"
+    >
+      <div
+        w="full"
+        max-w="md"
+        p="8"
+        rounded="lg"
+        bg="ui-bg-secondary"
+        border="1 ui-border-primary"
+        shadow="lg"
+      >
+        <div flex="~ col" items="center" gap="2" text="center" m="b-8">
+          <span
+            class="i-material-symbols-hub-outline"
+            w="10"
+            h="10"
+            text="ui-accent"
+            aria-hidden="true"
+          />
+          <h1 text="2xl ui-text-primary" font="semibold">
+            DTalk.ai Knowledge System
+          </h1>
+          <p text="sm ui-text-secondary">Sign in with your Microsoft work account to continue</p>
         </div>
 
         <Show when={params.error}>
-          <div class="mb-4 p-3 border border-red-200 rounded-md bg-red-50">
-            <p class="text-sm text-red-600">Sign-in didn't complete. Please try again.</p>
+          <div
+            flex="~"
+            items="center"
+            gap="2"
+            m="b-4"
+            p="3"
+            rounded="md"
+            bg="ui-danger/10"
+            border="1 ui-danger/40"
+            role="alert"
+          >
+            <span
+              class="i-material-symbols-error-outline"
+              w="4"
+              h="4"
+              text="ui-danger"
+              aria-hidden="true"
+            />
+            <p text="sm ui-danger">Sign-in didn't complete. Please try again.</p>
           </div>
         </Show>
 
@@ -37,13 +80,19 @@ export default function SignIn() {
         <a
           href="/api/auth/login"
           rel="external"
-          class="text-white font-medium px-4 py-3 rounded-md bg-blue-600 flex gap-2 w-full shadow-sm items-center justify-center focus:outline-none hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+          cyber-button
+          flex="~"
+          items="center"
+          justify="center"
+          gap="2"
+          w="full"
+          p="y-3"
         >
-          <span class="i-material-symbols-grid-view" style={{ width: '20px', height: '20px' }} />
+          <span class="i-material-symbols-grid-view" w="5" h="5" aria-hidden="true" />
           Sign in with Microsoft
         </a>
 
-        <p class="text-xs text-gray-500 mt-6 text-center">
+        <p text="xs ui-text-tertiary center" m="t-6">
           Access is restricted to authorized accounts. If you need access, please contact the
           administrator.
         </p>

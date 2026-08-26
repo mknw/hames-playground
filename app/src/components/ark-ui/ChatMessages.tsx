@@ -291,7 +291,17 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                     rounded="full"
                     items="center"
                     justify="center"
-                    text="white xs"
+                    text={
+                      // The three coloured avatars are solid in both themes,
+                      // so white reads on all of them. The assistant's ground
+                      // is the theme's own, and white on it disappears the
+                      // moment the theme turns light.
+                      message.role === 'user' ||
+                      message.role === 'error' ||
+                      message.role === 'warning'
+                        ? 'white xs'
+                        : 'ui-text-primary xs'
+                    }
                     font="medium"
                     bg={
                       message.role === 'user'
@@ -300,7 +310,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                           ? 'red-900/50'
                           : message.role === 'warning'
                             ? 'amber-900/50'
-                            : 'dark-bg-tertiary'
+                            : 'ui-bg-tertiary'
                     }
                     border={
                       message.role === 'user'
@@ -309,7 +319,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                           ? '1 red-500/50'
                           : message.role === 'warning'
                             ? '1 amber-500/50'
-                            : '1 neon-cyan/50'
+                            : '1 ui-accent/50'
                     }
                     shadow={
                       message.role === 'user'
@@ -336,9 +346,9 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                           ? 'red-900/20'
                           : message.role === 'warning'
                             ? 'amber-900/20'
-                            : 'dark-bg-tertiary'
+                            : 'ui-bg-tertiary'
                     }
-                    text="dark-text-primary"
+                    text="ui-text-primary"
                     border={
                       message.role === 'user'
                         ? '1 cyber-700/50'
@@ -346,7 +356,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                           ? '1 red-500/30'
                           : message.role === 'warning'
                             ? '1 amber-500/30'
-                            : '1 dark-border-secondary'
+                            : '1 ui-border-secondary'
                     }
                     backdrop-blur="sm"
                   >
@@ -379,7 +389,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                     the inline file viewer (navigator pages chunks). */}
                         <Show when={message.references && message.references.length > 0}>
                           <div class="doc-ref-footer">
-                            <span text="xs dark-text-tertiary">Sources:</span>
+                            <span text="xs ui-text-tertiary">Sources:</span>
                             <For each={dedupeReferencesByDoc(message.references!)}>
                               {(r) => (
                                 <button
@@ -452,14 +462,14 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                                   color: '#a3a3a3',
                                 }}
                               />
-                              <span text="dark-text-secondary">{message.hint}</span>
+                              <span text="ui-text-secondary">{message.hint}</span>
                             </div>
                           </Show>
                         </div>
                       </Match>
                     </Switch>
 
-                    <div text="xs dark-text-tertiary" m="t-1">
+                    <div text="xs ui-text-tertiary" m="t-1">
                       {message.timestamp.toLocaleTimeString([], {
                         hour: '2-digit',
                         minute: '2-digit',
@@ -486,7 +496,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
           <Show when={props.messages.length === 0}>
             <div flex="~" items="center" justify="center" h="full" min-h="64" text="center">
               <div>
-                <div text="2xl neon-cyan/50" m="b-2">
+                <div text="2xl ui-accent/50" m="b-2">
                   <svg
                     width="64"
                     height="64"
@@ -503,10 +513,10 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                     />
                   </svg>
                 </div>
-                <div text="lg dark-text-secondary" font="medium">
+                <div text="lg ui-text-secondary" font="medium">
                   Start a conversation
                 </div>
-                <div text="sm dark-text-tertiary" m="t-1">
+                <div text="sm ui-text-tertiary" m="t-1">
                   Type a message below to begin
                 </div>
               </div>
@@ -522,7 +532,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
         </ScrollArea.Content>
       </ScrollArea.Viewport>
 
-      <ScrollArea.Scrollbar orientation="vertical" w="2" bg="dark-bg-tertiary">
+      <ScrollArea.Scrollbar orientation="vertical" w="2" bg="ui-bg-tertiary">
         <ScrollArea.Thumb bg="cyber-700/50 hover:cyber-600/70" rounded="full" transition="colors" />
       </ScrollArea.Scrollbar>
     </ScrollArea.Root>

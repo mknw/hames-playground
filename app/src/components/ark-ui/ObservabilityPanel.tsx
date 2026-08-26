@@ -143,7 +143,7 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
   const hasEvents = () => timelineItems().length > 0
 
   return (
-    <div flex="~ col" h="full" bg="dark-bg-primary" overflow="hidden" position="relative">
+    <div flex="~ col" h="full" bg="ui-bg-primary" overflow="hidden" position="relative">
       {/* Summary Bar */}
       <SummaryBar events={props.events} onClear={props.onClear} />
 
@@ -193,8 +193,8 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
             onClick={handleSave}
             style={{ position: 'absolute', bottom: '1rem', right: '1rem', 'z-index': '20' }}
             p="2.5"
-            bg="dark-bg-tertiary hover:dark-bg-hover"
-            border="1 dark-border-primary hover:neon-cyan/40"
+            bg="ui-bg-tertiary hover:ui-bg-hover"
+            border="1 ui-border-primary hover:ui-accent/40"
             rounded="lg"
             cursor="pointer"
             transition="all"
@@ -218,11 +218,11 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
           </Tooltip.Trigger>
           <Tooltip.Positioner>
             <Tooltip.Content
-              bg="dark-bg-tertiary"
-              border="1 dark-border-primary"
+              bg="ui-bg-tertiary"
+              border="1 ui-border-primary"
               rounded="md"
               p="x-2 y-1"
-              text="xs dark-text-primary"
+              text="xs ui-text-primary"
               shadow="md"
             >
               Save session

@@ -30,13 +30,21 @@
 #     a file nobody reads. docs/PREVIEW.md §9 has the cron line that mails it.
 #
 # ⚠️  THIS SCRIPT DELIBERATELY DOES NOT BACK UP `.env`.
-#     `user_tokens` is AES-256-GCM ciphertext whose key is TOKEN_ENCRYPTION_KEY
-#     (HKDF-derived from AUTH_SESSION_SECRET when unset). A backup carrying both
-#     the ciphertext and its key protects nothing that the ciphertext alone did
-#     not. The keys must be escrowed SEPARATELY — a password manager or Key
-#     Vault — and they must exist somewhere, because restoring this dump onto a
-#     rebuilt VM without them leaves the token cache permanently undecryptable.
-#     See docs/PREVIEW.md §"Backups".
+#     A backup carrying both the ciphertext and its key protects nothing that
+#     the ciphertext alone did not. So the keys must be escrowed SEPARATELY — a
+#     password manager or Key Vault — and they must exist somewhere, because
+#     postgres.dump is mostly unreadable without them:
+#       TOKEN_ENCRYPTION_KEY   (HKDF-derived from AUTH_SESSION_SECRET when
+#                              unset) keys `user_tokens`. Losing it costs the
+#                              Microsoft token cache; people sign in again.
+#       DATA_ENCRYPTION_KEY    keys conversations.title / conversations.context,
+#                              the users and auth_sessions profile columns and
+#                              the routines prompt (#260). It has NO fallback,
+#                              so losing it means this dump restores to
+#                              ciphertext nothing can read — and the app
+#                              refuses to serve rather than pretend the rows
+#                              are empty.
+#     See docs/PREVIEW.md §7.
 #
 # ⚠️  THE GRAPH IS UNAVAILABLE FOR ROUGHLY 1.5-2 MINUTES PER RUN. The dump
 #     itself takes seconds; almost all of that window is Neo4j's own startup
@@ -62,9 +70,11 @@ POSTGRES_USER="${POSTGRES_USER:-postgres}"
 # to upgrade the store format rather than read it.
 NEO4J_IMAGE="${NEO4J_IMAGE:-neo4j:5.26}"
 NEO4J_DATA_VOLUME="${NEO4J_DATA_VOLUME:-kg-agent_neo4j_data}"
-# Seconds to wait for Neo4j's healthcheck after the dump before declaring the
-# graph down. Measured startup on a preview-sized graph is ~80s; this is that
-# with room, not a guess to tune down.
+# How many times to poll Neo4j's healthcheck after the dump before declaring
+# the graph down. Iterations, not seconds: each one is a `docker compose ps`
+# call plus a one-second sleep, so 180 is nearer 4-5 minutes of wall clock.
+# Measured startup on a preview-sized graph is ~80s; the slack is deliberate,
+# not a number to tune down.
 NEO4J_RESTART_TIMEOUT="${NEO4J_RESTART_TIMEOUT:-180}"
 
 SKIP_NEO4J=0
@@ -74,7 +84,7 @@ for arg in "$@"; do
     -h | --help)
       # The header block above, minus the shebang. Keep this range in step with
       # it — the last line is the `--no-neo4j` sentence.
-      sed -n '2,49p' "${BASH_SOURCE[0]}"
+      sed -n '2,57p' "${BASH_SOURCE[0]}"
       exit 0
       ;;
     *)
@@ -101,8 +111,6 @@ compose() { docker compose "$@"; }
 # --- preflight ---------------------------------------------------------------
 
 command -v docker >/dev/null || fail "docker not on PATH"
-compose ps --services --status running 2>/dev/null | grep -qx postgres \
-  || fail "the postgres service is not running — nothing to back up"
 
 case "$BACKUP_DIR" in
   "$REPO_ROOT" | "$REPO_ROOT/") fail "BACKUP_DIR must not be the repo root (it would sit next to .env)" ;;
@@ -117,6 +125,15 @@ chmod 700 "$BACKUP_DIR" "$OUT"
 # is the no-MTA way to notice a cron run that quietly stopped working.
 echo "this backup did not finish — do not restore from it" >"$OUT/INCOMPLETE"
 log "writing to $OUT"
+
+# The stack check comes AFTER the marker, deliberately. "the postgres service is
+# not running" is the likeliest way a nightly cron run fails, and with the check
+# first it failed without leaving a directory at all — so on a box with no MTA
+# the `find backups -name INCOMPLETE` fallback stayed silent and only a missing
+# dated directory betrayed it. Now that failure leaves the same marker every
+# other failure does.
+compose ps --services --status running 2>/dev/null | grep -qx postgres \
+  || fail "the postgres service is not running — nothing to back up"
 
 # sha256sum on Linux, shasum on a macOS box running this by hand.
 sha256() {
@@ -210,7 +227,7 @@ else
   # back" means, so that is what is polled.
   trap - EXIT
   compose start neo4j >/dev/null || fail "neo4j did not restart after the dump — THE GRAPH IS DOWN"
-  log "neo4j: started, waiting up to ${NEO4J_RESTART_TIMEOUT}s for its healthcheck"
+  log "neo4j: started, polling its healthcheck up to ${NEO4J_RESTART_TIMEOUT} times"
   NEO4J_UP=0
   for _ in $(seq 1 "$NEO4J_RESTART_TIMEOUT"); do
     if [ "$(compose ps neo4j --format '{{.Health}}' 2>/dev/null)" = healthy ]; then
@@ -220,7 +237,7 @@ else
     sleep 1
   done
   [ "$NEO4J_UP" -eq 1 ] \
-    || fail "neo4j is still not healthy ${NEO4J_RESTART_TIMEOUT}s after the dump — THE GRAPH IS DOWN"
+    || fail "neo4j is still not healthy after ${NEO4J_RESTART_TIMEOUT} polls — THE GRAPH IS DOWN"
   log "neo4j: restarted and healthy"
 
   [ -s "$OUT/neo4j.dump" ] || fail "neo4j dump is empty"
@@ -259,9 +276,12 @@ log "rotating: removed $REMOVED old backup(s)"
 
 {
   echo
-  echo "NOTE: .env is NOT in this backup, by design. AUTH_SESSION_SECRET and"
-  echo "TOKEN_ENCRYPTION_KEY must be escrowed separately, or the per-user"
-  echo "Microsoft token cache in postgres.dump cannot be decrypted on restore."
+  echo "NOTE: .env is NOT in this backup, by design. AUTH_SESSION_SECRET,"
+  echo "TOKEN_ENCRYPTION_KEY and DATA_ENCRYPTION_KEY must be escrowed"
+  echo "separately. Without the first two the per-user Microsoft token cache in"
+  echo "postgres.dump cannot be decrypted; without DATA_ENCRYPTION_KEY neither"
+  echo "can the conversations, the profile columns or the routine prompts, and"
+  echo "that one has no fallback to derive it from."
 } >>"$MANIFEST"
 
 # Last, and only here: every store is captured, verified and recorded. Anything

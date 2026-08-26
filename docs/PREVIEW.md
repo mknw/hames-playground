@@ -30,7 +30,7 @@ You need, and this list is the whole list:
 | Control of a DNS name          | Caddy's certificate is issued against it, and Entra's redirect URI is pinned to it |
 | Entra admin on the DTSC tenant | to add a redirect URI and (if not already done) grant the delegated Graph scopes   |
 | An `ANTHROPIC_API_KEY`         | the only LLM provider key; without it people sign in and then get no answers       |
-| A password manager or vault    | to escrow two secrets **off** the VM — see §7                                      |
+| A password manager or vault    | to escrow three secrets **off** the VM — see §7                                    |
 
 ---
 
@@ -53,9 +53,11 @@ x86/amd64.**
   attachment table and background jobs in process memory, so a restart orphans
   in-flight runs. That is a known limit (#105, #78), not a misconfiguration.
 
-**Enable the disk encryption offered at VM creation.** Until the conversation
-store is encrypted by the app (see §"What is not true yet"), disk encryption is
-the _only_ thing standing between a detached disk and every stored conversation.
+**Enable the disk encryption offered at VM creation.** The app now encrypts the
+conversation store and the personal-data columns itself (#260, §7), so this is
+no longer the only layer — but it is the one that covers everything the
+application-level key does not: the Neo4j store, the Data Stash volume, the
+`backups/` directory and `.env` itself.
 
 ## 2. Firewall — network security group
 
@@ -195,13 +197,13 @@ memory:
 
 **What is left out, and why:**
 
-| Omitted               | Why                                                                                                                                                                                                                                                                                                  |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `redis`               | 45 tools including `scan_keys` and `json_get`. Data Stash keys are `stash:doc:{sessionId}:{docId}` (`app/src/lib/document-store.server.ts:156-161`) — scoped by **session, never by owner** — so this is a read of every colleague's uploaded documents from any signed-in account's controller turn |
-| `database-server`     | arbitrary SQL over the app's own Postgres, i.e. `conversations.context`, which is plain `JSONB` holding verbatim tool results (`app/src/lib/db/client.server.ts:38`)                                                                                                                                 |
-| `rust-mcp-filesystem` | 24 tools with `allow_write: true`. No registered agent uses them                                                                                                                                                                                                                                     |
-| `playwright`          | a browser with `browser_evaluate` / `browser_run_code`. A development and E2E tool; no registered agent uses it                                                                                                                                                                                      |
-| `github`              | never in the tracked template, and the allow-list makes a stray block inert anyway — but check for it explicitly, below                                                                                                                                                                              |
+| Omitted               | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `redis`               | 45 tools including `scan_keys` and `json_get`. Data Stash keys are `stash:doc:{sessionId}:{docId}` (`app/src/lib/document-store.server.ts:145,156-158`) — scoped by **session, never by owner** — so this is a read of every colleague's uploaded documents from any signed-in account's controller turn                                                                                                                                                                                                                                           |
+| `database-server`     | arbitrary SQL over the app's own Postgres, across every user's rows. `conversations.context` is no longer plaintext — `conversations.server.ts:205` writes it through `encryptJsonb` and `:102`/`:317` read it back (#260) — so a raw `SELECT` returns envelopes rather than transcripts. What stays cleartext is what SQL has to scope and order by: `id`, `user_id`, `agent_id`, both timestamps (`app/src/lib/db/client.server.ts:38-46`). That is still every colleague's conversation metadata, and nothing about the tool makes it read-only |
+| `rust-mcp-filesystem` | 24 tools with `allow_write: true`. No registered agent uses them                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `playwright`          | a browser with `browser_evaluate` / `browser_run_code`. A development and E2E tool; no registered agent uses it                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `github`              | never in the tracked template; removed from `configs/custom-catalog.yaml` entirely by #226 E3, so no config block has a server definition to start; and its last consumer agent was deleted by #266. Three layers deep — but check for the token explicitly anyway, below                                                                                                                                                                                                                                                                          |
 
 **Dropping `redis` costs nothing, on one condition.** Uploads, ingestion and
 search do not use the redis MCP server: `STASH_DIRECT_REDIS='1'` in `.env`
@@ -209,6 +211,30 @@ routes the whole Data Stash app path through a direct `ioredis` connection
 (`app/src/lib/redis-direct.server.ts:286-288`), and the retriever's backend is
 an app-side object, not a gateway tool. **Leave that variable set.** Unset it
 and the stash falls back to the gateway path you just removed.
+
+**What the allow-list leaves, and cannot fix.** The table above is what it
+removes. These two properties belong to what stays, and neither is a setting you
+can tighten here:
+
+- **`neo4j-cypher` is shared, writable state.** The catalog gives it
+  `write_neo4j_cypher` alongside the two read tools
+  (`configs/custom-catalog.yaml:9-12`) and the config above sets
+  `read_only: false`. There is no owner scoping anywhere in the graph layer —
+  `grep -n 'user_id\|ownerId' app/src/lib/neo4j/*.ts` returns nothing — so
+  every signed-in colleague's turn reads **and writes** the same graph. That is
+  deliberate for a preview whose point is the shared graph; §11 records the
+  identical property for `memory`. It is a disclosure obligation rather than a
+  bug, and `PREVIEW-WELCOME.md` carries it.
+- **The agent holding that surface declares no content boundary.**
+  `withInjectionGuard` is declared by exactly three agents — `microsoft-365`,
+  `search` and `retriever-agent` — and `general`, the one that passes
+  `tools.all` into its loop, is not among them (a known, filed gap: #206). Two
+  of the preview's five servers are `fetch` and `web_search`, so text from a
+  page whose author is not your colleague lands in the same controller turn
+  that holds `write_neo4j_cypher` and the shared `memory` writes, unsanitised.
+  No setting on this VM switches that boundary on for `general` — it is the code
+  change filed as #206. It bears on how far to trust an answer that cites a fetched
+  page, and on who you invite — the same register §11 uses for the sandbox.
 
 **Pre-launch check — the GitHub MCP server and its token (#261 P0-2).** The
 tracked template carries no `github:` block, so a from-scratch provision is
@@ -302,6 +328,26 @@ configuration error here.
 grep -n 'example\.com' .env       # must return nothing
 ```
 
+The other half of the preflight is the four values that have no default and no
+fallback. `DATA_ENCRYPTION_KEY` is the one that hides: it does **not** fail at
+boot on a fresh database. The schema init finds no encrypted rows, logs a
+warning and continues
+(`app/src/lib/db/migrate-encryption.server.ts:363-379`), so the stack comes up
+healthy and the first sign-in is what dies — `encryptField` throws with no key
+(`app/src/lib/db/crypto.server.ts:158,184`) on the session insert
+(`app/src/lib/auth/session-store.server.ts:134`) and the user upsert
+(`app/src/lib/auth/users.server.ts:105`). That surfaces at §8 step 4 as an
+opaque error and takes steps 5–9 with it. Catch it here instead:
+
+```bash
+K="AUTH_SESSION_SECRET|TOKEN_ENCRYPTION_KEY|DATA_ENCRYPTION_KEY|ANTHROPIC_API_KEY"
+grep -nE "^($K)=(''|\"\")?$" .env    # must return nothing — a hit is still empty
+grep -cE "^($K)=" .env               # must print 4 — fewer means a line is gone
+```
+
+Two checks because the two failures look nothing alike: a value left at the
+template's `''` and a line removed from `.env` altogether.
+
 ```bash
 cd /opt/kg-agent
 
@@ -344,23 +390,34 @@ docker compose exec app printenv VITE_DEV_BYPASS_AUTH   # false
 > fail-closed: `VITE_ALLOWED_EMAILS` unset rejects **every** account
 > (`app/src/lib/auth/allowList.ts`).
 
-## 7. Escrow the two keys — do this now, not later
+## 7. Escrow the three keys — do this now, not later
 
 ```bash
-grep -E '^(AUTH_SESSION_SECRET|TOKEN_ENCRYPTION_KEY)=' .env
+grep -E '^(AUTH_SESSION_SECRET|TOKEN_ENCRYPTION_KEY|DATA_ENCRYPTION_KEY)=' .env
 ```
 
-Put both values in a password manager or Key Vault, **outside this VM and
-outside its backups**. `user_tokens` is AES-256-GCM ciphertext keyed by
-`TOKEN_ENCRYPTION_KEY` (HKDF-derived from `AUTH_SESSION_SECRET` when unset). If
-the VM is what you lose, a restored database without these values is
-undecryptable — the backup script deliberately does not copy `.env`, because a
-backup carrying both the ciphertext and its key protects nothing.
+Put all three values in a password manager or Key Vault, **outside this VM and
+outside its backups**. The backup script deliberately does not copy `.env`,
+because a backup carrying both the ciphertext and its key protects nothing —
+which makes the escrow the only copy, and a missing one unrecoverable.
 
-**It becomes three keys the day PR #260 lands.** `DATA_ENCRYPTION_KEY` is the
-one with the expensive rotation: it makes every stored conversation unreadable,
-not just the token cache, and it has no fallback to derive from. Escrow it here
-with the other two the moment you set it (§"What is not true yet").
+They do not fail the same way, and the difference decides how urgent this is:
+
+- `user_tokens` is AES-256-GCM ciphertext keyed by `TOKEN_ENCRYPTION_KEY`
+  (HKDF-derived from `AUTH_SESSION_SECRET` when unset). Losing it costs the
+  per-user Microsoft token cache — people sign in again and it refills.
+- `DATA_ENCRYPTION_KEY` (#260) is the expensive one. It encrypts
+  `conversations.title` / `conversations.context`, the `users` and
+  `auth_sessions` profile columns and the `routines` prompt, with **no
+  fallback to derive it from** — so a restored dump without it is ciphertext
+  forever, and the app refuses to serve rather than pretending the rows are
+  empty. Rotating it needs a re-encryption pass that has not been written yet;
+  the `v1.` envelope prefix is what will let that pass be lazy when it is.
+
+Both halves of that are stated the same way in
+[`azure-vm.md` §9](deployment/azure-vm.md), which is the reference for the
+systemd shape of the same box — including the pre-cutover `pg_dump` to take if
+this VM ever holds rows written before the key was set.
 
 ## 8. Smoke checklist
 
@@ -463,11 +520,12 @@ outage is the honest trade. Schedule it when nobody is using the app; use
 **The script will not leave the graph down quietly.** A failed dump or a Ctrl-C
 restarts Neo4j from an `EXIT` trap, best-effort, so the already-visible failure
 keeps the screen. On the successful path it does the opposite: it starts Neo4j,
-polls the service's own healthcheck for up to `NEO4J_RESTART_TIMEOUT` seconds
-(default 180 — the measured startup is ~80), and **aborts non-zero with `THE
-GRAPH IS DOWN`** if it never goes healthy. A restart that fails there used to be
-swallowed and followed by a green MANIFEST; the run now stops so somebody looks
-at it.
+polls the service's own healthcheck up to `NEO4J_RESTART_TIMEOUT` times (default
+180 — one `docker compose ps` plus a one-second sleep each, so nearer 4–5
+minutes of wall clock than 180 seconds; the measured startup is ~80 s, and the
+slack is deliberate), and **aborts non-zero with `THE GRAPH IS DOWN`** if it
+never goes healthy. A restart that fails there used to be swallowed and
+followed by a green MANIFEST; the run now stops so somebody looks at it.
 
 Install the cron entry as the user in the `docker` group:
 
@@ -498,7 +556,12 @@ sudo touch /var/log/kg-agent-backup.log && sudo chown "$USER" /var/log/kg-agent-
 > ls -d backups/*/ | tail -7 ; find backups -name INCOMPLETE
 > ```
 >
-> — and any path printed by the `find` is a run that did not complete.
+> — and any path printed by the `find` is a run that did not complete. A
+> directory holding **only** that marker is the commonest case and the one
+> worth recognising on sight: the stack was not running, so the run stopped
+> before it dumped anything. The marker is written before that check for
+> exactly this reason — checked first, the likeliest nightly failure left no
+> directory at all and the `find` stayed silent.
 
 ### Verifying a backup
 
@@ -535,7 +598,10 @@ docker run -d --name neo4j-restorecheck -v neo4j_restorecheck:/data \
 for i in $(seq 1 24); do
   docker exec neo4j-restorecheck cypher-shell -u neo4j -p restorecheck \
     'MATCH (n) RETURN count(n);' 2>/dev/null && break
-  [ "$i" = 24 ] && docker logs --tail 30 neo4j-restorecheck
+  if [ "$i" = 24 ]; then
+    docker logs --tail 30 neo4j-restorecheck
+    echo 'RESTORE UNPROVEN: neo4j never answered — do not count this dump as verified' >&2
+  fi
   sleep 5
 done
 docker rm -f neo4j-restorecheck && docker volume rm neo4j_restorecheck
@@ -559,13 +625,16 @@ module data I can't load: no matching module 'scdtype00'`, then exits 1. This
 Restoring **onto the live stack** is the same commands without the scratch names,
 with `docker compose stop app` first so nothing writes underneath you.
 
-**What a restore does not bring back:** `AUTH_SESSION_SECRET` and
-`TOKEN_ENCRYPTION_KEY` (§7). Restore the database onto a rebuilt VM with
-different values and every user's stored Microsoft token cache is lost — which
-degrades gracefully (people sign in again) but silently breaks background runs
-until they do. Once PR #260 lands, `DATA_ENCRYPTION_KEY` joins that list and
-stops degrading gracefully: without it the restored conversations are ciphertext
-nothing can read, and the app refuses to boot rather than pretending otherwise.
+**What a restore does not bring back:** the three keys in §7. Restore the
+database onto a rebuilt VM with a different `AUTH_SESSION_SECRET` /
+`TOKEN_ENCRYPTION_KEY` and every user's stored Microsoft token cache is lost —
+which degrades gracefully (people sign in again) but silently breaks background
+runs until they do. `DATA_ENCRYPTION_KEY` does not degrade gracefully: without
+the exact value that wrote them, the restored conversations, titles, profile
+columns and routine prompts are ciphertext nothing can read, and the app
+refuses to serve rather than pretending otherwise. A dump taken after the first
+boot with that key set is worthless without it — which is the whole reason §7
+says escrow it before the first sign-in rather than after the first backup.
 
 ## 10. Rollback
 
@@ -579,13 +648,25 @@ docker compose up -d --build app          # Caddy and the data tier keep running
 docker compose logs -f app
 ```
 
-> **This stops being data-safe once PR #260 lands.** Today the app tier is
-> stateless with respect to the database, so checking out an older commit is a
-> rebuild and nothing more. After conversation encryption at rest ships,
-> `conversations.context` holds ciphertext the pre-#260 code cannot read, and a
-> checkout that crosses that commit is a data migration wearing a rollback's
-> clothes. Re-read this section against `docs/data-privacy/plan.md` when #260
-> merges.
+> **This is only data-safe on the near side of #260, and that is now behind
+> you.** The app tier is stateless with respect to the database, so checking
+> out an older commit is normally a rebuild and nothing more. Encryption at
+> rest changed that: `conversations.context` and the profile columns hold
+> ciphertext that pre-#260 code has no key handling for, so a `<good-sha>`
+> older than `56ac2b4` is a data migration wearing a rollback's clothes. That
+> build has no decrypt path at all — it hands the envelope to the deserializer
+> where the event stream used to be (`conversations.server.ts:81` on the near
+> side of that commit) — and its first save of a conversation overwrites the
+> row's ciphertext with plaintext. **Check the target first**:
+>
+> ```bash
+> git merge-base --is-ancestor 56ac2b4 <good-sha> && echo 'safe rollback' \
+>   || echo 'CROSSES #260 — do not check this out without a restore plan'
+> ```
+>
+> If you must cross it, restore a pre-encryption dump alongside the older code
+> ([`azure-vm.md` §9](deployment/azure-vm.md) has the `pg_dump` to have taken);
+> there is no down-migration and no decrypt-back script.
 
 Faster, if the previous image is still on the box: `docker images kg-agent-app`,
 then `docker tag <old-id> kg-agent-app:local && docker compose up -d app` — no
@@ -618,12 +699,14 @@ diagnosis, and nothing is reachable from outside.
   embedder defaults to a `llama-server` on port 8090 that this stack does not
   run; the base compose points the app at `host.docker.internal:8090`, and on the
   VM nothing is listening there. Upload, storage, download and conversion all
-  work — only vector search over the uploads is dead. Fix it by running a
-  `llama-server --embedding` on the VM as its own systemd unit and setting
-  `EMBEDDINGS_LOCAL_URL` (the `/v1` suffix is required), or by pointing
-  `EMBEDDINGS_PROVIDER` at a hosted embedder. See
-  [`azure-vm.md` §7](deployment/azure-vm.md) and
-  [`DATA_STASH.md`](DATA_STASH.md).
+  work — only vector search over the uploads is dead. Fix it by running the
+  embedding server on the VM as its own systemd unit — `make embed` at the repo
+  root is that server, and [`models/README.md`](../models/README.md) says which
+  GGUF it expects — and setting `EMBEDDINGS_LOCAL_URL` (the `/v1` suffix is
+  required); or by pointing `EMBEDDINGS_PROVIDER` at a hosted embedder. The
+  endpoint does not have to be on this box: "local" names the OpenAI-compatible
+  wire format, not the machine. See [`azure-vm.md` §7](deployment/azure-vm.md)
+  and [`DATA_STASH.md`](DATA_STASH.md).
 - **Neo4j's password is set once.** `NEO4J_AUTH` is applied only when the data
   volume is empty, so changing `NEO4J_PASSWORD` in `.env` after first boot
   changes what the app sends and not what the database expects — the symptom is
@@ -642,8 +725,10 @@ diagnosis, and nothing is reachable from outside.
   single named volume (`claude-memory:/app/dist`,
   `configs/custom-catalog.yaml:88-104`) with no per-user or per-session
   scoping, so anything an agent writes there is readable by every other
-  signed-in user's agent. It is in the preview's server set (§3a) because
-  `general` advertises it; nothing in the preview writes to it on its own.
+  signed-in user's agent. It is in the preview's allow-list (§3a) because
+  `general` advertises it in the picker — a choice made when that list was
+  written, not something the agent's `servers: [...]` array enforces; nothing
+  in the preview writes to it on its own.
 - **The sandbox containers are not hardened.** They run as root with no
   capability drops, no read-only root and no seccomp profile, and only the
   strict egress profile is actually enforced — the other profile names fall
@@ -656,23 +741,34 @@ diagnosis, and nothing is reachable from outside.
   host. If nobody in the preview needs sandbox agents, dropping the mount (and
   adding `USER node` to `app/Dockerfile`) removes the most privileged thing on
   the box — they go together.
-- **No app-level encryption of conversations yet.** See §"What is not true yet".
+- **Encryption at rest has no rotation path yet.** Conversations and the
+  personal-data columns are encrypted (#260, §7), but the key lives in `.env`
+  on the same box as the data it protects — the escrow copy is what makes that
+  survivable — and changing it needs a re-encryption pass nobody has written.
+  Treat `DATA_ENCRYPTION_KEY` as set once for the life of this preview.
 
 ## What is not true yet — lands with in-flight work
 
-Three things a reader might reasonably assume are in place, and are not. None
-is required to deploy. The two that need a variable have one reserved and
+Two things a reader might reasonably assume are in place, and are not. Neither
+is required to deploy, and the one that needs variables has them reserved and
 commented in `.env.production.example`, ready for the day the work lands.
 
-| Claim                                            | Reality today                                                                                                                                                                                                                      | Lands with                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "Conversations are encrypted at rest."           | `conversations.context` is plain `JSONB` (`app/src/lib/db/client.server.ts:38`) — the full event stream, including verbatim tool results. Only the per-user Microsoft token cache is encrypted. Disk encryption is the only layer. | **PR #260, open.** The key is `DATA_ENCRYPTION_KEY` (`app/src/lib/db/crypto.server.ts:73` **on that branch**, not this one) — deliberately no fallback to `AUTH_SESSION_SECRET` or `TOKEN_ENCRYPTION_KEY`, and encrypted rows present with no key is a hard boot failure. Escrow it with the other two (§7) the day it lands, and re-read §10 |
-| "Names are pseudonymised before prompts go out." | The roster-based substitution modules exist and are tested, but nothing in production imports them — verified by grep, and independently mapped path-by-path in PR #258. Every egress path is unhooked.                            | a decision that has not been taken yet (see PR #258 and `docs/plan/graph-pseudonymisation.md`)                                                                                                                                                                                                                                                |
-| "Inference runs on our own hardware."            | Every BAML chain routes to Anthropic. The self-hosted Verda route is written but unmerged, and even with it on, four roles stay on Anthropic — so it is a routing switch, never a "nothing leaves the building" claim.             | **PR #263, open.** `USE_VERDA_INFERENCE='1'` re-points the controller / actor / critic / synthesizer only; router, describe, screen and planner stay on Anthropic                                                                                                                                                                             |
+A third used to be here — "conversations are encrypted at rest" — and it is now
+true: #260 merged on 2026-08-26 and `DATA_ENCRYPTION_KEY` is a **required**
+variable of this deployment (§7). If you are reading a copy of this runbook that
+still lists it as pending, that copy predates the merge.
+
+| Claim                                            | Reality today                                                                                                                                                                                                                                                                                          | Lands with                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "Names are pseudonymised before prompts go out." | The roster-based substitution modules exist and are tested, but nothing in production imports them — `grep -rn pseudonymise app/src` returns the three modules under `app/src/lib/privacy/` and their own tests, nothing else. Every egress path is unhooked, mapped path-by-path in PR #258 (merged). | a decision that has not been taken yet — `docs/plan/graph-pseudonymisation.md` holds the open questions, and PR #264 (open) would supply the roster the substitution reads from                                                                                                                                                  |
+| "Inference runs on our own hardware."            | Every BAML chain in this build routes to Anthropic. A self-hosted Verda route is written but not on `main`, and even with it on, four roles stay on Anthropic — so it is a routing switch, never a "nothing leaves the building" claim.                                                                | PR #263 (open at the time of writing). On a build that carries it, `USE_VERDA_INFERENCE='1'` re-points the controller / actor / critic / synthesizer only; router, describe, screen and planner stay on Anthropic. Deploying from `main` leaves the three variables the template reserves for it inert, whatever they are set to |
 
 [`PREVIEW-WELCOME.md`](PREVIEW-WELCOME.md) says all of this to the preview
-circle in plain language. **Keep the two documents in step**: if you deploy
-before that first row changes, the welcome note must not promise encryption.
+circle in plain language. **Keep the two documents in step**, in both
+directions: a row that is still pending must not be promised there, and a row
+that lands must be corrected there — #260 landing is what moved that note's
+storage paragraph from "not separately encrypted" to what it says today, and
+nothing but this instruction connects the two.
 
 ## State of this runbook
 
@@ -725,6 +821,13 @@ ACME issuance against a public name; the Entra sign-in and the allow-list
 rejection (no tenant is reachable from a laptop); an end-to-end chat turn
 against a real `ANTHROPIC_API_KEY`; the cron entry; and every claim about Azure
 NSG behaviour. Treat §5 and steps 4–7 of §8 as the parts to walk through slowly.
+
+One of those is newer than the rehearsals above: encryption at rest arrived with
+#260 **after** this runbook was executed on a laptop, so the first boot with
+`DATA_ENCRYPTION_KEY` set has not been walked through here. Its own test suite
+covers the code; what is unrehearsed is this sequence — a from-scratch database,
+the key present from the first boot, and step 4 of §8 writing the first
+encrypted session row.
 
 One local result that is **not** a finding about the VM: running redis-stack
 natively on Apple Silicon dies with `Illegal instruction` on the RediSearch

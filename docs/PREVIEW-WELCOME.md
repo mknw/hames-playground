@@ -30,7 +30,10 @@ You chat with it, and it can use tools on your behalf while it answers:
   files** — as you, with your permissions, so in Microsoft 365 it can never
   reach anything you could not open yourself;
 - search the **web**;
-- read and write a **knowledge graph**, and draw it for you;
+- read and write a **knowledge graph**, and draw it for you — one shared graph,
+  the same one for everybody in the preview, so anything it writes there is
+  visible to a colleague's next question and anything they write is visible to
+  yours;
 - **upload documents** and ask questions about them;
 - **run code** in a throwaway container for calculations, data wrangling and
   file conversion.
@@ -58,10 +61,13 @@ graph content that gets created. The full exchange is kept, including whatever
 the tools retrieved for you, so a conversation that searched your mailbox
 contains a copy of those messages.
 
-Today that stored copy sits in an ordinary database on an encrypted disk. It is
-**not separately encrypted by the application** — that work is in progress, and
-this page will be updated when it lands rather than before. Access to the server
-is limited to the small group running the preview.
+That stored copy is **encrypted by the application**, on top of the server's own
+disk encryption: the text of your conversations, and the name and address we
+hold for you, sit in the database scrambled rather than readable. Be clear about
+what that covers — the key lives on the same server, so it protects a disk or a
+copy of the database that leaves the machine, not someone who can use the
+machine itself. Access to the server is limited to the small group running the
+preview.
 
 **There is no delete button yet**, and no automatic expiry on conversations.
 Uploaded documents are removed after seven days; conversations are not removed

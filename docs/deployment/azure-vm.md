@@ -148,15 +148,15 @@ published port to loopback, and change the default passwords:
 # /opt/kg-agent/docker-compose.override.yml  (production)
 services:
   postgres:
-    ports: ['127.0.0.1:5432:5432']
-    environment: ['POSTGRES_PASSWORD=<STRONG_PW>']
+    ports: ["127.0.0.1:5432:5432"]
+    environment: ["POSTGRES_PASSWORD=<STRONG_PW>"]
   neo4j:
-    ports: ['127.0.0.1:7474:7474', '127.0.0.1:7687:7687']
-    environment: ['NEO4J_AUTH=neo4j/<STRONG_PW>']
+    ports: ["127.0.0.1:7474:7474", "127.0.0.1:7687:7687"]
+    environment: ["NEO4J_AUTH=neo4j/<STRONG_PW>"]
   redis:
-    ports: ['127.0.0.1:6379:6379']
+    ports: ["127.0.0.1:6379:6379"]
   mcp-gateway:
-    ports: ['127.0.0.1:8811:8811']
+    ports: ["127.0.0.1:8811:8811"]
   # (drop the arm64 `platform: linux/amd64` override — you're on x86 now)
 ```
 

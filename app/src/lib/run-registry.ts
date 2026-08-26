@@ -6,6 +6,7 @@
  * on a component so all three can agree on the shape without importing each
  * other — and so the pure policy helpers stay unit-testable without jsdom.
  */
+import type { WarmingEventData } from './sse-client'
 
 /**
  * Per-session UI run state. Lives at the route so progress and the submit
@@ -17,11 +18,38 @@ export interface SessionRunState {
   /** Tool name from the latest `controller_action` event of the active loop.
    *  Drives the composer guard banner ("Waiting for `<tool>`…"). */
   runningTool: string | null
+  /**
+   * This turn is waiting on a self-hosted box that is still starting, with the
+   * estimate the server sent; `null` otherwise.
+   *
+   * Per SESSION rather than global, like everything else here: several chats
+   * can stream at once and only the one that actually hit a cold box shows the
+   * notice. The receipt stamp rides along because the countdown ticks against
+   * when THIS browser got the frame — subtracting a server stamp from a browser
+   * `Date.now()` would fold clock skew into the number
+   * (`preview-header-format.ts`, `remainingSeconds`, same reasoning).
+   */
+  warming: WarmingNotice | null
+}
+
+/**
+ * A cold-start notice as the UI holds it: the wire payload verbatim, plus when
+ * this browser received it.
+ *
+ * Derived from `WarmingEventData` rather than restated, so the estimate's
+ * fields have one definition. `receivedAt` is the only thing the client adds,
+ * and it has to: the countdown ticks against it, and subtracting a server stamp
+ * from a browser `Date.now()` would measure clock skew as well as elapsed time.
+ */
+export type WarmingNotice = WarmingEventData & {
+  /** `Date.now()` in THIS browser when the frame arrived. */
+  receivedAt: number
 }
 
 export const DEFAULT_RUN_STATE: SessionRunState = {
   isProcessing: false,
   runningTool: null,
+  warming: null,
 }
 
 // ============================================================================

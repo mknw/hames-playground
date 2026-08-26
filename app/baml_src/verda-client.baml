@@ -63,7 +63,15 @@
 // `harness-patterns/harness.server.ts`), and the SSE stream no longer goes
 // byte-silent for the whole wait (`SSE_KEEPALIVE_MS`, declared in
 // `lib/sse-client.ts` beside the parser that drops it — NOT in
-// `routes/api/events.ts`, which is the one module it cannot live in).
+// `routes/api/events.ts`, which is the one module it cannot live in). And the
+// wait is now VISIBLE: a turn-level `warming` frame carries a spinner, the
+// words "starting GPU" and a counting-down estimate into the chat, in place of
+// the progress bar, for as long as the box is starting
+// (`lib/inference/cold-start.server.ts`). The keep-alive was never that — a
+// comment frame is invisible to a human by construction — so the two are
+// complementary rather than one covering for the other. The estimate defaults
+// to the 146s above until a server has measured one of its own; that constant
+// is `COLD_START_FALLBACK_MS`, and this comment is its provenance.
 client<llm> VerdaQwen {
   provider openai-generic
   options {

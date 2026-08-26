@@ -43,7 +43,7 @@ describe('SessionRegistry — per-session slots', () => {
     expect(r.context('unseen')).toBeUndefined()
     expect(r.completion('unseen')).toBeUndefined()
     // An untouched session reads as idle rather than undefined.
-    expect(r.runState('unseen')).toEqual({ isProcessing: false, runningTool: null })
+    expect(r.runState('unseen')).toEqual({ isProcessing: false, runningTool: null, warming: null })
   })
 
   it('keeps two conversations’ buffers apart', () => {
@@ -109,7 +109,11 @@ describe('SessionRegistry — per-session slots', () => {
     r.updateRunState('a', { isProcessing: true })
     r.updateRunState('b', { isProcessing: true, runningTool: 'read_neo4j_cypher' })
     expect(r.runningCount()).toBe(2)
-    expect(r.runState('b')).toEqual({ isProcessing: true, runningTool: 'read_neo4j_cypher' })
+    expect(r.runState('b')).toEqual({
+      isProcessing: true,
+      runningTool: 'read_neo4j_cypher',
+      warming: null,
+    })
 
     r.updateRunState('a', { isProcessing: false })
     expect(r.runningCount()).toBe(1)
@@ -288,7 +292,7 @@ describe('SessionRegistry — lifecycle', () => {
     expect(r.graph('gone')).toEqual([])
     expect(r.context('gone')).toBeUndefined()
     expect(r.completion('gone')).toBeUndefined()
-    expect(r.runState('gone')).toEqual({ isProcessing: false, runningTool: null })
+    expect(r.runState('gone')).toEqual({ isProcessing: false, runningTool: null, warming: null })
     expect(r.runningCount()).toBe(0)
     expect(r.progress('gone')).not.toBe(p)
     // The controller is forgotten too, so a late abort cannot reach it.

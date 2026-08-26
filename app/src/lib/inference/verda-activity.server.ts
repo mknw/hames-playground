@@ -176,3 +176,17 @@ export function verdaWarmth(now: number = Date.now()): VerdaWarmth {
     scaledownSeconds,
   }
 }
+
+/**
+ * When this process last saw a call to the box FINISH, or `null` if it never
+ * has. The narrow accessor exists for one caller — `inference/cold-start.server.ts`
+ * — which needs a claim {@link verdaWarmth} deliberately collapses: `starting`
+ * covers both "we have seen the box go cold" and "we have never seen it at
+ * all", and only the first is evidence a cold start is actually being paid.
+ * Reporting a measurement taken under the second would let "the box was warm
+ * and this process had not noticed" enter the cold-start history as a
+ * four-second cold start.
+ */
+export function verdaLastCallCompletedAt(): number | null {
+  return state.lastCompletedAt
+}

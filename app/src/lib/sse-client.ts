@@ -75,6 +75,36 @@ export interface TitleUpdatedEventData {
   title: string
 }
 
+/**
+ * The turn has started waiting on a self-hosted box that is not up.
+ *
+ * A turn-level frame, not a harness `ContextEvent`: it describes THIS wait, so
+ * it is never persisted into the conversation blob and never replayed on
+ * reload. Emitted at most once per turn, and only on the self-hosted tier with
+ * nothing saying the box is warm (`inference/cold-start.server.ts`).
+ *
+ * **There is no matching "warmed" frame, and that is deliberate.** The wait
+ * ends when the box answers, which is already observable as the next frame of
+ * any kind — an ordinary `message`, or `done`/`error` if the call was the
+ * turn's last. A second frame would be a second thing that can be dropped, and
+ * a dropped clear leaves a spinner up forever; "clear on anything" cannot.
+ * `runTurn` (`lib/turn-stream.ts`) owns that rule.
+ */
+export interface WarmingEventData {
+  sessionId: string
+  /** Expected total wait, in milliseconds. The client counts it down against
+   *  its OWN receipt time — subtracting a server stamp from a browser
+   *  `Date.now()` would measure clock skew as well as elapsed time, which is
+   *  why no server stamp rides along. */
+  estimateMs: number
+  /** Whether `estimateMs` is the median of cold starts this server actually
+   *  measured, or the single published reading it falls back to. The UI says
+   *  which; a fallback presented as a measurement is the failure mode. */
+  basis: 'measured' | 'default'
+  /** How many measurements the median is over; `0` on the fallback. */
+  samples: number
+}
+
 /** A standard harness event with the sessionId envelope added in #47.
  *  Carries no `event:` header on the wire (default `message`). */
 export type MessageEventData = ContextEvent & { sessionId?: string }
@@ -97,6 +127,7 @@ export type ChatStreamEvent =
   | { event: 'done'; data: DoneEventData }
   | { event: 'error'; data: { sessionId?: string; error: string } }
   | { event: 'title_updated'; data: TitleUpdatedEventData }
+  | { event: 'warming'; data: WarmingEventData }
 
 // ============================================================================
 // Parser

@@ -174,6 +174,45 @@ describe('the warm indicator', () => {
     expect(container.textContent).toContain('unknown')
   })
 
+  it('says "starting", not "answering", while the box is waking up', async () => {
+    // `running` is documented as implying warm and renders a full countdown.
+    // A turn against a scaled-to-zero box must not read that way: the sender
+    // is paying a cold start, and anyone else reading the strip would conclude
+    // the box is up and send into the same wait.
+    getPreviewHeaderState.mockResolvedValue(
+      state({ warmth: { state: 'starting', secondsUntilScaledown: null, scaledownSeconds: 180 } }),
+    )
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await mounted(container)
+
+    expect(container.textContent).toContain('starting')
+    expect(container.textContent).not.toContain('answering')
+    // No countdown: there is nothing measured to count down from.
+    expect(container.textContent).not.toMatch(/\d:\d\d/)
+  })
+
+  it('lets the local clock expire the window early, but never extend it', async () => {
+    // The client may only shorten what the server said. The other direction —
+    // a client that keeps rendering "warm" past the window, or re-inflates a
+    // countdown — would claim warmth no measurement supports.
+    vi.useFakeTimers()
+    try {
+      getPreviewHeaderState.mockResolvedValue(
+        state({ warmth: { state: 'warm', secondsUntilScaledown: 3, scaledownSeconds: 180 } }),
+      )
+      const { container } = render(() => <PreviewHeaderStrip />)
+      await vi.waitFor(() => expect(container.textContent).toContain('warm'))
+
+      // Past the window, with NO new poll landing.
+      await vi.advanceTimersByTimeAsync(4000)
+
+      expect(container.textContent).toContain('cold')
+      expect(container.textContent).not.toMatch(/\d:\d\d/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('is absent entirely when there is no self-hosted endpoint to be warm', async () => {
     getPreviewHeaderState.mockResolvedValue(state({ tier: 'anthropic', verdaAvailable: false }))
     const { container } = render(() => <PreviewHeaderStrip />)
@@ -221,6 +260,24 @@ describe('degradation', () => {
     const { container } = render(() => <PreviewHeaderStrip />)
 
     expect(container.textContent).toBe('')
+  })
+
+  it('says so when the FIRST poll fails, instead of rendering nothing', async () => {
+    // The stale path below keeps the last known values; this one has none to
+    // keep. Rendering nothing makes a permanently broken action (Postgres down,
+    // the table missing) indistinguishable from a deployment that never shipped
+    // the feature — and nobody investigates a feature they cannot see.
+    getPreviewHeaderState.mockRejectedValue(new Error('offline'))
+    const { container } = render(() => <PreviewHeaderStrip />)
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="preview-header-unavailable"]')).not.toBeNull(),
+    )
+    const chip = container.querySelector('[data-testid="preview-header-unavailable"]')!
+    expect(chip.getAttribute('role')).toBe('status')
+    expect(chip.getAttribute('title')).toContain('could not be refreshed')
+    // No fabricated numbers alongside it.
+    expect(container.textContent).not.toContain('active')
   })
 
   it('keeps the last values and says "stale" when a poll fails', async () => {

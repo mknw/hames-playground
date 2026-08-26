@@ -71,7 +71,7 @@ describe('createInjectionScreen — clean content', () => {
     await screen(CLEAN)
     // Byte-identical: the whole value of the deterministic-first design is that
     // clean content is never mangled, and that has to hold on this path too.
-    expect(mockScreen).toHaveBeenCalledWith('web/fetch_content', CLEAN.content)
+    expect(mockScreen).toHaveBeenCalledWith('web/fetch_content', CLEAN.content, expect.anything())
     expect(bodySentToBaml()).toBe(CLEAN.content)
   })
 
@@ -223,9 +223,16 @@ describe('createInjectionScreen — client routing', () => {
     // must not be talked out of reporting by the content it reviews and must
     // copy spans VERBATIM so the guard can locate and neutralize them, so it
     // keeps its OWN role: nothing may re-point it by re-pointing `describe`.
+    //
+    // The call now carries an options bag, but ONLY for usage accounting — the
+    // screen is an Anthropic-only role, and a role that spends tokens without
+    // being counted drops out of the header's on-prem denominator. So this pins
+    // the property that matters rather than the argument count: whatever is in
+    // that bag, it is never a `client`.
     const screen = await (await load())()
     await screen(CLEAN)
-    expect(mockScreen.mock.calls[0]).toHaveLength(2)
+    const opts = mockScreen.mock.calls[0][2] as Record<string, unknown> | undefined
+    expect(Object.keys(opts ?? {})).toEqual(['collector'])
   })
 
   it("resolveClientForRole('screen') is DescribeAnthropic, and tracks the .baml declaration (SA-M5)", async () => {

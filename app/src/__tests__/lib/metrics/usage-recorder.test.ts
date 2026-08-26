@@ -22,10 +22,15 @@ vi.mock('../../../lib/metrics/preview-counters.server', () => ({
 
 import {
   flushUsage,
+  installUsageRecorder,
   recordSample,
   recordTurn,
   tierOfSample,
 } from '../../../lib/metrics/usage-recorder.server'
+import {
+  notifyLlmUsage,
+  resetLlmUsageObservers,
+} from '../../../lib/harness-patterns/llm-usage-observer.server'
 import { resetVerdaActivity, verdaWarmth } from '../../../lib/inference/verda-activity.server'
 import type { EventMetrics } from '../../../lib/harness-patterns/types'
 
@@ -173,5 +178,49 @@ describe('flushUsage', () => {
     await flushUsage()
     expect(addUsage).not.toHaveBeenCalled()
     error.mockRestore()
+  })
+})
+
+describe('installUsageRecorder', () => {
+  beforeEach(() => {
+    resetLlmUsageObservers()
+    delete (globalThis as Record<symbol, unknown>)[Symbol.for('kg-agent.usage-recorder')]
+  })
+
+  it('registers exactly one listener however many times it is called', async () => {
+    // A dev-server reload re-evaluates the module. Without the install flag the
+    // second pass stacks a SECOND listener and every later call is counted
+    // twice — silently, and only in dev, where nobody is reading the counter.
+    installUsageRecorder(60_000)
+    installUsageRecorder(60_000)
+    installUsageRecorder(60_000)
+
+    notifyLlmUsage({
+      functionName: 'LoopController',
+      clientName: 'VerdaQwen',
+      metrics: metrics({
+        inputUncachedTokens: 100,
+        inputCacheReadTokens: 0,
+        inputCacheWriteTokens: 0,
+        outputTokens: 20,
+      }),
+    })
+    await flushUsage()
+
+    expect(addUsage).toHaveBeenCalledOnce()
+    expect(addUsage.mock.calls[0][0]).toMatchObject({
+      tier: 'verda',
+      llmCalls: 1,
+      inputTokens: 100,
+      outputTokens: 20,
+    })
+  })
+
+  it('subscribes to the observer at all', () => {
+    // The registration itself is production's only wiring; every other test in
+    // this file calls `recordSample` directly and would pass without it.
+    installUsageRecorder(60_000)
+    notifyLlmUsage({ functionName: 'X', clientName: 'VerdaQwen', metrics: metrics() })
+    expect(verdaWarmth().state).not.toBe('unknown')
   })
 })

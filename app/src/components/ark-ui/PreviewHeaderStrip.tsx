@@ -23,9 +23,11 @@
  * The top bar has no SSE channel — the app's only stream is the per-turn POST
  * in `routes/api/events.ts`, which lives for the duration of one answer. So
  * this polls one server action on a timer and ticks the countdown locally in
- * between, against the server's `generatedAt` rather than by counting its own
- * intervals, so a backgrounded tab resumes on the right number instead of
- * however many callbacks it managed to run.
+ * between, against the wall-clock time THIS browser received the payload rather
+ * than by counting its own intervals, so a backgrounded tab resumes on the right
+ * number instead of however many callbacks it managed to run. Both ends of that
+ * subtraction are stamped in the same browser (see `receivedAt`), so a clock
+ * skewed against the server changes nothing.
  *
  * ## Accessibility
  *
@@ -41,7 +43,7 @@
  * around it does. Flagged in the PR body rather than papered over with `dark:`
  * variants nothing could test.
  */
-import { createSignal, createMemo, onMount, onCleanup, Show } from 'solid-js'
+import { createSignal, createMemo, onMount, onCleanup, Show, type JSX } from 'solid-js'
 import { SegmentGroup } from '@ark-ui/solid/segment-group'
 import {
   getPreviewHeaderState,
@@ -71,7 +73,15 @@ export const WARMTH_PRESENTATION = {
     word: 'answering',
     icon: 'i-material-symbols-bolt',
     tone: 'cyan-400',
-    hint: 'A chat is running on the self-hosted endpoint right now.',
+    hint: 'A chat is running on the self-hosted endpoint, which was already up when it started.',
+  },
+  starting: {
+    word: 'starting',
+    icon: 'i-material-symbols-hourglass-top-outline',
+    tone: 'amber-500',
+    hint:
+      'A chat is running on the self-hosted endpoint, but nothing recent shows the endpoint was ' +
+      'up — so it is probably paying a cold start of minutes. Sending now joins the same wait.',
   },
   warm: {
     word: 'warm',
@@ -100,16 +110,20 @@ export const WARMTH_PRESENTATION = {
 type WarmthKey = keyof typeof WARMTH_PRESENTATION
 
 /** One glanceable number. `min-w` on the value is what keeps the row still
- *  while the value changes width. */
-const Metric = (props: {
-  icon: string
-  label: string
-  value: string
-  tone: string
-  hint: string
-}) => (
+ *  while the value changes width.
+ *
+ *  The glyph is passed in as a CHILD rather than as `icon` + `tone` props on
+ *  purpose. UnoCSS extracts attributify utilities from literal `attr="value"`
+ *  text in the source, so a runtime-resolved `text={props.tone}` produces no
+ *  CSS at all — the value is simply never seen by the build. That is the
+ *  silent kind of failure (no error, an element that just renders uncoloured),
+ *  and it had already happened: `emerald-500` was absent from the built bundle
+ *  while the other three tones survived only because unrelated components
+ *  happened to spell them out. Keeping the colour at the call site keeps every
+ *  tone literal in this file, so nothing here depends on another component. */
+const Metric = (props: { label: string; value: string; hint: string; children: JSX.Element }) => (
   <div flex="~" items="center" gap="1" title={props.hint}>
-    <span class={props.icon} w="3.5" h="3.5" text={props.tone} aria-hidden="true" />
+    {props.children}
     <span text="xs dark-text-primary right" font="mono" min-w="8">
       {props.value}
     </span>
@@ -119,6 +133,14 @@ const Metric = (props: {
 
 export const PreviewHeaderStrip = () => {
   const [state, setState] = createSignal<PreviewHeaderState | null>(null)
+  /** When THIS browser received the payload above. The countdown ticks against
+   *  it rather than against the server's `generatedAt`, because subtracting a
+   *  server stamp from a client `Date.now()` measures clock skew as well as
+   *  elapsed time — on a skewed clock the countdown jumps at each poll instead
+   *  of ticking, and a far-enough-behind client would read a full window as
+   *  already expired. Both stamps are `Date.now()` in the same browser, so the
+   *  difference is elapsed time and nothing else. */
+  const [receivedAt, setReceivedAt] = createSignal(Date.now())
   const [now, setNow] = createSignal(Date.now())
   const [busy, setBusy] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
@@ -129,7 +151,9 @@ export const PreviewHeaderStrip = () => {
 
   const load = async () => {
     try {
-      setState(await getPreviewHeaderState())
+      const next = await getPreviewHeaderState()
+      setState(next)
+      setReceivedAt(Date.now())
       setError(null)
     } catch {
       // A poll that cannot reach the server leaves the last known values on
@@ -154,7 +178,7 @@ export const PreviewHeaderStrip = () => {
   const countdown = createMemo(() => {
     const s = state()
     if (!s) return null
-    return remainingSeconds(s.warmth.secondsUntilScaledown, s.generatedAt, now())
+    return remainingSeconds(s.warmth.secondsUntilScaledown, receivedAt(), now())
   })
 
   const warmthKey = createMemo<WarmthKey>(() => {
@@ -174,6 +198,7 @@ export const PreviewHeaderStrip = () => {
     try {
       const next = await setPreviewInferenceTier(value)
       setState(next)
+      setReceivedAt(Date.now())
       setError(null)
       // The server is the authority and may not agree with the click (it
       // refuses the self-hosted position on a deployment with no endpoint).
@@ -192,172 +217,216 @@ export const PreviewHeaderStrip = () => {
   }
 
   return (
-    <Show when={state()}>
-      {(s) => (
-        <div
-          role="group"
-          aria-label="Preview status"
-          flex="~"
-          items="center"
-          gap="3"
-          op={error() ? '60' : '100'}
-          transition="opacity"
+    <>
+      {/* A failing FIRST poll leaves `state()` null, and the strip below is
+          gated on it — so without this the bar is EMPTY, and a permanently
+          broken action (Postgres down, the table missing) is indistinguishable
+          from a deployment that never shipped the feature. The stale path below
+          keeps the last known values; this one has none to keep, so it says so
+          rather than showing nothing. */}
+      <Show when={!state() && error()}>
+        <span
+          role="status"
+          text="xs amber-500"
+          title={error() ?? undefined}
+          data-testid="preview-header-unavailable"
         >
-          {/* ---- Inference-tier switch --------------------------------- */}
-          {/* `keyed` on the revision: the segment group owns its selection
+          preview status unavailable
+        </span>
+      </Show>
+      <Show when={state()}>
+        {(s) => (
+          <div
+            role="group"
+            aria-label="Preview status"
+            flex="~"
+            items="center"
+            gap="3"
+            op={error() ? '60' : '100'}
+            transition="opacity"
+          >
+            {/* ---- Inference-tier switch --------------------------------- */}
+            {/* `keyed` on the revision: the segment group owns its selection
               internally, so the only way to force it back onto server truth is
               to rebuild it. The value changes rarely (see `chooseTier`), so
               this is not a per-poll remount. */}
-          <Show when={revision() + 1} keyed>
-            <SegmentGroup.Root
-              value={s().tier}
-              onValueChange={(details) => void chooseTier(details.value ?? '')}
-              disabled={busy()}
-              flex="~"
-              items="center"
-              gap="2"
-            >
-              <SegmentGroup.Label text="xs dark-text-tertiary">Model</SegmentGroup.Label>
+            <Show when={revision() + 1} keyed>
+              <SegmentGroup.Root
+                value={s().tier}
+                onValueChange={(details) => void chooseTier(details.value ?? '')}
+                disabled={busy()}
+                flex="~"
+                items="center"
+                gap="2"
+              >
+                <SegmentGroup.Label text="xs dark-text-tertiary">Model</SegmentGroup.Label>
+                <div
+                  flex="~"
+                  items="center"
+                  gap="0.5"
+                  p="0.5"
+                  rounded="md"
+                  bg="dark-bg-tertiary"
+                  border="1 dark-border-primary"
+                >
+                  <SegmentGroup.Item
+                    value="verda"
+                    disabled={!s().verdaAvailable}
+                    flex="~"
+                    items="center"
+                    gap="1"
+                    p="x-2 y-1"
+                    rounded="sm"
+                    cursor="pointer"
+                    transition="all"
+                    ring="2 transparent focus-within:neon-cyan/40"
+                    text={s().tier === 'verda' ? 'xs neon-cyan' : 'xs dark-text-secondary'}
+                    bg={s().tier === 'verda' ? 'neon-cyan/10' : 'transparent hover:dark-bg-hover'}
+                    op={s().verdaAvailable ? '100' : '50'}
+                    title={
+                      s().verdaAvailable
+                        ? 'Run your chats on the company-hosted deployment — prompts stay on infrastructure we control.'
+                        : 'The self-hosted endpoint is not configured on this deployment.'
+                    }
+                  >
+                    <span
+                      class="i-material-symbols-shield-lock-outline"
+                      w="3.5"
+                      h="3.5"
+                      aria-hidden="true"
+                    />
+                    <SegmentGroup.ItemText>{TIER_LABELS.verda}</SegmentGroup.ItemText>
+                    <SegmentGroup.ItemHiddenInput />
+                  </SegmentGroup.Item>
+                  <SegmentGroup.Item
+                    value="anthropic"
+                    flex="~"
+                    items="center"
+                    gap="1"
+                    p="x-2 y-1"
+                    rounded="sm"
+                    cursor="pointer"
+                    transition="all"
+                    ring="2 transparent focus-within:neon-cyan/40"
+                    text={s().tier === 'anthropic' ? 'xs neon-magenta' : 'xs dark-text-secondary'}
+                    bg={
+                      s().tier === 'anthropic'
+                        ? 'neon-magenta/10'
+                        : 'transparent hover:dark-bg-hover'
+                    }
+                    title="Run your chats on Anthropic's hosted models."
+                  >
+                    <span
+                      class="i-material-symbols-cloud-outline"
+                      w="3.5"
+                      h="3.5"
+                      aria-hidden="true"
+                    />
+                    <SegmentGroup.ItemText>{TIER_LABELS.anthropic}</SegmentGroup.ItemText>
+                    <SegmentGroup.ItemHiddenInput />
+                  </SegmentGroup.Item>
+                </div>
+              </SegmentGroup.Root>
+            </Show>
+
+            {/* ---- Warm state -------------------------------------------- */}
+            <Show when={s().verdaAvailable}>
               <div
                 flex="~"
                 items="center"
-                gap="0.5"
-                p="0.5"
-                rounded="md"
-                bg="dark-bg-tertiary"
-                border="1 dark-border-primary"
+                gap="1"
+                title={WARMTH_PRESENTATION[warmthKey()].hint}
+                data-testid="verda-warmth"
               >
-                <SegmentGroup.Item
-                  value="verda"
-                  disabled={!s().verdaAvailable}
-                  flex="~"
-                  items="center"
-                  gap="1"
-                  p="x-2 y-1"
-                  rounded="sm"
-                  cursor="pointer"
-                  transition="all"
-                  ring="2 transparent focus-within:neon-cyan/40"
-                  text={s().tier === 'verda' ? 'xs neon-cyan' : 'xs dark-text-secondary'}
-                  bg={s().tier === 'verda' ? 'neon-cyan/10' : 'transparent hover:dark-bg-hover'}
-                  op={s().verdaAvailable ? '100' : '50'}
-                  title={
-                    s().verdaAvailable
-                      ? 'Run your chats on the company-hosted deployment — prompts stay on infrastructure we control.'
-                      : 'The self-hosted endpoint is not configured on this deployment.'
-                  }
-                >
-                  <span
-                    class="i-material-symbols-shield-lock-outline"
-                    w="3.5"
-                    h="3.5"
-                    aria-hidden="true"
-                  />
-                  <SegmentGroup.ItemText>{TIER_LABELS.verda}</SegmentGroup.ItemText>
-                  <SegmentGroup.ItemHiddenInput />
-                </SegmentGroup.Item>
-                <SegmentGroup.Item
-                  value="anthropic"
-                  flex="~"
-                  items="center"
-                  gap="1"
-                  p="x-2 y-1"
-                  rounded="sm"
-                  cursor="pointer"
-                  transition="all"
-                  ring="2 transparent focus-within:neon-cyan/40"
-                  text={s().tier === 'anthropic' ? 'xs neon-magenta' : 'xs dark-text-secondary'}
-                  bg={
-                    s().tier === 'anthropic' ? 'neon-magenta/10' : 'transparent hover:dark-bg-hover'
-                  }
-                  title="Run your chats on Anthropic's hosted models."
-                >
-                  <span
-                    class="i-material-symbols-cloud-outline"
-                    w="3.5"
-                    h="3.5"
-                    aria-hidden="true"
-                  />
-                  <SegmentGroup.ItemText>{TIER_LABELS.anthropic}</SegmentGroup.ItemText>
-                  <SegmentGroup.ItemHiddenInput />
-                </SegmentGroup.Item>
-              </div>
-            </SegmentGroup.Root>
-          </Show>
-
-          {/* ---- Warm state -------------------------------------------- */}
-          <Show when={s().verdaAvailable}>
-            <div
-              flex="~"
-              items="center"
-              gap="1"
-              title={WARMTH_PRESENTATION[warmthKey()].hint}
-              data-testid="verda-warmth"
-            >
-              <span
-                class={WARMTH_PRESENTATION[warmthKey()].icon}
-                w="3.5"
-                h="3.5"
-                text={WARMTH_PRESENTATION[warmthKey()].tone}
-                aria-hidden="true"
-              />
-              <span text={`xs ${WARMTH_PRESENTATION[warmthKey()].tone}`} aria-hidden="true">
-                {WARMTH_PRESENTATION[warmthKey()].word}
-              </span>
-              <Show when={warmthKey() === 'warm' && countdown() !== null}>
-                <span text="xs dark-text-tertiary right" font="mono" min-w="9" aria-hidden="true">
-                  {formatCountdown(countdown() ?? 0)}
+                <span
+                  class={WARMTH_PRESENTATION[warmthKey()].icon}
+                  w="3.5"
+                  h="3.5"
+                  text={WARMTH_PRESENTATION[warmthKey()].tone}
+                  aria-hidden="true"
+                />
+                <span text={`xs ${WARMTH_PRESENTATION[warmthKey()].tone}`} aria-hidden="true">
+                  {WARMTH_PRESENTATION[warmthKey()].word}
                 </span>
-              </Show>
-              {/* The only announced part: the state word, which changes rarely.
+                <Show when={warmthKey() === 'warm' && countdown() !== null}>
+                  <span text="xs dark-text-tertiary right" font="mono" min-w="9" aria-hidden="true">
+                    {formatCountdown(countdown() ?? 0)}
+                  </span>
+                </Show>
+                {/* The only announced part: the state word, which changes rarely.
                   The countdown above is aria-hidden on purpose. */}
-              <span sr-only aria-live="polite">
-                Self-hosted endpoint {WARMTH_PRESENTATION[warmthKey()].word}
-              </span>
-            </div>
-          </Show>
+                <span sr-only aria-live="polite">
+                  Self-hosted endpoint {WARMTH_PRESENTATION[warmthKey()].word}
+                </span>
+              </div>
+            </Show>
 
-          {/* ---- Metrics ----------------------------------------------- */}
-          <div flex="~" items="center" gap="3" border="l dark-border-primary" p="l-3">
-            <Metric
-              icon="i-material-symbols-group-outline"
-              label="active"
-              tone="cyan-400"
-              value={formatCompactNumber(s().activeUsers)}
-              hint={`Distinct people with chat activity in the last ${s().activeWindowMinutes} minutes.`}
-            />
-            <Metric
-              icon="i-material-symbols-token-outline"
-              label="tokens"
-              tone="neon-cyan"
-              value={formatCompactNumber(s().usage.totalTokens)}
-              hint="Input + output tokens across everyone today (UTC), counted since this counter shipped."
-            />
-            <Metric
-              icon="i-material-symbols-forum-outline"
-              label="turns"
-              tone="violet-400"
-              value={formatCompactNumber(s().usage.turns)}
-              hint="Chat turns started across everyone today (UTC)."
-            />
-            <Show when={s().verdaAvailable}>
+            {/* ---- Metrics ----------------------------------------------- */}
+            <div flex="~" items="center" gap="3" border="l dark-border-primary" p="l-3">
               <Metric
-                icon="i-material-symbols-shield-outline"
-                label="on-prem"
-                tone="emerald-500"
-                value={formatShare(s().usage.verdaCallShare)}
-                hint="Share of today's model calls that ran on the company-hosted deployment. Measured from the client each call actually used, not from the setting."
-              />
+                label="active"
+                value={formatCompactNumber(s().activeUsers)}
+                hint={`Distinct people with chat activity in the last ${s().activeWindowMinutes} minutes.`}
+              >
+                <span
+                  class="i-material-symbols-group-outline"
+                  w="3.5"
+                  h="3.5"
+                  text="cyan-400"
+                  aria-hidden="true"
+                />
+              </Metric>
+              <Metric
+                label="tokens"
+                value={formatCompactNumber(s().usage.totalTokens)}
+                hint="Input + output tokens across everyone today (UTC), counted since this counter shipped. Every model call is counted, including the summarizer and the injection screen."
+              >
+                <span
+                  class="i-material-symbols-token-outline"
+                  w="3.5"
+                  h="3.5"
+                  text="neon-cyan"
+                  aria-hidden="true"
+                />
+              </Metric>
+              <Metric
+                label="turns"
+                value={formatCompactNumber(s().usage.turns)}
+                hint="Chat turns started across everyone today (UTC)."
+              >
+                <span
+                  class="i-material-symbols-forum-outline"
+                  w="3.5"
+                  h="3.5"
+                  text="violet-400"
+                  aria-hidden="true"
+                />
+              </Metric>
+              <Show when={s().verdaAvailable}>
+                <Metric
+                  label="on-prem"
+                  value={formatShare(s().usage.verdaCallShare)}
+                  hint="Share of today's model calls that ran on the company-hosted deployment. Measured from the client each call actually used, not from the setting, and over every model call the app makes — the roles that only ever run on Anthropic are in the denominator."
+                >
+                  <span
+                    class="i-material-symbols-shield-outline"
+                    w="3.5"
+                    h="3.5"
+                    text="emerald-500"
+                    aria-hidden="true"
+                  />
+                </Metric>
+              </Show>
+            </div>
+
+            <Show when={error()}>
+              <span role="status" text="xs amber-500" title={error() ?? undefined}>
+                stale
+              </span>
             </Show>
           </div>
-
-          <Show when={error()}>
-            <span role="status" text="xs amber-500" title={error() ?? undefined}>
-              stale
-            </span>
-          </Show>
-        </div>
-      )}
-    </Show>
+        )}
+      </Show>
+    </>
   )
 }

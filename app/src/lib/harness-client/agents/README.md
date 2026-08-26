@@ -61,7 +61,9 @@ export const titleAgent = harness<TitleAgentData>(
     patternId: 'title-gen',
     mode: 'message',
     synthesize: async ({ userMessage }) => {
-      const raw = await b.GenerateConversationTitle(userMessage)
+      const raw = await withUsageAccounting('GenerateConversationTitle', (opts) =>
+        b.GenerateConversationTitle(userMessage, opts),
+      )
       return sanitizeTitle(raw) ?? ''
     },
   }),

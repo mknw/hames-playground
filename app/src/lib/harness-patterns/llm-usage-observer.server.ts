@@ -11,9 +11,19 @@
  * Why here and not on the event stream: `event.metrics` is per-conversation
  * and lands in a JSONB blob, so a global "tokens today" would mean folding
  * every user's blob on every read — accurate, and far too expensive to put
- * behind a header that polls. This fires once per call, at the only two places
- * that stamp accounting (`extractLLMCallData` and `extractFailureLLMCallData`),
- * so the failed-but-billed calls are counted too.
+ * behind a header that polls. This fires once per call, from the single
+ * chokepoint that stamps accounting (`accountBamlCall` in
+ * `baml-adapters.server.ts`), so the failed-but-billed calls are counted too.
+ *
+ * **Coverage is the property that matters here, and it is easy to lose.** A
+ * share ("what fraction ran on our own box?") is wrong the moment one ROLE is
+ * accounted and another is not — the uncounted role vanishes from the
+ * denominator and the share reads high. That is why the chokepoint is one
+ * function rather than a line copied beside each call, and why sites that
+ * produce no `LLMCallData` event of their own (the describe tier, the
+ * injection screen) still open a collector purely to be counted. A new BAML
+ * call site that holds a collector and does not reach `accountBamlCall` is a
+ * silent bias, not a missing detail.
  *
  * Deliberately weak by design:
  *

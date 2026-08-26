@@ -16,8 +16,11 @@
  *   - a zero delta must not cost a write per stray call.
  *   - `day` is UTC, so two users on one screen cannot disagree about today.
  *   - the active-users window is a constant in the SQL, never a caller's value.
+ *   - the index that makes the active-users read cheap actually exists.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -184,5 +187,24 @@ describe('countActiveUsers', () => {
   it('reads 0 when the table is empty rather than NaN', async () => {
     query.mockResolvedValue({ rows: [] })
     expect(await countActiveUsers()).toBe(0)
+  })
+
+  it('has an index it can actually seek on', () => {
+    // The query filters `conversations` on `updated_at` ALONE. Both composite
+    // indexes on that table lead on `user_id`, so neither can seek it: as
+    // shipped this was an index-only scan of every conversation ever (measured
+    // on 200k rows: 808 buffers / cost 4824, against 4 / 9 with the index
+    // below), running per 15s poll, per tab, per user, on every route — under
+    // three docstrings calling it "two small indexed reads".
+    //
+    // A source scan because the schema is a SQL string, not a value: a unit
+    // test of `countActiveUsers` passes whether or not the index exists, which
+    // is exactly how this shipped.
+    const schema = readFileSync(join(process.cwd(), 'src/lib/db/client.server.ts'), 'utf8')
+    const indexes = [...schema.matchAll(/CREATE INDEX[^;]*?ON conversations \(([^)]*)\)/gi)].map(
+      (m) => m[1].trim(),
+    )
+    const leadsOnUpdatedAt = indexes.some((cols) => /^updated_at\b/i.test(cols))
+    expect(leadsOnUpdatedAt, `indexes on conversations: ${indexes.join(' | ')}`).toBe(true)
   })
 })

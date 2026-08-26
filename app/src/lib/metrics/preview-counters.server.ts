@@ -188,6 +188,13 @@ export const ACTIVE_WINDOW_MINUTES = 15
  * The interval is inlined rather than parameterised because it is a constant,
  * and `make_interval` with a bound parameter is the alternative — this keeps
  * the SQL readable; the value never comes from a caller, let alone a client.
+ *
+ * **This is only cheap because of `conversations_updated_idx`** (`db/
+ * client.server.ts`), which leads on `updated_at`. The two composite indexes
+ * on that table lead on `user_id`, so without the recency-only one this
+ * degrades to a full index-only scan — O(every conversation ever) rather than
+ * O(the 15-minute window) — on a query that runs per poll, per tab, per user,
+ * on every route. Do not drop it while this surface polls.
  */
 export async function countActiveUsers(): Promise<number> {
   const { rows } = await query<{ active: string | number }>(

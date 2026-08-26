@@ -67,20 +67,26 @@ export function formatShare(share: number | null): string {
 /**
  * The countdown the header shows *between* polls.
  *
- * The server computed `secondsUntilScaledown` at `generatedAt`; the client
- * subtracts the elapsed wall-clock since then rather than counting its own
- * ticks, so a throttled background tab resumes on the right number instead of
- * however many `setInterval` callbacks it managed to run.
+ * The client subtracts the elapsed wall-clock since the payload arrived rather
+ * than counting its own ticks, so a throttled background tab resumes on the
+ * right number instead of however many `setInterval` callbacks it managed to
+ * run.
+ *
+ * `receivedAt` is the CLIENT's stamp for when the payload landed, not the
+ * server's `generatedAt`. Both it and `now` come from the same `Date.now()`, so
+ * the difference is elapsed time; mixing the two clocks would fold the skew
+ * between them into the countdown, which shows up as a number that jumps at
+ * every poll instead of ticking.
  *
  * Returns `null` when there is nothing to count down, and `0` once the window
  * has elapsed — the caller renders "cold" rather than a negative number.
  */
 export function remainingSeconds(
   secondsUntilScaledown: number | null,
-  generatedAt: number,
+  receivedAt: number,
   now: number,
 ): number | null {
   if (secondsUntilScaledown === null) return null
-  const elapsed = Math.max(0, (now - generatedAt) / 1000)
+  const elapsed = Math.max(0, (now - receivedAt) / 1000)
   return Math.max(0, Math.ceil(secondsUntilScaledown - elapsed))
 }

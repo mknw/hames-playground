@@ -174,7 +174,8 @@ function toPriorResults(refs: ReferenceCandidate[]): PriorResult[] {
 
 const defaultSelector: SelectorFn = async (input) => {
   const { b } = await import('../../../../baml_client')
-  const { warnIfCollectorEmpty, wrapAsLLMCallError } = await import('../baml-adapters.server')
+  const { accountBamlCall, warnIfCollectorEmpty, wrapAsLLMCallError } =
+    await import('../baml-adapters.server')
   const now = Date.now()
   const collector = new Collector('reference-selector')
   const candidates = input.candidates.map((c) => ({
@@ -207,6 +208,10 @@ const defaultSelector: SelectorFn = async (input) => {
   // Nothing here reads the collector, but an empty one still means the options
   // object never reached BAML — i.e. the client override was dropped too (#154).
   warnIfCollectorEmpty(collector, 'ReferenceSelector')
+  // The failure path accounts via `wrapAsLLMCallError` → `extractFailureLLMCallData`;
+  // without this the SUCCESSES of a describe-tier role would be the half that
+  // went uncounted, which biases the header's on-prem share upward.
+  accountBamlCall(collector, 'ReferenceSelector')
   return {
     selected: result.selected.map((s) => ({ ref_id: s.ref_id, reason: s.reason })),
     reasoning: result.reasoning,

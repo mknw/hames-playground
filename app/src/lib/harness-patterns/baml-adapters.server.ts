@@ -164,12 +164,70 @@ export function extractLLMCallData(
   }
   const llmCall = buildLLMCallDataFromLog(last, functionName, variables, startTime, parsedOutput)
   llmCall.metrics = computeEventMetrics(collector)
+  accountBamlCall(collector, functionName, llmCall.metrics)
+  return llmCall
+}
+
+/**
+ * THE accounting chokepoint: the one place a finished BAML call is stamped into
+ * process-wide usage (`llm-usage-observer.server.ts`).
+ *
+ * It is separate from `extractLLMCallData` because accounting coverage and
+ * *observability* coverage are not the same set. A call that produces no
+ * `LLMCallData` event — every describe-tier call, the injection screen — still
+ * spent tokens on a client, and leaving those out does not merely lose detail:
+ * describe and screen are Anthropic-only roles, so their absence from the
+ * denominator made the header's "on-prem %" read HIGHER than the truth. Use
+ * {@link withUsageAccounting} at any site that has no other reason to hold a
+ * collector.
+ *
+ * `metrics` is passed in by the two extractors, which have already computed it;
+ * everyone else lets this recompute from the collector.
+ *
+ * Silent when the collector never saw a call (a pre-flight failure spent
+ * nothing), and never throws — `notifyLlmUsage` owns that guarantee.
+ */
+export function accountBamlCall(
+  collector: Collector | undefined,
+  functionName: string,
+  metrics?: EventMetrics,
+): void {
+  const last = collector?.last
+  if (!last) return
+  const calls = (last.calls ?? []) as CollectorCall[]
+  const selectedCall = calls.find((c) => c.selected) ?? calls[calls.length - 1]
   notifyLlmUsage({
     functionName,
-    clientName: llmCall.clientName,
-    metrics: llmCall.metrics,
+    clientName: selectedCall?.clientName,
+    metrics: metrics ?? computeEventMetrics(collector),
   })
-  return llmCall
+}
+
+/**
+ * Run a BAML call that has no other use for a collector, purely so its usage is
+ * accounted. The collector is created, handed to the call in the options bag,
+ * and read once in a `finally` — a call that threw after reaching the model
+ * still spent what it spent, which is the same rule
+ * `extractFailureLLMCallData` follows.
+ *
+ *   return withUsageAccounting('ResultDescribe', (opts) =>
+ *     b.ResultDescribe(tool, toolArgs, reasoning, result, opts),
+ *   )
+ *
+ * The options bag is passed positionally to a generated function, so a stale
+ * `baml_client` drops it (#154) — the consequence here is an uncounted call,
+ * not a wrong answer, which is why this site does not also warn.
+ */
+export async function withUsageAccounting<T>(
+  functionName: string,
+  run: (opts: { collector: Collector }) => Promise<T>,
+): Promise<T> {
+  const collector = new Collector(functionName)
+  try {
+    return await run({ collector })
+  } finally {
+    accountBamlCall(collector, functionName)
+  }
 }
 
 /** Build LLMCallData from a collector log entry. Used for both success and
@@ -388,11 +446,7 @@ export function extractFailureLLMCallData(
     // Failed steps still spent tokens (e.g. a truncated 32k-output response
     // before the retry also failed) — account for them.
     llmCall.metrics = computeEventMetrics(collector)
-    notifyLlmUsage({
-      functionName,
-      clientName: llmCall.clientName,
-      metrics: llmCall.metrics,
-    })
+    accountBamlCall(collector, functionName, llmCall.metrics)
     return llmCall
   }
   return {
@@ -1268,6 +1322,11 @@ export function createCriticAdapter(): CriticFnWithLLMData {
 /**
  * Summarize a tool result using a lightweight model.
  * Non-fatal: returns empty string on failure.
+ *
+ * The collector exists only for accounting — nothing here reads it, and this
+ * call emits no `LLMCallData` event. See {@link withUsageAccounting}: describe
+ * is the repo's highest-frequency role and an Anthropic-only one, so an
+ * uncounted describe call biases the header's on-prem share upward.
  */
 export async function describeToolResultOp(
   tool: string,
@@ -1277,7 +1336,9 @@ export async function describeToolResultOp(
 ): Promise<string> {
   try {
     const { b } = await import('../../../baml_client')
-    return await b.ResultDescribe(tool, toolArgs, reasoning, result)
+    return await withUsageAccounting('ResultDescribe', (opts) =>
+      b.ResultDescribe(tool, toolArgs, reasoning, result, opts),
+    )
   } catch {
     return ''
   }
@@ -1321,7 +1382,10 @@ export async function describeToolResultsBatchOp(
       reasoning: i.reasoning,
       result: i.result,
     }))
-    const batch = await b.ResultDescribeBatch(targets)
+    // Collector for accounting only — see `describeToolResultOp`.
+    const batch = await withUsageAccounting('ResultDescribeBatch', (opts) =>
+      b.ResultDescribeBatch(targets, opts),
+    )
     for (const entry of batch?.summaries ?? []) {
       const summary = entry?.summary?.trim()
       if (summary && wanted.has(entry.id)) byId.set(entry.id, summary)
@@ -1393,7 +1457,13 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
 
     const { b } = await import('../../../baml_client')
     const source = `${namespace}/${tool}`
-    const verdict = await b.ScreenUntrustedContent(source, body)
+    // The collector carries accounting ONLY. It is not a client override and
+    // cannot become one: `clientOverrideFor('screen')` has no call site
+    // anywhere, which is what keeps this call on `DescribeAnthropic` in every
+    // tier position (SA-M5) — structurally, not by a map's omission.
+    const verdict = await withUsageAccounting('ScreenUntrustedContent', (opts) =>
+      b.ScreenUntrustedContent(source, body, opts),
+    )
 
     return {
       injection_detected: verdict.injection_detected,

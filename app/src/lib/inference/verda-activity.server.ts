@@ -20,7 +20,10 @@
  * `beginVerdaTurn()` around the turn, not individual outstanding HTTP calls.
  * A turn holds the box awake for its whole duration, so "a Verda turn is
  * running" is exactly the thing worth showing; "one call is on the wire right
- * now" would need a hook at every adapter for no extra information.
+ * now" would need a hook at every adapter for no extra information. It is
+ * incremented at turn ENTRY, though, so on its own it is a statement of intent,
+ * not of warmth — which is why a running turn with no recent completed call
+ * reads as `starting` rather than `running` (see {@link VerdaWarmth}).
  *
  * ## MULTI-INSTANCE CAVEAT (deliberate, and a preview-only compromise)
  *
@@ -113,16 +116,20 @@ export function resetVerdaActivity(): void {
 /** What the header renders. */
 export interface VerdaWarmth {
   /**
-   * - `running` — a turn is on the box right now (implies warm).
+   * - `running` — a turn is on the box right now, AND the box was already warm
+   *   when it started (so it implies warm, which is what the word promises).
+   * - `starting` — a turn is on the box but nothing recent proves the box was
+   *   up, so this turn is probably paying the cold start. Never claims a
+   *   countdown: there is nothing measured to count down from.
    * - `warm` — a call completed within the scale-down window.
    * - `cold` — nothing recent; the next call pays a cold start.
    * - `unknown` — this process has never seen a Verda call, so it cannot tell
    *   `cold` from "warm because another instance is using it". Distinct from
    *   `cold` on purpose: presenting a guess as a measurement is the failure.
    */
-  state: 'running' | 'warm' | 'cold' | 'unknown'
+  state: 'running' | 'starting' | 'warm' | 'cold' | 'unknown'
   /** Whole seconds until scale-down, or `null` when there is nothing to count
-   *  down (`cold`/`unknown`). Never negative. */
+   *  down (`starting`/`cold`/`unknown`). Never negative. */
   secondsUntilScaledown: number | null
   /** The configured delay, so the client can render a proportion without a
    *  second round trip. */
@@ -140,8 +147,21 @@ export function verdaWarmth(now: number = Date.now()): VerdaWarmth {
   // A running turn keeps the box awake regardless of when the last call
   // completed — reporting a countdown here would tick towards a scale-down
   // that cannot happen while work is in flight.
+  //
+  // But `inFlight` is incremented at turn ENTRY, before any call has reached
+  // the box, so on its own it proves intent rather than warmth. Claiming
+  // "answering" with a full countdown for the first message to a scaled-to-zero
+  // deployment tells the sender the box is up while they pay the multi-minute
+  // cold start this indicator exists to warn about — and tells every OTHER
+  // reader of the strip the same, so they send into the same wait. The whole
+  // module errs pessimistically by design; this was the one place it did not.
+  // So a turn only reads as `running` when a completed call independently says
+  // the box was warm; otherwise it reads as `starting`, which claims nothing.
   if (state.inFlight > 0) {
-    return { state: 'running', secondsUntilScaledown: scaledownSeconds, scaledownSeconds }
+    const provenWarm = last !== null && last + scaledownSeconds * 1000 > now
+    return provenWarm
+      ? { state: 'running', secondsUntilScaledown: scaledownSeconds, scaledownSeconds }
+      : { state: 'starting', secondsUntilScaledown: null, scaledownSeconds }
   }
   if (last === null) {
     return { state: 'unknown', secondsUntilScaledown: null, scaledownSeconds }

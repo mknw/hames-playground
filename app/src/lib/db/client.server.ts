@@ -42,6 +42,17 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS conversations_user_updated_idx
     ON conversations (user_id, updated_at DESC);
 
+  -- Recency alone, with NO leading user_id. The two composite indexes above
+  -- cannot seek on \`updated_at\` — it is never their leading column — so the
+  -- preview header's active-user count (\`metrics/preview-counters.server.ts\`,
+  -- polled every 15s by every open tab on every route) degraded to an
+  -- index-ONLY scan of the whole table: measured on 200k rows, 808 buffers /
+  -- cost 4824 to return 14 rows, against 4 buffers / cost 9 with this index.
+  -- It is O(the window) instead of O(every conversation ever), and being one
+  -- column narrower it is also SMALLER than the index it stops scanning.
+  CREATE INDEX IF NOT EXISTS conversations_updated_idx
+    ON conversations (updated_at DESC);
+
   -- Agent-trigger endpoint: a row is either a chat 'conversation' or a
   -- POST-triggered 'action'. These columns are added via ALTER (not in the
   -- CREATE above) so EXISTING databases pick them up too — the CREATE only runs

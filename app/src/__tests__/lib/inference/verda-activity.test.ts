@@ -115,11 +115,23 @@ describe('verdaWarmth', () => {
     expect(warmth.secondsUntilScaledown).toBe(180)
   })
 
-  it('reports running even when no call has completed yet', () => {
-    // The first turn of a cold start: in flight, nothing finished. "unknown"
-    // would be wrong — we know exactly what is happening.
+  it('reports STARTING, not running, when nothing proves the box was up', () => {
+    // The first turn against a scaled-to-zero deployment: in flight, nothing
+    // completed. `running` is documented as "implies warm" and renders a full
+    // countdown, so claiming it here tells the sender the box is up while they
+    // pay the multi-minute cold start this indicator exists to warn about —
+    // and tells everyone else reading the strip to send into the same wait.
     beginVerdaTurn()
-    expect(verdaWarmth(NOW).state).toBe('running')
+    expect(verdaWarmth(NOW)).toMatchObject({ state: 'starting', secondsUntilScaledown: null })
+  })
+
+  it('reports STARTING when the last completed call is older than the window', () => {
+    // Same claim, reached the other way: the box scaled down at some point
+    // after that call, so this turn is paying a cold start too. Only a call
+    // inside the window is evidence of warmth.
+    noteVerdaCallCompleted(NOW)
+    beginVerdaTurn()
+    expect(verdaWarmth(NOW + 181_000).state).toBe('starting')
   })
 
   it('returns to the countdown when the turn ends', () => {
@@ -130,12 +142,24 @@ describe('verdaWarmth', () => {
   })
 
   it('tracks concurrent turns rather than the last one to finish', () => {
+    noteVerdaCallCompleted(NOW)
     beginVerdaTurn()
     beginVerdaTurn()
     endVerdaTurn()
     expect(verdaWarmth(NOW).state).toBe('running')
     endVerdaTurn()
-    expect(verdaWarmth(NOW).state).toBe('unknown')
+    expect(verdaWarmth(NOW).state).toBe('warm')
+  })
+
+  it('clamps the in-flight gauge at zero, so a later turn still registers', () => {
+    // Pins the `Math.max(0, ...)` in `endVerdaTurn` from the other side. Without
+    // it, two mispaired decrements leave the gauge at -2 and the NEXT genuine
+    // turn reads as no turn at all — the header would go quiet for the run it
+    // exists to report. The test below covers the direction that stays stuck ON.
+    endVerdaTurn()
+    endVerdaTurn()
+    beginVerdaTurn()
+    expect(verdaWarmth(NOW).state).toBe('starting')
   })
 
   it('cannot be pinned to running by an unbalanced decrement', () => {

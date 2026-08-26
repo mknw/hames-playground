@@ -57,14 +57,18 @@ export interface PreviewHeaderState {
   activeUsers: number
   activeWindowMinutes: number
   usage: UsageToday
-  /** Stamped server-side so the client can tick the countdown between polls
-   *  against the same clock the countdown was computed on. */
+  /** When the server computed this payload. Informational: the strip ticks its
+   *  countdown against its OWN receipt time, because subtracting a server stamp
+   *  from a client `Date.now()` would measure clock skew as well as elapsed
+   *  time (`preview-header-format.ts`, `remainingSeconds`). */
   generatedAt: number
 }
 
 /** The strip's whole payload. Cheap by construction: two indexed reads and a
  *  process-local clock — no event blob is opened, which is what makes it safe
- *  to poll. */
+ *  to poll. "Indexed" is load-bearing for the active-user read and was not true
+ *  when this shipped: it needs `conversations_updated_idx` (`db/client.server.ts`),
+ *  the only index on that table that leads on `updated_at`. */
 export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
   const user = await requireUser()
   const [stored, activeUsers, usage] = await Promise.all([

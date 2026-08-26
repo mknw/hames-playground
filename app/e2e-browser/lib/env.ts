@@ -89,10 +89,12 @@ export const COLD_START_HEADLINE = 'starting GPU'
 /**
  * `VERDA_SCALEDOWN_SECONDS` for the dev server under test.
  *
- * Two seconds instead of the shipped 180. This is not a shortcut around the
- * feature — it is the only way to REACH it more than once. The cold-start
- * notice fires when nothing says the box is up, and a completed self-hosted
- * call marks it warm for the whole scale-down window
+ * Two seconds instead of the shipped default (300 since 2026-08-26, when the
+ * owner set it to match the live box; it was 180 when this suite was written,
+ * and the exact figure has never been what matters here). This is not a
+ * shortcut around the feature — it is the only way to REACH it more than once.
+ * The cold-start notice fires when nothing says the box is up, and a completed
+ * self-hosted call marks it warm for the whole scale-down window
  * (`inference/verda-activity.server.ts`). The suite's own preflight turn makes
  * such a call, so with the shipped value every later scenario would run against
  * a box this process believes is warm, and the notice would never fire — the
@@ -100,8 +102,8 @@ export const COLD_START_HEADLINE = 'starting GPU'
  *
  * It is an operator-facing env var the app already reads per call, clamped and
  * warned about on garbage, so setting it is configuration rather than a test
- * hook. What it costs: this suite cannot say anything about the 180-second
- * window itself, only about what happens on either side of it.
+ * hook. What it costs: this suite cannot say anything about the shipped window
+ * itself, only about what happens on either side of it.
  */
 export const VERDA_SCALEDOWN_SECONDS = 2
 

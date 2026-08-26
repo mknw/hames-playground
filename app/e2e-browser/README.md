@@ -121,13 +121,18 @@ Two halves, and only the second is new.
 so pointing that variable at the fake is what a developer does to run the
 deployment locally.
 
-**The Anthropic chains have no such seam**, and a verda-tier turn still makes
-its `router` / `describe` / `screen` / `planner` and title calls on them — that
-is what the shipped tier does. `app/e2e/` solves this with a test-only
+**The Anthropic chains have no such seam**, and the anthropic position of the
+header switch runs every role on them. `app/e2e/` solves this with a test-only
 `ClientRegistry` installed on the `b` it imported. **This suite cannot**: the app
 is a different process and there is no handle to install anything on. Without a
 redirect, those calls would leave the machine on the developer's own key, from a
 suite advertised as hermetic.
+
+> Until the 2026-08-26 tier widening this was true of a _verda_-tier turn too —
+> `router` / `describe` / `screen` / `planner` and the title call stayed on
+> Anthropic in both switch positions. Every role is on the tier now, so the
+> redirect is reachable only from the anthropic position. It did not become
+> optional: scenario 3 uses that position, and so does half of the preflight.
 
 So there is one dev-only module in `src/`:
 [`lib/inference/dev-fake-inference.server.ts`](../src/lib/inference/dev-fake-inference.server.ts),
@@ -157,10 +162,21 @@ the route a call took.
 
 **Fail-closed, twice.** `ANTHROPIC_API_KEY` is overwritten with a sentinel, so
 the worst case of a failed redirect is a loud 401 rather than a bill. And global
-setup runs a real turn against the real server before any scenario and
-**refuses to run** unless the fake recorded a call on an Anthropic-chain role —
-"something arrived" is not enough, because the shipped `VERDA_INFERENCE_ENDPOINT`
-seam alone would satisfy that while every side-role call went to the provider.
+setup runs **two** real turns against the real server before any scenario and
+**refuses to run** unless both land: one on the default tier (which proves the
+self-hosted seam is carrying calls, and creates the schema for the next), then
+one forced onto the **anthropic** tier, which has to produce at least one call
+carrying `e2e-fake-anthropic-tier`. Two turns rather than one because of the
+widening above: "something arrived" was never enough, and since every role is
+self-hosted on the private tier there is no longer any Anthropic-chain call on a
+default-tier turn to observe. The tier is forced by writing the same
+`user_prefs` row the header switch writes, and `wipeUserRows()` deletes it
+again, so scenarios still start from the default a preview user gets.
+
+**Something else on the port is refused, not driven.** `startDevServer` TCP-probes
+the port before spawning and throws naming the collision. Without that the boot
+probe was satisfied by whatever answered `/api/health` first and the run failed
+two steps later, blaming the redirect for a stale vinxi.
 
 ## Knobs
 
@@ -177,21 +193,22 @@ seam alone would satisfy that while every side-role call went to the provider.
 One value is **not** a knob and is set unconditionally: `VERDA_SCALEDOWN_SECONDS=2`
 on the server under test. The cold-start notice only fires when nothing says the
 box is up, and a completed self-hosted call marks it warm for the whole
-scale-down window — with the shipped 180s, the suite's own preflight would leave
-the box "warm" for the entire run and scenario 2 could never reach the feature.
-See `lib/env.ts`. The cost is stated there too: this suite says nothing about
-the 180-second window itself, only about what happens on either side of it.
+scale-down window — with the shipped default (300s), the suite's own preflight
+would leave the box "warm" for the entire run and scenario 2 could never reach
+the feature. See `lib/env.ts`. The cost is stated there too: this suite says
+nothing about the shipped window itself, only about what happens on either side
+of it.
 
 ## The scenarios
 
-| File                               | What it pins                                                                                                                                                                                                                                                                                                               |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `01-send-and-reply.browser.ts`     | A message typed into the composer gets an answer **painted** in the transcript, the composer comes back, and the conversation appears in the sidebar under the title the server pushed down the same stream.                                                                                                               |
-| `02-cold-start-spinner.browser.ts` | **The reason this layer exists.** A cold self-hosted box shows the warming spinner with its headline and estimate, the progress bar is suppressed in its favour, and both clear when the answer streams in. Then the failure twin: a box that will not serve ends the turn as a VISIBLE error with no spinner left behind. |
-| `03-tier-switch.browser.ts`        | Clicking the header switch moves the calls the switch is supposed to move — read off the `model` the fake recorded, per position — without forking the conversation, and the position survives a reload because it lives on the server.                                                                                    |
-| `04-mid-turn-reload.browser.ts`    | Reloading with a turn in flight keeps the conversation in the list, rebuilds its history from Postgres on reopen, and does not cancel the run whose reader went away — both turns are there afterwards.                                                                                                                    |
-| `05-multi-turn.browser.ts`         | Three turns, all still on screen, alternating question/answer in document order — plus one wire assertion that turn 3 was handed turn 1, so this is a conversation and not a list.                                                                                                                                         |
-| `06-theme-sanity.browser.ts`       | In dark AND light: the tier label and the Send button are not invisible on their own (composited) background, and two icon spans actually paint a glyph — the shape an unregistered `i-mdi-*` leaves behind.                                                                                                               |
+| File                               | What it pins                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `01-send-and-reply.browser.ts`     | A message typed into the composer gets an answer **painted** in the transcript, the composer comes back, and the conversation appears in the sidebar under the title the server pushed down the same stream.                                                                                                                                                                                                                                            |
+| `02-cold-start-spinner.browser.ts` | **The reason this layer exists.** A cold self-hosted box shows the warming spinner with its headline and estimate, the progress bar is suppressed in its favour, and the notice RETRACTS — asserted with the turn provably still running (two calls withheld, Stop still visible), because otherwise the teardown unmount discharges it. Then the failure twin: a box that will not serve ends the turn as a VISIBLE error with no spinner left behind. |
+| `03-tier-switch.browser.ts`        | Clicking the header switch moves the controller and synthesizer calls — read off the `model` the fake recorded, per position — without forking the conversation, and the position survives a reload because it lives on the server. The MAPPING (which roles move) belongs to `app/e2e/scenarios/05`; what is only checkable here is that a click reaches it.                                                                                           |
+| `04-mid-turn-reload.browser.ts`    | Reloading with a turn in flight keeps the conversation in the list, rebuilds its history from Postgres on reopen, and does not cancel the run whose reader went away — both turns are there afterwards.                                                                                                                                                                                                                                                 |
+| `05-multi-turn.browser.ts`         | Three turns, all still on screen, alternating question/answer in document order — plus one wire assertion that turn 3 was handed turn 1, so this is a conversation and not a list.                                                                                                                                                                                                                                                                      |
+| `06-theme-sanity.browser.ts`       | In dark AND light: the tier label and the Send button are not invisible on their own (composited) background, and two icon spans actually paint a glyph — the shape an unregistered `i-mdi-*` leaves behind.                                                                                                                                                                                                                                            |
 
 ### What is NOT covered
 

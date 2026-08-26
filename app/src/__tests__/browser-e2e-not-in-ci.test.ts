@@ -48,6 +48,100 @@ function walk(dir: string): string[] {
 const FILES = walk(path.join(APP, SUITE))
 const TS = FILES.filter((f) => f.endsWith('.ts'))
 
+// ============================================================================
+// The server-entry static-import closure
+// ============================================================================
+
+/** The module SolidStart loads once when the server handler graph loads. */
+const ENTRY = 'src/middleware.ts'
+
+/**
+ * Source with comments removed.
+ *
+ * Load-bearing, not hygiene: the two modules this file is about both DISCUSS
+ * `import('…/baml_client')` in their doc comments, and a scanner that read
+ * prose as code would report the very idiom it exists to require.
+ */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+}
+
+interface StaticImport {
+  /** The specifier as written. */
+  spec: string
+  /** `import type` / `export type` — erased before a bundler sees it, so it
+   *  neither creates a graph edge nor pulls a runtime into the entry chunk. */
+  typeOnly: boolean
+  /** The statement, whitespace-collapsed, for a legible failure message. */
+  text: string
+}
+
+/**
+ * Every STATIC import/re-export in a module. Dynamic `import()` is deliberately
+ * not matched — it is the house idiom this whole check exists to require, and it
+ * lands in a lazy chunk rather than in the entry.
+ */
+function staticImports(source: string): StaticImport[] {
+  const clean = stripComments(source)
+  const out: StaticImport[] = []
+  // Multi-line named-import lists are covered: the gap between the keyword and
+  // `from` is matched with a negated class, which crosses newlines.
+  const withFrom = /^[ \t]*(?:import|export)[ \t]+(type[ \t]+)?[^'"]*?from[ \t]*['"]([^'"]+)['"]/gm
+  for (const m of clean.matchAll(withFrom)) {
+    out.push({ spec: m[2], typeOnly: m[1] !== undefined, text: m[0].replace(/\s+/g, ' ').trim() })
+  }
+  // `import './x'` for side effects only.
+  for (const m of clean.matchAll(/^[ \t]*import[ \t]*['"]([^'"]+)['"]/gm)) {
+    out.push({ spec: m[1], typeOnly: false, text: m[0].trim() })
+  }
+  return out
+}
+
+/** A relative or `~/`-aliased specifier resolved to an app-relative file, or
+ *  `null` for a package import (not walked — a package's own graph is nitro's
+ *  problem, and `@boundaryml/baml` is the thing being asserted ABOUT). */
+function resolveLocal(fromFile: string, spec: string): string | null {
+  let base: string
+  if (spec.startsWith('~/')) base = path.join(APP, 'src', spec.slice(2))
+  else if (spec.startsWith('.')) base = path.resolve(path.dirname(path.join(APP, fromFile)), spec)
+  else return null
+  for (const candidate of [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    path.join(base, 'index.ts'),
+    path.join(base, 'index.tsx'),
+  ]) {
+    try {
+      if (statSync(candidate).isFile()) {
+        return path.relative(APP, candidate).split(path.sep).join('/')
+      }
+    } catch {
+      // Not this candidate.
+    }
+  }
+  return null
+}
+
+/** Everything reachable from `ENTRY` by STATIC imports, transitively. */
+function entryClosure(): string[] {
+  const seen = new Set<string>([ENTRY])
+  const queue = [ENTRY]
+  while (queue.length > 0) {
+    const file = queue.shift()!
+    for (const imported of staticImports(readFileSync(path.join(APP, file), 'utf8'))) {
+      if (imported.typeOnly) continue
+      const resolved = resolveLocal(file, imported.spec)
+      if (resolved === null || seen.has(resolved)) continue
+      seen.add(resolved)
+      queue.push(resolved)
+    }
+  }
+  return [...seen]
+}
+
+const ENTRY_CLOSURE = entryClosure()
+
 describe('the browser e2e suite is not reachable from CI', () => {
   // Guards against the guard becoming vacuous: if the directory were emptied
   // or moved, every assertion below would pass while proving nothing.
@@ -153,7 +247,20 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
     expect(seam).toMatch(/process\.env\.E2E_FAKE_INFERENCE_URL/)
   })
 
-  it('never imports BAML at module scope, so the production entry stays clean', () => {
+  it('the server-entry closure is WALKED, so the pin cannot go vacuous', () => {
+    // The assertion below is only as good as this list. A resolver that stopped
+    // returning anything would make it green over nothing, so the three
+    // landmarks the invariant is about are named: the entry, the seam it
+    // reaches, and the deepest module the reviewer's walk turned up — the one
+    // whose acquiring a `Collector` import is the realistic regression.
+    expect(ENTRY_CLOSURE).toContain(ENTRY)
+    expect(ENTRY_CLOSURE).toContain('src/lib/inference/dev-fake-inference.server.ts')
+    expect(ENTRY_CLOSURE).toContain('src/lib/metrics/usage-recorder.server.ts')
+    expect(ENTRY_CLOSURE).toContain('src/lib/harness-patterns/clients.server.ts')
+    expect(ENTRY_CLOSURE.length).toBeGreaterThan(10)
+  })
+
+  it('nothing in the server-entry closure imports BAML at module scope', () => {
     // The regression CI caught on the first push of this suite: a static
     // `import { ClientRegistry } from '@boundaryml/baml'` in the seam reaches
     // the server ENTRY chunk through `src/middleware.ts` (which imports the
@@ -164,19 +271,30 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
     // that in place — only the docker boot job fails — which is exactly why it
     // is pinned here, in the suite that runs on every push.
     //
-    // Nothing else in `src/` imports BAML at module scope either: the house
-    // idiom is `const { b } = await import('…/baml_client')` inside an async
-    // function. These two modules have to keep following it.
-    for (const [name, source] of [
-      ['dev-fake-inference.server.ts', seam],
-      ['middleware.ts', middleware],
-    ] as const) {
-      const staticImports = source
-        .split('\n')
-        .filter((line) => /^import\b/.test(line) || /^\s*\} from '/.test(line))
-        .filter((line) => /@boundaryml\/baml|baml_client/.test(line))
-      expect(staticImports, `${name} imports BAML at module scope`).toEqual([])
-    }
+    // THE CLOSURE, not two files. The first version of this checked
+    // `dev-fake-inference.server.ts` and `middleware.ts` by name and said
+    // "nothing else in `src/` imports BAML at module scope either". That was
+    // false when it was written: `harness-patterns/routing.server.ts`,
+    // `baml-adapters.server.ts`, eight `patterns/*.server.ts` and
+    // `agents/title-generator.server.ts` all do. They are SAFE — none of them
+    // is in the entry graph — and that is the actual rule, so it is the rule
+    // that is asserted. An independent review walked this closure and found
+    // ~19 modules, including `metrics/usage-recorder.server.ts` →
+    // `harness-patterns/clients.server.ts`: any one of those acquiring a
+    // module-scope `Collector` restores the boot regression with the old
+    // two-file pin, `typecheck`, `test:run` and `build` all green.
+    //
+    // `import type` is not an offender: it is erased before a bundler sees it,
+    // which is why several modules in the closure legitimately import BAML
+    // TYPES. The house idiom for values stays
+    // `const { b } = await import('…/baml_client')` inside an async function.
+    const offenders = ENTRY_CLOSURE.flatMap((file) =>
+      staticImports(readFileSync(path.join(APP, file), 'utf8'))
+        .filter((imported) => !imported.typeOnly)
+        .filter((imported) => /@boundaryml\/baml|baml_client/.test(imported.spec))
+        .map((imported) => `${file}: ${imported.text}`),
+    )
+    expect(offenders, 'a module in the server-entry graph imports BAML at module scope').toEqual([])
   })
 
   it('is only ever reached from the boot hook behind that same gate', () => {

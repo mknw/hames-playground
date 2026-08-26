@@ -8,11 +8,13 @@
  * position is checked twice — the header reflects it, AND the fake endpoint
  * recorded the matching `model` on the calls the switch is supposed to move.
  *
- * `app/e2e/scenarios/05-tier-switch` proves the same routing through the server
- * action, and additionally that `router` / `describe` / `screen` never move
- * (`SA-M5`). That is the authority on the mapping; what is unproven until here
- * is that a CLICK reaches it at all — the preference is written by a server
- * action from the browser, and nothing below this layer sends that click.
+ * `app/e2e/scenarios/05-tier-switch` is the authority on the MAPPING — which
+ * roles a tier decision moves. It used to prove that `router` / `describe` /
+ * `screen` never moved; since the 2026-08-26 owner decision every role is on
+ * the tier, and it proves the opposite for `router` and `describe`. What is
+ * unproven until here, and unchanged by that, is that a CLICK reaches the
+ * mapping at all: the preference is written by a server action from the
+ * browser, and nothing below this layer sends that click.
  */
 import { test, expect } from '../lib/fixtures'
 import { FAKE_ANTHROPIC_TIER_MODEL, VERDA_MODEL } from '../lib/env'
@@ -22,11 +24,18 @@ import type { FakeCall } from '../lib/control'
 const PRIVATE = 'Private (Verda)'
 const ANTHROPIC = 'Anthropic'
 
-/** The calls the switch actually moves. `LoopController` is this chain's
- *  controller role and `Synthesize` its `compactExecution` role — both in
- *  `VERDA_CLIENT_BY_ROLE`. Asserting on the whole call list instead would fold
- *  in the roles that stay on Anthropic in BOTH positions and make the two
- *  tiers look identical. */
+/** The two calls this scenario asserts on. `LoopController` is this chain's
+ *  controller role and `Synthesize` its `compactExecution` role.
+ *
+ *  The filter was originally needed: it kept the roles that stayed on Anthropic
+ *  in BOTH positions out of the comparison. Since the tier widening there are
+ *  none, so it is now a NARROWING rather than a correction — kept because these
+ *  two are separate call sites each spreading their own `clientOverrideFor(role)`
+ *  and each turn is guaranteed to make both, whereas the side roles a turn
+ *  happens to make vary with the chain and would make a red result ambiguous
+ *  about what moved. Widening it to every call is a strictly stronger assertion
+ *  today and belongs to the layer that owns the mapping (`app/e2e/`), not to the
+ *  one that owns the click. */
 const SWITCHED = (calls: FakeCall[]) =>
   calls.filter((call) => call.fn === 'LoopController' || call.fn === 'Synthesize')
 

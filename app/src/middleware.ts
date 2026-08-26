@@ -32,16 +32,26 @@ installUsageRecorder()
  *
  * ## Why the `import()` is inside the handler
  *
- * Nothing in `src/` imports `baml_client` at module scope: every call site in
- * the app writes `const { b } = await import('…/baml_client')` INSIDE an async
- * function, which is what keeps the native runtime out of the server entry.
- * The first draft of this file broke that by creating the promise at module
- * scope — nitro then linked `@boundaryml/baml` into `.output/server/index.mjs`
- * itself and the production container died at boot with `Cannot find module
+ * Nothing in THIS MODULE'S STATIC-IMPORT CLOSURE may import `baml_client` or
+ * `@boundaryml/baml` at module scope. That is the rule, and it is narrower than
+ * "nothing in `src/` does" — which is simply untrue: `harness-patterns`'
+ * patterns and adapters take a module-scope `Collector`, and
+ * `agents/title-generator.server.ts` imports `b` itself. Those are fine
+ * precisely because nothing reaches them from here.
+ *
+ * The house idiom for a call site that IS reachable from the entry is
+ * `const { b } = await import('…/baml_client')` INSIDE an async function, which
+ * is what keeps the native runtime out of the server entry chunk. The first
+ * draft of this file broke that by creating the promise at module scope — nitro
+ * then linked `@boundaryml/baml` into `.output/server/index.mjs` itself and the
+ * production container died at boot with `Cannot find module
  * '…/@boundaryml/baml/native'` before serving a single request. `pnpm build`
  * passes either way; CI's `docker image · build · boot` job is what caught it.
- * Following the same idiom as everything else keeps the import in a lazy chunk
- * that a production run never loads.
+ *
+ * The closure is walked and pinned by
+ * `src/__tests__/browser-e2e-not-in-ci.test.ts`, so adding an import here — or
+ * anywhere below here — that drags BAML in fails on every push rather than only
+ * in the docker job.
  *
  * ## Why a handler at all rather than a top-level await
  *

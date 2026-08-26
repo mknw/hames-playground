@@ -31,9 +31,10 @@
  */
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { startFakeLlm, type FakeLlm, type Fault } from '../../e2e/lib/fake-llm'
+import { startFakeLlm, type FakeCall, type FakeLlm, type Fault } from '../../e2e/lib/fake-llm'
 import { startFakeGateway, type FakeGateway } from '../../e2e/lib/fake-gateway'
-import { VERDA_MODEL } from './env'
+import { FAKE_ANTHROPIC_TIER_MODEL } from './env'
+import { setStoredTier } from './db'
 
 export interface Backend {
   readonly llm: FakeLlm
@@ -117,44 +118,73 @@ export async function startBackend(): Promise<Backend> {
  * The probe is a real HTTP request to the real server — `/api/events`, the
  * route the browser posts to — because that is the only thing that proves the
  * redirect reached the process actually serving the app.
+ *
+ * ## Why it takes TWO turns since 2026-08-26
+ *
+ * It used to be one, and it asserted "at least one call arrived on a model
+ * that is not `VerdaQwen`" — the side roles (`router` / `describe` / `screen` /
+ * `planner` / title) were held on Anthropic in both switch positions, so any
+ * turn at all witnessed the redirect. The owner's tier widening put EVERY role
+ * on the self-hosted deployment for a private-tier run, and the private tier is
+ * also the default when `VERDA_INFERENCE_ENDPOINT` is configured — which global
+ * setup configures. So a default-tier turn now makes no Anthropic-chain call
+ * whatsoever, and the old assertion would have failed for the right reason
+ * about the wrong thing: nothing was leaking, there was simply nothing left to
+ * observe on that turn.
+ *
+ * The two claims are therefore now one turn each, and neither can stand in for
+ * the other:
+ *
+ *  1. **The self-hosted seam.** A default-tier turn reaches the fake at all.
+ *     This is the shipped `VERDA_INFERENCE_ENDPOINT` route, and it is also what
+ *     creates the schema the tier row below is written into.
+ *  2. **The Anthropic redirect.** A turn forced onto the anthropic tier has to
+ *     produce at least one call carrying `FAKE_ANTHROPIC_TIER_MODEL`. That is
+ *     the only tier from which the redirect is reachable now, so it is the only
+ *     place the fail-closed check can live.
  */
 export async function assertHermetic(backend: Backend, appUrl: string): Promise<void> {
+  const onDefaultTier = await probeTurn(backend, appUrl, 'default')
+  if (onDefaultTier.length === 0) {
+    throw new Error(
+      'e2e-browser preflight: a whole turn completed WITHOUT one call reaching the fake ' +
+        'endpoint. Neither seam is carrying the run — check that E2E_FAKE_INFERENCE_URL and ' +
+        'VERDA_INFERENCE_ENDPOINT reached the dev server, and that src/middleware.ts still ' +
+        'calls installDevFakeInference(). Refusing to run: every scenario would otherwise ' +
+        'issue real provider calls with whatever key the environment holds.',
+    )
+  }
+
+  // The row `resolveInferenceTier()` reads, written the way the header switch
+  // writes it. Only reachable now that the turn above has run `ensureSchema()`.
+  await setStoredTier('anthropic')
+  const onAnthropicTier = await probeTurn(backend, appUrl, 'anthropic')
+  if (!onAnthropicTier.some((call) => call.model === FAKE_ANTHROPIC_TIER_MODEL)) {
+    throw new Error(
+      'e2e-browser preflight: a turn forced onto the ANTHROPIC tier produced no call ' +
+        `carrying \`${FAKE_ANTHROPIC_TIER_MODEL}\` (${onAnthropicTier.length} call(s) served: ` +
+        `${[...new Set(onAnthropicTier.map((call) => call.model))].join(', ') || 'none'}). The ` +
+        'Anthropic-chain redirect is NOT installed, so those calls are going to the real ' +
+        'provider. See src/lib/inference/dev-fake-inference.server.ts.',
+    )
+  }
+}
+
+/** One real turn against the real server; the calls the fake served for it. */
+async function probeTurn(backend: Backend, appUrl: string, label: string): Promise<FakeCall[]> {
   const before = backend.llm.calls.length
   const response = await fetch(`${appUrl}/api/events`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      sessionId: `e2e-browser-preflight-${Date.now()}`,
+      sessionId: `e2e-browser-preflight-${label}-${Date.now()}`,
       message: 'preflight',
       agentId: 'search',
     }),
   })
   // Drain the stream; the turn itself is not what is being asserted.
   await response.text()
-
-  const served = backend.llm.calls.slice(before)
-  if (served.length === 0) {
-    throw new Error(
-      'e2e-browser preflight: a whole turn completed WITHOUT one call reaching the fake ' +
-        'endpoint. The dev server did not install the redirect — check that ' +
-        'E2E_FAKE_INFERENCE_URL reached it and that src/middleware.ts still calls ' +
-        'installDevFakeInference(). Refusing to run: every scenario would otherwise issue ' +
-        'real provider calls with whatever key the environment holds.',
-    )
-  }
-  // Not merely "something arrived": the roles the tier switch never moves
-  // (router, describe, screen, planner, title) are the ones that would go to
-  // Anthropic, and they are the reason this module exists. If ONLY the
-  // self-hosted-model calls arrived, the redirect is not installed and the
-  // shipped `VERDA_INFERENCE_ENDPOINT` seam is carrying the run alone.
-  if (!served.some((call) => call.model !== VERDA_MODEL)) {
-    throw new Error(
-      'e2e-browser preflight: the fake served only self-hosted-model calls, so the ' +
-        'Anthropic-chain redirect is NOT installed — the roles the tier switch never moves ' +
-        '(router / describe / screen / planner / title) are still going to the real provider. ' +
-        'See src/lib/inference/dev-fake-inference.server.ts.',
-    )
-  }
+  return backend.llm.calls.slice(before)
 }
 
 // ============================================================================

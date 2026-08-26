@@ -63,3 +63,38 @@ export async function conversationRows(): Promise<Array<{ id: string; status: st
     await client.end().catch(() => {})
   }
 }
+
+/**
+ * Force the suite's user onto one inference tier, the way the header switch
+ * does — by writing the row `resolveInferenceTier()` reads.
+ *
+ * Used by global setup's preflight, which since the 2026-08-26 tier widening
+ * needs BOTH tiers to prove itself (see `assertHermetic`): every role is now
+ * self-hosted on the private tier, so a default-tier turn makes no Anthropic
+ * call at all and cannot witness the redirect. Requires the app to have booted
+ * far enough to have run `ensureSchema()` — the preflight's first turn is what
+ * guarantees that, which is why this is called between the two and not before
+ * either.
+ *
+ * The same raw upsert `setStoredInferenceTier()` performs, rather than an
+ * import of it, for this file's stated reason: the repository modules are
+ * `.server.ts` and would drag `assertServerOnImport` into the runner.
+ * `wipeUserRows()` deletes the row afterwards, so scenarios still start from
+ * the default a preview user gets.
+ */
+export async function setStoredTier(tier: 'anthropic' | 'verda'): Promise<void> {
+  const client = new pg.Client({ connectionString: TEST_DATABASE_URL })
+  await client.connect()
+  try {
+    await client.query(
+      `INSERT INTO user_prefs (user_id, inference_tier)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id) DO UPDATE SET
+         inference_tier = EXCLUDED.inference_tier,
+         updated_at     = NOW()`,
+      [BYPASS_USER_ID, tier],
+    )
+  } finally {
+    await client.end().catch(() => {})
+  }
+}

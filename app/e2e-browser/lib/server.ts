@@ -16,6 +16,7 @@
  * bundle needs a real session, and that is a different suite.
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { connect } from 'node:net'
 import { APP_DIR, SERVER_BOOT_TIMEOUT_MS } from './env'
 
 /**
@@ -64,6 +65,8 @@ export async function startDevServer(
   // environment, and `undefined` here means "do not pass it on".
   env: Record<string, string | undefined>,
 ): Promise<DevServer> {
+  await assertPortFree(port)
+
   const url = `http://127.0.0.1:${port}`
   const log: string[] = []
 
@@ -121,6 +124,52 @@ export async function startDevServer(
       await stopChild(child)
     },
   }
+}
+
+/**
+ * Refuse to start if anything is already listening on `port`.
+ *
+ * Found by review: with a stub answering `/api/health` on 3446, vinxi did not
+ * fail — `startDevServer`'s boot probe was satisfied by the SQUATTER, the run proceeded,
+ * and the failure surfaced two steps later as the preflight blaming
+ * `src/middleware.ts` for not installing the redirect. It failed closed, which
+ * is the property that matters, but it accused the wrong thing, and it POSTed a
+ * real turn at whatever answered first — harmless against a dead e2e server
+ * from a crashed run, less harmless against an unrelated app instance.
+ *
+ * A TCP connect rather than a `/api/health` fetch, deliberately: the question is
+ * "is anything on this port", and a squatter that speaks no HTTP is exactly the
+ * case an HTTP probe would wave through.
+ *
+ * The `vinxi dev` process cannot be made to do this itself — vite's
+ * `strictPort` is a config-file setting and this suite spawns the app's own
+ * unmodified dev command — so the check lives on this side of the spawn, which
+ * is also where the diagnosis is legible.
+ */
+async function assertPortFree(port: number): Promise<void> {
+  const occupied = await new Promise<boolean>((resolve) => {
+    const socket = connect({ host: '127.0.0.1', port })
+    const settle = (answer: boolean): void => {
+      socket.destroy()
+      resolve(answer)
+    }
+    socket.setTimeout(1000)
+    socket.once('connect', () => settle(true))
+    // A refused connect is the answer this function wants; a timeout on
+    // loopback is not "free", but it is not something to drive a suite into
+    // either, so both are reported the same way they would be diagnosed.
+    socket.once('timeout', () => settle(false))
+    socket.once('error', () => settle(false))
+  })
+  if (!occupied) return
+  throw new Error(
+    `e2e-browser: something is already listening on 127.0.0.1:${port}, so this run would ` +
+      'either drive a server it did not configure or fail later with a misleading message ' +
+      'about the dev-only inference redirect. Nothing was started. Likely causes: a stale ' +
+      'vinxi from a crashed run, a second copy of this suite, or an unrelated app instance. ' +
+      `Find it with \`lsof -nP -iTCP:${port} -sTCP:LISTEN\`, or point this run elsewhere with ` +
+      'E2E_BROWSER_PORT.',
+  )
 }
 
 async function stopChild(child: ChildProcess): Promise<void> {

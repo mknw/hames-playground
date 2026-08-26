@@ -31,6 +31,7 @@ import {
   progressRange,
   replyTexts,
   send,
+  stopButton,
   tierOption,
   waitForReplies,
 } from '../lib/chat'
@@ -50,11 +51,15 @@ test('a cold private box shows the warming spinner, suppresses the bar, then cle
   await tierOption(page, PRIVATE).click()
   await expect(page.getByRole('radio', { name: PRIVATE })).toBeChecked()
 
-  // Only the self-hosted model is cold. The `model` filter is what separates
-  // "the app survived a cold start" from "the app was slow everywhere" — the
-  // router, screen and title calls stay instant, exactly as they do in
-  // production, where they run on Anthropic in both switch positions.
-  await backend.arm({ kind: 'cold-start', ms: COLD_START_MS, model: VERDA_MODEL, times: 1 })
+  // TWO calls withheld, not one, and that is what makes the retraction
+  // assertion below able to fail — see it for the mutation that survived with
+  // `times: 1`. The `model` filter still says "the self-hosted route is the
+  // slow one", but since the 2026-08-26 tier widening it no longer separates
+  // ROLES: on the private tier every role is self-hosted, so the two withheld
+  // calls are simply this turn's first two, whatever they are. The notice now
+  // fires from the `router` rather than the controller for the same reason
+  // (`clientOverrideFor()` is the hook, so the code did not change).
+  await backend.arm({ kind: 'cold-start', ms: COLD_START_MS, model: VERDA_MODEL, times: 2 })
 
   // The notice fires when nothing says the box is up, and this process has
   // seen self-hosted calls complete (the preflight, and every scenario before
@@ -75,18 +80,31 @@ test('a cold private box shows the warming spinner, suppresses the bar, then cle
   // notice exists to perform, checked in a browser rather than in jsdom.
   await expect(progressRange(page)).toHaveCount(0)
 
-  // The wait ENDS. A notice that never retracts is the same bug wearing a
-  // better label.
+  // The wait ENDS, and it ends by RETRACTION — which is a different claim from
+  // "the notice was gone by the time the turn finished", and the reason this
+  // block is not one line.
+  //
+  // With one call withheld, `toBeHidden` was discharged by teardown: the whole
+  // progress shell unmounts when the turn ends (`LiveProgressBar` renders on
+  // `props.visible` alone) and `runSend`'s `finally` clears `warming` anyway.
+  // An independent review deleted `sink.onWarming(null)` from
+  // `turn-stream.ts`'s `clearWarming()` — the exact bug this scenario names,
+  // a spinner that sits over the progress bar for the rest of the turn — and
+  // the whole suite stayed green. So: two calls are withheld, and the Stop
+  // button is asserted still visible at the moment the notice goes away. The
+  // turn is provably still running, so nothing but the retraction can have
+  // hidden it.
   await expect(coldStartNotice(page)).toBeHidden({ timeout: COLD_START_MS + 60_000 })
+  await expect(stopButton(page)).toBeVisible()
 
   await waitForReplies(page, 1)
   expectFakeAnswer((await replyTexts(page))[0])
 
-  // Evidence the wait was the self-hosted one: the fake withheld a call for
-  // the declared model, and it is the only one it withheld.
+  // Evidence the wait was the self-hosted one: the fake withheld calls for the
+  // declared model, and only for that model.
   const withheld = (await backend.calls()).filter((call) => call.delayedMs > 0)
-  expect(withheld.length).toBe(1)
-  expect(withheld[0].model).toBe(VERDA_MODEL)
+  expect(withheld.length).toBe(2)
+  for (const call of withheld) expect(call.model).toBe(VERDA_MODEL)
 })
 
 test('a private box that will not serve ends the turn visibly, with no spinner left behind', async ({
@@ -104,9 +122,12 @@ test('a private box that will not serve ends the turn visibly, with no spinner l
   // already pins that all three end the turn non-silently ON THE WIRE. What is
   // unproven until here is that any of it reaches the screen.
   //
-  // The roles the switch never moves are untouched, so the turn gets as far as
-  // routing and then cannot run its controller — which is precisely what a
-  // scale-to-zero box that fails to wake looks like from the app's side.
+  // Since the 2026-08-26 tier widening that is the WHOLE turn: `router` and
+  // `describe` are on the tier too, so a private-tier run has nothing left to
+  // fall back on and fails at its first call. That is precisely what a
+  // scale-to-zero box that never wakes looks like from the app's side, and it
+  // is a strictly harder case than the old one (which still got as far as
+  // routing) — the app has to say so with no partial output to show.
   await backend.arm({
     kind: 'status',
     status: 503,

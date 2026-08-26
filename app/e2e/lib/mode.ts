@@ -21,16 +21,20 @@
  * to cross.
  *
  * WHAT LIVE MODE STILL BILLS, stated rather than implied. `E2E_LIVE=verda` was
- * never "no Anthropic calls", and after the two 2026-08-26 owner decisions it
- * is: the tier switch moves exactly the roles in `VERDA_CLIENT_BY_ROLE`, which
- * is now EVERY role — the injection screen included. So a live run in the
+ * never "no Anthropic calls", and after the 2026-08-26 owner decisions it is:
+ * the tier switch moves exactly the roles in `VERDA_CLIENT_BY_ROLE`, which is
+ * now EVERY role — the injection screen included. So a live run in the
  * self-hosted position bills Anthropic nothing at all. That is a smaller claim
  * than it sounds, because no scenario here triggers a screen call anyway (no
- * agent enables the opt-in LLM screen), and the bill moved rather than shrank:
- * `router`, `planner`, the title and every describe call now land on the
- * self-hosted box, which is more traffic through a single-replica deployment
- * than the pre-widening shape, and the reason the burst discipline above
- * matters more than it did.
+ * agent enables the opt-in LLM screen).
+ *
+ * WHERE THE TRAFFIC GOES changed again with the describe flip, and it went the
+ * helpful way: `router`, `planner` and the controller land on the self-hosted
+ * box, while every describe call — the title, the intent compaction, and one per
+ * tool result, i.e. the majority by count — lands on `SMALL_LLM_BASE_URL`
+ * instead. A live run therefore puts LESS through the single-replica deployment
+ * than the pre-flip shape did, though the burst discipline above still holds:
+ * the calls that remain are the slow ones.
  *
  * What is still avoidable is running each scenario a second time with the
  * switch in the anthropic position, which would put every one of those roles
@@ -91,6 +95,17 @@ export const FAKE_ANTHROPIC_TIER_MODEL = 'e2e-fake-anthropic-tier'
  *  re-derived here on purpose: a scenario asserting "this call took the
  *  self-hosted route" should fail if the declaration changes under it. */
 export const VERDA_MODEL = 'Qwen/Qwen3.8-27B-FP8'
+
+/**
+ * The model id `LocalQwenSmall` declares in `baml_src/local-client.baml` — the
+ * 4B the private tier routes the `describe` role to since 2026-08-26.
+ *
+ * Hardcoded for VERDA_MODEL's reason, and it buys something extra here: the fake
+ * records each request's `model` field, so this is how a scenario tells a
+ * private-tier SUMMARY apart from a private-tier CONTROLLER call. Before the flip
+ * those were the same model and indistinguishable on the wire.
+ */
+export const SMALL_MODEL = 'qwen3.5-4b-instruct'
 
 /**
  * How long the cold-start scenario withholds the first response.

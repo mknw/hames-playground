@@ -33,6 +33,13 @@ const ENV_KEYS = [
   'USE_VERDA_INFERENCE',
   'VERDA_INFERENCE_ENDPOINT',
   'VERDA_INFERENCE_API_KEY',
+  // The private tier is TWO models since 2026-08-26 — `describe` runs on the 4B
+  // `LocalQwenSmall`, reached through this — so it is part of the tier's
+  // configuration and a scope naming `verda` without it is refused. The KEY is
+  // saved/restored too, because one test deletes it to pin that it is NOT
+  // required, and a leaked deletion would change another file's outcome.
+  'SMALL_LLM_BASE_URL',
+  'SMALL_LLM_API_KEY',
 ] as const
 
 /** The roles the map routes — all of them, since 2026-08-26. `router` /
@@ -54,11 +61,26 @@ const UNROUTED: [BamlRole, string][] = []
 
 let saved: Record<string, string | undefined>
 
-/** Endpoint present and shaped correctly, flag NOT set — the preview's normal
- *  deployment posture once the per-user switch exists. */
+/** BOTH endpoints present and shaped correctly, flag NOT set — the preview's
+ *  normal deployment posture once the per-user switch exists. */
 function configureEndpointOnly(): void {
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
+}
+
+/** What each routed role's client is under a `verda` scope. NOT one value any
+ *  more: the tier is the 27B for the heavy roles and the 4B for summarization,
+ *  and a test that asserted one client for all of them would pass with the
+ *  describe flip reverted. */
+const PRIVATE_CLIENT: Record<string, string> = {
+  controller: 'VerdaQwen',
+  critic: 'VerdaQwen',
+  compactExecution: 'VerdaQwen',
+  router: 'VerdaQwen',
+  planner: 'VerdaQwen',
+  describe: 'LocalQwenSmall',
+  screen: 'VerdaQwen',
 }
 
 async function load() {
@@ -86,9 +108,13 @@ describe('runWithInferenceTier — both positions reach the right override', () 
 
     await runWithInferenceTier('verda', async () => {
       for (const role of ROUTED) {
-        expect(clientOverrideFor(role)).toEqual({ client: 'VerdaQwen' })
-        expect(resolveClientForRole(role)).toBe('VerdaQwen')
+        expect(clientOverrideFor(role)).toEqual({ client: PRIVATE_CLIENT[role] })
+        expect(resolveClientForRole(role)).toBe(PRIVATE_CLIENT[role])
       }
+      // Not vacuous, and this is the line that makes the loop above mean
+      // something: the tier really does route two DIFFERENT clients, so a
+      // fixture collapsed back to one value would be caught here.
+      expect(new Set(Object.values(PRIVATE_CLIENT)).size).toBe(2)
     })
   })
 
@@ -107,9 +133,14 @@ describe('runWithInferenceTier — both positions reach the right override', () 
       // both directions, rather than inferred from the map.
       expect(clientOverrideFor('screen')).toEqual({ client: 'VerdaQwen' })
       expect(resolveClientForRole('screen')).toBe('VerdaQwen')
-      // Paired with its neighbour on the same BAML chain, which moved a few
-      // hours earlier — the two are now on the same side, by two decisions.
-      expect(resolveClientForRole('describe')).toBe('VerdaQwen')
+      // AND ITS NEIGHBOUR ON THE SAME BAML CHAIN GOES SOMEWHERE ELSE. `describe`
+      // and `screen` both declare `DescribeAnthropic` in `baml_src/`, so a chain
+      // edit could only ever move them together; the tier map moves them apart,
+      // which is the whole reason `screen` is a role of its own (SA-M5 / SD-4).
+      // Asserted as an inequality as well as two values, because "the screen
+      // stayed off the 4B" is the property, not "the screen is on VerdaQwen".
+      expect(resolveClientForRole('describe')).toBe('LocalQwenSmall')
+      expect(resolveClientForRole('screen')).not.toBe(resolveClientForRole('describe'))
     })
   })
 
@@ -144,9 +175,13 @@ describe('runWithInferenceTier — both positions reach the right override', () 
 
     await runWithInferenceTier('verda', async () => {
       expect(getContextWindow(resolveClientForRole('controller'))).toBe(131_072)
-      // …including the describe role, which sizes `compactBulkData`'s batches
-      // and the retriever's history trim.
-      expect(getContextWindow(resolveClientForRole('describe'))).toBe(131_072)
+      // …but NOT the describe role, which is the point of the flip: it runs on
+      // the 4B, whose server was started with `--ctx-size 32768`. Budgeting
+      // follows routing because `resolveClientForRole` reports the override — a
+      // describe batch still sized for 131K would overflow the summarizer on the
+      // first busy turn, which is the mirror's whole job (`compactBulkData`'s
+      // batches and the retriever's history trim both read this).
+      expect(getContextWindow(resolveClientForRole('describe'))).toBe(32_768)
       // …and the screen, which moved on 2026-08-26. This is the half of that
       // move easiest to forget: the guard hands the screen up to 20 000
       // characters of fetched content, so a screen still budgeted for 200K
@@ -226,6 +261,55 @@ describe('the verda position fails closed when the endpoint is unset', () => {
     )
   })
 
+  it('throws, rather than descaling describe, when the 4B endpoint is unset', async () => {
+    // THE FAILURE POLICY, named (SD-4's "an unexamined one is the defect"). The
+    // private tier routes `describe` to LocalQwenSmall; with no
+    // SMALL_LLM_BASE_URL there are three options and only one is honest:
+    //   - fall back to Anthropic — the one thing the whole route exists to
+    //     prevent, and worse here than anywhere because `describe` is handed tool
+    //     results VERBATIM (SD-10);
+    //   - descale to the 27B — plausible, harmless-looking, and a routing change
+    //     nobody asked for, invisible in every log, moving the tier's
+    //     highest-frequency role onto the model the flip moved it off;
+    //   - refuse the tier. Owner decision 2026-08-26, and this is the pin.
+    // Asserted through the SCOPE rather than through the assert function
+    // directly, because the scope is what a user's stored preference opens.
+    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
+    process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+    const { runWithInferenceTier } = await load()
+    const ran = vi.fn()
+
+    await expect(runWithInferenceTier('verda', async () => ran())).rejects.toThrow(
+      /SMALL_LLM_BASE_URL is not set/,
+    )
+    expect(ran).not.toHaveBeenCalled()
+  })
+
+  it('rejects a 4B endpoint that is not a /v1 base', async () => {
+    // Same reason as the 27B's: BAML hands `base_url` to openai-generic
+    // verbatim, so a root URL 404s every describe call mid-conversation.
+    configureEndpointOnly()
+    process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small'
+    const { runWithInferenceTier } = await load()
+
+    await expect(runWithInferenceTier('verda', async () => 1)).rejects.toThrow(
+      /SMALL_LLM_BASE_URL must be the OpenAI-compatible base URL/,
+    )
+  })
+
+  it('does NOT require the 4B api key — llama-server authenticates nothing', async () => {
+    // A local `make llm-small` has no key to set. Refusing the tier for a
+    // missing one would refuse it for the common case, and a remote endpoint
+    // that checks a key fails loudly on its own with a 401.
+    configureEndpointOnly()
+    delete process.env.SMALL_LLM_API_KEY
+    const { runWithInferenceTier, resolveClientForRole } = await load()
+
+    await expect(
+      runWithInferenceTier('verda', async () => resolveClientForRole('describe')),
+    ).resolves.toBe('LocalQwenSmall')
+  })
+
   it('never blocks the anthropic position — it needs no endpoint', async () => {
     const { runWithInferenceTier, clientOverrideFor } = await load()
 
@@ -241,10 +325,22 @@ describe('verdaConfigured — the non-throwing sibling', () => {
     expect(verdaConfigured()).toBe(false)
   })
 
-  it('is true once both values are present and the endpoint is a /v1 base', async () => {
+  it('is true once BOTH endpoints are present and shaped as /v1 bases', async () => {
     configureEndpointOnly()
     const { verdaConfigured } = await load()
     expect(verdaConfigured()).toBe(true)
+  })
+
+  it('is false with the 27B configured and the 4B missing', async () => {
+    // What this controls is user-visible: `verdaConfigured()` is what disables
+    // the header switch's private position and what `defaultInferenceTier()`
+    // reads. A half-configured deployment must not OFFER a tier whose first
+    // tool-result summary would fail — offering it and failing per turn is
+    // strictly worse than showing one disabled control.
+    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
+    process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+    const { verdaConfigured } = await load()
+    expect(verdaConfigured()).toBe(false)
   })
 
   it('is false for a root URL — offering a tier that throws is worse than hiding it', async () => {

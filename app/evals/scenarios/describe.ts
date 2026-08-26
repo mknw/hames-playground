@@ -11,6 +11,13 @@
  * So the checks are on the batch's SHAPE, not on the summaries' wording: one
  * summary per item, ids echoed verbatim, nothing invented, nothing dropped.
  * That is precisely what moves when a client changes.
+ *
+ * WHICH CLIENT THIS GRADES matters more than it used to. Until 2026-08-26 the
+ * describe role only ever resolved to an Anthropic chain; the private tier now
+ * routes it to the 4B `LocalQwenSmall`, so this is the scenario standing in front
+ * of "does a 4B keep the id discipline a 200B model kept". Run it with
+ * `EVAL_CLIENT=tier` to grade the shipped route; the observations name the client
+ * so a green cell cannot be mistaken for a green cell about a different model.
  */
 
 import { Collector } from '@boundaryml/baml'
@@ -50,6 +57,11 @@ export const describeBatchScenario: Scenario = {
   what: 'the id-keyed batch contract compactBulkData depends on: drop an id and the caller silently falls back to N+1 calls',
   run: async (ctx) => {
     const { b } = await import('../../baml_client')
+    const { expectedClientFor } = await import('../client')
+    const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../src/lib/settings')
+    const { maxBatchItems, MAX_BATCH_ITEMS } =
+      await import('../../src/lib/harness-patterns/compactBulkData.server')
+    const describeClient = expectedClientFor(ctx.routing, 'describe')
     const collector = new Collector('eval-describe-batch')
     const batch = await b.ResultDescribeBatch(ITEMS, ctx.opts('describe', collector))
     const summaries = batch?.summaries ?? []
@@ -78,7 +90,39 @@ export const describeBatchScenario: Scenario = {
         summaries.every((s) => (s.summary ?? '').trim().length > 0),
         `${summaries.filter((s) => (s.summary ?? '').trim().length === 0).length} blank`,
       ),
+      // THE BATCH GEOMETRY IS DERIVED FROM THE CLIENT, and the derivation fails
+      // OPEN: `maxBatchItems()` returns the full 8-item ceiling when the resolved
+      // client has no `CLIENT_MAX_OUTPUT_TOKENS` entry. That is the worst possible
+      // default for a small model — an 8-item batch on a 2 048-token cap truncates,
+      // drops its tail summaries, and sends every dropped item down the per-item
+      // fallback: N+1 calls, which is precisely the cost batching exists to avoid,
+      // and it reads as a cost regression with no cause.
+      //
+      // It became a live risk with the 2026-08-26 describe flip, which is the
+      // first time this role resolved to a client outside the Anthropic chains.
+      // The unit suite pins today's two entries; this checks whatever client THIS
+      // RUN was pointed at, on the machine the run happened on, which is the
+      // moment a newly added one is discovered to be missing.
+      check(
+        `${describeClient} is visible to the batch-size derivation`,
+        typeof CLIENT_MAX_OUTPUT_TOKENS[describeClient] === 'number',
+        typeof CLIENT_MAX_OUTPUT_TOKENS[describeClient] === 'number'
+          ? `max_tokens=${CLIENT_MAX_OUTPUT_TOKENS[describeClient]}`
+          : `no CLIENT_MAX_OUTPUT_TOKENS entry — maxBatchItems() falls back to the full ` +
+              `${MAX_BATCH_ITEMS}-item ceiling for a client whose cap nobody knows`,
+      ),
     ]
-    return { checks, collectors: [collector] }
+    return {
+      checks,
+      collectors: [collector],
+      observations: [
+        // Which model this run actually graded. On the shipped tier
+        // (`EVAL_CLIENT=tier`) this is the 4B and the heavy roles' scenarios say
+        // the 27B — a divergence that is the point, not a mistake, and one the
+        // report has to show rather than imply.
+        { name: 'describe client under test', value: describeClient },
+        { name: 'batch size it affords', value: String(maxBatchItems()) },
+      ],
+    }
   },
 }

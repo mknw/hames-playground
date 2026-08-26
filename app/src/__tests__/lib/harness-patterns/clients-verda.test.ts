@@ -50,6 +50,10 @@ const ENV_KEYS = [
   'USE_VERDA_INFERENCE',
   'VERDA_INFERENCE_ENDPOINT',
   'VERDA_INFERENCE_API_KEY',
+  // Part of the tier's configuration since 2026-08-26: `describe` runs on the
+  // 4B `LocalQwenSmall`, which is reached through this variable, and a private
+  // tier without it is refused rather than descaled (see the fail-closed block).
+  'SMALL_LLM_BASE_URL',
 ] as const
 
 const ALL_ROLES: BamlRole[] = [
@@ -62,30 +66,39 @@ const ALL_ROLES: BamlRole[] = [
   'screen',
 ]
 
-/** The roles the map routes, and the Anthropic chain each one leaves behind.
- *  `router` / `planner` / `describe` joined on 2026-08-26 (the owner's call:
- *  the router sees the raw user message and describe sees tool results
- *  verbatim, so holding them back left the private tier shipping the two
- *  payloads it exists to keep). */
-const ROUTED: Partial<Record<BamlRole, string>> = {
-  controller: 'ControllerAnthropic',
-  critic: 'CriticAnthropic',
-  compactExecution: 'SynthesizerAnthropic',
-  router: 'RouterAnthropic',
-  planner: 'PlannerAnthropic',
-  describe: 'DescribeAnthropic',
+/** The roles the map routes: the Anthropic chain each one leaves behind, and the
+ *  private-tier client it arrives at.
+ *
+ *  TWO COLUMNS, not one, and that is the 2026-08-26 describe flip: the private
+ *  tier is the 27B for the heavy roles and a 4B summarizer for `describe`. Every
+ *  assertion below reads the `to` column rather than a literal, so a test cannot
+ *  keep passing with the flip reverted — and `two clients, not one` below pins
+ *  that the column really does hold two values. */
+const ROUTED: Partial<Record<BamlRole, { from: string; to: string }>> = {
+  controller: { from: 'ControllerAnthropic', to: 'VerdaQwen' },
+  critic: { from: 'CriticAnthropic', to: 'VerdaQwen' },
+  compactExecution: { from: 'SynthesizerAnthropic', to: 'VerdaQwen' },
+  router: { from: 'RouterAnthropic', to: 'VerdaQwen' },
+  planner: { from: 'PlannerAnthropic', to: 'VerdaQwen' },
+  // THE FLIP. Summarization is the tier's highest-frequency role and the one
+  // handed tool results verbatim (SD-10); it moved off the scale-to-zero 27B
+  // onto the 4B the role was designed around, on infrastructure the company
+  // still runs, so the private posture is unchanged and the latency is not.
+  describe: { from: 'DescribeAnthropic', to: 'LocalQwenSmall' },
   // `screen` is a security control's client (SD-4 / SA-M5), which is why it was
   // the last role to move and why it moved by a named owner decision rather
   // than with the widening. It is in this map now, and listed LAST so the diff
-  // that added it is readable as what it is.
-  screen: 'DescribeAnthropic',
+  // that added it is readable as what it is. Note what it did NOT do: it shares
+  // `describe`'s BAML chain and did not follow it onto the 4B.
+  screen: { from: 'DescribeAnthropic', to: 'VerdaQwen' },
 }
 /** Nothing is held back any more. Kept as an empty map rather than deleted:
  *  every test below iterates it, so a future exception is added in one place
  *  and is immediately asserted in both flag positions. */
-const UNROUTED: Partial<Record<BamlRole, string>> = {}
-const roles = (map: Partial<Record<BamlRole, string>>): [BamlRole, string][] =>
-  Object.entries(map) as [BamlRole, string][]
+const UNROUTED: Partial<Record<BamlRole, { from: string; to: string }>> = {}
+type Move = { from: string; to: string }
+const roles = (map: Partial<Record<BamlRole, Move>>): [BamlRole, Move][] =>
+  Object.entries(map) as [BamlRole, Move][]
 
 let saved: Record<string, string | undefined>
 
@@ -95,6 +108,9 @@ function enable(): void {
   process.env.USE_VERDA_INFERENCE = '1'
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  // BOTH endpoints. The tier is two models, so a fixture with one describes a
+  // deployment this build refuses — which is its own test, below.
+  process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 
 async function load() {
@@ -119,8 +135,8 @@ describe('USE_VERDA_INFERENCE unset — the default posture is untouched', () =>
     const { resolveClientForRole, clientOverrideFor, verdaInferenceEnabled } = await load()
 
     expect(verdaInferenceEnabled()).toBe(false)
-    for (const [role, chain] of roles({ ...ROUTED, ...UNROUTED })) {
-      expect(resolveClientForRole(role)).toBe(chain)
+    for (const [role, move] of roles({ ...ROUTED, ...UNROUTED })) {
+      expect(resolveClientForRole(role)).toBe(move.from)
       expect(clientOverrideFor(role)).toBeUndefined()
     }
   })
@@ -135,14 +151,28 @@ describe('USE_VERDA_INFERENCE unset — the default posture is untouched', () =>
 describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
   beforeEach(enable)
 
-  it('routes every conversational role to VerdaQwen', async () => {
+  it('routes every role to its private-tier client', async () => {
     const { resolveClientForRole, clientOverrideFor, verdaInferenceEnabled } = await load()
 
     expect(verdaInferenceEnabled()).toBe(true)
-    for (const [role] of roles(ROUTED)) {
-      expect(clientOverrideFor(role)).toEqual({ client: 'VerdaQwen' })
-      expect(resolveClientForRole(role)).toBe('VerdaQwen')
+    for (const [role, move] of roles(ROUTED)) {
+      expect(clientOverrideFor(role), role).toEqual({ client: move.to })
+      expect(resolveClientForRole(role), role).toBe(move.to)
     }
+  })
+
+  it('is two clients, not one — the flip is not a rename', async () => {
+    // Guards the loop above from going vacuous in the way that matters. Every
+    // assertion up there reads `move.to`, so collapsing the fixture back to a
+    // single client would keep the whole file green while the describe flip was
+    // reverted. This is the line that cannot.
+    const { resolveClientForRole } = await load()
+    const clients = new Set(roles(ROUTED).map(([role]) => resolveClientForRole(role)))
+    expect([...clients].sort()).toEqual(['LocalQwenSmall', 'VerdaQwen'])
+    // And which side each of the two BAML-chain siblings landed on. Neither
+    // value is interesting alone; the pair is the SA-M5 / SD-4 property.
+    expect(resolveClientForRole('describe')).toBe('LocalQwenSmall')
+    expect(resolveClientForRole('screen')).toBe('VerdaQwen')
   })
 
   it('moves the injection screen too, and leaves nothing behind', async () => {
@@ -164,6 +194,10 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
     for (const [role] of roles(UNROUTED)) {
       expect(clientOverrideFor(role)).toBeUndefined()
     }
+    // And it did NOT follow `describe` off the 27B when that moved to a 4B a few
+    // hours later, which is the accident SA-M5 was written about: the two roles
+    // share one chain in `baml_src/` and are separable only here.
+    expect(resolveClientForRole('screen')).not.toBe(resolveClientForRole('describe'))
   })
 
   it('trims Verda-routed prompts against the 131K server window, not 200K', async () => {
@@ -174,9 +208,14 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
     // rejected outright, so this is the difference between "the flag works"
     // and "the flag routes to a client that refuses every long turn".
     expect(getContextWindow(resolveClientForRole('controller'))).toBe(131_072)
-    // The describe role trims against the same server ceiling now that it
-    // moves; `compactBulkData` and the retriever both size off this.
-    expect(getContextWindow(resolveClientForRole('describe'))).toBe(131_072)
+    // The describe role does NOT — it runs on the 4B, whose server is started
+    // with `--ctx-size 32768`. This is the budgeting half of the flip, and it
+    // came free precisely because `resolveClientForRole` reports the override:
+    // `compactBulkData`'s batches and the retriever's history trim both size off
+    // this one call, so a describe batch still sized for 131K would overflow the
+    // summarizer on the first busy turn with nothing in the routing looking
+    // wrong.
+    expect(getContextWindow(resolveClientForRole('describe'))).toBe(32_768)
     // The screen, unlike the two above, is NOT budgeted by context window —
     // nothing in production calls `getContextWindow` for it, and it bounds its
     // own input by characters instead (`maxChars: 20_000`, see the note on the
@@ -255,11 +294,25 @@ describe('settings and baml_src agree about VerdaQwen', () => {
     // Its ABSENCE is the control, so absence is what gets pinned.
     expect(declared).not.toMatch(/allowed_role_metadata/)
     expect(declared).not.toMatch(/cache_control/)
-    // The endpoint scales to zero: a default-ish request timeout would fail
-    // every first call of a session. Pinned as "generous", not as an exact
-    // number — the point is that it survives a multi-minute cold start.
-    const timeout = declared.match(/request_timeout_ms\s+(\d+)/)
-    expect(Number(timeout?.[1])).toBeGreaterThanOrEqual(300_000)
+    // A WARM-CALL BUDGET, and the direction of this pin is INVERTED from what it
+    // was. It used to demand >= 300 000ms, because the first call of a session
+    // absorbed the cold start; the wake ping now pays that out in front
+    // (`inference/wake.server.ts`), so a timeout still sized for a container
+    // start would be ten minutes in which a silently dropped request is
+    // indistinguishable from a working one.
+    //
+    // Bounded on BOTH sides rather than pinned exactly, because both bounds are
+    // measurements and the value between them is a judgement:
+    //   - above 60s, so a call still clears the 55s at which the deployment's own
+    //     gateway was once observed to cancel, and comfortably clears the 9.9s
+    //     warm p95 at 8-way concurrency (2026-08-25 load test);
+    //   - below the wake ping's own bound, because the two are one decision and
+    //     this one is not allowed to be the longer of the pair — if it were, the
+    //     harness would again be the thing waiting out a cold start.
+    const timeout = Number(declared.match(/request_timeout_ms\s+(\d+)/)?.[1])
+    expect(timeout).toBeGreaterThan(60_000)
+    const { VERDA_WAKE_TIMEOUT_MS } = await import('../../../lib/inference/wake.server')
+    expect(timeout).toBeLessThan(VERDA_WAKE_TIMEOUT_MS)
   })
 
   it('settings mirrors the cap and the --max-model-len window', async () => {
@@ -283,6 +336,11 @@ describe('the switched-function set follows the routed roles', () => {
     const { SWITCHED_FUNCTIONS_BY_ROLE, TIER_SWITCHED_FUNCTIONS } = await load()
 
     expect(Object.keys(SWITCHED_FUNCTIONS_BY_ROLE).sort()).toEqual(Object.keys(ROUTED).sort())
+    // KEYS, not values. The switched-function set answers "does a tier decision
+    // move this role", which is still true of all seven — the describe flip
+    // changed WHERE describe goes, not WHETHER the switch moves it, so the
+    // header's per-tier latency window still holds the same thirteen functions
+    // in both positions.
     expect([...TIER_SWITCHED_FUNCTIONS].sort()).toEqual([
       'ActorController',
       'CompactIntent',
@@ -509,6 +567,8 @@ describe('every routed role has a wired call site', () => {
     // would keep passing if `screen` were quietly dropped from BOTH the map and
     // that fixture, which is precisely the two-line edit this guards.
     expect(clientOverrideFor('screen')).toEqual({ client: 'VerdaQwen' })
+    // …and specifically NOT the 4B its BAML chain-mate moved to.
+    expect(clientOverrideFor('screen')).not.toEqual({ client: 'LocalQwenSmall' })
 
     // Half two: the call site, pinned ON the call rather than merely in its
     // file. The per-file scan above cannot separate the screen from the two

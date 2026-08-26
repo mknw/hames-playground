@@ -74,6 +74,23 @@
  *   trade was made knowingly, so the honest record is "accepted, unmeasured,
  *   measurable" — the eval suite's `screen-on-the-tier` scenario is where the
  *   measurement lands, not a promise in a comment.
+ *
+ * **The private tier is TWO models, not one** (owner decision 2026-08-26). The
+ * heavy roles take `VerdaQwen`, the 27B; `describe` takes `LocalQwenSmall`, the
+ * 4B summarizer reached over `SMALL_LLM_BASE_URL` (the #256 env-vars-only
+ * contract — "local" names the wire format, not the machine). Summarization is
+ * the highest-frequency, lowest-value call in the repo and it was making a
+ * scale-to-zero 27B the latency floor of every tool result; the 4B is the model
+ * the role was designed around (`baml_src/local-client.baml`). What did NOT
+ * follow it is the `screen`, which stays on the 27B: SD-4's separation exists so
+ * that a describe flip cannot carry prompt-injection screening onto a 4B, and
+ * this is the flip it was written for.
+ *
+ * Which makes the tier's configuration a CONJUNCTION, and the failure loud:
+ * {@link assertPrivateTierConfigured} demands both endpoints. A private tier
+ * with no small endpoint does not descale describe back onto the 27B — that
+ * would be a routing change nobody asked for, made silently, on the role handed
+ * tool results verbatim (SD-10). It refuses the tier instead.
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks'
@@ -83,6 +100,7 @@ import { assertServerOnImport } from './assert.server'
 // with no database behind it, which is the boundary the library extraction
 // actually cares about (see `llm-usage-observer.server.ts`).
 import { noteVerdaCallStarting } from '../inference/cold-start.server'
+import { VERDA_CLIENT_NAME } from '../inference/verda-activity.server'
 
 assertServerOnImport()
 
@@ -130,6 +148,15 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
   // (SA-M5 / SD-4): `VERDA_CLIENT_BY_ROLE` below now names both roles, on the
   // record, rather than one edit having moved both.
   //
+  // AND THEN THE HYPOTHETICAL HAPPENED. On 2026-08-26 `describe` was re-pointed
+  // at `LocalQwenSmall` — a 4B summarizer — on the private tier, which is
+  // literally the "re-pointed at a cheap summarization model" this comment had
+  // been describing in the abstract since SA-M5. The screen did not move: it is
+  // its own line naming `VerdaQwen`, a 27B. This is the role separation paying
+  // for itself once, in production, and it is worth noting that the mechanism
+  // that saved it was two map lines rather than any test — the tests pin the
+  // outcome, the separation is what made the outcome possible to get right.
+  //
   // NOTE the asymmetry that survives all of this: the separation exists only
   // HERE. In BAML both roles name the same `DescribeAnthropic` chain, so
   // re-pointing THAT chain still moves the screen implicitly — see the block on
@@ -170,6 +197,12 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
  * an owner decision with its own line rather than a side effect of moving
  * summarization. See `CLIENT_BY_ROLE` above.
  *
+ * NOT EVERY ROLE HERE NAMES THE SAME CLIENT, since 2026-08-26. `describe` names
+ * `LocalQwenSmall`. Read the values, never the key set, when you want to know
+ * where a role's calls land — `Object.keys(VERDA_CLIENT_BY_ROLE)` answers "does
+ * the tier move this role", which is a different question and the one
+ * `TIER_SWITCHED_FUNCTIONS` asks.
+ *
  * ADDING A ROLE HERE IS NOT ENOUGH ON ITS OWN — the call site for that role
  * must also spread `clientOverrideFor(role)` into its BAML options bag, or the
  * entry reads like routing and changes nothing. `clients-verda.test.ts` pins
@@ -179,8 +212,16 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
  * own argument list — extracted by balanced parens, not grepped, because a decoy
  * two statements below the call defeated the regex version. Removing either half
  * is red on its own.
+ *
+ * EXPORTED for the two consumers that need the VALUES rather than the keys:
+ * `metrics/usage-recorder.server.ts` (which client names count as private-tier
+ * traffic, so a describe call on the 4B is not counted as an Anthropic call) and
+ * the tests that render one request per routed function and have to know which
+ * client to render it against. Exported as a read-only type: it is not a seam,
+ * and nothing may route through it directly — `clientOverrideFor` is the only
+ * thing that routes, because it is the only thing that consults the active tier.
  */
-const VERDA_CLIENT_BY_ROLE: Partial<Record<BamlRole, string>> = {
+export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> = {
   controller: 'VerdaQwen', // LoopController + ActorController
   critic: 'VerdaQwen',
   compactExecution: 'VerdaQwen', // Synthesize
@@ -221,7 +262,37 @@ const VERDA_CLIENT_BY_ROLE: Partial<Record<BamlRole, string>> = {
   // scenario is run against a client, nothing measures 1–3. That scenario
   // exists precisely so this stops being four flags in four files.
   planner: 'VerdaQwen',
-  describe: 'VerdaQwen', // the six summarization functions
+  // THE ONE ROLE ON THIS TIER THAT IS NOT THE 27B. Owner decision 2026-08-26,
+  // and the composite consequence stated whole in the style of `planner:` above,
+  // because three of the four pieces are improvements and the fourth is not.
+  //
+  //  1. LATENCY, which is why it moved. Six short high-frequency functions —
+  //     per-result and batched summaries, run titles, intent compaction, the
+  //     retriever's query rewrite, the citation picker — were queueing behind a
+  //     single-replica scale-to-zero 27B. A turn with four tool results is four
+  //     more calls into that queue, where concurrency is queueing rather than
+  //     scaling (measured 2026-08-25, `smoke-verda-load.ts`).
+  //  2. The POSTURE is unchanged, which is the only reason this is allowed at
+  //     all: `SMALL_LLM_BASE_URL` is infrastructure the company runs, so the
+  //     2026-08-26 rule — no call made under the private tier may be sent to any
+  //     public AI provider — still holds, and it holds for the role that carries
+  //     the most sensitive payload of the twelve (`describe` is handed tool
+  //     results VERBATIM: mail bodies, calendar entries, file contents, SD-10).
+  //  3. The OUTPUT CEILING drops 16 384 → 2 048 and the window 131 072 → 32 768.
+  //     Both are already in `CLIENT_MAX_OUTPUT_TOKENS` / `MODEL_CONTEXT_WINDOWS`,
+  //     so `resolveClientForRole('describe')` re-budgets automatically — which is
+  //     the whole reason that mirror reports the override. The visible effect is
+  //     `maxBatchItems()` returning 5 instead of 8, i.e. MORE describe calls per
+  //     turn, each far cheaper and none of them on the queue in (1).
+  //  4. COST reads as unknown. `LocalQwenSmall` is in neither `CLIENT_PRICING`
+  //     nor `TIME_PRICED_CLIENT`, so a private-tier step that summarized a result
+  //     renders cost-unknown rather than €0. That is honest and it is also a
+  //     regression in the dashboard's coverage; pricing this box is an owner
+  //     call, not a number to invent here.
+  //
+  // If `SMALL_LLM_BASE_URL` is unset the tier is REFUSED, not descaled — see
+  // `assertPrivateTierConfigured`.
+  describe: 'LocalQwenSmall', // the six summarization functions
   // The composite consequence of THIS line, in the style the `planner:` entry
   // above sets: the screen now inherits the scale-to-zero LATENCY profile as
   // well as the routing. A guarded tool result can wait a 146s cold start — or
@@ -304,6 +375,16 @@ export const SWITCHED_FUNCTIONS_BY_ROLE: Partial<Record<BamlRole, readonly strin
  * the invariant was always "the same role mix in both positions", and the
  * whole mix satisfies it trivially. It stops being trivial the moment a role
  * is pulled back out, which is why the filter stays.
+ *
+ * WHAT DID CHANGE THE MEANING is the describe flip: the private tier's window
+ * now blends TWO models, and by call count the fast one dominates (six describe
+ * functions on a 4B against six heavy ones on the 27B, and a turn makes more
+ * describe calls than controller calls). So the private-tier median answers
+ * "what does a model call on this tier cost" — which is what the header copy
+ * says — and NOT "how fast is the self-hosted box". Those were the same number
+ * until 2026-08-26 and are not any more. The invariant this set protects is
+ * untouched: both positions still hold the same thirteen functions, so the two
+ * medians still compare like with like.
  */
 export const TIER_SWITCHED_FUNCTIONS: ReadonlySet<string> = new Set(
   (Object.keys(VERDA_CLIENT_BY_ROLE) as BamlRole[]).flatMap(
@@ -331,18 +412,24 @@ export function verdaInferenceEnabled(): boolean {
 }
 
 /**
- * Whether the self-hosted endpoint is configured well enough to be *offered*.
+ * Whether the private tier is configured well enough to be *offered*.
  *
- * The non-throwing sibling of `assertVerdaConfigured()`, and the two are not
- * interchangeable: this one answers "may a user pick this tier?" (a header
+ * The non-throwing sibling of `assertPrivateTierConfigured()`, and the two are
+ * not interchangeable: this one answers "may a user pick this tier?" (a header
  * control, a preference default), while the assert answers "this run says it
- * is on Verda — is that reachable?" and stops the run when it is not. Reaching
- * for this one where the assert belongs is how the fail-closed posture below
- * would quietly become a fall-through to Anthropic.
+ * is on the private tier — is that reachable?" and stops the run when it is
+ * not. Reaching for this one where the assert belongs is how the fail-closed
+ * posture below would quietly become a fall-through to Anthropic.
+ *
+ * It asks about BOTH endpoints, because the tier needs both (the 27B and the 4B
+ * summarizer). A deployment with only the 27B configured therefore leaves the
+ * switch's private position DISABLED and defaults every user to Anthropic — a
+ * whole-tier decision the operator can see, rather than a tier that works until
+ * the first tool result needs summarizing.
  */
 export function verdaConfigured(): boolean {
   try {
-    assertVerdaConfigured()
+    assertPrivateTierConfigured()
     return true
   } catch {
     return false
@@ -373,7 +460,7 @@ export function runWithInferenceTier<T>(tier: InferenceTier, fn: () => Promise<T
     // `.catch()` would otherwise take the throw on the stack instead. `fn` is
     // deliberately never invoked — the check is before any prompt is built.
     try {
-      assertVerdaConfigured()
+      assertPrivateTierConfigured()
     } catch (err) {
       return Promise.reject(err instanceof Error ? err : new Error(String(err)))
     }
@@ -436,13 +523,76 @@ export function assertVerdaConfigured(): void {
   }
 }
 
+/**
+ * Throws unless the 4B summarizer the private tier's `describe` role runs on is
+ * reachable — `SMALL_LLM_BASE_URL`, the #256 env-vars-only contract.
+ *
+ * FAIL CLOSED, and this one is a NAMED OWNER DECISION (2026-08-26) rather than
+ * an inherited posture: describe must never silently descale back onto the 27B.
+ * A fallback would look harmless — the calls would succeed, on infrastructure
+ * the company still controls, so the confidential-compute property would hold —
+ * and that is exactly what makes it the wrong default. It would be a routing
+ * change nobody asked for, invisible in every log, moving the highest-frequency
+ * role in the repo onto the model the tier's whole latency budget was rearranged
+ * to keep it off, and doing it on the role that is handed tool results verbatim
+ * (SD-10). "It still works" is not the property being protected.
+ *
+ * `SMALL_LLM_API_KEY` is deliberately NOT required. llama-server authenticates
+ * nothing, so a local `make llm-small` has no key to set; `openai-generic` sends
+ * the header regardless and a remote endpoint that checks one fails loudly on
+ * its own with a 401. Demanding it here would refuse the tier for the common
+ * local case.
+ *
+ * The URL is checked for the `/v1` suffix for `assertVerdaConfigured`'s reason:
+ * BAML hands `base_url` to `openai-generic` verbatim, so a root URL 404s every
+ * call on `<root>/chat/completions` — mid-conversation, which is the failure
+ * this whole family of checks exists to move forward in time.
+ */
+export function assertSmallModelConfigured(): void {
+  const base = process.env.SMALL_LLM_BASE_URL
+  if (!base) {
+    throw new Error(
+      'The private inference tier routes the `describe` role to LocalQwenSmall, but ' +
+        'SMALL_LLM_BASE_URL is not set. Set it (see app/.env.example — `make llm-small` serves ' +
+        'http://localhost:8095/v1) or use the anthropic tier. This build refuses to quietly ' +
+        'descale summarization back onto the 27B: that would re-route the role handed tool ' +
+        'results verbatim, invisibly, and nobody asked for it.',
+    )
+  }
+  if (!/\/v1\/?$/.test(base)) {
+    throw new Error(
+      'SMALL_LLM_BASE_URL must be the OpenAI-compatible base URL, i.e. end in `/v1`. BAML passes ' +
+        'it to openai-generic verbatim, so a root URL makes every describe call 404 on ' +
+        '`<root>/chat/completions`.',
+    )
+  }
+}
+
+/**
+ * Throws unless EVERY endpoint the private tier needs is configured.
+ *
+ * The tier is two models (see `VERDA_CLIENT_BY_ROLE`), so its configuration is
+ * a conjunction and this is the only function that says so. Every gate on the
+ * tier — module load below, `runWithInferenceTier('verda')`, and
+ * `verdaConfigured()`'s "may a user pick this?" — goes through here, so adding a
+ * third model to the tier is one edit rather than three.
+ *
+ * The two halves stay separately callable on purpose: `scripts/smoke-verda.ts`
+ * exercises only the 27B roles and must not be refused for a summarizer it never
+ * calls.
+ */
+export function assertPrivateTierConfigured(): void {
+  assertVerdaConfigured()
+  assertSmallModelConfigured()
+}
+
 // Checked once, at module load, and only when the flag is on: a misconfigured
 // endpoint should fail loudly and closed rather than surface as a 404 mid-
 // conversation. Module load is the FIRST use of the harness, not process
 // start (see the note on `assertVerdaConfigured` above), so this refuses the
 // first agent call — it does not refuse the boot. Costs nothing on the
 // default path.
-if (verdaInferenceEnabled()) assertVerdaConfigured()
+if (verdaInferenceEnabled()) assertPrivateTierConfigured()
 
 /**
  * `{ client: 'VerdaQwen' }` for a Verda-routed role while the active tier is
@@ -466,19 +616,27 @@ if (verdaInferenceEnabled()) assertVerdaConfigured()
 export function clientOverrideFor(role: BamlRole): { client: string } | undefined {
   const client = verdaClientFor(role)
   if (!client) return undefined
-  // A bag with a `client` key in it is a call about to be made, which is the
-  // moment the cold-start notice exists to catch. #274 wrote this hook when the
-  // `router` still answered on Anthropic, so the first bag of a turn belonged to
-  // the controller; since the 2026-08-26 widening the router is on the tier too
-  // and the notice fires one call earlier, from the router. That is the same
-  // rule, not a new one — the hook is on the SEAM, never on a role or a position
-  // in the chain, so the map can move again without touching this.
-  // `resolveClientForRole` below deliberately
-  // does NOT come through here — it is asked the same question for prompt
-  // budgeting, potentially more than once and without a call following, and a
-  // notice fired from a budgeting lookup would be announcing a wait nobody is
-  // paying. No-op unless a turn armed a watch (`runWithColdStartWatch`).
-  noteVerdaCallStarting()
+  // A bag naming the SCALE-TO-ZERO BOX is a call about to wait on a container
+  // start, which is the moment the cold-start notice exists to catch. #274 wrote
+  // this hook when the `router` still answered on Anthropic, so the first bag of
+  // a turn belonged to the controller; the 2026-08-26 widening put the router on
+  // the tier and the notice moved one call earlier. That was free because the
+  // hook is on the SEAM rather than on a role or a position in the chain.
+  //
+  // What is NOT free is the client test below, and it arrived with the describe
+  // flip. The private tier is two models now, and `LocalQwenSmall` does not
+  // scale to zero — it is a llama-server somebody is running. A bag naming it is
+  // a call that will answer in milliseconds, and announcing "starting GPU, ~146
+  // seconds" in front of it would be a countdown for a wait nobody is paying,
+  // fired from the highest-frequency role on the tier. So the hook keys on the
+  // client, not on "the tier moved this role".
+  //
+  // `resolveClientForRole` below deliberately does NOT come through here — it is
+  // asked the same question for prompt budgeting, potentially more than once and
+  // without a call following, and a notice fired from a budgeting lookup would
+  // announce a wait nobody is paying either. No-op unless a turn armed a watch
+  // (`runWithColdStartWatch`).
+  if (client === VERDA_CLIENT_NAME) noteVerdaCallStarting()
   return { client }
 }
 

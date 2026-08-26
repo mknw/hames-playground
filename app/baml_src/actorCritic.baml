@@ -115,8 +115,15 @@ template_string ActorMultiCalls(multi_call_mode: string?) #"
 // 1-based (the loop passes attempt + 1), so `== 1` fires exactly on call 1,
 // when the request is the last block that recurs in the next call's prefix.
 // (`== 0` is defensive: it can never fire under the current convention.)
-// CONTEXT is authored as a system role for template-level semantics — the
-// Anthropic provider coerces mid-conversation system to `user` on the wire.
+// CONTEXT renders as a USER block. It was authored `system` for template-level
+// semantics, on the reading that the wire coerces it anyway — true of Anthropic
+// (which lifts only the LEADING system block into its top-level `system` field
+// and rewrites the rest to `user`), false of an OpenAI-compatible server. vLLM
+// rejects the whole request with `System message must be at the beginning.`, so
+// a `system` marker here 400s every actor call that carries a context — and
+// under `USE_VERDA_INFERENCE=1` that is every sandbox actor call. Rendering it
+// `user` is byte-identical on the Anthropic wire (pinned by
+// `prompt-role-order.test.ts`) and legal on both.
 // An upstream planner's plan (#27) rides `context` here and stays cache-safe:
 // unlike LoopController's tier 1, this marker's prefix is already RUN-scoped
 // (it ends on USER REQUEST, and fires only on call 1), and the plan is fixed
@@ -129,7 +136,7 @@ template_string ActorTaskFrame(intent: string, context: string?, user_message: s
   {% if context %}
 
   ---
-  {{ _.role("system") }}
+  {{ _.role("user") }}
   CONTEXT:
   {{ context }}
   {% endif %}
@@ -149,7 +156,12 @@ template_string ActorTaskFrame(intent: string, context: string?, user_message: s
 // ROLLING cache marker on the newest result: loop.index0 maxes at
 // attempts|length - 1 == attempt_n - 2, so `>=` fires on the last entry only
 // (strict `>` never fires — measured as 0% cache reads before the fix).
-// Result blocks use the system role; the wire coerces them to `user`.
+// Result blocks use the USER role — the same as simpleLoop's LoopTurnLog, and
+// for the same reason it never had this bug: a `system` marker AFTER an
+// assistant turn is illegal on an OpenAI-compatible server (vLLM: `System
+// message must be at the beginning.`), which 400d every actor RETRY on the
+// self-hosted route while attempt 1 passed. Anthropic coerced them to `user`
+// already, so this changes nothing there.
 // Assistant entries render the recorded ControllerAction as JSON — the shape
 // `ctx.output_format` asks for. Same reasoning as simpleLoop's LoopTurnLog (see
 // the comment there): prior assistant messages are the model's own output, so a
@@ -167,9 +179,9 @@ template_string ActorAttemptLog(attempts: Attempt[], attempt_n: int?) #"
   {{ _.role("assistant") }}
   {"reasoning": {{ attempt.action.reasoning | default("") | tojson }}, "tool_name": {{ attempt.action.tool_name | tojson }}, "tool_args": {{ attempt.action.tool_args | tojson }}{% if attempt.action.additional_calls %}, "additional_calls": [{% for c in attempt.action.additional_calls %}{"tool_name": {{ c.tool_name | tojson }}, "tool_args": {{ c.tool_args | tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}, "status": {{ attempt.action.status | default("") | tojson }}, "is_final": {{ attempt.action.is_final | default(false) | tojson }}}
       {% if loop.index0 >= (attempt_n - 2) %}
-      {{ _.role("system", cache_control={"type": "ephemeral"}) }}
+      {{ _.role("user", cache_control={"type": "ephemeral"}) }}
       {% else %}
-      {{ _.role("system") }}
+      {{ _.role("user") }}
       {% endif %}
   Attempt {{ attempt.n }} result:
       {% if attempt.error %}

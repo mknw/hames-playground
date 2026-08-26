@@ -1,20 +1,22 @@
 ---
 name: kg-lane-dispatch
-description: This repo's hand-off contract — the pointer line every dispatch carries, findings landing as a GitHub issue or PR comment, and the URL + verdict + gates report-back. Use when writing a task spec or handing work to a lane, worker, or subagent in THIS repo. How to split work, pick an agent type or model, or run a coordinator loop is `dispatching-work`; Orca worker mechanics are `orchestration`.
+description: This repo's hand-off contract — the pointer line every dispatch carries, findings landing as a GitHub issue or PR comment, and the URL + verdict + gates report-back, and the review loop that lands the work — whose terms bind a fix, and the coordinator's merge mechanics. Use when writing a task spec, handing work to a lane, worker, or subagent in THIS repo, or reviewing and merging what one sends back. How to split work, pick an agent type or model, or run a coordinator loop is `dispatching-work`; Orca worker mechanics are `orchestration`.
 ---
 
-# kg-lane-dispatch — how work leaves the coordinator
+# kg-lane-dispatch — how work leaves the coordinator, and how it lands
 
-Three rules. They hold for every dispatch, whatever the task.
+Three rules govern the hand-off, and they hold for every dispatch whatever the
+task. What comes back has its own contract — the review loop and the merge
+mechanics in §4 and §5.
 
 This skill is only the repo contract — it routes everything generic elsewhere:
 coordination doctrine (how to split the work, which executor and model take a
 piece, supervision, the review gate before merge) is the `dispatching-work`
 skill; Orca's command surface and message mechanics are the `orchestration`
 skill. Within this repo, the standing acceptance criteria each piece of work is
-held to live in [`docs/agents/AGENT-BRIEF.md`](../../docs/agents/AGENT-BRIEF.md);
+held to live in [`docs/agents/AGENT-BRIEF.md`](../../../docs/agents/AGENT-BRIEF.md);
 the issue-tracker workflow lives in
-[`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md).
+[`docs/agents/issue-tracker.md`](../../../docs/agents/issue-tracker.md).
 This skill covers only what none of those do: the shape of the hand-off itself.
 
 ## 1. Point, don't restate
@@ -82,6 +84,56 @@ lane on demand, and the coordinator's `check --wait --types worker_done,escalati
 blocks until something actionable arrives. A lane that wants to report mid-flight
 either has a question (`ask`) or is blocked (`escalation`); if it is neither, the work
 is not finished and there is nothing to say yet.
+
+## 4. The review loop: the reviewer's terms bind
+
+A lane's work lands through review, not through a green CI run. The loop is the
+same every time — review → fix → delta review → CONVERGED — and four rules keep
+it from drifting into a conversation.
+
+**The reviewer's terms bind verbatim.** A fix dispatch says **"apply in the
+reviewer's terms"**, and the lane implements what the reviewer wrote rather than
+its own reading of the underlying problem. A lane that fixed the same bug a
+better way has produced an **unreviewed change wearing a reviewed one's
+approval** — the delta review is then re-deriving the finding instead of
+checking a fix.
+
+**A fix is proven by the reviewer's own mutations, plus the lane's.** A reviewer
+who reports a missing guard names the edits that must turn it red; the fix round
+runs exactly those, adds any it finds, and reports each one's result. `pnpm
+test:run` passing is not evidence that a guard guards — only a mutation that
+goes red is.
+
+**Every fix round gets a delta review, until CONVERGED.** The same reviewer,
+re-reading only the delta. The loop terminates on the **reviewer's** word — a
+lane declaring itself done is a report, not a verdict, and the round that
+introduces a regression is usually the one that felt trivial.
+
+**A substituted fix is allowed when the prescribed one provably fails — with the
+proof on the record.** Post what was prescribed, what it did when tried, and
+what was done instead, in the PR comment, **before** the delta review reads the
+code. The substitution is not the failure mode; the silence is. An undisclosed
+substitution is the first rule's unreviewed change, arriving through the back
+door.
+
+## 5. Merge mechanics (the coordinator's half)
+
+The lane never merges. The coordinator does, and these are the four checks that
+a green CI run does not make for you.
+
+- **Check `baseRefName == main` before EVERY merge**, not once per stack.
+  `gh pr view <n> --json baseRefName`. A PR opened off another branch merges
+  **into that branch**, silently, and the work never reaches `main`.
+- **When a stack's base lands, retarget its dependents** —
+  `gh pr edit <n> --base main`. GitHub retargets on its own only sometimes; a
+  dependent left pointing at a merged branch shows a diff nobody wrote.
+- **update-branch → CI green → merge, in that order.** A stale branch's green is
+  an answer about a tree that no longer exists; re-basing after the green
+  invalidates the very run you merged on.
+- **Conflict doctrine: `main`'s structure and content win, and the branch's
+  intent is re-applied on top.** A conflict means `main` moved. Resolving toward
+  the branch silently reverts whatever moved it — which is how a merge lands as
+  a revert of someone else's PR with no revert commit to find later.
 
 ## Worked dispatch spec
 

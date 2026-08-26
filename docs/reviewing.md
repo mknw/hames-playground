@@ -33,6 +33,11 @@ else**, so this file stays cheap to maintain and safe to read in parallel.
   pointing a generic skill at a `kg-*` one is repo-local config, not the
   generic skill itself calling it — that indirection is what keeps the
   generic set portable (see `CLAUDE.md`'s Agent skills section).
+- **Tests** — the `kg-test-pyramid` skill: the four layers and which one a
+  given test belongs to, the `*-not-in-ci.test.ts` pins, hermetic-is-the-gate,
+  and no-retries. Reach for it when a change adds or moves a test, or when a
+  finding is "this was not caught". Same repo-local-config indirection as the
+  row above.
 - **House vocabulary** — [`GLOSSARY.md`](../GLOSSARY.md); decisions not to
   re-litigate — [`docs/adr/`](adr/README.md).
 - **Module boundaries** — the `codebase-design` skill's vocabulary (depth,
@@ -51,7 +56,9 @@ split that the issue body is the spec while the project board
 
 - Local: the scripts in `app/package.json`, run from `app/` — typecheck, lint,
   `test:run --coverage` (floors live in `app/vitest.config.ts`; raise by hand,
-  never lower), build.
+  never lower), build. `test:e2e`, `test:e2e:browser` and `eval:harness` are
+  deliberately **not** gates — see the tests bullet above before filing their
+  absence as a finding.
 - CI: `.github/workflows/ci.yml` (the same gates plus changed-file prettier and
   the docker image build/boot job).
 - Standing acceptance criteria for any dispatched change:

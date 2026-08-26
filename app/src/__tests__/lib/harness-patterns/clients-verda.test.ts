@@ -275,7 +275,7 @@ describe('misconfiguration fails closed', () => {
 })
 
 describe('settings and baml_src agree about VerdaQwen', () => {
-  it('the client is declared, capped at 16384, and asks for no caching', async () => {
+  it('the client is declared, capped at 4096, and asks for no caching', async () => {
     // Comments stripped the way client-output-caps.test.ts does it: the file
     // DISCUSSES caching at length, and a test that reads prose cannot tell a
     // declaration from an explanation of why there isn't one.
@@ -285,7 +285,7 @@ describe('settings and baml_src agree about VerdaQwen', () => {
       .join('\n')
     expect(declared).toMatch(/client<llm>\s+VerdaQwen/)
     expect(declared).toMatch(/provider\s+openai-generic/)
-    expect(declared).toMatch(/max_tokens\s+16384/)
+    expect(declared).toMatch(/max_tokens\s+4096/)
     expect(declared).toMatch(/base_url\s+env\.VERDA_INFERENCE_ENDPOINT/)
     expect(declared).toMatch(/api_key\s+env\.VERDA_INFERENCE_API_KEY/)
     // The confidential-compute posture: this client must not opt into prompt
@@ -315,10 +315,46 @@ describe('settings and baml_src agree about VerdaQwen', () => {
     expect(timeout).toBeLessThan(VERDA_WAKE_TIMEOUT_MS)
   })
 
+  it('the timeout covers a FULL-CAP generation at the measured decode rate', async () => {
+    // THE COUPLING, as an executable inequality rather than as a paragraph. The
+    // timeout used to be justified as a multiple of the warm p95 — measured on
+    // the SMALLEST request this client permits (~250 output tokens) — while the
+    // client declared a cap 65x larger. #279's review proved the gap by
+    // arithmetic: at the worst measured per-stream decode rate, the old pair
+    // covered under a fifth of the cap it allowed.
+    //
+    // Why the inequality must hold in THIS direction, which is the part worth
+    // pinning: a generation that reaches `max_tokens` is DETECTED
+    // (`llmCallHitOutputCap` reads CLIENT_MAX_OUTPUT_TOKENS) and the adapters
+    // retry once asking for less. A generation aborted by the timeout produces a
+    // `BamlTimeoutError` with no usage sample, so nothing detects it and nothing
+    // retries — a dead turn. A cap that cannot be REACHED inside the timeout
+    // makes the recovery path for long outputs unreachable code.
+    //
+    // The rate is the load test's own worst reading, not a fresh assumption:
+    // 208 tok/s aggregate with 8 requests in flight on one replica (2026-08-25,
+    // `smoke-verda-load.ts`) is 26 tok/s per stream. Single-stream measured
+    // 64 tok/s; the slower figure is the one a bound has to survive.
+    const declared = readFileSync(path.resolve(process.cwd(), 'baml_src/verda-client.baml'), 'utf8')
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('//'))
+      .join('\n')
+    const cap = Number(declared.match(/max_tokens\s+(\d+)/)?.[1])
+    const timeout = Number(declared.match(/request_timeout_ms\s+(\d+)/)?.[1])
+    const PER_STREAM_TOKENS_PER_SEC = 26
+    const fullCapDecodeMs = (cap / PER_STREAM_TOKENS_PER_SEC) * 1000
+    expect(fullCapDecodeMs).toBeLessThan(timeout)
+    // And not by a hair: what is left over is the whole allowance for prefill on
+    // a prompt that may be 50x the measured one, plus queueing behind another
+    // request on the single replica. A pair that only just satisfies the line
+    // above would time out on the first slow day.
+    expect(timeout - fullCapDecodeMs).toBeGreaterThanOrEqual(10_000)
+  })
+
   it('settings mirrors the cap and the --max-model-len window', async () => {
     const { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS, CLIENT_PRICING } =
       await import('../../../lib/settings')
-    expect(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwen).toBe(16_384)
+    expect(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwen).toBe(4_096)
     expect(MODEL_CONTEXT_WINDOWS.VerdaQwen).toBe(131_072)
     // Billed per GPU-second, not per token — an invented rate here would
     // render as a confident dollar figure. "Unknown" is the honest reading.

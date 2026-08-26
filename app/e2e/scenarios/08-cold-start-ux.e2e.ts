@@ -18,7 +18,7 @@
  * WHO PAYS THE WAIT changed with wake-then-run. A private-tier turn now sends one
  * throwaway `max_tokens: 1` request FIRST and starts the harness only once it
  * answers (`inference/wake.server.ts`), which is what let the BAML client's
- * timeout drop from ten minutes to two. So the cold start this scenario injects
+ * timeout drop from ten minutes to three. So the cold start this scenario injects
  * is absorbed by the WAKE PING, and the fake records that request with its own
  * `wake` outcome — which makes the ordering assertable in a way it was not
  * before: the notice, then the wake, then any model call at all. Previously the
@@ -60,6 +60,10 @@ afterAll(async () => {
 beforeEach(async () => {
   app.fakeLlm.reset()
   app.fakeGateway.reset()
+  // The box goes back to sleep between tests. One process, one warm clock (see
+  // `goToSleep`): a successful wake ping in an earlier test stamps it, and every
+  // assertion in this file is about the cold path.
+  await app.goToSleep()
 })
 
 /** Withhold the first self-hosted response for the configured cold start. */
@@ -143,10 +147,10 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
 
     // WAKE THEN RUN. Exactly one throwaway request, it is the one that absorbed
     // the injected cold start, and it was the FIRST thing on the wire — which is
-    // the whole reason the BAML client's timeout could drop to 120s. A harness
+    // the whole reason the BAML client's timeout could drop to 180s. A harness
     // that started against the sleeping box would show the delay on a
     // LoopController call instead, and every such call would now be aborted at
-    // 120s against this 90s+ fault.
+    // 180s against this 90s+ fault.
     const pings = wakePings(app)
     expect(pings, 'the turn did not wake the box before running').toHaveLength(1)
     expect(pings[0].delayedMs).toBe(COLD_START_MS)
@@ -162,7 +166,7 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
   it('ends the turn as a visible error when the box refuses to wake', async () => {
     // THE OTHER HALF of #273's D-b, and the property the owner asked for by name:
     // never a silent hang. A wake that fails must not fall through to the harness
-    // (same wait, now against a 120s timeout) and must not fall back to Anthropic
+    // (same wait, now against a 180s timeout) and must not fall back to Anthropic
     // (confidential prompts to the provider the tier exists to avoid). It ends the
     // turn, and the user is TOLD.
     await app.setTier('verda')

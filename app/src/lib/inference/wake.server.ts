@@ -75,10 +75,45 @@
  *
  * No prompt, no user id, no conversation id — the ping's content is a fixed
  * literal (SD-10).
+ *
+ * ## Two things it deliberately does and does not account for
+ *
+ * **It stamps the warm clock** on a successful ping. The clock's standard is an
+ * answered completion on the deployment naming `VERDA_MODEL_ID`, and that is
+ * exactly what this is — so without the stamp a turn arriving just after a ping
+ * landed, but before the first BAML sample, paid a second ping and was shown a
+ * "~146s" countdown that cleared in about a second. Stamped from here rather
+ * than by faking an `LlmUsageSample`: this is not a BAML call and must not enter
+ * the token counters or the latency window as one.
+ *
+ * **Its GPU seconds are NOT priced, and that is a decision rather than an
+ * oversight.** The ping is a hand-rolled `fetch`, so it emits no usage sample
+ * and a ~146s cold start (≈€0.07 at `VERDA_EUR_PER_HOUR`) is outside the
+ * time-priced figure — where before this module existed it sat inside the first
+ * call's `timing.durationMs`. Three reasons it stays outside:
+ *
+ *  1. **A shared ping belongs to no one turn.** Concurrent turns attach to the
+ *     same request, so charging its euros to a step would charge one user for a
+ *     wait several of them shared, and charging all of them would multiply one
+ *     bill by the size of the burst.
+ *  2. **There is no step to hang it on.** Cost is rendered per LLM step from the
+ *     conversation blob; a ping fires before the harness starts and produces no
+ *     step. Inventing one would put a call in the observability panel that no
+ *     pattern made.
+ *  3. **The figure already says it excludes this.** Every time-priced number is
+ *     labelled a FLOOR (`≥`, "compute time") whose caveat names the cold start
+ *     and the scale-down window as the two things it does not include. This
+ *     makes that label true rather than breaking it.
+ *
+ * What is genuinely lost is that on a low-traffic preview the cold start is the
+ * single largest GPU-time item, and `settleColdStart` has the number in hand.
+ * Surfacing it belongs where an operator reads GPU time — a deployment-level
+ * figure, not a per-conversation one — and that is not this module's call to
+ * make.
  */
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { verdaProvenWarm, settleColdStart, noteVerdaCallStarting } from './cold-start.server'
-import { VERDA_MODEL_ID } from './verda-activity.server'
+import { VERDA_MODEL_ID, noteVerdaCallCompleted } from './verda-activity.server'
 
 assertServerOnImport()
 
@@ -209,7 +244,7 @@ async function ping(): Promise<number> {
 
   // Node's `fetch` has NO default timeout, and an unbounded wake is the failure
   // this module would otherwise introduce: it would hang the turn forever
-  // instead of the 600s the client used to. The same lesson
+  // instead of the 180s the client's own calls are bounded by. The same lesson
   // `smoke-verda.ts`'s preflight learned the hard way — an unbounded probe hung
   // a diagnostic for four minutes and then said `fetch failed`.
   const controller = new AbortController()
@@ -244,6 +279,16 @@ async function ping(): Promise<number> {
     // Drain the body. An undrained response can hold the socket, and this is the
     // one request in the system whose reply nobody wants.
     await res.text().catch(() => '')
+    // THE BOX IS UP, and this is the evidence the warm clock asks for: a
+    // completion the deployment answered, on `VERDA_MODEL_ID`. Stamped only on
+    // the SUCCESS path, which is where this diverges from the usage observer's
+    // rule ("success or failure — a failed call woke the box exactly as much").
+    // That rule is safe for a sample: a BAML call that failed still got far
+    // enough to be attributed. Here it would be self-defeating — the clock is
+    // what makes `verdaProvenWarm()` skip the ping, so stamping it on a 400 for
+    // an unknown model id, or on the platform's own 504, would suppress the next
+    // wake on the strength of a box that answered an error.
+    noteVerdaCallCompleted()
     return Date.now() - started
   } catch (err) {
     // `AbortError` is the timeout, and it is the case worth naming explicitly:

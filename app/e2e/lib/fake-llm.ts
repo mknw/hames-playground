@@ -108,19 +108,44 @@ export interface FakeCall {
 // Faults
 // ============================================================================
 
+/**
+ * Filters every fault kind shares.
+ *
+ * `wake` is the one that needs explaining. Since wake-then-run, the FIRST
+ * private-tier request on the wire is the wake ping, so an unfiltered fault
+ * armed `times: 1` lands on it and never reaches a BAML call — which is how
+ * scenario 4 stopped exercising the BAML client's own timeout without going red
+ * (it exercised `VERDA_WAKE_TIMEOUT_MS` instead, and passed). The two are
+ * separate budgets and each wants a scenario, so which of them a fault targets
+ * has to be sayable:
+ *
+ *   - omitted   → either (the default, and what a cold-start scenario wants:
+ *                 the ping is the request that pays a real cold start)
+ *   - `false`   → BAML calls only, i.e. "the box is up, but this call is slow"
+ *   - `true`    → the ping only, i.e. "the box will not come up"
+ */
+interface FaultFilters {
+  /** Only requests naming this model. */
+  model?: string
+  /** How many matching requests the fault applies to. Unbounded when absent. */
+  times?: number
+  /** Whether the fault applies to the wake ping — see above. */
+  wake?: boolean
+}
+
 export type Fault =
   /** Withhold the response for `ms`, then answer normally. Models the
    *  scale-to-zero endpoint's multi-minute first call. */
-  | { kind: 'cold-start'; ms: number; model?: string; times?: number }
+  | ({ kind: 'cold-start'; ms: number } & FaultFilters)
   /** Answer with an HTTP error. `400` is what vLLM returns for a malformed or
    *  unsupported request — the shape that killed `ActorController` retries on
    *  the real deployment before #263's system-message fix. */
-  | { kind: 'status'; status: number; message?: string; model?: string; times?: number }
+  | ({ kind: 'status'; status: number; message?: string } & FaultFilters)
   /** Send headers and a truncated body, then destroy the socket. */
-  | { kind: 'mid-stream'; model?: string; times?: number }
+  | ({ kind: 'mid-stream' } & FaultFilters)
 
-/** A fault applies to a request when the model matches (or no filter is set)
- *  and it has not already been spent `times` times. */
+/** A fault applies to a request when the model matches (or no filter is set),
+ *  the wake filter admits it, and it has not already been spent `times` times. */
 interface ArmedFault {
   fault: Fault
   remaining: number
@@ -210,7 +235,9 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     // wake itself. A separate early-return branch was the first version of this
     // and it silently swallowed the mid-stream fault — the ping consumed the
     // armed fault and answered 200, so the fault never reached the call the
-    // scenario meant to break, and nothing was red.
+    // scenario meant to break, and nothing was red. A scenario that needs the
+    // OTHER aim — past the ping, at the BAML call behind it — says so with the
+    // `wake: false` filter rather than by counting requests.
     const wake = isWakePing(prompt, body)
 
     // An unrecognised prompt is a HARD failure, never a guess. A canned reply
@@ -244,7 +271,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       return
     }
 
-    const fault = takeFault(model)
+    const fault = takeFault(model, wake)
 
     if (fault?.kind === 'status') {
       record('status', 0)
@@ -282,9 +309,12 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     res.end(payload)
   }
 
-  function takeFault(model: string): Fault | null {
+  function takeFault(model: string, wake: boolean): Fault | null {
     if (!armed) return null
     if (armed.fault.model && armed.fault.model !== model) return null
+    // Not spent, either: a fault that skips this request must still be there for
+    // the next one, which is the whole point of being able to aim past the ping.
+    if (armed.fault.wake !== undefined && armed.fault.wake !== wake) return null
     if (armed.remaining <= 0) return null
     armed.remaining -= 1
     return armed.fault

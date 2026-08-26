@@ -58,7 +58,11 @@ import {
 } from './session.server'
 import { runWithRequestContext } from './request-user.server'
 import { runWithSettings } from '../settings-context.server'
-import { activeInferenceTier, runWithInferenceTier } from '../harness-patterns/clients.server'
+import {
+  activeInferenceTier,
+  runWithInferenceTier,
+  type InferenceTier,
+} from '../harness-patterns/clients.server'
 import { resolveInferenceTier } from '../db/user-prefs.server'
 import { beginVerdaTurn, endVerdaTurn } from '../inference/verda-activity.server'
 import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold-start.server'
@@ -205,19 +209,6 @@ export async function runTurnAndPersist(
         if (tier === 'verda') beginVerdaTurn()
         recordTurn(tier)
         try {
-          // WAKE THEN RUN. The self-hosted box scales to zero, so on the private
-          // tier the turn's first job is to get it up — one throwaway request,
-          // shared with any concurrent turn, and the harness does not start until
-          // it answers (`inference/wake.server.ts` carries the reasoning, and it
-          // is what let the BAML client's timeout drop from ten minutes to two).
-          //
-          // Inside the watch scope, before `runOneTurn`, and both halves of that
-          // are load-bearing: the wake is what announces the wait now, through
-          // the same `noteVerdaCallStarting` seam a verda-bound BAML call uses,
-          // so the notice has to be able to see the listener. A wake that fails
-          // THROWS, which ends the turn as a visible error rather than handing
-          // the harness a box that is not there — see the SSE route's `catch`.
-          //
           // The cold-start watch is armed HERE rather than at the first
           // verda-bound call, because the thing that detects one is several
           // layers down and takes no parameters. Only for a verda-tier turn whose
@@ -225,10 +216,12 @@ export async function runTurnAndPersist(
           // since it is the only entry point with a live wire to a person
           // waiting. A turn with no watch still wakes; the ping is not a UI
           // feature.
-          const run = async (): Promise<HarnessResultScoped<SessionData>> => {
-            if (tier === 'verda') await ensureVerdaAwake()
-            return runOneTurn(req)
-          }
+          //
+          // The WAKE itself is deliberately NOT here. It used to be, and that
+          // put a routine network failure outside every `catch` that owns a
+          // conversation row — see {@link runAndSave}, which is where it moved
+          // and why.
+          const run = (): Promise<HarnessResultScoped<SessionData>> => runOneTurn(req, tier)
           const watched = tier === 'verda' && req.onWarming
           return watched ? await runWithColdStartWatch(watched, run) : await run()
         } finally {
@@ -244,7 +237,10 @@ export async function runTurnAndPersist(
  * above stays readable — it is not a second entry point and nothing else calls
  * it.
  */
-async function runOneTurn(req: TurnRequest): Promise<HarnessResultScoped<SessionData>> {
+async function runOneTurn(
+  req: TurnRequest,
+  tier: InferenceTier,
+): Promise<HarnessResultScoped<SessionData>> {
   const { sessionId, userId } = req
   // A triggered run never loads (see the module docstring).
   const loaded = req.mode === 'triggered' ? null : await loadSession(sessionId, userId)
@@ -271,7 +267,7 @@ async function runOneTurn(req: TurnRequest): Promise<HarnessResultScoped<Session
     })
   }
 
-  const result = await runAndSave(req, agentId, run)
+  const result = await runAndSave(req, agentId, run, tier)
 
   req.onResult?.(result)
   if (req.mode === 'interactive') await generateTitle(req, result)
@@ -337,14 +333,53 @@ function planTurn(req: TurnRequest, loaded: LoadedSession | null): { agentId: st
  * than throwing), so the realistic throws are pattern construction (a gateway
  * outage) and the final `saveSession`. Flip the row to 'error', then rethrow so
  * the caller still sees the failure (sf-M2).
+ *
+ * THE WAKE IS ONE OF THOSE THROWS, and it is why this function takes a tier at
+ * all. It ran one layer up until #279's review, outside this `catch`, and the
+ * two paths that cost is worth naming because neither is exotic:
+ *
+ *  - A TRIGGERED run's row already exists — `seedActionRow` writes it at
+ *    `status:'running'` before `runAgentInBackground`, which then swallows the
+ *    rejection with `.catch(() => {})` on the strength of "runTurnAndPersist
+ *    logs the failure and flips the seeded row off running". Outside this
+ *    `catch` neither happened, so a routine that met a box which would not wake
+ *    left a row spinning forever with no trace anywhere.
+ *  - An INTERACTIVE first message is worse in the other direction: the wake ran
+ *    before {@link runOneTurn}'s `!loaded` pre-seed, so nothing was persisted at
+ *    all and a reload lost the user's message — where a failed first BAML call
+ *    leaves an errored conversation in the sidebar (#105's property).
+ *
+ * Both are the same defect: a routine, network-dependent failure on the tier
+ * that is the deployment DEFAULT, against a box whose documented behaviour is to
+ * be asleep. #278's reaper is a 20-minute backstop, not the designed path. So
+ * the ping happens here, first, inside the try — every entry point ends its row
+ * in an error state, chat or not.
+ *
+ * ORDER, and both halves of it are deliberate. The row is seeded BEFORE the
+ * wake (that is the interactive fix), and the wake comes before
+ * `getOrBuildPatterns` so the private tier's first act is still to get the box
+ * up rather than to build patterns against a gateway while the GPU sleeps. The
+ * announcement seam is unchanged: `runTurnAndPersist` still opens the cold-start
+ * watch around all of this, so `ensureVerdaAwake`'s `noteVerdaCallStarting` sees
+ * the listener and the `warming` frame still lands INSIDE the wait.
  */
 async function runAndSave(
   req: TurnRequest,
   agentId: string,
   run: RunFn,
+  tier: InferenceTier,
 ): Promise<HarnessResultScoped<SessionData>> {
   const { sessionId, userId } = req
   try {
+    // WAKE THEN RUN. The self-hosted box scales to zero, so on the private tier
+    // the turn's first job is to get it up — one throwaway request, shared with
+    // any concurrent turn, and the harness does not start until it answers
+    // (`inference/wake.server.ts` carries the reasoning, and it is what let the
+    // BAML client's timeout drop from ten minutes to three). A wake that fails
+    // THROWS, which is what ends the turn as a visible error rather than handing
+    // the harness a box that is not there — see the SSE route's `catch`, and the
+    // `catch` below for the row.
+    if (tier === 'verda') await ensureVerdaAwake()
     const result = await run(await getOrBuildPatterns(sessionId, agentId))
     await saveSession(sessionId, userId, agentId, result.serialized)
     return result

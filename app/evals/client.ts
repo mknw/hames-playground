@@ -17,7 +17,7 @@
  * path is untouched and still consulted — `resolveClientForRole()` is what the
  * report prints as the baseline each scenario is compared against.
  *
- ## Two questions, two modes
+ * ## Two questions, two modes
  *
  * `EVAL_CLIENT=<name>` is the EXPLORATORY question — "would this one client cope
  * with all these roles?" — and it applies that client to every role in

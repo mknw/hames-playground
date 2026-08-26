@@ -48,9 +48,13 @@ beforeAll(async () => {
 afterAll(async () => {
   await app.wipe()
 })
-beforeEach(() => {
+beforeEach(async () => {
   app.fakeLlm.reset()
   app.fakeGateway.reset()
+  // The box goes back to sleep between tests. One process, one warm clock (see
+  // `goToSleep`): a successful wake ping in an earlier test stamps it, and every
+  // assertion in this file is about the cold path.
+  await app.goToSleep()
 })
 
 describe('two conversations in flight together', () => {

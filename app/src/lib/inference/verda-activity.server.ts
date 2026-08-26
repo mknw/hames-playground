@@ -109,9 +109,13 @@ const state: VerdaState = ((globalThis as VerdaGlobal)[STATE_KEY] ??= {
   inFlight: 0,
 })
 
-/** Record that a call to the self-hosted box just finished. Called from the
- *  LLM-usage observer for every sample naming `VerdaQwen` — success or failure,
- *  because a failed call woke the box exactly as much as a successful one. */
+/** Record that a call to the self-hosted box just finished. Two callers, both
+ *  holding the same evidence — an answered completion on the deployment:
+ *  the LLM-usage observer, for every sample naming `VerdaQwen` (success or
+ *  failure, because a failed call woke the box exactly as much as a successful
+ *  one), and the wake ping, which is not a BAML call and so has no sample. The
+ *  ping stamps only on success, and `wake.server.ts` says why that is not the
+ *  same rule rather than an inconsistency. */
 export function noteVerdaCallCompleted(at: number = Date.now()): void {
   state.lastCompletedAt = at
 }

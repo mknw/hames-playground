@@ -712,12 +712,15 @@ describe('what the header learns from a turn', () => {
   it('wakes the box BEFORE the harness runs, on a verda turn', async () => {
     // WAKE THEN RUN, and the ORDER is the whole claim. The box scales to zero, so
     // starting the harness first just moves a 146s wait into a call whose timeout
-    // is now sized for a warm box (120s) — i.e. the first turn of every session
+    // is now sized for a warm box (180s) — i.e. the first turn of every session
     // would fail. Asserted by call order against the first thing the run does
     // rather than by "was it called", because a wake that happens after the
     // controller is not a wake.
     resolveInferenceTier.mockResolvedValue('verda')
     const order: string[] = []
+    dbSaveConversation.mockImplementation(async () => {
+      order.push('seed')
+    })
     ensureVerdaAwake.mockImplementation(async () => {
       order.push('wake')
     })
@@ -729,7 +732,11 @@ describe('what the header learns from a turn', () => {
     await runTurnAndPersist(interactive())
 
     expect(ensureVerdaAwake).toHaveBeenCalledTimes(1)
-    expect(order).toEqual(['wake', 'patterns'])
+    // The #105 pre-seed comes FIRST and the wake second — the other half of the
+    // ordering, and the half that makes the failure below recordable. A wake
+    // ahead of the seed persisted nothing at all when it failed, so a reload lost
+    // the user's message.
+    expect(order).toEqual(['seed', 'wake', 'patterns'])
   })
 
   it('does not wake anything on an anthropic turn', async () => {
@@ -742,7 +749,7 @@ describe('what the header learns from a turn', () => {
 
   it('ends the turn when the box does not wake, and releases the gauge', async () => {
     // THE VISIBLE-FAILURE HALF of #273 D-b. A wake that fails must not fall
-    // through to the harness (same 146s wait, now against a 120s timeout) and
+    // through to the harness (same 146s wait, now against a 180s timeout) and
     // must not fall back to Anthropic (confidential prompts to the provider the
     // tier exists to avoid). It throws, the throw reaches the SSE route's `catch`
     // as an `error` frame, and the in-flight gauge is still released — otherwise
@@ -762,6 +769,50 @@ describe('what the header learns from a turn', () => {
     expect(getOrBuildPatterns).not.toHaveBeenCalled()
     expect(beginVerdaTurn).toHaveBeenCalledTimes(1)
     expect(endVerdaTurn).toHaveBeenCalledTimes(1)
+    // AND THE ROW IS NOT LEFT SPINNING. The wake moved inside `runAndSave`'s try
+    // for this: a first message that cannot wake the box leaves an errored
+    // conversation in the sidebar, the same as a first BAML call that fails
+    // (#105's property), rather than a row stuck at 'running' or no row at all.
+    expect(dbSaveConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sess-1', status: 'running' }),
+    )
+    expect(dbSetConversationStatus).toHaveBeenCalledWith('sess-1', 'user-1', 'error')
+  })
+
+  it('flips a TRIGGERED run out of running when the box does not wake', async () => {
+    // The path with no chat to show an error in, and the one the review proved by
+    // execution. `seedActionRow` wrote this row at 'running' before the run and
+    // `runAgentInBackground` swallows the rejection with `.catch(() => {})` — on
+    // the strength of this function logging the failure and flipping the row. A
+    // wake outside the `catch` did neither, so an unattended routine that met a
+    // sleeping box left a row spinning forever with no trace anywhere: no chat,
+    // no error frame, no log.
+    resolveInferenceTier.mockResolvedValue('verda')
+    ensureVerdaAwake.mockRejectedValueOnce(
+      new Error('the private inference box did not wake: no answer within 300s.'),
+    )
+
+    await expect(
+      runTurnAndPersist({
+        mode: 'triggered' as const,
+        sessionId: 'run-wake',
+        userId: 'user-1',
+        agentId: 'search',
+        message: 'do the thing',
+        data: { trigger: TRIGGER },
+      }),
+    ).rejects.toThrow(/the private inference box did not wake/)
+
+    expect(dbSetConversationStatus).toHaveBeenCalledWith('run-wake', 'user-1', 'error')
+    // A triggered run has no row to seed — `seedActionRow` already wrote it, and
+    // touching it here would overwrite the trigger's own title.
+    expect(dbSaveConversation).not.toHaveBeenCalled()
+    // The log `runAgentInBackground` relies on, since it is the only trace this
+    // path leaves.
+    expect(logged).toHaveBeenCalledWith(
+      expect.stringContaining('[turn] run failed for run-wake'),
+      expect.anything(),
+    )
   })
 
   it('does not touch the gauge for an Anthropic turn', async () => {

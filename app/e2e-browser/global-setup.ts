@@ -63,6 +63,16 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     // what makes it the default tier for a user who has never chosen.
     VERDA_INFERENCE_ENDPOINT: backend.llm.baseUrl,
     VERDA_INFERENCE_API_KEY: 'e2e-browser-fake-key',
+    // The private tier's SECOND model (2026-08-26): `describe` runs on the 4B
+    // `LocalQwenSmall` over this var, and `verdaConfigured()` asks about BOTH
+    // endpoints — so without this line the header switch renders its private
+    // position DISABLED and every scenario that clicks it fails on the click,
+    // not on anything it was written to test. Same fake as above: it records
+    // the request's `model`, which is what lets a scenario tell the 4B's calls
+    // from the 27B's. The API key is optional in production (llama-server
+    // authenticates nothing) and set here only for symmetry with the 27B.
+    SMALL_LLM_BASE_URL: backend.llm.baseUrl,
+    SMALL_LLM_API_KEY: 'e2e-browser-fake-key',
     // See the constant: with the shipped 180s, the suite's own preflight turn
     // would leave the box "warm" for the whole run and the cold-start notice
     // could never fire again.

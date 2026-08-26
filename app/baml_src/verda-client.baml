@@ -62,21 +62,64 @@
 // indistinguishable from a working one for the whole timeout, and ten minutes of
 // that is ten minutes of a user watching nothing.
 //
-// WHERE 120 000 COMES FROM. The load test measured this deployment WARM at a
-// 2.75k-token prompt (2026-08-25, `smoke-verda-load.ts`): 4.1s for a single
-// call, 6.3s p50 and 9.9s p95 with 8 requests in flight, one replica, so
-// concurrency is queueing rather than scaling. 120s is ~12x that p95, which
-// leaves room for a longer prompt, a deeper queue and a slower day, and still
-// gives up an order of magnitude sooner than before. It is deliberately not
-// tight: an aborted call is a failed turn, and the p95 was measured at one
-// prompt size on one day. Two things it must stay clear of, in both directions:
+// WHERE 180 000 COMES FROM, AND WHY IT IS DERIVED FROM `max_tokens` RATHER THAN
+// FROM THE p95. The load test measured this deployment WARM at a 2.75k-token
+// prompt (2026-08-25, `smoke-verda-load.ts`): 4.1s for a single call, 6.3s p50
+// and 9.9s p95 with 8 requests in flight, one replica, so concurrency is
+// queueing rather than scaling. A multiple of that p95 is what the first version
+// of this number was ("~12x"), and #279's review was right that it does not
+// establish what it sounds like: the p95 was measured on the SMALLEST request
+// shape this client permits — ~250 output tokens — while the client itself
+// declares `max_tokens 4096`. A timeout justified by the small shape does not
+// cover the large one, and the failure mode of getting that wrong is the worse
+// of the two available (see WHY A CAP-HIT IS THE FAILURE WE WANT, below).
+//
+// So the two numbers are ONE decision, and this is the arithmetic:
+//
+//   decode rate    26 tok/s per stream — 208 tok/s aggregate at 8 in flight,
+//                  one replica, ÷ 8. The worst rate measured on this
+//                  deployment; single-stream measured 64 tok/s.
+//   full cap       4 096 output tokens (`max_tokens` below).
+//   decode time    4 096 / 26  =  158s
+//   + prefill/queue allowance   ~22s   (the 2.75k-token prompt prefilled in
+//                  ~0.2s; a prompt at the 131 072 window ceiling is UNMEASURED,
+//                  and this allowance is a judgement, not a reading)
+//   ------------------------------------------------------------------
+//   request_timeout_ms          180 000
+//
+// WHY A CAP-HIT IS THE FAILURE WE WANT, and the reason the inequality has to
+// hold in this direction: a generation that reaches `max_tokens` is DETECTED
+// (`llmCallHitOutputCap`, because this client is in `CLIENT_MAX_OUTPUT_TOKENS`)
+// and the adapters make one corrective retry asking for a smaller response. A
+// generation aborted by the timeout yields a `BamlTimeoutError` with NO usage
+// sample, so that detection is blind and there is no retry — a dead turn with a
+// generic error. If the cap is not reachable inside the timeout, the recovery
+// path for long outputs is unreachable code. `clients-verda.test.ts` pins the
+// inequality against both literals, so neither number can move alone.
+//
+// WHAT MOVED, AND THE ALTERNATIVE NOT TAKEN. `max_tokens` was 16 384, inherited
+// from the Sonnet 4.6 / Haiku caps and from the server's
+// `--max-num-batched-tokens`; at 26 tok/s that is 630s of decode, i.e. it could
+// only ever be covered by the 600s this file just removed. The other way to
+// close the gap was to keep 120s and cap output at 2 048 — arithmetically fine
+// (79s), but it would take the planner's ceiling to a sixteenth of the Anthropic
+// tier's 32 768 on the role whose output is longest and whose truncation path
+// ends in a silently unplanned chain (see the `planner:` entry in
+// `clients.server.ts`). 4 096 keeps a workable ceiling for the two roles that
+// need one — planner and synthesizer — and pays for it with 60s more timeout.
+// Every role's own envelope is far under it: a controller action is ~250 tokens.
+//
+// Three things it must stay clear of, in both directions:
 //   - the ~150s FLOOR the old comment named no longer binds this client, because
 //     the wake ping absorbs the first call of a session — that floor moved to
 //     `VERDA_WAKE_TIMEOUT_MS`, and lowering THAT below ~150s would reliably fail
 //     the first turn of every session;
 //   - it is above the 55s at which the platform's own gateway was once seen to
 //     cancel, so a prompt 504 still surfaces as a 504 rather than as our
-//     timeout — which is the more diagnosable of the two.
+//     timeout — which is the more diagnosable of the two;
+//   - it stays BELOW `VERDA_WAKE_TIMEOUT_MS` (300s), so the wait a user sits
+//     through on a cold box is bounded by the request whose whole job is to
+//     wait, not by a real call that will be retried.
 // What is NOT a judgement call, and is fixed: a turn that spends that time and
 // comes back with nothing is no longer recorded as a success (`settleTurn` in
 // `harness-patterns/harness.server.ts`), and the SSE stream no longer goes
@@ -139,10 +182,14 @@ client<llm> VerdaQwen {
       enable_thinking false
     }
     // Mirror in CLIENT_MAX_OUTPUT_TOKENS (settings.ts) — enforced by
-    // client-output-caps.test.ts. Matches the Sonnet 4.6 / Haiku 4.5 cap: the
-    // controller envelope needs room for a large `tool_args`, and it is also
-    // the server's `--max-num-batched-tokens`.
-    max_tokens 16384
+    // client-output-caps.test.ts. NOT a copy of the Sonnet 4.6 / Haiku 4.5 cap
+    // any more: this number and `request_timeout_ms` below are one decision, and
+    // the arithmetic that ties them is in WHERE 180 000 COMES FROM above. Short
+    // version: a full-cap generation has to be able to FINISH inside the
+    // timeout, or the truncation-recovery retry for long outputs is unreachable
+    // code. 4 096 / 26 tok/s = 158s, inside 180s. Raising this without raising
+    // the timeout breaks that, and `clients-verda.test.ts` fails when it does.
+    max_tokens 4096
     // The Anthropic leaves declare no temperature at all, so there is no house
     // value to copy — they run at their provider default. This one is set low
     // on purpose: the only thing this client is asked to produce is the JSON
@@ -153,14 +200,18 @@ client<llm> VerdaQwen {
     temperature 0.2
     http {
       connect_timeout_ms 30000
-      // 2 minutes: a WARM-call budget, ~12x the measured 9.9s p95 at 8-way
-      // concurrency. It is no longer sized for a cold start — the wake ping
-      // ahead of the harness pays that, and its own bound is
-      // `VERDA_WAKE_TIMEOUT_MS`. Read the SCALE TO ZERO note above before
-      // changing either number; they are one decision split across two files
-      // and raising this one back up would quietly re-create the ten minutes of
-      // indistinguishable-from-working that the wake ping exists to end.
-      request_timeout_ms 120000
+      // 3 minutes: a WARM-call budget, sized so a FULL-CAP generation fits —
+      // 4 096 output tokens at the worst measured per-stream decode rate
+      // (26 tok/s at 8-way concurrency) is 158s, plus a prefill/queue
+      // allowance. The derivation, the alternative not taken and the reason the
+      // inequality must hold in this direction are all in WHERE 180 000 COMES
+      // FROM above; `clients-verda.test.ts` pins it against both literals. It is
+      // no longer sized for a cold start — the wake ping ahead of the harness
+      // pays that, and its own bound is `VERDA_WAKE_TIMEOUT_MS`. Read the SCALE
+      // TO ZERO note above before changing either number; raising this one back
+      // towards ten minutes would quietly re-create the
+      // indistinguishable-from-working window the wake ping exists to end.
+      request_timeout_ms 180000
     }
   }
 }

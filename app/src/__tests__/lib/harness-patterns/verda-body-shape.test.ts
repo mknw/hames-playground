@@ -202,10 +202,13 @@ describe('private-tier request bodies', () => {
   })
 
   it('caps the 4B at its own max_tokens, not the 27B’s', async () => {
-    // The describe flip's other half. 2 048 against 16 384 is what re-imposes
-    // `maxBatchItems()`'s batch-of-5 floor, so a body still carrying 16 384 would
-    // mean the flip routed but did not re-budget — and the summarizer would be
-    // asked for eight items' worth of output it cannot produce.
+    // The describe flip's other half. 2 048 against the 27B's own cap is what
+    // re-imposes `maxBatchItems()`'s batch-of-5 floor, so a body carrying the
+    // 27B's number would mean the flip routed but did not re-budget — and the
+    // summarizer would be asked for eight items' worth of output it cannot
+    // produce. Written as the inequality plus the named mirror rather than as
+    // two literals, so the 27B's cap can move (it did, in #279) without
+    // touching this.
     const body = (
       await b.request.ResultDescribe('search', '{}', 'r', 'rows', SMALL)
     ).body.json() as Body

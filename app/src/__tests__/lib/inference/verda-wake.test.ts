@@ -46,6 +46,7 @@ import {
 import {
   noteVerdaCallCompleted,
   resetVerdaActivity,
+  verdaLastCallCompletedAt,
   VERDA_MODEL_ID,
 } from '../../../lib/inference/verda-activity.server'
 import {
@@ -224,8 +225,72 @@ describe('concurrent turns share one ping', () => {
     // clock — not this module — is what decides that.
     await ensureVerdaAwake()
     expect(fetchMock).toHaveBeenCalledTimes(1)
+    // Which is why the clock has to be wound back to make the point: a
+    // successful ping STAMPS it (see the next test), so within the scale-down
+    // window the second turn is right to send nothing. Idle past the window and
+    // the ping returns — no memory of the earlier success anywhere.
+    noteVerdaCallCompleted(Date.now() - 10 * 60 * 1000)
     await ensureVerdaAwake()
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('a successful ping stamps the warm clock, so the next turn sends nothing', async () => {
+    // The clock's own standard is an answered completion on the deployment
+    // naming VERDA_MODEL_ID — which is exactly what the ping is, so it counts as
+    // evidence rather than needing a BAML call to confirm it. Without this, a
+    // turn arriving after a ping landed but before the first usage sample paid a
+    // SECOND ping and was shown a ~146s countdown that cleared in a second
+    // (#279 review, F5).
+    await ensureVerdaAwake()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(verdaLastCallCompletedAt()).not.toBeNull()
+
+    await ensureVerdaAwake()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('a ping that ERRORS does not stamp the clock — an error is not readiness', async () => {
+    // Where this deliberately diverges from the usage observer, which stamps on
+    // success or failure alike. Here the stamp is what SKIPS the next ping, so a
+    // 400 for an unknown model id or the platform's own 504 would suppress the
+    // next wake on the strength of a box that answered an error.
+    fetchMock.mockImplementationOnce(async () => new Response('nope', { status: 503 }))
+    await expect(ensureVerdaAwake()).rejects.toThrow(VERDA_WAKE_FAILED)
+    expect(verdaLastCallCompletedAt()).toBeNull()
+  })
+
+  it('rejects ALL FOUR waiting turns when the shared ping fails', async () => {
+    // The fan-out half of the failure, which the single-turn case does not
+    // cover: three of these four never sent a request, so their rejection comes
+    // from the promise they attached to. Every one of them has to be told, with
+    // the user-facing sentence — a waiter that resolved instead would run the
+    // harness against a box that is not there, which is the whole thing
+    // wake-then-run prevents (#279 review).
+    let fail: () => void = () => {}
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((_resolve, reject) => {
+          fail = () => reject(new Error('ECONNREFUSED'))
+        }),
+    )
+
+    const turns = [
+      ensureVerdaAwake(),
+      ensureVerdaAwake(),
+      ensureVerdaAwake(),
+      ensureVerdaAwake(),
+    ].map((p) => p.catch((err: unknown) => (err instanceof Error ? err.message : String(err))))
+    await Promise.resolve()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    fail()
+    const outcomes = await Promise.all(turns)
+    expect(outcomes).toHaveLength(4)
+    for (const outcome of outcomes) expect(outcome).toContain(VERDA_WAKE_FAILED)
+
+    // And the shared failure did not poison the next wake for any of them.
+    fetchMock.mockImplementation(async () => ok())
+    await expect(ensureVerdaAwake()).resolves.toBeUndefined()
   })
 
   it('retries after a failed ping instead of remembering the failure', async () => {

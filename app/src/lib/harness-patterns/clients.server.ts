@@ -284,11 +284,16 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   //     the whole reason that mirror reports the override. The visible effect is
   //     `maxBatchItems()` returning 5 instead of 8, i.e. MORE describe calls per
   //     turn, each far cheaper and none of them on the queue in (1).
-  //  4. COST reads as unknown. `LocalQwenSmall` is in neither `CLIENT_PRICING`
-  //     nor `TIME_PRICED_CLIENT`, so a private-tier step that summarized a result
-  //     renders cost-unknown rather than €0. That is honest and it is also a
-  //     regression in the dashboard's coverage; pricing this box is an owner
-  //     call, not a number to invent here.
+  //  4. COST is €0.00, on a basis of its own. `LocalQwenSmall` is in
+  //     `LOCAL_PRICED_CLIENTS` (settings.ts) rather than in `CLIENT_PRICING` or
+  //     `TIME_PRICED_CLIENT`, so a private-tier step that summarized a result
+  //     renders an exact zero labelled "local" — not cost-unknown, which is what
+  //     it read as until the owner settled this on 2026-08-26. The distinction is
+  //     the whole decision: unknown means unmeasured, and a call served by a
+  //     model process on infrastructure with no marginal bill is not unmeasured.
+  //     It is a claim about the CLIENT, so moving that endpoint onto metered
+  //     infrastructure means moving the client into the priced set — the same
+  //     edit this map already requires.
   //
   // If `SMALL_LLM_BASE_URL` is unset the tier is REFUSED, not descaled — see
   // `assertPrivateTierConfigured`.
@@ -296,7 +301,7 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   // The composite consequence of THIS line, in the style the `planner:` entry
   // above sets: the screen now inherits the scale-to-zero LATENCY profile as
   // well as the routing. A guarded tool result can wait a 146s cold start — or
-  // the client's 600s `request_timeout_ms`, or the platform's 55s 504 — before
+  // the client's 180s `request_timeout_ms`, or the platform's 55s 504 — before
   // `withInjectionGuard`'s fail-open gives up and records `screen unavailable:`
   // (`patterns/withInjectionGuard.server.ts`). The degradation IS emitted, so SD-4's
   // "recorded rather than hidden" still holds and the guard's own regex layer is

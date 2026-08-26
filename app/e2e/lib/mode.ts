@@ -108,12 +108,20 @@ export const VERDA_MODEL = 'Qwen/Qwen3.8-27B-FP8'
 export const SMALL_MODEL = 'qwen3.5-4b-instruct'
 
 /**
- * How long the cold-start scenario withholds the first response.
+ * How long the slow-response scenarios withhold a response.
  *
- * The brief asks for minutes. 90s is the default because it already exceeds
- * every default HTTP timeout in the stack that is NOT the one deliberately
- * sized for a cold start, which is what the scenario is there to find; raise it
- * with `E2E_COLD_START_MS=180000` for the full pre-release shape.
+ * 90s because it already exceeds every default HTTP timeout in the stack that is
+ * NOT deliberately sized for a slow model call, which is what those scenarios
+ * are there to find.
+ *
+ * IT HAS A CEILING NOW, and it is 180s — `VerdaQwen`'s `request_timeout_ms`.
+ * Since wake-then-run the cold start is paid by the wake ping (bounded
+ * separately, at `VERDA_WAKE_TIMEOUT_MS` = 300s) and scenario 4 aims its delay
+ * PAST the ping, at a real BAML call. So a value at or above 180 000 no longer
+ * asks "does the stack survive a slow call" — it asks the client to break its
+ * own budget, and scenario 4 would go red for the one reason that is not a
+ * finding. The old advice here was `E2E_COLD_START_MS=180000` for a
+ * pre-release run; that number is now exactly the wrong one.
  */
 export const COLD_START_MS = Number.parseInt(process.env.E2E_COLD_START_MS ?? '90000', 10)
 

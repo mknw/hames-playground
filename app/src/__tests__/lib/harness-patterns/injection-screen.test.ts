@@ -21,7 +21,7 @@
  *     hyphens)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
@@ -211,28 +211,61 @@ describe('createInjectionScreen — truncation', () => {
 })
 
 describe('createInjectionScreen — client routing', () => {
+  const VERDA_ENV = ['VERDA_INFERENCE_ENDPOINT', 'VERDA_INFERENCE_API_KEY'] as const
+  let savedVerdaEnv: Record<string, string | undefined>
+
   beforeEach(() => {
     vi.clearAllMocks()
     mockScreen.mockResolvedValue({ injection_detected: false, reason: 'ok', spans: [] })
+    savedVerdaEnv = Object.fromEntries(VERDA_ENV.map((k) => [k, process.env[k]]))
   })
 
-  it("passes no client override — it runs on injection-screen.baml's declared client", async () => {
+  afterEach(() => {
+    for (const k of VERDA_ENV) {
+      if (savedVerdaEnv[k] === undefined) delete process.env[k]
+      else process.env[k] = savedVerdaEnv[k]
+    }
+  })
+
+  it("ON THE ANTHROPIC TIER passes no client override — it runs on injection-screen.baml's declared client", async () => {
     // The screen used to ride the `describe` role, and under the removed mixed
     // chains that silently put prompt-injection screening on the weakest model
     // in the repo while the guard's docs promised DescribeAnthropic. A screen
     // must not be talked out of reporting by the content it reviews and must
     // copy spans VERBATIM so the guard can locate and neutralize them, so it
-    // keeps its OWN role: nothing may re-point it by re-pointing `describe`.
+    // keeps its OWN role — but what that role buys is NOT "the screen never
+    // moves": on 2026-08-26 the owner moved it to the private tier with every
+    // other role, on the rule that no call made under the private tier may be
+    // sent to any public AI provider. What the separate role buys is that the
+    // move had to be DELIBERATE — its own map entry, its own decision, its own
+    // eval scenario — instead of arriving as a side effect of re-pointing
+    // `describe` (SA-M5). That accident is still live, because BAML names one
+    // chain for both roles.
     //
-    // The call now carries an options bag, but ONLY for usage accounting — the
-    // screen is an Anthropic-only role, and a role that spends tokens without
-    // being counted drops out of the header's on-prem denominator. So this pins
-    // the property that matters rather than the argument count: whatever is in
-    // that bag, it is never a `client`.
+    // So this assertion is the ANTHROPIC-TIER case, and its title says so. The
+    // bag exists for usage accounting — a role that spends tokens without being
+    // counted drops out of the header's on-prem denominator — and on this tier
+    // it carries a collector and nothing else. `clientOverrideFor` returns
+    // `undefined` rather than `{}`, so there is no `client` key at all, not even
+    // `client: undefined`. The verda-tier case is the test below.
     const screen = await (await load())()
     await screen(CLEAN)
     const opts = mockScreen.mock.calls[0][2] as Record<string, unknown> | undefined
     expect(Object.keys(opts ?? {})).toEqual(['collector'])
+  })
+
+  it('ON THE VERDA TIER passes `client: VerdaQwen` — the screen follows the private tier', async () => {
+    // The other half of the claim above, and the one that would have caught the
+    // screen being LEFT BEHIND when every other role moved: a private-tier turn
+    // that quietly sent the guarded tool result to Anthropic for screening is
+    // exactly the payload the tier exists to keep on the box.
+    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
+    process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+    const { runWithInferenceTier } = await import('../../../lib/harness-patterns/clients.server')
+    const screen = await (await load())()
+    await runWithInferenceTier('verda', () => screen(CLEAN))
+    const opts = mockScreen.mock.calls[0][2] as Record<string, unknown> | undefined
+    expect(opts?.client).toBe('VerdaQwen')
   })
 
   it("resolveClientForRole('screen') is DescribeAnthropic, and tracks the .baml declaration (SA-M5)", async () => {
@@ -245,10 +278,12 @@ describe('createInjectionScreen — client routing', () => {
     // to re-couple what the separation protects.
     expect(resolveClientForRole('screen')).toBe('DescribeAnthropic')
 
-    // The call passes no `client` override (test above), so the client that
-    // actually runs the screen is the one DECLARED in injection-screen.baml;
-    // the role map only reports it to callers that need the model behind the
-    // call (context window, output cap). Pin the map against that declaration:
+    // On the ANTHROPIC tier the call passes no `client` override (first test
+    // above), so the client that actually runs the screen is the one DECLARED in
+    // injection-screen.baml; under a verda scope a per-call override wins over
+    // the declaration (second test above) and this map is not consulted at all.
+    // The map only reports the declared client to callers that need the model
+    // behind the call (output cap). Pin it against that declaration:
     // the map's docstring says "keep in sync with the `client X` lines in
     // baml_src/*.baml", and nothing else enforces it.
     const declared = readFileSync(

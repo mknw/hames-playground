@@ -38,14 +38,20 @@ client<llm> LocalGLM {
 //     — a silent mis-budget no test would catch. It is a MIRROR of the BAML
 //     declarations: update it WITH the `client` lines, never instead of them.
 //
-//   * ScreenUntrustedContent (injection-screen.baml) STAYS on DescribeAnthropic.
-//     It declares the same chain but is its own `screen` role (SA-M5): a screen
-//     must not be talked out of reporting by the content it reviews, and must
-//     copy spans VERBATIM so the guard can locate and neutralize them. Both are
-//     what a small summarization model is worst at. Re-pointing the shared
-//     DescribeAnthropic CHAIN — the one-line change that reads like "switch the
-//     tier on" — would move the injection screen onto this 4B as a side effect.
-//     Six lines, not the chain.
+//   * ScreenUntrustedContent (injection-screen.baml) STAYS on DescribeAnthropic
+//     when the describe tier flips. It declares the same chain but is its own
+//     `screen` role (SA-M5): a screen must not be talked out of reporting by the
+//     content it reviews, and must copy spans VERBATIM so the guard can locate
+//     and neutralize them. Both are what a small summarization model is worst
+//     at. Re-pointing the shared DescribeAnthropic CHAIN — the one-line change
+//     that reads like "switch the tier on" — would move the injection screen
+//     onto this 4B as a side effect. Six lines, not the chain.
+//
+//     NOT a claim that the screen never moves: the private tier routes it to
+//     VerdaQwen (a 27B) as of 2026-08-26, by explicit owner decision with its
+//     own map line and its own eval scenario. That is the difference this role
+//     exists to preserve — a screen may be moved on purpose, never as a side
+//     effect of a describe flip, and least of all onto a 4B summarizer.
 //
 // ── WHERE IT RUNS ───────────────────────────────────────────────────────────
 //

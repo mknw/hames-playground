@@ -463,8 +463,8 @@ export const PreviewHeaderStrip = () => {
                 value={formatLatency(s().latency.p50Ms)}
                 hint={
                   s().latency.samples === 0
-                    ? `No controller, critic or synthesis call on ${TIER_LABELS[s().tier]} has completed on this server yet, so there is no median to show.`
-                    : `Median duration of the last ${s().latency.samples} model call(s) on ${TIER_LABELS[s().tier]} — the tier your next message runs on. Counting only the controller, critic and synthesis calls the switch actually moves, so the two positions are comparable; the cheap side-roles run on Anthropic either way and are left out. One model call, not one reply: a turn makes several. Counted by this server only, so another instance may show a different figure, and a restart clears it. A cold start is included, because it is time someone waited.`
+                    ? `No model call that the tier switch moves has completed on ${TIER_LABELS[s().tier]} on this server yet, so there is no median to show.`
+                    : `Median duration of the last ${s().latency.samples} model call(s) on ${TIER_LABELS[s().tier]} — the tier your next message runs on. Counting only the calls the switch actually moves, so the two positions are comparable — which is now every model call a turn makes, with no exception. A mix of long and short calls, so this is well under what a reply takes: one model call, not one reply — a turn makes several. Counted by this server only, so another instance may show a different figure, and a restart clears it. A cold start is included, because it is time someone waited.`
                 }
               >
                 {/* A NEW glyph takes a theme token, not a fifth fixed hue: §4
@@ -484,7 +484,7 @@ export const PreviewHeaderStrip = () => {
                 <Metric
                   label="on-prem"
                   value={formatShare(s().usage.verdaCallShare)}
-                  hint="Share of today's model calls that ran on the company-hosted deployment. Measured from the client each call actually used, not from the setting, and over every model call the app makes — the roles that only ever run on Anthropic are in the denominator."
+                  hint="Share of today's model calls that ran on the company-hosted deployment. Measured from the client each call actually used, not from the setting, and over every model call the app makes — including the safety screen on fetched content, which follows the setting like everything else. A day on which every chat used the company-hosted setting reads 100%."
                 >
                   <span
                     class="i-material-symbols-shield-outline"

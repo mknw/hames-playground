@@ -116,22 +116,54 @@ Two things follow that _are_ in our control:
   materially changes the risk picture, and is a contract setting rather than a
   code one.
 
-**Update (2026-08-25) — a self-hosted route now exists, opt-in and not default.**
-`USE_VERDA_INFERENCE=1` re-points the controller / actor / critic / synthesizer
-roles at the company's own Qwen deployment on a Verda (DataCrunch) GPU
-(`baml_src/verda-client.baml`). Read against the paragraph above: no
+**Update (2026-08-25, widened twice on 2026-08-26) — a self-hosted route now
+exists, and it now covers every role without exception.** A verda tier decision
+— the `USE_VERDA_INFERENCE=1` deployment default or a per-user header switch —
+re-points controller / actor / critic / synthesizer / router / planner /
+describe **and the injection screen** at the company's own Qwen deployment on a
+Verda (DataCrunch) GPU (`baml_src/verda-client.baml`). Read against the paragraph above: no
 configuration still sends a prompt to Groq, OpenRouter or OpenAI, and the new
 route moves prompts _off_ a third-country processor rather than onto one, so it
 cuts the exposure this finding is about rather than widening it. Three caveats
 belong in the same breath, because each is the kind of thing this doc exists to
 stop being assumed:
 
-- The flag is **not** a "no prompt leaves the building" switch. `router`,
-  `describe`, `screen` and `planner` stay on Anthropic while it is on, and
-  `describe` is the role handed `tool_result` content verbatim — i.e. exactly
-  the mail and file bodies "The part that changes the risk profile" is about.
-  Whether those roles should follow is an open owner decision, and the role map
-  in `clients.server.ts` is where it would be made.
+- The flag **is** a "no BAML call leaves the building" switch as of 2026-08-26,
+  which is more than this doc recorded a day earlier and needs its edges stated
+  rather than celebrated. Two owner decisions got it there. The first settled the
+  open question named here — whether `router`, `describe` and `planner` should
+  follow — and **they did**: `describe` is the role handed `tool_result` content
+  verbatim, i.e. exactly the mail and file bodies "The part that changes the risk
+  profile" is about, and leaving it on Anthropic while calling the tier
+  confidential was the wrong way round. `router` went with it (it sees the raw
+  user message) and `planner` with them.
+
+  The second settled **`screen`**, the opt-in prompt-injection classifier, which
+  this doc recorded the previous day as the one deliberate exception. It moved
+  too, on a rule rather than on a rebuttal of the reasoning: _no call made under
+  the private tier may be sent to any public AI provider_, no exception sought.
+  So the residual exposure this paragraph used to quantify — up to 20 000
+  characters of fetched third-party content per guarded tool result, reaching
+  Anthropic whatever tier the chat was on — is **gone**.
+
+  What replaces it is a **measurement debt, not an exposure**, and it is the
+  honest cost of the decision: a screen is only worth running on a model that
+  cannot be talked out of reporting by the content it reviews and that copies
+  matched spans verbatim (SA-M5 / SD-4 — the guard neutralizes a span by literal
+  match, so a paraphrase is a missed injection carrying a detection on the
+  record), and the self-hosted model is unmeasured on both. The owner accepted
+  that explicitly. `app/evals/scenarios/screen.ts` (`screen-on-the-tier`) is what
+  settles it and needs a live endpoint; a failing run of it is evidence the move
+  was wrong, and no agent enables the screen today, so nothing depends on the
+  answer yet. Read the eval report before treating the control as effective on
+  this route.
+
+- Two things the "no BAML call leaves the building" claim does **not** cover, so
+  that it is not read wider than it is: it is about model calls routed through
+  `clients.server.ts`, and `EMBEDDINGS_PROVIDER=openrouter` is a different seam
+  that would send a user's query text to a third party (the default is `local`,
+  so the claim holds as shipped); and it says nothing about the sandbox boxes'
+  network egress, which SD-20 records as uncovered by anything.
 - The **infrastructure** is company-controlled, which is a claim about hosting,
   not a completed Art. 28 / Chapter V analysis: DataCrunch is still a hosting
   provider with its own contract, location and sub-processors, and this doc has

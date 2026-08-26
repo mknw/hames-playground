@@ -94,16 +94,14 @@ describe.each(TIERS)('a fresh conversation on the %s tier', (tier) => {
       const expected = tier === 'verda' ? VERDA_MODEL : FAKE_ANTHROPIC_TIER_MODEL
       for (const call of controller) expect(call.model).toBe(expected)
 
-      // The router is NOT in `VERDA_CLIENT_BY_ROLE`, so it stays Anthropic in
-      // both switch positions. This is the app-level counterpart of
-      // `clients-verda.test.ts`: that file pins the map, this pins that a real
-      // turn honours it.
-      for (const call of byFn('Router')) expect(call.model).toBe(FAKE_ANTHROPIC_TIER_MODEL)
-      // Same for the describe tier — the summariser sees raw tool results and
-      // deliberately does not move with the switch.
-      for (const call of byFn('ResultDescribeBatch')) {
-        expect(call.model).toBe(FAKE_ANTHROPIC_TIER_MODEL)
-      }
+      // The router is in `VERDA_CLIENT_BY_ROLE` as of 2026-08-26 — it is handed
+      // the user's raw message, so the private tier keeps it — and therefore
+      // takes the same tier as the controller. This is the app-level
+      // counterpart of `clients-verda.test.ts`: that file pins the map, this
+      // pins that a real turn honours it.
+      const router = byFn('Router')
+      expect(router.length, 'the router never ran').toBeGreaterThan(0)
+      for (const call of router) expect(call.model).toBe(expected)
     },
   )
 

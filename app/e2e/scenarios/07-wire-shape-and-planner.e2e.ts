@@ -75,6 +75,13 @@ describe.runIf(IS_HERMETIC)('every request the self-hosted route receives is leg
     // reached the self-hosted model at all.
     const verdaCalls = app.fakeLlm.calls.filter((c) => c.model === VERDA_MODEL)
     expect(verdaCalls.length, 'no call took the self-hosted route').toBeGreaterThan(0)
+
+    // …and it means much more since the 2026-08-26 widening, because the
+    // ordering rule is now enforced over templates that had never met a vLLM
+    // server. `prompt-role-order.test.ts` audits all thirteen offline; this is
+    // the running-turn half, and `Router` is named explicitly so the widening
+    // cannot silently stop being covered here.
+    expect(verdaCalls.map((c) => c.fn)).toContain('Router')
   })
 })
 
@@ -92,15 +99,18 @@ describe.each(TIERS)('the general agent on the %s tier', (tier) => {
     expect(eventsOfType(row!.serializedContext, 'assistant_message').length).toBeGreaterThan(0)
   })
 
-  it.runIf(IS_HERMETIC)('leaves the planner on the Anthropic chain in both positions', async () => {
+  it.runIf(IS_HERMETIC)('routes the planner to whichever tier the turn is on', async () => {
     await app.setTier(tier)
     await app.runTurn(newSessionId(`plan-${tier}`), 'Count the nodes in the graph.', 'general')
 
     const planner = app.fakeLlm.calls.filter((c) => c.fn === 'Planner')
     expect(planner.length, 'the planner never ran').toBeGreaterThan(0)
-    // `planner` is absent from VERDA_CLIENT_BY_ROLE on purpose: it runs once
-    // per chain over the largest tool catalog in the repo and throws outright
-    // when structured output fails.
-    for (const call of planner) expect(call.model).toBe(FAKE_ANTHROPIC_TIER_MODEL)
+    // `planner` joined VERDA_CLIENT_BY_ROLE on 2026-08-26. It is the role with
+    // the harshest failure policy in the repo — one call per chain, over the
+    // largest tool catalog, and a structured-output failure throws rather than
+    // degrading — which is why it was held back, and why this leg is worth
+    // running against the real endpoint rather than only against the fake.
+    const expected = tier === 'verda' ? VERDA_MODEL : FAKE_ANTHROPIC_TIER_MODEL
+    for (const call of planner) expect(call.model).toBe(expected)
   })
 })

@@ -23,7 +23,7 @@
  *   pnpm eval:harness                          # baseline: the declared Anthropic chains
  *   EVAL_CLIENT=VerdaQwen pnpm eval:harness    # the self-hosted deployment
  *   EVAL_RELIABILITY_N=5 pnpm eval:harness     # shorter reliability sample
- *   EVAL_ROLES=controller,router pnpm eval:harness   # widen the routed roles
+ *   EVAL_ROLES=screen pnpm eval:harness        # narrow to one role while bisecting
  *
  * See `evals/README.md` for what each knob does and what the exit code means.
  */
@@ -42,15 +42,17 @@ import {
 import { criticAcceptScenario, criticRejectAndReviseScenario } from './scenarios/actor-critic'
 import { synthesizerGroundedScenario } from './scenarios/synthesizer'
 import { describeBatchScenario } from './scenarios/describe'
-import { screenPinnedScenario } from './scenarios/screen-pinned'
+import { screenScenario } from './scenarios/screen'
+import { plannerScenario } from './scenarios/planner'
 import { reliabilityScenario } from './scenarios/reliability'
 
 /** Declaration order is report order. Cheap structural checks first so a
  *  misconfigured run fails in a second rather than after twenty calls. */
 export const SCENARIOS: Scenario[] = [
   truncationDetectionScenario,
-  screenPinnedScenario,
+  screenScenario,
   routerScenario,
+  plannerScenario,
   controllerToolCallScenario,
   controllerFinalAnswerScenario,
   controllerToolErrorScenario,

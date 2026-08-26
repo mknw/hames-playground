@@ -129,7 +129,7 @@ describe('recordSample', () => {
     expect(verdaWarmth(NOW).state).toBe('unknown')
 
     recordSample({ functionName: 'B', clientName: 'VerdaQwen', metrics: metrics() }, NOW)
-    expect(verdaWarmth(NOW)).toMatchObject({ state: 'warm', secondsUntilScaledown: 180 })
+    expect(verdaWarmth(NOW)).toMatchObject({ state: 'warm', secondsUntilScaledown: 300 })
   })
 
   it('stamps the clock even for a call that failed', () => {
@@ -153,30 +153,48 @@ describe('recordSample — the latency window', () => {
 
   it('counts only the roles a tier decision moves, so the two windows compare', () => {
     // The number sits beside the switch and is read as "this tier vs the other
-    // one". `router`, `describe`, `screen` and `planner` run on Anthropic in
-    // BOTH positions, so counting them would leave the anthropic window holding
-    // a different role mix from the verda one — and in a verda-default
-    // deployment, NOTHING BUT the cheap side-roles. A user would then read a
-    // role-mix difference as a model difference.
-    recordSample({ functionName: 'Router', clientName: 'RouterAnthropic', durationMs: 300 })
+    // one", so a function whose client does NOT follow the switch would leave
+    // the two windows holding different role mixes and a user would read that
+    // as a model difference.
+    //
+    // After BOTH 2026-08-26 owner decisions — router/planner/describe, then the
+    // injection screen (SD-4 / SA-M5) — that is ZERO functions, so the filter
+    // admits everything and this test asserts the identity rather than an
+    // exclusion. It is the exclusion machinery that is being pinned, not the
+    // current emptiness of the excluded set: a function name the map does not
+    // know still has to be dropped, or the window would start counting calls
+    // whose client never followed the switch.
     recordSample({
-      functionName: 'ResultDescribe',
-      clientName: 'DescribeAnthropic',
-      durationMs: 400,
-    })
-    recordSample({
-      functionName: 'ScreenUntrustedContent',
+      functionName: 'NotABamlFunction',
       clientName: 'DescribeAnthropic',
       durationMs: 500,
     })
-    recordSample({ functionName: 'Planner', clientName: 'PlannerAnthropic', durationMs: 9000 })
     expect(tierLatency('anthropic')).toEqual({ p50Ms: null, samples: 0 })
 
-    // ...and all four switched functions do land, on whichever tier ran them.
-    for (const fn of ['LoopController', 'ActorController', 'Critic', 'Synthesize']) {
+    // ...and every switched function lands, on whichever tier ran it. Listed
+    // rather than derived from TIER_SWITCHED_FUNCTIONS on purpose: a test that
+    // reads the same set the code filters on would pass whatever that set said.
+    // `ScreenUntrustedContent` is in the list now — it used to be the one name
+    // asserted OUT of it.
+    const switched = [
+      'LoopController',
+      'ActorController',
+      'Critic',
+      'Synthesize',
+      'Router',
+      'Planner',
+      'ResultDescribe',
+      'ResultDescribeBatch',
+      'GenerateConversationTitle',
+      'CompactIntent',
+      'RetrieveQuery',
+      'ReferenceSelector',
+      'ScreenUntrustedContent',
+    ]
+    for (const fn of switched) {
       recordSample({ functionName: fn, clientName: 'AnthropicSonnet5', durationMs: 1000 })
     }
-    expect(tierLatency('anthropic').samples).toBe(4)
+    expect(tierLatency('anthropic').samples).toBe(switched.length)
   })
 
   it('records the wait for a call that spent no tokens', () => {

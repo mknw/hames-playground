@@ -431,6 +431,49 @@ describe('compactBulkData', () => {
     expect(maxBatchItems()).toBe(MAX_BATCH_ITEMS)
   })
 
+  it('sizes against the self-hosted client, not Anthropic, on a verda-tier run', async () => {
+    // The 2026-08-26 widening put `describe` on `VerdaQwen`, and both halves of
+    // this batcher read `resolveClientForRole('describe')` — the OUTPUT cap for
+    // the item count and the INPUT window for the per-batch token budget. So a
+    // tier decision now moves the batch geometry, and the two numbers move in
+    // opposite directions: the cap is identical (16 384 either way, so the
+    // 8-item ceiling holds and batching does not regress into N+1 calls) while
+    // the window is SMALLER (131 072 against 200 000), which trims sooner
+    // rather than overflowing a server that would reject the request outright.
+    //
+    // Asserted through the real scope rather than by stubbing the map, because
+    // "the budget follows the tier" is the claim and the scope is what carries
+    // a tier.
+    const clients = await import('../../../lib/harness-patterns/clients.server')
+    const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
+    const { getContextWindow } = await import('../../../lib/harness-patterns/token-budget.server')
+    const { maxBatchItems, MAX_BATCH_ITEMS } =
+      await import('../../../lib/harness-patterns/compactBulkData.server')
+
+    const saved = {
+      endpoint: process.env.VERDA_INFERENCE_ENDPOINT,
+      key: process.env.VERDA_INFERENCE_API_KEY,
+    }
+    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
+    process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+    try {
+      await clients.runWithInferenceTier('verda', async () => {
+        expect(clients.resolveClientForRole('describe')).toBe('VerdaQwen')
+        expect(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwen).toBe(CLIENT_MAX_OUTPUT_TOKENS.DescribeAnthropic)
+        expect(maxBatchItems()).toBe(MAX_BATCH_ITEMS)
+        expect(getContextWindow(clients.resolveClientForRole('describe'))).toBe(131_072)
+      })
+      // Outside the scope the geometry is Anthropic's again — the mirror is not
+      // a module-load constant.
+      expect(getContextWindow(clients.resolveClientForRole('describe'))).toBe(200_000)
+    } finally {
+      if (saved.endpoint === undefined) delete process.env.VERDA_INFERENCE_ENDPOINT
+      else process.env.VERDA_INFERENCE_ENDPOINT = saved.endpoint
+      if (saved.key === undefined) delete process.env.VERDA_INFERENCE_API_KEY
+      else process.env.VERDA_INFERENCE_API_KEY = saved.key
+    }
+  })
+
   it('should use the single-item path for a lone result, never the batch', async () => {
     const { compactBulkData } = await import('../../../lib/harness-patterns/compactBulkData.server')
 

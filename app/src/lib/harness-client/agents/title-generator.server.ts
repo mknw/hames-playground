@@ -32,6 +32,7 @@
  */
 import { assertServerOnImport } from '../../harness-patterns/assert.server'
 import { harness, compactExecution, withUsageAccounting } from '../../harness-patterns'
+import { clientOverrideFor } from '../../harness-patterns/clients.server'
 import type { HarnessData, UnifiedContext, UserMessageEventData } from '../../harness-patterns'
 import { b } from '../../../../baml_client'
 import { updateConversationTitle } from '../../db/conversations.server'
@@ -93,8 +94,11 @@ export const titleAgent = harness<TitleAgentData>(
       // Collector for ACCOUNTING only (nothing here reads it): a title is a
       // describe-tier call, and a role that is not counted drops out of the
       // preview header's on-prem denominator rather than merely losing detail.
+      // The override is the other half: a title is generated FROM the user's
+      // first message, so on a verda-tier turn it belongs on the box with the
+      // rest of the describe role (`VERDA_CLIENT_BY_ROLE`).
       const raw = await withUsageAccounting('GenerateConversationTitle', (opts) =>
-        b.GenerateConversationTitle(userMessage, opts),
+        b.GenerateConversationTitle(userMessage, { ...opts, ...clientOverrideFor('describe') }),
       )
       return sanitizeTitle(raw) ?? ''
     },

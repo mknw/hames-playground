@@ -58,7 +58,7 @@ import {
 
 /** A fixed "now" so nothing here depends on the wall clock. */
 const NOW = 1_700_000_000_000
-/** Comfortably past the 180s default scale-down window. */
+/** Comfortably past the 300s default scale-down window. */
 const LONG_AGO = NOW - 10 * 60 * 1000
 
 beforeEach(() => {
@@ -138,9 +138,10 @@ describe('the estimate', () => {
  * The coldness gate one layer up proves less than it reads: it proves THIS
  * process was quiet for longer than the scale-down value it was CONFIGURED
  * with. Two ordinary situations make that a lie in the same direction — a
- * `VERDA_SCALEDOWN_SECONDS` lower than the deployment's own (the committed
- * default, 180, against the live box's 300), and a second app instance that has
- * seen a call finish and then gone quiet. Both admit a warm ~4s call, and a
+ * `VERDA_SCALEDOWN_SECONDS` lower than the deployment's own — no longer the
+ * committed default's doing (it was settled at 300 on 2026-08-26, matching the
+ * live box) but still one env var away on any host whose box differs — and a
+ * second app instance that has seen a call finish and then gone quiet. Both admit a warm ~4s call, and a
  * handful of those turn the estimate into a confident "~10 sec" promise for a
  * 146-second wait, which is the exact dishonesty the whole `basis` apparatus
  * exists to prevent.
@@ -167,8 +168,9 @@ describe('the plausibility floor', () => {
   })
 
   it('refuses a warm call the CONFIGURED scale-down window mistook for a cold box', async () => {
-    // The preview as shipped: the app is told 180s, the deployment holds the box
-    // for 300s. A 200s idle gap passes the coldness gate — `verdaWarmth` agrees
+    // A host that set the var below its own deployment's setting: the app is told
+    // 180s, the box is held for 300s. A 200s idle gap passes the coldness gate —
+    // `verdaWarmth` agrees
     // the box is cold — and the call still comes back in 4.1s because the
     // platform never released the GPU.
     process.env.VERDA_SCALEDOWN_SECONDS = '180'

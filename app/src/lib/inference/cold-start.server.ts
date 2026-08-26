@@ -12,16 +12,18 @@
  *
  * ## When the notice fires, and why not at turn entry
  *
- * The `router` role runs on Anthropic in BOTH switch positions **as the map
- * stands today** and answers in a second or two; only the roles in
- * `VERDA_CLIENT_BY_ROLE` reach the box. (Widening that map to `router` would
- * make this sentence stale without making the code wrong — the notice would
- * simply fire from the router call. Nothing here hardcodes a role.) So
- * the moment worth telling the user about is not "a verda-tier turn began" —
- * it is "routing has answered and the NEXT call is verda-bound while nothing
- * says the box is up". {@link noteVerdaCallStarting} is therefore called from
- * `clientOverrideFor()` (`harness-patterns/clients.server.ts`), the per-call
+ * Only the roles in `VERDA_CLIENT_BY_ROLE` reach the box, and since 2026-08-26
+ * that is every role including `router` — so on a verda-tier turn the notice now
+ * fires from the ROUTER call, the turn's first verda-bound one, rather than from
+ * the controller after routing answered on Anthropic. #274 predicted exactly
+ * this and it cost no code: nothing here hardcodes a role, and the hook is on the
+ * seam, not on a position in the chain. The moment worth telling the user about
+ * is still "a call is about to be made and nothing says the box is up" — not "a
+ * verda-tier turn began", which is why {@link noteVerdaCallStarting} is called
+ * from `clientOverrideFor()` (`harness-patterns/clients.server.ts`), the per-call
  * seam that builds a verda-bound options bag, and fires at most once per turn.
+ * The move made the notice EARLIER by one call, which is the right direction: on
+ * this tier the router is itself a call that waits on the box.
  *
  * ## Two claims, deliberately not the same one
  *
@@ -46,9 +48,10 @@
  *    released the GPU. The app cannot read the deployment's own setting, so a
  *    `VERDA_SCALEDOWN_SECONDS` **lower** than the deployment's poisons the
  *    history downward: every idle gap between the two values looks cold here
- *    while the box is still held warm. `app/.env.example` records that the code
- *    default (180) currently lags the live deployment (300), on a line that is
- *    commented out — so that window is open on the preview as shipped. The same
+ *    while the box is still held warm. The code default and `app/.env.example`
+ *    now both say 300, matching the live deployment (owner-settled 2026-08-26),
+ *    so that window is closed on the preview as shipped — but it reopens for any
+ *    host whose box differs, which is why gate 2 below exists. The same
  *    shape arrives with no misconfiguration at all the moment a second instance
  *    exists: an instance that has itself seen a call finish and then gone quiet
  *    is indistinguishable from a cold box.

@@ -26,8 +26,14 @@
  * where the endpoint is unreachable. The live counterpart is
  * `scripts/smoke-verda.ts`.
  */
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, vi } from 'vitest'
 import type { LoopTurn, ToolDescription } from '../../../../baml_client/types'
+
+// This file renders requests in a jsdom environment; `clients.server.ts` is
+// imported for its derived function set only, never to route anything.
+vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+  assertServerOnImport: vi.fn(),
+}))
 
 /** Fakes: rendering a request needs the options to resolve, not to connect. */
 const ENV = {
@@ -61,9 +67,29 @@ const TURNS: LoopTurn[] = [
   },
 ]
 
-/** The three routed roles' functions — controller (both loops), critic,
- *  compactExecution. The kwarg is declared on the CLIENT, so every one of them
- *  must carry it without any call site knowing about it. */
+const MESSAGES = [{ role: 'user', content: 'q' }]
+const CANDIDATES = [{ ref_id: 'r1', tool: 'search', summary: 's', tool_args: null, ts_offset_s: 1 }]
+const DESCRIBE_TARGETS = [
+  { id: '1', tool: 'search', tool_args: '{}', reasoning: 'r', result: 'rows' },
+]
+
+/**
+ * EVERY routed role's functions — which since 2026-08-26 is every function in
+ * `baml_src/`, `ScreenUntrustedContent` included.
+ *
+ * The kwarg is declared on the CLIENT, so all of them must carry it without any
+ * call site knowing about it. That was cheap reassurance while only four heavy
+ * functions took this route; it is the actual check now that the describe tier
+ * does too, because a describe call is short and its `max_tokens` is the same
+ * 16 384 — an unsuppressed reasoning block in `content` would eat a two-line
+ * summary's whole budget and the failure mode is a degraded parse, never an
+ * error. It matters a third time for the SCREEN: a reasoning block ahead of a
+ * `ScreenVerdict` degrades the parse of `spans`, and a span that does not
+ * survive character-for-character is one the guard cannot neutralize (SD-3),
+ * so the failure would be a quietly weaker control rather than an error.
+ * `TIER_SWITCHED_FUNCTIONS` is asserted equal to these names below, so a role
+ * added to the map cannot skip this file.
+ */
 const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
   [
     'LoopController',
@@ -76,12 +102,37 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
   ],
   ['Critic', () => b.request.Critic('i', [], VERDA)],
   ['Synthesize', () => b.request.Synthesize('q', 'i', TURNS, false, null, VERDA)],
+  ['Router', () => b.request.Router('q', [{ name: 'search', description: 'd' }], MESSAGES, VERDA)],
+  ['Planner', () => b.request.Planner('q', 'i', TOOLS, null, VERDA)],
+  ['ResultDescribe', () => b.request.ResultDescribe('search', '{}', 'r', 'rows', VERDA)],
+  ['ResultDescribeBatch', () => b.request.ResultDescribeBatch(DESCRIBE_TARGETS, VERDA)],
+  ['GenerateConversationTitle', () => b.request.GenerateConversationTitle('q', VERDA)],
+  ['CompactIntent', () => b.request.CompactIntent(MESSAGES, 'q', VERDA)],
+  ['RetrieveQuery', () => b.request.RetrieveQuery(MESSAGES, 'q', VERDA)],
+  ['ReferenceSelector', () => b.request.ReferenceSelector('i', MESSAGES, CANDIDATES, VERDA)],
+  [
+    'ScreenUntrustedContent',
+    () => b.request.ScreenUntrustedContent('web/fetch', 'fetched page text', VERDA),
+  ],
 ]
 
 describe('VerdaQwen request body', () => {
   it.each(CALLS)('%s disables the chat template’s thinking block', async (_name, render) => {
     const body = (await render()).body.json() as Body
     expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
+  })
+
+  it('renders every function a tier decision routes, and nothing it does not', async () => {
+    // Without this, adding a role to `VERDA_CLIENT_BY_ROLE` would route new
+    // functions to a client whose one silent-failure property nothing checked
+    // for them. Compared against the derived set, so the list above cannot go
+    // short — and `ScreenUntrustedContent` is now present in BOTH, which is the
+    // inversion of what this line pinned until 2026-08-26 (SD-4: the screen
+    // moved on an explicit owner decision, so it is checked like every other
+    // routed function rather than excluded).
+    const { TIER_SWITCHED_FUNCTIONS } = await import('../../../lib/harness-patterns/clients.server')
+    expect(CALLS.map(([name]) => name).sort()).toEqual([...TIER_SWITCHED_FUNCTIONS].sort())
+    expect(CALLS.map(([name]) => name)).toContain('ScreenUntrustedContent')
   })
 
   it('names the served model id exactly', async () => {

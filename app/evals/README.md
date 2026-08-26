@@ -46,12 +46,12 @@ it), so they cannot rot into unbuildable code unnoticed.
 
 ## Knobs
 
-| Env var              | Default                  | What it does                                                                                                                                                                                                                              |
-| -------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EVAL_CLIENT`        | unset                    | The BAML client to route through, e.g. `VerdaQwen`. Unset (or `default`) is the **baseline**: no override anywhere, so every function runs the Anthropic chain it declares in `baml_src/`.                                                |
-| `EVAL_ROLES`         | the production Verda map | Comma-separated roles `EVAL_CLIENT` applies to. Default is `controller,actor,critic,compactExecution` — the same set `USE_VERDA_INFERENCE` moves in production, so a plain run measures the shipped route rather than a hypothetical one. |
-| `EVAL_RELIABILITY_N` | `20`                     | Calls in the structured-output reliability sample. `0` skips them, for a quick structural-only pass.                                                                                                                                      |
-| `EVAL_ONLY`          | unset                    | Comma-separated scenario ids, to re-run one thing. Unknown ids throw.                                                                                                                                                                     |
+| Env var              | Default                  | What it does                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EVAL_CLIENT`        | unset                    | The BAML client to route through, e.g. `VerdaQwen`. Unset (or `default`) is the **baseline**: no override anywhere, so every function runs the Anthropic chain it declares in `baml_src/`.                                                                                                                                                                                                                                             |
+| `EVAL_ROLES`         | the production Verda map | Comma-separated roles `EVAL_CLIENT` applies to. Default is `controller,actor,critic,compactExecution,router,planner,describe,screen` — the same set a verda tier decision moves in production (widened twice on 2026-08-26, the second time to include the injection screen), so a plain run measures the shipped route rather than a hypothetical one. Set it to NARROW a run while bisecting. No role is refused; nothing is pinned. |
+| `EVAL_RELIABILITY_N` | `20`                     | Calls in the structured-output reliability sample. `0` skips them, for a quick structural-only pass.                                                                                                                                                                                                                                                                                                                                   |
+| `EVAL_ONLY`          | unset                    | Comma-separated scenario ids, to re-run one thing. Unknown ids throw.                                                                                                                                                                                                                                                                                                                                                                  |
 
 The script sets `BAML_LOG=warn` so the console stays readable; override it
 (`BAML_LOG=info pnpm eval:harness`) to see the rendered prompts and raw replies
@@ -79,17 +79,39 @@ call's options bag; every scenario here does the same thing with a value
 `resolveClientForRole()` is what the report prints as each scenario's expected
 client.
 
-### The screen is never re-pointed
+### The screen is measured, not pinned
 
-`screen` is in `PINNED_ROLES` and no combination of env vars moves it. The
-injection screen resolves through a role of its **own** rather than riding
-`describe` (`SD-4` / `SA-M5`) because a screen is only worth running on a model
-that cannot be talked out of reporting by the content it reviews, and that
-copies `spans` character-for-character — the guard neutralizes them by literal
-match, so a paraphrased span is a missed injection. A security control's model
-is not a knob an eval may turn. The `screen-stays-anthropic` scenario asserts
-this holds _in the same run_, including that a live call was actually served by
-the declared chain rather than by the client under test.
+`screen` was in a `PINNED_ROLES` list until 2026-08-26 and no combination of env
+vars could move it, on the reasoning that a security control's model is not a
+knob an eval may turn. That list is **gone**, and its removal is the point.
+
+The owner ruled the same day that no call made under the private tier may be
+sent to any public AI provider, so production routes the injection screen to the
+self-hosted box. The two properties a screener needs — it must not be talked out
+of reporting by the content it reviews, and it must copy `spans`
+character-for-character, because the guard neutralizes them by literal match —
+were **unmeasured** on that client. They were unmeasured _because_ of the pin: a
+suite that refuses to point the screen at a candidate is the reason no candidate
+has ever been measured as a screener. Measuring a control before shipping it is
+the opposite of tuning it.
+
+So `screen-on-the-tier` (`scenarios/screen.ts`) replaces the old
+`screen-stays-anthropic`. It grades those two properties on whatever client the
+run routes, twice — once on an instruction buried in a plausible page, once on a
+page that addresses the screening model directly and asks it to stay quiet,
+fence and all. **A failing run of it is the evidence that the production move
+was wrong**, and it is the only thing in the repo that can say otherwise.
+
+What survives from the old reasoning, and is why `screen` is still a role of its
+own rather than folded into `describe` (`SD-4` / `SA-M5`): nothing may move the
+screen _implicitly_. It is its own entry in `DEFAULT_ROUTED_ROLES`, so narrowing
+a run to `describe` does not drag it, and `EVAL_ROLES=screen` measures it alone.
+
+To measure the screen end to end on the box, set **both** `EVAL_CLIENT` and
+`USE_VERDA_INFERENCE=1`: the graded calls follow `EVAL_CLIENT`, but the one
+production-adapter call in that scenario resolves its client through
+`clientOverrideFor('screen')` like production does, and the report shows them
+separately rather than pretending they agree.
 
 ---
 
@@ -101,19 +123,20 @@ model's wording and decides whether it is good enough measures the reader, not
 the client. Where a branch has no deterministic reading, the value is recorded
 as an _observation_ instead, which lands in the report but never fails the run.
 
-| Scenario                                   | Role             | Branch it pins                                                                                                                                                                                 |
-| ------------------------------------------ | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `controller-truncation-detection-wired`    | controller       | `CLIENT_MAX_OUTPUT_TOKENS` has an entry for this client. Without one, `llmCallHitOutputCap()` returns false for every call and the corrective retry is silently dead (`SA-C2`). No model call. |
-| `screen-stays-anthropic`                   | screen           | The eval refuses to re-point the screen; a live call is served by the declared chain; spans come back as exact substrings.                                                                     |
-| `router-intent-classification`             | router           | 5 canonical utterances: the tool/no-tool branch, the route name is one of the offered ones, and a back-reference resolves into a self-contained `intent`.                                      |
-| `controller-tool-call-turn`                | controller       | Turn 0, empty history: picks an offered tool, emits `tool_args` the loop can `JSON.parse`.                                                                                                     |
-| `controller-final-answer-turn`             | controller       | The answer is already in the turn log: terminates with `Return` + `is_final` and carries the facts through, rather than re-querying.                                                           |
-| `controller-tool-error-feedback`           | controller       | The previous call errored: reacts instead of re-issuing the identical failing call.                                                                                                            |
-| `critic-accepts-sufficient-attempt`        | critic           | An attempt that answers the intent is passed — a critic that rejects everything is a budget burner.                                                                                            |
-| `critic-rejects-then-actor-revises`        | actor            | A wrong-but-_successful_ attempt is rejected, and the rejection reaches the actor as `Attempt.feedback` and changes the proposal (`SA-C1`).                                                    |
-| `synthesizer-grounded-summary`             | compactExecution | Reports the counts that are in the log, does **not** invent the one whose query failed, and admits the failure.                                                                                |
-| `describe-batch-shape`                     | describe         | One summary per item with ids echoed verbatim — the contract `compactBulkData` matches results back on.                                                                                        |
-| `controller-structured-output-reliability` | controller       | N escaping-heavy controller calls, counting parse failures. Reported as a rate; the pass/fail threshold is deliberately an owner decision, so the only check is "at least one valid action".   |
+| Scenario                                   | Role             | Branch it pins                                                                                                                                                                                                                              |
+| ------------------------------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `controller-truncation-detection-wired`    | controller       | `CLIENT_MAX_OUTPUT_TOKENS` has an entry for this client. Without one, `llmCallHitOutputCap()` returns false for every call and the corrective retry is silently dead (`SA-C2`). No model call.                                              |
+| `screen-on-the-tier`                       | screen           | The two properties `withInjectionGuard` depends on, on the routed client: an injection is reported, and every span is an exact substring — including on a page that tells the screen to stay quiet.                                         |
+| `planner-plan-shape`                       | planner          | Non-empty plan, `n_steps` in the region of the steps written, only catalog tools named (a decoy in the request is not), and output tokens under the cap with headroom. Closes the gap the `planner:` entry in `VERDA_CLIENT_BY_ROLE` names. |
+| `router-intent-classification`             | router           | 5 canonical utterances: the tool/no-tool branch, the route name is one of the offered ones, and a back-reference resolves into a self-contained `intent`.                                                                                   |
+| `controller-tool-call-turn`                | controller       | Turn 0, empty history: picks an offered tool, emits `tool_args` the loop can `JSON.parse`.                                                                                                                                                  |
+| `controller-final-answer-turn`             | controller       | The answer is already in the turn log: terminates with `Return` + `is_final` and carries the facts through, rather than re-querying.                                                                                                        |
+| `controller-tool-error-feedback`           | controller       | The previous call errored: reacts instead of re-issuing the identical failing call.                                                                                                                                                         |
+| `critic-accepts-sufficient-attempt`        | critic           | An attempt that answers the intent is passed — a critic that rejects everything is a budget burner.                                                                                                                                         |
+| `critic-rejects-then-actor-revises`        | actor            | A wrong-but-_successful_ attempt is rejected, and the rejection reaches the actor as `Attempt.feedback` and changes the proposal (`SA-C1`).                                                                                                 |
+| `synthesizer-grounded-summary`             | compactExecution | Reports the counts that are in the log, does **not** invent the one whose query failed, and admits the failure.                                                                                                                             |
+| `describe-batch-shape`                     | describe         | One summary per item with ids echoed verbatim — the contract `compactBulkData` matches results back on.                                                                                                                                     |
+| `controller-structured-output-reliability` | controller       | N escaping-heavy controller calls, counting parse failures. Reported as a rate; the pass/fail threshold is deliberately an owner decision, so the only check is "at least one valid action".                                                |
 
 ### Latency
 
@@ -131,7 +154,8 @@ Three things to know before reading a number out of it:
   which is what makes the reliability scenario's N calls a real p95 sample even
   though it reports only its first collector in the served-by column. The one
   call outside the bag is the injection screen's production-adapter call, so
-  that scenario's `ms` exceeds the calls counted for it.
+  that scenario's `ms` exceeds the calls counted for it — deliberately, because
+  that call is there to show the production wiring, not to be timed.
 - **Samples are attributed to the leaf client that served them**, not to the
   client under test, and non-selected fallback attempts are included. A chain
   that fell back shows up as two rows rather than one blended number, and the

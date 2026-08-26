@@ -9,9 +9,11 @@
  *
  * The second half is the property the preview header's on-prem share depends
  * on: accounting coverage has to be uniform across ROLES. A role that spends
- * tokens without being counted disappears from the denominator, and since the
- * uncounted roles (describe, screen) were the Anthropic-only ones, the share
- * read higher than the truth. The last test is a source scan rather than a
+ * tokens without being counted disappears from the denominator. When the two
+ * uncounted roles (describe, screen) were both Anthropic-only that bias had a
+ * fixed sign — the share read higher than the truth; since `describe` moved to
+ * the self-hosted box on 2026-08-26 the sign depends on the tier, which makes
+ * uniform coverage more load-bearing rather than less. The last test is a source scan rather than a
  * behavioural one, because the failure mode is a NEW call site that forgets —
  * which no amount of testing the existing ones catches.
  */
@@ -246,8 +248,18 @@ describe('accounting coverage across roles', () => {
       /(?:extractLLMCallData|extractFailureLLMCallData|wrapAsLLMCallError|accountBamlCall|withUsageAccounting)\(([^)]*)/g
     const offenders: string[] = []
 
+    // COMMENTS STRIPPED FIRST, the same way `clients-verda.test.ts` does it and
+    // for the same reason in the opposite direction: a scan that reads prose
+    // cannot tell a call from an explanation of one. `clients.server.ts`
+    // DISCUSSES `b.ScreenUntrustedContent(...)` while documenting the screen's
+    // routing, and un-stripped that reads as an unaccounted call site in a file
+    // that makes no BAML calls at all. A real call site is never inside a
+    // comment, so this removes false positives only.
+    const stripComments = (src: string): string =>
+      src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+
     for (const file of walk(LIB)) {
-      const source = readFileSync(file, 'utf8')
+      const source = stripComments(readFileSync(file, 'utf8'))
       const called = new Set([...source.matchAll(/\bb\.([A-Z]\w+)\s*\(/g)].map((m) => m[1]))
       if (called.size === 0) continue
       const accounted = new Set(

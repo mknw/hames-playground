@@ -1,11 +1,21 @@
 # Eval reports
 
 Output of `pnpm eval:harness`, one markdown file per run, named
-`<timestamp>-<client>.md`.
+`<timestamp>-<client>.md` — and, since #280, of `pnpm release:check`, named
+`<timestamp>-release-check.md`.
+
+The two are here together on purpose: they are the two things a release decision
+is made from, and they are complements rather than duplicates. A release-check
+report is the **hermetic** answer (unit → app-path e2e → browser e2e) and its last
+section lists the live steps it did NOT run; an eval report is one of those live
+steps. Neither is a go/no-go on its own, which is why each names what it leaves to
+the other. See [`docs/testing/pyramid.md`](../../../docs/testing/pyramid.md).
 
 **This directory is gitignored except for this file.** Reports are run output
 against whatever endpoint happened to be up; tracking every ad-hoc run would
-make the directory unreadable within a week.
+make the directory unreadable within a week. (`release:check` also uses a
+`.release-check/` scratch directory here for each runner's machine-readable
+output, and deletes it when it has parsed it.)
 
 The exception is a **reference run** — a report a PR argues from, added
 deliberately with `git add -f`. Those are the runs worth keeping, because the

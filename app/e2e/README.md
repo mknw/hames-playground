@@ -76,7 +76,8 @@ No credential, no network, no bill. Two fakes start in-process:
   are deterministic and Docker is not a dependency.
 
 The one piece of real infrastructure is **Postgres**, and it is the throwaway
-`kgagent_test` database the unit suite already provisions — same
+`kgagent_test_apppath` database this suite provisions for itself with the unit
+suite's own `provisionDatabase()` — same
 `global-setup.ts`, same `DATA_ENCRYPTION_KEY`. Dev rows are never touched. The
 suite runs as the dev-bypass user and deletes its own rows before and after each
 scenario file.
@@ -107,6 +108,16 @@ scenario a second time with the switch in the anthropic position, which would
 put all of that on the metered API for no live-route information. So the
 per-tier legs of scenarios 1, 2 and 7 collapse to the self-hosted tier here,
 via the single `TIERS` in `lib/mode.ts`.
+
+One fault shape in `lib/fake-llm.ts` is armed by **no scenario here**: `hold`,
+which parks a request until the test releases it. It lives with the others
+because the fake is one file shared with `app/e2e-browser/`, and that is the only
+suite that needs it — a browser scenario whose claim is "the turn is still
+running" cannot establish it with a duration without racing the machine (#280).
+The distinction is worth knowing when reading the fault table: `cold-start` is
+the shape that models the real deployment and answers "does anything in the stack
+time out", which is scenario 4's question; `hold` is the shape that removes the
+clock, and it answers a question this layer does not ask.
 
 Scenarios that inject faults (6's four injected shapes) or simulate a cold start
 (4's timing assertions) are **skipped**, not faked — there is no responsible way to cause a
@@ -153,14 +164,14 @@ fake recorded it.
 
 ## Knobs
 
-| Env var                  | Default                        | What it does                                                                                                                                                                                                                                                    |
-| ------------------------ | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `E2E_LIVE`               | unset                          | `verda` runs against the real endpoint. Unset (or `0`/`false`) is hermetic. Any other value throws.                                                                                                                                                             |
-| `E2E_COLD_START_MS`      | `90000`                        | How long scenarios 4 and 8 withhold a self-hosted response. Keep it **under 180 000**: scenario 4 aims its delay past the wake ping, so at or above `VerdaQwen`'s own `request_timeout_ms` the client breaks its budget by design and the red is not a finding. |
-| `E2E_CONCURRENT_COLD_MS` | `3000`                         | Scenario 3's shorter cold start — that scenario owns interleaving, not duration.                                                                                                                                                                                |
-| `E2E_TURN_TIMEOUT_MS`    | `max(cold + 120s, 300s)`       | The suite's own bound on a single turn. A breach names itself, so a harness-side kill is distinguishable from an app one.                                                                                                                                       |
-| `TEST_DATABASE_URL`      | `…localhost:5432/kgagent_test` | The throwaway database, shared with the unit suite.                                                                                                                                                                                                             |
-| `BAML_LOG`               | `warn`                         | `info` to see rendered prompts and raw replies while debugging a scenario.                                                                                                                                                                                      |
+| Env var                  | Default                  | What it does                                                                                                                                                                                                                                                    |
+| ------------------------ | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `E2E_LIVE`               | unset                    | `verda` runs against the real endpoint. Unset (or `0`/`false`) is hermetic. Any other value throws.                                                                                                                                                             |
+| `E2E_COLD_START_MS`      | `90000`                  | How long scenarios 4 and 8 withhold a self-hosted response. Keep it **under 180 000**: scenario 4 aims its delay past the wake ping, so at or above `VerdaQwen`'s own `request_timeout_ms` the client breaks its budget by design and the red is not a finding. |
+| `E2E_CONCURRENT_COLD_MS` | `3000`                   | Scenario 3's shorter cold start — that scenario owns interleaving, not duration.                                                                                                                                                                                |
+| `E2E_TURN_TIMEOUT_MS`    | `max(cold + 120s, 300s)` | The suite's own bound on a single turn. A breach names itself, so a harness-side kill is distinguishable from an app one.                                                                                                                                       |
+| `TEST_DATABASE_URL`      | `…/kgagent_test_apppath` | This suite's OWN throwaway database (#280 — see [`docs/testing/pyramid.md`](../../docs/testing/pyramid.md)). It also runs as its own dev-bypass user, `e2e-app-path-user`.                                                                                      |
+| `BAML_LOG`               | `warn`                   | `info` to see rendered prompts and raw replies while debugging a scenario.                                                                                                                                                                                      |
 
 ## The scenarios
 

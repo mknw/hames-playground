@@ -101,4 +101,29 @@ describe('BYPASS_USER', () => {
       email: 'dev@local',
     })
   })
+
+  it('takes its id from VITE_DEV_BYPASS_USER_ID when one is set', async () => {
+    // The mechanism the two e2e suites separate themselves with (#280): the
+    // browser suite drives a SEPARATE PROCESS, so an env var is the only way it
+    // can decide which identity that process runs turns as. Re-imported rather
+    // than mutated in place, because unlike `isBypassEnabled()` this is read once
+    // at module load — which is itself the property worth pinning.
+    vi.resetModules()
+    const before = import.meta.env.VITE_DEV_BYPASS_USER_ID
+    ;(import.meta.env as Record<string, unknown>).VITE_DEV_BYPASS_USER_ID = 'some-other-suite'
+    try {
+      const mod = await import('../../../lib/auth/dev-bypass')
+      expect(mod.BYPASS_USER.id).toBe('some-other-suite')
+      // The email is NOT namespaced: nothing scopes rows by it, and two suites
+      // sharing it costs nothing.
+      expect(mod.BYPASS_USER.email).toBe('dev@local')
+    } finally {
+      if (before === undefined) {
+        delete (import.meta.env as Record<string, unknown>).VITE_DEV_BYPASS_USER_ID
+      } else {
+        ;(import.meta.env as Record<string, unknown>).VITE_DEV_BYPASS_USER_ID = before
+      }
+      vi.resetModules()
+    }
+  })
 })

@@ -17,6 +17,7 @@
     "test:e2e": "vitest run --config e2e/vitest.config.ts",
     "test:e2e:browser": "playwright test --config e2e-browser/playwright.config.ts",
     "eval:harness": "BAML_LOG=warn pnpm dlx tsx --env-file=.env evals/run.ts",
+    "release:check": "pnpm dlx tsx scripts/release-check.ts",
     "dev:llama": "llama-server --model /Users/mknw/Library/Caches/llama.cpp/bartowski_zai-org_GLM-4.7-Flash-GGUF_zai-org_GLM-4.7-Flash-Q4_K_M.gguf --ctx-size 16384 --parallel 2 --threads 4 --host 127.0.0.1 --port 8080",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -54,6 +55,7 @@
     ]
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@boundaryml/baml": "0.224.0",
     "@eslint/js": "^9.39.4",
     "@iconify-json/material-symbols": "^1.2.67",
@@ -69,6 +71,7 @@
     "@unocss/preset-icons": "^66.6.8",
     "@unocss/preset-wind4": "^66.6.8",
     "@vitest/coverage-v8": "^4.1.5",
+    "axe-core": "^4.13.0",
     "eslint": "^9.39.4",
     "eslint-plugin-solid": "^0.14.5",
     "jsdom": "^27.4.0",

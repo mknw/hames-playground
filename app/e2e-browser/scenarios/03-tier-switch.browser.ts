@@ -18,11 +18,11 @@
  */
 import { test, expect } from '../lib/fixtures'
 import { FAKE_ANTHROPIC_TIER_MODEL, VERDA_MODEL } from '../lib/env'
-import { open, send, tierOption, waitForReplies } from '../lib/chat'
+import { chooseTier, open, send, TIER_LABEL, waitForReplies } from '../lib/chat'
 import type { FakeCall } from '../lib/control'
 
-const PRIVATE = 'Private (Verda)'
-const ANTHROPIC = 'Anthropic'
+const PRIVATE = TIER_LABEL.verda
+const ANTHROPIC = TIER_LABEL.anthropic
 
 /** The two calls this scenario asserts on. `LoopController` is this chain's
  *  controller role and `Synthesize` its `compactExecution` role.
@@ -47,8 +47,12 @@ test('the header switch moves the next turn to the other endpoint, and shows the
   await open(page, appUrl)
 
   // ---- Anthropic position ------------------------------------------------
-  await tierOption(page, ANTHROPIC).click()
-  await expect(page.getByRole('radio', { name: ANTHROPIC })).toBeChecked()
+  // `chooseTier` clicks AND waits for the persisted row. Both waits are needed
+  // and they are different claims — see its docstring. Without the second one,
+  // the send below races the server action the click fired, so the turn ran on
+  // whichever tier was still stored and this scenario reported it as the app
+  // routing to the wrong endpoint (#280).
+  await chooseTier(page, 'anthropic')
   await expect(page.getByRole('radio', { name: PRIVATE })).not.toBeChecked()
 
   await send(page, 'first question')
@@ -64,8 +68,7 @@ test('the header switch moves the next turn to the other endpoint, and shows the
 
   // ---- Self-hosted position ----------------------------------------------
   await backend.reset()
-  await tierOption(page, PRIVATE).click()
-  await expect(page.getByRole('radio', { name: PRIVATE })).toBeChecked()
+  await chooseTier(page, 'verda')
   await expect(page.getByRole('radio', { name: ANTHROPIC })).not.toBeChecked()
 
   await send(page, 'second question')

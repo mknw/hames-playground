@@ -37,14 +37,29 @@ export const APP_PORT = Number.parseInt(process.env.E2E_BROWSER_PORT ?? '3446', 
 
 export const APP_URL = `http://127.0.0.1:${APP_PORT}`
 
-/** Shared with the unit suite and `app/e2e/` rather than copied — the three
- *  must agree on the target, or one of them is writing somewhere nobody cleans
- *  up. `src/__tests__/global-setup.ts` provisions it. */
+/**
+ * This suite's OWN throwaway database.
+ *
+ * It was `kgagent_test`, shared with the unit suite and `app/e2e/`, until #280.
+ * Sharing was survivable while nothing ran concurrently and became a source of
+ * false reds the moment something did: all three drive real turns, two of them
+ * wipe "their" rows by dev-bypass user id, and the id was one literal — so a
+ * concurrent app-path run deleted this suite's conversations mid-scenario and the
+ * failure named a scenario rather than the collision. That is exactly what
+ * happened during #277's fix round.
+ *
+ * `provisionDatabase` (`src/__tests__/global-setup.ts`) creates it on demand, so
+ * separating cost one `CREATE DATABASE` on a first run. The code is still shared;
+ * only the target is not. {@link BYPASS_USER_ID} is the second, independent
+ * separation — see it for why both exist.
+ */
 export const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL ?? 'postgresql://postgres:password@localhost:5432/kgagent_test'
+  process.env.TEST_DATABASE_URL ??
+  'postgresql://postgres:password@localhost:5432/kgagent_test_browser'
 
-/** The same key the unit suite and `app/e2e/` use. All three write to
- *  `kgagent_test`, and `initSchema()`'s backfill would fight two keys. */
+/** The same key the unit suite and `app/e2e/` use. The databases are separate
+ *  now, so this is no longer forced — but a second key would be a second thing
+ *  to know when reading a row by hand, and nothing here tests key handling. */
 export const DATA_ENCRYPTION_KEY = 'unit-test-data-encryption-key'
 
 /**
@@ -70,8 +85,22 @@ export const FAKE_ANTHROPIC_TIER_MODEL = 'e2e-fake-anthropic-tier'
  *  should fail if the declaration changes under it. */
 export const VERDA_MODEL = 'Qwen/Qwen3.8-27B-FP8'
 
-/** The dev-bypass user every turn runs as (`src/lib/auth/dev-bypass.ts`). */
-export const BYPASS_USER_ID = 'dev-bypass-user'
+/**
+ * The dev-bypass user every turn in THIS suite runs as.
+ *
+ * Handed to the dev server as `VITE_DEV_BYPASS_USER_ID`, which
+ * `src/lib/auth/dev-bypass.ts` reads through `import.meta.env` — so one value
+ * moves both halves of the app, the browser bundle's `AuthProvider` and the
+ * server's turn path.
+ *
+ * Distinct from the other suites' (#280) as DEFENCE IN DEPTH rather than as the
+ * fix: {@link TEST_DATABASE_URL} is what actually keeps the suites apart, and
+ * this is what keeps them apart anyway when someone deliberately points two of
+ * them at one database to reproduce a cross-suite bug. `wipeUserRows()` deletes
+ * by this id, so getting it wrong is how one suite comes to delete another's
+ * rows.
+ */
+export const BYPASS_USER_ID = 'e2e-browser-user'
 
 /** The answer `fake-llm.ts` puts in every synthesized reply. A scenario
  *  asserting on it is asserting the reply came from the fake. */

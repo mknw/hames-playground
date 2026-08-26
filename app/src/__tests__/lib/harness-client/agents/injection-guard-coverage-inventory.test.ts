@@ -17,7 +17,7 @@
  * `ConfiguredPattern.injectionGuard`. No agent is executed.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
@@ -146,6 +146,28 @@ async function patternsOf(file: string, exportName: string): Promise<Pattern[]> 
   const agent = mod[exportName] as { createPatterns: (s: string) => Promise<Pattern[]> }
   return agent.createPatterns('inventory-session')
 }
+
+/**
+ * Import every agent module BEFORE any test measures anything (#280).
+ *
+ * `patternsOf` dynamically imports an agent, and an agent pulls in
+ * harness-patterns and the generated BAML client — a module graph large enough
+ * that vitest's first transform of it took over five seconds on a loaded machine.
+ * Whichever `it` happened to import a module first therefore paid that inside its
+ * own 5s budget and failed, while passing in isolation: `search — the web route is
+ * guarded` and `microsoft-365 — the whole graph loop is guarded` both did, in a
+ * full-suite run, on a tree where nothing had changed. That is a one-time cost
+ * billed to an assertion, not a defect.
+ *
+ * Widening the per-test timeout would have hidden it and made the next case that
+ * got genuinely slow indistinguishable from a regression. The imports are paid
+ * here instead, once, against a hook timeout that says what it is for — after
+ * which every test below measures `createPatterns` and the inventory, which is
+ * what each of them is about.
+ */
+beforeAll(async () => {
+  await Promise.all(Object.values(LOADERS).map((load) => load()))
+}, 120_000)
 
 beforeEach(() => vi.clearAllMocks())
 

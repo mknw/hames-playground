@@ -469,7 +469,12 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                       </Match>
                     </Switch>
 
-                    <div text="xs ui-text-tertiary" m="t-1">
+                    {/* `data-testid` so the browser suite's screenshot
+                        comparison can mask it: a wall-clock time differs between
+                        two otherwise identical runs, and a baseline that diffed
+                        on the minute hand would be re-recorded until nobody
+                        looked at it. */}
+                    <div data-testid="message-time" text="xs ui-text-tertiary" m="t-1">
                       {message.timestamp.toLocaleTimeString([], {
                         hour: '2-digit',
                         minute: '2-digit',

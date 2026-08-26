@@ -8,11 +8,12 @@
  * other.
  */
 import { readFileSync } from 'node:fs'
+import { expect } from '@playwright/test'
 import { HANDLES_FILE } from './env'
-import type { FakeCall, Fault } from '../../e2e/lib/fake-llm'
+import type { FakeCall, Fault, HeldRequest } from '../../e2e/lib/fake-llm'
 import type { FakeToolCall } from '../../e2e/lib/fake-gateway'
 
-export type { FakeCall, Fault }
+export type { FakeCall, Fault, HeldRequest }
 
 /** What global setup parked for the workers. */
 export interface Handles {
@@ -53,10 +54,44 @@ export class FakeBackend {
     await this.post('/reset')
   }
 
-  /** Arm one fault shape (`cold-start`, `status`, `mid-stream`). Replaces any
-   *  previously armed one; see `e2e/lib/fake-llm.ts` for the table. */
+  /** Arm one fault shape (`cold-start`, `hold`, `status`, `mid-stream`).
+   *  Replaces any previously armed one; see `e2e/lib/fake-llm.ts` for the
+   *  table. */
   async arm(fault: Fault): Promise<void> {
     await this.post('/arm', fault)
+  }
+
+  /**
+   * Requests currently PARKED by a `hold` fault, oldest first.
+   *
+   * The evidence a browser scenario wants when its claim is "the turn is still
+   * running": a parked request has arrived AND has not been answered, so the turn
+   * demonstrably cannot advance past it. `calls()` cannot say that — a call is
+   * recorded only once the fake has answered it, so by the time it appears the
+   * turn has already moved on. That difference is what both #280 browser flakes
+   * were made of.
+   */
+  async held(): Promise<HeldRequest[]> {
+    return (await this.get<{ held: HeldRequest[] }>('/held')).held
+  }
+
+  /** Stop applying the armed fault to NEW requests, keeping recorded calls and
+   *  anything already parked. `reset()` would also throw the calls away, which a
+   *  scenario mid-assertion usually still needs. */
+  async disarm(): Promise<void> {
+    await this.post('/disarm')
+  }
+
+  /** Let parked requests answer, oldest first; `count` omitted releases all.
+   *  Returns how many were released. */
+  async release(count?: number): Promise<number> {
+    const response = await fetch(`${this.controlUrl}/release`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(count === undefined ? {} : { count }),
+    })
+    if (!response.ok) throw new Error(`control /release: HTTP ${response.status}`)
+    return ((await response.json()) as { released: number }).released
   }
 
   /** Stop accepting connections entirely — the "endpoint is down" case, which
@@ -87,4 +122,30 @@ export class FakeBackend {
     })
     if (!response.ok) throw new Error(`control ${path}: HTTP ${response.status}`)
   }
+}
+
+/**
+ * Wait until the PARKED requests satisfy `predicate`, then hand them back.
+ *
+ * The synchronisation primitive the browser layer was missing (#280). Two things
+ * make it different from polling `calls()`:
+ *
+ *  - a parked request proves the turn REACHED this call and has not got past it,
+ *    where a recorded call proves only that the turn has already moved on;
+ *  - once the predicate holds, every assertion that follows is about a turn that
+ *    cannot advance — so "the notice retracted while the turn was still running"
+ *    and "the reopened thread holds one reply" stop being races against a
+ *    duration and become facts the test established.
+ *
+ * `expect.poll` rather than a hand-rolled loop: it inherits the project's expect
+ * timeout and puts `message` in the failure, which is where a scenario says what
+ * the app failed to do rather than "timed out".
+ */
+export async function expectHeld(
+  backend: FakeBackend,
+  predicate: (held: HeldRequest[]) => boolean,
+  message: string,
+): Promise<HeldRequest[]> {
+  await expect.poll(async () => predicate(await backend.held()), { message }).toBe(true)
+  return backend.held()
 }

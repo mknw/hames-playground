@@ -418,7 +418,20 @@ export const PreviewHeaderStrip = () => {
             </Show>
 
             {/* ---- Metrics ----------------------------------------------- */}
-            <div flex="~" items="center" gap="3" border="l ui-border-primary" p="l-3">
+            {/* `data-testid` so the browser suite's screenshot comparison can
+                MASK this block: every figure in it (active people, today's
+                tokens and turns, the rolling p50) is a live counter, so an
+                unmasked header would diff against its own baseline on every
+                run. Masked rather than stubbed — a stub would make the visual
+                test assert a layout the app never renders. */}
+            <div
+              data-testid="preview-header-metrics"
+              flex="~"
+              items="center"
+              gap="3"
+              border="l ui-border-primary"
+              p="l-3"
+            >
               <Metric
                 label="active"
                 value={formatCompactNumber(s().activeUsers)}

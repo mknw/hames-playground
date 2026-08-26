@@ -12,7 +12,7 @@
  * "unchanged by default" a fact rather than a hope, and what makes migrating a
  * component a rename.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll } from 'vitest'
 import { createGenerator } from 'unocss'
 import config from '../../../uno.config'
 
@@ -20,6 +20,25 @@ const generator = await createGenerator(config as never)
 
 /** All CSS the config emits for `input`, preflights included. */
 const cssFor = async (input: string) => (await generator.generate(input, {})).css
+
+/**
+ * Load the icon collections BEFORE any test measures anything (#280).
+ *
+ * `presetIcons` loads `@iconify-json/material-symbols` — a multi-megabyte JSON —
+ * lazily, on the first `i-material-symbols-*` utility it is asked to generate. So
+ * whichever icon case ran first paid that load inside its own 5s test budget, and
+ * on a loaded machine it lost: `emits CSS for i-material-symbols-light-mode`
+ * failed at 5004ms in a full-suite run while passing in isolation, which is the
+ * signature of a one-time cost billed to an assertion rather than a defect.
+ *
+ * Widening the test timeout would have hidden it and left the next case that got
+ * slow indistinguishable from a regression. Paying the load here, once, against a
+ * hook timeout that says what it is for, leaves each test's own budget measuring
+ * the generation it is actually about.
+ */
+beforeAll(async () => {
+  await cssFor('i-material-symbols-home i-material-symbols-light-home')
+}, 60_000)
 
 /** The `--ui-*` declarations inside the `:root` / `:root.light` blocks. */
 async function palette(selector: ':root' | ':root.light'): Promise<Record<string, string>> {

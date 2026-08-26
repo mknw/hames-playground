@@ -4,7 +4,8 @@
  * Postgres is not faked here for the same reason `app/e2e/` does not fake it:
  * "the conversation survived a reload" is a claim about persistence, and a
  * suite that faked the store would be asserting against its own fake. The
- * target is the throwaway `kgagent_test` the unit suite provisions, never a
+ * target is the throwaway `kgagent_test_browser` this suite provisions for itself
+ * (#280), never a
  * developer's dev database — `initSchema()`'s backfill would otherwise rewrite
  * real rows under the unit-test key, after which `pnpm dev` refuses to boot.
  *
@@ -26,7 +27,8 @@ const UNDEFINED_TABLE = '42P01'
  *
  * Called before each scenario file rather than after, so a failed run leaves
  * its rows behind to be looked at. Test database only — the `TEST_DATABASE_URL`
- * default and `vitest`'s twin both point at `kgagent_test`.
+ * default and the dev server's `DATABASE_URL` both point at this suite's own
+ * `kgagent_test_browser`.
  */
 export async function wipeUserRows(): Promise<void> {
   const client = new pg.Client({ connectionString: TEST_DATABASE_URL })
@@ -58,6 +60,38 @@ export async function conversationRows(): Promise<Array<{ id: string; status: st
     return result.rows
   } catch (err) {
     if ((err as { code?: string }).code === UNDEFINED_TABLE) return []
+    throw err
+  } finally {
+    await client.end().catch(() => {})
+  }
+}
+
+/**
+ * The tier the server will actually read for this suite's user, or `null` when
+ * no row exists yet (a user who has never chosen — the state every scenario
+ * starts in, since `wipeUserRows()` deletes it).
+ *
+ * The evidence half of clicking the header switch (#280). The Ark segment group
+ * moves its own selection the moment it is clicked, so `toBeChecked()` says the
+ * WIDGET moved and nothing about the server — while the server action that
+ * persists it is still in flight. A scenario that clicked and immediately sent
+ * therefore ran its turn on whichever tier `resolveInferenceTier()` happened to
+ * read, and asserted the other one. That is the same "assert on evidence, not on
+ * inputs" rule this suite's README states, applied to a PRECONDITION: this row is
+ * the exact thing the next turn reads, so waiting for it is waiting for the state
+ * the scenario needs rather than for a paint. `chat.ts#chooseTier` is the wait.
+ */
+export async function storedTier(): Promise<string | null> {
+  const client = new pg.Client({ connectionString: TEST_DATABASE_URL })
+  await client.connect()
+  try {
+    const result = await client.query<{ inference_tier: string | null }>(
+      'SELECT inference_tier FROM user_prefs WHERE user_id = $1',
+      [BYPASS_USER_ID],
+    )
+    return result.rows[0]?.inference_tier ?? null
+  } catch (err) {
+    if ((err as { code?: string }).code === UNDEFINED_TABLE) return null
     throw err
   } finally {
     await client.end().catch(() => {})

@@ -30,7 +30,7 @@
  * back-to-back rather than being run repeatedly — each separate session risks
  * paying another cold start.
  *
- * Two calls, chosen for what they prove:
+ * Three calls, chosen for what they prove:
  *   1. `createCriticAdapter()` — the smallest structured-output round trip in
  *      the repo (no tool catalog, no gateway, no sandbox). If the endpoint is
  *      wired at all, this passes.
@@ -38,15 +38,24 @@
  *      or brace-less action is the repo's recurring parse failure), over a
  *      hand-written two-tool catalog so the script stays independent of the
  *      MCP gateway being up.
+ *   3. `ActorController` WITH a populated attempt log and a context — the
+ *      actor's RETRY shape, and the one call in this script that a passing
+ *      first attempt does not cover. It 400d here (`System message must be at
+ *      the beginning.`) until the two `_.role("system")` markers that followed
+ *      the conversation in `actorCritic.baml` were rendered `user` instead;
+ *      `src/__tests__/lib/harness-patterns/prompt-role-order.test.ts` is the
+ *      hermetic pin, and this is the live one. Both of that fix's inputs are
+ *      exercised at once: attempts non-empty AND context non-null, because
+ *      each marker fires on a different one.
  *
- * Both calls assert the collector reports `clientName === 'VerdaQwen'`. Being
- * told the flag is on is not evidence that the call went there.
+ * All three calls assert the collector reports `clientName === 'VerdaQwen'`.
+ * Being told the flag is on is not evidence that the call went there.
  */
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { Collector } from '@boundaryml/baml'
-import type { ToolDescription } from '../../../../baml_client/types'
+import type { Attempt, ToolDescription } from '../../../../baml_client/types'
 import { createCriticAdapter, extractLLMCallData } from '../baml-adapters.server'
 import { assertVerdaConfigured, clientOverrideFor, verdaInferenceEnabled } from '../clients.server'
 
@@ -133,7 +142,7 @@ function assertServedByVerda(label: string, collector: Collector): void {
 }
 
 async function critic(): Promise<void> {
-  console.log('\n▶ 1/2 Critic — smallest structured round trip')
+  console.log('\n▶ 1/3 Critic — smallest structured round trip')
   const collector = new Collector('smoke-verda-critic')
   const t0 = Date.now()
   const { result } = await createCriticAdapter()(
@@ -158,7 +167,7 @@ async function critic(): Promise<void> {
 }
 
 async function controller(): Promise<void> {
-  console.log('\n▶ 2/2 LoopController — the action envelope')
+  console.log('\n▶ 2/3 LoopController — the action envelope')
   const { b } = await import('../../../../baml_client')
   const collector = new Collector('smoke-verda-controller')
   const opts = { collector, ...clientOverrideFor('controller') }
@@ -207,6 +216,63 @@ async function controller(): Promise<void> {
   // for caching — a non-zero cache figure would mean that changed.
 }
 
+/**
+ * The actor's retry shape: a non-empty attempt log AND a context block.
+ *
+ * `ActorController` is called directly rather than through
+ * `createActorControllerAdapter`, for the same reason step 2 calls
+ * `LoopController` directly — the adapter lists tools over the MCP gateway, and
+ * this script must not need the gateway up. Calling the function is also what
+ * lets the attempt log be HAND-BUILT: the failure only appears once there is
+ * something in it, so an empty one would pass and prove nothing.
+ */
+async function actorRetry(): Promise<void> {
+  console.log('\n▶ 3/3 ActorController — retry shape (attempt log + context)')
+  const { b } = await import('../../../../baml_client')
+  const collector = new Collector('smoke-verda-actor-retry')
+  // 'controller' — the one role covers BOTH loop patterns' controllers, which
+  // is exactly why the actor's 400 rode in on the same map entry that the
+  // healthy LoopController scenarios had already been passing on.
+  const opts = { collector, ...clientOverrideFor('controller') }
+  const attempts: Attempt[] = [
+    {
+      n: 1,
+      action: {
+        reasoning: 'Ask the graph what labels it has before querying them.',
+        tool_name: 'read_neo4j_cypher',
+        tool_args: JSON.stringify({ query: 'MATCH (n) RETURN n LIMIT 1' }),
+        status: 'Sampling a node',
+        is_final: false,
+      },
+      result: '[]',
+      feedback: 'Empty result — sample the schema instead of a node.',
+    },
+  ]
+  const t0 = Date.now()
+  const action = await b.ActorController(
+    'What node labels exist in the graph?',
+    'inspect the graph schema',
+    TOOLS,
+    attempts,
+    'The graph is a knowledge graph of documents and the entities mentioned in them.',
+    undefined, // few_shots
+    2, // attempt_n — 1-based, so this is the retry
+    5, // max_attempts
+    undefined, // multi_call_mode
+    opts,
+  )
+  const llmCall = extractLLMCallData(collector, 'ActorController', {}, t0, action)
+  if (!llmCall) throw new Error('the collector captured nothing — is baml_client stale? (#154)')
+  console.log(`   ${Date.now() - t0}ms · served by ${llmCall.clientName} (${llmCall.provider})`)
+  assertServedByVerda('ActorController', collector)
+  console.log(
+    `   action: tool=${action.tool_name} status=${action.status} is_final=${action.is_final}`,
+  )
+  if (typeof action.tool_name !== 'string' || typeof action.reasoning !== 'string') {
+    throw new Error('ControllerAction did not parse into its declared shape')
+  }
+}
+
 async function main(): Promise<void> {
   console.log('🔒 Verda (self-hosted) smoke — confidential-compute route')
   await preflight()
@@ -214,7 +280,8 @@ async function main(): Promise<void> {
   console.log('   NOTE: a cold start can take minutes on the first call.')
   await critic()
   await controller()
-  console.log('\n✅ both calls served by VerdaQwen and parsed into their declared types')
+  await actorRetry()
+  console.log('\n✅ all three calls served by VerdaQwen and parsed into their declared types')
 }
 
 main().catch((err) => {

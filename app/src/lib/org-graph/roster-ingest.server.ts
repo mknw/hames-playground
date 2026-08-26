@@ -200,9 +200,11 @@ function tally(violations: Violation[], counts: CountsByReason, ok: boolean): vo
  *
  * One `UNWIND` + `MERGE` in a single transaction: the whole roster is a few
  * dozen rows, and a per-row round trip would be slower and non-atomic for no
- * gain. `syncedAt` is set from the server clock (`datetime()`) rather than from
- * this process, so the staleness comparison below cannot be skewed by a
- * container's clock drift.
+ * gain. `syncedAt` is stamped with `datetime()`, so it is on the **database**
+ * clock; {@link databaseNow} is what keeps the staleness threshold on that same
+ * clock. Stamping here and thresholding from `new Date()` compares two clocks
+ * and is the bug that reading is meant to prevent — not, as this comment used
+ * to claim, a defence against drift that `datetime()` provides on its own.
  */
 export async function upsertMembers(members: MemberRecord[]): Promise<number> {
   if (members.length === 0) return 0
@@ -226,19 +228,54 @@ export async function upsertMembers(members: MemberRecord[]): Promise<number> {
 }
 
 /**
+ * The database's own clock, as the ISO string `datetime()` renders.
+ *
+ * One round trip, and the only reason it exists: `syncedAt` is stamped by the
+ * server, so a threshold compared against it has to come from the server too.
+ * Taking it from `new Date()` in this process compares the app container's
+ * clock to the database container's, and the skew is not hypothetical — a
+ * database clock running behind the host by more than the directory fetch
+ * takes makes **every member just written** count as stale.
+ *
+ * It stays a string rather than becoming a `Date`: `datetime()` renders
+ * nanoseconds, `Date` holds milliseconds, and the round trip through a JS
+ * `Date` would round the threshold — possibly *forwards*, which is the one
+ * direction that reintroduces the false positive. Cypher parses it back with
+ * full fidelity on the other side.
+ *
+ * **Fails closed.** A clock that cannot be read throws rather than falling back
+ * to `new Date()`: the fallback would be the defect, silently, on exactly the
+ * runs where something is already wrong.
+ */
+export async function databaseNow(): Promise<string> {
+  const session = getNeo4jDriver().session({ defaultAccessMode: neo4j.session.READ })
+  try {
+    const result = await session.run('RETURN toString(datetime()) AS now')
+    const now = result.records[0]?.get('now')
+    if (typeof now !== 'string' || now === '') {
+      throw new Error('could not read the database clock: datetime() returned no value')
+    }
+    return now
+  } finally {
+    await session.close()
+  }
+}
+
+/**
  * `Member` nodes whose `syncedAt` is older than `since` — people the directory
  * no longer returns, or who never had a `syncedAt` at all.
  *
- * Counted, not deleted. See the module header.
+ * `since` is a database timestamp from {@link databaseNow}, never a value this
+ * process minted. Counted, not deleted — see the module header.
  */
-export async function countStaleMembers(since: Date): Promise<number> {
+export async function countStaleMembers(since: string): Promise<number> {
   const session = getNeo4jDriver().session({ defaultAccessMode: neo4j.session.READ })
   try {
     const result = await session.run(
       `MATCH (m:Member)
        WHERE m.syncedAt IS NULL OR m.syncedAt < datetime($since)
        RETURN count(m) AS stale`,
-      { since: since.toISOString() },
+      { since },
     )
     return toCount(result.records[0]?.get('stale'))
   } finally {
@@ -385,9 +422,10 @@ export interface IngestOptions {
 export async function ingestRoster(options: IngestOptions = {}): Promise<IngestReport> {
   await ensureOrgGraphSchema()
 
-  // Taken before the write, so a member written by this run can never count as
-  // stale (its `syncedAt` is necessarily later).
-  const startedAt = new Date()
+  // Taken before the write, and from the database, so a member written by this
+  // run can never count as stale: its `syncedAt` comes from the same clock and
+  // is necessarily later.
+  const startedAt = await databaseNow()
 
   const { members, fetched, pages, rejectedRows, rejected, incomplete } =
     await fetchDirectoryMembers()

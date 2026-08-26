@@ -76,6 +76,11 @@ const denyGroups = (): void => {
   })
 }
 
+/** What the doubled database answers `RETURN toString(datetime())` with.
+ *  Deliberately nowhere near the host clock, so a threshold taken from
+ *  `new Date()` cannot pass for it by coincidence. */
+const DB_NOW = '2019-03-04T05:06:07.891011121Z'
+
 const cypher = (): string[] => sessionRun.mock.calls.map((c) => String(c[0]))
 const paramsOf = (index: number) => sessionRun.mock.calls[index][1] as Record<string, unknown>
 
@@ -220,20 +225,51 @@ describe('upsertMembers', () => {
   })
 })
 
+describe('databaseNow', () => {
+  it('asks the database for its clock and hands the string back untouched', async () => {
+    // Nanoseconds: the whole reason this is a string and not a Date. A round
+    // trip through Date would round it, and rounding *up* is what would make a
+    // member written moments later look stale.
+    const { databaseNow } = await mod()
+    queue.push([{ now: '2026-08-26T09:15:00.123456789Z' }])
+
+    await expect(databaseNow()).resolves.toBe('2026-08-26T09:15:00.123456789Z')
+    expect(cypher()[0]).toContain('datetime()')
+  })
+
+  it('throws rather than falling back to the process clock', async () => {
+    // Fail closed. A silent `new Date()` fallback would reintroduce the
+    // two-clock comparison on exactly the runs where something is already off.
+    const { databaseNow } = await mod()
+    queue.push([])
+    await expect(databaseNow()).rejects.toThrow(/database clock/)
+    expect(sessionClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes the session when the read throws', async () => {
+    const { databaseNow } = await mod()
+    sessionRun.mockRejectedValueOnce(new Error('unreachable'))
+    await expect(databaseNow()).rejects.toThrow('unreachable')
+    expect(sessionClose).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('countStaleMembers', () => {
   it('counts and never deletes', async () => {
     const { countStaleMembers } = await mod()
     queue.push([{ stale: 3 }])
 
-    await expect(countStaleMembers(new Date('2026-08-25T00:00:00Z'))).resolves.toBe(3)
+    await expect(countStaleMembers('2026-08-25T00:00:00.000000000Z')).resolves.toBe(3)
     expect(cypher()[0]).not.toMatch(/\b(DELETE|DETACH|SET|REMOVE)\b/i)
-    expect(paramsOf(0).since).toBe('2026-08-25T00:00:00.000Z')
+    // Passed through verbatim: Cypher parses the full precision back, and
+    // anything this process did to the value first would be a second clock.
+    expect(paramsOf(0).since).toBe('2026-08-25T00:00:00.000000000Z')
   })
 
   it('treats a member with no syncedAt as stale', async () => {
     const { countStaleMembers } = await mod()
     queue.push([{ stale: 1 }])
-    await countStaleMembers(new Date(0))
+    await countStaleMembers('1970-01-01T00:00:00.000000000Z')
     expect(cypher()[0]).toContain('m.syncedAt IS NULL')
   })
 })
@@ -360,6 +396,7 @@ describe('ingestRoster', () => {
     const { ingestRoster } = await mod()
     graphAppFetch.mockResolvedValueOnce(page([user(1)]))
     denyGroupsAfterFirst()
+    queue.push([{ now: DB_NOW }])
     queue.push([{ written: 1 }])
     queue.push([{ stale: 0 }])
 
@@ -374,6 +411,7 @@ describe('ingestRoster', () => {
     const { ingestRoster } = await mod()
     graphAppFetch.mockResolvedValueOnce(page([user(1), user(2, { jobTitle: null })]))
     denyGroupsAfterFirst()
+    queue.push([{ now: DB_NOW }])
     queue.push([{ written: 2 }])
     queue.push([{ stale: 1 }])
 
@@ -399,9 +437,30 @@ describe('ingestRoster', () => {
     })
   })
 
+  it('thresholds staleness on the database clock, not this process clock', async () => {
+    // The bug this pins: `syncedAt` is stamped by the server, so comparing it
+    // against a host-minted `new Date()` compares two clocks. With the gap
+    // between them smaller than the skew, every member just written counts as
+    // stale. Reading the threshold from the same clock removes the question.
+    const { ingestRoster } = await mod()
+    graphAppFetch.mockResolvedValueOnce(page([user(1)]))
+    denyGroupsAfterFirst()
+    queue.push([{ now: DB_NOW }])
+    queue.push([{ written: 1 }])
+    queue.push([{ stale: 0 }])
+
+    await ingestRoster()
+
+    // First query of the run, before anything is written.
+    expect(cypher()[0]).toContain('datetime()')
+    const stalenessQuery = cypher().findIndex((c) => c.includes('AS stale'))
+    expect(paramsOf(stalenessQuery).since).toBe(DB_NOW)
+  })
+
   it('spends no group request at all when memberships are disabled', async () => {
     const { ingestRoster } = await mod()
     graphAppFetch.mockResolvedValueOnce(page([user(1)]))
+    queue.push([{ now: DB_NOW }])
     queue.push([{ written: 1 }])
     queue.push([{ stale: 0 }])
 

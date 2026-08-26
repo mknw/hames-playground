@@ -40,9 +40,16 @@ Four, and nothing else is conforming data.
 | `Resource`  | A system, tool or asset the organisation runs    | `key`             | `key`, `name`                    | —                        |
 | `Knowledge` | A documented item — a note, a decision, a how-to | `key`             | `key`, `title`                   | —                        |
 
-`Member` also carries `syncedAt`, set from the **database** clock on every
-ingest. It is not part of the ontology's contract; it is what makes "not seen in
-the last run" answerable without trusting a container's clock.
+`Member` also carries `syncedAt`, stamped with `datetime()` on every ingest and
+therefore on the **database** clock. It is not part of the ontology's contract;
+it is what makes "not seen in the last run" answerable.
+
+Stamping it server-side buys nothing on its own — what matters is that the
+threshold it is compared against comes from the same clock, which is why
+`ingestRoster` opens with a `databaseNow()` round trip instead of `new Date()`.
+Two clocks would make the `stale` count skew-dependent in the one direction
+that hurts: a database running behind the app container by more than the
+directory fetch takes would report every member just written as stale.
 
 ### Why "required" has two tiers
 

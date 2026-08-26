@@ -486,7 +486,7 @@ Displays the full agent event timeline:
 - **LLM call detail** (events with `llmCall`): two-tab layout — **Prompt** | **Output**. The Prompt tab uses an Ark UI Accordion with three sections: _Template_ (Jinja source with `{{ vars }}` and `{% if %}` / `{% for %}` blocks, sourced from `baml_src/`), _Variables_ (function inputs), _Rendered messages_ (HTTP body parsed into role/content bubbles via `ParsedPromptView`). Sourced from `LLMCallData` in `baml-adapters.server.ts` — `httpRequest.body` is read via `body.text()` because BAML returns an `HttpBody` class instance, not a plain object.
 - **Save button** (floating, bottom-right): calls `showSaveFilePicker()` to save the full `UnifiedContext` as a named JSON file; falls back to `<a download>` on browsers without File System Access API
 - Requires `context?: UnifiedContext` prop threaded down from `index.tsx` → `SupportPanel` → `ObservabilityPanel`
-- **Split across files** (#226 B5): `ObservabilityPanel.tsx` is the composition root and the only public export. The pure projections live in `app/src/lib/observability/` — `projection.ts` (`buildTimelineItems()`, `getEventPreview()`, `getEventLane()`), `prompt-parse.ts` (`parsePromptBody()`, `flattenContent()`, `formatParamValue()`), `token-totals.ts` (`foldTokenTotals()`, `fmtTok()`, `fmtUsd()`) and `event-styles.ts` (icon/colour tables, `getPatternColor()`) — and the rendering in `components/ark-ui/observability/` (`SummaryBar`, `TimelineRows`, `EventDetail`, `LLMCallTabs`, `PromptView`)
+- **Split across files** (#226 B5): `ObservabilityPanel.tsx` is the composition root and the only public export. The pure projections live in `app/src/lib/observability/` — `projection.ts` (`buildTimelineItems()`, `getEventPreview()`, `getEventLane()`), `prompt-parse.ts` (`parsePromptBody()`, `flattenContent()`, `formatParamValue()`), `token-totals.ts` (`foldTokenTotals()`, `fmtTok()`, `fmtEur()` — the app's one price formatter) and `event-styles.ts` (icon/colour tables, `getPatternColor()`) — and the rendering in `components/ark-ui/observability/` (`SummaryBar`, `TimelineRows`, `EventDetail`, `LLMCallTabs`, `PromptView`)
 
 ### Theme System
 
@@ -1032,7 +1032,7 @@ app/
 │       ├── observability/         # Pure event-stream projections behind the timeline
 │       │   ├── projection.ts      # buildTimelineItems(), getEventPreview(), getEventLane()
 │       │   ├── prompt-parse.ts    # parsePromptBody(), flattenContent(), formatParamValue()
-│       │   ├── token-totals.ts    # foldTokenTotals(), fmtTok(), fmtUsd()
+│       │   ├── token-totals.ts    # foldTokenTotals(), fmtTok(), fmtEur()
 │       │   └── event-styles.ts    # eventIcons/eventColors tables, getPatternColor()
 │       ├── neo4j/
 │       │   ├── queries.ts         # runManualCypher() (read-only), getNodeProperties()

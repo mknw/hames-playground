@@ -38,7 +38,14 @@ import { listTools as mcpListTools } from './mcp-client.server'
 import { getActiveSandbox } from '../sandbox/scope.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
-import { CLIENT_MAX_OUTPUT_TOKENS, estimateLlmCostUsd } from '../settings'
+import {
+  CLIENT_MAX_OUTPUT_TOKENS,
+  TIME_PRICED_CLIENT,
+  estimateLlmCostEur,
+  type CostBasis,
+  type TokenBuckets,
+} from '../settings'
+import { eurPerUsdRate, verdaEurPerHour } from '../cost-rates.server'
 import { clientOverrideFor } from './clients.server'
 import { notifyLlmUsage } from './llm-usage-observer.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
@@ -200,11 +207,14 @@ export function accountBamlCall(
     functionName,
     clientName: selectedCall?.clientName,
     metrics: metrics ?? computeEventMetrics(collector),
-    durationMs: functionDurationMs(last),
+    durationMs: measuredDurationMs(last),
   })
 }
 
-/** How long BAML measured this function call to take, across every attempt.
+/** How long BAML measured something to take — a whole function call across
+ *  every attempt (`FunctionLog`) or one physical attempt (`LLMCall`). Both
+ *  expose the same `timing` getter, and the second is what a time-priced client
+ *  is billed on.
  *
  *  Read off the collector rather than timed around the call: the number a user
  *  waits on is the model round trip, and a stopwatch here would also fold in
@@ -212,9 +222,14 @@ export function accountBamlCall(
  *  class and is absent from the collector stubs the tests build, so it is read
  *  defensively — and a non-finite or negative reading is reported as "not
  *  measured" (undefined) rather than as a 0 that would look like a fast call.
+ *  For a time-priced call that undefined is what makes the whole step's cost
+ *  read as unknown, which is the honest reading: a time bill with no time is
+ *  not a free call.
  */
-function functionDurationMs(last: { timing?: { durationMs?: number | null } }): number | undefined {
-  const raw = last.timing?.durationMs
+function measuredDurationMs(source: {
+  timing?: { durationMs?: number | null }
+}): number | undefined {
+  const raw = source.timing?.durationMs
   return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : undefined
 }
 
@@ -255,6 +270,10 @@ type CollectorCall = {
   selected?: boolean
   provider?: string
   clientName?: string
+  /** Per-ATTEMPT duration — the wall-clock a time-priced client is billed on.
+   *  Read off the same `timing` getter as the function-level reading, which is
+   *  why {@link measuredDurationMs} takes both. */
+  timing?: { durationMs?: number | null }
   httpRequest?: { body?: unknown }
   httpResponse?: { body?: { json?: () => unknown } } | null
   usage?: {
@@ -290,6 +309,16 @@ function usageFromResponse(call: CollectorCall | undefined):
   } catch {
     return undefined // absent/malformed body (e.g. stream call, network failure)
   }
+}
+
+/** What a call that reported no usage at all is priced against when its client
+ *  is billed by the second. Not a claim that it moved no tokens — a claim that
+ *  its tokens are free either way, so the missing count changes no figure. */
+const NO_TOKEN_USAGE: TokenBuckets = {
+  inputUncachedTokens: 0,
+  inputCacheReadTokens: 0,
+  inputCacheWriteTokens: 0,
+  outputTokens: 0,
 }
 
 /** One call's token buckets: raw response usage first (has the cache-write
@@ -328,8 +357,20 @@ function callTokenBuckets(call: CollectorCall | undefined):
  *  policies). One collector == one harness step by construction (the
  *  loops create a fresh Collector per turn/attempt), so this is the step's
  *  true bill; `llmCall.usage` remains the selected exchange only.
- *  Cost is omitted (not zeroed) when any token-bearing attempt has no
- *  pricing entry — unknown beats silently wrong. */
+ *  Cost is omitted (not zeroed) when any token-bearing attempt could not be
+ *  priced — unknown beats silently wrong.
+ *
+ *  Each attempt is priced under the model its OWN selected client is billed
+ *  under (`estimateLlmCostEur`), so a step whose retry fell back from the
+ *  self-hosted box to Anthropic pays wall-clock for the first attempt and
+ *  tokens for the second. Attribution is the client BAML reports, never the
+ *  tier the run intended — the same rule `usage-recorder.server.ts` follows.
+ *  `basis` names the LAST priced attempt, which is the convention `rates`
+ *  already had; `timePricedAttempts` is the one that must NOT be read off the
+ *  last one, because it is what the `≥` on every surface claims. A step with a
+ *  billed GPU hour and one Anthropic retry is a floor whichever attempt came
+ *  last, so the count is accumulated and `timeRate` sums the seconds
+ *  `costEur` actually charged for. */
 export function computeEventMetrics(collector: Collector | undefined): EventMetrics | undefined {
   if (!collector) return undefined
   const totals = {
@@ -338,25 +379,54 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
     inputCacheWriteTokens: 0,
     outputTokens: 0,
   }
+  // Resolved once per step rather than per attempt: an operator changing a rate
+  // mid-step would otherwise price two attempts of one call differently.
+  const eurPerUsd = eurPerUsdRate()
+  const eurPerHour = verdaEurPerHour()
   let attempts = 0
-  let costUsd = 0
-  let noCacheUsd = 0
+  let costEur = 0
+  let noCacheEur = 0
   let costKnown = true
+  let timePricedAttempts = 0
+  let basis: CostBasis | undefined
   let rates: { inPerMTok: number; outPerMTok: number } | undefined
+  let timeRate: { eurPerHour: number; durationMs: number } | undefined
   for (const log of collector.logs ?? []) {
     for (const call of (log.calls ?? []) as CollectorCall[]) {
-      const buckets = callTokenBuckets(call)
+      // A time-priced attempt is billed on wall-clock, so absent token usage must
+      // not drop it before pricing: `callTokenBuckets` reports none for a
+      // pre-flight failure and for an unreadable body, and the box was awake
+      // either way. Zero buckets leave the token sums truthful and let the
+      // measured duration price the attempt — dropping it instead understated a
+      // 15-minute cold start as €0.003 with a `≥` in front of it.
+      const buckets =
+        callTokenBuckets(call) ??
+        (call.clientName === TIME_PRICED_CLIENT ? NO_TOKEN_USAGE : undefined)
       if (!buckets) continue
       attempts++
       totals.inputUncachedTokens += buckets.inputUncachedTokens
       totals.inputCacheReadTokens += buckets.inputCacheReadTokens
       totals.inputCacheWriteTokens += buckets.inputCacheWriteTokens
       totals.outputTokens += buckets.outputTokens
-      const est = estimateLlmCostUsd(buckets, call.clientName)
+      const est = estimateLlmCostEur(buckets, call.clientName, {
+        durationMs: measuredDurationMs(call),
+        eurPerUsd,
+        eurPerHour,
+      })
       if (est) {
-        costUsd += est.costUsd
-        noCacheUsd += est.noCacheUsd
-        rates = est.rates
+        costEur += est.costEur
+        noCacheEur += est.noCacheEur
+        basis = est.basis
+        // Each audit field keeps the last attempt that HAD one, so a mixed step
+        // carries both rather than whichever basis happened to run last.
+        if (est.rates) rates = est.rates
+        if (est.basis === 'time') {
+          timePricedAttempts++
+          timeRate = {
+            eurPerHour: est.timeRate?.eurPerHour ?? eurPerHour,
+            durationMs: (timeRate?.durationMs ?? 0) + (est.timeRate?.durationMs ?? 0),
+          }
+        }
       } else {
         costKnown = false
       }
@@ -366,7 +436,16 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
   return {
     ...totals,
     attempts,
-    ...(costKnown ? { costUsd, noCacheUsd, rates } : {}),
+    ...(costKnown
+      ? {
+          costEur,
+          noCacheEur,
+          basis,
+          ...(timePricedAttempts > 0 ? { timePricedAttempts } : {}),
+          ...(rates ? { rates } : {}),
+          ...(timeRate ? { timeRate } : {}),
+        }
+      : {}),
   }
 }
 

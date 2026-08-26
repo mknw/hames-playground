@@ -22,7 +22,11 @@ const { default: Dashboard } = await import('~/routes/dashboard')
 
 const tick = () => new Promise((r) => setTimeout(r, 20))
 
-function metered(patternId: string, costUsd: number): ContextEvent {
+function metered(
+  patternId: string,
+  costEur: number,
+  basis: 'tokens' | 'time' = 'tokens',
+): ContextEvent {
   return {
     type: 'controller_action',
     ts: 1,
@@ -35,8 +39,9 @@ function metered(patternId: string, costUsd: number): ContextEvent {
       inputCacheWriteTokens: 2000,
       outputTokens: 1500,
       attempts: 1,
-      costUsd,
-      noCacheUsd: costUsd * 2,
+      costEur,
+      noCacheEur: basis === 'time' ? costEur : costEur * 2,
+      basis,
     },
   } as ContextEvent
 }
@@ -71,7 +76,7 @@ describe('Dashboard route', () => {
     const text = container.textContent ?? ''
 
     // Global cards: cost, savings (half the bill is cache-free baseline), hit-rate.
-    expect(text).toContain('$0.50')
+    expect(text).toContain('€0.50')
     expect(text).toContain('Cache hit-rate')
     expect(text).toContain('60%') // 12k cache-read of 20k input tokens
     expect(text).toContain('Saved by caching')
@@ -90,6 +95,38 @@ describe('Dashboard route', () => {
 
     const rows = container.querySelectorAll('tbody tr')
     expect(rows.length).toBe(4) // 2 patterns + 2 conversations
+
+    // All token-priced: nothing is a floor, and the wall-clock footnote stays off.
+    expect(text).not.toContain('≥')
+    expect(text).not.toContain('VERDA_EUR_PER_HOUR')
+  })
+
+  it('marks every cost figure a floor, and explains why, once a step was time-billed', async () => {
+    getMetricsDashboard.mockResolvedValue({
+      ...buildDashboard([
+        conversation('alpha', [metered('neo4j-query', 0.4, 'time')]),
+        conversation('beta', [metered('web-search', 0.1)]),
+      ]),
+      generatedAt: 1_700_000_000_000,
+      conversationScanLimit: 200,
+    })
+
+    const { container } = render(() => <Dashboard />)
+    await tick()
+    const text = container.textContent ?? ''
+
+    // The card, and the pattern/conversation row whose own steps were time-billed.
+    expect(text).toContain('≥ €0.50')
+    expect(text).toContain('≥ €0.40')
+    // The marker is per-summary, so the all-token row keeps its exact figure:
+    // four markers in total — the card, the two `alpha`-side rows, and the one
+    // the footnote quotes when it explains what the symbol means.
+    expect(text).toContain('€0.10')
+    expect(text.match(/≥/g)).toHaveLength(4)
+    // The caveat is stated on the page, not only in a tooltip.
+    expect(text).toContain('VERDA_EUR_PER_HOUR')
+    expect(text).toMatch(/cold start/)
+    expect(text).toMatch(/floors on the bill/)
   })
 
   it('says "most recent N" when the load hit its row ceiling', async () => {

@@ -79,6 +79,8 @@ Each layer's own README stays the authority on its coverage: [`app/e2e/README.md
 Authoritative source-level docs (closer to the code):
 
 - [`app/evals/README.md`](../app/evals/README.md) — **harness/client compatibility evals** (`pnpm eval:harness`): the scenario set, the `EVAL_CLIENT` seam and why it is not a new routing switch, the roles that are never re-pointed, and how the suite is kept structurally out of CI. Run it whenever a BAML client changes
+- [`app/e2e/README.md`](../app/e2e/README.md) — **app-path e2e** (`pnpm test:e2e`): whole conversations through the real server actions, the real SSE route and a real Postgres, with only the inference endpoint and the MCP gateway substituted; the scenario table, the `E2E_LIVE=verda` live mode and its burst discipline. Run it whenever anything under the chat path changes
+- [`app/e2e-browser/README.md`](../app/e2e-browser/README.md) — **browser e2e** (`pnpm test:e2e:browser`): Playwright driving a headless Chromium against a real `vinxi dev`, for the failure shape the layers below cannot see — fine on the wire, wrong on the screen. Run it whenever anything a user can see changes
 - [`app/src/lib/harness-patterns/SPEC.md`](../app/src/lib/harness-patterns/SPEC.md) — full framework API and design spec
 - [`app/src/lib/harness-patterns/README.md`](../app/src/lib/harness-patterns/README.md) — the `hames` library front page
 - [`app/src/lib/harness-client/agents/README.md`](../app/src/lib/harness-client/agents/README.md) — example implementations

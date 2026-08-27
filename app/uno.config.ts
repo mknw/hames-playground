@@ -42,31 +42,37 @@ export default defineConfig({
     presetWind4(),
     presetWebFonts({
       /**
-       * The default budget for this fetch is 2000ms (`@unocss/preset-web-fonts`,
-       * `timeouts.failure`), and five Google families do not reliably arrive in
-       * it. Missing it is not a cosmetic problem — it has two failure modes, and
-       * the preset picks between them on `process.env.CI`:
+       * SELF-HOSTED (#285). This block used to say `provider: 'google'`, which
+       * makes UnoCSS FETCH `fonts.googleapis.com/css2` while it builds its
+       * preflights and inline the answer. That fetch ran on every `vinxi dev`
+       * boot AND inside layer 1, because `uno-theme.test.ts` calls
+       * `generator.generate(input, {})` and preflights are on by default — so
+       * the merge gate and both e2e layers, all three advertised as hermetic,
+       * each needed a third party to be up.
        *
-       *  - **CI unset**: the failure is SWALLOWED. The dev server boots with no
-       *    `@font-face` at all and every glyph renders in the fallback stack, so
-       *    all six of `e2e-browser/`'s committed screenshot baselines go red with
-       *    a font-metrics diff (measured: 212px on the header strip, 429 on the
-       *    sidebar, 8412 on the chat view) that looks exactly like a real visual
-       *    regression and is caused by the network.
-       *  - **CI set**: it THROWS, uncaught, and `vinxi dev` exits 1 before
-       *    serving. `pnpm release:check` spawns every layer with `CI=1`, so its
-       *    browser layer could not run at all.
+       * It failed in two directions and the preset picked between them on
+       * `process.env.CI`: unset, the failure was SWALLOWED and every glyph fell
+       * back, reddening all six committed screenshot baselines with a
+       * font-metrics diff (212px on the header strip, 429 on the sidebar, 8412
+       * on the chat view) that looks exactly like a visual regression; set —
+       * which `release:check` sets for every layer — it THREW and `vinxi dev`
+       * exited 1 before serving. #283 raised the budget 2s → 30s, which removed
+       * the flake and left the dependency.
        *
-       * Measured 2026-08-27: at the 2s default the fetch failed on 5 consecutive
-       * boots and the baseline was red on all five; at 30s it succeeded and the
-       * baseline was green. Raising the budget removes the flake but not the
-       * DEPENDENCY — layer 3 still needs fonts.googleapis.com on every boot,
-       * which is the part `docs/testing/pyramid.md` calls hermetic. Self-hosting
-       * these five families is the fix that makes that claim true; it is a bigger
-       * change than this one and is not made here.
+       * `provider: 'none'` keeps the half of this preset that is not a network
+       * call — registering the five families in the theme, so `font-sans` /
+       * `font-mono` / `font-lexend` still resolve — and emits no import and no
+       * `@font-face`. Those now come from the `@fontsource/*` packages imported
+       * in `src/app.tsx`, at the exact weights the Google request named (400 for
+       * Inter / Roboto Slab / Fira Code, 200 for the two Lexends: a bare
+       * `family=X` asks css2 for the 400 instance, and `:200` asked for 200).
+       *
+       * #283's 30s budget is gone rather than shrunk, and may be: `timeouts`
+       * bounds a fetch that no longer happens. `uno-fonts.test.ts` pins that the
+       * generated CSS names neither fonts host, so the dependency cannot come
+       * back through a one-line provider edit without a red test.
        */
-      timeouts: { warning: 2000, failure: 30_000 },
-      provider: 'google',
+      provider: 'none',
       fonts: {
         sans: 'Inter',
         serif: 'Roboto Slab',

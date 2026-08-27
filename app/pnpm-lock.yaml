@@ -72,6 +72,21 @@ importers:
       '@eslint/js':
         specifier: ^9.39.4
         version: 9.39.4
+      '@fontsource/fira-code':
+        specifier: ^5.3.0
+        version: 5.3.0
+      '@fontsource/inter':
+        specifier: ^5.3.0
+        version: 5.3.0
+      '@fontsource/lexend-exa':
+        specifier: ^5.3.0
+        version: 5.3.0
+      '@fontsource/lexend-zetta':
+        specifier: ^5.3.0
+        version: 5.3.0
+      '@fontsource/roboto-slab':
+        specifier: ^5.3.0
+        version: 5.3.0
       '@iconify-json/material-symbols':
         specifier: ^1.2.67
         version: 1.2.67
@@ -849,6 +864,21 @@ packages:
 
   '@floating-ui/utils@0.2.11':
     resolution: {integrity: sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg==}
+
+  '@fontsource/fira-code@5.3.0':
+    resolution: {integrity: sha512-EJL968RJRkakubAj/coU8pSUaeTE5UNoRjtzAr6kGiSZ3jWuN8/AKWHwym/PFUaQL1q7IL/H+EXs4358YhrTBQ==}
+
+  '@fontsource/inter@5.3.0':
+    resolution: {integrity: sha512-RofMylZmjlJEfELXeNHFWBRcSs75rGU/6bV2S2jfnvv/3rPXPGe0LgUJTklcHZ9lM4OZmAVFhcJPnACfb91A3g==}
+
+  '@fontsource/lexend-exa@5.3.0':
+    resolution: {integrity: sha512-CW48kdNUQvU8yLXxFvjMtF6C0fGpsk7jefAKhIJJD3kao9r8qv9XpnNbBUvf53BoAAzcvSewdkSBSuGuLOimhw==}
+
+  '@fontsource/lexend-zetta@5.3.0':
+    resolution: {integrity: sha512-MvgyAEA4nl9v42vbsvmUbdlpJtz2nct/GMiQmpRq0IVoz57iC/aDiTpAPpVx16e+WzZHWVWXz7k8AF9LiFg1pQ==}
+
+  '@fontsource/roboto-slab@5.3.0':
+    resolution: {integrity: sha512-nrl4sOt5OIoMV3VecGVOnNAADU/8vz6+CLtLr4cCAf106hVtSLCTObPN8Z2KdZ03U01UDvgIp3hsu2TX3jen6w==}
 
   '@hono/node-server@1.19.14':
     resolution: {integrity: sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw==}
@@ -5742,6 +5772,16 @@ snapshots:
       '@floating-ui/utils': 0.2.11
 
   '@floating-ui/utils@0.2.11': {}
+
+  '@fontsource/fira-code@5.3.0': {}
+
+  '@fontsource/inter@5.3.0': {}
+
+  '@fontsource/lexend-exa@5.3.0': {}
+
+  '@fontsource/lexend-zetta@5.3.0': {}
+
+  '@fontsource/roboto-slab@5.3.0': {}
 
   '@hono/node-server@1.19.14(hono@4.12.14)':
     dependencies:

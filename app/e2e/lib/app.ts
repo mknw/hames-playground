@@ -349,3 +349,86 @@ export function eventsOfType(
   }
   return (ctx.events ?? []).filter((e) => e.type === type).map((e) => e.data ?? {})
 }
+
+/**
+ * Block until the LAST turn's detached summarization has landed.
+ *
+ * WHY THIS EXISTS (#280/#285). `runTurnAndPersist` starts `compactAndSave`
+ * DETACHED — deliberately, so the answer reaches the user before the
+ * summarization of its tool results is paid for. The turn therefore resolves
+ * while a describe-role call is still on its way to the fake, and the fake is a
+ * process-wide singleton with ONE call log that scenarios clear between tests.
+ *
+ * That made `fakeLlm.reset()` a race rather than a boundary: a describe call
+ * started by the previous test could be recorded AFTER the reset and read as
+ * this test's. In `05-tier-switch` that is a routing assertion reading a call
+ * made under the other tier — the turn that leaked it was correct, the turn
+ * being asserted on was correct, and the test was red. Red in 2 of 6 runs, and
+ * green on every re-run, because the leak window is the few milliseconds
+ * between a turn resolving and the next test starting.
+ *
+ * The fix is #283's first pattern: replace the deadline with a fact. The last
+ * thing `compactBulkData` does is write the summaries onto the tool_result
+ * events and persist the blob — so a persisted row in which the current turn's
+ * successful tool results all carry a summary is PROOF that the detached work
+ * has finished, and therefore that its calls are already in the log rather than
+ * still in flight. Waiting for the row is waiting for the same event the fake's
+ * log was being polled for, minus the ambiguity about which test made the call.
+ *
+ * SCOPED TO THE LAST TURN, because that is exactly what `compactBulkData`
+ * summarizes (it slices from the last `user_message`) — and because an earlier
+ * turn's summaries do not necessarily survive: each turn ends by writing back
+ * the context it loaded when it STARTED, so a turn that began before the
+ * previous turn's detached persist lands overwrites it. So **call this after
+ * every turn**, not once at the end of a multi-turn scenario: after each turn it
+ * is a fact about that turn, and calling it in the loop is also what keeps the
+ * earlier turns' summaries in the blob.
+ *
+ * Vacuously true for a turn that called no tools, which is correct: there is no
+ * detached call to wait for (`compactBulkData` returns before its persist when
+ * there is nothing to summarize).
+ *
+ * The timeout is a FUSE. Nothing should reach it; a run that does has a
+ * summarization that never ran, which is what the message says.
+ */
+export async function settleSummaries(
+  app: AppHandles,
+  sessionId: string,
+  timeoutMs = 20_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const row = await app.readRow(sessionId)
+    const pending = row ? unsummarizedInLastTurn(row.serializedContext) : -1
+    if (pending === 0) return
+    if (Date.now() > deadline) {
+      throw new Error(
+        `e2e: ${pending} tool result(s) from the last turn of ${sessionId} were still ` +
+          `unsummarized after ${timeoutMs}ms. The detached compactAndSave either never ran ` +
+          "or never persisted, so no scenario can tell its calls apart from the next test's.",
+      )
+    }
+    await new Promise((r) => setTimeout(r, 25))
+  }
+}
+
+/** How many of the LAST turn's successful tool results still want a summary —
+ *  the same slice and the same filters `compactBulkData` applies. */
+function unsummarizedInLastTurn(serializedContext: string): number {
+  const ctx = JSON.parse(serializedContext) as {
+    events?: Array<{ type: string; data?: Record<string, unknown> }>
+  }
+  const events = ctx.events ?? []
+  let turnStart = 0
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].type === 'user_message') {
+      turnStart = i
+      break
+    }
+  }
+  return events
+    .slice(turnStart)
+    .filter((e) => e.type === 'tool_result')
+    .map((e) => e.data ?? {})
+    .filter((d) => d.success === true && !d.hidden && !d.archived && !d.summary).length
+}

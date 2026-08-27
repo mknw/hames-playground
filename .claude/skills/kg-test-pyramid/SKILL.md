@@ -120,6 +120,17 @@ live — an injected fault, a simulated cold start — is **skipped** there, wit
 `it.runIf` rather than an early `return`, so it reports as skipped instead of
 passing while asserting nothing.
 
+**Hermetic is a claim about the whole layer, not just its endpoints.** Until #285
+all three needed `fonts.googleapis.com`, because `uno.config.ts` declared five
+families through `presetWebFonts`'s google provider and that fetch runs while
+UnoCSS builds preflights — on every dev-server boot AND inside layer 1's
+`uno-theme.test.ts`. It failed silently without `CI` (fallback glyphs, six red
+screenshot baselines, nothing naming the network) and fatally with it. The
+families are self-hosted from `@fontsource/*` now, and `uno-fonts.test.ts` pins
+both halves: no remote host in the generated CSS, and a local face actually
+declared for each family — the second is what stops "hermetic" from being
+satisfied by an app with no fonts at all.
+
 ### 4. A new suite re-earns its isolation, by convention
 
 Every one of these is load-bearing, and each pin asserts its own row:

@@ -53,7 +53,7 @@
  * here either.
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
-import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
+import { bootApp, newSessionId, eventsOfType, settleSummaries, type AppHandles } from '../lib/app'
 import {
   IS_HERMETIC,
   FAKE_ANTHROPIC_TIER_MODEL,
@@ -71,6 +71,9 @@ beforeAll(async () => {
 afterAll(async () => {
   await app.wipe()
 })
+// Every test in this file ends by settling its own conversations (see
+// `settleSummaries`), so by the time this runs there is nothing of the previous
+// test still in flight and `reset()` is a boundary rather than a race.
 beforeEach(() => {
   app.fakeLlm.reset()
   app.fakeGateway.reset()
@@ -107,6 +110,16 @@ describe('switching tier between turns', () => {
       const from = app.fakeLlm.calls.length
       await app.runTurn(sessionId, message)
       turns.push({ tier, from, to: app.fakeLlm.calls.length })
+      // Close each turn on a fact rather than on a resolved promise. The turn
+      // resolves with its DETACHED summarization still on the wire, making a
+      // describe-role call under the tier this turn ran on — and a call still in
+      // flight when the LAST turn ends is recorded after the next test's
+      // `fakeLlm.reset()` and read as that test's. That is a private-tier
+      // routing assertion failing on an anthropic-tier call neither test made
+      // wrongly, which is the #280 flake this file carried. Settled per TURN
+      // rather than once at the end, because that is the granularity
+      // `compactBulkData` works at (see `settleSummaries`).
+      await settleSummaries(app, sessionId)
     }
 
     // Both of the search agent's switched roles, not just the loud one.
@@ -139,10 +152,14 @@ describe('switching tier between turns', () => {
     // `Router` runs before the loop and the title is awaited inside the turn,
     // so both have landed by now. The describe-of-tool-results does NOT: the
     // turn runner starts it detached, after the answer has reached the caller
-    // (`compactAndSave`), so it is polled for rather than assumed. It is also
-    // the single most important one to check — a tool result is the payload
-    // the widening was about (SD-10).
-    const describe = await waitForCall(['ResultDescribe', 'ResultDescribeBatch'])
+    // (`compactAndSave`). Waiting for the summaries to be PERSISTED is what
+    // makes it readable — the call is recorded before the persist, so a settled
+    // row proves the call is in the log rather than still on the wire. That the
+    // log holds nothing ELSE is the previous test's settle, not this one's. It
+    // is also the single most important call to check — a tool result is the
+    // payload the widening was about (SD-10).
+    await settleSummaries(app, sessionId)
+    const describe = describeFnUsed(app)
 
     // The routing table this scenario exists to prove, per FUNCTION rather than
     // per tier, because the tier is two models. `Router` is a heavy role on the
@@ -177,14 +194,15 @@ describe('switching tier between turns', () => {
 
     await app.setTier('anthropic')
     await app.runTurn(sessionId, 'How many nodes are in the graph?')
-    const describe = await waitForCall(['ResultDescribe', 'ResultDescribeBatch'])
+    await settleSummaries(app, sessionId)
+    const describe = describeFnUsed(app)
 
     for (const fn of ['Router', 'GenerateConversationTitle', describe]) {
       const calls = app.fakeLlm.calls.filter((c) => c.fn === fn)
       // Same vacuity guard as the verda leg above, which this test was missing:
-      // `waitForCall` only covers the describe leg (it throws), so `Router` and
-      // the title could both go silently uncalled and this loop would iterate
-      // nothing and pass.
+      // `describeFnUsed` only covers the describe leg (it throws), so `Router`
+      // and the title could both go silently uncalled and this loop would
+      // iterate nothing and pass.
       expect(calls.length, `no ${fn} call was made, so this asserts nothing`).toBeGreaterThan(0)
       for (const call of calls) {
         // ONE model on this side, all three functions. The Anthropic tier is
@@ -199,24 +217,21 @@ describe('switching tier between turns', () => {
 })
 
 /**
- * Wait for any of `names` to appear in the fake's log, and return which one.
+ * Which of the two describe functions this turn's summarization used.
  *
- * Only the post-turn summarization needs this: `runTurnAndPersist` deliberately
- * does not await it, so a scenario that read the log the instant the turn
- * resolved would assert on a call that had not been made yet — intermittently,
- * which is worse than never.
+ * Read only AFTER {@link settleSummaries}, which is what turns "the call has
+ * probably been made by now" into "the call is in the log". The batch prompt is
+ * skipped for a lone tool result, so which of the two names appears is a
+ * property of the turn rather than of the routing — the scenario asserts on the
+ * one that ran and throws if neither did, because a table keyed on a function
+ * nobody called asserts nothing.
  */
-async function waitForCall(names: readonly string[], timeoutMs = 15_000): Promise<string> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const hit = app.fakeLlm.calls.find((c) => c.fn !== null && names.includes(c.fn))
-    if (hit?.fn) return hit.fn
-    if (Date.now() > deadline) {
-      throw new Error(
-        `e2e: no ${names.join(' / ')} call within ${timeoutMs}ms. The detached ` +
-          'summarization either never ran or no longer reaches the describe role.',
-      )
-    }
-    await new Promise((r) => setTimeout(r, 100))
-  }
+function describeFnUsed(app: AppHandles): string {
+  const names = ['ResultDescribe', 'ResultDescribeBatch']
+  const hit = app.fakeLlm.calls.find((c) => c.fn !== null && names.includes(c.fn))
+  if (hit?.fn) return hit.fn
+  throw new Error(
+    `e2e: no ${names.join(' / ')} call in the log even though every tool result is ` +
+      'summarized. The describe role no longer reaches the summarizer.',
+  )
 }

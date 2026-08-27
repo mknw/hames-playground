@@ -308,6 +308,17 @@ Write a `*.e2e.ts` under `scenarios/`. Two rules:
 - **Assert on evidence, not on inputs.** Which tier a call took is the `model`
   the fake recorded, not the preference the test wrote. Whether history survived
   is what the model was handed on turn 3, not that three turns returned a string.
+- **A resolved turn is not a quiet suite.** `runTurnAndPersist` starts
+  `compactAndSave` DETACHED — deliberately, so the answer reaches the user before
+  its tool results are summarized — so a turn returns with a describe-role call
+  still on the wire. The fake is a process-wide singleton with one call log, and
+  `fakeLlm.reset()` cannot recall a request that is already in flight: whatever
+  lands after it is read as the NEXT test's. A scenario that ran a turn and then
+  asserts anything about which calls were made ends with
+  `await settleSummaries(app, sessionId)`, which waits for the persisted row in
+  which every successful tool result carries a summary — the last thing
+  `compactBulkData` does, and therefore proof that its calls are recorded rather
+  than pending. That is what made `05-tier-switch` red 2 runs in 6 (#285).
 
 And check your assertion can fail: mutate the source, watch it go red, and say
 which checks you verified that way. A green test that would stay green with the

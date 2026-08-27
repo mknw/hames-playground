@@ -65,9 +65,15 @@ vi.mock('../../../lib/metrics/preview-counters.server', () => ({
 
 import {
   getPreviewHeaderState,
+  igniteVerdaBox,
   setPreviewInferenceTier,
 } from '../../../lib/harness-client/preview-header.server'
 import { noteCallLatency, resetCallLatency } from '../../../lib/metrics/call-latency.server'
+import { resetVerdaWake, VERDA_WAKE_FAILED } from '../../../lib/inference/wake.server'
+import {
+  noteVerdaCallCompleted,
+  resetVerdaActivity,
+} from '../../../lib/inference/verda-activity.server'
 
 const ENV_KEYS = [
   'VERDA_INFERENCE_ENDPOINT',
@@ -76,6 +82,12 @@ const ENV_KEYS = [
   // asks about both — so a fixture that configures only the 27B leaves the
   // switch's private position DISABLED.
   'SMALL_LLM_BASE_URL',
+  // Cleared per test and restored after, so the wake's own defaults apply
+  // everywhere except where a case sets its budget deliberately — see
+  // `shortWakeBudget`.
+  'VERDA_WAKE_TIMEOUT_MS',
+  'VERDA_WAKE_ATTEMPT_TIMEOUT_MS',
+  'VERDA_WAKE_POLL_INTERVAL_MS',
 ] as const
 let saved: Record<string, string | undefined>
 
@@ -88,6 +100,28 @@ function configureVerda(): void {
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 
+/**
+ * A wake budget measured in milliseconds, for the one case that lets the poll
+ * run out.
+ *
+ * The wake POLLS (#291): a 5xx is a box that is coming up, so it is retried for
+ * the whole of `VERDA_WAKE_TIMEOUT_MS` — 600s by default. A rejection case that
+ * stubs a 503 and waits for the poll to give up therefore does not assert
+ * anything at all; it hangs until vitest kills the test at 5s, which reports as
+ * a timeout rather than as the behaviour the case is named for. The fix is to
+ * make the budget the test's own: the box still never comes up, the poll still
+ * ends the only way it can, and it does so in milliseconds.
+ *
+ * All three are set together — a budget below one attempt would be the wake's
+ * own edge case rather than this file's subject, and a poll interval left at 5s
+ * would sleep out the budget between two attempts.
+ */
+function shortWakeBudget(): void {
+  process.env.VERDA_WAKE_TIMEOUT_MS = '60'
+  process.env.VERDA_WAKE_ATTEMPT_TIMEOUT_MS = '20'
+  process.env.VERDA_WAKE_POLL_INTERVAL_MS = '1'
+}
+
 beforeEach(() => {
   saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]))
   for (const k of ENV_KEYS) delete process.env[k]
@@ -96,9 +130,25 @@ beforeEach(() => {
   getAuthenticatedUser.mockResolvedValue({ id: 'user-1', email: 'a@example.invalid' })
   getStoredInferenceTier.mockResolvedValue(null)
   resetCallLatency()
+  resetVerdaWake()
+  resetVerdaActivity()
+  // The wake ping is a hand-rolled `fetch`; stubbing it is what keeps this file
+  // hermetic while still exercising the real `ensureVerdaAwake`, which is the
+  // whole point of the cases below — a mock of that function would prove the
+  // action calls SOMETHING, not that it joins the dedupe every other caller uses.
+  fetchMock = vi.fn(
+    async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: 'x' } }] }), { status: 200 }),
+  )
+  vi.stubGlobal('fetch', fetchMock)
 })
 
+let fetchMock: ReturnType<typeof vi.fn>
+
 afterEach(() => {
+  vi.unstubAllGlobals()
+  resetVerdaWake()
+  resetVerdaActivity()
   for (const k of ENV_KEYS) {
     if (saved[k] === undefined) delete process.env[k]
     else process.env[k] = saved[k]
@@ -224,5 +274,111 @@ describe('setPreviewInferenceTier', () => {
     await expect(setPreviewInferenceTier('anthropic')).resolves.toMatchObject({
       tier: 'anthropic',
     })
+  })
+})
+
+describe('igniteVerdaBox', () => {
+  it('authenticates before it starts anything', async () => {
+    // Same gate as the rest of the module (`SD-13`), and it matters more here
+    // than on a read: this export is the one that spends GPU seconds.
+    configureVerda()
+    getAuthenticatedUser.mockRejectedValue(new Error('nope'))
+
+    await expect(igniteVerdaBox()).rejects.toThrow('nope')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('takes no owner id, so a caller cannot start the box as someone else', () => {
+    // The whole module's rule. Pinned by arity rather than by reading, because
+    // an added parameter is exactly the change that would slip past a reviewer.
+    expect(igniteVerdaBox.length).toBe(0)
+  })
+
+  it('refuses when there is no endpoint, instead of fetching a malformed URL', async () => {
+    await expect(igniteVerdaBox()).rejects.toThrow(/not configured/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('wakes a cold box and answers with the state it is now in', async () => {
+    configureVerda()
+
+    const state = await igniteVerdaBox()
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // The ping stamps the warm clock, so the strip's next render has a number to
+    // count down — which is the point of the button.
+    expect(state.warmth.state).toBe('warm')
+    expect(state.warmth.secondsUntilScaledown).toBeGreaterThan(0)
+  })
+
+  it('JOINS an in-flight wake rather than starting a second one', async () => {
+    // The property the owner asked for by name. The deployment is a single
+    // replica where concurrency is queueing, so a click that opened its own ping
+    // beside a turn's would make both wait two cold starts. It holds because
+    // this action calls the SAME `ensureVerdaAwake` the turn runner does; a
+    // second wake path would not inherit it.
+    configureVerda()
+    let release: () => void = () => {}
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>(
+          (resolve) => (release = () => resolve(new Response('{}', { status: 200 }))),
+        ),
+    )
+
+    const clicks = [igniteVerdaBox(), igniteVerdaBox(), igniteVerdaBox()]
+    // Drain the microtask queue completely rather than tick once: each click
+    // awaits its own gate before reaching the wake, so a single tick would leave
+    // two of them short of the line this test is about and pass for the wrong
+    // reason. After this, all three have had every chance to send a request.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    release()
+    await Promise.all(clicks)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('is a no-op on a box that is already up', async () => {
+    // Clicking a warm indicator must not bill GPU seconds. `ensureVerdaAwake`
+    // returns on `verdaProvenWarm` before touching the network.
+    configureVerda()
+    noteVerdaCallCompleted()
+
+    const state = await igniteVerdaBox()
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(state.warmth.state).toBe('warm')
+  })
+
+  it('REJECTS when the box does not come up, rather than reporting cold', async () => {
+    // A wake that failed and a box that is merely cold look identical in the
+    // returned state, so the failure has to travel as a rejection or the strip
+    // would settle back to "cold" and say nothing happened.
+    //
+    // The 503 is a box that is starting and never finishes, which is exactly
+    // what the name says — and under #291's poll it is RETRIED, so the case only
+    // reaches its assertion inside a budget it sets itself (`shortWakeBudget`).
+    configureVerda()
+    shortWakeBudget()
+    fetchMock.mockResolvedValue(new Response('nope', { status: 503 }))
+
+    await expect(igniteVerdaBox()).rejects.toThrow(VERDA_WAKE_FAILED)
+    // It kept trying rather than giving up on the first 5xx — the property that
+    // makes this case a poll running out, and not a refusal by another name.
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(1)
+  })
+
+  it('REJECTS at once when the deployment refuses the request outright', async () => {
+    // The other half of the wake's failure policy (`isRefusal`): a 400 for an
+    // unknown model id is a property of the REQUEST, so no retry can fix it and
+    // the poll ends on the spot. Here that is the difference between a user
+    // being told and a spinner running out a budget on a one-line
+    // misconfiguration.
+    configureVerda()
+    fetchMock.mockResolvedValue(new Response('unknown model', { status: 400 }))
+
+    await expect(igniteVerdaBox()).rejects.toThrow(VERDA_WAKE_FAILED)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

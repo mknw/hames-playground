@@ -578,6 +578,48 @@ describe('ObservabilityPanel — detail drill-down', () => {
     expect(panel.textContent).toContain('the response was truncated')
   })
 
+  it('marks a budget_exhausted error as a truncation, with the fraction', () => {
+    const events = [
+      ev('error', {
+        error: 'Loop exhausted its round budget',
+        kind: 'budget_exhausted',
+        severity: 'recoverable',
+        turn: 7,
+        maxTurns: 8,
+      }),
+    ]
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+
+    const panel = openFirstRow(container)
+    // The badge is keyed on the typed marker, never on the prose: re-key it on
+    // the message text (or delete it) and this is the only test that notices.
+    expect(panel.textContent).toContain('stopped by round budget')
+    // Eight completed rounds out of eight — the numerator is rendered
+    // 1-indexed because `turn` is the 0-indexed round and `maxTurns` a count.
+    expect(panel.textContent).toContain('8 / 8')
+  })
+
+  it('marks the actorCritic exhaustion too — the marker, not the sentence', () => {
+    // `actorCritic` stamps the same `kind` with a completely different message
+    // ("Max retries (2) exceeded"), so a badge re-keyed on `simpleLoop`'s prose
+    // renders on one loop and silently not on the other. That is the whole
+    // reason the marker is a typed field, and this case is what notices.
+    const events = [
+      ev('error', {
+        error: 'Max retries (2) exceeded',
+        kind: 'budget_exhausted',
+        severity: 'recoverable',
+        iteration: 1,
+        maxTurns: 2,
+      }),
+    ]
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+
+    const panel = openFirstRow(container)
+    expect(panel.textContent).toContain('stopped by round budget')
+    expect(panel.textContent).toContain('2 / 2')
+  })
+
   it('falls back to a raw JSON dump for an event type with no dedicated view', () => {
     const { container } = render(() => (
       <ObservabilityPanel events={[ev('critic_result', { verdict: 'needs work', score: 3 })]} />

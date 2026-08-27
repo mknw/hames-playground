@@ -71,10 +71,13 @@ describe('actorCritic', () => {
     expect(pattern.fn).toBeDefined()
   })
 
-  it('should use default maxRetries of MAX_RETRIES', async () => {
+  // As with simpleLoop's `maxTurns`: the default lives once, in
+  // `DEFAULT_SETTINGS`, and is read here through the pattern rather than
+  // restated as a literal (#269).
+  it('should take its default maxRetries from the request settings', async () => {
     const { actorCritic } =
       await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
-    const { MAX_RETRIES } = await import('../../../../lib/harness-patterns/types')
+    const { DEFAULT_SETTINGS } = await import('../../../../lib/settings')
     const { createActorControllerAdapter, createCriticAdapter } =
       await import('../../../../lib/harness-patterns/baml-adapters.server')
 
@@ -84,7 +87,7 @@ describe('actorCritic', () => {
     const pattern = actorCritic(actor, critic, ['Return'])
 
     expect(pattern.name).toBe('actorCritic')
-    expect(MAX_RETRIES).toBe(3)
+    expect(pattern.estimateTurns?.(DEFAULT_SETTINGS)).toBe(DEFAULT_SETTINGS.maxRetries)
   })
 
   it('should handle custom maxRetries config', async () => {

@@ -26,10 +26,11 @@ import { EXPAND_TOOL_NAME } from '../types'
 import type { ErrorEventData, MultiCallMode, ReturnStyle } from '../types'
 import { runBatch, combineOutcomes } from '../parallel-tools.server'
 import type { SubCall } from '../parallel-tools.server'
-import { getErrorHint } from '../error-hints'
+import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { omitResultFields } from '../content-transforms'
 import { getRequestSettings } from '../../settings-context.server'
+import { resolveTurnBudget } from '../../settings'
 import { getActiveSandbox } from '../../sandbox/scope.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import { trimToFit, getContextWindow } from '../token-budget.server'
@@ -192,7 +193,11 @@ export function simpleLoop<T extends SimpleLoopData>(
     }
 
     const settings = getRequestSettings()
-    const maxTurns = config?.maxTurns ?? settings.maxToolTurns
+    // One resolution rule for the body, `estimateTurns` below and the
+    // exhaustion event: the pattern's declaration wins over the request's
+    // setting, clamped to the bound the stuck-run reaper derives its threshold
+    // from (`lib/settings.ts`, `resolveTurnBudget`).
+    const maxTurns = resolveTurnBudget('maxToolTurns', config?.maxTurns, settings.maxToolTurns)
     // Multi-call turns (ControllerAction.additional_calls). 'off' still
     // EXECUTES an un-advertised batch (serially) — it only stops the prompt
     // from inviting one, because the shared output schema means any agent's
@@ -842,14 +847,28 @@ export function simpleLoop<T extends SimpleLoopData>(
         // Loop exhausted maxTurns without controller signaling completion.
         // Surface as a recoverable error so the compactExecution can warn the user;
         // partial results from completed turns are still preserved on scope.
+        //
+        // `kind: 'budget_exhausted'` + `maxTurns` are what make this identifiable
+        // as a TRUNCATION rather than a failure (#269): nothing here errored, the
+        // loop was cut off mid-work, and a reader — the panel, a test, a future
+        // eval — should not have to match the sentence below to know that. The
+        // run this came from spent 8 non-repeating rounds and lost its
+        // deliverable to the cap.
         trackEvent(
           scope,
           'error',
           {
             error: `Loop exhausted: reached maxTurns (${maxTurns}) without 'Return' or is_final from the controller. Partial results from ${turns.length} completed turn(s) are preserved.`,
             severity: 'recoverable',
-            hint: 'The controller may have needed more turns to finish. Consider increasing maxToolTurns in settings, or simplifying the task.',
+            // Name the lever that ACTUALLY bound. A pattern's own `maxTurns`
+            // wins over `settings.maxToolTurns`, so telling a developer to raise
+            // the setting is advice that does nothing for a pinned loop — which
+            // is exactly the case that hit this in #269 (`general`, pinned at
+            // 8, with the setting reading 5).
+            hint: budgetHint('maxToolTurns', config?.maxTurns, maxTurns, resolved.patternId),
             turn: turns.length - 1,
+            maxTurns,
+            kind: 'budget_exhausted' as const,
           } as ErrorEventData,
           true,
         )
@@ -876,6 +895,6 @@ export function simpleLoop<T extends SimpleLoopData>(
     name: 'simpleLoop',
     fn,
     config: resolved,
-    estimateTurns: (s) => config?.maxTurns ?? s.maxToolTurns,
+    estimateTurns: (s) => resolveTurnBudget('maxToolTurns', config?.maxTurns, s.maxToolTurns),
   }
 }

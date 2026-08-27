@@ -1021,7 +1021,7 @@ app/
 │       │   ├── projection.ts      # buildTimelineItems(), getEventPreview(), getEventLane()
 │       │   ├── prompt-parse.ts    # parsePromptBody(), flattenContent(), formatParamValue()
 │       │   ├── token-totals.ts    # foldTokenTotals(), fmtTok(), fmtEur()
-│       │   └── event-styles.ts    # eventIcons/eventColors tables, getPatternColor()
+│       │   └── event-styles.ts    # eventIconClasses/eventColors tables, getPatternColor()
 │       ├── neo4j/
 │       │   ├── queries.ts         # runManualCypher() (read-only), getNodeProperties()
 │       │   └── graph-edit.server.ts # createGraphNode()/linkGraphNodes()/setGraphNodeProperty() — authenticated, intent-shaped graph writes

@@ -24,12 +24,22 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
 }))
 
 vi.mock('../../../components/ark-ui/GraphVisualization', () => ({
-  GraphVisualization: (props: { elements: unknown[]; emptyMessage?: string }) => (
+  GraphVisualization: (props: {
+    elements: unknown[]
+    emptyMessage?: string
+    onClearGraph?: () => void
+  }) => (
     <div
       data-testid="graph-viz"
       data-count={props.elements.length}
       data-empty-message={props.emptyMessage}
-    />
+      data-has-clear={props.onClearGraph ? 'yes' : 'no'}
+    >
+      {/* The clear control itself lives in the real GraphVisualization (it owns
+          the Cytoscape instance). What the panel is contracted to pass is the
+          reset, so the stub offers a way to invoke it. */}
+      <button onClick={() => props.onClearGraph?.()}>stub-clear</button>
+    </div>
   ),
 }))
 
@@ -218,18 +228,7 @@ describe('SupportPanel — graph controls bar', () => {
   it('hides the controls bar entirely when the tab has no elements', async () => {
     const { container } = render(() => <SupportPanel graphElements={[]} />)
     await clickTab(container, 'Neo4j')
-    expect(container.textContent).not.toContain('Clear Graph')
-  })
-
-  it('forwards Clear Graph to the owner', async () => {
-    const onClearGraph = vi.fn()
-    const { container, getByText } = render(() => (
-      <SupportPanel graphElements={mixed} onClearGraph={onClearGraph} />
-    ))
-    await clickTab(container, 'Neo4j')
-
-    fireEvent.click(getByText('Clear Graph'))
-    expect(onClearGraph).toHaveBeenCalledTimes(1)
+    expect(container.textContent).not.toContain('Sync')
   })
 
   it('freezes the rendered graph while sync is paused and catches up on resume', async () => {
@@ -252,6 +251,61 @@ describe('SupportPanel — graph controls bar', () => {
     fireEvent.click(syncToggle(container))
     expect(count()).toBe('5')
     expect(container.textContent).toContain('4 nodes, 1 edges')
+  })
+
+  // The clear control moved onto the canvas toolbar, beside Fit View / zoom /
+  // + Node: it has to be reachable when the conversation graph is empty but the
+  // canvas is not (a manual Cypher query), and the old count-gated button in
+  // this bar was hidden in exactly that case.
+  it('hands the canvas a reset, and forwards it to the owner', async () => {
+    const onClearGraph = vi.fn()
+    const { container, getByText } = render(() => (
+      <SupportPanel graphElements={[]} onClearGraph={onClearGraph} />
+    ))
+    await clickTab(container, 'Neo4j')
+
+    expect(
+      container.querySelector('[data-testid="graph-viz"]')!.getAttribute('data-has-clear'),
+    ).toBe('yes')
+    fireEvent.click(getByText('stub-clear'))
+    expect(onClearGraph).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers no clear when nothing owns the elements', async () => {
+    const { container } = render(() => <SupportPanel graphElements={mixed} />)
+    await clickTab(container, 'Neo4j')
+    expect(
+      container.querySelector('[data-testid="graph-viz"]')!.getAttribute('data-has-clear'),
+    ).toBe('no')
+  })
+
+  // Clearing a PAUSED view has to drop the snapshot too. Resetting only the
+  // conversation's list leaves `frozenElements` rendering, and the element
+  // effect re-runs on tab visibility — so the snapshot would come back. It also
+  // has to leave the freeze: this bar is hidden while the tab has nothing to
+  // show, so a clear that stayed paused would take the Sync toggle with it and
+  // strand the tab on an empty snapshot for good.
+  it('drops the freeze snapshot and resumes sync', async () => {
+    const [elements, setElements] = createSignal<GraphElement[]>(mixed)
+    const { container, getByText } = render(() => (
+      <SupportPanel graphElements={elements()} onClearGraph={() => setElements([])} />
+    ))
+    await clickTab(container, 'Neo4j')
+
+    const count = () =>
+      container.querySelector('[data-testid="graph-viz"]')!.getAttribute('data-count')
+
+    fireEvent.click(getByText('⏸ Sync'))
+    expect(count()).toBe('3')
+
+    fireEvent.click(getByText('stub-clear'))
+    expect(count(), 'the snapshot is empty, not still frozen at 3').toBe('0')
+
+    // Live again: a later result repopulates instead of resurrecting the old
+    // snapshot, and the toggle is back to prove sync resumed.
+    setElements([node('n9')])
+    expect(count()).toBe('1')
+    expect(getByText('⏸ Sync')).toBeTruthy()
   })
 })
 

@@ -300,6 +300,24 @@ const GraphTabContent = (props: GraphTabContentProps) => {
   const nodeCount = () => effectiveElements().filter(isNodeElement).length
   const edgeCount = () => effectiveElements().filter(isEdgeElement).length
 
+  /**
+   * Clearing has to leave the freeze, not just empty the source. While sync is
+   * paused the canvas renders `frozenElements`, so resetting only the
+   * conversation's own list leaves the snapshot on screen — and puts it back on
+   * the canvas the next time the element effect re-runs (it re-runs on tab
+   * visibility, not just on new elements).
+   *
+   * Resuming sync is part of the same thought and not a convenience: this bar
+   * is hidden while the tab has nothing to show, so a clear that left the view
+   * paused would take the toggle away with it and strand the tab frozen on an
+   * empty snapshot — no later element could bring either back.
+   */
+  const clearGraph = () => {
+    setFrozenElements([])
+    setSyncEnabled(true)
+    props.onClearGraph?.()
+  }
+
   const toggleSync = () => {
     if (syncEnabled()) {
       // Freezing: snapshot current elements
@@ -353,18 +371,6 @@ const GraphTabContent = (props: GraphTabContentProps) => {
               />
               Sync
             </button>
-            <button
-              onClick={() => props.onClearGraph?.()}
-              p="x-2 y-1"
-              text="xs red-400"
-              bg="red-600/10 hover:red-600/20"
-              border="1 red-500/30"
-              rounded="md"
-              cursor="pointer"
-              transition="all"
-            >
-              Clear Graph
-            </button>
           </div>
         </div>
       </Show>
@@ -380,6 +386,7 @@ const GraphTabContent = (props: GraphTabContentProps) => {
           onNodeClick={props.onNodeClick}
           onEdgeClick={props.onEdgeClick}
           extraStyles={props.extraStyles}
+          onClearGraph={props.onClearGraph ? clearGraph : undefined}
           emptyIconClass={props.emptyIconClass}
           emptyMessage={props.emptyMessage}
         />

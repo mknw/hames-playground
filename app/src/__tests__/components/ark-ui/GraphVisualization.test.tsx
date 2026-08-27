@@ -837,3 +837,122 @@ describe('GraphVisualization — relation mode', () => {
     expect(container.textContent).not.toContain('Select target node')
   })
 })
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Clearing the VIEW. Nothing here reaches Neo4j — the assertion that matters
+ * most is the one about re-running a query, because "repopulates" is what makes
+ * the clear non-destructive and is why there is no confirmation in front of it.
+ */
+describe('GraphVisualization — clearing the view', () => {
+  const clearButton = (container: HTMLElement) =>
+    container.querySelector<HTMLButtonElement>('button[aria-label="Clear graph view"]')
+
+  it('is offered only where something owns the elements', async () => {
+    const { container } = render(() => <GraphVisualization elements={nodes(['a'])} />)
+    await becomeVisible()
+    // The turn explorer derives its elements from the selected turns, so a
+    // clear there would be undone by the next re-derivation.
+    expect(clearButton(container)).toBeNull()
+  })
+
+  it('empties the canvas and the accumulated source behind it', async () => {
+    const [elements, setElements] = createSignal<ElementDefinition[]>(nodes(['a', 'b']))
+    const { container } = render(() => (
+      <GraphVisualization elements={elements()} onClearGraph={() => setElements([])} />
+    ))
+    await becomeVisible()
+    expect(nodeIds).toEqual(['a', 'b'])
+    expect(container.textContent).toContain('2 nodes')
+
+    clearButton(container)!.click()
+    await tick()
+
+    expect(nodeIds, 'the Cytoscape instance is emptied').toEqual([])
+    expect(container.textContent).toContain('0 nodes')
+
+    // The source went with it, so the next element to arrive brings only
+    // itself. The append models the registry's merge: it is what makes a
+    // canvas-only clear visible as the whole cleared set coming back.
+    setElements((prev) => [...prev, ...nodes(['c'])])
+    await tick()
+    expect(nodeIds).toEqual(['c'])
+  })
+
+  /**
+   * The half a source reset cannot reach. `renderQueryResult` puts manual
+   * results straight on the instance and nothing owns `onElementsChange`, so
+   * with `props.elements` already empty the owner's reset changes no signal,
+   * the element effect never re-runs, and a clear that only reset the source
+   * would leave every one of these on the canvas.
+   */
+  it('clears manual-query results the source array never held, and re-queries clean', async () => {
+    runManualCypher.mockResolvedValue({ success: true, graphUpdate: nodes(['x', 'y']) })
+    const onClearGraph = vi.fn()
+    const { container } = render(() => (
+      <GraphVisualization elements={[]} onClearGraph={onClearGraph} />
+    ))
+    await becomeVisible()
+
+    const runQuery = async () => {
+      const box = container.querySelector('textarea')!
+      box.value = 'MATCH (n) RETURN n'
+      box.dispatchEvent(new Event('input', { bubbles: true }))
+      button(container, 'Run Query').click()
+      await tick()
+    }
+
+    await runQuery()
+    expect(nodeIds).toEqual(['x', 'y'])
+
+    clearButton(container)!.click()
+    await tick()
+
+    expect(nodeIds, 'gone, even though `elements` was empty throughout').toEqual([])
+    expect(container.textContent).toContain('0 nodes')
+    expect(onClearGraph, 'the owner is still told to reset').toHaveBeenCalledTimes(1)
+
+    // Non-destructive: the same query brings the same graph back, framed as a
+    // first load because the canvas it lands on is empty again.
+    layoutRuns.length = 0
+    await runQuery()
+    expect(nodeIds).toEqual(['x', 'y'])
+    expect(container.textContent).toContain('2 nodes')
+    expect(layoutRuns.at(-1)).toMatchObject({ scope: 'core' })
+  })
+
+  it('closes the node panel the clear leaves anchored to nothing', async () => {
+    const [elements, setElements] = createSignal<ElementDefinition[]>(nodes(['a']))
+    const { container } = render(() => (
+      <GraphVisualization elements={elements()} onClearGraph={() => setElements([])} />
+    ))
+    await becomeVisible()
+
+    fire('tap', 'node', fakeNode('a', { label: 'Alpha' }))
+    await tick()
+    expect(container.textContent).toContain('No properties loaded')
+
+    clearButton(container)!.click()
+    await tick()
+    expect(container.textContent).not.toContain('No properties loaded')
+  })
+
+  it('abandons relation mode, whose second click can no longer happen', async () => {
+    const [elements, setElements] = createSignal<ElementDefinition[]>(nodes(['a', 'b']))
+    const { container } = render(() => (
+      <GraphVisualization elements={elements()} onClearGraph={() => setElements([])} />
+    ))
+    await becomeVisible()
+
+    fire('tap', 'node', fakeNode('a', { label: 'Alpha' }))
+    await tick()
+    button(container, 'Create Relation').click()
+    await tick()
+    expect(container.textContent).toContain('Select target node')
+
+    clearButton(container)!.click()
+    await tick()
+    expect(container.textContent).not.toContain('Select target node')
+  })
+})

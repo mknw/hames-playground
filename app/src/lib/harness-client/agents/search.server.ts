@@ -92,7 +92,10 @@ export const searchAgent: AgentConfig = {
   id: 'search',
   name: 'Search Agent',
   description: 'Router-based agent with Neo4j and Web Search',
-  icon: 'i-material-symbols-robot-2-outline',
+  welcome:
+    'Ask a question and I send it down one route: the knowledge graph, or a web ' +
+    'search. Best when the answer lives in one of those two places.',
+  icon: 'i-material-symbols-search',
   accent: 'indigo',
   servers: ['neo4j-cypher', 'web_search', 'fetch'],
   createPatterns,

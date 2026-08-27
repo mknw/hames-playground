@@ -115,10 +115,18 @@ describe('SupportPanel — tab routing', () => {
     expect(container.textContent).toContain('ls -la')
   })
 
-  it('renders the coming-soon placeholders for the disabled tabs', async () => {
+  // The two disabled "coming in Phase 6/7" tabs (Actions, Documents) were
+  // deleted for the alpha preview — they were tab stops that led to a
+  // placeholder. This pins that they stay gone rather than being re-added as
+  // clutter; git holds the panels themselves.
+  it('offers no tab that leads nowhere', async () => {
     const { container } = render(() => <SupportPanel graphElements={[]} />)
-    expect((tab(container, 'Actions') as HTMLButtonElement).disabled).toBe(true)
-    expect((tab(container, 'Documents') as HTMLButtonElement).disabled).toBe(true)
+    const labels = [
+      ...container.querySelectorAll<HTMLElement>('[data-scope="tabs"][data-part="trigger"]'),
+    ].map((el) => el.textContent?.trim())
+    expect(labels).not.toContain('Actions')
+    expect(labels).not.toContain('Documents')
+    expect(labels.length).toBe(6)
   })
 
   it('jumps to the Data tab when a chat citation is clicked', async () => {

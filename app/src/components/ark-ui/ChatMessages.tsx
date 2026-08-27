@@ -46,6 +46,12 @@ interface ChatMessagesProps {
    *  used by ChatInterface to inline the live progress bar where the next
    *  assistant bubble would appear. */
   trailing?: () => JSX.Element
+  /** What the empty state says. Undefined while the agent list is still in
+   *  flight (and in any caller that has no agent), which is why the generic
+   *  pair below stays as the fallback rather than being replaced. The copy is
+   *  the AGENT's — `AgentConfig.welcome` — so it is one greeting per agent
+   *  rather than one for the whole app. */
+  welcome?: { title: string; body: string }
 }
 
 // ============================================================================
@@ -523,10 +529,10 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                   </svg>
                 </div>
                 <div text="lg ui-text-secondary" font="medium">
-                  Start a conversation
+                  {props.welcome?.title ?? 'Start a conversation'}
                 </div>
-                <div text="sm ui-text-tertiary" m="t-1">
-                  Type a message below to begin
+                <div text="sm ui-text-tertiary" m="t-1" max-w="md">
+                  {props.welcome?.body ?? 'Type a message below to begin'}
                 </div>
               </div>
             </div>

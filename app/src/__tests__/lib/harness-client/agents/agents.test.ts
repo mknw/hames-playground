@@ -130,6 +130,7 @@ interface AgentConfig {
   id: string
   name: string
   description: string
+  welcome: string
   icon: string
   accent: string
   servers: string[]
@@ -142,6 +143,16 @@ function validateAgentConfig(config: AgentConfig) {
   expect(config.name).toBeDefined()
   expect(config.name.length).toBeGreaterThan(0)
   expect(config.description).toBeDefined()
+  // Every agent greets in its own words: an empty conversation renders
+  // `welcome` (ChatMessages' empty state), and until 2026-08-27 they all shared
+  // one "your knowledge assistant" paragraph. TypeScript makes the field
+  // mandatory; this is what makes an EMPTY one — the shape a stub or a
+  // copy-paste leaves behind — fail too.
+  expect(config.welcome.trim().length).toBeGreaterThan(0)
+  // Two plain sentences, per the field's contract. A description-length blob
+  // would be read as a wall of text at the exact moment the user has not yet
+  // decided to type anything.
+  expect(config.welcome.length).toBeLessThanOrEqual(280)
   expect(config.icon).toBeDefined()
   // Every agent must claim a real accent family — a typo'd token would
   // silently render zinc via accentColor()'s fallback.

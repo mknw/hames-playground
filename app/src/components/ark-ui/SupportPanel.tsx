@@ -2,7 +2,7 @@
  * Support Panel Component
  *
  * Tabbed interface for knowledge graph visualization and observability tools
- * Tabs: Neo4j | Memory | All (Turn Explorer) | Context manager | Data | Terminal | Actions | Documents
+ * Tabs: Neo4j | Memory | All (Turn Explorer) | Context manager | Data | Terminal
  */
 
 import { Tabs } from '@ark-ui/solid/tabs'
@@ -207,28 +207,6 @@ export const SupportPanel = (props: SupportPanelProps) => {
             <span mr="1">🖥️</span>
             Terminal
           </Tabs.Trigger>
-
-          <Tabs.Trigger
-            value="actions"
-            p="x-3 y-2"
-            text="sm ui-text-tertiary"
-            cursor="not-allowed"
-            opacity="50"
-            disabled
-          >
-            Actions
-          </Tabs.Trigger>
-
-          <Tabs.Trigger
-            value="docs"
-            p="x-3 y-2"
-            text="sm ui-text-tertiary"
-            cursor="not-allowed"
-            opacity="50"
-            disabled
-          >
-            Documents
-          </Tabs.Trigger>
         </Tabs.List>
 
         {/* Tab Content */}
@@ -307,26 +285,6 @@ export const SupportPanel = (props: SupportPanelProps) => {
               events={props.contextEvents ?? []}
               sessionId={props.sessionId}
               agentId={props.agentId}
-            />
-          </Tabs.Content>
-
-          {/* Actions Tab (Future) */}
-          <Tabs.Content value="actions" h="full">
-            <PlaceholderPanel
-              icon="M13 10V3L4 14h7v7l9-11h-7z"
-              title="Actions Panel"
-              description="Context-based action suggestions, n8n workflow triggers, and file operations"
-              phase="Phase 6"
-            />
-          </Tabs.Content>
-
-          {/* Documents Tab (Future) */}
-          <Tabs.Content value="docs" h="full">
-            <PlaceholderPanel
-              icon="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"
-              title="Document Panel"
-              description="File uploads, Google Drive integration, and context management"
-              phase="Phase 7"
             />
           </Tabs.Content>
         </div>
@@ -437,40 +395,3 @@ const GraphTabContent = (props: GraphTabContentProps) => {
     </>
   )
 }
-
-// ============================================================================
-// Placeholder Component
-// ============================================================================
-
-interface PlaceholderPanelProps {
-  icon: string
-  title: string
-  description: string
-  phase: string
-}
-
-const PlaceholderPanel = (props: PlaceholderPanelProps) => (
-  <div flex="~" items="center" justify="center" h="full" bg="ui-bg-primary">
-    <div text="center">
-      <svg
-        width="64"
-        height="64"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-        style={{ margin: '0 auto', color: '#4f46e5', opacity: '0.5' }}
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={props.icon} />
-      </svg>
-      <div text="lg ui-text-secondary" font="medium" m="t-4">
-        {props.title}
-      </div>
-      <div text="sm ui-text-tertiary" m="t-2" max-w="sm">
-        {props.description}
-      </div>
-      <div text="xs ui-text-tertiary" m="t-4">
-        Coming in {props.phase}
-      </div>
-    </div>
-  </div>
-)

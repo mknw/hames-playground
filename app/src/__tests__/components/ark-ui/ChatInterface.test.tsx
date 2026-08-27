@@ -45,6 +45,7 @@ const AGENTS = [
     id: 'search',
     name: 'Default',
     description: 'The generalist',
+    welcome: 'I route your question to the graph or the web.',
     icon: 'i-x',
     servers: ['neo4j'],
   },
@@ -52,6 +53,7 @@ const AGENTS = [
     id: 'kg',
     name: 'KG Builder',
     description: 'Builds the graph',
+    welcome: 'I write what you tell me into the knowledge graph.',
     icon: 'i-y',
     servers: ['neo4j', 'memory'],
   },
@@ -186,13 +188,42 @@ afterEach(() => {
 })
 
 describe('ChatInterface — hydration', () => {
-  it('greets on a brand-new session that has nothing persisted', async () => {
+  // The greeting used to be one hardcoded assistant message planted in the
+  // transcript, identical for every agent ("your knowledge assistant"). It is
+  // now the SELECTED AGENT's own `welcome` from the registry, rendered as
+  // ChatMessages' empty state — so the transcript itself stays empty, and no
+  // words are attributed to an assistant that has not spoken.
+  it("greets with the selected agent's own copy, leaving the transcript empty", async () => {
     const host = makeHost()
     const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
     await settle()
 
-    expect(transcript(container)).toContain("I'm your knowledge assistant")
-    expect(host.registry.messages('s1')).toHaveLength(1)
+    expect(transcript(container)).toContain('I route your question to the graph or the web.')
+    expect(transcript(container)).toContain('Default')
+    expect(host.registry.messages('s1')).toHaveLength(0)
+  })
+
+  it('greets as the agent a rehydrated thread reports, not as the default', async () => {
+    loadConversation.mockResolvedValue({
+      agentId: 'kg',
+      kind: 'conversation',
+      serialized: JSON.stringify({ events: [] } satisfies Partial<UnifiedContext>),
+      messages: [],
+    })
+    const host = makeHost()
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
+    await settle()
+
+    expect(transcript(container)).toContain('I write what you tell me into the knowledge graph.')
+  })
+
+  it('falls back to the generic empty state when the agent list cannot be fetched', async () => {
+    getAgentList.mockRejectedValue(new Error('gateway down'))
+    const host = makeHost()
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
+    await settle()
+
+    expect(transcript(container)).toContain('Start a conversation')
   })
 
   it('rehydrates a persisted thread, reporting its agent and replaying its events', async () => {

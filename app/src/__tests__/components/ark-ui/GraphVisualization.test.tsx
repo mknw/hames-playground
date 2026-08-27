@@ -852,8 +852,8 @@ describe('GraphVisualization — clearing the view', () => {
   it('is offered only where something owns the elements', async () => {
     const { container } = render(() => <GraphVisualization elements={nodes(['a'])} />)
     await becomeVisible()
-    // The turn explorer derives its elements from the selected turns, so a
-    // clear there would be undone by the next re-derivation.
+    // A caller that does not own its elements — one that re-derives them from
+    // somewhere else — would have the clear undone by its next re-derivation.
     expect(clearButton(container)).toBeNull()
   })
 

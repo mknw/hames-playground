@@ -279,12 +279,11 @@ describe('SupportPanel — graph controls bar', () => {
     ).toBe('no')
   })
 
-  // Clearing a PAUSED view has to drop the snapshot too. Resetting only the
-  // conversation's list leaves `frozenElements` rendering, and the element
-  // effect re-runs on tab visibility — so the snapshot would come back. It also
-  // has to leave the freeze: this bar is hidden while the tab has nothing to
-  // show, so a clear that stayed paused would take the Sync toggle with it and
-  // strand the tab on an empty snapshot for good.
+  // Clearing a PAUSED view has to leave the freeze. While sync is paused the
+  // canvas renders `frozenElements`, so resuming is what puts the cleared
+  // source on screen — and it is the only way out: this bar is hidden while the
+  // tab has nothing to show, so a clear that stayed paused would take the Sync
+  // toggle with it and strand the tab on a snapshot for good.
   it('drops the freeze snapshot and resumes sync', async () => {
     const [elements, setElements] = createSignal<GraphElement[]>(mixed)
     const { container, getByText } = render(() => (
@@ -295,17 +294,17 @@ describe('SupportPanel — graph controls bar', () => {
     const count = () =>
       container.querySelector('[data-testid="graph-viz"]')!.getAttribute('data-count')
 
-    fireEvent.click(getByText('⏸ Sync'))
+    fireEvent.click(syncToggle(container))
     expect(count()).toBe('3')
 
     fireEvent.click(getByText('stub-clear'))
-    expect(count(), 'the snapshot is empty, not still frozen at 3').toBe('0')
+    expect(count(), 'sync resumed onto the cleared source, not still frozen at 3').toBe('0')
 
     // Live again: a later result repopulates instead of resurrecting the old
     // snapshot, and the toggle is back to prove sync resumed.
     setElements([node('n9')])
     expect(count()).toBe('1')
-    expect(getByText('⏸ Sync')).toBeTruthy()
+    expect(syncToggle(container).getAttribute('aria-label')).toBe('Pause graph sync')
   })
 })
 

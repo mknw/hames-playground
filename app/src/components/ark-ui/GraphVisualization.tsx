@@ -38,9 +38,9 @@ export interface GraphVisualizationProps {
   onElementsChange?: (elements: ElementDefinition[]) => void
   /** Reset the accumulated elements this canvas is fed from. Supplying it is
    *  what renders the clear control, because a clear is only meaningful where
-   *  something owns `elements` and can empty it — the turn explorer derives its
-   *  own from the selected turns, so a clear there would be undone by the next
-   *  re-derivation. */
+   *  something owns `elements` and can empty it: a caller that does not own its
+   *  elements — one that re-derives them from somewhere else — would have the
+   *  clear undone by its next re-derivation. */
   onClearGraph?: () => void
   layout?: 'cose' | 'cola' | 'dagre' | 'circle' | 'grid' | 'breadthfirst'
   /** Additional Cytoscape stylesheets appended after base styles (e.g. per-turn colors) */

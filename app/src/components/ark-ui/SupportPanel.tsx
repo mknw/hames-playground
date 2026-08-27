@@ -302,18 +302,15 @@ const GraphTabContent = (props: GraphTabContentProps) => {
 
   /**
    * Clearing has to leave the freeze, not just empty the source. While sync is
-   * paused the canvas renders `frozenElements`, so resetting only the
-   * conversation's own list leaves the snapshot on screen — and puts it back on
-   * the canvas the next time the element effect re-runs (it re-runs on tab
-   * visibility, not just on new elements).
+   * paused the canvas renders `frozenElements` instead of the conversation's
+   * own list, so resuming is what puts the cleared source on screen.
    *
-   * Resuming sync is part of the same thought and not a convenience: this bar
-   * is hidden while the tab has nothing to show, so a clear that left the view
-   * paused would take the toggle away with it and strand the tab frozen on an
-   * empty snapshot — no later element could bring either back.
+   * It is also the only way out: this bar is hidden while the tab has nothing
+   * to show, so a clear that left the view paused would take the Sync toggle
+   * away with it and strand the tab frozen on a snapshot — no later element
+   * could bring either back.
    */
   const clearGraph = () => {
-    setFrozenElements([])
     setSyncEnabled(true)
     props.onClearGraph?.()
   }

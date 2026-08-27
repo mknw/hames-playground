@@ -160,8 +160,8 @@ Writing a new agent is two steps:
 git clone https://github.com/mknw/hames-playground.git
 cd hames-playground
 
-# 1. Backing services — Neo4j, Postgres, redis-stack, MCP gateway,
-#    doc-convert and n8n. The app itself is behind a profile (step 4).
+# 1. Backing services — Neo4j, Postgres, redis-stack, MCP gateway and
+#    doc-convert. The app itself is behind a profile (step 4).
 docker compose up -d
 docker compose ps                 # wait for healthy
 

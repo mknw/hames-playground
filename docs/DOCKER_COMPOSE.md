@@ -4,7 +4,6 @@
 
 The kg-agent project uses Docker Compose to orchestrate the stack:
 
-- **n8n**: Workflow automation platform
 - **neo4j**: Graph database (Community Edition v5.26)
 - **postgres**: Relational database (PostgreSQL 16)
 - **redis**: Key-value store and cache (redis-stack — RedisJSON + RediSearch)
@@ -15,13 +14,6 @@ The kg-agent project uses Docker Compose to orchestrate the stack:
 All services communicate via a shared bridge network (`app-network`).
 
 ## Service Details
-
-### n8n
-
-- **Container**: n8n-seederis
-- **Ports**: 5678:5678
-- **Timezone**: Europe/Brussels
-- **Data**: Persisted in `./n8n_data`
 
 ### Neo4j
 

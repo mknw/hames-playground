@@ -179,6 +179,20 @@ stays empty while lanes run. A lane that needs something from the main checkout
 (a gitignored log, a local config) gets the absolute path in its spec, marked
 read-only.
 
+**Under heavy load, `worker-start` can return `agent_prompt_stalled`.** The
+condition is load, not the worktree: a fresh worktree's first agent terminal
+pays the nix shell + direnv startup before the TUI can take the prompt, and
+with many lanes running concurrently that startup outlasts the dispatch window
+(observed 2026-08-27: nine dispatches succeeded at two-three concurrent lanes;
+all four stalls came at six lanes, load average 75+). The terminal usually
+comes up moments later, so recover by **attaching, not respawning**:
+`orca terminal list` to find the live Claude terminal in the worktree, then
+`orca orchestration dispatch --task <id> --to <terminal-handle>`; if the spec
+sits unsubmitted in the composer, `orca terminal send --terminal <handle>
+--enter`. Each stalled attempt marks its task failed, and a failed task cannot
+be started — recreate it from the same spec file. Prevention is fewer
+concurrent lanes.
+
 ## Writing the spec safely
 
 Pass a long spec through a **file**, not an inline shell string:

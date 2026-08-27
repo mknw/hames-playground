@@ -28,17 +28,60 @@ const SRC = resolve(process.cwd(), 'src')
 const PUBLIC_MODULE = resolve(SRC, 'lib/harness-client/shared-conversation.server.ts')
 const OWNER_MODULE = resolve(SRC, 'lib/harness-client/actions.server.ts')
 
-/** `export async function name(` / `export function name(` — the RPC shapes.
- *  Types and interfaces are not callable and are deliberately not matched. */
-const EXPORTED_FUNCTIONS = /^export (?:async )?function\s+([A-Za-z0-9_$]+)/gm
+/** `export async function name(` / `export function name(` — the shape these
+ *  two modules happen to use today. It is NOT the only shape an RPC can take,
+ *  which is what the three below are for. */
+const EXPORTED_FUNCTION_DECL = /^export (?:async )?function\s+([A-Za-z0-9_$]+)/gm
+
+/** `export const name =` (also `let` / `var`, with or without a type
+ *  annotation). An arrow assigned to a const is the same RPC as a declaration —
+ *  SolidStart registers it either way — and a scan that only knew the
+ *  declaration form reported a clean surface while an ungated `export const`
+ *  sat in the file. */
+const EXPORTED_BINDING = /^export (?:const|let|var)\s+([A-Za-z0-9_$]+)\s*(?::[^=\n]*)?=/gm
+
+/** `export default …` — an RPC whose name is chosen by the importer. */
+const EXPORTED_DEFAULT = /^export default\b/gm
+
+/** `export { a, b as c }` — a name can be re-exported from somewhere else and
+ *  is just as callable. `export type { … }` is a different token sequence and
+ *  is not matched, which is how type-only re-exports stay excluded. */
+const EXPORTED_LIST = /^export\s*\{([^}]*)\}/gm
 
 /** Every function in the file, exported or not, with the source of its body.
  *  Non-exported ones matter because an exported action is allowed to be gated
  *  by something it calls — see the fixpoint below. */
 const ANY_FUNCTION = /^(?:export )?(?:async )?function\s+([A-Za-z0-9_$]+)/gm
 
-function exportedFunctions(source: string): string[] {
-  return [...source.matchAll(EXPORTED_FUNCTIONS)].map((m) => m[1]).sort()
+/**
+ * Every callable this module hands out, by name.
+ *
+ * Types and interfaces stay excluded — they are not callable, so they are not
+ * RPCs — but everything that IS callable must be here, because the whole
+ * safety argument for `shared-conversation.server.ts` is a count of the names
+ * in it. A form this function cannot see is a form that can be added silently.
+ */
+function exportedCallables(source: string): string[] {
+  const names = [
+    ...[...source.matchAll(EXPORTED_FUNCTION_DECL)].map((m) => m[1]),
+    ...[...source.matchAll(EXPORTED_BINDING)].map((m) => m[1]),
+    ...[...source.matchAll(EXPORTED_DEFAULT)].map(() => 'default'),
+    // `a as b` exports the name `b`; a `type`-prefixed specifier inside the
+    // braces is type-only and drops out.
+    ...[...source.matchAll(EXPORTED_LIST)].flatMap((m) =>
+      m[1]
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0 && !/^type\s/.test(s))
+        .map((s) =>
+          s
+            .split(/\s+as\s+/)
+            .pop()!
+            .trim(),
+        ),
+    ),
+  ]
+  return names.sort()
 }
 
 /**
@@ -75,6 +118,13 @@ function bodies(source: string): Map<string, string> {
  * `approveAction` / `rejectAction` → `resolveApproval`) and a test that could
  * not see that would have to be weakened with a hand-maintained allow-list —
  * which is where a genuinely ungated export would eventually be parked.
+ *
+ * This reads DECLARATIONS only, while {@link exportedCallables} reads four
+ * export shapes — deliberately, and the asymmetry is the guard. An export in a
+ * shape this cannot see has no body to prove a gate with, so it lands in
+ * `ungated` and fails the assertion below. Erring that way costs an honest
+ * arrow-const export one line of allow-listing; erring the other way is an
+ * ungated RPC reported as gated.
  */
 function gatedFunctions(source: string): Set<string> {
   const fns = bodies(source)
@@ -97,7 +147,7 @@ function gatedFunctions(source: string): Set<string> {
 describe('the public share surface', () => {
   it('exports exactly one callable function', async () => {
     const source = await readFile(PUBLIC_MODULE, 'utf8')
-    expect(exportedFunctions(source)).toEqual(['loadSharedConversation'])
+    expect(exportedCallables(source)).toEqual(['loadSharedConversation'])
   })
 
   it('is a "use server" module, so the scan is about the right kind of file', async () => {
@@ -130,7 +180,7 @@ describe('the public share surface', () => {
 describe('the owner-scoped surface beside it', () => {
   it('resolves the caller in every exported action', async () => {
     const source = code(await readFile(OWNER_MODULE, 'utf8'))
-    const names = exportedFunctions(source)
+    const names = exportedCallables(source)
     // Sanity: the scan found a real module rather than an empty string.
     expect(names.length).toBeGreaterThan(5)
 

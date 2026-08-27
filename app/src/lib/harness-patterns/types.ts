@@ -739,16 +739,32 @@ export interface ErrorEventData {
   turn?: number
   /** Retry iteration (for actorCritic, 0-indexed) */
   iteration?: number
-  /** Origin of the error. `llm_call` means the failure is attributable to an
-   *  LLM call and the event carries that call's observability data on
-   *  `ContextEvent.llmCall` — including `rawOutput`, the only record of what
-   *  the model actually said. Two families qualify:
+  /** The round budget in force when the loop stopped — always set alongside
+   *  `kind: 'budget_exhausted'`, so a reader has BOTH halves of "7 of 8" and
+   *  the panel can render the fraction. Absent on every other error. */
+  maxTurns?: number
+  /** Origin of the error.
+   *
+   *  `llm_call` means the failure is attributable to an LLM call and the event
+   *  carries that call's observability data on `ContextEvent.llmCall` —
+   *  including `rawOutput`, the only record of what the model actually said.
+   *  Two families qualify:
    *   - the CALL failed (parse error, fallback exhausted, network) — the
    *     adapters wrap these as `LLMCallError` so the pattern can re-attach;
    *   - the call SUCCEEDED and its content is the defect (a tool name off the
    *     allowlist, unparseable or output-cap-truncated `tool_args`).
+   *
+   *  `budget_exhausted` means nothing FAILED: the loop was stopped by its own
+   *  round budget with the controller still working, so the turn's answer is
+   *  whatever the completed rounds produced (#83, #269). It is a marker rather
+   *  than a prose match because that is the difference between a panel badge
+   *  and a test that can be broken by rewording a sentence — the two loops used
+   *  to be identifiable only by `/^Loop exhausted/` and `/^Max retries/`. Read
+   *  `maxTurns` beside it for the budget, `turn` / `iteration` for how far it
+   *  got.
+   *
    *  Absent for non-LLM errors (MCP failures, tool errors, etc.). */
-  kind?: 'llm_call'
+  kind?: 'llm_call' | 'budget_exhausted'
 }
 
 /** Data payload for reference_attached event — emitted by `withReferences` on pattern entry */
@@ -901,8 +917,11 @@ export interface RoutesConfig extends PatternConfig {
 // Constants
 // ============================================================================
 
-export const MAX_TOOL_TURNS = 5
-export const MAX_RETRIES = 3
+// The loop round budgets live in `lib/settings.ts` (`DEFAULT_SETTINGS`, bounded
+// by `SETTINGS_BOUNDS`, resolved per pattern by `resolveTurnBudget`). Two
+// exported constants used to restate them here, read by nothing but their own
+// tests; #269 raised the default and deleted the copy rather than leaving a
+// second declaration free to disagree with the one the loops actually run on.
 
 /** Default trackHistory by pattern type */
 export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {

@@ -64,21 +64,22 @@ describe('simpleLoop', () => {
     expect(pattern.fn).toBeDefined()
   })
 
-  it('should use default maxTurns of MAX_TOOL_TURNS', async () => {
+  // The default itself is `DEFAULT_SETTINGS.maxToolTurns` — one declaration,
+  // asserted through `estimateTurns` rather than against a literal here, so the
+  // number can be raised on evidence in one place (#269 raised it 5 → 8). The
+  // resolution rule and its clamp are pinned in `turn-budget.test.ts`.
+  it('should take its default maxTurns from the request settings', async () => {
     const { simpleLoop } =
       await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
-    const { MAX_TOOL_TURNS } = await import('../../../../lib/harness-patterns/types')
+    const { DEFAULT_SETTINGS } = await import('../../../../lib/settings')
     const { createLoopControllerAdapter } =
       await import('../../../../lib/harness-patterns/baml-adapters.server')
 
     const controller = createLoopControllerAdapter(['Return'])
-
-    // Pattern should have been created with default maxTurns
     const pattern = simpleLoop(controller, ['Return'])
 
-    // We can verify the pattern was created
     expect(pattern.name).toBe('simpleLoop')
-    expect(MAX_TOOL_TURNS).toBe(5)
+    expect(pattern.estimateTurns?.(DEFAULT_SETTINGS)).toBe(DEFAULT_SETTINGS.maxToolTurns)
   })
 
   it('should handle custom maxTurns config', async () => {

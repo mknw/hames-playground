@@ -56,7 +56,24 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
       liveEvents: true,
       // Cross-namespace work needs more room than a single-route loop: the
       // plan is typically 2-6 steps and a step can take more than one call.
-      maxTurns: 8,
+      //
+      // **12, raised from 8 on evidence (#269).** A captured run —
+      // "find the last excel I edited and return a docx report on it" — spent
+      // all 8 rounds and lost the deliverable: 12 tool calls with NO repeated
+      // (tool, args) pair, a new fact on every round, and the 8th still
+      // recovering from a filesystem `Permission denied`. It was not spinning,
+      // so a bigger budget buys real rounds rather than more of the same call:
+      // 2 rounds went on a graph search that 500'd, 3 on discovering that an
+      // ingested file is not on disk, and it needed roughly one more to
+      // abandon the write and answer from what it already held.
+      // 12 = the ~10 that run needed + 2 rounds of recovery headroom, and it
+      // stays under `SETTINGS_BOUNDS.maxToolTurns[1]`, the ceiling the stuck-run
+      // reaper's "longest legitimate turn" is derived from. Rounds, not calls:
+      // with the default `multiToolCalls: 'parallel'` one round can carry up to
+      // MAX_PARALLEL_TOOL_CALLS calls, so this is 12 controller round-trips and
+      // up to ~48 tool calls — the budget bounds the LLM's thinking steps, not
+      // the tool spend.
+      maxTurns: 12,
     },
   )
 

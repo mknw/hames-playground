@@ -71,10 +71,17 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
       patternId: 'microsoft-365',
       liveEvents: true,
       rememberPriorTurns: false,
-      // A "what's on today?" briefing needs several calls in one turn
-      // (calendar + mail, sometimes profile), plus room to recover from a
-      // failed call, so this is deliberately higher than a single-shot loop.
-      maxTurns: 8,
+      // No `maxTurns` pin. This loop wanted 8 — a "what's on today?" briefing
+      // needs several calls in one turn (calendar + mail, sometimes profile)
+      // plus room to recover from a failed call — and 8 is what
+      // `DEFAULT_SETTINGS.maxToolTurns` became in #269, so the pin was carrying
+      // the default and nothing else. Dropping it is behaviour-identical at
+      // default settings and strictly better away from them: a declared budget
+      // WINS over `settings.maxToolTurns` in both directions
+      // (`resolveTurnBudget`), so a pin equal to the default buys nothing and
+      // costs the user their only lever — the Settings slider was inert for
+      // this agent. `general` still pins, because 12 is a value the default
+      // does not carry.
       // The controller never needs a URL to decide the next action, and a Loop
       // hit's webUrl is ~519 chars of base64 — half the hit. The compactExecution
       // still gets every webUrl for citation links (it reads the full events,

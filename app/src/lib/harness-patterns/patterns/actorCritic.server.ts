@@ -26,9 +26,10 @@ import type {
 import type { ErrorEventData, MultiCallMode } from '../types'
 import { runBatch, combineOutcomes } from '../parallel-tools.server'
 import type { SubCall } from '../parallel-tools.server'
-import { getErrorHint } from '../error-hints'
+import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
+import { resolveTurnBudget } from '../../settings'
 import { getActiveSandbox } from '../../sandbox/scope.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import type { ActorControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
@@ -88,7 +89,14 @@ export function actorCritic<T extends ActorCriticData>(
       return scope
     }
 
-    const maxRetries = config?.maxRetries ?? getRequestSettings().maxRetries
+    // Same resolution rule as simpleLoop's round budget: the pattern's own
+    // declaration wins over the request's setting, clamped to the bound the
+    // stuck-run reaper derives from (`lib/settings.ts`, `resolveTurnBudget`).
+    const maxRetries = resolveTurnBudget(
+      'maxRetries',
+      config?.maxRetries,
+      getRequestSettings().maxRetries,
+    )
     // Critic cadence: run the critic every Nth *successful* actor turn (default
     // 1 = every turn, the original behavior). Clamped to >= 1 so a stray 0 /
     // negative value can't disable the critic — the loop's only exit authority.
@@ -607,7 +615,11 @@ export function actorCritic<T extends ActorCriticData>(
         }
       }
 
-      // Exhausted retries
+      // Exhausted retries — a TRUNCATION, not a failure, and marked as one so
+      // the panel and the tests can tell the two apart without matching this
+      // sentence (#269). `maxTurns` carries the budget here too: it is the field
+      // the controller_action events above already use for `maxRetries`, so one
+      // reader serves both loops.
       errorMessage = `Max retries (${maxRetries}) exceeded`
       trackEvent(
         scope,
@@ -615,8 +627,10 @@ export function actorCritic<T extends ActorCriticData>(
         {
           error: errorMessage,
           severity: resolved.errorSeverity,
-          hint: getErrorHint(errorMessage),
+          hint: budgetHint('maxRetries', config?.maxRetries, maxRetries, resolved.patternId),
           iteration: maxRetries - 1,
+          maxTurns: maxRetries,
+          kind: 'budget_exhausted' as const,
         } as ErrorEventData,
         true,
       )
@@ -647,6 +661,6 @@ export function actorCritic<T extends ActorCriticData>(
     name: 'actorCritic',
     fn,
     config: resolved,
-    estimateTurns: (s) => config?.maxRetries ?? s.maxRetries,
+    estimateTurns: (s) => resolveTurnBudget('maxRetries', config?.maxRetries, s.maxRetries),
   }
 }

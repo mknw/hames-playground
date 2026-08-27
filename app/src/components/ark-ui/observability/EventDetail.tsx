@@ -181,8 +181,25 @@ const ActionDetail = (props: { data: ControllerActionEventData }) => (
 const ErrorDetail = (props: { data: ErrorEventData }) => (
   <div flex="~ col" gap="3">
     <div>
-      <div text="xs ui-text-tertiary" m="b-1">
-        Error
+      <div flex="~ wrap" items="center" gap="2" m="b-1">
+        <div text="xs ui-text-tertiary">Error</div>
+        {/* A loop stopped by its own round budget is a truncation, not a
+            failure: nothing threw, the controller was still working. Say that
+            where the message is, so the panel does not read as an error the
+            reader has to diagnose (#269). Keyed on the marker, never on the
+            message text. */}
+        <Show when={props.data.kind === 'budget_exhausted'}>
+          <span
+            text="[10px] amber-400"
+            bg="amber-500/10"
+            border="1 amber-500/20"
+            p="x-1.5 y-0.5"
+            rounded="full"
+            font="medium"
+          >
+            stopped by round budget
+          </span>
+        </Show>
       </div>
       <div
         text="sm red-400"
@@ -215,8 +232,12 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
           <div text="xs ui-text-tertiary" m="b-1">
             Turn
           </div>
+          {/* `n / budget` when the event carries one — "7" alone leaves the
+              reader guessing whether the loop stopped early or ran out. */}
           <div text="sm ui-text-primary" font="mono">
-            {props.data.turn}
+            {props.data.maxTurns === undefined
+              ? props.data.turn
+              : `${props.data.turn} / ${props.data.maxTurns}`}
           </div>
         </div>
       </Show>
@@ -226,7 +247,9 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
             Iteration
           </div>
           <div text="sm ui-text-primary" font="mono">
-            {props.data.iteration}
+            {props.data.maxTurns === undefined
+              ? props.data.iteration
+              : `${props.data.iteration} / ${props.data.maxTurns}`}
           </div>
         </div>
       </Show>

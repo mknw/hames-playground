@@ -188,8 +188,24 @@ describe('createPatterns', () => {
       patternId: 'microsoft-365',
       liveEvents: true,
       rememberPriorTurns: false,
-      maxTurns: 8,
     })
+  })
+
+  // This agent pinned `maxTurns: 8` until #269 raised the DEFAULT to 8, at which
+  // point the pin carried nothing the default did not. Its absence is asserted
+  // rather than merely un-asserted, because the pin was not free: a declared
+  // budget wins over `settings.maxToolTurns` in both directions
+  // (`resolveTurnBudget`), so re-adding one equal to the default would silently
+  // make the Settings slider inert for this agent again. The effective budget is
+  // still checked — via the resolution rule, so this test does not have to
+  // restate the default's value.
+  it('declares no round budget of its own, so the setting reaches it', async () => {
+    const { DEFAULT_SETTINGS } = await import('../../../../lib/settings')
+    await microsoft365Agent.createPatterns('test-session')
+
+    const cfg = lastLoopCall()[2] as { maxTurns?: number }
+    expect(cfg.maxTurns).toBeUndefined()
+    expect(DEFAULT_SETTINGS.maxToolTurns).toBeGreaterThanOrEqual(8)
   })
 
   it('guards the graph namespace against prompt injection', async () => {

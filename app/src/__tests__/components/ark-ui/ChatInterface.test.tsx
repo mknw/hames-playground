@@ -234,8 +234,12 @@ describe('ChatInterface — hydration', () => {
     rejectLoad?.(new Error('not found'))
     await settle()
 
-    expect(host.registry.messages('s-late').map((m) => m.content)).toContain('the first question')
-    expect(transcript(container)).not.toContain("I'm your knowledge assistant")
+    // Both survive, and in a fixed order: the welcome is prepended rather than
+    // assigned, so neither round trip winning the race changes the transcript.
+    const contents = host.registry.messages('s-late').map((m) => m.content)
+    expect(contents.some((c) => c.includes("I'm your knowledge assistant"))).toBe(true)
+    expect(contents).toContain('the first question')
+    expect(contents.findIndex((c) => c.includes("I'm your knowledge assistant"))).toBe(0)
   })
 
   it('rehydrates a persisted thread, reporting its agent and replaying its events', async () => {

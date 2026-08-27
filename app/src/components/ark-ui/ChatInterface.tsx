@@ -312,12 +312,23 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         }
       })
       .catch(() => {
-        // Either a brand-new session id or no row yet — show welcome. Same
-        // guard as the success branch, and it is the one that actually bit: a
-        // brand-new chat REJECTS here, and the rejection is a round trip that
-        // can land after the user has already sent into it.
-        if (hasLocalTurn(sid)) return
-        registry.setMessages(sid, [WELCOME_MESSAGE])
+        // Either a brand-new session id or no row yet — show the welcome.
+        //
+        // PREPENDED rather than assigned, and that is the whole fix. A
+        // brand-new chat rejects here, and the rejection is a network round
+        // trip, so it can land after the user has already sent into the
+        // conversation. Assigning replaced their message and its answer with
+        // the welcome bubble; skipping the write instead (the first version of
+        // this guard) dropped the welcome bubble whenever the send won the
+        // race, which left the transcript's first line depending on which of
+        // two round trips finished first — visible as scenario 07's chat-view
+        // baseline differing between two runs of the same code.
+        //
+        // Prepending is deterministic in both orders: the welcome is always the
+        // first bubble, and nothing a turn wrote is ever lost. The buffer was
+        // emptied at the top of this effect, so there is no earlier welcome to
+        // duplicate.
+        registry.setMessages(sid, (prev) => [WELCOME_MESSAGE, ...prev])
       })
   })
 

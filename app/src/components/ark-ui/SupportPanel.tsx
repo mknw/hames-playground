@@ -2,7 +2,7 @@
  * Support Panel Component
  *
  * Tabbed interface for knowledge graph visualization and observability tools
- * Tabs: Neo4j | Memory | All (Turn Explorer) | Context manager | Data | Terminal | Actions | Documents
+ * Tabs: Neo4j | Memory | Context manager | Data | Terminal
  */
 
 import { Tabs } from '@ark-ui/solid/tabs'
@@ -12,7 +12,6 @@ import { GraphVisualization } from './GraphVisualization'
 import { ObservabilityPanel } from './ObservabilityPanel'
 import { DataStashPanel, type StashAction } from './DataStashPanel'
 import { TerminalPanel } from './TerminalPanel'
-import { AllGraphTabWrapper } from './AllGraphTab'
 import type { ElementDefinition, StylesheetJsonBlock } from 'cytoscape'
 import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns'
 
@@ -110,6 +109,9 @@ export const SupportPanel = (props: SupportPanelProps) => {
             value="neo4j-graph"
             p="x-3 y-2"
             text="sm ui-text-primary"
+            flex="~"
+            items="center"
+            gap="1"
             cursor="pointer"
             border="b-2 transparent"
             transition="all"
@@ -121,7 +123,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
                 selectedTab() === 'neo4j-graph' ? 'var(--ui-accent)' : 'var(--ui-text-secondary)',
             }}
           >
-            <span mr="1">🗄️</span>
+            <span class="i-material-symbols-database-outline" w="4" h="4" aria-hidden="true" />
             Neo4j
           </Tabs.Trigger>
 
@@ -129,6 +131,9 @@ export const SupportPanel = (props: SupportPanelProps) => {
             value="memory-graph"
             p="x-3 y-2"
             text="sm ui-text-primary"
+            flex="~"
+            items="center"
+            gap="1"
             cursor="pointer"
             border="b-2 transparent"
             transition="all"
@@ -138,25 +143,8 @@ export const SupportPanel = (props: SupportPanelProps) => {
               color: selectedTab() === 'memory-graph' ? '#a855f7' : 'var(--ui-text-secondary)',
             }}
           >
-            <span mr="1">🧠</span>
+            <span class="i-material-symbols-psychology-outline" w="4" h="4" aria-hidden="true" />
             Memory
-          </Tabs.Trigger>
-
-          <Tabs.Trigger
-            value="all-graph"
-            p="x-3 y-2"
-            text="sm ui-text-primary"
-            cursor="pointer"
-            border="b-2 transparent"
-            transition="all"
-            data-state={selectedTab() === 'all-graph' ? 'active' : 'inactive'}
-            style={{
-              'border-bottom-color': selectedTab() === 'all-graph' ? '#22c55e' : 'transparent',
-              color: selectedTab() === 'all-graph' ? '#22c55e' : 'var(--ui-text-secondary)',
-            }}
-          >
-            <span mr="1">🕸️</span>
-            All
           </Tabs.Trigger>
 
           <Tabs.Trigger
@@ -195,6 +183,9 @@ export const SupportPanel = (props: SupportPanelProps) => {
             value="terminal"
             p="x-3 y-2"
             text="sm ui-text-primary"
+            flex="~"
+            items="center"
+            gap="1"
             cursor="pointer"
             border="b-2 transparent"
             transition="all"
@@ -204,30 +195,8 @@ export const SupportPanel = (props: SupportPanelProps) => {
               color: selectedTab() === 'terminal' ? '#10b981' : 'var(--ui-text-secondary)',
             }}
           >
-            <span mr="1">🖥️</span>
+            <span class="i-material-symbols-terminal" w="4" h="4" aria-hidden="true" />
             Terminal
-          </Tabs.Trigger>
-
-          <Tabs.Trigger
-            value="actions"
-            p="x-3 y-2"
-            text="sm ui-text-tertiary"
-            cursor="not-allowed"
-            opacity="50"
-            disabled
-          >
-            Actions
-          </Tabs.Trigger>
-
-          <Tabs.Trigger
-            value="docs"
-            p="x-3 y-2"
-            text="sm ui-text-tertiary"
-            cursor="not-allowed"
-            opacity="50"
-            disabled
-          >
-            Documents
           </Tabs.Trigger>
         </Tabs.List>
 
@@ -243,7 +212,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
               onClearGraph={props.onClearGraph}
               extraStyles={TOUCHED_NODE_STYLES}
               emptyMessage="No Neo4j graph data yet. Query your knowledge base to see results."
-              emptyIcon="🗄️"
+              emptyIconClass="i-material-symbols-database-outline"
             />
           </Tabs.Content>
 
@@ -256,17 +225,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
               onEdgeClick={props.onEdgeClick}
               onClearGraph={props.onClearGraph}
               emptyMessage="No memory graph data yet. Use agents that interact with the Memory MCP to see data."
-              emptyIcon="🧠"
-            />
-          </Tabs.Content>
-
-          {/* All Graphs Tab — Turn-based explorer */}
-          <Tabs.Content value="all-graph" h="full" flex="~ col">
-            <AllGraphTabWrapper
-              contextEvents={props.contextEvents ?? []}
-              highlightedIds={props.highlightedIds}
-              onNodeClick={props.onNodeClick}
-              onEdgeClick={props.onEdgeClick}
+              emptyIconClass="i-material-symbols-psychology-outline"
             />
           </Tabs.Content>
 
@@ -309,26 +268,6 @@ export const SupportPanel = (props: SupportPanelProps) => {
               agentId={props.agentId}
             />
           </Tabs.Content>
-
-          {/* Actions Tab (Future) */}
-          <Tabs.Content value="actions" h="full">
-            <PlaceholderPanel
-              icon="M13 10V3L4 14h7v7l9-11h-7z"
-              title="Actions Panel"
-              description="Context-based action suggestions, n8n workflow triggers, and file operations"
-              phase="Phase 6"
-            />
-          </Tabs.Content>
-
-          {/* Documents Tab (Future) */}
-          <Tabs.Content value="docs" h="full">
-            <PlaceholderPanel
-              icon="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"
-              title="Document Panel"
-              description="File uploads, Google Drive integration, and context management"
-              phase="Phase 7"
-            />
-          </Tabs.Content>
         </div>
       </Tabs.Root>
     </div>
@@ -346,7 +285,8 @@ interface GraphTabContentProps {
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void
   onClearGraph?: () => void
   emptyMessage: string
-  emptyIcon: string
+  /** Icon utility class for the empty state — see GraphVisualization. */
+  emptyIconClass: string
   extraStyles?: StylesheetJsonBlock[]
 }
 
@@ -395,13 +335,23 @@ const GraphTabContent = (props: GraphTabContentProps) => {
               rounded="md"
               cursor="pointer"
               transition="all"
+              flex="~"
+              items="center"
+              gap="1"
               title={
                 syncEnabled()
                   ? 'Pause graph sync with conversation'
                   : 'Resume graph sync with conversation'
               }
+              aria-label={syncEnabled() ? 'Pause graph sync' : 'Resume graph sync'}
             >
-              {syncEnabled() ? '⏸ Sync' : '▶ Sync'}
+              <span
+                class={syncEnabled() ? 'i-material-symbols-pause' : 'i-material-symbols-play-arrow'}
+                w="3.5"
+                h="3.5"
+                aria-hidden="true"
+              />
+              Sync
             </button>
             <button
               onClick={() => props.onClearGraph?.()}
@@ -430,47 +380,10 @@ const GraphTabContent = (props: GraphTabContentProps) => {
           onNodeClick={props.onNodeClick}
           onEdgeClick={props.onEdgeClick}
           extraStyles={props.extraStyles}
-          emptyIcon={props.emptyIcon}
+          emptyIconClass={props.emptyIconClass}
           emptyMessage={props.emptyMessage}
         />
       </div>
     </>
   )
 }
-
-// ============================================================================
-// Placeholder Component
-// ============================================================================
-
-interface PlaceholderPanelProps {
-  icon: string
-  title: string
-  description: string
-  phase: string
-}
-
-const PlaceholderPanel = (props: PlaceholderPanelProps) => (
-  <div flex="~" items="center" justify="center" h="full" bg="ui-bg-primary">
-    <div text="center">
-      <svg
-        width="64"
-        height="64"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-        style={{ margin: '0 auto', color: '#4f46e5', opacity: '0.5' }}
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={props.icon} />
-      </svg>
-      <div text="lg ui-text-secondary" font="medium" m="t-4">
-        {props.title}
-      </div>
-      <div text="sm ui-text-tertiary" m="t-2" max-w="sm">
-        {props.description}
-      </div>
-      <div text="xs ui-text-tertiary" m="t-4">
-        Coming in {props.phase}
-      </div>
-    </div>
-  </div>
-)

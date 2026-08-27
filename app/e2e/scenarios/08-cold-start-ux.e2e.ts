@@ -15,11 +15,12 @@
  * arrival time for exactly this claim, which is why the assertions below are
  * about `frame.at` and not only about frame order.
  *
- * WHO PAYS THE WAIT changed with wake-then-run. A private-tier turn now sends one
- * throwaway `max_tokens: 1` request FIRST and starts the harness only once it
- * answers (`inference/wake.server.ts`), which is what let the BAML client's
- * timeout drop from ten minutes to three. So the cold start this scenario injects
- * is absorbed by the WAKE PING, and the fake records that request with its own
+ * WHO PAYS THE WAIT changed with wake-then-run. A private-tier turn now sends
+ * throwaway `max_tokens: 1` requests FIRST — a POLL since 2026-08-27, retried
+ * until one is answered — and starts the harness only once one is
+ * (`inference/wake.server.ts`), which is what let the BAML client's timeout drop
+ * from ten minutes to three. So the cold start this scenario injects is absorbed
+ * by the WAKE, and the fake records those requests with their own
  * `wake` outcome — which makes the ordering assertable in a way it was not
  * before: the notice, then the wake, then any model call at all. Previously the
  * notice merely preceded the first controller call, and "the harness started
@@ -84,6 +85,29 @@ function firstVerdaAnswer(frames: SseFrame[]): number {
 /** Requests the fake served as wake pings, oldest first. */
 function wakePings(app: AppHandles): readonly { at: number; delayedMs: number }[] {
   return app.fakeLlm.calls.filter((c) => c.outcome === 'wake')
+}
+
+/**
+ * Run `body` with the wake poll's tunables overridden, then put them back.
+ *
+ * The three vars are read per call inside `wake.server.ts` (deliberately — the
+ * rest of that route reads env per call too), which is what makes this possible
+ * without a re-import. `bootApp` sets a hermetic-wide attempt bound; the two
+ * tests that are ABOUT the poll rather than about the notice narrow it here, so
+ * one test's timings cannot leak into the others' — the restore is in a
+ * `finally` for exactly that reason.
+ */
+async function withWakeEnv<T>(vars: Record<string, string>, body: () => Promise<T>): Promise<T> {
+  const previous = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]))
+  Object.assign(process.env, vars)
+  try {
+    return await body()
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
 }
 
 describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
@@ -151,6 +175,11 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     // that started against the sleeping box would show the delay on a
     // LoopController call instead, and every such call would now be aborted at
     // 180s against this 90s+ fault.
+    // ONE attempt, because the hermetic run sets the poll's per-attempt bound
+    // above the injected delay (`WAKE_ATTEMPT_TIMEOUT_MS`) — the fake always
+    // answers, so one attempt is its faithful shape and this test stays about
+    // the notice. `keeps polling until the box answers` below is the one that
+    // lowers that bound and asserts the retry.
     const pings = wakePings(app)
     expect(pings, 'the turn did not wake the box before running').toHaveLength(1)
     expect(pings[0].delayedMs).toBe(COLD_START_MS)
@@ -163,23 +192,8 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     expect(app.fakeLlm.calls.filter((c) => c.delayedMs > 0)).toHaveLength(1)
   })
 
-  it('ends the turn as a visible error when the box refuses to wake', async () => {
-    // THE OTHER HALF of #273's D-b, and the property the owner asked for by name:
-    // never a silent hang. A wake that fails must not fall through to the harness
-    // (same wait, now against a 180s timeout) and must not fall back to Anthropic
-    // (confidential prompts to the provider the tier exists to avoid). It ends the
-    // turn, and the user is TOLD.
-    await app.setTier('verda')
-    const sessionId = newSessionId('coldux-wake-fails')
-    app.fakeLlm.arm({ kind: 'status', status: 503, message: 'no capacity', model: VERDA_MODEL })
-
-    const { status, frames } = await app.runTurnOverSse({
-      sessionId,
-      message: 'How many nodes are in the graph?',
-      agentId: 'search',
-    })
-
-    expect(status).toBe(200)
+  /** Assert the turn ended as a VISIBLE failure the user can read. */
+  function expectVisibleWakeFailure(frames: SseFrame[]): void {
     const error = frames.find((f) => f.event === 'error')
     expect(
       error,
@@ -190,16 +204,148 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     const message = (error!.data as { error?: string }).error ?? ''
     expect(message).toContain('the private inference box did not wake')
     expect(message).toContain('nothing was sent to any other provider')
+  }
 
-    // And the harness never ran. Named FUNCTIONS rather than "no BAML call at
-    // all": the previous test's post-turn summarization is detached by design
-    // (`compactAndSave`), so its `ResultDescribe` can land in this test's window
-    // after `reset()` and has nothing to do with this turn. `Router` is the first
-    // call any turn makes and `LoopController` is the first one inside the loop —
-    // either of them here would mean the turn half-ran against a box that is not
-    // there.
-    const started = app.fakeLlm.calls.filter((c) => c.fn === 'Router' || c.fn === 'LoopController')
-    expect(started, 'the harness ran anyway, against a box that never woke').toEqual([])
+  /** The two BAML functions that would prove the harness ran anyway. Named
+   *  FUNCTIONS rather than "no BAML call at all": an earlier test's post-turn
+   *  summarization is detached by design (`compactAndSave`), so its
+   *  `ResultDescribe` can land in this test's window after `reset()` and has
+   *  nothing to do with this turn. `Router` is the first call any turn makes and
+   *  `LoopController` is the first one inside the loop. */
+  function harnessCalls(app: AppHandles): readonly unknown[] {
+    return app.fakeLlm.calls.filter((c) => c.fn === 'Router' || c.fn === 'LoopController')
+  }
+
+  it('ends the turn as a visible error when the deployment REFUSES the wake', async () => {
+    // THE OTHER HALF of #273's D-b, and the property the owner asked for by name:
+    // never a silent hang. A wake that fails must not fall through to the harness
+    // (same wait, now against a 180s timeout) and must not fall back to Anthropic
+    // (confidential prompts to the provider the tier exists to avoid). It ends the
+    // turn, and the user is TOLD.
+    //
+    // A 400 rather than the 503 this test used before the wake became a poll, and
+    // the swap is the behaviour change: a 503 is a box saying "not yet" and is now
+    // RETRIED for the whole budget, while vLLM's 400 for a request it will never
+    // accept is a property of the request rather than of the box's state. Polling
+    // that out would turn a one-line misconfiguration into a ten-minute spinner,
+    // so it ends the poll on the first attempt — which is what makes this test
+    // finish in milliseconds rather than in ten minutes.
+    await app.setTier('verda')
+    const sessionId = newSessionId('coldux-wake-refused')
+    app.fakeLlm.arm({ kind: 'status', status: 400, message: 'unknown model', model: VERDA_MODEL })
+
+    const { status, frames } = await app.runTurnOverSse({
+      sessionId,
+      message: 'How many nodes are in the graph?',
+      agentId: 'search',
+    })
+
+    expect(status).toBe(200)
+    expectVisibleWakeFailure(frames)
+    expect(harnessCalls(app), 'the harness ran anyway, against a box that never woke').toEqual([])
+  })
+
+  it('ends the turn as a visible error when the box never comes up', async () => {
+    // The other failure shape, and the one the 2026-08-27 incident actually was:
+    // nothing refuses anything, the box simply never answers. The poll keeps
+    // trying until its overall budget runs out and THEN fails visibly — the
+    // budget is what bounds the spinner, and it must not be the harness or the
+    // browser that gives up first.
+    //
+    // Driven at 1/300th of the shipped budget, because the property under test is
+    // "it gives up, loudly, at the budget" and the budget's VALUE is an arithmetic
+    // decision pinned in `verda-wake.test.ts`. A 503 is a transient status, so
+    // every attempt is retried.
+    await app.setTier('verda')
+    const sessionId = newSessionId('coldux-wake-never')
+    app.fakeLlm.arm({ kind: 'status', status: 503, message: 'no capacity', model: VERDA_MODEL })
+
+    const { status, frames } = await withWakeEnv(
+      {
+        VERDA_WAKE_TIMEOUT_MS: '2000',
+        VERDA_WAKE_ATTEMPT_TIMEOUT_MS: '500',
+        VERDA_WAKE_POLL_INTERVAL_MS: '100',
+      },
+      () =>
+        app.runTurnOverSse({
+          sessionId,
+          message: 'How many nodes are in the graph?',
+          agentId: 'search',
+        }),
+    )
+
+    expect(status).toBe(200)
+    expectVisibleWakeFailure(frames)
+    expect(harnessCalls(app), 'the harness ran anyway, against a box that never woke').toEqual([])
+  })
+
+  it('keeps polling until the box answers, rather than riding one request', async () => {
+    // THE 2026-08-27 CHANGE, at the app path. The live platform was observed
+    // abandoning every request that arrived while the container was starting —
+    // a 1-token probe held open for 590s returned nothing while the box came up
+    // at ~360s — so a wake that rides ONE request can miss a box that woke.
+    //
+    // Modelled here as a first attempt the fake withholds for longer than the
+    // attempt bound: the poll abandons it and a later attempt (the one-shot fault
+    // now spent) meets a box that answers. The decisive assertion is the LAST
+    // one — a wake ping the fake did not delay could only have been a second
+    // attempt.
+    await app.setTier('verda')
+    const sessionId = newSessionId('coldux-wake-polls')
+    const attemptMs = 1000
+    app.fakeLlm.arm({
+      kind: 'cold-start',
+      ms: attemptMs * 3,
+      model: VERDA_MODEL,
+      wake: true,
+      times: 1,
+    })
+
+    const started = Date.now()
+    const { status, frames } = await withWakeEnv(
+      {
+        VERDA_WAKE_ATTEMPT_TIMEOUT_MS: String(attemptMs),
+        VERDA_WAKE_POLL_INTERVAL_MS: '100',
+      },
+      () =>
+        app.runTurnOverSse({
+          sessionId,
+          message: 'How many nodes are in the graph?',
+          agentId: 'search',
+        }),
+    )
+    const elapsed = Date.now() - started
+
+    expect(status).toBe(200)
+    expect(
+      frames.some((f) => f.event === 'error'),
+      'the turn failed even though a later attempt found the box up',
+    ).toBe(false)
+    expect(frames.some((f) => f.event === 'done')).toBe(true)
+    // It waited out the abandoned attempt rather than skipping it.
+    expect(
+      elapsed,
+      `the turn finished in ${elapsed}ms, faster than one abandoned attempt`,
+    ).toBeGreaterThanOrEqual(attemptMs)
+    // ABANDONING A REQUEST DOES NOT UNSEND IT. The fake is still holding the
+    // first attempt and only records a call once it answers, so the record lands
+    // `ms` after it arrived — which is after this turn finished and, without this
+    // wait, after the NEXT scenario file's `reset()`, where it showed up as a
+    // phantom extra call in whichever file vitest happened to run next (files run
+    // sequentially in ONE process and are ordered by size, not by number, so the
+    // victim is not even predictable). Waiting for it here is both the fix and
+    // the strongest form of the assertion: BOTH attempts are then visible.
+    await new Promise((resolve) => setTimeout(resolve, attemptMs * 3))
+    const pings = wakePings(app)
+    expect(pings.length, 'the wake did not retry — one attempt is all it made').toBe(2)
+    expect(
+      pings.some((p) => p.delayedMs === attemptMs * 3),
+      'no attempt was withheld, so the fault never armed and this passed for the wrong reason',
+    ).toBe(true)
+    expect(
+      pings.some((p) => p.delayedMs === 0),
+      'the only answered wake ping was the withheld one — the poll did not retry',
+    ).toBe(true)
   })
 
   it('is not sent on the anthropic tier, which has no box to start', async () => {

@@ -34,6 +34,7 @@ import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
 import { defaultInferenceTier, getStoredInferenceTier } from '../db/user-prefs.server'
 import { verdaConfigured, type InferenceTier } from '../harness-patterns/clients.server'
 import { verdaWarmth, type VerdaWarmth } from '../inference/verda-activity.server'
+import { ensureVerdaAwake } from '../inference/wake.server'
 import { ACTIVE_WINDOW_MINUTES, countActiveUsers } from '../db/conversations.server'
 import { getUsageToday, type UsageToday } from '../metrics/preview-counters.server'
 import { tierLatency, type TierLatency } from '../metrics/call-latency.server'
@@ -105,4 +106,49 @@ export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
     latency: tierLatency(tier),
     generatedAt: Date.now(),
   }
+}
+
+/**
+ * Start the self-hosted box from the header, and return the state the strip
+ * should now show.
+ *
+ * The header's cold indicator is the only place a person can act on the box's
+ * state rather than wait for it, and this is the whole of that action. It
+ * reuses `ensureVerdaAwake` rather than issuing a wake of its own, which is not
+ * a tidiness point — three properties a second wake path would each have to
+ * re-earn come from being the SAME call the turn runner makes:
+ *
+ *  - **A click during an in-flight wake JOINS it.** The dedupe is one promise on
+ *    a `globalThis` symbol inside that module, so a user who clicks and then
+ *    sends a message, or two users on the same box, share one request instead of
+ *    queueing two cold starts on a single replica.
+ *  - **A click on a warm box is free.** `ensureVerdaAwake` returns on
+ *    `verdaProvenWarm` without touching the network, so the button cannot bill
+ *    GPU seconds for a box that is already up.
+ *  - **The measurement stays honest.** Only the caller that STARTED the ping
+ *    records its duration, and the plausibility floor still applies, so a click
+ *    cannot enter a four-second no-op into the cold-start history the chat's
+ *    countdown is estimated from.
+ *
+ * It waits for the box rather than returning immediately, so the caller learns
+ * whether it actually came up. That can legitimately take minutes
+ * (`VERDA_WAKE_TIMEOUT_MS`); a failure REJECTS, carrying the message that names
+ * the box, because a wake that silently did nothing is the one outcome that
+ * leaves a user believing their next message will be quick when it will not.
+ */
+export async function igniteVerdaBox(): Promise<PreviewHeaderState> {
+  await requireUser()
+  // Same refusal as the tier switch, for the same reason: without an endpoint
+  // there is nothing to start, and `ensureVerdaAwake` would otherwise fail on a
+  // `fetch` to an empty URL — an error about a malformed request rather than
+  // about an unconfigured deployment.
+  if (!verdaConfigured()) {
+    throw new Error(
+      'The self-hosted inference endpoint is not configured on this deployment, so there is ' +
+        'nothing to start. Set VERDA_INFERENCE_ENDPOINT and VERDA_INFERENCE_API_KEY (see ' +
+        'app/.env.example).',
+    )
+  }
+  await ensureVerdaAwake()
+  return getPreviewHeaderState()
 }

@@ -46,6 +46,12 @@ interface ChatMessagesProps {
    *  used by ChatInterface to inline the live progress bar where the next
    *  assistant bubble would appear. */
   trailing?: () => JSX.Element
+  /** What the empty state says. Undefined while the agent list is still in
+   *  flight (and in any caller that has no agent), which is why the generic
+   *  pair below stays as the fallback rather than being replaced. The copy is
+   *  the AGENT's — `AgentConfig.welcome` — so it is one greeting per agent
+   *  rather than one for the whole app. */
+  welcome?: { title: string; body: string }
 }
 
 // ============================================================================
@@ -110,7 +116,8 @@ function annotateEntities(html: string, entityNames: Map<string, string[]>): str
 
 /**
  * Wrap retriever-cited filename mentions in the rendered markdown with a
- * clickable `.doc-ref` span + a "↗" superscript (mirrors {@link annotateEntities}).
+ * clickable `.doc-ref` span + a superscript open-in-new glyph (mirrors
+ * {@link annotateEntities}).
  * Skips HTML tags and code blocks. The click opens the inline file viewer.
  */
 function annotateReferences(html: string, references: RetrievalReference[]): string {
@@ -141,7 +148,12 @@ function annotateReferences(html: string, references: RetrievalReference[]): str
       // Filenames and document ids are user/tool supplied — escape them so a
       // quote in a filename cannot terminate the attribute it lands in.
       const docId = escapeHtmlAttribute(byName.get(key)!)
-      return `<span class="doc-ref" data-doc-id="${docId}" title="Open ${escapeHtmlAttribute(key)} in viewer">${match}<sup class="doc-ref-mark">↗</sup></span>`
+      // The mark is an empty <sup> carrying an icon utility class — the
+      // `.doc-ref-mark` preflight gives it the `inline-block` an icon needs, and
+      // its `color` is what the mask paints with. It used to be a "↗"
+      // character. Both classes are literals here, so UnoCSS extracts them even
+      // though this markup is built as a string.
+      return `<span class="doc-ref" data-doc-id="${docId}" title="Open ${escapeHtmlAttribute(key)} in viewer">${match}<sup class="doc-ref-mark i-material-symbols-arrow-outward" aria-hidden="true"></sup></span>`
     })
   }
 
@@ -523,10 +535,10 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                   </svg>
                 </div>
                 <div text="lg ui-text-secondary" font="medium">
-                  Start a conversation
+                  {props.welcome?.title ?? 'Start a conversation'}
                 </div>
-                <div text="sm ui-text-tertiary" m="t-1">
-                  Type a message below to begin
+                <div text="sm ui-text-tertiary" m="t-1" max-w="md">
+                  {props.welcome?.body ?? 'Type a message below to begin'}
                 </div>
               </div>
             </div>

@@ -643,13 +643,18 @@ function shouldTrack(type: EventType, trackHistory: TrackHistory): boolean
 ## Constants
 
 ```typescript
-const MAX_TOOL_TURNS = 5
-const MAX_RETRIES = 3
-
 const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory>
 const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy>
 ```
 
+The loop round budgets are NOT here. `MAX_TOOL_TURNS` / `MAX_RETRIES` were
+exported from this package and read by nothing; #269 deleted them rather than
+leave a second declaration of a default free to disagree with the one the loops
+run on. The live values are `DEFAULT_SETTINGS.maxToolTurns` / `.maxRetries` in
+`app/src/lib/settings.ts`, bounded by `SETTINGS_BOUNDS` and resolved per pattern
+by `resolveTurnBudget`; see "Round budgets" in
+[`SPEC.md`](../../app/src/lib/harness-patterns/SPEC.md).
+
 ---
 
-**Last Updated:** 2026-06-15
+**Last Updated:** 2026-08-27

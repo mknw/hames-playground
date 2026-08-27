@@ -22,7 +22,7 @@
  *   threads (#47 / #105).
  */
 
-import { createSignal, createEffect, createMemo, untrack, Show } from 'solid-js'
+import { createSignal, createEffect, createMemo, onMount, untrack, Show } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { AgentSelector } from './AgentSelector'
@@ -35,6 +35,7 @@ import {
   loadConversation,
   extractGraphElements,
   extractReferences,
+  getAgentList,
   type OpenReferenceTarget,
 } from '~/lib/harness-client'
 import { getSettings } from '~/lib/settings-store'
@@ -105,14 +106,6 @@ export interface ChatInterfaceProps {
   focusInputToken?: number
 }
 
-const WELCOME_MESSAGE: Message = {
-  id: 'welcome',
-  role: 'assistant',
-  content:
-    "Hello! I'm your knowledge assistant. I can help you:\n\n- Query and explore your Knowledge Base\n- Create new observations\n- Analyze patterns and connections\n- Use additional tools\n\nSelect an agent from the dropdown above, then ask me anything!",
-  timestamp: new Date(),
-}
-
 // ============================================================================
 // Component
 // ============================================================================
@@ -138,6 +131,29 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     if (sid === props.sessionId) props.onHighlightEntities?.(ids)
   }
   const [selectedAgent, setSelectedAgent] = createSignal('search')
+
+  // The registry's greeting for whichever agent is selected — what an empty
+  // conversation says instead of the one fixed "your knowledge assistant"
+  // paragraph every agent used to open with.
+  //
+  // A plain signal filled on mount, deliberately not a `createResource`:
+  // reading a resource here registers with the root `<Suspense>` in `app.tsx`,
+  // which has no fallback, so a slow agent-list fetch would blank the whole app
+  // (the same trap `SupportPanel`'s local Suspense exists for). Nothing here
+  // needs loading state or refetching — until it arrives, `ChatMessages` shows
+  // its generic pair. `getAgentList` is a read of an in-memory registry map, so
+  // the second call (AgentSelector makes the first, for the picker) costs a
+  // round trip and no work.
+  const [agentMeta, setAgentMeta] = createSignal<Awaited<ReturnType<typeof getAgentList>>>([])
+  onMount(() => {
+    void getAgentList()
+      .then(setAgentMeta)
+      .catch((err) => console.error('[ChatInterface] failed to fetch agent metadata:', err))
+  })
+  const welcome = () => {
+    const agent = agentMeta().find((a) => a.id === selectedAgent())
+    return agent ? { title: agent.name, body: agent.welcome } : undefined
+  }
   // Row kind for the open thread — gates the promotion confirm on send. A
   // brand-new chat (load throws) stays 'conversation'. Set from loadConversation.
   const [currentKind, setCurrentKind] = createSignal<'conversation' | 'action'>('conversation')
@@ -312,23 +328,12 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         }
       })
       .catch(() => {
-        // Either a brand-new session id or no row yet — show the welcome.
-        //
-        // PREPENDED rather than assigned, and that is the whole fix. A
-        // brand-new chat rejects here, and the rejection is a network round
-        // trip, so it can land after the user has already sent into the
-        // conversation. Assigning replaced their message and its answer with
-        // the welcome bubble; skipping the write instead (the first version of
-        // this guard) dropped the welcome bubble whenever the send won the
-        // race, which left the transcript's first line depending on which of
-        // two round trips finished first — visible as scenario 07's chat-view
-        // baseline differing between two runs of the same code.
-        //
-        // Prepending is deterministic in both orders: the welcome is always the
-        // first bubble, and nothing a turn wrote is ever lost. The buffer was
-        // emptied at the top of this effect, so there is no earlier welcome to
-        // duplicate.
-        registry.setMessages(sid, (prev) => [WELCOME_MESSAGE, ...prev])
+        // Either a brand-new session id or no row yet. Nothing to plant: the
+        // buffer was cleared above, and an empty transcript is what makes
+        // ChatMessages render the selected agent's greeting (`welcome` below).
+        // It used to plant one fixed assistant message here, which greeted
+        // every agent as "your knowledge assistant" and put words in the
+        // assistant's mouth before it had said anything.
       })
   })
 
@@ -612,6 +617,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
             out as that bubble takes its place. */}
       <ChatMessages
         messages={messages()}
+        welcome={welcome()}
         onApproveWrite={handleApproveWrite}
         onRejectWrite={handleRejectWrite}
         graphEntityNames={props.graphEntityNames}

@@ -63,6 +63,13 @@ const tab = (container: HTMLElement, label: string) =>
 /** zag's tabs machine settles its selection asynchronously. */
 const tick = () => new Promise((r) => setTimeout(r, 30))
 
+/** The Sync toggle is a pause/play icon + the word "Sync", so its STATE lives
+ *  only in the accessible name — found by the invariant half of that name. */
+const syncToggle = (container: HTMLElement) =>
+  [...container.querySelectorAll<HTMLElement>('button')].find((b) =>
+    b.getAttribute('aria-label')?.endsWith('graph sync'),
+  )!
+
 const clickTab = async (container: HTMLElement, label: string) => {
   fireEvent.click(tab(container, label))
   await tick()
@@ -115,10 +122,20 @@ describe('SupportPanel — tab routing', () => {
     expect(container.textContent).toContain('ls -la')
   })
 
-  it('renders the coming-soon placeholders for the disabled tabs', async () => {
+  // Three tabs have been deleted for the alpha preview: the two disabled
+  // "coming in Phase 6/7" stops (Actions, Documents), which led to a
+  // placeholder, and "All" (the Turn Explorer), which the owner found showed
+  // nothing useful. This pins that they stay gone rather than being re-added as
+  // clutter; git holds the panels themselves.
+  it('offers no tab that leads nowhere', async () => {
     const { container } = render(() => <SupportPanel graphElements={[]} />)
-    expect((tab(container, 'Actions') as HTMLButtonElement).disabled).toBe(true)
-    expect((tab(container, 'Documents') as HTMLButtonElement).disabled).toBe(true)
+    const labels = [
+      ...container.querySelectorAll<HTMLElement>('[data-scope="tabs"][data-part="trigger"]'),
+    ].map((el) => el.textContent?.trim())
+    expect(labels).not.toContain('Actions')
+    expect(labels).not.toContain('Documents')
+    expect(labels).not.toContain('All')
+    expect(labels.length).toBe(5)
   })
 
   it('jumps to the Data tab when a chat citation is clicked', async () => {
@@ -217,20 +234,22 @@ describe('SupportPanel — graph controls bar', () => {
 
   it('freezes the rendered graph while sync is paused and catches up on resume', async () => {
     const [elements, setElements] = createSignal<GraphElement[]>(mixed)
-    const { container, getByText } = render(() => <SupportPanel graphElements={elements()} />)
+    const { container } = render(() => <SupportPanel graphElements={elements()} />)
     await clickTab(container, 'Neo4j')
 
     const count = () =>
       container.querySelector('[data-testid="graph-viz"]')!.getAttribute('data-count')
     expect(count()).toBe('3')
 
-    fireEvent.click(getByText('⏸ Sync'))
+    expect(syncToggle(container).getAttribute('aria-label')).toBe('Pause graph sync')
+    fireEvent.click(syncToggle(container))
+    expect(syncToggle(container).getAttribute('aria-label')).toBe('Resume graph sync')
     setElements([...mixed, node('n3'), node('n4')])
     // Frozen at the snapshot taken when sync was paused.
     expect(count()).toBe('3')
     expect(container.textContent).toContain('2 nodes, 1 edges')
 
-    fireEvent.click(getByText('▶ Sync'))
+    fireEvent.click(syncToggle(container))
     expect(count()).toBe('5')
     expect(container.textContent).toContain('4 nodes, 1 edges')
   })

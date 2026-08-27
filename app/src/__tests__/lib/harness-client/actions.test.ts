@@ -43,7 +43,7 @@ vi.mock('../../../lib/harness-client/session.server', () => ({
 
 // ── registry ────────────────────────────────────────────────────────────────
 const AGENTS: Record<string, { icon: string; accent: string }> = {
-  search: { icon: 'i-material-symbols-robot-2-outline', accent: 'cyan' },
+  search: { icon: 'i-material-symbols-search', accent: 'cyan' },
 }
 const getAgent = vi.fn((id: string) => AGENTS[id])
 const getAgentMetadata = vi.fn(() => [
@@ -51,6 +51,7 @@ const getAgentMetadata = vi.fn(() => [
     id: 'search',
     name: 'Default',
     description: 'd',
+    welcome: 'w',
     icon: 'i-x',
     accent: 'cyan',
     servers: ['neo4j'],
@@ -253,7 +254,7 @@ describe('sidebar actions', () => {
     expect(rows[0]).toEqual({
       id: 'c1',
       agentId: 'search',
-      agentIcon: 'i-material-symbols-robot-2-outline',
+      agentIcon: 'i-material-symbols-search',
       agentAccent: 'cyan',
       title: 'T',
       kind: 'conversation',

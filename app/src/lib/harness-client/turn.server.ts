@@ -385,8 +385,9 @@ async function runAndSave(
   const { sessionId, userId } = req
   try {
     // WAKE THEN RUN. The self-hosted box scales to zero, so on the private tier
-    // the turn's first job is to get it up — one throwaway request, shared with
-    // any concurrent turn, and the harness does not start until it answers
+    // the turn's first job is to get it up — throwaway requests polled until one
+    // is answered, the whole poll shared with any concurrent turn, and the
+    // harness does not start until one of them answers
     // (`inference/wake.server.ts` carries the reasoning, and it is what let the
     // BAML client's timeout drop from ten minutes to three). A wake that fails
     // THROWS, which is what ends the turn as a visible error rather than handing

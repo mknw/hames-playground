@@ -6,7 +6,7 @@
 
 import { Show } from 'solid-js'
 import type { ContextEvent, ToolCallEventData, ToolResultEventData } from '~/lib/harness-patterns'
-import { eventColors, eventIcons, getPatternColor } from '~/lib/observability/event-styles'
+import { eventColors, eventIconClasses, getPatternColor } from '~/lib/observability/event-styles'
 import { getEventLane, getEventPreview } from '~/lib/observability/projection'
 import { SanitizedChip } from '../SanitizedChip'
 
@@ -96,14 +96,12 @@ export const PatternBoundaryRow = (props: { event: ContextEvent }) => {
       }}
     >
       <span
-        style={{
-          color: pc.color,
-          'font-size': '9px',
-          'line-height': '1',
-        }}
-      >
-        {isEnter ? '▶' : '■'}
-      </span>
+        class={isEnter ? 'i-material-symbols-play-arrow' : 'i-material-symbols-stop'}
+        w="2.5"
+        h="2.5"
+        style={{ color: pc.color }}
+        aria-hidden="true"
+      />
       <span
         style={{
           color: pc.color,
@@ -143,7 +141,7 @@ export const EventRow = (props: {
   // Guard against malformed events (e.g. from SSE stream)
   if (!type) return null
 
-  const icon = eventIcons[type]
+  const iconClass = eventIconClasses[type]
   const preview = getEventPreview(type, data)
   const lane = getEventLane(type)
   const color = eventColors[type]
@@ -163,7 +161,7 @@ export const EventRow = (props: {
       w="full"
     >
       {/* Icon */}
-      <span text="lg">{icon}</span>
+      <span class={iconClass} text="lg" style={{ color }} aria-hidden="true" />
 
       {/* Event type */}
       <div
@@ -270,7 +268,12 @@ export const ToolPairRow = (props: {
           onClick={props.onExpand}
           w="full"
         >
-          <span text="lg">🔧</span>
+          <span
+            class="i-material-symbols-build-outline"
+            text="lg"
+            style={{ color: success() ? '#a78bfa' : '#ef4444' }}
+            aria-hidden="true"
+          />
           <div
             style={{
               color: success() ? '#a78bfa' : '#ef4444',

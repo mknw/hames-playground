@@ -83,7 +83,22 @@ describe('house design language', () => {
     'src/routes/auth/access-denied.tsx',
     'src/routes/[...404].tsx',
     'src/components/AuthProvider.tsx',
+    // The boot splash, added in #295. It is the fallback for BOTH gates on the
+    // post-login path, so it is now the first surface a cold visit paints —
+    // exactly the role that put `AuthProvider.tsx` on this list.
+    'src/components/ark-ui/AppLoadingSplash.tsx',
   ]
+
+  /**
+   * The subset that paints a full-screen ground of its own.
+   *
+   * `AuthProvider.tsx` is deliberately NOT here since #295: it stopped
+   * rendering a surface and now renders `<AppLoadingSplash />`, which is. The
+   * property this pins — every screen a visitor can be looking at is grounded
+   * on a theme-aware token — has to follow the file that actually paints, or it
+   * degrades into requiring dead markup in a component that only delegates.
+   */
+  const grounded = sources.filter((file) => file !== 'src/components/AuthProvider.tsx')
 
   it.each(sources)('%s uses class= only for icon glyphs', (file) => {
     const source = readFileSync(file, 'utf8')
@@ -94,7 +109,7 @@ describe('house design language', () => {
     expect(nonIcon).toEqual([])
   })
 
-  it.each(sources)('%s grounds itself on a theme-aware token', (file) => {
+  it.each(grounded)('%s grounds itself on a theme-aware token', (file) => {
     const source = readFileSync(file, 'utf8')
     // A page still on `bg-gray-50` / `bg-dark-bg-*` would not follow the
     // switcher, which is the whole point of the fix.

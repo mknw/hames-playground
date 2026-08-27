@@ -311,8 +311,8 @@ describe('settings and baml_src agree about VerdaQwen', () => {
     //     harness would again be the thing waiting out a cold start.
     const timeout = Number(declared.match(/request_timeout_ms\s+(\d+)/)?.[1])
     expect(timeout).toBeGreaterThan(60_000)
-    const { VERDA_WAKE_TIMEOUT_MS } = await import('../../../lib/inference/wake.server')
-    expect(timeout).toBeLessThan(VERDA_WAKE_TIMEOUT_MS)
+    const { DEFAULT_VERDA_WAKE_TIMEOUT_MS } = await import('../../../lib/inference/wake.server')
+    expect(timeout).toBeLessThan(DEFAULT_VERDA_WAKE_TIMEOUT_MS)
   })
 
   it('the timeout covers a FULL-CAP generation at the measured decode rate', async () => {

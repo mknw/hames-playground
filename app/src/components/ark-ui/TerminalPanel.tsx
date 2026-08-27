@@ -225,7 +225,11 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
             when={entries().length > 0}
             fallback={
               <div flex="~ col" items="center" justify="center" h="full" text="center" gap="3">
-                <span text="4xl">🖥️</span>
+                <span
+                  class="i-material-symbols-terminal"
+                  text="4xl ui-text-tertiary"
+                  aria-hidden="true"
+                />
                 <span text="sm ui-text-secondary" max-w="xs">
                   No sandbox activity yet. Run the <strong>Sandbox Demo</strong> agent (or any agent
                   wrapped in <code>withSandbox</code>) to see commands here — or hit{' '}

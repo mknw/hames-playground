@@ -22,10 +22,16 @@ a `dotenv` import (same convention as `../../sandbox/scripts/`).
 
 ## The scripts
 
-| File                 | Touches       | Destructive        |
-| -------------------- | ------------- | ------------------ |
-| `setup-org-graph.ts` | Neo4j schema  | only with `--wipe` |
-| `ingest-roster.ts`   | Graph → Neo4j | no (upsert)        |
+| File                  | Touches       | Destructive                                                         |
+| --------------------- | ------------- | ------------------------------------------------------------------- |
+| `setup-org-graph.ts`  | Neo4j schema  | only with `--wipe`                                                  |
+| `ingest-roster.ts`    | Graph → Neo4j | no (upsert)                                                         |
+| `enrich-org-edges.ts` | Neo4j only    | no (idempotent — clears/re-derives its own inferred structure only) |
+
+`enrich-org-edges.ts` needs no Graph credential and no `AZURE_*` env — it reads
+and writes the local graph only, deriving `MEMBER_OF` groupings and `Resource`
+reclassification from the roster `ingest-roster.ts` already wrote. Run it after
+that, any time; see `docs/org-graph.md` §8.
 
 ```sh
 # idempotent: creates missing constraints, deletes nothing
@@ -35,6 +41,8 @@ pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/setup-org-graph.ts
 pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/setup-org-graph.ts --wipe
 
 pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/ingest-roster.ts
+
+pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/enrich-org-edges.ts
 ```
 
 A third, `smoke-pseudonymise.ts`, is run the same way but lives elsewhere:
@@ -85,3 +93,7 @@ masks the id out before printing (see `maskGraphIds` in `_redact.ts`).
 - `smoke-pseudonymise.ts`: `all assertions passed`. Case 1 is _meant_ to show a
   leak — it reproduces the payload-only limitation against real data, which is
   the baseline case 2 improves on.
+- `enrich-org-edges.ts`: non-conformance `none` afterwards, same as the ingest.
+  `0` everywhere in the report body is not a failure by itself — it means the
+  roster has nothing the current bases can see yet (see `docs/org-graph.md`
+  §1 on how sparse `department` is on the live tenant).

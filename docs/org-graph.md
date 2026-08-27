@@ -356,9 +356,11 @@ unchanged by this work.
 A later enrichment lane owns crawling the company website and M365 content, and
 these seams are left for it deliberately:
 
-- **`Resource` and `Knowledge` are declared, constrained and empty.** Their
-  unique keys are `key`, a caller-chosen slug rather than an Entra id, precisely
-  because their sources are not the directory.
+- **`Knowledge` is declared, constrained and empty.** Its unique key is `key`, a
+  caller-chosen slug rather than an Entra id, precisely because its source is
+  not the directory. `Resource` is no longer empty — see §8 — but its key stays
+  a caller-chosen slug for the same reason: not every `Resource` will come from
+  the directory either.
 - **`STEWARDS`, `ABOUT` and `AUTHORED` are declared and unwritten**, so an
   enrichment writer has a fixed shape to target and `countNonConforming` will not
   flag its first edge as drift.
@@ -370,3 +372,73 @@ these seams are left for it deliberately:
 
 Nothing here reads M365 content, and the `$select` list is the whole of what
 leaves Graph.
+
+## 8. The first enrichment lane: structure inferred from the roster already in place
+
+The graph shipped from #264 with 48-odd `Member` nodes and zero relationships —
+the roster ingest writes people, nothing wrote structure between them. A first
+enrichment lane closes part of that gap **from data already in the graph**, no
+new Graph permission needed: `lib/org-graph/edge-inference.ts` (pure — the
+judgement calls) and `lib/org-graph/enrich-org-edges.server.ts` (the writes),
+run via `scripts/enrich-org-edges.ts`.
+
+**Every inferred node and edge carries provenance** — `inferred: true`, a
+`basis`, a `confidence`, an `inferredAt` — so inferred structure is never
+mistaken for ingested fact. Three things it does, on a run against the local
+graph:
+
+1. **Shared-mailbox accounts become `Resource`, not `Member`.** A member with
+   no `jobTitle`, no `department`, and a mail local-part that does not follow
+   this tenant's `firstname.lastname` convention is reclassified
+   (`RESOURCE_BASIS = 'account-shape'`). This is a `MERGE` onto `Resource.key`
+   plus a `DETACH DELETE` of the source node, not a label flip — a label flip
+   would drop the node out of `Member`'s uniqueness constraints and let the next
+   roster re-ingest recreate a duplicate `Member` with the same `entraId`;
+   `enrich-org-edges.server.ts`'s header has the full reasoning.
+2. **Members sharing a `jobTitle` are grouped onto an inferred `Team`**
+   (`JOB_TITLE_BASIS = 'job-title'`), one node per distinct title, joined by
+   `MEMBER_OF` — the relation the roster ingest already declared, reused rather
+   than extended.
+3. **Members sharing a `department` are grouped the same way**
+   (`DEPARTMENT_BASIS = 'department'`), which today is one department (the
+   ontology's own §1 already notes how sparse `department` is on the live
+   tenant: 1/49).
+
+**This widens what a `Team` node can mean.** §1 introduces `Team` as "a named
+group people belong to (an Entra group)"; an inferred role or department
+grouping has no Entra group behind it. Rather than add a fifth node label for
+an otherwise-identical shape, an inferred `Team`'s `entraId` carries a `role:`
+or `dept:` prefix — which a real Entra group id (a GUID) can never collide
+with — and `inferred: true` marks the instance. Flagged here as a widening
+rather than folded in silently; a future reader comparing a `Team` node's
+`entraId` against Entra's `/groups` should not assume every hit is real.
+
+**Idempotent by delete-and-recreate, not by diffing.** Every run clears every
+relationship carrying `inferred: true` — regardless of type or basis — before
+re-deriving groupings from the roster's _current_ `jobTitle`/`department`
+values. A re-run against an unchanged roster reproduces exactly what it just
+deleted; a re-run after a title changes drops the stale grouping and adds the
+new one. Resource reclassification does not need the same treatment — matching
+is already scoped to nodes still labelled `:Member`, so a second run converts
+nothing new rather than double-applying.
+
+**No new relation type, and no `Member`↔`Member` edge.** `ontology.test.ts`
+pins that nothing in `RELATIONS` joins two `Member` nodes — the structural form
+the no-reports-to decision takes (§2, "There is deliberately no reports-to")
+— and this lane does not touch that file. Every inferred edge points a
+`Member` at a `Team`.
+
+**What this lane does not attempt.** A second, evidence-based half — co-work
+edges from M365 activity such as recently-edited file titles or shared
+calendar events — was scoped for the same change and is **not implemented**:
+the app-only credential this doc's ingest uses holds `User.Read.All` only (no
+`Files.Read.All` / `Sites.Read.All` / `Calendars.Read`), and the app's
+delegated Graph path (`lib/auth/graph-token.server.ts`'s `getUserGraphToken`,
+what the `microsoft-365` agent's `graph_files_recent` etc. run on) is scoped to
+whichever single user is signed in, not the roster — neither reaches "this
+activity, for all 48 members" today. Filed as a scope/consent gap for the
+owner rather than worked around. Also unimplemented, and left for that same
+gap to unblock: any `Member`↔`Member` collaboration edge would need a relation
+type this ontology does not declare, since §2's structural rule forbids one on
+`Team`-mediated relations too (COORDINATES points at a team) — a real design
+question for whenever the missing scopes land, not answered here.

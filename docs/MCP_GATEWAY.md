@@ -450,13 +450,6 @@ docker mcp workingset pull docker.io/org/my-set:v1.0
 }
 ```
 
-### n8n (Docker Compose)
-1. Use `--transport streaming --port 8811`
-2. Configure MCP Client tool:
-   - Endpoint: `http://mcp-gateway:8811/mcp`
-   - Transport: HTTP Streamable
-   - Authentication: None
-
 ### Python Client
 ```python
 # Use streaming transport

@@ -144,7 +144,8 @@ export const ConversationTierSwitch = (props: ConversationTierSwitchProps) => {
   }
 
   return (
-    <>
+    // No `gap`: see the status region below.
+    <div flex="~" items="center">
       <Show when={state()}>
         {(s) => (
           <Show when={revision() + 1} keyed>
@@ -215,14 +216,20 @@ export const ConversationTierSwitch = (props: ConversationTierSwitchProps) => {
           exactly when a person needs to be told. Unconditionally, because a
           `role="status"` that appears together with its own text is the classic
           live-region pitfall and will often not announce at all; the region is
-          here from the first render and only its content changes.
+          here from the first render and only its text changes.
+
+          It has to cost NOTHING while empty, and that is why the separation is
+          a margin on the inner element rather than a `gap` on the row: an empty
+          span is a zero-width flex item, but a gap applies to it anyway — 16px
+          of it, measured, which was enough to wrap the agent selector beside it
+          onto two lines. A control that reflows its neighbour to reserve room
+          for a message it is not showing is not free.
 
           `ui-danger`, not a fixed amber: this is text a user has to read, and it
-          has to clear contrast on both grounds. Empty it occupies no visual
-          space, so the idle header row is unchanged. */}
+          has to clear contrast on both grounds. */}
       <span role="status" text="xs ui-danger" title={error() ?? undefined}>
-        {signal()}
+        <Show when={signal()}>{(text) => <span m="l-2">{text()}</span>}</Show>
       </span>
-    </>
+    </div>
   )
 }

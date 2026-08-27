@@ -420,13 +420,40 @@ values. A re-run against an unchanged roster reproduces exactly what it just
 deleted; a re-run after a title changes drops the stale grouping and adds the
 new one. Resource reclassification does not need the same treatment — matching
 is already scoped to nodes still labelled `:Member`, so a second run converts
-nothing new rather than double-applying.
+nothing new rather than double-applying. A stale grouping's now-empty `Team`
+node is not a relationship, so it survives an edge clear on its own; a
+separate step drops any inferred `Team` left with no member after the
+re-derive, closing that gap and, for a reclassified node specifically, the
+part of it that step 1's own edge removal (below) would otherwise leave open.
+
+**Scoped to "untouched by step 2", not to step 1.** The claim above — real
+ingested structure survives a run — holds for the clear-and-re-derive step.
+It does **not** hold for step 1: `reclassifyResourceAccounts`'s
+`DETACH DELETE m` removes _every_ relationship on a reclassified node,
+inferred or not. Latent today, because every edge in the graph is currently
+`inferred: true`; live the day a real `MEMBER_OF` edge exists on a node this
+heuristic also reclassifies. `reclassifyResourceAccounts` is also now the one
+step this lane's own script gates behind an explicit `--apply` — see
+`scripts/README.md` — rather than the reasoning above making it sound safer
+than it is.
 
 **No new relation type, and no `Member`↔`Member` edge.** `ontology.test.ts`
 pins that nothing in `RELATIONS` joins two `Member` nodes — the structural form
 the no-reports-to decision takes (§2, "There is deliberately no reports-to")
 — and this lane does not touch that file. Every inferred edge points a
 `Member` at a `Team`.
+
+**A singleton `role:` team is a shape change worth naming, even though it is
+not a relation change.** On the live tenant, several inferred `Team` nodes
+have exactly one member — a title only one person holds. That node is 1:1
+with an individual and its `name` is that person's rank, which was already
+true as a `Member.jobTitle` property before this lane existed. What is new is
+the **shape**: rank is now a traversable node with an edge, not only a
+property to read off one person. No relation joins two `Member`s and no
+ontology entry changes — the no-reports-to decision (§2) is not breached —
+but a future reader querying "who is at the same rank as X" is now one hop
+away in a way a property scan was not, and that traversability is disclosed
+here rather than left implicit in the data.
 
 **What this lane does not attempt.** A second, evidence-based half — co-work
 edges from M365 activity such as recently-edited file titles or shared
@@ -442,3 +469,14 @@ gap to unblock: any `Member`↔`Member` collaboration edge would need a relation
 type this ontology does not declare, since §2's structural rule forbids one on
 `Team`-mediated relations too (COORDINATES points at a team) — a real design
 question for whenever the missing scopes land, not answered here.
+
+**Owner decision, 2026-08-27: delegated-token access, not an app permission.**
+An independent review of this lane suggested filing an issue for the missing
+application permissions (`Files.Read.All` / `Sites.Read.All` / `Calendars.Read`)
+above. The owner has since decided against that path: the second, evidence-based
+half will instead go through the app's existing delegated Graph route
+(`getUserGraphToken`, what the `microsoft-365` agent already runs on) rather
+than widen the app-only credential's application permissions. That is a phase-2
+lane, in flight separately from this one — recorded here, in the durable doc,
+rather than only in a PR thread or an orchestration message that evaporates on
+acknowledgement.

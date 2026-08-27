@@ -33,7 +33,7 @@ const member = (over: Partial<MemberFields>): MemberFields => ({
 describe('looksLikeResourceAccount', () => {
   it('flags an account with no title, no department, and an undotted local-part', () => {
     expect(looksLikeResourceAccount(member({ mail: 'shared-access@example.test' }))).toBe(true)
-    expect(looksLikeResourceAccount(member({ mail: 'publiccalendar@example.test' }))).toBe(true)
+    expect(looksLikeResourceAccount(member({ mail: 'frontdesk@example.test' }))).toBe(true)
   })
 
   it('never flags a member with a job title, however the mail is shaped', () => {
@@ -83,6 +83,18 @@ describe('slugifyLabel', () => {
   it('is deterministic — the same input always slugs the same way', () => {
     expect(slugifyLabel('Widget Engineer')).toBe(slugifyLabel('Widget Engineer'))
   })
+
+  it('folds an accented title onto the same slug as its unaccented spelling', () => {
+    // One role, not two teams for the same job: "Développeur" and
+    // "Developpeur" must MERGE onto the same Team node.
+    expect(slugifyLabel('Développeur')).toBe('developpeur')
+    expect(slugifyLabel('Développeur')).toBe(slugifyLabel('Developpeur'))
+  })
+
+  it('slugs a punctuation-only label to the empty string', () => {
+    expect(slugifyLabel('!!!')).toBe('')
+    expect(slugifyLabel('   ')).toBe('')
+  })
 })
 
 describe('roleTeamKey / departmentTeamKey', () => {
@@ -115,6 +127,10 @@ describe('buildRoleGroupEdges', () => {
     expect(buildRoleGroupEdges([member({ jobTitle: null })])).toEqual([])
     expect(buildRoleGroupEdges([member({ jobTitle: '   ' })])).toEqual([])
   })
+
+  it('skips a punctuation-only title rather than merging unrelated members onto role:', () => {
+    expect(buildRoleGroupEdges([member({ jobTitle: '!!!' })])).toEqual([])
+  })
 })
 
 describe('buildDepartmentGroupEdges', () => {
@@ -132,6 +148,10 @@ describe('buildDepartmentGroupEdges', () => {
         confidence: DEPARTMENT_CONFIDENCE,
       },
     ])
+  })
+
+  it('skips a punctuation-only department rather than merging unrelated members onto dept:', () => {
+    expect(buildDepartmentGroupEdges([member({ department: '###' })])).toEqual([])
   })
 })
 

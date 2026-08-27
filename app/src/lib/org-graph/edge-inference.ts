@@ -74,7 +74,7 @@ export const DEPARTMENT_BASIS = 'department'
  * directory field the tenant maintains, so both are higher than the
  * account-shape heuristic, which infers structure the directory does not
  * state at all. Department outranks job title because two people who share a
- * title are not always on the same effort (many `Project Manager`s run
+ * title are not always on the same effort (many `Widget Engineer`s run
  * unrelated projects), while a shared department is a stronger organisational
  * claim on this small a roster.
  */
@@ -122,15 +122,19 @@ export function looksLikeResourceAccount(
 // ============================================================================
 
 /**
- * `"Some  Role!"` → `"some-role"`. Lower-cased, every run of non-alphanumeric
- * characters collapsed to one hyphen, leading/trailing hyphens trimmed.
- * Deterministic so the same title always MERGEs onto the same `Team` node,
- * which is the whole idempotence guarantee for the grouping step: re-running
- * this module never depends on what ran before it, only on the directory's
- * current values.
+ * `"Some  Role!"` → `"some-role"`. NFD-folded so an accented letter collapses
+ * onto its base form (`"Développeur"` and `"Developpeur"` both slug to
+ * `"developpeur"` — one role, deliberately, rather than two teams for the same
+ * job), lower-cased, every run of non-alphanumeric characters collapsed to one
+ * hyphen, leading/trailing hyphens trimmed. Deterministic so the same title
+ * always MERGEs onto the same `Team` node, which is the whole idempotence
+ * guarantee for the grouping step: re-running this module never depends on
+ * what ran before it, only on the directory's current values.
  */
 export function slugifyLabel(value: string): string {
   return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // strip combining diacritics left by NFD
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -150,10 +154,13 @@ export const departmentTeamKey = (department: string): string => `dept:${slugify
 
 /** One `MEMBER_OF` row per member with a `jobTitle`, grouped onto a `Team`
  *  keyed by {@link roleTeamKey}. Members sharing a title MERGE onto the same
- *  node; this returns one row per member, not one per group. */
+ *  node; this returns one row per member, not one per group. A title that
+ *  slugs to the empty string (punctuation-only) is skipped rather than
+ *  merged onto `role:` — an empty key is not a team, and would otherwise
+ *  collapse every such title onto one node with unrelated members. */
 export function buildRoleGroupEdges(members: readonly MemberFields[]): GroupEdge[] {
   return members
-    .filter((m) => filled(m.jobTitle))
+    .filter((m) => filled(m.jobTitle) && slugifyLabel(m.jobTitle as string) !== '')
     .map((m) => ({
       memberId: m.entraId,
       teamKey: roleTeamKey(m.jobTitle as string),
@@ -163,10 +170,11 @@ export function buildRoleGroupEdges(members: readonly MemberFields[]): GroupEdge
     }))
 }
 
-/** Same shape as {@link buildRoleGroupEdges}, over `department`. */
+/** Same shape as {@link buildRoleGroupEdges}, over `department`, with the same
+ *  empty-slug guard. */
 export function buildDepartmentGroupEdges(members: readonly MemberFields[]): GroupEdge[] {
   return members
-    .filter((m) => filled(m.department))
+    .filter((m) => filled(m.department) && slugifyLabel(m.department as string) !== '')
     .map((m) => ({
       memberId: m.entraId,
       teamKey: departmentTeamKey(m.department as string),

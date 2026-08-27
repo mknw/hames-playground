@@ -22,16 +22,22 @@ a `dotenv` import (same convention as `../../sandbox/scripts/`).
 
 ## The scripts
 
-| File                  | Touches       | Destructive                                                         |
-| --------------------- | ------------- | ------------------------------------------------------------------- |
-| `setup-org-graph.ts`  | Neo4j schema  | only with `--wipe`                                                  |
-| `ingest-roster.ts`    | Graph → Neo4j | no (upsert)                                                         |
-| `enrich-org-edges.ts` | Neo4j only    | no (idempotent — clears/re-derives its own inferred structure only) |
+| File                  | Touches       | Destructive                                                                                                                                |
+| --------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `setup-org-graph.ts`  | Neo4j schema  | only with `--wipe`                                                                                                                         |
+| `ingest-roster.ts`    | Graph → Neo4j | no (upsert)                                                                                                                                |
+| `enrich-org-edges.ts` | Neo4j only    | grouping edges: no (clears/re-derives its own inferred structure only); resource reclassification (a `DETACH DELETE`): only with `--apply` |
 
 `enrich-org-edges.ts` needs no Graph credential and no `AZURE_*` env — it reads
 and writes the local graph only, deriving `MEMBER_OF` groupings and `Resource`
 reclassification from the roster `ingest-roster.ts` already wrote. Run it after
 that, any time; see `docs/org-graph.md` §8.
+
+Without `--apply` it is a dry run for the reclassification step only: every
+other step still writes, but a `Member` that looks like a shared mailbox is
+reported (masked) rather than converted and deleted. Same shape as
+`setup-org-graph.ts --wipe`'s confirmation phrase — an irreversible write
+needs an explicit argument, not a default.
 
 ```sh
 # idempotent: creates missing constraints, deletes nothing
@@ -42,7 +48,11 @@ pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/setup-org-graph.ts --wipe
 
 pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/ingest-roster.ts
 
+# dry run — reports resource-reclassification candidates, writes nothing there
 pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/enrich-org-edges.ts
+
+# review the candidates printed above, then:
+pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/enrich-org-edges.ts --apply
 ```
 
 A third, `smoke-pseudonymise.ts`, is run the same way but lives elsewhere:
@@ -75,11 +85,17 @@ Assertions run on the unmasked strings in memory. That is output hygiene, not a
 security control: it keeps a transcript pasteable, and the thing that makes it
 pasteable is that nothing in it identifies anybody.
 
-One thing it does **not** cover: `ingest-roster.ts`'s error path prints
-`err.message`, and a Graph error carries the request path — which on the
-memberships loop contains a member's Entra object id. Still no display name and
-no address, but an opaque directory identifier is not nothing, so that path
-masks the id out before printing (see `maskGraphIds` in `_redact.ts`).
+`ingest-roster.ts`'s error path prints `err.message`, and a Graph error carries
+the request path — which on the memberships loop contains a member's Entra
+object id. Still no display name and no address, but an opaque directory
+identifier is not nothing, so that path masks the id out before printing (see
+`maskGraphIds` in `_redact.ts`). `enrich-org-edges.ts`'s error path routes
+through both `mask()` and `maskGraphIds()`, because a Neo4j constraint
+violation quotes the offending property value directly and this script's
+writes carry mail addresses and slugged job titles, not just an id in a URL.
+`enrich-org-edges.ts` also prints resource-reclassification candidates on a
+dry run (no `--apply`) — each one through `mask()`, the same function
+`smoke-pseudonymise.ts` uses to prove a real name was replaced.
 
 ## What "passing" looks like
 
@@ -96,4 +112,6 @@ masks the id out before printing (see `maskGraphIds` in `_redact.ts`).
 - `enrich-org-edges.ts`: non-conformance `none` afterwards, same as the ingest.
   `0` everywhere in the report body is not a failure by itself — it means the
   roster has nothing the current bases can see yet (see `docs/org-graph.md`
-  §1 on how sparse `department` is on the live tenant).
+  §1 on how sparse `department` is on the live tenant). Without `--apply`,
+  `resourcesReclassified: 0` with a printed candidate list is the expected
+  shape, not a failure — it means the write is waiting on review.

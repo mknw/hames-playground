@@ -27,12 +27,6 @@
 #   * it does not tune Neo4j/Postgres/Redis. Nobody has measured this box yet.
 
 services:
-  # Not part of the preview. The base file gives n8n no profile, so it would
-  # start with everything else; a profile parks it here without touching the
-  # dev bring-up, which still starts it.
-  n8n:
-    profiles: ['n8n']
-
   # ---------------------------------------------------------------------------
   # Data tier — reachable only over the compose network and from the VM itself.
   #

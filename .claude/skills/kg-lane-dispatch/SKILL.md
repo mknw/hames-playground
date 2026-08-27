@@ -193,6 +193,16 @@ sits unsubmitted in the composer, `orca terminal send --terminal <handle>
 be started — recreate it from the same spec file. Prevention is fewer
 concurrent lanes.
 
+**A dispatch receipt is not a running lane.** After every dispatch or attach,
+read the terminal and confirm the agent is *generating* — the TUI spinner with
+a climbing token counter ("Puttering… ↓ 12k tokens"), not merely a delivered
+prompt. `worker-start` exiting 0, a `dispatched` task row, and the spec landing
+in the composer are all receipts about the hand-off; every one of them was
+observed (2026-08-27) on a lane whose spec sat unsubmitted in the composer for
+over an hour while the coordinator reported it running. The same discipline
+closes the loop at the far end: verify **outcomes** — the commit on the lane's
+branch, the push, the posted comment — never bookkeeping.
+
 ## Writing the spec safely
 
 Pass a long spec through a **file**, not an inline shell string:

@@ -75,7 +75,7 @@ export default defineConfig({
     conditions: ['development', 'browser'],
     alias: {
       // Mirror SolidStart's `~` → src/ alias so components that use it
-      // (e.g. AllGraphTab → ~/lib/turn-utils) are importable from tests.
+      // (e.g. DataStashPanel → ~/lib/turn-utils) are importable from tests.
       '~': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },

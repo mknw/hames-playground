@@ -30,6 +30,7 @@ function stubAgent(id: string): AgentConfig {
     id,
     name: id,
     description: id,
+    welcome: `greeting for ${id}`,
     icon: `i-${id}`,
     accent: 'blue',
     servers: [],
@@ -78,6 +79,7 @@ function freshAgent(overrides: Partial<{ createPatterns: PatternFactory }> = {})
     id,
     name: `Agent ${id}`,
     description: 'probe',
+    welcome: 'probe greeting',
     icon: `i-${id}`,
     accent: 'violet',
     servers: ['neo4j'],
@@ -142,6 +144,9 @@ describe('registration + lookup', () => {
       id,
       name: `Agent ${id}`,
       description: 'probe',
+      // The empty-state greeting rides the same client-safe projection as the
+      // picker's name/description — `ChatMessages` has no registry import.
+      welcome: 'probe greeting',
       icon: `i-${id}`,
       accent: 'violet',
       servers: ['neo4j'],

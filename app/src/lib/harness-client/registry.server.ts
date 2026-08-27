@@ -34,6 +34,16 @@ export interface AgentConfig {
   id: string
   name: string
   description: string
+  /** The greeting an empty conversation shows for this agent — one or two
+   *  plain sentences saying what it can actually do, in the words a user can
+   *  act on. `description` is the one-liner the picker lists; this is the
+   *  same claim written to be read *before* the first message.
+   *
+   *  Required, not optional: every agent greeted as "your knowledge
+   *  assistant" until 2026-08-27 because the copy was one string in
+   *  `ChatInterface`. A required field makes a new agent's greeting a
+   *  compile error rather than someone else's wrong sentence. */
+  welcome: string
   /** Iconify class for UI display (e.g. `i-material-symbols-robot-2-outline`).
    *  Must appear as a literal in a file matched by uno.config.ts
    *  `content.filesystem`, or UnoCSS emits no CSS for it and the icon
@@ -109,14 +119,16 @@ export function getAgentMetadata(): Array<{
   id: string
   name: string
   description: string
+  welcome: string
   icon: string
   accent: AgentAccent
   servers: string[]
 }> {
-  return getAllAgents().map(({ id, name, description, icon, accent, servers }) => ({
+  return getAllAgents().map(({ id, name, description, welcome, icon, accent, servers }) => ({
     id,
     name,
     description,
+    welcome,
     icon,
     accent,
     servers,

@@ -447,19 +447,21 @@ export default defineConfig({
           color: var(--agent-accent, var(--ui-text-tertiary));
         }
 
-        /* Sidebar mini progress strip, indeterminate mode (#105) — shown
-           between run start and the chain projection seed arriving. A 40%-
-           wide segment sweeps the 3px track (RowProgress in ChatSidebar). */
-        @keyframes thread-progress-slide {
+        /* The shared bar's indeterminate mode (#105, generalised in #295) — a
+           40%-wide segment sweeping the 3px track, for any consumer of
+           ProgressBar that passes percent: null. Named for the component
+           rather than for the sidebar row that was its first caller: since
+           #295 it is also the chain bar's and the boot splash's. */
+        @keyframes progress-slide {
           0%   { transform: translateX(-100%); }
           100% { transform: translateX(250%); }
         }
-        .thread-progress-indeterminate {
-          animation: thread-progress-slide 1.2s ease-in-out infinite;
+        .progress-indeterminate {
+          animation: progress-slide 1.2s ease-in-out infinite;
         }
         @media (prefers-reduced-motion: reduce) {
           /* Motionless fallback: a dim full-width fill still signals "running". */
-          .thread-progress-indeterminate {
+          .progress-indeterminate {
             animation: none;
             width: 100% !important;
             opacity: 0.35;
@@ -512,7 +514,18 @@ export default defineConfig({
           background: rgba(34,211,238,0.15);
           border-bottom-color: #22d3ee;
         }
-        .doc-ref-mark {
+        /* Two things here are load-bearing, both because the mark is an empty
+           <sup> whose glyph comes from an i-material-symbols-* utility.
+           display:inline-block — an icon utility sets a 1em box but no display,
+           and on a bare inline element that box is ignored, so the icon
+           vanishes. And the selector is sup.doc-ref-mark rather than
+           .doc-ref-mark: the icon utility declares color:inherit to paint its
+           mask with currentColor, and at equal specificity the utility layer
+           wins on source order — so a class-only rule loses the colour and the
+           mark renders in the message's text colour. Element+class outranks it.
+           Measured in a browser both ways. */
+        sup.doc-ref-mark {
+          display: inline-block;
           font-size: 0.7em;
           color: #22d3ee;
           margin-left: 1px;

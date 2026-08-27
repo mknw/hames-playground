@@ -1,11 +1,13 @@
 /**
- * FloatingPanel window controls — SettingsPanel + AllGraphTab Turn Explorer.
+ * FloatingPanel window controls — SettingsPanel.
  *
  * Exercises the real zag floating-panel machine in jsdom: open via trigger,
  * minimize via StageTrigger, restore, close. Guards the Control anatomy
- * added for both panels (minimize/restore[/maximize] + close in the header)
- * and the stage-conditional rendering (restore only while staged, resize
- * handle only at default stage).
+ * (minimize/restore + close in the header) and the stage-conditional
+ * rendering (restore only while staged, resize handle only at default stage).
+ *
+ * The Turn Explorer used to be the second panel under test here; it was the
+ * right panel's "All" tab and was removed with it.
  *
  * ## Why every step waits for a STATE rather than for a duration (#280/#285)
  *
@@ -50,7 +52,6 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
 
 const { render, waitFor } = await import('@solidjs/testing-library')
 const { SettingsPanel } = await import('../../../components/ark-ui/SettingsPanel')
-const { AllGraphTabWrapper } = await import('../../../components/ark-ui/AllGraphTab')
 
 /**
  * Block until `read()` matches `want`.
@@ -107,38 +108,5 @@ describe('SettingsPanel window controls', () => {
     // carries no attributify display prop, so [hidden] actually hides it.
     part(document, 'close-trigger')!.click()
     await settle('close hides the content', () => part(document, 'content')?.hidden, true)
-  })
-})
-
-describe('AllGraphTab Turn Explorer window controls', () => {
-  const FULL_SET = ['Minimize', 'Maximize (fills the graph area)']
-
-  it('offers minimize+maximize+close, and restore while staged', async () => {
-    const { container } = render(() => <AllGraphTabWrapper contextEvents={[]} />)
-    container.querySelector<HTMLElement>('[data-part="trigger"]')!.click()
-
-    await settle(
-      'explorer opens with the full control set',
-      () => stageTriggers(document),
-      FULL_SET,
-    )
-    expect(part(document, 'content')).toBeTruthy()
-
-    // All/None content actions must NOT be inside the Control slot.
-    const control = part(document, 'control')!
-    expect(control.textContent).not.toContain('All')
-
-    // Maximize → restore appears (fullscreen-exit icon), maximize hides.
-    document.querySelectorAll<HTMLElement>('[data-part="stage-trigger"]')[1].click()
-    await settle('maximize swaps in Restore', () => stageTriggers(document), [
-      'Minimize',
-      'Restore',
-    ])
-    expect(part(document, 'resize-trigger')).toBeNull()
-
-    // Restore → full set back.
-    document.querySelectorAll<HTMLElement>('[data-part="stage-trigger"]')[1].click()
-    await settle('restore brings the full set back', () => stageTriggers(document), FULL_SET)
-    expect(part(document, 'resize-trigger')).toBeTruthy()
   })
 })

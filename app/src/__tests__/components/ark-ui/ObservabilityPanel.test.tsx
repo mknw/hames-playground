@@ -126,7 +126,9 @@ describe('ObservabilityPanel — summary bar', () => {
 
     expect(container.textContent).toContain('Cached:')
     expect(container.textContent).toContain('75%')
-    expect(container.textContent).toContain('+3.0k⚡')
+    // The bolt beside it is an icon class now, not a character in the text.
+    expect(container.textContent).toContain('+3.0k')
+    expect(container.querySelector('.i-material-symbols-bolt')).toBeTruthy()
   })
 
   it('counts cache writes into the input denominator, diluting the cached share', () => {
@@ -148,7 +150,8 @@ describe('ObservabilityPanel — summary bar', () => {
     ]
     const { container } = render(() => <ObservabilityPanel events={events} />)
 
-    expect(container.textContent).toContain('+1.0k✎')
+    expect(container.textContent).toContain('+1.0k')
+    expect(container.querySelector('.i-material-symbols-edit-outline')).toBeTruthy()
     expect(container.textContent).toContain('60%')
     expect(container.textContent).not.toContain('75%')
   })
@@ -422,7 +425,7 @@ describe('ObservabilityPanel — timeline construction', () => {
       }),
     ]
     const { container } = render(() => <ObservabilityPanel events={events} />)
-    expect(rows(container)[0].textContent).toContain('⚡×2 first_tool, second_tool')
+    expect(rows(container)[0].textContent).toContain('×2 first_tool, second_tool')
   })
 
   it('previews approval requests, errors and compacted intents on their rows', () => {

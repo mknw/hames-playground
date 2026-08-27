@@ -4,8 +4,9 @@
  * WHAT IT NOW TARGETS, because this changed under it. The scenario was written
  * when the first call of a session absorbed the deployment's cold start behind a
  * ten-minute `request_timeout_ms`. Wake-then-run moved that wait out in front,
- * into a ping with its own 300s bound, and the BAML client's budget became a
- * WARM-call one (180s, derived from its own output cap — see
+ * into a poll with its own 600s budget (30s per attempt, hermetically raised
+ * above this scenario's delay — see `lib/mode.ts`), and the BAML client's budget
+ * became a WARM-call one (180s, derived from its own output cap — see
  * `baml_src/verda-client.baml`). Two separate budgets, and this scenario used to
  * cover neither cleanly: armed `times: 1`, its delay landed on the wake ping,
  * which meant it exercised `VERDA_WAKE_TIMEOUT_MS` and passed — while nothing at

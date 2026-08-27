@@ -28,8 +28,9 @@
  * (`warming`), the same mounted shell renders a SPINNER and a counting-down
  * estimate INSTEAD of the bar. The bar's denominator is seeded by the first
  * event of the turn, so without this it would appear at 0/N and sit there for
- * the whole cold start — measured at 146s on 2026-08-26 — which reads as a
- * hung chat rather than as a wait.
+ * the whole cold start — measured at 71.7s, 146s and ~360s on the three
+ * occasions it has been timed — which reads as a hung chat rather than as a
+ * wait.
  *
  * The two variants share the avatar and the outer row, and the column reserves
  * the same `min-h` in BOTH, so the swap changes what is in the box and never
@@ -40,6 +41,7 @@
  */
 import { Show, createSignal, createMemo, createEffect, on, onCleanup } from 'solid-js'
 import { Progress } from '@ark-ui/solid/progress'
+import { ProgressBar } from './ProgressBar'
 import {
   COLD_START_HEADLINE,
   coldStartAnnouncement,
@@ -69,7 +71,6 @@ export interface LiveProgressBarProps {
 
 const STATUS_FADE_MS = 220
 const EXIT_FADE_MS = 360
-const FILL_TRANSITION_MS = 420
 /** Don't show the bar until the chain has been running this long — direct
  *  router responses complete in <1s and don't deserve a flash of progress UI. */
 const MOUNT_DELAY_MS = 350
@@ -224,7 +225,7 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
           <Show
             when={props.warming}
             fallback={
-              <Progress.Root value={value()} min={0} max={max()} flex="~ col gap-1.5">
+              <ProgressBar percent={percent()}>
                 {/* Status row: pulse + crossfading status text */}
                 <div flex="~ items-center gap-2" h="4" style={{ position: 'relative' }}>
                   <div
@@ -265,27 +266,9 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
                   </div>
                 </div>
 
-                {/* Linear bar — no fraction text shown alongside */}
-                <Progress.Track
-                  style={{
-                    height: '3px',
-                    'background-color': 'rgb(58, 58, 74)',
-                    'border-radius': '9999px',
-                    overflow: 'hidden',
-                  }}
-                >
-                  <Progress.Range
-                    style={{
-                      height: '100%',
-                      width: `${percent()}%`,
-                      'background-image':
-                        'linear-gradient(90deg, rgba(0,255,255,0.85), rgba(157,0,255,0.85))',
-                      'box-shadow': '0 0 8px rgba(0,255,255,0.45)',
-                      transition: `width ${FILL_TRANSITION_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
-                    }}
-                  />
-                </Progress.Track>
-              </Progress.Root>
+                {/* The track and the fill are `ProgressBar`'s — see that file
+                    for why three copies of this geometry became one. */}
+              </ProgressBar>
             }
           >
             {(notice) => (

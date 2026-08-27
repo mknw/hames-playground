@@ -233,11 +233,17 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
             Turn
           </div>
           {/* `n / budget` when the event carries one — "7" alone leaves the
-              reader guessing whether the loop stopped early or ran out. */}
+              reader guessing whether the loop stopped early or ran out. The
+              numerator is 1-INDEXED here and the event field is not: `turn` is
+              the 0-indexed round and `maxTurns` is a count, so a fully spent
+              loop would otherwise always render one short ("7 / 8" for eight
+              completed rounds), which reads as "it had a round left" — the
+              opposite of what the badge beside it says. Display only; the
+              event's own semantics are untouched. */}
           <div text="sm ui-text-primary" font="mono">
             {props.data.maxTurns === undefined
               ? props.data.turn
-              : `${props.data.turn} / ${props.data.maxTurns}`}
+              : `${(props.data.turn ?? 0) + 1} / ${props.data.maxTurns}`}
           </div>
         </div>
       </Show>
@@ -246,10 +252,11 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
           <div text="xs ui-text-tertiary" m="b-1">
             Iteration
           </div>
+          {/* 1-indexed for the same reason as Turn above. */}
           <div text="sm ui-text-primary" font="mono">
             {props.data.maxTurns === undefined
               ? props.data.iteration
-              : `${props.data.iteration} / ${props.data.maxTurns}`}
+              : `${(props.data.iteration ?? 0) + 1} / ${props.data.maxTurns}`}
           </div>
         </div>
       </Show>

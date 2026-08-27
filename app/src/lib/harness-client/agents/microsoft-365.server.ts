@@ -76,12 +76,15 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
       // plus room to recover from a failed call — and 8 is what
       // `DEFAULT_SETTINGS.maxToolTurns` became in #269, so the pin was carrying
       // the default and nothing else. Dropping it is behaviour-identical at
-      // default settings and strictly better away from them: a declared budget
-      // WINS over `settings.maxToolTurns` in both directions
-      // (`resolveTurnBudget`), so a pin equal to the default buys nothing and
-      // costs the user their only lever — the Settings slider was inert for
-      // this agent. `general` still pins, because 12 is a value the default
-      // does not carry.
+      // default settings, and away from them the setting reaches it, in both
+      // directions: a declared budget WINS over `settings.maxToolTurns` either
+      // way (`resolveTurnBudget`), so a pin equal to the default buys nothing
+      // and costs the user their only lever — the Settings slider was inert for
+      // this agent. Dropping it is not an unqualified improvement: a user who
+      // drags the slider down to 3 now gets 3 rounds on a briefing loop that
+      // used to get 8 regardless. That is the user getting what they asked for,
+      // which is the right design, but it is a degradation for that agent.
+      // `general` still pins, because 12 is a value the default does not carry.
       // The controller never needs a URL to decide the next action, and a Loop
       // hit's webUrl is ~519 chars of base64 — half the hit. The compactExecution
       // still gets every webUrl for citation links (it reads the full events,

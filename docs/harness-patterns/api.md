@@ -657,4 +657,4 @@ by `resolveTurnBudget`; see "Round budgets" in
 
 ---
 
-**Last Updated:** 2026-06-15
+**Last Updated:** 2026-08-27

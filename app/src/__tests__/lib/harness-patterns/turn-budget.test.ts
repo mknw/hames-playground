@@ -283,6 +283,47 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
     expect(data.maxTurns).toBe(2)
     expect(data.iteration).toBe(1)
   })
+
+  it('the BODY spends the clamped budget, not the declared literal', async () => {
+    const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../lib/harness-patterns/patterns')
+    const { SETTINGS_BOUNDS } = await import('../../../lib/settings')
+    const ceiling = SETTINGS_BOUNDS.maxToolTurns[1]
+
+    const controller = neverFinishingController()
+    const result = await simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'execute',
+      maxTurns: ceiling + 25,
+    }).fn(createScope('execute', { intent: 'x' }), createEventView(contextWith('x')))
+
+    // The resolver being clamped is not the same claim as the loop running on
+    // the clamped value — this is the half the reaper's derivation rests on.
+    expect(controller).toHaveBeenCalledTimes(ceiling)
+    const data = result.events.find((e) => e.type === 'error')?.data as { maxTurns?: number }
+    expect(data?.maxTurns).toBe(ceiling)
+  })
+
+  it('a declared 0 still runs a round and RECORDS its exhaustion', async () => {
+    const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../lib/harness-patterns/patterns')
+
+    const controller = neverFinishingController()
+    const result = await simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'execute',
+      maxTurns: 0,
+    }).fn(createScope('execute', { intent: 'x' }), createEventView(contextWith('x')))
+
+    // The floor exists because the exhaustion event is gated on `turns.length >
+    // 0`: at a budget of 0 the loop ran nothing and recorded nothing, a silent
+    // no-op that read as a clean run. Asserting the floor VALUE against
+    // SETTINGS_BOUNDS cannot catch that — lower the bound and the assertion
+    // moves with it — so assert the behaviour the floor buys.
+    expect(controller).toHaveBeenCalledTimes(1)
+    const data = result.events.find((e) => e.type === 'error')?.data as { kind?: string }
+    expect(data?.kind).toBe('budget_exhausted')
+  })
 })
 
 describe('the clamp keeps the stuck-run reaper honest', () => {

@@ -32,11 +32,47 @@
  * subtraction are stamped in the same browser (see `receivedAt`), so a clock
  * skewed against the server changes nothing.
  *
+ * The RATE is a function of what the last poll said — {@link POLL_INTERVAL_MS}
+ * for a settled box, {@link ACTIVE_POLL_INTERVAL_MS} while one is mid-transition
+ * — which is half of why the countdown was never seen; the other half is the
+ * next section.
+ *
+ * ## Why nobody had seen the countdown
+ *
+ * It shipped working and unreachable, which is the failure mode a screenshot
+ * cannot catch and a green suite does not either. Two independent causes, both
+ * fixed here, both pinned:
+ *
+ *  1. **The render site asked the wrong question.** It gated the number on
+ *     `warmthKey() === 'warm'`, but `verdaWarmth()` also computes one for
+ *     `running` — the state whose whole documented promise is that it implies
+ *     warm, and the state a user is in for as long as their own turn is on the
+ *     box. On a route whose first call costs minutes, that is nearly all of the
+ *     time anyone is looking at this strip. The entitlement is now a property of
+ *     the state (`WARMTH_PRESENTATION[...].countdown`) rather than a literal
+ *     written here, so it cannot drift from the word again.
+ *  2. **The strip learned too late.** With one 15-second interval for every
+ *     state, the `cold` → `warm` flip a user's own message causes landed up to
+ *     fifteen seconds after the answer they were watching for — by which time
+ *     they had stopped looking. Hence the two rates.
+ *
+ * ## Starting the box from here
+ *
+ * A cold indicator is also a BUTTON, and the only one in the app that acts on
+ * the deployment rather than on a conversation: hovering it offers
+ * {@link IGNITE_LABEL} and clicking calls `igniteVerdaBox`, which is the same
+ * `ensureVerdaAwake` a turn uses — so a click during an in-flight wake joins it
+ * and a click on a warm box costs nothing. The reasoning for reusing that entry
+ * point rather than issuing a second wake is on the action itself.
+ *
  * ## Accessibility
  *
  * The warm state is a word, not a colour (`color-not-only`), and only that word
  * is announced: the countdown is `aria-hidden` because a live region that
- * re-reads a number every second is noise, not information.
+ * re-reads a number every second is noise, not information. The cold state is a
+ * real `<button>` rather than a clickable `<div>`, so it is reachable and
+ * operable from the keyboard, and its `aria-label` is the action rather than the
+ * state — the hover swap is visual only and is deliberately not announced.
  *
  * ## Themes
  *
@@ -60,13 +96,24 @@
  * which the light palette has no darkened twin for and which nothing else in
  * the chrome uses any more.
  */
-import { createSignal, createMemo, onMount, onCleanup, Show, type JSX } from 'solid-js'
+import {
+  createSignal,
+  createMemo,
+  createEffect,
+  onMount,
+  onCleanup,
+  Show,
+  type JSX,
+} from 'solid-js'
+import { Dynamic } from 'solid-js/web'
 import { SegmentGroup } from '@ark-ui/solid/segment-group'
 import {
   getPreviewHeaderState,
+  igniteVerdaBox,
   setPreviewInferenceTier,
   type PreviewHeaderState,
 } from '~/lib/harness-client/preview-header.server'
+import { COLD_START_HEADLINE } from '~/lib/cold-start-format'
 import {
   TIER_LABELS,
   formatCompactNumber,
@@ -76,12 +123,35 @@ import {
   remainingSeconds,
 } from '~/lib/preview-header-format'
 
-/** How often the strip re-reads the server. Slower than the countdown ticks
- *  (which are local arithmetic): the numbers behind it move on the scale of a
- *  turn, not a second. */
+/** How often the strip re-reads the server when the box is SETTLED — warm with
+ *  time on the clock, or cold with nothing running. Slower than the countdown
+ *  ticks (which are local arithmetic): the numbers behind it move on the scale
+ *  of a turn, not a second. */
 export const POLL_INTERVAL_MS = 15_000
+/**
+ * How often it re-reads the server while the box is mid-transition — a turn is
+ * on it (`starting`/`running`), or this browser has just asked it to wake.
+ *
+ * The whole reason the countdown was never seen is downstream of this number
+ * (see the module docstring). At one interval for every state, the strip learns
+ * the box came up on its next 15-second tick, so the flip a user sends a message
+ * to cause lands up to fifteen seconds after the answer they were watching for
+ * — which on a route whose first call costs minutes is long after they stopped
+ * looking at the header. Three seconds is short enough that the transition
+ * reads as caused by the thing that caused it.
+ *
+ * Cheap enough to do: the payload is two indexed reads and two process-local
+ * readings, and this rate applies only while a turn is actually on the box, so
+ * it is bounded by the turn rather than left running.
+ */
+export const ACTIVE_POLL_INTERVAL_MS = 3_000
 /** How often the countdown re-renders. */
 export const TICK_INTERVAL_MS = 1_000
+
+/** The label the cold indicator swaps to under the pointer, and the accessible
+ *  name of the button it becomes. Exported so a test asserts the string a user
+ *  reads rather than one it chose itself. */
+export const IGNITE_LABEL = 'start RTX PRO 6000'
 
 /** Warm state → the word and the glyph that carry it. The word is not
  *  decoration: a bare coloured dot fails `color-not-only`, and "warm" vs "cold"
@@ -91,10 +161,20 @@ export const TICK_INTERVAL_MS = 1_000
  *  pair, for the reason spelled out on `Metric` below: a colour applied as
  *  `text={props.tone}` is invisible to UnoCSS's extractor and emits no CSS at
  *  all. Written this way the colour cannot be resolved at runtime, so it cannot
- *  silently fail to exist. */
+ *  silently fail to exist.
+ *
+ *  `countdown` says whether this state MEANS the box is up, and is therefore
+ *  entitled to render the seconds the server sent. It lives here rather than as
+ *  a `=== 'warm'` comparison at the render site because that comparison is the
+ *  bug this file shipped with: `verdaWarmth()` computes a countdown for
+ *  `running` too — the state's whole documented promise is that it implies warm
+ *  — and the render site silently dropped it, so the one state a user watching
+ *  their own turn is actually looking at never showed a number. A flag beside
+ *  the word cannot go out of step with the word the way a second literal can. */
 export const WARMTH_PRESENTATION = {
   running: {
     word: 'answering',
+    countdown: true,
     glyph: () => (
       <span class="i-material-symbols-bolt" w="3.5" h="3.5" text="cyan-400" aria-hidden="true" />
     ),
@@ -102,6 +182,7 @@ export const WARMTH_PRESENTATION = {
   },
   starting: {
     word: 'starting',
+    countdown: false,
     glyph: () => (
       <span
         class="i-material-symbols-hourglass-top"
@@ -117,6 +198,7 @@ export const WARMTH_PRESENTATION = {
   },
   warm: {
     word: 'warm',
+    countdown: true,
     glyph: () => (
       <span
         class="i-material-symbols-local-fire-department-outline"
@@ -132,6 +214,7 @@ export const WARMTH_PRESENTATION = {
   },
   cold: {
     word: 'cold',
+    countdown: false,
     glyph: () => (
       <span
         class="i-material-symbols-ac-unit"
@@ -145,6 +228,7 @@ export const WARMTH_PRESENTATION = {
   },
   unknown: {
     word: 'unknown',
+    countdown: false,
     glyph: () => (
       <span
         class="i-material-symbols-help-outline"
@@ -161,6 +245,30 @@ export const WARMTH_PRESENTATION = {
 } as const
 
 type WarmthKey = keyof typeof WARMTH_PRESENTATION
+
+/** The ignition glyph the cold indicator swaps to under the pointer. A flame
+ *  being LIT, deliberately not the flame `warm` already owns — the two states
+ *  sit in the same three pixels and a user has to be able to tell "it is up"
+ *  from "press to bring it up". Literal JSX for `WARMTH_PRESENTATION`'s reason:
+ *  a runtime-resolved colour emits no CSS at all. */
+const igniteGlyph = () => (
+  <span class="i-material-symbols-mode-heat" w="3.5" h="3.5" text="amber-500" aria-hidden="true" />
+)
+
+/** The pending glyph, once the wake is actually out on the wire. Shares the
+ *  chat notice's spinner class (`uno.config.ts`), which carries the
+ *  reduced-motion branch attributify has nowhere to put — so the glyph stops
+ *  rotating for a user who asked for that, and the word beside it still says
+ *  what is happening. */
+const ignitingGlyph = () => (
+  <span
+    class="cold-start-spin i-material-symbols-autorenew"
+    w="3.5"
+    h="3.5"
+    text="amber-500"
+    aria-hidden="true"
+  />
+)
 
 /** One glanceable number. `min-w` on the value is what keeps the row still
  *  while the value changes width.
@@ -205,6 +313,14 @@ export const PreviewHeaderStrip = () => {
   const [receivedAt, setReceivedAt] = createSignal(Date.now())
   const [now, setNow] = createSignal(Date.now())
   const [busy, setBusy] = createSignal(false)
+  /** This browser has a wake request out. Local, not server state: the server's
+   *  own answer stays `cold` for the whole ping (nothing has completed yet), so
+   *  without this the button would sit reading "cold" for the entire minutes-long
+   *  start it had just been asked for. */
+  const [igniting, setIgniting] = createSignal(false)
+  /** Pointer or keyboard focus is on the cold indicator, so it offers the start
+   *  instead of just reporting the state. */
+  const [hovering, setHovering] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   /** Bumped only when the server's answer disagrees with the click — see
    *  `chooseTier`. Used as a `keyed` Show value, so the switch is rebuilt on
@@ -227,12 +343,20 @@ export const PreviewHeaderStrip = () => {
 
   onMount(() => {
     void load()
-    const poll = setInterval(() => void load(), POLL_INTERVAL_MS)
     const tick = setInterval(() => setNow(Date.now()), TICK_INTERVAL_MS)
-    onCleanup(() => {
-      clearInterval(poll)
-      clearInterval(tick)
-    })
+    onCleanup(() => clearInterval(tick))
+  })
+
+  // The poll's RATE is a function of what the last poll said, so the interval
+  // is owned by an effect that TRACKS it rather than armed once at mount: a
+  // timer armed in `onMount` is armed before the first payload has arrived, so
+  // it always gets the settled rate and the strip then waits the full fifteen
+  // seconds before noticing the transition it had already been told about.
+  // Re-running the effect tears the old interval down (`onCleanup` runs before
+  // each re-run as well as on dispose), so exactly one is ever live.
+  createEffect(() => {
+    const poll = setInterval(() => void load(), pollInterval())
+    onCleanup(() => clearInterval(poll))
   })
 
   /** The countdown, ticked locally between polls; `null` when there is nothing
@@ -252,6 +376,64 @@ export const PreviewHeaderStrip = () => {
     if (s.warmth.state === 'warm' && countdown() === 0) return 'cold'
     return s.warmth.state
   })
+
+  /** Is the box mid-transition, so the next poll is worth taking sooner? Both
+   *  transitional states mean a turn is on the box right now; `igniting` is this
+   *  browser having just asked it to wake. Anything else is settled — a warm box
+   *  ticking down, or a cold one nobody is starting — and re-reading that three
+   *  times a minute is enough. */
+  const pollInterval = () =>
+    igniting() || warmthKey() === 'starting' || warmthKey() === 'running'
+      ? ACTIVE_POLL_INTERVAL_MS
+      : POLL_INTERVAL_MS
+
+  /** The cold indicator is the one state a click can do something about, and it
+   *  is only then that it becomes a button (see `igniteBox`).
+   *
+   *  `cold` and not also `unknown`: `unknown` means this process has never seen
+   *  a call, which is exactly as consistent with a box another instance is
+   *  keeping warm as with one that is down. Offering "start it" there would put
+   *  a claim about the box behind a control whose whole state is "we do not
+   *  know" — and the wake ping already runs on `unknown` at the start of a turn,
+   *  so nothing is lost by not offering the button. */
+  const canIgnite = () => warmthKey() === 'cold'
+
+  /** The word in the indicator: what the box is doing, unless this browser is
+   *  mid-wake or offering to start one. */
+  const ignitionWord = () =>
+    igniting()
+      ? COLD_START_HEADLINE
+      : canIgnite() && hovering()
+        ? IGNITE_LABEL
+        : WARMTH_PRESENTATION[warmthKey()].word
+
+  /**
+   * Ask the server to wake the box, then settle on what it says.
+   *
+   * Deliberately thin: everything that makes this safe — one shared ping per
+   * idle period, a click on an already-warm box costing nothing, a failure
+   * naming the box rather than the click — belongs to `ensureVerdaAwake` and is
+   * enforced there for every caller, not re-implemented per button. What is
+   * this component's own is the pending state, because the wake can legitimately
+   * take minutes and a control that looks idle for two minutes reads as broken.
+   */
+  const igniteBox = async () => {
+    if (igniting()) return
+    setIgniting(true)
+    setError(null)
+    try {
+      setState(await igniteVerdaBox())
+      setReceivedAt(Date.now())
+    } catch (err) {
+      // Surfaced, never swallowed: a wake that failed is the difference between
+      // "the next message is slow" and "the next message will not work at all".
+      setError(
+        err instanceof Error ? err.message : 'The self-hosted endpoint could not be started.',
+      )
+    } finally {
+      setIgniting(false)
+    }
+  }
 
   const chooseTier = async (value: string) => {
     if (value !== 'verda' && value !== 'anthropic') return
@@ -389,32 +571,75 @@ export const PreviewHeaderStrip = () => {
 
             {/* ---- Warm state -------------------------------------------- */}
             <Show when={s().verdaAvailable}>
-              <div
+              {/* Two elements, one `data-testid`. A cold box is the one state a
+                  click can act on, so THERE it is a real `<button>` — not a
+                  `<div onClick>` — which is what buys the keyboard, the focus
+                  ring and the role for free. In every other state there is
+                  nothing to press, and a permanently-disabled button would
+                  advertise an affordance that never applies. `Dynamic` rather
+                  than two branches so the contents below are written once. */}
+              <Dynamic
+                component={canIgnite() ? 'button' : 'div'}
+                type={canIgnite() ? 'button' : undefined}
+                onClick={canIgnite() ? () => void igniteBox() : undefined}
+                onMouseEnter={() => setHovering(true)}
+                onMouseLeave={() => setHovering(false)}
+                onFocus={() => setHovering(true)}
+                onBlur={() => setHovering(false)}
+                disabled={canIgnite() ? igniting() : undefined}
+                aria-label={canIgnite() ? IGNITE_LABEL : undefined}
                 flex="~"
                 items="center"
                 gap="1"
-                title={WARMTH_PRESENTATION[warmthKey()].hint}
+                p={canIgnite() ? 'x-1.5 y-0.5' : undefined}
+                m={canIgnite() ? 'x--1.5' : undefined}
+                rounded={canIgnite() ? 'md' : undefined}
+                cursor={canIgnite() ? 'pointer' : undefined}
+                bg={canIgnite() ? 'transparent hover:ui-bg-hover' : undefined}
+                ring={canIgnite() ? '2 transparent focus-visible:ui-accent/40' : undefined}
+                transition="all"
+                title={
+                  igniting()
+                    ? 'Starting the self-hosted endpoint. The first call after it has scaled to zero takes minutes.'
+                    : canIgnite() && hovering()
+                      ? 'Start the self-hosted endpoint now, so your next message does not pay the cold start.'
+                      : WARMTH_PRESENTATION[warmthKey()].hint
+                }
                 data-testid="verda-warmth"
               >
-                {WARMTH_PRESENTATION[warmthKey()].glyph()}
+                <Show when={!igniting()} fallback={ignitingGlyph()}>
+                  <Show
+                    when={canIgnite() && hovering()}
+                    fallback={WARMTH_PRESENTATION[warmthKey()].glyph()}
+                  >
+                    {igniteGlyph()}
+                  </Show>
+                </Show>
                 {/* The WORD is themed text, not the glyph's hue: `amber-500` on
                     the light ground is around 2:1, and the state has to be
                     readable in both. The hue rides the glyph beside it, which
                     carries no information of its own (`color-not-only`). */}
                 <span text="xs ui-text-primary" aria-hidden="true">
-                  {WARMTH_PRESENTATION[warmthKey()].word}
+                  {ignitionWord()}
                 </span>
-                <Show when={warmthKey() === 'warm' && countdown() !== null}>
+                {/* Whether a state gets a number is the state's own property, not
+                    a comparison written here — see `WARMTH_PRESENTATION`. This
+                    line read `warmthKey() === 'warm'` and that is the whole
+                    countdown bug: `running` carries one and never rendered it. */}
+                <Show when={WARMTH_PRESENTATION[warmthKey()].countdown && countdown() !== null}>
                   <span text="xs ui-text-tertiary right" font="mono" min-w="9" aria-hidden="true">
                     {formatCountdown(countdown() ?? 0)}
                   </span>
                 </Show>
                 {/* The only announced part: the state word, which changes rarely.
-                  The countdown above is aria-hidden on purpose. */}
+                  The countdown above is aria-hidden on purpose. The hover swap is
+                  NOT announced either — the button already has its accessible
+                  name from `aria-label`, and a live region that re-read it on
+                  every pointer crossing would be noise. */}
                 <span sr-only aria-live="polite">
                   Self-hosted endpoint {WARMTH_PRESENTATION[warmthKey()].word}
                 </span>
-              </div>
+              </Dynamic>
             </Show>
 
             {/* ---- Metrics ----------------------------------------------- */}

@@ -21,13 +21,16 @@ beforeAll(() => installDomStubs())
 
 const getPreviewHeaderState = vi.fn()
 const setPreviewInferenceTier = vi.fn()
+const igniteVerdaBox = vi.fn()
 vi.mock('~/lib/harness-client/preview-header.server', () => ({
   getPreviewHeaderState: () => getPreviewHeaderState(),
   setPreviewInferenceTier: (tier: string) => setPreviewInferenceTier(tier),
+  igniteVerdaBox: () => igniteVerdaBox(),
 }))
 
 const { render, waitFor, fireEvent } = await import('@solidjs/testing-library')
-const { PreviewHeaderStrip } = await import('../../../components/ark-ui/PreviewHeaderStrip')
+const { PreviewHeaderStrip, IGNITE_LABEL } =
+  await import('../../../components/ark-ui/PreviewHeaderStrip')
 
 type State = Awaited<
   ReturnType<typeof import('~/lib/harness-client/preview-header.server').getPreviewHeaderState>
@@ -50,7 +53,17 @@ beforeEach(() => {
   vi.clearAllMocks()
   getPreviewHeaderState.mockResolvedValue(state())
   setPreviewInferenceTier.mockImplementation(async (tier: string) => state({ tier } as never))
+  igniteVerdaBox.mockResolvedValue(
+    state({ warmth: { state: 'warm', secondsUntilScaledown: 300, scaledownSeconds: 300 } }),
+  )
 })
+
+const cold = () =>
+  state({ warmth: { state: 'cold', secondsUntilScaledown: null, scaledownSeconds: 300 } })
+
+/** The warm indicator, whichever element it currently is. */
+const indicator = (container: HTMLElement) =>
+  container.querySelector('[data-testid="verda-warmth"]') as HTMLElement
 
 /** Render and wait for the first poll to land. */
 async function mounted(container: HTMLElement) {
@@ -234,6 +247,60 @@ describe('the warm indicator', () => {
     }
   })
 
+  it('shows the countdown while a turn is ANSWERING on the box, not only between turns', async () => {
+    // THE COUNTDOWN BUG. `verdaWarmth()` computes `secondsUntilScaledown` for
+    // `running` — the state's documented promise is that it implies warm — and
+    // the render site gated the number on `=== 'warm'`, so it was computed,
+    // serialized to the browser and dropped. `running` is also the state a user
+    // is in for the whole of their own turn, which on a route whose first call
+    // costs minutes is most of the time anyone looks at this strip: hence
+    // "never once seen".
+    getPreviewHeaderState.mockResolvedValue(
+      state({ warmth: { state: 'running', secondsUntilScaledown: 300, scaledownSeconds: 300 } }),
+    )
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await waitFor(() => expect(container.textContent).toContain('answering'))
+
+    expect(container.textContent).toContain('5:00')
+  })
+
+  it('polls faster while the box is mid-transition than when it has settled', async () => {
+    // The other half of "never seen": one 15s interval for every state meant the
+    // cold -> warm flip a user's own message causes landed up to fifteen seconds
+    // after the answer they were watching for.
+    vi.useFakeTimers()
+    try {
+      getPreviewHeaderState.mockResolvedValue(
+        state({
+          warmth: { state: 'starting', secondsUntilScaledown: null, scaledownSeconds: 300 },
+        }),
+      )
+      const { container } = render(() => <PreviewHeaderStrip />)
+      await vi.waitFor(() => expect(container.textContent).toContain('starting'))
+      const afterMount = getPreviewHeaderState.mock.calls.length
+
+      // Well inside the settled interval, and past several active ones.
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(getPreviewHeaderState.mock.calls.length).toBeGreaterThan(afterMount)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does NOT poll at the active rate once the box has settled', async () => {
+    vi.useFakeTimers()
+    try {
+      const { container } = render(() => <PreviewHeaderStrip />)
+      await vi.waitFor(() => expect(container.textContent).toContain('warm'))
+      const afterMount = getPreviewHeaderState.mock.calls.length
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(getPreviewHeaderState.mock.calls.length).toBe(afterMount)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('is absent entirely when there is no self-hosted endpoint to be warm', async () => {
     getPreviewHeaderState.mockResolvedValue(state({ tier: 'anthropic', verdaAvailable: false }))
     const { container } = render(() => <PreviewHeaderStrip />)
@@ -371,5 +438,113 @@ describe('degradation', () => {
     await waitFor(() => expect(container.textContent).toContain('stale'))
     // The numbers are still there — they were true a moment ago.
     expect(container.textContent).toContain('12.5k')
+  })
+})
+
+describe('starting the box from the header', () => {
+  it('offers the start under the pointer while cold, and reports the state otherwise', async () => {
+    getPreviewHeaderState.mockResolvedValue(cold())
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await waitFor(() => expect(container.textContent).toContain('cold'))
+
+    // At rest it still says what the box IS — the affordance must not displace
+    // the state a user came to read.
+    expect(container.textContent).not.toContain(IGNITE_LABEL)
+
+    fireEvent.mouseEnter(indicator(container))
+    await waitFor(() => expect(container.textContent).toContain(IGNITE_LABEL))
+
+    fireEvent.mouseLeave(indicator(container))
+    await waitFor(() => expect(container.textContent).not.toContain(IGNITE_LABEL))
+  })
+
+  it('is a real button while cold, named for the ACTION rather than the state', async () => {
+    // A clickable div would be invisible to the keyboard, and naming it "cold"
+    // would announce a state where a control was pressed.
+    getPreviewHeaderState.mockResolvedValue(cold())
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await waitFor(() => expect(container.textContent).toContain('cold'))
+
+    const el = indicator(container)
+    expect(el.tagName).toBe('BUTTON')
+    expect(el.getAttribute('aria-label')).toBe(IGNITE_LABEL)
+  })
+
+  it('is NOT a button when the box is already up — there is nothing to press', async () => {
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await waitFor(() => expect(container.textContent).toContain('warm'))
+
+    expect(indicator(container).tagName).not.toBe('BUTTON')
+    fireEvent.mouseEnter(indicator(container))
+    await waitFor(() => expect(container.textContent).toContain('warm'))
+    expect(container.textContent).not.toContain(IGNITE_LABEL)
+  })
+
+  it('clicking starts the box and settles on what the server then says', async () => {
+    getPreviewHeaderState.mockResolvedValue(cold())
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await waitFor(() => expect(container.textContent).toContain('cold'))
+
+    fireEvent.click(indicator(container))
+
+    await waitFor(() => expect(container.textContent).toContain('warm'))
+    expect(igniteVerdaBox).toHaveBeenCalledTimes(1)
+    // The countdown the server returned is on screen — the whole point.
+    expect(container.textContent).toContain('5:00')
+  })
+
+  it('sends ONE wake however many times it is clicked', async () => {
+    // The dedupe that matters is `ensureVerdaAwake`'s, on the server; this is
+    // the client half — a second click while the first is out must not open a
+    // second request for the same box.
+    getPreviewHeaderState.mockResolvedValue(cold())
+    let release: (v: unknown) => void = () => {}
+    igniteVerdaBox.mockReturnValue(new Promise((r) => (release = r)))
+
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await waitFor(() => expect(container.textContent).toContain('cold'))
+
+    fireEvent.click(indicator(container))
+    fireEvent.click(indicator(container))
+    fireEvent.click(indicator(container))
+
+    expect(igniteVerdaBox).toHaveBeenCalledTimes(1)
+    release(state({ warmth: { state: 'warm', secondsUntilScaledown: 300, scaledownSeconds: 300 } }))
+    await waitFor(() => expect(container.textContent).toContain('warm'))
+  })
+
+  it('says it is starting while the wake is out, rather than still reading "cold"', async () => {
+    // The server answers `cold` for the whole ping — nothing has completed yet —
+    // so without a local pending state the button a user just pressed would sit
+    // reading "cold" for the minutes the start actually takes.
+    getPreviewHeaderState.mockResolvedValue(cold())
+    let release: (v: unknown) => void = () => {}
+    igniteVerdaBox.mockReturnValue(new Promise((r) => (release = r)))
+
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await waitFor(() => expect(container.textContent).toContain('cold'))
+    fireEvent.click(indicator(container))
+
+    await waitFor(() => expect(container.textContent).toContain('starting GPU'))
+    expect(container.querySelector('.cold-start-spin'), 'no spinner glyph').toBeTruthy()
+
+    release(state({ warmth: { state: 'warm', secondsUntilScaledown: 300, scaledownSeconds: 300 } }))
+    await waitFor(() => expect(container.textContent).toContain('warm'))
+  })
+
+  it('surfaces a wake that failed instead of quietly going back to "cold"', async () => {
+    // A box that did not come up is the difference between "your next message is
+    // slow" and "your next message will not work", and the strip is the only
+    // place that click can report from.
+    getPreviewHeaderState.mockResolvedValue(cold())
+    igniteVerdaBox.mockRejectedValue(new Error('the private inference box did not wake'))
+
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await waitFor(() => expect(container.textContent).toContain('cold'))
+    fireEvent.click(indicator(container))
+
+    await waitFor(() => expect(container.textContent).toContain('stale'))
+    const banner = container.querySelector('[role="status"]')!
+    expect(banner.getAttribute('title')).toContain('did not wake')
   })
 })

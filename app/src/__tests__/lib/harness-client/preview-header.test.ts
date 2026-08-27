@@ -65,9 +65,15 @@ vi.mock('../../../lib/metrics/preview-counters.server', () => ({
 
 import {
   getPreviewHeaderState,
+  igniteVerdaBox,
   setPreviewInferenceTier,
 } from '../../../lib/harness-client/preview-header.server'
 import { noteCallLatency, resetCallLatency } from '../../../lib/metrics/call-latency.server'
+import { resetVerdaWake, VERDA_WAKE_FAILED } from '../../../lib/inference/wake.server'
+import {
+  noteVerdaCallCompleted,
+  resetVerdaActivity,
+} from '../../../lib/inference/verda-activity.server'
 
 const ENV_KEYS = [
   'VERDA_INFERENCE_ENDPOINT',
@@ -96,9 +102,25 @@ beforeEach(() => {
   getAuthenticatedUser.mockResolvedValue({ id: 'user-1', email: 'a@example.invalid' })
   getStoredInferenceTier.mockResolvedValue(null)
   resetCallLatency()
+  resetVerdaWake()
+  resetVerdaActivity()
+  // The wake ping is a hand-rolled `fetch`; stubbing it is what keeps this file
+  // hermetic while still exercising the real `ensureVerdaAwake`, which is the
+  // whole point of the cases below — a mock of that function would prove the
+  // action calls SOMETHING, not that it joins the dedupe every other caller uses.
+  fetchMock = vi.fn(
+    async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: 'x' } }] }), { status: 200 }),
+  )
+  vi.stubGlobal('fetch', fetchMock)
 })
 
+let fetchMock: ReturnType<typeof vi.fn>
+
 afterEach(() => {
+  vi.unstubAllGlobals()
+  resetVerdaWake()
+  resetVerdaActivity()
   for (const k of ENV_KEYS) {
     if (saved[k] === undefined) delete process.env[k]
     else process.env[k] = saved[k]
@@ -224,5 +246,90 @@ describe('setPreviewInferenceTier', () => {
     await expect(setPreviewInferenceTier('anthropic')).resolves.toMatchObject({
       tier: 'anthropic',
     })
+  })
+})
+
+describe('igniteVerdaBox', () => {
+  it('authenticates before it starts anything', async () => {
+    // Same gate as the rest of the module (`SD-13`), and it matters more here
+    // than on a read: this export is the one that spends GPU seconds.
+    configureVerda()
+    getAuthenticatedUser.mockRejectedValue(new Error('nope'))
+
+    await expect(igniteVerdaBox()).rejects.toThrow('nope')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('takes no owner id, so a caller cannot start the box as someone else', () => {
+    // The whole module's rule. Pinned by arity rather than by reading, because
+    // an added parameter is exactly the change that would slip past a reviewer.
+    expect(igniteVerdaBox.length).toBe(0)
+  })
+
+  it('refuses when there is no endpoint, instead of fetching a malformed URL', async () => {
+    await expect(igniteVerdaBox()).rejects.toThrow(/not configured/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('wakes a cold box and answers with the state it is now in', async () => {
+    configureVerda()
+
+    const state = await igniteVerdaBox()
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // The ping stamps the warm clock, so the strip's next render has a number to
+    // count down — which is the point of the button.
+    expect(state.warmth.state).toBe('warm')
+    expect(state.warmth.secondsUntilScaledown).toBeGreaterThan(0)
+  })
+
+  it('JOINS an in-flight wake rather than starting a second one', async () => {
+    // The property the owner asked for by name. The deployment is a single
+    // replica where concurrency is queueing, so a click that opened its own ping
+    // beside a turn's would make both wait two cold starts. It holds because
+    // this action calls the SAME `ensureVerdaAwake` the turn runner does; a
+    // second wake path would not inherit it.
+    configureVerda()
+    let release: () => void = () => {}
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>(
+          (resolve) => (release = () => resolve(new Response('{}', { status: 200 }))),
+        ),
+    )
+
+    const clicks = [igniteVerdaBox(), igniteVerdaBox(), igniteVerdaBox()]
+    // Drain the microtask queue completely rather than tick once: each click
+    // awaits its own gate before reaching the wake, so a single tick would leave
+    // two of them short of the line this test is about and pass for the wrong
+    // reason. After this, all three have had every chance to send a request.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    release()
+    await Promise.all(clicks)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('is a no-op on a box that is already up', async () => {
+    // Clicking a warm indicator must not bill GPU seconds. `ensureVerdaAwake`
+    // returns on `verdaProvenWarm` before touching the network.
+    configureVerda()
+    noteVerdaCallCompleted()
+
+    const state = await igniteVerdaBox()
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(state.warmth.state).toBe('warm')
+  })
+
+  it('REJECTS when the box does not come up, rather than reporting cold', async () => {
+    // A wake that failed and a box that is merely cold look identical in the
+    // returned state, so the failure has to travel as a rejection or the strip
+    // would settle back to "cold" and say nothing happened.
+    configureVerda()
+    fetchMock.mockResolvedValue(new Response('nope', { status: 503 }))
+
+    await expect(igniteVerdaBox()).rejects.toThrow(VERDA_WAKE_FAILED)
   })
 })

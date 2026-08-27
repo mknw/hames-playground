@@ -144,10 +144,19 @@ describe('resolveConversationTier', () => {
     // private tier ran its next turn on Anthropic, while its sidebar glyph
     // still said Private. The seed is only ever consulted when the column has
     // nothing, so losing it here costs nothing at all.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     getConversationInferenceTier.mockResolvedValue('verda')
     getStoredInferenceTier.mockRejectedValue(new Error('user_prefs schema is unavailable'))
 
     await expect(resolveConversationTier('conv-1', 'user-1')).resolves.toBe('verda')
+
+    // `allSettled` is also what makes the failure invisible — the caller's
+    // `.catch()` can no longer fire — so the resolver says which half it lost.
+    // Exactly one line, because the half that DID answer must not be reported
+    // as a failure too.
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]?.[0]).toContain('last-used inference tier for user-1')
+    warn.mockRestore()
   })
 
   it('falls to the seed when the CONVERSATION read fails, rather than rejecting', async () => {
@@ -155,10 +164,17 @@ describe('resolveConversationTier', () => {
     // visible: there is no recorded tier to keep, so the user's last-used one
     // is the nearest answer left. Still a fall-back — a nearer one than the
     // caller's env flag.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     getConversationInferenceTier.mockRejectedValue(new Error('conversations is unavailable'))
     getStoredInferenceTier.mockResolvedValue('anthropic')
 
     await expect(resolveConversationTier('conv-1', 'user-1')).resolves.toBe('anthropic')
+
+    // The half worth naming: this is the read whose failure routes a PINNED
+    // thread somewhere else while the sidebar glyph still shows the column.
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]?.[0]).toContain("conversation conv-1's own inference tier")
+    warn.mockRestore()
   })
 
   it('falls to the deployment default when BOTH reads fail', async () => {
@@ -167,12 +183,22 @@ describe('resolveConversationTier', () => {
     // pre-existing fall-open ABOVE this function — a rejection reaching
     // `turn.server.ts`'s `activeInferenceTier()` — is #303 and is deliberately
     // not touched here; this pins that the rejection no longer happens.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     getConversationInferenceTier.mockRejectedValue(new Error('conversations is unavailable'))
     getStoredInferenceTier.mockRejectedValue(new Error('user_prefs is unavailable'))
 
     await expect(resolveConversationTier('conv-1', 'user-1')).resolves.toBe('anthropic')
+
+    // Both halves reported, one line each, so the log distinguishes a total
+    // read failure from either single one.
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      expect.stringContaining("conversation conv-1's own inference tier"),
+      expect.stringContaining('last-used inference tier for user-1'),
+    ])
+
     configureVerda()
     await expect(resolveConversationTier('conv-1', 'user-1')).resolves.toBe('verda')
+    warn.mockRestore()
   })
 })
 

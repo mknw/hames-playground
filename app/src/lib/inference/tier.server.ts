@@ -109,6 +109,27 @@ export async function resolveConversationTier(
     getConversationInferenceTier(sessionId, userId),
     getStoredInferenceTier(userId),
   ])
+  // One line per rejected half, because `allSettled` is what makes each failure
+  // survivable and also what makes it INVISIBLE: it is now the only place either
+  // read's failure is observable at all, the caller's `.catch()`
+  // (`turn.server.ts`) no longer being reachable. Which half failed is the whole
+  // content of the diagnostic — the two fall back in different directions, and
+  // the column's failure is the one that routes a PINNED thread on something
+  // else while its sidebar glyph still shows the column that was not read.
+  // Warn and continue: the policy above is deliberate, so this reports the
+  // degradation rather than changing it.
+  if (stored.status === 'rejected') {
+    console.warn(
+      `[tier] could not read conversation ${sessionId}'s own inference tier; resolving without it:`,
+      stored.reason,
+    )
+  }
+  if (seed.status === 'rejected') {
+    console.warn(
+      `[tier] could not read the last-used inference tier for ${userId}; resolving without it:`,
+      seed.reason,
+    )
+  }
   return resolveTier(
     stored.status === 'fulfilled' ? stored.value : null,
     seed.status === 'fulfilled' ? seed.value : null,

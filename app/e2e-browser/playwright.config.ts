@@ -51,7 +51,24 @@ export default defineConfig({
 
   globalSetup: fileURLToPath(new URL('./global-setup.ts', import.meta.url)),
 
-  reporter: process.env.CI ? [['list']] : [['list'], ['html', { open: 'never' }]],
+  // The HTML report's folder is pinned INSIDE `.runtime/`, which is gitignored
+  // (and which `eslint` therefore never walks). Left at its default,
+  // `playwright test` writes `app/playwright-report/` — a directory nobody had
+  // declared, holding Playwright's own minified vendor bundles, which `pnpm lint`
+  // then read as source and reported ~200 errors in. An artifact directory that
+  // reddens the lint gate of the repo it sits in is not an artifact directory.
+  reporter: process.env.CI
+    ? [['list']]
+    : [
+        ['list'],
+        [
+          'html',
+          {
+            open: 'never',
+            outputFolder: fileURLToPath(new URL('./.runtime/report', import.meta.url)),
+          },
+        ],
+      ],
 
   use: {
     baseURL: APP_URL,
@@ -62,6 +79,24 @@ export default defineConfig({
   },
 
   outputDir: fileURLToPath(new URL('./.runtime/results', import.meta.url)),
+
+  /**
+   * Where the visual-regression baselines live (scenario 7).
+   *
+   * COMMITTED, unlike everything else this suite writes — `.runtime/` is
+   * gitignored and these are not: a baseline nobody can diff against is not a
+   * baseline. They go in `baselines/` rather than beside the scenario so a
+   * `scenarios/` listing stays readable.
+   *
+   * `{platform}` is load-bearing. Font rasterisation and subpixel antialiasing
+   * differ between macOS and Linux, so one image cannot serve both; with the
+   * platform in the name each grows its own set on first run there instead of the
+   * two overwriting each other. `{arg}` is the name the scenario passes, which
+   * already carries the surface and the theme.
+   */
+  snapshotPathTemplate: fileURLToPath(
+    new URL('./baselines/{arg}-{platform}{ext}', import.meta.url),
+  ),
 
   projects: [
     {

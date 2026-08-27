@@ -29,7 +29,7 @@ export default function Nav() {
   const onAuthRoute = () => location.pathname.startsWith('/auth')
 
   return (
-    <nav bg="ui-bg-secondary" border="b ui-border-primary">
+    <nav data-testid="app-header-strip" bg="ui-bg-secondary" border="b ui-border-primary">
       <ul text="ui-text-primary" p="3" container flex items-center>
         <li flex items-center>
           <Show when={!onAuthRoute()}>

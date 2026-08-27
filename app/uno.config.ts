@@ -41,6 +41,31 @@ export default defineConfig({
     presetAttributify(),
     presetWind4(),
     presetWebFonts({
+      /**
+       * The default budget for this fetch is 2000ms (`@unocss/preset-web-fonts`,
+       * `timeouts.failure`), and five Google families do not reliably arrive in
+       * it. Missing it is not a cosmetic problem — it has two failure modes, and
+       * the preset picks between them on `process.env.CI`:
+       *
+       *  - **CI unset**: the failure is SWALLOWED. The dev server boots with no
+       *    `@font-face` at all and every glyph renders in the fallback stack, so
+       *    all six of `e2e-browser/`'s committed screenshot baselines go red with
+       *    a font-metrics diff (measured: 212px on the header strip, 429 on the
+       *    sidebar, 8412 on the chat view) that looks exactly like a real visual
+       *    regression and is caused by the network.
+       *  - **CI set**: it THROWS, uncaught, and `vinxi dev` exits 1 before
+       *    serving. `pnpm release:check` spawns every layer with `CI=1`, so its
+       *    browser layer could not run at all.
+       *
+       * Measured 2026-08-27: at the 2s default the fetch failed on 5 consecutive
+       * boots and the baseline was red on all five; at 30s it succeeded and the
+       * baseline was green. Raising the budget removes the flake but not the
+       * DEPENDENCY — layer 3 still needs fonts.googleapis.com on every boot,
+       * which is the part `docs/testing/pyramid.md` calls hermetic. Self-hosting
+       * these five families is the fix that makes that claim true; it is a bigger
+       * change than this one and is not made here.
+       */
+      timeouts: { warning: 2000, failure: 30_000 },
       provider: 'google',
       fonts: {
         sans: 'Inter',

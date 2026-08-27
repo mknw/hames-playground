@@ -194,6 +194,12 @@ describe('the browser e2e suite is not reachable from CI', () => {
     // `playwright install` step added for something else would make the suite
     // one `pnpm` invocation away from running.
     expect(ci).not.toMatch(/playwright/i)
+    // `pnpm release:check` runs this suite as its third layer, and it does so
+    // from `scripts/release-check.ts` rather than from its own script BODY — so
+    // the package-script scan below cannot see it, and adding `release:check` to
+    // a CI job would run the browser suite past every other assertion in this
+    // file. Named here, where the question is "what does CI invoke".
+    expect(ci).not.toMatch(/release:check/)
   })
 
   it('no other package script pulls it in', () => {

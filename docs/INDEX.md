@@ -52,6 +52,16 @@ Records: [0001](adr/0001-anthropic-only-default-chains.md) Anthropic-only defaul
 
 ---
 
+## Testing (`docs/testing/`)
+
+| Document                                 | Description                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [testing/pyramid.md](testing/pyramid.md) | **The four layers and the one command.** What each layer sees that the one below cannot, `pnpm release:check` (order, stop-at-first-failure, the go/no-go report and its "live steps still owed" section), why the three hermetic suites have three databases and three dev-bypass identities, and the #280 determinism table |
+
+Each layer's own README stays the authority on its coverage: [`app/e2e/README.md`](../app/e2e/README.md) · [`app/e2e-browser/README.md`](../app/e2e-browser/README.md) · [`app/evals/README.md`](../app/evals/README.md).
+
+---
+
 ## Architecture Documentation
 
 ### Harness Patterns Framework

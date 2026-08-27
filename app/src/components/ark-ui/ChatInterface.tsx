@@ -517,7 +517,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   }
 
   return (
-    <div flex="~ col" h="full" bg="ui-bg-secondary">
+    <div data-testid="chat-column" flex="~ col" h="full" bg="ui-bg-secondary">
       {/* Agent Selector Header */}
       <div
         flex="~ items-center gap-4"

@@ -34,15 +34,46 @@
  * | ------------ | ------------------------------------------------------------- |
  * | `cold-start` | nothing at all for N ms, then a normal 200                    |
  * |              | (on the private tier the WAKE PING is what absorbs this)      |
+ * | `hold`       | nothing at all until the TEST says so, then a normal 200      |
  * | `status`     | an immediate 4xx/5xx with an OpenAI-shaped error body         |
  * | `mid-stream` | 200, headers, half the body, then the connection destroyed    |
  *
- * Three, and every one of them is armed by a scenario. A `trickle` shape (a
+ * Four, and every one of them is armed by a scenario. A `trickle` shape (a
  * complete body delivered in small delayed chunks) was here and is gone: it
  * worked, nothing asserted on it, and a fault table advertising an affordance
  * no scenario uses reads as coverage that does not exist. `cold-start` already
  * covers "slow" and `mid-stream` covers "truncated"; add it back when an
  * assertion needs the difference.
+ *
+ * ## `hold` is `cold-start` with the clock taken out (#280)
+ *
+ * `cold-start` models the real deployment: a duration. That makes it the right
+ * shape for "does anything in the stack time out", which is what
+ * `scenarios/04-cold-start-survival` asks. It is the WRONG shape for "assert
+ * something while the turn is provably still running", because then the duration
+ * is a deadline the assertions race — and a scenario that loses that race is
+ * green today and red on a loaded machine. Both browser-suite flakes on #280
+ * were exactly that:
+ *
+ *   - `02-cold-start-spinner` asserted the notice had RETRACTED and Stop was
+ *     still visible. Both are true only inside a window bounded by the remaining
+ *     delay.
+ *   - `04-mid-turn-reload` reloaded the tab and then asserted the reopened
+ *     thread held ONE reply. True only while turn 2 had not yet finished — and
+ *     a reload plus a hydrate is exactly the kind of step whose cost varies with
+ *     the machine.
+ *
+ * `hold` parks the matching request and answers nothing until the test releases
+ * it. There is no window: the turn cannot advance past a held request, so
+ * "provably still running" stops being a race and becomes a fact the test
+ * established. {@link FakeLlm.held} is how a scenario waits for the park
+ * (evidence the request ARRIVED and is still in flight — strictly more than
+ * `calls` can say, since a call is recorded only once it has been answered), and
+ * {@link FakeLlm.release} is how it lets the turn continue.
+ *
+ * A held request still carries a fuse ({@link Fault} `maxHoldMs`, default
+ * {@link DEFAULT_MAX_HOLD_MS}) so a scenario that forgets to release fails on
+ * its own assertion rather than hanging the whole run behind an idle socket.
  *
  * A fault carries an optional `model` filter so a scenario can make ONE tier
  * cold while the other stays warm — which is the only way to tell "the app
@@ -137,6 +168,10 @@ export type Fault =
   /** Withhold the response for `ms`, then answer normally. Models the
    *  scale-to-zero endpoint's multi-minute first call. */
   | ({ kind: 'cold-start'; ms: number } & FaultFilters)
+  /** Withhold the response until {@link FakeLlm.release} is called (or the fuse
+   *  burns), then answer normally. The deterministic sibling of `cold-start` —
+   *  see the header for which question each one answers. */
+  | ({ kind: 'hold'; maxHoldMs?: number } & FaultFilters)
   /** Answer with an HTTP error. `400` is what vLLM returns for a malformed or
    *  unsupported request — the shape that killed `ActorController` retries on
    *  the real deployment before #263's system-message fix. */
@@ -151,6 +186,29 @@ interface ArmedFault {
   remaining: number
 }
 
+/**
+ * How long a `hold` parks a request when the scenario names no `maxHoldMs`.
+ *
+ * A FUSE, not a duration to design around: nothing should ever reach it, and a
+ * scenario that does has forgotten to release. 60s is under Playwright's 120s
+ * per-test timeout, so the release-less scenario fails on its own assertion —
+ * which names the missing release — rather than on a runner timeout, and the run
+ * that follows it is not left behind an idle socket.
+ */
+export const DEFAULT_MAX_HOLD_MS = 60_000
+
+/** One request currently parked by a `hold` fault. What a scenario reads to
+ *  learn that a call ARRIVED and has not been answered — which `calls` cannot
+ *  say, because a call is recorded only once the fake has answered it. */
+export interface HeldRequest {
+  /** Wall-clock ms since the fake started, i.e. when it was parked. */
+  at: number
+  model: string
+  fn: BamlFunctionName | null
+  /** True for the wake ping (`isWakePing`), which is not a BAML call. */
+  wake: boolean
+}
+
 // ============================================================================
 // The server
 // ============================================================================
@@ -161,9 +219,21 @@ export interface FakeLlm {
   readonly port: number
   /** Every request served, oldest first. */
   readonly calls: readonly FakeCall[]
+  /** Requests currently parked by a `hold` fault, oldest first. Empty unless a
+   *  `hold` is armed. */
+  readonly held: readonly HeldRequest[]
   /** Arm a fault. Replaces any previously armed one. */
   arm(fault: Fault): void
-  /** Disarm faults and clear recorded calls. Called between scenarios. */
+  /** Stop applying the armed fault to NEW requests, leaving recorded calls and
+   *  already-parked requests alone. What a scenario calls when it wants the rest
+   *  of a turn to run unimpeded but still needs the calls it has recorded — which
+   *  `reset()` would throw away. */
+  disarm(): void
+  /** Let parked requests answer, oldest first. `count` omitted releases all.
+   *  Returns how many were actually released. */
+  release(count?: number): number
+  /** Disarm faults, release everything parked, and clear recorded calls. Called
+   *  between scenarios. */
   reset(): void
   /** Stop accepting connections entirely — the "endpoint is down" case, which
    *  a status code cannot model because a refused TCP connect fails in a
@@ -178,6 +248,10 @@ export interface FakeLlm {
 
 export async function startFakeLlm(port = 0): Promise<FakeLlm> {
   const calls: FakeCall[] = []
+  /** Parked requests, oldest first, each with the resolver that frees it and the
+   *  fuse timer that frees it anyway. Kept as one list so `release()` is FIFO —
+   *  a scenario releasing one request means "the one that has been waiting". */
+  const parked: Array<{ request: HeldRequest; free: () => void }> = []
   let armed: ArmedFault | null = null
   let server: http.Server | null = null
   let boundPort = port
@@ -289,6 +363,14 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       delayedMs = fault.ms
       await sleep(fault.ms)
     }
+    if (fault?.kind === 'hold') {
+      // Recorded as `at` on the parked entry, so a scenario can see the park
+      // happen; the CALL record below still gets the real withheld duration, so
+      // `delayedMs > 0` means the same thing it does for a cold start.
+      const parkedAt = Date.now()
+      await park({ at: parkedAt - startedAt, model, fn, wake }, fault.maxHoldMs)
+      delayedMs = Date.now() - parkedAt
+    }
 
     // `fn` is non-null for everything but the wake ping, which the `!wake` guard
     // above let through — it wants a token, not a parseable envelope.
@@ -307,6 +389,37 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     record(wake ? 'wake' : 'ok', delayedMs)
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(payload)
+  }
+
+  /**
+   * Hold this request until something frees it: {@link FakeLlm.release},
+   * `reset()`, or the fuse.
+   *
+   * The fuse resolves rather than rejecting: a scenario that forgot to release
+   * should fail on the assertion it actually wrote, and an answered request
+   * leaves the app in a state a scenario can still describe. A rejection here
+   * would surface three layers away as a socket error and read like an app bug.
+   */
+  function park(request: HeldRequest, maxHoldMs = DEFAULT_MAX_HOLD_MS): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const entry = {
+        request,
+        free: () => {
+          clearTimeout(fuse)
+          const index = parked.findIndex((p) => p === entry)
+          if (index >= 0) parked.splice(index, 1)
+          resolve()
+        },
+      }
+      const fuse = setTimeout(() => {
+        console.warn(
+          `[fake-llm] a held ${request.fn ?? 'wake'} request burned its ${maxHoldMs}ms fuse and ` +
+            'was answered. A scenario armed `hold` and never released it.',
+        )
+        entry.free()
+      }, maxHoldMs)
+      parked.push(entry)
+    })
   }
 
   function takeFault(model: string, wake: boolean): Fault | null {
@@ -341,11 +454,27 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     get calls() {
       return calls
     },
+    get held() {
+      return parked.map((p) => p.request)
+    },
     arm(fault: Fault) {
       armed = { fault, remaining: fault.times ?? Number.MAX_SAFE_INTEGER }
     },
+    disarm() {
+      armed = null
+    },
+    release(count?: number) {
+      // A snapshot first: `free()` splices the list it is iterating.
+      const freeing = parked.slice(0, count ?? parked.length)
+      for (const entry of freeing) entry.free()
+      return freeing.length
+    },
     reset() {
       armed = null
+      // Release BEFORE clearing the log, and always: a parked request left
+      // behind by a failed scenario holds a socket the dev server is waiting on,
+      // and the next scenario's first turn would inherit that wait.
+      for (const entry of parked.slice()) entry.free()
       calls.length = 0
     },
     async goDown() {

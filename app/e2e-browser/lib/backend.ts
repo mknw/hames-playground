@@ -26,8 +26,16 @@
  * address for the whole run. So `fake.arm()` — a plain method call in
  * `app/e2e/` — becomes an HTTP call from the worker. The surface is small on
  * purpose: arm a fault, take the endpoint down, bring it back, read what was
- * served, reset. Anything a scenario wants to assert about the wire it asserts
- * on `/calls`, which is the same `FakeCall` records the app-path suite reads.
+ * served, read what is PARKED, release it, reset. Anything a scenario wants to
+ * assert about the wire it asserts on `/calls`, which is the same `FakeCall`
+ * records the app-path suite reads.
+ *
+ * `/held` + `/release` are the two that only this layer needed (#280). A browser
+ * scenario asserting "the turn is still running" cannot do it with a duration —
+ * the assertion races the duration, and the loser is whichever machine is
+ * busier. With the request PARKED the turn cannot advance, so the claim stops
+ * being a race. See `e2e/lib/fake-llm.ts`'s header for the two flakes that shape
+ * came from.
  */
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -65,9 +73,18 @@ export async function startBackend(): Promise<Backend> {
         llm.reset()
         gateway.reset()
         return json(res, 200, { ok: true })
+      case 'GET /held':
+        return json(res, 200, { held: llm.held })
       case 'POST /arm':
         llm.arm(body as unknown as Fault)
         return json(res, 200, { ok: true })
+      case 'POST /disarm':
+        llm.disarm()
+        return json(res, 200, { ok: true })
+      case 'POST /release': {
+        const { count } = body as { count?: number }
+        return json(res, 200, { released: llm.release(count) })
+      }
       case 'POST /down':
         await llm.goDown()
         return json(res, 200, { ok: true })

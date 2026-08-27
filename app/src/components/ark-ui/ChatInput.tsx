@@ -91,6 +91,18 @@ export const ChatInput = (props: ChatInputProps) => {
           <span>{props.blockedMessage ?? DEFAULT_BLOCKED_MESSAGE}</span>
         </div>
       </Show>
+      {/* `aria-label` is `form-labels` in the a11y checklist, and axe's
+          `label-title-only` — which the browser suite's accessibility pass
+          recorded as open on every surface until this attribute existed. A
+          `placeholder` is not a label, so this field had no accessible name at
+          all.
+
+          An `aria-label` rather than the checklist's preferred `Field.Label`
+          part deliberately: a visible label moves the composer and every
+          screenshot baseline below it, for a control whose purpose the
+          placeholder and the helper text already carry visually. If a visible
+          label is ever wanted it is a `Field.Label` plus a re-recorded
+          baseline, not an edit to this attribute. */}
       <Field.Textarea
         ref={textareaRef}
         value={value()}
@@ -98,6 +110,7 @@ export const ChatInput = (props: ChatInputProps) => {
         onKeyDown={handleKeyDown}
         autoresize
         placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
+        aria-label="Message"
         aria-disabled={props.disabled ? 'true' : undefined}
         border="1 ui-border-secondary focus:ui-accent"
         rounded="lg"

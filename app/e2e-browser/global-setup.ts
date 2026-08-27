@@ -13,23 +13,27 @@
  */
 import { writeFileSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
-import provisionTestDatabase from '../src/__tests__/global-setup'
+import { chromium } from '@playwright/test'
+import { provisionDatabase } from '../src/__tests__/global-setup'
 import { startBackend, assertHermetic } from './lib/backend'
 import { generateBamlClient, startDevServer } from './lib/server'
 import { conversationRows, wipeUserRows } from './lib/db'
 import {
   APP_PORT,
+  BYPASS_USER_ID,
   DATA_ENCRYPTION_KEY,
   HANDLES_FILE,
   POISONED_ANTHROPIC_KEY,
+  SERVER_BOOT_TIMEOUT_MS,
   TEST_DATABASE_URL,
   VERDA_SCALEDOWN_SECONDS,
 } from './lib/env'
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
-  // Shared with the unit suite and `app/e2e/` rather than reimplemented: the
-  // three must agree on which database is the throwaway one.
-  await provisionTestDatabase()
+  // The provisioning CODE is shared with the unit suite rather than
+  // reimplemented; the TARGET is this suite's own since #280 — see
+  // `lib/env.ts#TEST_DATABASE_URL` for what sharing it cost.
+  await provisionDatabase(TEST_DATABASE_URL)
 
   // `pnpm dev`'s own `predev` hook, which spawning vinxi directly skips.
   generateBamlClient()
@@ -46,6 +50,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     DATABASE_URL: TEST_DATABASE_URL,
     TEST_DATABASE_URL,
     DATA_ENCRYPTION_KEY,
+    // This suite's identity, not the literal every bypassed request used to
+    // share. `lib/auth/dev-bypass.ts` reads it through `import.meta.env`, so one
+    // line moves the browser bundle's `AuthProvider` and the server's turn path
+    // together — and `wipeUserRows()` deletes only rows this suite created.
+    VITE_DEV_BYPASS_USER_ID: BYPASS_USER_ID,
 
     // ---- Auth --------------------------------------------------------------
     // The same gate `app/e2e/` uses (`SD-15`). Both halves are required, and
@@ -94,6 +103,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   try {
     await wipeUserRows()
     await runPreflight(backend, server.url)
+    await warmTheClientBundle(server.url)
     await wipeUserRows()
   } catch (err) {
     await server.stop()
@@ -120,7 +130,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
  *    fake — including at least one on an Anthropic-chain role, which is the
  *    half the shipped `VERDA_INFERENCE_ENDPOINT` seam cannot cover.
  * 2. **The server is on the throwaway database.** The turn above persists a
- *    row; it has to be visible in `kgagent_test`. If `app/.env` or a stray
+ *    row; it has to be visible in this suite's own database. If `app/.env` or a stray
  *    shell export won the `DATABASE_URL` race, this suite would be writing to a
  *    developer's dev database — and `initSchema()`'s backfill would re-encrypt
  *    their real conversations under the unit-test key, after which `pnpm dev`
@@ -140,5 +150,52 @@ async function runPreflight(
         'DATABASE_URL reached it and that app/.env is not overriding it. Refusing to run: ' +
         'the suite would be writing to (and wiping rows from) a database it does not own.',
     )
+  }
+}
+
+/**
+ * Open the app in a browser ONCE, before any scenario, and wait for the composer.
+ *
+ * `/api/health` proves the dev server is serving HTTP; `runPreflight` proves the
+ * SERVER half of a turn works. Neither touches the CLIENT module graph, and under
+ * `vinxi dev` that graph is transformed ON DEMAND, on the first request for it.
+ * On a cold vite cache that first paint took over 20 seconds on this repo
+ * (measured 2026-08-26, first run in a fresh worktree) — so scenarios 1 and 2
+ * both failed inside `open()`, on the project's 20s expect timeout, with the nav
+ * rendered and the chat column not yet compiled. Nothing was wrong with the app.
+ *
+ * That is a determinism bug of exactly the #280 shape, and widening the expect
+ * timeout would be the wrong fix twice over: it would hide a genuinely slow first
+ * paint behind the same budget every real assertion uses, and it would leave the
+ * cost in whichever scenario happens to run first, so the suite would keep
+ * reporting the bundler as an app failure.
+ *
+ * So the cost is paid here instead, once, against `SERVER_BOOT_TIMEOUT_MS` — the
+ * budget that already exists for "a cold vite start is not fast" — and every
+ * scenario's own 20s then measures the app rather than the transform pipeline.
+ *
+ * It asserts nothing else on purpose: the claim is only "the client bundle is
+ * built and the shell paints". Everything a person can see is a scenario's job.
+ */
+async function warmTheClientBundle(appUrl: string): Promise<void> {
+  const browser = await chromium.launch()
+  try {
+    const page = await browser.newPage()
+    await page.goto(appUrl)
+    await page
+      .getByPlaceholder('Type your message')
+      .waitFor({ state: 'visible', timeout: SERVER_BOOT_TIMEOUT_MS })
+  } catch (err) {
+    throw new Error(
+      'e2e-browser: the app shell never painted in a browser, so no scenario could have ' +
+        `run. The dev server answered /api/health and served a whole turn, so this is the ` +
+        'CLIENT half — a compile error in the module graph, or a first transform slower ' +
+        `than E2E_BROWSER_BOOT_TIMEOUT_MS (${SERVER_BOOT_TIMEOUT_MS}ms). Re-run with ` +
+        `E2E_BROWSER_SERVER_LOG=1 to see which. (${
+          err instanceof Error ? err.message : String(err)
+        })`,
+    )
+  } finally {
+    await browser.close()
   }
 }

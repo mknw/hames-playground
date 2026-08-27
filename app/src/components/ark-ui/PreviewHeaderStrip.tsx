@@ -418,7 +418,24 @@ export const PreviewHeaderStrip = () => {
             </Show>
 
             {/* ---- Metrics ----------------------------------------------- */}
-            <div flex="~" items="center" gap="3" border="l ui-border-primary" p="l-3">
+            {/* `data-testid` so the browser suite's screenshot comparison can
+                REMOVE this block before the shot: every figure in it (active
+                people, today's tokens and turns, the rolling p50) is a live
+                counter, so leaving it in would diff the header against its own
+                baseline on every run. Removed rather than masked — Playwright's
+                `mask` paints over an element and leaves it in the flow, so a
+                block whose width varies keeps moving what sits beside it (the
+                measured cost was a 1152-pixel diff in a run where nothing had
+                changed). Removed rather than stubbed, too: a stub would make the
+                visual test assert a layout the app never renders. */}
+            <div
+              data-testid="preview-header-metrics"
+              flex="~"
+              items="center"
+              gap="3"
+              border="l ui-border-primary"
+              p="l-3"
+            >
               <Metric
                 label="active"
                 value={formatCompactNumber(s().activeUsers)}

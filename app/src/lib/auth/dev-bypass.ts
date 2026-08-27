@@ -8,15 +8,35 @@
  * Closes #42.
  */
 
-// TODO(#42): `BYPASS_USER.id` is a single literal shared by every developer
-// running with bypass enabled, which means all devs hitting the same Postgres
-// share one conversation namespace. Per-dev namespacing (e.g. seeded from
-// hostname or git user.email) is intentionally out of scope here — tracked
-// as the remaining footgun on #42.
+/**
+ * The identity every bypassed request runs as.
+ *
+ * `id` is overridable through `VITE_DEV_BYPASS_USER_ID`, and that is the only
+ * reason this is not a bare literal. #42 recorded the footgun: one id shared by
+ * everything running with the bypass on means one conversation namespace in one
+ * Postgres, so two things using the bypass at once delete each other's rows.
+ * That stopped being hypothetical with the test pyramid — `app/e2e/` and
+ * `app/e2e-browser/` both drive real turns and both wipe "their" rows by user id,
+ * and running them concurrently produced false reds (#280). Each suite now names
+ * its own id.
+ *
+ * Read through `import.meta.env` rather than `process.env` for the same reason
+ * `VITE_DEV_BYPASS_AUTH` below is: this module is imported by BOTH halves —
+ * `AuthProvider.tsx` in the browser bundle and the turn path on the server — and
+ * `process` does not exist in one of them. Vite inlines `VITE_*` into both, so
+ * setting it once on the dev server (or in a vitest `test.env`) moves both.
+ *
+ * It cannot leak into production: the id is only ever consulted when
+ * `isBypassEnabled()` is true, and that is gated on `import.meta.env.DEV`, which
+ * a production build statically replaces with `false`.
+ *
+ * Per-DEVELOPER namespacing (seeded from hostname or git user.email) is still out
+ * of scope and still on #42; this closes the half that was breaking the suites.
+ */
 export const BYPASS_USER = {
-  id: "dev-bypass-user",
-  email: "dev@local",
-} as const;
+  id: import.meta.env.VITE_DEV_BYPASS_USER_ID || 'dev-bypass-user',
+  email: 'dev@local',
+} as const
 
 /**
  * Returns true when the dev auth bypass should be honored.
@@ -28,22 +48,16 @@ export const BYPASS_USER = {
  *   2. `VITE_DEV_BYPASS_AUTH === 'true'` — the explicit opt-in.
  */
 export function isBypassEnabled(): boolean {
-  return (
-    import.meta.env.DEV === true &&
-    import.meta.env.VITE_DEV_BYPASS_AUTH === "true"
-  );
+  return import.meta.env.DEV === true && import.meta.env.VITE_DEV_BYPASS_AUTH === 'true'
 }
 
 // Surface the leakage path: a production build with the env var still set.
 // `isBypassEnabled()` already returns false here (DEV gate), but a silent
 // no-op would hide a misconfiguration. Run once at module load.
-if (
-  !import.meta.env.DEV &&
-  import.meta.env.VITE_DEV_BYPASS_AUTH === "true"
-) {
+if (!import.meta.env.DEV && import.meta.env.VITE_DEV_BYPASS_AUTH === 'true') {
   console.warn(
-    "[dev-bypass] VITE_DEV_BYPASS_AUTH=true is set in a production build. " +
-      "The bypass is ignored (gated on import.meta.env.DEV), but the env " +
-      "var should be removed from production config to avoid confusion.",
-  );
+    '[dev-bypass] VITE_DEV_BYPASS_AUTH=true is set in a production build. ' +
+      'The bypass is ignored (gated on import.meta.env.DEV), but the env ' +
+      'var should be removed from production config to avoid confusion.',
+  )
 }

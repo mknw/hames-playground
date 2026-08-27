@@ -23,15 +23,41 @@
  */
 import pg from 'pg'
 
-/** The database every DB-backed test talks to. Override with `TEST_DATABASE_URL`. */
+/** The database the UNIT suite talks to. Override with `TEST_DATABASE_URL`.
+ *
+ *  One of three, since #280: `app/e2e/` and `app/e2e-browser/` each provision
+ *  their OWN database through {@link provisionDatabase}, so two suites running
+ *  at once cannot delete each other's rows. See `docs/testing/pyramid.md`. */
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? 'postgresql://postgres:password@localhost:5432/kgagent_test'
 
 /** `duplicate_database` — someone (or a previous run) got there first. */
 const DUPLICATE_DATABASE = '42P04'
 
+/**
+ * Vitest's globalSetup entry point for the unit suite.
+ *
+ * Takes no argument on purpose even though vitest passes a project object: the
+ * URL is this suite's, and a suite that wants a different one calls
+ * {@link provisionDatabase} directly rather than hoping an argument lands in the
+ * right position.
+ */
 export default async function setup(): Promise<void> {
-  const url = new URL(TEST_DATABASE_URL)
+  await provisionDatabase(TEST_DATABASE_URL)
+}
+
+/**
+ * Create `url`'s database if it is not there yet.
+ *
+ * Exported so each suite can own its own throwaway target (#280): the app-path
+ * and browser suites pass their own URL instead of inheriting this file's, which
+ * is what makes concurrent runs safe. The alternative — one shared database and a
+ * per-suite user id — leaves a `DROP`/`TRUNCATE` or a schema migration in one
+ * suite visible to the other, and the user id is defence in depth on top rather
+ * than a substitute.
+ */
+export async function provisionDatabase(connectionString: string): Promise<void> {
+  const url = new URL(connectionString)
   const database = url.pathname.replace(/^\//, '')
   const maintenance = new URL(url)
   maintenance.pathname = '/postgres'

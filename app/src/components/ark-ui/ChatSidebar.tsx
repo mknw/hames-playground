@@ -570,6 +570,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
 
   return (
     <div
+      data-testid="chat-sidebar"
       flex="~ col"
       h="full"
       bg="ui-bg-primary"
@@ -942,10 +943,16 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             to the live status + mini progress strip — the
                             same per-session controller that feeds the
                             in-chat bar (#105). Reappears when the run ends. */}
+                        {/* The fallback's `data-testid` lets the browser suite
+                            take it OUT of the page before a screenshot
+                            comparison: it is a RELATIVE time ("just now", "3m
+                            ago"), so it changes between two otherwise identical
+                            runs — and its WIDTH changes with it, which is why it
+                            is removed rather than masked. */}
                         <Show
                           when={live()}
                           fallback={
-                            <div text="xs ui-text-tertiary" m="t-1">
+                            <div data-testid="thread-time" text="xs ui-text-tertiary" m="t-1">
                               {formatTimestamp(thread.updatedAt)}
                             </div>
                           }

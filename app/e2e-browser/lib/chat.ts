@@ -17,6 +17,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import { FAKE_ANSWER_MARK, GO_COLD_MS, TURN_TIMEOUT_MS } from './env'
+import { storedTier } from './db'
 
 /** The first bubble the app paints before any turn. Excluded from replies —
  *  it is chrome, not an answer. */
@@ -69,9 +70,87 @@ export function progressRange(page: Page): Locator {
   return progressShell(page).locator('[data-part="range"]')
 }
 
+/**
+ * The header switch's two positions, by the label a user reads.
+ *
+ * Mirrors `TIER_LABELS` in `src/lib/preview-header-format.ts` rather than
+ * importing it, for this file's usual reason: a scenario asserting on an
+ * accessible name should go red if the app renames it.
+ */
+export const TIER_LABEL = {
+  verda: 'Private (Verda)',
+  anthropic: 'Anthropic',
+} as const
+
+export type Tier = keyof typeof TIER_LABEL
+
 /** One position of the header's inference-tier switch. */
 export function tierOption(page: Page, label: string): Locator {
   return page.locator('[data-scope="segment-group"][data-part="item"]').filter({ hasText: label })
+}
+
+/**
+ * Put the app on a tier through the header switch, and wait until the SERVER has
+ * it — not just the widget.
+ *
+ * Three things had to be got right here, and each of them was a way the browser
+ * suite could go red with nothing wrong in the app (#280).
+ *
+ * **1. `toBeChecked()` is not evidence.** Ark's segment group owns its selection
+ * and moves it the instant the click lands, while the server action that persists
+ * the preference is still in flight. A scenario that clicked and immediately sent
+ * therefore raced the write: `resolveInferenceTier()` read whatever was still
+ * stored, the turn ran on the tier the test thought it was leaving, and the
+ * failure blamed the app's routing. So this also waits for the persisted
+ * `user_prefs` row, which is the exact thing the next turn reads. It is read out
+ * of Postgres rather than the DOM because there is no DOM evidence of the write
+ * landing — the switch looks identical before and after.
+ *
+ * **2. Clicking the tier you are already on writes nothing.**
+ * `PreviewHeaderStrip`'s handler returns early when the clicked value equals the
+ * current one, so no action fires and no row appears. That is not an edge case:
+ * every scenario starts with `wipeUserRows()` having deleted the preference, and
+ * the private tier is the DEFAULT when the endpoint is configured — so
+ * `chooseTier(page, 'verda')` on a fresh page is exactly that no-op. This
+ * therefore always goes VIA the other position, unconditionally rather than
+ * conditionally: a branch on "is a row already there" would make the wait's
+ * behaviour depend on the state it is trying to establish.
+ *
+ * **3. The switch is disabled while an action is in flight** (`disabled={busy()}`),
+ * so a click sent during one is silently dropped. Each click waits for the control
+ * to be enabled first.
+ *
+ * The cost is one extra round trip. What it buys is that every scenario after this
+ * line is running on the tier it asked for, provably.
+ */
+export async function chooseTier(page: Page, tier: Tier): Promise<void> {
+  const other: Tier = tier === 'verda' ? 'anthropic' : 'verda'
+
+  await clickTier(page, other)
+  // The FIRST click's persistence is deliberately not asserted: when the page
+  // already sits on `other`, it is the no-op of point 2 and there is nothing to
+  // wait for. What matters is that the switch has settled before the next click.
+  await expect(page.getByRole('radio', { name: TIER_LABEL[other] })).toBeChecked()
+
+  await clickTier(page, tier)
+  await expect(page.getByRole('radio', { name: TIER_LABEL[tier] })).toBeChecked()
+  await expect
+    .poll(async () => storedTier(), {
+      message:
+        `the header switch never persisted \`${tier}\` — the next turn would run on ` +
+        'whatever tier was already stored, and this scenario would blame the routing',
+    })
+    .toBe(tier)
+}
+
+/** One click on the switch, after waiting for it to be accepting clicks. */
+async function clickTier(page: Page, tier: Tier): Promise<void> {
+  const label = TIER_LABEL[tier]
+  // `tierOption` targets the visible item (the hidden radio cannot be clicked),
+  // and Playwright's own actionability check does not see the item as disabled —
+  // the `disabled` attribute lands on the input. So the wait is explicit.
+  await expect(page.getByRole('radio', { name: label })).toBeEnabled()
+  await tierOption(page, label).click()
 }
 
 /** A sidebar conversation row, by the title a user reads on it. */

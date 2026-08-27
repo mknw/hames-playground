@@ -66,10 +66,14 @@ to it — so it cannot rot into unbuildable code unnoticed. Same arrangement as
 ## What it needs
 
 - **Postgres** on `localhost:5432` (`docker compose up -d postgres` from the
-  repo root). The suite provisions and uses the throwaway `kgagent_test`
-  database, via the same `src/__tests__/global-setup.ts` the unit suite uses.
-  Your dev rows are never touched, and global setup **refuses to run** if the
-  server it started turns out to be persisting somewhere else.
+  repo root). The suite provisions and uses its OWN throwaway database,
+  `kgagent_test_browser`, through the same `provisionDatabase()` the unit suite
+  calls — shared code, its own target. It also runs as its own dev-bypass user,
+  `e2e-browser-user`. Both were shared literals until #280, and both are why a
+  concurrent app-path run used to delete this suite's rows mid-scenario; see
+  [`docs/testing/pyramid.md`](../../docs/testing/pyramid.md). Your dev rows are
+  never touched, and global setup **refuses to run** if the server it started
+  turns out to be persisting somewhere else.
 - **A browser**, once: `pnpm exec playwright install chromium`.
 - **Nothing else.** No credential, no Docker gateway, no GPU, no bill. Both the
   inference endpoint and the MCP gateway are the fakes `app/e2e/` already owns.
@@ -91,7 +95,7 @@ Playwright runner ──── control plane (HTTP) ────┐
                     │  VERDA_INFERENCE_ENDPOINT → fake
                     │  E2E_FAKE_INFERENCE_URL   → fake
                     │  MCP_GATEWAY_URL          → fake
-                    │  DATABASE_URL             → kgagent_test
+                    │  DATABASE_URL             → kgagent_test_browser
                     └── Chromium ── http://127.0.0.1:3446
 ```
 
@@ -111,6 +115,13 @@ below had already moved off.
 **Faults travel over HTTP**, because Playwright runs tests in worker processes
 and the fakes live in the runner's. `backend.arm(...)`, `backend.down()`,
 `backend.calls()` are the same vocabulary `app/e2e/` calls directly.
+
+Two verbs exist only here: `backend.held()` and `backend.release()`, the halves of
+the `hold` fault. A browser scenario whose claim is "the turn is still running"
+cannot establish that with a duration — the assertion races the duration and the
+loser is whichever machine is busier, which is what both #280 flakes were. With
+the request PARKED the turn cannot advance, so the claim becomes a fact the test
+established. `expectHeld(...)` is the wait.
 
 ### How the app reaches the fake — and the one thing that had to change in `src/`
 
@@ -180,15 +191,15 @@ two steps later, blaming the redirect for a stale vinxi.
 
 ## Knobs
 
-| Env var                       | Default                        | What it does                                                                                                  |
-| ----------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `E2E_BROWSER_PORT`            | `3446`                         | The dev server's port. Deliberately not 3444 — a developer's own `pnpm dev` must not be driven by this suite. |
-| `E2E_BROWSER_COLD_MS`         | `8000`                         | How long scenario 2's fake box withholds its first self-hosted answer.                                        |
-| `E2E_BROWSER_TURN_TIMEOUT_MS` | `90000`                        | How long a scenario waits for a turn to land in the transcript.                                               |
-| `E2E_BROWSER_BOOT_TIMEOUT_MS` | `180000`                       | How long global setup waits for `/api/health`. A cold vite start with `baml-generate` behind it is not fast.  |
-| `E2E_BROWSER_SERVER_LOG`      | unset                          | Stream the dev server's stdout/stderr into the run. The first thing to reach for when a scenario fails oddly. |
-| `TEST_DATABASE_URL`           | `…localhost:5432/kgagent_test` | The throwaway database, shared with the unit suite and `app/e2e/`.                                            |
-| `BAML_LOG`                    | `warn`                         | Passed through to the dev server.                                                                             |
+| Env var                       | Default                  | What it does                                                                                                        |
+| ----------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `E2E_BROWSER_PORT`            | `3446`                   | The dev server's port. Deliberately not 3444 — a developer's own `pnpm dev` must not be driven by this suite.       |
+| `E2E_BROWSER_COLD_MS`         | `8000`                   | How long scenario 2's fake box withholds its first self-hosted answer.                                              |
+| `E2E_BROWSER_TURN_TIMEOUT_MS` | `90000`                  | How long a scenario waits for a turn to land in the transcript.                                                     |
+| `E2E_BROWSER_BOOT_TIMEOUT_MS` | `180000`                 | How long global setup waits for `/api/health`. A cold vite start with `baml-generate` behind it is not fast.        |
+| `E2E_BROWSER_SERVER_LOG`      | unset                    | Stream the dev server's stdout/stderr into the run. The first thing to reach for when a scenario fails oddly.       |
+| `TEST_DATABASE_URL`           | `…/kgagent_test_browser` | This suite's OWN throwaway database. Point two suites at one and their dev-bypass identities still keep them apart. |
+| `BAML_LOG`                    | `warn`                   | Passed through to the dev server.                                                                                   |
 
 One value is **not** a knob and is set unconditionally: `VERDA_SCALEDOWN_SECONDS=2`
 on the server under test. The cold-start notice only fires when nothing says the
@@ -201,14 +212,16 @@ of it.
 
 ## The scenarios
 
-| File                               | What it pins                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `01-send-and-reply.browser.ts`     | A message typed into the composer gets an answer **painted** in the transcript, the composer comes back, and the conversation appears in the sidebar under the title the server pushed down the same stream.                                                                                                                                                                                                                                            |
-| `02-cold-start-spinner.browser.ts` | **The reason this layer exists.** A cold self-hosted box shows the warming spinner with its headline and estimate, the progress bar is suppressed in its favour, and the notice RETRACTS — asserted with the turn provably still running (two calls withheld, Stop still visible), because otherwise the teardown unmount discharges it. Then the failure twin: a box that will not serve ends the turn as a VISIBLE error with no spinner left behind. |
-| `03-tier-switch.browser.ts`        | Clicking the header switch moves the controller and synthesizer calls — read off the `model` the fake recorded, per position — without forking the conversation, and the position survives a reload because it lives on the server. The MAPPING (which roles move) belongs to `app/e2e/scenarios/05`; what is only checkable here is that a click reaches it.                                                                                           |
-| `04-mid-turn-reload.browser.ts`    | Reloading with a turn in flight keeps the conversation in the list, rebuilds its history from Postgres on reopen, and does not cancel the run whose reader went away — both turns are there afterwards.                                                                                                                                                                                                                                                 |
-| `05-multi-turn.browser.ts`         | Three turns, all still on screen, alternating question/answer in document order — plus one wire assertion that turn 3 was handed turn 1, so this is a conversation and not a list.                                                                                                                                                                                                                                                                      |
-| `06-theme-sanity.browser.ts`       | In dark AND light: the tier label and the Send button are not invisible on their own (composited) background, and two icon spans actually paint a glyph — the shape an unregistered `i-mdi-*` leaves behind.                                                                                                                                                                                                                                            |
+| File                               | What it pins                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `01-send-and-reply.browser.ts`     | A message typed into the composer gets an answer **painted** in the transcript, the composer comes back, and the conversation appears in the sidebar under the title the server pushed down the same stream.                                                                                                                                                                                                                                                                                                                                                                  |
+| `02-cold-start-spinner.browser.ts` | **The reason this layer exists.** A cold self-hosted box shows the warming spinner with its headline and estimate, the progress bar is suppressed in its favour, and the notice RETRACTS — asserted with the turn provably still running (the box's requests are PARKED by the `hold` fault and released by name, Stop still visible), because otherwise the teardown unmount discharges it. Then the failure twin: a box that will not serve ends the turn as a VISIBLE error with no spinner left behind.                                                                   |
+| `03-tier-switch.browser.ts`        | Clicking the header switch moves the controller and synthesizer calls — read off the `model` the fake recorded, per position — without forking the conversation, and the position survives a reload because it lives on the server. The MAPPING (which roles move) belongs to `app/e2e/scenarios/05`; what is only checkable here is that a click reaches it.                                                                                                                                                                                                                 |
+| `04-mid-turn-reload.browser.ts`    | Reloading with a turn in flight keeps the conversation in the list, rebuilds its history from Postgres on reopen, and does not cancel the run whose reader went away — both turns are there afterwards.                                                                                                                                                                                                                                                                                                                                                                       |
+| `05-multi-turn.browser.ts`         | Three turns, all still on screen, alternating question/answer in document order — plus one wire assertion that turn 3 was handed turn 1, so this is a conversation and not a list.                                                                                                                                                                                                                                                                                                                                                                                            |
+| `06-theme-sanity.browser.ts`       | In dark AND light: the tier label and the Send button are not invisible on their own (composited) background, and two icon spans actually paint a glyph — the shape an unregistered `i-mdi-*` leaves behind.                                                                                                                                                                                                                                                                                                                                                                  |
+| `07-visual-regression.browser.ts`  | Per-theme SCREENSHOT comparison over three surfaces (header strip · sidebar with rows · the chat column) against committed baselines. The instrument for the family of regressions where every name is still there and the pixels are wrong — an icon that stopped painting, a colour that reads in dark and vanishes in light, a layout that collapsed. Volatile regions are REMOVED from the page before the shot, never tolerated by a wider threshold — a tolerance wide enough to absorb an unstable region is wide enough to absorb a real regression of the same size. |
+| `08-accessibility.browser.ts`      | An axe-core pass over the SAME three surfaces in both themes, gated on `serious`/`critical` only, as an EQUALITY against a recorded known-open list — so a new violation fails and a fixed one fails too. What is deliberately not gated is enumerated in the file.                                                                                                                                                                                                                                                                                                           |
 
 ### What is NOT covered
 
@@ -229,8 +242,25 @@ to be complete. Add to it when you add a scenario that leaves something out.
   `e2e/scenarios/03-concurrent-cold` owns overlapping turns, at the app layer.
 - **Every panel that is not the chat column.** The graph canvas, the Data Stash,
   the terminal, the observability panel and the dashboard are all unvisited.
-  Scenario 6 is the only thing here that looks at pixels at all, and it looks at
-  three elements.
+  Scenarios 6–8 are what look at pixels: three surfaces (`lib/surfaces.ts`) plus
+  scenario 6's three individual elements. The observability panel is left out of
+  the screenshot comparison for a concrete reason rather than a budget one —
+  every pattern instance carries a random id suffix (`router-pab3iw`), so a
+  baseline of it needs a stable identifier for a pattern instance first, and
+  masking it would leave a screenshot of magenta rectangles asserting nothing.
+- **The accessibility debt scenario 8 RECORDS rather than fixes.** Its
+  `KNOWN_OPEN` list is the app's existing serious/critical violations, each with
+  why it has not had a change of its own yet — `button-name` (icon-only buttons),
+  `color-contrast` (a palette decision) and `scrollable-region-focusable` (a
+  `tabindex` with real tab-order consequences). The gate's job is to stop that
+  list growing, not to make it look empty. Two entries have left it: `<title>`
+  (`src/entry-server.tsx`) and the composer's `aria-label` (`ChatInput.tsx`),
+  both because the EQUALITY made deleting their lines mandatory once they were
+  fixed.
+- **Visual baselines are per-PLATFORM, and never compared in CI.** Font
+  rasterisation differs between macOS and Linux, so `baselines/` carries a
+  `{platform}` suffix and a contributor on another OS records their own set on
+  first run. Nothing cross-checks the two.
 - **The approval gate and the triggered runner.** Same gap `app/e2e/` records:
   only the `interactive` turn mode runs here.
 
@@ -257,3 +287,17 @@ Write a `*.browser.ts` under `scenarios/`. Three rules:
 And check your assertion can fail: mutate the source, watch it go red, and say
 which checks you verified that way. A green test that would stay green with the
 feature removed manufactures a coverage number.
+
+**Do not establish "the turn is still running" with a duration.** Arm the `hold`
+fault (`e2e/lib/fake-llm.ts`) and wait for the request to PARK with
+`expectHeld(...)`. A `cold-start` duration turns every following assertion into a
+race against the machine, which is what both #280 browser flakes were made of.
+Same rule for the tier switch: use `chooseTier(page, tier)`, which waits for the
+SERVER to hold the preference — `toBeChecked()` only says the widget moved.
+
+**Adding a visual surface** means adding it to `lib/surfaces.ts`, which scenarios
+7 and 8 both read: one list, so the screenshot comparison and the axe pass always
+look at the same thing. Then record its baseline with
+`pnpm test:e2e:browser --update-snapshots`, in a commit of its own, having looked
+at the image first — a baseline recorded in the same commit as the change that
+moved it is a baseline nobody reviewed.

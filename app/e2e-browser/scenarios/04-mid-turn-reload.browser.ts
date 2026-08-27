@@ -19,9 +19,20 @@
  * (3) is the one worth the wall clock. A reload that quietly killed the run
  * would leave a row stuck at `running` forever, which is the same visible
  * symptom as a hung chat and a completely different bug.
+ *
+ * ## Determinism (#280)
+ *
+ * This file flaked during #278's fix-round gate. The cause was that "the turn is
+ * still in flight" was established with a DURATION and then spent on a reload, a
+ * click and a hydrate — three steps whose cost is a property of the machine, not
+ * of the app. Turn 2's first call is now PARKED instead, so the window is
+ * unbounded and (1)-(3) are checked against a turn that provably has not
+ * finished. It is released explicitly, which is also what makes (3) a real claim:
+ * the run resumes with nobody reading it.
  */
 import { test, expect } from '../lib/fixtures'
-import { COLD_START_MS, FAKE_TITLE, VERDA_MODEL } from '../lib/env'
+import { FAKE_TITLE, VERDA_MODEL } from '../lib/env'
+import { expectHeld } from '../lib/control'
 import { conversationRows } from '../lib/db'
 import {
   open,
@@ -47,38 +58,39 @@ test('a reload mid-turn keeps the conversation, its history, and the run that wa
   await expect(threadRow(page, FAKE_TITLE)).toBeVisible()
 
   // ---- Turn 2: in flight when the tab dies -------------------------------
-  // TWO self-hosted calls withheld, so the turn is provably still running when
-  // the reload happens rather than racing it.
+  // The turn's first self-hosted BAML call is PARKED, and that is the #280 fix
+  // for this file. It used to be a `cold-start` DURATION, which made every
+  // assertion after the reload a race: the fake records a call only once it has
+  // ANSWERED it, so the `Router` record the reload waited for appeared exactly
+  // when its delay had elapsed, and the rest of turn 2 then ran against a
+  // reload-plus-hydrate whose cost is a property of the machine. A parked request
+  // has no such window — the turn cannot get past it until this test says so.
   //
-  // Two rather than one because of what the evidence below actually is. The
-  // fake records a call AFTER serving it, so the `Router` record the poll waits
-  // for only appears once that call's delay has ELAPSED — and since the
-  // 2026-08-26 tier widening the router is itself self-hosted, i.e. it is the
-  // first call the fault hits. With one withheld call the reload therefore
-  // landed after the only delay in the turn, and the rest of turn 2 raced it to
-  // completion: the reopened thread showed two replies where the scenario means
-  // to see one. Withholding the next call as well leaves a full
-  // `COLD_START_MS` of in-flight turn on the far side of the poll.
+  // `wake: false` aims past the wake ping, so the park is the HARNESS's own first
+  // call whether or not turn 1 left the box inside its scale-down window. Which
+  // of those is true is exactly the kind of thing this scenario must not depend
+  // on.
   await backend.reset()
-  await backend.arm({ kind: 'cold-start', ms: COLD_START_MS, model: VERDA_MODEL, times: 2 })
+  await backend.arm({ kind: 'hold', model: VERDA_MODEL, wake: false })
   await send(page, 'second question')
 
   // "In flight" as the user sees it: Send has been replaced by Stop.
   await expect(stopButton(page)).toBeVisible()
 
-  // ...and as the SERVER sees it. Stop appears the moment the composer
-  // submits, which is before the request has necessarily been handled — the
-  // first draft reloaded in that window, the server never started turn 2, and
-  // the test still passed because the row was already `done` from turn 1. So
-  // the reload waits for evidence the turn is actually running: `Router` is
-  // the first call every turn makes, and the backend was reset a moment ago,
-  // so this call can only be turn 2's. See the arm above for why proving the
-  // turn STARTED is not on its own enough to prove it is still running.
-  await expect
-    .poll(async () => (await backend.calls()).map((call) => call.fn), {
-      message: 'the server never started turn 2, so there was nothing to reload through',
-    })
-    .toContain('Router')
+  // ...and as the SERVER sees it. Stop appears the moment the composer submits,
+  // which is before the request has necessarily been handled — the first draft
+  // reloaded in that window, the server never started turn 2, and the test still
+  // passed because the row was already `done` from turn 1. A PARKED request is
+  // strictly better evidence than a recorded one: it says the turn reached this
+  // call AND has not got past it, so the turn is running now rather than having
+  // been running at some point. `Router` is the first call every turn makes, and
+  // the backend was reset a moment ago, so it can only be turn 2's.
+  const pinned = await expectHeld(
+    backend,
+    (held) => held.length === 1,
+    'the server never started turn 2, so there was nothing to reload through',
+  )
+  expect(pinned[0].fn, "the parked call is not the turn's first one").toBe('Router')
 
   await page.reload()
 
@@ -90,11 +102,20 @@ test('a reload mid-turn keeps the conversation, its history, and the run that wa
   await expect(row).toBeVisible()
 
   // ---- 2. Opening it rebuilds the history --------------------------------
+  // Turn 2 is still parked, so `toHaveCount(1)` is a statement about what
+  // persistence held rather than a bet that the second reply has not arrived
+  // yet. That bet is precisely what used to make this file flake.
   await row.click()
   await expect(userBubbles(page).filter({ hasText: 'first question' })).toHaveCount(1)
   await expect(replies(page)).toHaveCount(1)
 
   // ---- 3. The run nobody was watching still landed -----------------------
+  // Let it go: disarm first, so the calls AFTER the parked one are not parked in
+  // turn, then release. `disarm()` rather than `reset()` because the recorded
+  // calls are the evidence the poll below reads.
+  await backend.disarm()
+  expect(await backend.release()).toBe(1)
+
   // Evidence from the endpoint, not from the row: turn 1 already left the row
   // `done`, so a status check alone cannot tell "turn 2 finished" from "turn 2
   // never ran". `Synthesize` is the last call of a turn and the one whose text
@@ -102,7 +123,7 @@ test('a reload mid-turn keeps the conversation, its history, and the run that wa
   // reading.
   await expect
     .poll(async () => (await backend.calls()).map((call) => call.fn), {
-      timeout: COLD_START_MS + 90_000,
+      timeout: 90_000,
       message: 'the run was abandoned when its reader reloaded away',
     })
     .toContain('Synthesize')

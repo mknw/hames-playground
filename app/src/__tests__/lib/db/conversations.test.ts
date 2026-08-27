@@ -28,7 +28,9 @@ import {
   setConversationInferenceTier,
   getConversationInferenceTier,
   backfillConversationInferenceTier,
+  setConversationPinned,
   reapStuckConversations,
+  CONVERSATION_PIN_LIMIT,
   STUCK_RUN_TIMEOUT_MINUTES,
 } from '../../../lib/db/conversations.server'
 import { closePool, query } from '../../../lib/db/client.server'
@@ -775,5 +777,218 @@ describe('reapStuckConversations', () => {
     // Had the reap bumped `updated_at`, every reaped conversation's owner would
     // appear in the preview header's "active" figure.
     expect(rows[0].stale).toBe(true)
+  })
+})
+
+/**
+ * Pinned conversations.
+ *
+ * Every test here gets its OWN user id rather than the file's shared
+ * `TEST_USER`: the cap is a per-owner COUNT, so two tests sharing an owner
+ * would leak pins into each other's arithmetic and the first failure would
+ * name the wrong rule.
+ */
+describe('conversation pinning', () => {
+  const users: string[] = []
+  /** A fresh owner, registered for cleanup in this block's afterAll. */
+  const freshUser = () => {
+    const u = `pin-user-${Math.random().toString(36).slice(2, 10)}`
+    users.push(u)
+    return u
+  }
+  const mkId = () => `conv-${Math.random().toString(36).slice(2, 10)}`
+
+  /** Seed a conversation with an explicit `created_at`, so the fallback
+   *  ordering under test is a fact rather than a race between two NOW()s. */
+  const seed = async (userId: string, createdAt: string) => {
+    const id = mkId()
+    await saveConversation({
+      id,
+      userId,
+      agentId: 'search',
+      title: id,
+      serializedContext: '{}',
+    })
+    await query('UPDATE conversations SET created_at = $1 WHERE id = $2', [createdAt, id])
+    return id
+  }
+
+  const idsInOrder = async (userId: string) => (await listConversations(userId)).map((r) => r.id)
+
+  afterAll(async () => {
+    if (!dbAvailable) return
+    for (const u of users) await query('DELETE FROM conversations WHERE user_id = $1', [u])
+  })
+
+  // Every other test in this block reads the cap off the constant, so they all
+  // pass at any value — mutation-checked, and this is what that check bought.
+  // Three is the owner's product decision (2026-08-27), not a derived number.
+  it('caps pinning at three conversations', () => {
+    expect(CONVERSATION_PIN_LIMIT).toBe(3)
+  })
+
+  it('puts a pinned conversation above newer unpinned ones', async () => {
+    if (!dbAvailable) return
+    const user = freshUser()
+    const oldest = await seed(user, '2020-01-01T00:00:00Z')
+    const middle = await seed(user, '2021-01-01T00:00:00Z')
+    const newest = await seed(user, '2022-01-01T00:00:00Z')
+
+    // Baseline: creation order, newest first — unchanged by this feature.
+    expect(await idsInOrder(user)).toEqual([newest, middle, oldest])
+
+    expect(await setConversationPinned(oldest, user, true)).toBe('pinned')
+    expect(await idsInOrder(user)).toEqual([oldest, newest, middle])
+  })
+
+  it('orders several pins by most recently pinned', async () => {
+    if (!dbAvailable) return
+    const user = freshUser()
+    const a = await seed(user, '2020-01-01T00:00:00Z')
+    const b = await seed(user, '2021-01-01T00:00:00Z')
+    const c = await seed(user, '2022-01-01T00:00:00Z')
+
+    expect(await setConversationPinned(a, user, true)).toBe('pinned')
+    expect(await setConversationPinned(b, user, true)).toBe('pinned')
+    // Most recently pinned leads the pinned block; c is unpinned and trails
+    // despite being the newest row.
+    expect(await idsInOrder(user)).toEqual([b, a, c])
+  })
+
+  it(`refuses the pin past ${CONVERSATION_PIN_LIMIT} and leaves that row unpinned`, async () => {
+    if (!dbAvailable) return
+    const user = freshUser()
+    const ids: string[] = []
+    for (let i = 0; i <= CONVERSATION_PIN_LIMIT; i++) {
+      ids.push(await seed(user, `202${i}-01-01T00:00:00Z`))
+    }
+    for (let i = 0; i < CONVERSATION_PIN_LIMIT; i++) {
+      expect(await setConversationPinned(ids[i], user, true)).toBe('pinned')
+    }
+    const overflow = ids[CONVERSATION_PIN_LIMIT]
+    expect(await setConversationPinned(overflow, user, true)).toBe('cap_reached')
+
+    const list = await listConversations(user)
+    expect(list.filter((r) => r.pinnedAt !== null)).toHaveLength(CONVERSATION_PIN_LIMIT)
+    expect(list.find((r) => r.id === overflow)!.pinnedAt).toBeNull()
+  })
+
+  it('frees a slot on unpin, so the refused row can then be pinned', async () => {
+    if (!dbAvailable) return
+    const user = freshUser()
+    const ids: string[] = []
+    for (let i = 0; i <= CONVERSATION_PIN_LIMIT; i++) {
+      ids.push(await seed(user, `202${i}-01-01T00:00:00Z`))
+    }
+    for (let i = 0; i < CONVERSATION_PIN_LIMIT; i++) {
+      await setConversationPinned(ids[i], user, true)
+    }
+    const overflow = ids[CONVERSATION_PIN_LIMIT]
+    expect(await setConversationPinned(overflow, user, true)).toBe('cap_reached')
+
+    expect(await setConversationPinned(ids[0], user, false)).toBe('unpinned')
+    expect(await setConversationPinned(overflow, user, true)).toBe('pinned')
+
+    const list = await listConversations(user)
+    expect(list.filter((r) => r.pinnedAt !== null)).toHaveLength(CONVERSATION_PIN_LIMIT)
+    // The freshly unpinned row is back in the creation-ordered tail.
+    expect(list.find((r) => r.id === ids[0])!.pinnedAt).toBeNull()
+  })
+
+  it('counts the cap per owner, not globally', async () => {
+    if (!dbAvailable) return
+    const owner = freshUser()
+    const other = freshUser()
+    for (let i = 0; i < CONVERSATION_PIN_LIMIT; i++) {
+      const id = await seed(other, `201${i}-01-01T00:00:00Z`)
+      expect(await setConversationPinned(id, other, true)).toBe('pinned')
+    }
+    // Another user holding a full set of pins must not consume this user's.
+    const mine = await seed(owner, '2020-01-01T00:00:00Z')
+    expect(await setConversationPinned(mine, owner, true)).toBe('pinned')
+  })
+
+  it("will not pin someone else's conversation", async () => {
+    if (!dbAvailable) return
+    const owner = freshUser()
+    const stranger = freshUser()
+    const theirs = await seed(owner, '2020-01-01T00:00:00Z')
+
+    expect(await setConversationPinned(theirs, stranger, true)).toBe('not_found')
+    // Untouched: still the owner's, still unpinned.
+    const list = await listConversations(owner)
+    expect(list.find((r) => r.id === theirs)!.pinnedAt).toBeNull()
+    expect(await listConversations(stranger)).toEqual([])
+  })
+
+  it("will not unpin someone else's conversation", async () => {
+    if (!dbAvailable) return
+    const owner = freshUser()
+    const stranger = freshUser()
+    const theirs = await seed(owner, '2020-01-01T00:00:00Z')
+    await setConversationPinned(theirs, owner, true)
+
+    expect(await setConversationPinned(theirs, stranger, false)).toBe('not_found')
+    expect((await listConversations(owner)).find((r) => r.id === theirs)!.pinnedAt).not.toBeNull()
+  })
+
+  it('reports an unknown id as not_found for both directions', async () => {
+    if (!dbAvailable) return
+    const user = freshUser()
+    expect(await setConversationPinned('no-such-conversation', user, true)).toBe('not_found')
+    expect(await setConversationPinned('no-such-conversation', user, false)).toBe('not_found')
+  })
+
+  it('is idempotent, and a repeat pin does not reorder the pinned block', async () => {
+    if (!dbAvailable) return
+    const user = freshUser()
+    const a = await seed(user, '2020-01-01T00:00:00Z')
+    const b = await seed(user, '2021-01-01T00:00:00Z')
+    await setConversationPinned(a, user, true)
+    await setConversationPinned(b, user, true)
+    expect(await idsInOrder(user)).toEqual([b, a])
+
+    const before = (await listConversations(user)).find((r) => r.id === a)!.pinnedAt
+    // Re-pinning the older pin must not promote it over b.
+    expect(await setConversationPinned(a, user, true)).toBe('pinned')
+    const after = (await listConversations(user)).find((r) => r.id === a)!.pinnedAt
+    expect(after).toEqual(before)
+    expect(await idsInOrder(user)).toEqual([b, a])
+
+    // Unpinning twice is likewise a success, not an error.
+    expect(await setConversationPinned(a, user, false)).toBe('unpinned')
+    expect(await setConversationPinned(a, user, false)).toBe('unpinned')
+  })
+
+  it('does not bump updated_at — a pin is not conversation activity', async () => {
+    if (!dbAvailable) return
+    const user = freshUser()
+    const id = await seed(user, '2020-01-01T00:00:00Z')
+    await query("UPDATE conversations SET updated_at = '2020-06-01T00:00:00Z' WHERE id = $1", [id])
+    const before = (await loadConversation(id, user))!.updatedAt
+
+    await setConversationPinned(id, user, true)
+    expect((await loadConversation(id, user))!.updatedAt).toEqual(before)
+
+    await setConversationPinned(id, user, false)
+    expect((await loadConversation(id, user))!.updatedAt).toEqual(before)
+  })
+
+  it('survives a turn-save: the upsert does not clear a pin', async () => {
+    if (!dbAvailable) return
+    const user = freshUser()
+    const id = await seed(user, '2020-01-01T00:00:00Z')
+    await setConversationPinned(id, user, true)
+
+    // A later turn writes the row again through the normal persistence path.
+    await saveConversation({
+      id,
+      userId: user,
+      agentId: 'search',
+      title: 'ignored',
+      serializedContext: JSON.stringify({ events: [{ id: 'ev' }] }),
+      status: 'done',
+    })
+    expect((await listConversations(user)).find((r) => r.id === id)!.pinnedAt).not.toBeNull()
   })
 })

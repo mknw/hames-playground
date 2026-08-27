@@ -273,6 +273,7 @@ export default function Home() {
                 onNewChat={handleNewChat}
                 onTitleRegenerated={threadList.applyTitle}
                 onDeleteThreads={handleDeleteThreads}
+                onPinChanged={threadList.refetch}
               />
               <div flex="1" overflow="hidden">
                 <ChatInterface

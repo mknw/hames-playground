@@ -2,7 +2,7 @@ import { For, Show, Switch, Match, createSignal, createEffect, onCleanup } from 
 import { Dialog } from '@ark-ui/solid/dialog'
 import { SettingsPanel } from './SettingsPanel'
 import { ProgressBar } from './ProgressBar'
-import { regenerateConversationTitle } from '../../lib/harness-client'
+import { regenerateConversationTitle, setConversationPinned } from '../../lib/harness-client'
 import { accentColor } from '../../lib/agent-palette'
 import type { CompletionMark } from '../../lib/run-registry'
 import type { ChainProgressSnapshot } from './useChainProgress'
@@ -43,6 +43,12 @@ export interface ChatThreadSummary {
    * behind it yet. Every persisted row carries one.
    */
   inferenceTier?: ThreadTier
+  /** ISO 8601 timestamp of when the user pinned this row, or null/absent when
+   *  it is not pinned. Only its presence is read here — the pinned-first
+   *  ORDER BY lives in the list query, so the sidebar renders the order it is
+   *  given rather than re-deriving it. Absent on placeholders, which cannot be
+   *  pinned because nothing is persisted yet. */
+  pinnedAt?: string | null
   /** Optimistic client-side row for a brand-new chat that hasn't been
    *  persisted yet. Replaced in place once the real row appears in the
    *  threadsResource refetch. */
@@ -53,6 +59,10 @@ export interface ChatThreadSummary {
 export type ThreadFilter = 'all' | 'conversation' | 'action'
 
 const PLACEHOLDER_TITLE = 'new chat'
+
+/** How long the pin hint stays up. Long enough to read one short sentence,
+ *  short enough that it never becomes chrome. */
+const PIN_HINT_MS = 4000
 
 /**
  * Merge the optimistic "+ New Chat" placeholder with the persisted thread
@@ -123,6 +133,11 @@ interface ChatSidebarProps {
    *  the route owns the mutation (thread list + registry disposal).
    *  Rejects → the dialog stays open for retry. */
   onDeleteThreads?: (ids: string[]) => Promise<void>
+  /** A pin was added or removed. The sidebar runs the server action itself
+   *  (like regenerate), but a pin changes the list ORDER, which is the
+   *  server's rule — so the parent refetches rather than the sidebar
+   *  re-sorting a second copy of that rule client-side. */
+  onPinChanged?: () => void
 }
 
 /**
@@ -531,6 +546,58 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
   const [filter, setFilter] = createSignal<ThreadFilter>('all')
   const visibleThreads = () => filterThreads(props.threads, filter())
 
+  // ---- Pinning ------------------------------------------------------------
+  // Per-thread in-flight guard, keyed by sessionId (same shape as pendingRegen).
+  const [pinPending, setPinPending] = createSignal<ReadonlySet<string>>(new Set())
+  // A short-lived line under the filter row. This is the "refuse with a hint"
+  // half of the cap: the pin control is never DISABLED at three pins, because
+  // the thread list is stale-while-revalidating and can be a refetch behind
+  // another tab — a disabled state computed from it would be wrong in both
+  // directions (blocking a legitimate pin, or inviting one the server refuses).
+  // The server owns the count; the hint reports its answer and names the limit.
+  const [pinHint, setPinHint] = createSignal<string | null>(null)
+  let pinHintTimer: ReturnType<typeof setTimeout> | undefined
+  const showPinHint = (message: string) => {
+    setPinHint(message)
+    clearTimeout(pinHintTimer)
+    pinHintTimer = setTimeout(() => setPinHint(null), PIN_HINT_MS)
+  }
+  onCleanup(() => clearTimeout(pinHintTimer))
+
+  const handleTogglePin = async (e: MouseEvent, thread: ChatThreadSummary) => {
+    // The control is a sibling of the row button rather than a child, so this
+    // is belt-and-braces rather than load-bearing — but a future layout change
+    // must not silently turn a pin click into a thread selection.
+    e.stopPropagation()
+    e.preventDefault()
+    if (pinPending().has(thread.id)) return
+    const wantPinned = !thread.pinnedAt
+    setPinPending((prev) => new Set(prev).add(thread.id))
+    try {
+      const result = await setConversationPinned(thread.id, wantPinned)
+      if (result.outcome === 'cap_reached') {
+        showPinHint(`Only ${result.limit} conversations can be pinned — unpin one first.`)
+        return
+      }
+      if (result.outcome === 'not_found') {
+        showPinHint('That conversation is no longer available.')
+        return
+      }
+      props.onPinChanged?.()
+    } catch (err) {
+      // Surfaced, not swallowed: the row's glyph does not move on its own, so
+      // a silent failure would read as a dead button.
+      console.error('[sidebar] pin toggle failed:', err)
+      showPinHint('Could not update the pin. Try again.')
+    } finally {
+      setPinPending((prev) => {
+        const next = new Set(prev)
+        next.delete(thread.id)
+        return next
+      })
+    }
+  }
+
   const handleRegenerate = async (e: MouseEvent, threadId: string) => {
     // Stop the click from also selecting the thread.
     e.stopPropagation()
@@ -786,6 +853,26 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
               </button>
             </div>
           </Show>
+          {/* Pin refusal / failure hint. `role="status"` so the refusal is
+              announced rather than only drawn — the pin control that produced
+              it does not change state, so nothing else tells a screen-reader
+              user the click was rejected. */}
+          <Show when={pinHint()}>
+            {(message) => (
+              <div
+                role="status"
+                data-testid="pin-hint"
+                m="x-2 b-1"
+                p="2"
+                rounded="md"
+                bg="ui-bg-tertiary"
+                border="1 ui-border-primary"
+                text="xs ui-text-secondary"
+              >
+                {message()}
+              </div>
+            )}
+          </Show>
           <div flex="1" overflow="auto">
             <Show
               when={visibleThreads().length > 0}
@@ -817,140 +904,150 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         : 'Finished while you were away'
                     }
                     return (
-                      <button
-                        onClick={() =>
-                          selectionMode() ? toggleRow(thread) : props.onSelectThread(thread.id)
-                        }
-                        w="full"
-                        text="left"
-                        p="3"
-                        rounded="md"
-                        bg={isSelected() ? 'cyber-700/30' : ''}
-                        hover="bg-ui-bg-hover"
-                        transition="all"
-                        border={
-                          isSelected() ? '1 ui-accent/40' : '1 transparent hover:ui-accent/30'
-                        }
-                        cursor="pointer"
-                        data-testid="thread-row"
-                        data-placeholder={thread.isPlaceholder ? '' : undefined}
-                        data-completed={completion()?.outcome}
-                        title={completionTitle()}
-                        relative=""
-                        class={`group ${rowFlashClass(completion())}`}
-                        style={{ 'border-color': completionBorderColor(completion()) }}
-                      >
-                        {/* Inline padding-right: two hover actions need
-                            ~3.5rem clearance, and new attributify spacing
-                            literals are extractor roulette (see t-1.5). */}
-                        <div
-                          flex="~"
-                          items="center"
-                          gap="1.5"
-                          style={{ 'padding-right': '3.5rem' }}
+                      // The row is a <button>, so an interactive pin control
+                      // cannot live inside it — nested buttons are invalid and
+                      // the browser hoists them out of the DOM. The wrapper
+                      // makes the pin a SIBLING instead, which is what lets it
+                      // be a real focusable button carrying `aria-pressed`
+                      // rather than the aria-hidden click-target span the two
+                      // older hover actions use. It also carries `.group`, so
+                      // the hover-reveal rule reaches the pin; the row button
+                      // keeps its own `.group` for the actions still inside it.
+                      <div relative="" class="group">
+                        <button
+                          onClick={() =>
+                            selectionMode() ? toggleRow(thread) : props.onSelectThread(thread.id)
+                          }
+                          w="full"
+                          text="left"
+                          p="3"
+                          rounded="md"
+                          bg={isSelected() ? 'cyber-700/30' : ''}
+                          hover="bg-ui-bg-hover"
+                          transition="all"
+                          border={
+                            isSelected() ? '1 ui-accent/40' : '1 transparent hover:ui-accent/30'
+                          }
+                          cursor="pointer"
+                          data-testid="thread-row"
+                          data-placeholder={thread.isPlaceholder ? '' : undefined}
+                          data-completed={completion()?.outcome}
+                          title={completionTitle()}
+                          relative=""
+                          class={`group ${rowFlashClass(completion())}`}
+                          style={{ 'border-color': completionBorderColor(completion()) }}
                         >
-                          {/* Select-mode checkbox (#71) — a styled span, not
+                          {/* Inline padding-right: three hover actions need
+                            ~5rem clearance, and new attributify spacing
+                            literals are extractor roulette (see t-1.5). */}
+                          <div
+                            flex="~"
+                            items="center"
+                            gap="1.5"
+                            style={{ 'padding-right': '5rem' }}
+                          >
+                            {/* Select-mode checkbox (#71) — a styled span, not
                               an <input>: rows are <button>s and nesting an
                               interactive element would break semantics.
                               Running/placeholder rows render it dimmed and
                               toggleRow() no-ops for them. */}
-                          <Show when={selectionMode()}>
-                            <span
-                              role="checkbox"
-                              aria-checked={selectedIds().has(thread.id) ? 'true' : 'false'}
-                              aria-disabled={
-                                canDeleteRow({
-                                  isPlaceholder: thread.isPlaceholder,
-                                  isProcessing: live(),
-                                })
-                                  ? undefined
-                                  : 'true'
-                              }
-                              class={
-                                selectedIds().has(thread.id)
-                                  ? 'i-material-symbols-check-box'
-                                  : 'i-material-symbols-check-box-outline-blank'
-                              }
-                              style={{
-                                width: '16px',
-                                height: '16px',
-                                'flex-shrink': 0,
-                                color: selectedIds().has(thread.id)
-                                  ? '#22d3ee'
-                                  : 'var(--ui-text-tertiary)',
-                                opacity: canDeleteRow({
-                                  isPlaceholder: thread.isPlaceholder,
-                                  isProcessing: live(),
-                                })
-                                  ? 1
-                                  : 0.35,
-                              }}
-                            />
-                          </Show>
-                          {/* Agent identity (#60) — muted so the title stays
+                            <Show when={selectionMode()}>
+                              <span
+                                role="checkbox"
+                                aria-checked={selectedIds().has(thread.id) ? 'true' : 'false'}
+                                aria-disabled={
+                                  canDeleteRow({
+                                    isPlaceholder: thread.isPlaceholder,
+                                    isProcessing: live(),
+                                  })
+                                    ? undefined
+                                    : 'true'
+                                }
+                                class={
+                                  selectedIds().has(thread.id)
+                                    ? 'i-material-symbols-check-box'
+                                    : 'i-material-symbols-check-box-outline-blank'
+                                }
+                                style={{
+                                  width: '16px',
+                                  height: '16px',
+                                  'flex-shrink': 0,
+                                  color: selectedIds().has(thread.id)
+                                    ? '#22d3ee'
+                                    : 'var(--ui-text-tertiary)',
+                                  opacity: canDeleteRow({
+                                    isPlaceholder: thread.isPlaceholder,
+                                    isProcessing: live(),
+                                  })
+                                    ? 1
+                                    : 0.35,
+                                }}
+                              />
+                            </Show>
+                            {/* Agent identity (#60) — muted so the title stays
                               the row's anchor, taking the agent's accent
                               family on row hover and while selected. The
                               colour rides in as a custom property because
                               it's per-row: `.agent-glyph` (a preflight rule)
                               owns the rest states, since a dynamic utility
                               class would never be extracted. */}
-                          <Show when={threadIcon(thread)}>
-                            {(icon) => (
-                              <span
-                                class={`${icon()} agent-glyph`}
-                                aria-hidden="true"
-                                data-lit={isSelected() ? 'true' : undefined}
-                                style={{
-                                  width: '14px',
-                                  height: '14px',
-                                  'flex-shrink': 0,
-                                  '--agent-accent': accentColor(thread.agentAccent),
-                                }}
-                              />
-                            )}
-                          </Show>
-                          <StatusBadge indicator={indicator()} />
-                          <div
-                            text={
-                              thread.isPlaceholder ? 'sm ui-text-tertiary' : 'sm ui-text-primary'
-                            }
-                            font={thread.isPlaceholder ? 'normal italic' : 'medium'}
-                            truncate
-                            flex="1"
-                          >
-                            {thread.isPlaceholder
-                              ? PLACEHOLDER_TITLE
-                              : (thread.title ?? '(untitled)')}
+                            <Show when={threadIcon(thread)}>
+                              {(icon) => (
+                                <span
+                                  class={`${icon()} agent-glyph`}
+                                  aria-hidden="true"
+                                  data-lit={isSelected() ? 'true' : undefined}
+                                  style={{
+                                    width: '14px',
+                                    height: '14px',
+                                    'flex-shrink': 0,
+                                    '--agent-accent': accentColor(thread.agentAccent),
+                                  }}
+                                />
+                              )}
+                            </Show>
+                            <StatusBadge indicator={indicator()} />
+                            <div
+                              text={
+                                thread.isPlaceholder ? 'sm ui-text-tertiary' : 'sm ui-text-primary'
+                              }
+                              font={thread.isPlaceholder ? 'normal italic' : 'medium'}
+                              truncate
+                              flex="1"
+                            >
+                              {thread.isPlaceholder
+                                ? PLACEHOLDER_TITLE
+                                : (thread.title ?? '(untitled)')}
+                            </div>
                           </div>
-                        </div>
-                        {/* While a run streams, the timestamp row gives way
+                          {/* While a run streams, the timestamp row gives way
                             to the live status + mini progress strip — the
                             same per-session controller that feeds the
                             in-chat bar (#105). Reappears when the run ends. */}
-                        {/* The fallback's `data-testid` lets the browser suite
+                          {/* The fallback's `data-testid` lets the browser suite
                             take it OUT of the page before a screenshot
                             comparison: it is a RELATIVE time ("just now", "3m
                             ago"), so it changes between two otherwise identical
                             runs — and its WIDTH changes with it, which is why it
                             is removed rather than masked. */}
-                        {/* Inline padding-right for the tier glyph below,
+                          {/* Inline padding-right for the tier glyph below,
                             which is absolutely positioned at the same corner:
                             without it the running row's progress strip runs
                             under it. Same reason and same idiom as the title
                             row's clearance above. */}
-                        <div style={{ 'padding-right': '1.5rem' }}>
-                          <Show
-                            when={live()}
-                            fallback={
-                              <div data-testid="thread-time" text="xs ui-text-tertiary" m="t-1">
-                                {formatTimestamp(thread.updatedAt)}
-                              </div>
-                            }
-                          >
-                            <RowProgress snapshot={registry.progress(thread.id).snapshot()} />
-                          </Show>
-                        </div>
-                        {/* Which infrastructure this conversation runs on.
+                          <div style={{ 'padding-right': '1.5rem' }}>
+                            <Show
+                              when={live()}
+                              fallback={
+                                <div data-testid="thread-time" text="xs ui-text-tertiary" m="t-1">
+                                  {formatTimestamp(thread.updatedAt)}
+                                </div>
+                              }
+                            >
+                              <RowProgress snapshot={registry.progress(thread.id).snapshot()} />
+                            </Show>
+                          </div>
+                          {/* Which infrastructure this conversation runs on.
                             ALWAYS visible, unlike the two hover actions above
                             it: those are things you can do to the row, this is
                             something true of it — and a setting only visible
@@ -967,108 +1064,160 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             not on the spacing scale — and coloured with a theme
                             token, since the tier is not a status and has no hue
                             of its own to claim. */}
-                        <Show when={thread.inferenceTier}>
-                          {(tier) => (
-                            <span
-                              role="img"
-                              aria-label={tierRowLabel(tier())}
-                              title={tierRowLabel(tier())}
-                              data-tier={tier()}
-                              class={TIER_ICONS[tier()]}
-                              text="ui-text-tertiary"
-                              style={{
-                                position: 'absolute',
-                                bottom: '0.5rem',
-                                right: '0.5rem',
-                                width: '14px',
-                                height: '14px',
-                                display: 'block',
-                              }}
-                            />
-                          )}
-                        </Show>
-                        {/* Hover-reveal delete button (#71). Hidden — not
+                          <Show when={thread.inferenceTier}>
+                            {(tier) => (
+                              <span
+                                role="img"
+                                aria-label={tierRowLabel(tier())}
+                                title={tierRowLabel(tier())}
+                                data-tier={tier()}
+                                class={TIER_ICONS[tier()]}
+                                text="ui-text-tertiary"
+                                style={{
+                                  position: 'absolute',
+                                  bottom: '0.5rem',
+                                  right: '0.5rem',
+                                  width: '14px',
+                                  height: '14px',
+                                  display: 'block',
+                                }}
+                              />
+                            )}
+                          </Show>
+                          {/* Hover-reveal delete button (#71). Hidden — not
                             disabled — for placeholders and running rows: a
                             mid-run delete would be resurrected by the run's
                             end-save upsert, so the affordance simply isn't
                             offered (mid-run cancel is #105 PR 3 scope). Same
                             span-not-button idiom as the regenerate action. */}
-                        <Show
-                          when={
-                            !selectionMode() &&
-                            canDeleteRow({
-                              isPlaceholder: thread.isPlaceholder,
-                              isProcessing: live(),
-                            })
-                          }
-                        >
-                          <span
-                            aria-hidden="true"
-                            onClick={(e) => requestDelete(e, thread)}
-                            title="Delete conversation"
-                            style={{
-                              position: 'absolute',
-                              top: '0.5rem',
-                              right: '0.5rem',
-                              padding: '0.25rem',
-                              'border-radius': '0.375rem',
-                              cursor: 'pointer',
-                            }}
-                            text="xs ui-text-tertiary hover:red-400"
-                            transition="opacity"
-                            class="opacity-0 group-hover:opacity-100"
+                          <Show
+                            when={
+                              !selectionMode() &&
+                              canDeleteRow({
+                                isPlaceholder: thread.isPlaceholder,
+                                isProcessing: live(),
+                              })
+                            }
                           >
                             <span
-                              class="i-material-symbols-delete-outline"
-                              style={{ width: '14px', height: '14px', display: 'block' }}
-                            />
-                          </span>
-                        </Show>
-                        {/* Hover-reveal regenerate-title button. Hidden for
+                              aria-hidden="true"
+                              onClick={(e) => requestDelete(e, thread)}
+                              title="Delete conversation"
+                              style={{
+                                position: 'absolute',
+                                top: '0.5rem',
+                                right: '0.5rem',
+                                padding: '0.25rem',
+                                'border-radius': '0.375rem',
+                                cursor: 'pointer',
+                              }}
+                              text="xs ui-text-tertiary hover:red-400"
+                              transition="opacity"
+                              class="opacity-0 group-hover:opacity-100"
+                            >
+                              <span
+                                class="i-material-symbols-delete-outline"
+                                style={{ width: '14px', height: '14px', display: 'block' }}
+                              />
+                            </span>
+                          </Show>
+                          {/* Hover-reveal regenerate-title button. Hidden for
                             placeholder rows (nothing persisted yet). Spinning
                             while the LLM call is in flight. Sits in a span
                             outside the outer <button> hit area so nested-
                             interactive semantics stay valid. Shifted left to
                             make room for the delete action at right:0.5rem. */}
-                        <Show when={!selectionMode() && !thread.isPlaceholder}>
-                          <span
-                            aria-hidden="true"
-                            onClick={(e) => handleRegenerate(e, thread.id)}
-                            title="Regenerate title"
-                            style={{
-                              position: 'absolute',
-                              top: '0.5rem',
-                              right: '2rem',
-                              padding: '0.25rem',
-                              'border-radius': '0.375rem',
-                              cursor: 'pointer',
-                              opacity: isRegenerating() ? 1 : undefined,
-                              'pointer-events': isRegenerating() ? 'none' : 'auto',
-                            }}
-                            text="xs ui-text-tertiary hover:ui-accent"
-                            transition="opacity"
-                            class={
-                              isRegenerating() ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                            }
-                          >
-                            <svg
-                              width="14"
-                              height="14"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                              class={isRegenerating() ? 'animate-spin' : ''}
+                          <Show when={!selectionMode() && !thread.isPlaceholder}>
+                            <span
+                              aria-hidden="true"
+                              onClick={(e) => handleRegenerate(e, thread.id)}
+                              title="Regenerate title"
+                              style={{
+                                position: 'absolute',
+                                top: '0.5rem',
+                                right: '2rem',
+                                padding: '0.25rem',
+                                'border-radius': '0.375rem',
+                                cursor: 'pointer',
+                                opacity: isRegenerating() ? 1 : undefined,
+                                'pointer-events': isRegenerating() ? 'none' : 'auto',
+                              }}
+                              text="xs ui-text-tertiary hover:ui-accent"
+                              transition="opacity"
+                              class={
+                                isRegenerating()
+                                  ? 'opacity-100'
+                                  : 'opacity-0 group-hover:opacity-100'
+                              }
                             >
-                              <path
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                stroke-width="2"
-                                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                              />
-                            </svg>
-                          </span>
+                              <svg
+                                width="14"
+                                height="14"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                                class={isRegenerating() ? 'animate-spin' : ''}
+                              >
+                                <path
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  stroke-width="2"
+                                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                                />
+                              </svg>
+                            </span>
+                          </Show>
+                        </button>
+                        {/* Pin toggle. Unlike delete, it stays offered while a
+                          run is in flight: pinning writes only `pinned_at`,
+                          which no turn-save touches, so there is nothing for
+                          the run's end-save to resurrect. Hidden for
+                          placeholders (nothing persisted to pin) and in
+                          select mode, like its neighbours. */}
+                        <Show when={!selectionMode() && !thread.isPlaceholder}>
+                          <button
+                            onClick={(e) => handleTogglePin(e, thread)}
+                            title={
+                              thread.pinnedAt ? 'Unpin conversation' : 'Pin conversation to top'
+                            }
+                            aria-label={
+                              thread.pinnedAt ? 'Unpin conversation' : 'Pin conversation to top'
+                            }
+                            aria-pressed={thread.pinnedAt ? 'true' : 'false'}
+                            data-testid="pin-toggle"
+                            data-pinned={thread.pinnedAt ? '' : undefined}
+                            disabled={pinPending().has(thread.id)}
+                            absolute=""
+                            p="1"
+                            rounded="md"
+                            text={
+                              thread.pinnedAt
+                                ? 'xs ui-accent'
+                                : 'xs ui-text-tertiary hover:ui-accent'
+                            }
+                            transition="opacity"
+                            /* A pinned row reads as pinned WITHOUT hover — that
+                             is the state, not an affordance. An unpinned one
+                             reveals on row hover like the other two actions,
+                             and on keyboard focus, which opacity alone would
+                             otherwise hide from a tabbing user. */
+                            op={thread.pinnedAt ? '100' : '0 group-hover:100 focus:100'}
+                            style={{ top: '0.5rem', right: '3.5rem', cursor: 'pointer' }}
+                          >
+                            <span
+                              class={
+                                thread.pinnedAt
+                                  ? 'i-material-symbols-keep'
+                                  : 'i-material-symbols-keep-outline'
+                              }
+                              w="3.5"
+                              h="3.5"
+                              block=""
+                              aria-hidden="true"
+                            />
+                          </button>
                         </Show>
-                      </button>
+                      </div>
                     )
                   }}
                 </For>

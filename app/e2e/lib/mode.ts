@@ -116,15 +116,41 @@ export const SMALL_MODEL = 'qwen3.5-4b-instruct'
  * are there to find.
  *
  * IT HAS A CEILING NOW, and it is 180s — `VerdaQwen`'s `request_timeout_ms`.
- * Since wake-then-run the cold start is paid by the wake ping (bounded
- * separately, at `VERDA_WAKE_TIMEOUT_MS` = 300s) and scenario 4 aims its delay
- * PAST the ping, at a real BAML call. So a value at or above 180 000 no longer
+ * Since wake-then-run the cold start is paid by the wake poll (bounded
+ * separately, at `VERDA_WAKE_TIMEOUT_MS` = 600s overall) and scenario 4 aims its
+ * delay PAST the wake, at a real BAML call. So a value at or above 180 000 no longer
  * asks "does the stack survive a slow call" — it asks the client to break its
  * own budget, and scenario 4 would go red for the one reason that is not a
  * finding. The old advice here was `E2E_COLD_START_MS=180000` for a
  * pre-release run; that number is now exactly the wrong one.
  */
 export const COLD_START_MS = Number.parseInt(process.env.E2E_COLD_START_MS ?? '90000', 10)
+
+/**
+ * What the hermetic run sets `VERDA_WAKE_ATTEMPT_TIMEOUT_MS` to.
+ *
+ * The wake became a POLL on 2026-08-27 — short attempts, retried until one
+ * answers — because the live platform was observed ABANDONING every request
+ * that arrived while the container was starting. The fake endpoint does not do
+ * that: a `cold-start` fault withholds a response and then answers it, i.e. the
+ * fake is a pure queue-and-answer deployment. Under the shipped 30s attempt
+ * bound the poll would abandon the fake's 90s delay at second 30 and the next
+ * attempt (the fault spent) would answer instantly — so scenario 8 would stop
+ * observing a 90s wait, scenario 4's `wake: false` filter would be doing work
+ * the timeout had already done, and both would be measuring the poll's cadence
+ * rather than the budget each was written for.
+ *
+ * So the hermetic attempt bound is set ABOVE the injected delay, which makes the
+ * fake's one-shot behaviour and the poll's first attempt line up: one attempt,
+ * one wait, exactly the shape those scenarios assert. The poll's RETRY behaviour
+ * is not configured away — it has fake-timer unit coverage in
+ * `verda-wake.test.ts`, and scenario 8's "keeps polling until the box answers"
+ * lowers this var itself for the one test that is about it.
+ *
+ * Derived from {@link COLD_START_MS} rather than fixed, so raising
+ * `E2E_COLD_START_MS` cannot silently push the delay past the attempt bound.
+ */
+export const WAKE_ATTEMPT_TIMEOUT_MS = COLD_START_MS + 30_000
 
 /** Per-turn timeout. Generous in both modes: the cold-start scenario is the
  *  point of the suite, so a turn budget tighter than the cold start would

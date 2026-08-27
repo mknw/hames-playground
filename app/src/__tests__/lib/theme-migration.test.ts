@@ -26,8 +26,8 @@ function tsxFiles(dir: string): string[] {
 }
 
 // The chrome: components and routed pages. `src/lib` is excluded on purpose —
-// `turn-colors.ts` and `agent-palette.ts` are graph *data* palettes handed to
-// Cytoscape as values, and those are not theme roles.
+// `agent-palette.ts` is a graph *data* palette handed to Cytoscape as values,
+// and those are not theme roles.
 const CHROME = [...tsxFiles('src/components'), ...tsxFiles('src/routes')].sort()
 
 describe('the migrated chrome', () => {

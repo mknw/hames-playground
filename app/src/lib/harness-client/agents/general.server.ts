@@ -106,7 +106,11 @@ export const generalAgent: AgentConfig = {
   id: 'general',
   name: 'General Agent',
   description: 'Plans first, then executes across every available tool namespace',
-  icon: 'i-material-symbols-map-outline',
+  welcome:
+    'I write a plan first, then work through it across every tool I have — the ' +
+    'knowledge graph, web search and fetch, library docs, and the memory graph. ' +
+    'Best for questions that need more than one of those.',
+  icon: 'i-material-symbols-robot-2-outline',
   accent: 'indigo',
   servers: ['neo4j-cypher', 'web_search', 'fetch', 'context7', 'memory'],
   createPatterns,

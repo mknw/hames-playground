@@ -15,7 +15,7 @@ import type {
   ToolResultEventData,
   UserMessageEventData,
 } from '~/lib/harness-patterns'
-import { eventIcons } from '~/lib/observability/event-styles'
+import { eventColors, eventIconClasses } from '~/lib/observability/event-styles'
 import { LLMCallTabs } from './LLMCallTabs'
 import { SanitizedChip } from '../SanitizedChip'
 
@@ -429,7 +429,11 @@ export const ToolPairDetail = (props: {
       <div flex="~" items="center" justify="between" p="4" border="b ui-border-primary">
         <div flex="~ col" gap="1">
           <div flex="~" items="center" gap="2">
-            <span text="lg">🔧</span>
+            <span
+              class="i-material-symbols-build-outline"
+              text="lg ui-text-secondary"
+              aria-hidden="true"
+            />
             <span text="sm ui-text-primary" font="medium">
               tool call
             </span>
@@ -576,7 +580,12 @@ export const EventDetailPanel = (props: {
       <div flex="~" items="center" justify="between" p="4" border="b ui-border-primary">
         <div flex="~ col" gap="1">
           <div flex="~" items="center" gap="2">
-            <span text="lg">{eventIcons[type]}</span>
+            <span
+              class={eventIconClasses[type]}
+              text="lg"
+              style={{ color: eventColors[type] }}
+              aria-hidden="true"
+            />
             <span text="sm ui-text-primary" font="medium">
               {type.replace(/_/g, ' ')}
             </span>

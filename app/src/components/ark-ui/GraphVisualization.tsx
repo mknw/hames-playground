@@ -39,8 +39,9 @@ export interface GraphVisualizationProps {
   layout?: 'cose' | 'cola' | 'dagre' | 'circle' | 'grid' | 'breadthfirst'
   /** Additional Cytoscape stylesheets appended after base styles (e.g. per-turn colors) */
   extraStyles?: StylesheetJsonBlock[]
-  /** Emoji for the built-in empty-graph state, in place of the default glyph. */
-  emptyIcon?: string
+  /** Icon utility class (`i-material-symbols-*`) for the built-in empty-graph
+   *  state, in place of the default glyph. */
+  emptyIconClass?: string
   /** Per-tab copy for the built-in empty-graph state. */
   emptyMessage?: string
 }
@@ -1107,7 +1108,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
           >
             <div text="center" max-w="sm" p="x-6">
               <Show
-                when={props.emptyIcon}
+                when={props.emptyIconClass}
                 fallback={
                   <svg
                     width="96"
@@ -1126,7 +1127,20 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                   </svg>
                 }
               >
-                <div text="5xl">{props.emptyIcon}</div>
+                {(iconClass) => (
+                  /* The flex wrapper is what centres it AND what makes `w`/`h`
+                     apply — an icon utility sets a 1em box but no `display`, so
+                     an icon span outside a flex parent stays a zero-size inline. */
+                  <div flex="~" justify="center">
+                    <span
+                      class={iconClass()}
+                      w="16"
+                      h="16"
+                      text="ui-text-tertiary"
+                      aria-hidden="true"
+                    />
+                  </div>
+                )}
               </Show>
               <div text="xl ui-text-secondary" font="medium" m="t-4">
                 No Graph Data

@@ -7,7 +7,7 @@
 
 # Network graphs (Cytoscape.js)
 
-Applies to `GraphVisualization.tsx`, the Neo4j / Memory / All tabs inside
+Applies to `GraphVisualization.tsx`, the Neo4j / Memory tabs inside
 `SupportPanel`, and anything else that renders nodes and edges.
 
 Upstream classifies network graphs as **accessibility risk: high**. That is the
@@ -54,9 +54,10 @@ adjacency view (§3). A frozen canvas is worse than a table.
   chrome, or the other way round.
 - **Edge style is a channel too.** Solid vs dashed vs width distinguishes
   relationship kinds without spending another hue.
-- The per-turn colour coding on the All tab (`GraphVisualization`'s `extraStyles`
-  prop) is an additional layer on top of type colour — check that the two do not
-  collide before adding a third.
+- `GraphVisualization`'s `extraStyles` prop layers a second stylesheet on top of
+  type colour — the Neo4j tab's touched-node highlight is the one live caller.
+  Check that the two do not collide before adding a third. (The All tab's
+  per-turn palette was the other caller; both it and the tab are gone.)
 
 ## 3. The adjacency view is the accessible source of truth
 

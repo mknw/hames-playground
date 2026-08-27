@@ -144,6 +144,8 @@ export async function getAgentList(): Promise<
     id: string
     name: string
     description: string
+    /** Per-agent greeting for an empty conversation — see `AgentConfig.welcome`. */
+    welcome: string
     icon: string
     /** Accent-family token; resolve with `accentColor()` (lib/agent-palette). */
     accent: string

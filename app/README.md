@@ -23,8 +23,7 @@ src/
 │   ├── ChatSidebar.tsx        # Thread list: live progress strip + completion marks (#105), agent icons + collapsed rail (#60), delete + select mode (#71)
 │   ├── ChatMessages.tsx       # Markdown rendering with interactive graph entity spans
 │   ├── GraphVisualization.tsx  # Cytoscape.js graph with controls, editing, extraStyles
-│   ├── SupportPanel.tsx       # Tabbed panel (lazyMount): Neo4j, Memory, All, Context manager, Data, Terminal, Actions, Documents
-│   ├── AllGraphTab.tsx        # Turn-based graph explorer (FloatingPanel + color-coded Cytoscape)
+│   ├── SupportPanel.tsx       # Tabbed panel (lazyMount): Neo4j, Memory, Context manager, Data, Terminal
 │   ├── SettingsPanel.tsx      # Harness settings FloatingPanel (sliders, number inputs)
 │   └── ObservabilityPanel.tsx  # Event timeline + LLM call detail
 ├── lib/
@@ -49,8 +48,7 @@ src/
 │   ├── settings.ts            # HarnessSettings type, defaults, MODEL_CONTEXT_WINDOWS
 │   ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
 │   ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
-│   ├── turn-utils.ts          # splitIntoTurns(), extractTurnGraphElements()
-│   ├── turn-colors.ts         # Per-turn color palette for graph visualization
+│   ├── turn-utils.ts          # findLastUserMessageIndex() — where "this turn" starts
 │   ├── graph-merge.ts         # mergeGraphElements() — accumulator dedup + touched-flag refresh
 │   ├── neo4j/
 │   │   ├── queries.ts         # Schema, manual Cypher, node properties
@@ -78,7 +76,6 @@ Conversations are persisted to Postgres in a single `conversations` table; the `
 - Entity names in chat messages are interactive: hover highlights graph elements, click toggles persistent highlight
 - Visual controls: node size, edge width, font size, edge labels
 - Node property editing and relation creation directly from the graph
-- **All tab — Turn Explorer**: FloatingPanel with horizontal turn columns, multi-select turns, color-coded per-turn visualization with legend overlay
 - `lazyMount` + `unmountOnExit` on tabs prevents idle Cytoscape instances
 
 ### Settings & Token Budget

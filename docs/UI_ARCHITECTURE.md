@@ -424,26 +424,23 @@ Tabbed right panel. **Context manager is the default tab.** Uses `lazyMount` + `
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Neo4j                           | Graph visualization for Neo4j query results (accumulated, live sync)                                                                                                                                                                                        |
 | Memory                          | Graph visualization for Memory MCP entities                                                                                                                                                                                                                 |
-| All (Turn Explorer)             | Turn-based graph explorer — select specific turns, color-coded                                                                                                                                                                                              |
 | **Context manager** _(default)_ | Event timeline + LLM call detail                                                                                                                                                                                                                            |
 | Data                            | Data Stash — two collapsible groups: **Your Uploads** (drag-drop/picker + document chips) and **Agent Findings** (tool-result icons by turn), each with hide/archive/delete. See [DATA_STASH.md](DATA_STASH.md) for the upload→chunk→embed→search pipeline. |
 
-**Conversation Sync toggle:** The Neo4j and Memory graph tabs have a ⏸/▶ "Sync" button (cyan when live, amber when paused). Implemented in `GraphTabContent` via a `syncEnabled` signal. When paused, the current element list is snapshotted into `frozenElements` and passed to `GraphVisualization` instead of live `props.elements`. Resuming restores the live feed.
+**Conversation Sync toggle:** The Neo4j and Memory graph tabs have a pause/play "Sync" button (cyan when live, amber when paused; the state is in its `aria-label`, since the glyph is a `material-symbols` icon). Implemented in `GraphTabContent` via a `syncEnabled` signal. When paused, the current element list is snapshotted into `frozenElements` and passed to `GraphVisualization` instead of live `props.elements`. Resuming restores the live feed.
 
 **Touched-node highlight (Neo4j tab only):** When an agent runs a Neo4j query, the `enrichNeo4jResult` hook (`onToolResult` on `simpleLoop`) attaches a 1-hop neighborhood plus a `_touched` list to the tool result. The extractor tags nodes whose name is in that list with `data.touched = true`, and the Neo4j tab passes a static `TOUCHED_NODE_STYLES` block (`node[touched]` selector → magenta fill/border + glow) as `extraStyles` to `GraphVisualization`. The result: nodes the agent's query _actually targeted_ render in magenta, while neighborhood-context nodes render in the default cyan. The Memory tab does not receive this stylesheet.
 
 **Touched-flag refresh across turns** (`app/src/lib/graph-merge.ts`): `index.tsx` accumulates elements via `mergeGraphElements(prev, fresh)` rather than ad-hoc dedup. When a fresh batch carries any element with `touched: true`, the merger first strips the flag from all prior elements, then re-applies it to elements in the new batch — so the magenta highlight tracks the most recent enriched query and doesn't linger on nodes from earlier topics. When the fresh batch carries no `touched` flags (e.g., a non-enriched tool, or a count-only query), prior `touched` flags are preserved.
 
-**All Tab — Turn Explorer (AllGraphTab.tsx):**
-The All tab does not use the accumulated `graphElements` signal. Instead, it derives graph elements on-demand from `contextEvents`:
-
-1. `splitIntoTurns()` (from `turn-utils.ts`) splits the event stream at `user_message` boundaries
-2. User opens the FloatingPanel ("Turns" button) to see turn columns side-by-side
-3. Each column shows turn number, user message preview, and graph-producing tool results
-4. Clicking a turn header toggles its selection; "All"/"None" buttons for bulk selection
-5. `extractMultiTurnGraphElements()` extracts and merges elements from selected turns, tagging each with `data.turn = N`
-6. Cytoscape renders elements with per-turn colors via `extraStyles` prop (attribute selectors: `node[turn=N]`)
-7. A color legend overlay in the bottom-right corner shows the turn-color mapping
+**The "All" tab is gone (alpha preview).** It was a third graph tab that derived
+its elements from `contextEvents` on demand — `splitIntoTurns()` +
+`extractMultiTurnGraphElements()` from `turn-utils.ts`, rendered with a per-turn
+palette from `turn-colors.ts` through the `extraStyles` prop and driven from a
+FloatingPanel "Turn Explorer". The owner removed it as showing nothing useful,
+and `AllGraphTab.tsx`, `turn-colors.ts` and the per-turn half of `turn-utils.ts`
+went with it (`findLastUserMessageIndex` stays — the Data Stash partition and the
+citation extractor both use it). Git holds the panel.
 
 #### 7. GraphVisualization.tsx
 
@@ -451,7 +448,7 @@ Cytoscape.js graph component with dark futuristic theme.
 
 **Rendering lifecycle:** With `unmountOnExit` on `Tabs.Root`, Cytoscape instances are fully created/destroyed when switching tabs. A `ResizeObserver` on `containerRef` drives a `visible()` signal to defer layout until the container has non-zero dimensions. The observer callback guards against a detached `containerRef` and defers `setVisible` + `cy.resize()` to `requestAnimationFrame` so that a notify-during-layout firing after the tab unmounts doesn't surface as the `ResizeObserver loop completed with undelivered notifications` warning (issue #38). The component-scoped `resizeObserver` and `resizeRafId` are torn down explicitly in `onCleanup` alongside `cy.destroy()`.
 
-**Base styles** are extracted to a module-level `BASE_STYLES` constant. The `extraStyles` prop appends additional stylesheets (e.g. per-turn color rules) — a reactive `createEffect` re-applies `cy.style([...BASE_STYLES, ...extraStyles])` when they change.
+**Base styles** are extracted to a module-level `BASE_STYLES` constant. The `extraStyles` prop appends additional stylesheets (e.g. the touched-node highlight) — a reactive `createEffect` re-applies `cy.style([...BASE_STYLES, ...extraStyles])` when they change.
 
 **Features:**
 
@@ -462,7 +459,7 @@ Cytoscape.js graph component with dark futuristic theme.
 - Relation creation mode (purple banner, click source then target)
 - Node creation form ("+ Node" toolbar button — Name, Label, Description)
 - `highlightedIds` prop adds `.highlighted` CSS class to matching elements
-- `extraStyles` prop for dynamic Cytoscape stylesheet injection (used by AllGraphTab for turn colors)
+- `extraStyles` prop for dynamic Cytoscape stylesheet injection (the Neo4j tab's touched-node highlight is the live caller)
 
 **Props:**
 
@@ -582,13 +579,6 @@ index.tsx (view state only)
             ├─> GraphTabContent (Neo4j/Memory tabs)
             │       └─> GraphVisualization (elements, highlightedIds, onCypherWrite)
             │               └─ Inline edit / relation create / node create → onCypherWrite
-            ├─> AllGraphTabWrapper (All tab — turn-based explorer)
-            │       └─> AllGraphTab
-            │               ├─ splitIntoTurns(contextEvents) → TurnData[]
-            │               ├─ FloatingPanel with TurnColumn[] (horizontal layout)
-            │               ├─ extractMultiTurnGraphElements() → tagged elements
-            │               ├─> GraphVisualization (elements, extraStyles=turnStyles)
-            │               └─ Turn color legend overlay
             ├─> DataStashPanel (events, onStashAction)
             ├─> SettingsPanel (FloatingPanel in ChatSidebar footer)
             │       └─ SliderSetting / NumberSetting components
@@ -986,7 +976,6 @@ app/
 │   │       ├── ChatInput.tsx          # Autoresize textarea
 │   │       ├── GraphVisualization.tsx # Cytoscape graph display (+ extraStyles prop)
 │   │       ├── SupportPanel.tsx       # Tabbed right panel (lazyMount + unmountOnExit)
-│   │       ├── AllGraphTab.tsx        # Turn-based graph explorer (FloatingPanel + color-coded)
 │   │       ├── SettingsPanel.tsx      # Harness settings FloatingPanel (sliders, number inputs)
 │   │       ├── ObservabilityPanel.tsx # Event timeline + tool-pair merging + Save button
 │   │       ├── observability/         # Panel internals: SummaryBar, TimelineRows, EventDetail, LLMCallTabs, PromptView
@@ -1027,13 +1016,12 @@ app/
 │       ├── settings.ts             # HarnessSettings type, defaults, MODEL_CONTEXT_WINDOWS
 │       ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
 │       ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
-│       ├── turn-utils.ts           # splitIntoTurns(), extractTurnGraphElements()
-│       ├── turn-colors.ts         # TURN_COLORS palette, getTurnColor()
+│       ├── turn-utils.ts           # findLastUserMessageIndex() — the turn boundary
 │       ├── observability/         # Pure event-stream projections behind the timeline
 │       │   ├── projection.ts      # buildTimelineItems(), getEventPreview(), getEventLane()
 │       │   ├── prompt-parse.ts    # parsePromptBody(), flattenContent(), formatParamValue()
 │       │   ├── token-totals.ts    # foldTokenTotals(), fmtTok(), fmtEur()
-│       │   └── event-styles.ts    # eventIcons/eventColors tables, getPatternColor()
+│       │   └── event-styles.ts    # eventIconClasses/eventColors tables, getPatternColor()
 │       ├── neo4j/
 │       │   ├── queries.ts         # runManualCypher() (read-only), getNodeProperties()
 │       │   └── graph-edit.server.ts # createGraphNode()/linkGraphNodes()/setGraphNodeProperty() — authenticated, intent-shaped graph writes

@@ -1,11 +1,20 @@
 /**
  * Per-event and per-pattern presentation tables for the observability
  * timeline — pure lookups, no rendering. Split out of
- * `ObservabilityPanel.tsx` (#226 B5); the values are unchanged.
+ * `ObservabilityPanel.tsx` (#226 B5).
  *
  * The colours are consumed through inline `style`, not utility classes, so
  * they are literal hexes by necessity (a dynamic class would never be
  * extracted by UnoCSS).
+ *
+ * The GLYPHS are the opposite case: they are `i-material-symbols-*` utility
+ * classes (they used to be emoji), so the literals below have to be extracted
+ * — which is what the `@unocss-include` marker in this comment buys. UnoCSS's
+ * pipeline rejects plain `.ts` paths without it, and an unextracted icon class
+ * renders as an empty span with no error. See the note at the top of
+ * `uno.config.ts`.
+ *
+ * @unocss-include
  */
 
 import type { EventType } from '../harness-patterns'
@@ -34,22 +43,25 @@ export function getPatternColor(patternId: string): PatternColorEntry {
 // Event Icons and Colors
 // ============================================================================
 
-export const eventIcons: Record<EventType, string> = {
-  user_message: '💬',
-  assistant_message: '🤖',
-  tool_call: '🔧',
-  tool_result: '📥',
-  controller_action: '🎯',
-  critic_result: '📝',
-  pattern_enter: '▶',
-  pattern_exit: '■',
-  approval_request: '⏸️',
-  approval_response: '✅',
-  error: '❌',
-  reference_attached: '🔗',
-  intent_compacted: '🎯',
-  plan_created: '🗺️',
-  content_sanitized: '🛡️',
+export const eventIconClasses: Record<EventType, string> = {
+  user_message: 'i-material-symbols-chat-outline',
+  assistant_message: 'i-material-symbols-smart-toy-outline',
+  tool_call: 'i-material-symbols-build-outline',
+  tool_result: 'i-material-symbols-download',
+  controller_action: 'i-material-symbols-adjust',
+  critic_result: 'i-material-symbols-rate-review-outline',
+  pattern_enter: 'i-material-symbols-play-arrow',
+  pattern_exit: 'i-material-symbols-stop',
+  approval_request: 'i-material-symbols-pause-circle-outline',
+  approval_response: 'i-material-symbols-check-circle-outline',
+  error: 'i-material-symbols-cancel-outline',
+  reference_attached: 'i-material-symbols-link',
+  // Same glyph as controller_action, as the emoji table had: both are an LLM
+  // reasoning step (see the eventColors note below).
+  intent_compacted: 'i-material-symbols-adjust',
+  plan_created: 'i-material-symbols-map-outline',
+  // The same shield SanitizedChip uses for the guard's own chip.
+  content_sanitized: 'i-material-symbols-shield-outline',
 }
 
 export const eventColors: Record<EventType, string> = {

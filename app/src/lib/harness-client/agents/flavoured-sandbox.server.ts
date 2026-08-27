@@ -229,6 +229,10 @@ export const flavouredSandboxAgent: AgentConfig = {
   name: 'Sandbox · Flavoured (router)',
   description:
     'Routes each turn to a purpose-built sandbox flavour — base, image-processing, data or office — over one shared session workspace.',
+  welcome:
+    'Same idea as the session sandbox, but I pick the box per message: a plain ' +
+    'shell, or one already set up for images, for data and charts, or for Word, ' +
+    'Excel and PDF files. Upload what needs working on and say what you want done.',
   icon: 'i-material-symbols-stack-star-outline',
   accent: 'orange',
   servers: [],

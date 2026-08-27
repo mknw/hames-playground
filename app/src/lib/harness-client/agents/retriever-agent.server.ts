@@ -134,6 +134,10 @@ export const retrieverAgent: AgentConfig = {
   name: 'Retriever Agent',
   description:
     'Fast semantic retrieval over uploaded documents (Data Stash), with Neo4j and Web Search routes',
+  welcome:
+    'Upload documents in the Data tab and I answer from them, with a citation ' +
+    'back to the passage I used. I can also go to the knowledge graph or the web ' +
+    'when the answer is not in your files.',
   icon: 'i-material-symbols-document-search-outline',
   accent: 'violet',
   servers: ['neo4j-cypher', 'web_search', 'fetch'],

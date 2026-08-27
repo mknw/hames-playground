@@ -12,7 +12,10 @@
  *     unconfigured — a missing control explains nothing;
  *   - switching threads re-reads, so the previous conversation's tier is never
  *     left on screen against the new one;
- *   - a flip in flight is handed to the composer, so a send cannot overtake it.
+ *   - a flip in flight is handed to the composer, so a send cannot overtake it;
+ *   - a read that FAILS says so. The one path that renders no control is the
+ *     one where the user most needs the reason, and it is carried by a live
+ *     region mounted before it has anything to say.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { installDomStubs } from './dom-stubs'
@@ -174,5 +177,40 @@ describe('switching threads', () => {
     expect(container.textContent).not.toContain('Anthropic')
     resolve?.(state())
     await mounted(container)
+  })
+})
+
+describe('a read that fails', () => {
+  it('says so when the FIRST read fails, instead of rendering nothing at all', async () => {
+    // The one path that produces no control. The message used to be set and
+    // then rendered inside `<Show when={state()}>`, so a rejected first read
+    // left the user with neither the switch nor the reason — on the one widget
+    // that says where their prompts go. Silent degradation on this control is
+    // worse than a missing control, because the absence of a control is at
+    // least visible.
+    getConversationTier.mockRejectedValue(new Error('the database is unavailable'))
+    const { container } = render(() => <ConversationTierSwitch sessionId="c1" />)
+
+    await waitFor(() =>
+      expect(container.textContent).toContain('The model setting could not be read.'),
+    )
+    // Carried by a live region so it is announced, not only drawn.
+    expect(container.querySelector('[role="status"]')).not.toBeNull()
+    // And it really is the no-control case: nothing claims a tier.
+    expect(container.textContent).not.toContain('Private (Verda)')
+  })
+
+  it('mounts the status region before it has anything to say', async () => {
+    // A `role="status"` that appears at the same moment as its text is the
+    // classic live-region pitfall — screen readers commonly announce nothing.
+    // The region is in the tree from the first render and only its content
+    // changes, which is what makes the message above reach a user who is not
+    // looking at it.
+    const { container } = render(() => <ConversationTierSwitch sessionId="c1" />)
+    await mounted(container)
+
+    const live = container.querySelector('[role="status"]')
+    expect(live).not.toBeNull()
+    expect(live!.textContent).toBe('')
   })
 })

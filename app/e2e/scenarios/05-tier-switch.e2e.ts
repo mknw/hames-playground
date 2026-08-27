@@ -1,11 +1,11 @@
 /**
  * Scenario 5 — flipping a conversation's tier switch mid-conversation.
  *
- * The control in the header writes `user_prefs.inference_tier`; every turn
- * reads it once, in `runTurnAndPersist`, and opens an AsyncLocalStorage scope
- * for the whole run. Nothing about that is per-conversation, so a user who
- * flips it between messages expects the NEXT message to move and the thread to
- * be otherwise untouched.
+ * The control beside the agent selector writes `conversations.inference_tier`
+ * (and the user's seed); every turn resolves the tier once, in
+ * `runTurnAndPersist`, and opens an AsyncLocalStorage scope for the whole run.
+ * The scope is per TURN, so a user who flips the switch between messages expects
+ * the NEXT message to move and the thread to be otherwise untouched.
  *
  * Two things have to hold at once, and only one of them is obvious:
  *

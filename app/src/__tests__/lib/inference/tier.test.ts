@@ -134,6 +134,46 @@ describe('resolveConversationTier', () => {
     getStoredInferenceTier.mockResolvedValue('anthropic')
     expect(await resolveConversationTier('never-persisted', 'user-1')).toBe('anthropic')
   })
+
+  it('keeps a conversation tier it read when the SEED read fails', async () => {
+    // The two reads are independent and their failures have to be too. Under
+    // `Promise.all` this rejected, and the caller's fall-back is the env flag
+    // (`activeInferenceTier()`), not `defaultInferenceTier()` — so on the
+    // deployment shape docs/PREVIEW.md allows (endpoints configured,
+    // USE_VERDA_INFERENCE unset) a conversation the user had PINNED to the
+    // private tier ran its next turn on Anthropic, while its sidebar glyph
+    // still said Private. The seed is only ever consulted when the column has
+    // nothing, so losing it here costs nothing at all.
+    getConversationInferenceTier.mockResolvedValue('verda')
+    getStoredInferenceTier.mockRejectedValue(new Error('user_prefs schema is unavailable'))
+
+    await expect(resolveConversationTier('conv-1', 'user-1')).resolves.toBe('verda')
+  })
+
+  it('falls to the seed when the CONVERSATION read fails, rather than rejecting', async () => {
+    // The other direction of the same decoupling, pinned so the asymmetry is
+    // visible: there is no recorded tier to keep, so the user's last-used one
+    // is the nearest answer left. Still a fall-back — a nearer one than the
+    // caller's env flag.
+    getConversationInferenceTier.mockRejectedValue(new Error('conversations is unavailable'))
+    getStoredInferenceTier.mockResolvedValue('anthropic')
+
+    await expect(resolveConversationTier('conv-1', 'user-1')).resolves.toBe('anthropic')
+  })
+
+  it('falls to the deployment default when BOTH reads fail', async () => {
+    // Fail-closed by construction: `defaultInferenceTier()` answers `anthropic`
+    // on a deployment with no endpoint and `verda` on one that has it. The
+    // pre-existing fall-open ABOVE this function — a rejection reaching
+    // `turn.server.ts`'s `activeInferenceTier()` — is #303 and is deliberately
+    // not touched here; this pins that the rejection no longer happens.
+    getConversationInferenceTier.mockRejectedValue(new Error('conversations is unavailable'))
+    getStoredInferenceTier.mockRejectedValue(new Error('user_prefs is unavailable'))
+
+    await expect(resolveConversationTier('conv-1', 'user-1')).resolves.toBe('anthropic')
+    configureVerda()
+    await expect(resolveConversationTier('conv-1', 'user-1')).resolves.toBe('verda')
+  })
 })
 
 describe('chooseConversationTier', () => {

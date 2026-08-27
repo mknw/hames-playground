@@ -78,16 +78,41 @@ export function resolveTier(
  *
  * Both reads are indexed single-row lookups and independent, so they go
  * together — this runs once per turn, in front of the run.
+ *
+ * **`allSettled`, not `all`: the two reads are independent and their failures
+ * must be too.** They are not symmetric — the column is queried directly, while
+ * the seed first awaits `ensureSchema()` (`db/user-prefs.server.ts`), which has
+ * its own persistent failure mode — and under `Promise.all` either rejection
+ * discarded both. A conversation the user had PINNED to the private tier then
+ * resolved through the caller's fail-open, which is `activeInferenceTier()`, the
+ * env flag: on the deployment shape `docs/PREVIEW.md` explicitly allows
+ * (endpoints configured, `USE_VERDA_INFERENCE` unset) that is Anthropic, so a
+ * seed lookup failing sent a private thread to the public provider while its
+ * sidebar glyph still said otherwise.
+ *
+ * The failure policy of each half, named rather than inherited:
+ *   - **seed read fails** → the column decides alone; a recorded tier is the
+ *     stronger fact anyway, and the seed is only consulted when there is none.
+ *   - **column read fails** → the seed decides, i.e. the user's last-used tier
+ *     instead of the deployment's env flag. Still a fall-back, and still an
+ *     un-pinned one, but a nearer answer than the caller's.
+ *   - **both fail** → `defaultInferenceTier()`, which is fail-closed by
+ *     construction. The pre-existing fall-open ABOVE this function (a total
+ *     read failure reaching `activeInferenceTier()`) is unchanged and tracked
+ *     separately (#303) — it is the caller's, not this resolver's.
  */
 export async function resolveConversationTier(
   sessionId: string,
   userId: string,
 ): Promise<InferenceTier> {
-  const [stored, seed] = await Promise.all([
+  const [stored, seed] = await Promise.allSettled([
     getConversationInferenceTier(sessionId, userId),
     getStoredInferenceTier(userId),
   ])
-  return resolveTier(stored, seed)
+  return resolveTier(
+    stored.status === 'fulfilled' ? stored.value : null,
+    seed.status === 'fulfilled' ? seed.value : null,
+  )
 }
 
 /**

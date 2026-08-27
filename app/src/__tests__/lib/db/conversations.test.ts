@@ -609,6 +609,50 @@ describe('backfillConversationInferenceTier', () => {
       await query('DELETE FROM user_prefs WHERE user_id = $1', [withPref])
     }
   })
+
+  it('copies nothing from a stored value this build does not recognise', async () => {
+    if (!dbAvailable) return
+    // The backfill's own rule is "copy a recorded fact, never a guess", and a
+    // `user_prefs` value outside the union is not a fact about anything — it is
+    // a row written by a build that knew a tier this one does not, or by hand.
+    // Copying it would put a value on `conversations.inference_tier` that
+    // `resolveTier` narrows straight back out, so the row would read as pinned
+    // and resolve as unpinned: worse than the NULL it replaced, because the
+    // sidebar glyph renders the column.
+    //
+    // The column is deliberately un-CONSTRAINED plaintext (a lifted enum, like
+    // `kind`/`source`/`status`), so nothing below this statement rejects such a
+    // value — which is why the `IN ('verda','anthropic')` filter is the control
+    // and why it needs a test of its own.
+    const unknownPref = `${TEST_USER}-unknown-pref`
+    const untiered = `bf-${Math.random().toString(36).slice(2, 10)}`
+    await saveConversation({
+      id: untiered,
+      userId: unknownPref,
+      agentId: 'search',
+      title: 't',
+      serializedContext: '{}',
+    })
+    // Through the repository first, so `user_prefs` exists and this test does
+    // not depend on the bootstrap order; then straight to SQL, because the
+    // setter's own type is the union and the row under test is outside it.
+    await setStoredInferenceTier(unknownPref, 'anthropic')
+    await query('UPDATE user_prefs SET inference_tier = $1 WHERE user_id = $2', [
+      'some-future-tier',
+      unknownPref,
+    ])
+
+    try {
+      await backfillConversationInferenceTier((text: string, params?: unknown[]) =>
+        query(text, params),
+      )
+
+      expect(await getConversationInferenceTier(untiered, unknownPref)).toBeNull()
+    } finally {
+      await query('DELETE FROM conversations WHERE user_id = $1', [unknownPref])
+      await query('DELETE FROM user_prefs WHERE user_id = $1', [unknownPref])
+    }
+  })
 })
 
 describe('reapStuckConversations', () => {

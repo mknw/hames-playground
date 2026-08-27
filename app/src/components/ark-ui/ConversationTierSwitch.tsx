@@ -78,13 +78,22 @@ export const ConversationTierSwitch = (props: ConversationTierSwitchProps) => {
   // A stale answer from the outgoing conversation must not settle onto the
   // incoming one, so each load checks that its id is still the current one —
   // the same guard the chat view's hydration carries.
+  //
+  // `solid/reactivity` is disabled on each of the four async callbacks below,
+  // and the read it objects to is the entire point of them: `sid` is the id this
+  // round trip was STARTED for and `props.sessionId` is the one on screen NOW,
+  // so comparing them is what discards an answer that arrived after the user
+  // moved on. Tracking that read would defeat the guard by re-running it. Same
+  // rule, same reason, as the disables in `GraphVisualization.tsx`.
   createEffect(() => {
     const sid = props.sessionId
     setError(null)
     void getConversationTier(sid)
+      // eslint-disable-next-line solid/reactivity -- stale-response guard, see above
       .then((next) => {
         if (sid === props.sessionId) setState(next)
       })
+      // eslint-disable-next-line solid/reactivity -- stale-response guard, see above
       .catch(() => {
         if (sid === props.sessionId) {
           // Leave whatever was on screen rather than blanking the control, and
@@ -101,12 +110,14 @@ export const ConversationTierSwitch = (props: ConversationTierSwitchProps) => {
     const sid = props.sessionId
     setBusy(true)
     const write = setConversationTier(sid, value)
+      // eslint-disable-next-line solid/reactivity -- stale-response guard, see above
       .then((next) => {
         if (sid !== props.sessionId) return
         setState(next)
         setError(null)
         if (next.tier !== value) setRevision((r) => r + 1)
       })
+      // eslint-disable-next-line solid/reactivity -- stale-response guard, see above
       .catch((err: unknown) => {
         if (sid !== props.sessionId) return
         setError(err instanceof Error ? err.message : 'Could not change the model.')
@@ -116,78 +127,102 @@ export const ConversationTierSwitch = (props: ConversationTierSwitchProps) => {
     props.onPendingWrite?.(write)
   }
 
+  /**
+   * What the status region says, empty when there is nothing to report.
+   *
+   * Two words when the control is on screen — it is beside the tier it is
+   * qualifying — and the whole sentence when it is not, because a rejected
+   * FIRST read leaves no control for a two-word chip to attach to. That case is
+   * the one this region exists for: it used to render inside
+   * `<Show when={state()}>`, so the one path that produces no control produced
+   * no message either, on the widget that says where a person's prompts go.
+   */
+  const signal = () => {
+    const message = error()
+    if (!message) return ''
+    return state() ? 'not saved' : message
+  }
+
   return (
-    <Show when={state()}>
-      {(s) => (
-        <Show when={revision() + 1} keyed>
-          <SegmentGroup.Root
-            value={s().tier}
-            onValueChange={(details) => choose(details.value ?? '')}
-            disabled={busy()}
-            flex="~"
-            items="center"
-            gap="2"
-          >
-            <SegmentGroup.Label text="sm ui-text-secondary">Model:</SegmentGroup.Label>
-            <div
+    <>
+      <Show when={state()}>
+        {(s) => (
+          <Show when={revision() + 1} keyed>
+            <SegmentGroup.Root
+              value={s().tier}
+              onValueChange={(details) => choose(details.value ?? '')}
+              disabled={busy()}
               flex="~"
               items="center"
-              gap="0.5"
-              p="0.5"
-              rounded="lg"
-              bg="ui-bg-tertiary"
-              border="1 ui-border-primary"
-              data-testid="conversation-tier-switch"
+              gap="2"
             >
-              <SegmentGroup.Item
-                value="verda"
-                disabled={!s().verdaAvailable}
+              <SegmentGroup.Label text="sm ui-text-secondary">Model:</SegmentGroup.Label>
+              <div
                 flex="~"
                 items="center"
-                gap="1"
-                p="x-2 y-1"
-                rounded="md"
-                cursor="pointer"
-                transition="all"
-                ring="2 transparent focus-within:ui-accent/40"
-                text={s().tier === 'verda' ? 'xs ui-accent' : 'xs ui-text-secondary'}
-                bg={s().tier === 'verda' ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
-                op={s().verdaAvailable ? '100' : '50'}
-                title={s().verdaAvailable ? TIER_HINTS.verda : TIER_UNAVAILABLE_HINT}
+                gap="0.5"
+                p="0.5"
+                rounded="lg"
+                bg="ui-bg-tertiary"
+                border="1 ui-border-primary"
+                data-testid="conversation-tier-switch"
               >
-                <span class={TIER_ICONS.verda} w="3.5" h="3.5" aria-hidden="true" />
-                <SegmentGroup.ItemText>{TIER_LABELS.verda}</SegmentGroup.ItemText>
-                <SegmentGroup.ItemHiddenInput />
-              </SegmentGroup.Item>
-              <SegmentGroup.Item
-                value="anthropic"
-                flex="~"
-                items="center"
-                gap="1"
-                p="x-2 y-1"
-                rounded="md"
-                cursor="pointer"
-                transition="all"
-                ring="2 transparent focus-within:ui-accent/40"
-                text={s().tier === 'anthropic' ? 'xs ui-accent' : 'xs ui-text-secondary'}
-                bg={s().tier === 'anthropic' ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
-                title={TIER_HINTS.anthropic}
-              >
-                <span class={TIER_ICONS.anthropic} w="3.5" h="3.5" aria-hidden="true" />
-                <SegmentGroup.ItemText>{TIER_LABELS.anthropic}</SegmentGroup.ItemText>
-                <SegmentGroup.ItemHiddenInput />
-              </SegmentGroup.Item>
-            </div>
-            <Show when={error()}>
-              {/* `ui-danger`, not a fixed amber: this is text a user has to
-                  read, and it has to clear contrast on both grounds. */}
-              <span role="status" text="xs ui-danger" title={error() ?? undefined}>
-                not saved
-              </span>
-            </Show>
-          </SegmentGroup.Root>
-        </Show>
-      )}
-    </Show>
+                <SegmentGroup.Item
+                  value="verda"
+                  disabled={!s().verdaAvailable}
+                  flex="~"
+                  items="center"
+                  gap="1"
+                  p="x-2 y-1"
+                  rounded="md"
+                  cursor="pointer"
+                  transition="all"
+                  ring="2 transparent focus-within:ui-accent/40"
+                  text={s().tier === 'verda' ? 'xs ui-accent' : 'xs ui-text-secondary'}
+                  bg={s().tier === 'verda' ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
+                  op={s().verdaAvailable ? '100' : '50'}
+                  title={s().verdaAvailable ? TIER_HINTS.verda : TIER_UNAVAILABLE_HINT}
+                >
+                  <span class={TIER_ICONS.verda} w="3.5" h="3.5" aria-hidden="true" />
+                  <SegmentGroup.ItemText>{TIER_LABELS.verda}</SegmentGroup.ItemText>
+                  <SegmentGroup.ItemHiddenInput />
+                </SegmentGroup.Item>
+                <SegmentGroup.Item
+                  value="anthropic"
+                  flex="~"
+                  items="center"
+                  gap="1"
+                  p="x-2 y-1"
+                  rounded="md"
+                  cursor="pointer"
+                  transition="all"
+                  ring="2 transparent focus-within:ui-accent/40"
+                  text={s().tier === 'anthropic' ? 'xs ui-accent' : 'xs ui-text-secondary'}
+                  bg={s().tier === 'anthropic' ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
+                  title={TIER_HINTS.anthropic}
+                >
+                  <span class={TIER_ICONS.anthropic} w="3.5" h="3.5" aria-hidden="true" />
+                  <SegmentGroup.ItemText>{TIER_LABELS.anthropic}</SegmentGroup.ItemText>
+                  <SegmentGroup.ItemHiddenInput />
+                </SegmentGroup.Item>
+              </div>
+            </SegmentGroup.Root>
+          </Show>
+        )}
+      </Show>
+      {/* MOUNTED UNCONDITIONALLY, and outside the `Show` above — both halves
+          matter. Outside, because the read failure that leaves no control is
+          exactly when a person needs to be told. Unconditionally, because a
+          `role="status"` that appears together with its own text is the classic
+          live-region pitfall and will often not announce at all; the region is
+          here from the first render and only its content changes.
+
+          `ui-danger`, not a fixed amber: this is text a user has to read, and it
+          has to clear contrast on both grounds. Empty it occupies no visual
+          space, so the idle header row is unchanged. */}
+      <span role="status" text="xs ui-danger" title={error() ?? undefined}>
+        {signal()}
+      </span>
+    </>
   )
 }

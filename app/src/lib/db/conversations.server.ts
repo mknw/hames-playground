@@ -291,28 +291,6 @@ export async function setConversationStatus(
 }
 
 /**
- * Set a conversation's inference tier — the per-conversation switch's only
- * write. Scoped by `user_id`, so a wrong userId silently no-ops rather than
- * re-routing someone else's chat.
- *
- * Unconditional, unlike the `COALESCE` in {@link saveConversation}: this IS the
- * deliberate act, and a mid-conversation flip has to be able to replace a tier
- * the row already carries. The scope is per turn (`runWithInferenceTier`), so
- * the flip takes effect on the next turn and no in-flight one changes provider
- * underneath itself.
- *
- * **`updated_at` is deliberately left alone**, for the reason
- * {@link reapStuckConversations} spells out: the column is the app's record of
- * chat activity ({@link countActiveUsers} reads exactly that) and it is what the
- * sidebar renders as "x ago". Choosing where the next turn runs is not a turn,
- * and bumping it would reorder the list and report the owner as chatting.
- *
- * The value is written as given. Validation is the caller's — `lib/inference/
- * tier.server.ts` is the one that narrows to the union and refuses `'verda'` on
- * a deployment with no endpoint, because that refusal is about the deployment
- * rather than about the row.
- */
-/**
  * A conversation's tier column alone, or `null` when the row does not exist,
  * belongs to someone else, or has no tier of its own — three cases that mean
  * the same thing to the caller (resolve through the seed) and are deliberately
@@ -335,6 +313,28 @@ export async function getConversationInferenceTier(
   return rows[0]?.inference_tier ?? null
 }
 
+/**
+ * Set a conversation's inference tier — the per-conversation switch's only
+ * write. Scoped by `user_id`, so a wrong userId silently no-ops rather than
+ * re-routing someone else's chat.
+ *
+ * Unconditional, unlike the `COALESCE` in {@link saveConversation}: this IS the
+ * deliberate act, and a mid-conversation flip has to be able to replace a tier
+ * the row already carries. The scope is per turn (`runWithInferenceTier`), so
+ * the flip takes effect on the next turn and no in-flight one changes provider
+ * underneath itself.
+ *
+ * **`updated_at` is deliberately left alone**, for the reason
+ * {@link reapStuckConversations} spells out: the column is the app's record of
+ * chat activity ({@link countActiveUsers} reads exactly that) and it is what the
+ * sidebar renders as "x ago". Choosing where the next turn runs is not a turn,
+ * and bumping it would reorder the list and report the owner as chatting.
+ *
+ * The value is written as given. Validation is the caller's — `lib/inference/
+ * tier.server.ts` is the one that narrows to the union and refuses `'verda'` on
+ * a deployment with no endpoint, because that refusal is about the deployment
+ * rather than about the row.
+ */
 export async function setConversationInferenceTier(
   id: string,
   userId: string,

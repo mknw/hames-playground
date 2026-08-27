@@ -54,9 +54,20 @@ export interface AppHandles {
   /** The SSE route — `routes/api/events.ts#POST`. Returns every frame it sent,
    *  in order, plus the HTTP status so a rejected request is visible. */
   runTurnOverSse(body: Record<string, unknown>): Promise<{ status: number; frames: SseFrame[] }>
-  /** Set the user's stored inference tier, which is what the header switch
-   *  writes and what `runTurnAndPersist` reads once per turn. */
-  setTier(tier: 'anthropic' | 'verda'): Promise<void>
+  /**
+   * Put the next turn on a tier, the way the app does.
+   *
+   * The tier is a property of the CONVERSATION now, so this writes both halves
+   * the switch writes: the user's last-used seed — which is what a conversation
+   * with no row yet resolves through, i.e. every scenario that starts a fresh
+   * session id — and, when `sessionId` is given, that conversation's own column.
+   *
+   * The `sessionId` argument is what a mid-conversation flip needs: once a
+   * conversation has run a turn its row carries a tier of its own, and the seed
+   * no longer reaches it. A scenario that flips between turns of ONE session
+   * must pass it, or it is asserting on a tier change the app correctly ignored.
+   */
+  setTier(tier: 'anthropic' | 'verda', sessionId?: string): Promise<void>
   /** The persisted row for a conversation, or null. */
   readRow(sessionId: string): Promise<StoredRow | null>
   /** Delete every row this suite's user owns. Test database only. */
@@ -179,7 +190,7 @@ async function boot(): Promise<AppHandles> {
     process.env.VERDA_WAKE_ATTEMPT_TIMEOUT_MS = String(WAKE_ATTEMPT_TIMEOUT_MS)
   }
   // Never the process default: every scenario decides its tier per user, the
-  // way the header switch does, so a stray deployment default would mask a
+  // way the switch does, so a stray deployment default would mask a
   // broken preference read.
   delete process.env.USE_VERDA_INFERENCE
 
@@ -243,8 +254,9 @@ async function boot(): Promise<AppHandles> {
       return { status: response.status, frames: await readSse(response) }
     },
 
-    async setTier(tier) {
+    async setTier(tier, sessionId) {
       await prefs.setStoredInferenceTier(userId, tier)
+      if (sessionId) await conversations.setConversationInferenceTier(sessionId, userId, tier)
     },
 
     async readRow(sessionId) {

@@ -228,6 +228,57 @@ describe('ChatSidebar — expanded list', () => {
   })
 })
 
+describe('ChatSidebar — the tier glyph', () => {
+  const tiered = [
+    thread({ id: 'a', title: 'Graph audit', inferenceTier: 'verda' }),
+    thread({ id: 'b', title: 'Ontology sweep', inferenceTier: 'anthropic' }),
+  ]
+
+  it('shows each row’s OWN tier, not one setting repeated', () => {
+    // The whole point of the switch moving: two conversations, two answers, in
+    // the same list at the same time.
+    const { container } = mount(() => <ChatSidebar {...baseProps()} threads={tiered} />)
+
+    const glyphs = rows(container).map((r) => r.querySelector('[role="img"][data-tier]'))
+    expect(glyphs.map((g) => g?.getAttribute('data-tier'))).toEqual(['verda', 'anthropic'])
+    expect(glyphs[0]!.className).not.toBe(glyphs[1]!.className)
+  })
+
+  it('is visible without hovering, unlike the row actions above it', () => {
+    // Delete and retitle are things you can DO to a row and are hover-revealed
+    // (`opacity-0 group-hover:opacity-100`). Where a conversation runs is
+    // something true of it, and a setting only visible on hover is one a user
+    // has to go looking for to check.
+    const { container } = mount(() => <ChatSidebar {...baseProps()} threads={tiered} />)
+
+    const glyph = rows(container)[0].querySelector('[role="img"][data-tier]')!
+    expect(glyph.className).not.toContain('opacity-0')
+    expect(glyph.className).not.toContain('group-hover')
+  })
+
+  it('names itself, since it is the only place the row says this', () => {
+    const { container } = mount(() => <ChatSidebar {...baseProps()} threads={tiered} />)
+
+    const glyph = rows(container)[0].querySelector('[role="img"][data-tier]')!
+    // A sentence rather than a label: it is read out of context, in a list.
+    expect(glyph.getAttribute('aria-label')).toBe('Runs on Private (Verda)')
+    expect(glyph.getAttribute('title')).toBe('Runs on Private (Verda)')
+    // And it therefore reaches the row button's accessible name.
+    expect(rows(container)[0].textContent).toContain('Graph audit')
+  })
+
+  it('shows nothing for the optimistic placeholder, which has no conversation yet', () => {
+    const { container } = mount(() => (
+      <ChatSidebar
+        {...baseProps()}
+        threads={[thread({ id: 'new', title: null, isPlaceholder: true })]}
+      />
+    ))
+
+    expect(rows(container)[0].querySelector('[role="img"][data-tier]')).toBeNull()
+  })
+})
+
 describe('ChatSidebar — live run readout (#105)', () => {
   it('replaces the timestamp with the live status line while a run streams', () => {
     const { container } = mount(

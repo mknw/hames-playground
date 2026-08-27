@@ -11,12 +11,9 @@
  * `m:ss` and why compact numbers keep one decimal place.
  */
 
-/** Tier labels, in the words a preview user can act on. "Private" is the
- *  property they care about; the deployment name is the parenthetical. */
-export const TIER_LABELS = {
-  verda: 'Private (Verda)',
-  anthropic: 'Anthropic',
-} as const
+// Tier labels moved to `lib/tier-presentation.ts` when the switch left this
+// header: three surfaces render a tier now, and the label belongs with the
+// glyph and the hint rather than with the countdown formatter.
 
 /**
  * Seconds → `m:ss`, clamped at zero and capped so a very long scale-down delay

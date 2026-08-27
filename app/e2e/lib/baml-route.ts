@@ -47,8 +47,8 @@
  *
  * It does not touch `clients.server.ts`, `clientOverrideFor`, or any BAML file.
  * Production resolution runs untouched and is still consulted — the tier a turn
- * takes is decided by `resolveInferenceTier()` reading the user's stored
- * preference, exactly as it is in the app. All this changes is where the
+ * takes is decided by `resolveConversationTier()` reading the conversation's own
+ * tier (else the user's last-used seed), exactly as it is in the app. All this changes is where the
  * resulting HTTP request lands.
  */
 

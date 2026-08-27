@@ -21,7 +21,7 @@
 import { createResource, createSignal, Show, type JSX } from 'solid-js'
 import { getProfile, type ProfileView } from '~/lib/auth/profile.server'
 import { ThemeSwitcher } from '~/components/ark-ui/ThemeSwitcher'
-import { TIER_LABELS } from '~/lib/preview-header-format'
+import { TIER_LABELS } from '~/lib/tier-presentation'
 
 /** Epoch millis → the viewer's locale. Em dash when the row has no stamp. */
 const fmtWhen = (ms: number | null): string => (ms === null ? '—' : new Date(ms).toLocaleString())
@@ -142,8 +142,9 @@ export default function Profile() {
                   {TIER_LABELS[data().tier]}
                 </span>
                 <span text="xs ui-text-secondary">
-                  Change it with the switch at the left of the top bar — one control, so this page
-                  cannot disagree with it.
+                  This is what a NEW chat starts on. Change it with the switch beside the agent
+                  selector, which sets the tier of the conversation you are in — so an open thread
+                  may be on the other one.
                 </span>
               </div>
             </Section>

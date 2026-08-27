@@ -118,11 +118,21 @@ test('flips one conversation without moving its neighbour, and says so on every 
   await chooseTier(page, 'verda')
   await send(page, 'the private one')
   await waitForReplies(page, 1)
+  // WINDOWED PER TURN, and this is why the window has to be closed here rather
+  // than sliced off the end afterwards: each turn makes TWO switched calls
+  // (`LoopController` and `Synthesize`), so the last two calls of the run are
+  // both the second chat's and a comparison over them can only ever see one
+  // endpoint. Reading each turn's own window instead is also the stronger
+  // assertion — it says which endpoint served WHICH chat, not merely that two
+  // were used somewhere.
+  const onPrivate = SWITCHED(await backend.calls())
 
+  await backend.reset()
   await newChat(page)
   await chooseTier(page, 'anthropic')
   await send(page, 'the anthropic one')
   await waitForReplies(page, 1)
+  const onAnthropic = SWITCHED(await backend.calls())
 
   // Newest-created first, so row 0 is the Anthropic chat and row 1 the private
   // one. Addressed by position because the fake endpoint gives every
@@ -143,11 +153,26 @@ test('flips one conversation without moving its neighbour, and says so on every 
   await expect(page.getByRole('radio', { name: PRIVATE })).toBeChecked()
 
   // Not a claim about the widget alone: the second conversation's turn really
-  // was served by the other endpoint while the first one's row said verda.
-  const models = new Set(
-    SWITCHED(await backend.calls())
-      .slice(-2)
-      .map((call) => call.model),
+  // was served by the other endpoint while the first one's row said verda. Each
+  // window is checked whole — every switched call in it, not a set over both —
+  // so a single call landing on the wrong endpoint is a red result and names the
+  // chat it belonged to.
+  expect(onPrivate.length, 'the private chat served no switched-role call at all').toBeGreaterThan(
+    0,
   )
-  expect(models.size, `expected both endpoints across the two chats, saw ${[...models]}`).toBe(2)
+  for (const call of onPrivate) {
+    expect(call.model, `${call.fn} in the private chat did not take the self-hosted route`).toBe(
+      VERDA_MODEL,
+    )
+  }
+
+  expect(
+    onAnthropic.length,
+    'the anthropic chat served no switched-role call at all',
+  ).toBeGreaterThan(0)
+  for (const call of onAnthropic) {
+    expect(call.model, `${call.fn} in the anthropic chat did not take the Anthropic route`).toBe(
+      FAKE_ANTHROPIC_TIER_MODEL,
+    )
+  }
 })

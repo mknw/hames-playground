@@ -133,7 +133,7 @@ so pointing that variable at the fake is what a developer does to run the
 deployment locally.
 
 **The Anthropic chains have no such seam**, and the anthropic position of the
-the tier switch runs every role on them. `app/e2e/` solves this with a test-only
+tier switch runs every role on them. `app/e2e/` solves this with a test-only
 `ClientRegistry` installed on the `b` it imported. **This suite cannot**: the app
 is a different process and there is no handle to install anything on. Without a
 redirect, those calls would leave the machine on the developer's own key, from a

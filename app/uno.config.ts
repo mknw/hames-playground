@@ -512,11 +512,17 @@ export default defineConfig({
           background: rgba(34,211,238,0.15);
           border-bottom-color: #22d3ee;
         }
-        /* display:inline-block is load-bearing: the mark is an empty <sup>
-           whose glyph comes from an i-material-symbols-* utility, and those set
-           a 1em box but no display — on a bare inline element the box is
-           ignored and the icon vanishes. */
-        .doc-ref-mark {
+        /* Two things here are load-bearing, both because the mark is an empty
+           <sup> whose glyph comes from an i-material-symbols-* utility.
+           display:inline-block — an icon utility sets a 1em box but no display,
+           and on a bare inline element that box is ignored, so the icon
+           vanishes. And the selector is sup.doc-ref-mark rather than
+           .doc-ref-mark: the icon utility declares color:inherit to paint its
+           mask with currentColor, and at equal specificity the utility layer
+           wins on source order — so a class-only rule loses the colour and the
+           mark renders in the message's text colour. Element+class outranks it.
+           Measured in a browser both ways. */
+        sup.doc-ref-mark {
           display: inline-block;
           font-size: 0.7em;
           color: #22d3ee;

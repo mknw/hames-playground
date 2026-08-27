@@ -157,6 +157,28 @@ gate results. Do not merge. Send only ask / escalation / worker_done messages �
 `Do not merge` and the message-type line stay explicit in every spec — both are
 guardrails a lane otherwise talks itself past.
 
+## Starting the worker: worktree first
+
+A lane runs in its own worktree — created first, then pinned at start:
+
+```bash
+orca worktree create --name <lane> --repo path:<repo-root> --base-branch main --setup run
+orca orchestration worker-start --run <run> --task <task> \
+  --worktree name:<lane> --agent claude --model opus
+```
+
+`--worktree` is what puts the worker there: `worker-start` without it opens the
+agent's terminal in the coordinator's own checkout — the one with the owner's
+dev server attached — where every save hot-reloads the app under the owner's
+hands and two lanes' edits interleave in one working tree (observed 2026-08-27:
+two lanes stopped mid-flight, their mixed WIP stashed to a salvage branch, the
+owner's checkout restored by hand).
+
+After each dispatch, verify the pin took: `git -C <repo-root> status --short`
+stays empty while lanes run. A lane that needs something from the main checkout
+(a gitignored log, a local config) gets the absolute path in its spec, marked
+read-only.
+
 ## Writing the spec safely
 
 Pass a long spec through a **file**, not an inline shell string:

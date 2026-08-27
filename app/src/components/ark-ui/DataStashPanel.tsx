@@ -180,6 +180,7 @@ const CollapsibleSection = (props: {
     <div border="b ui-border-primary">
       <button
         onClick={() => setOpen(!open())}
+        aria-expanded={open()}
         w="full"
         flex="~"
         items="center"

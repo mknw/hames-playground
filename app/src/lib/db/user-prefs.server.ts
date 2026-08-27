@@ -2,11 +2,20 @@
  * Per-user preferences (Postgres) — Server Only.
  *
  * One row per user, holding the settings that must survive the browser because
- * the thing they configure runs on the SERVER. Today that is exactly one:
- * which inference tier the user's chats run on. `localStorage` cannot hold it —
- * the turn executes server-side, in an SSE POST and in triggered runs that have
- * no browser at all, so a client-only preference would be invisible to the code
- * it is supposed to steer.
+ * the thing they configure runs on the SERVER. Today that is exactly one: the
+ * inference tier a user's NEXT NEW conversation starts on. `localStorage` cannot
+ * hold it — the turn executes server-side, in an SSE POST and in triggered runs
+ * that have no browser at all, so a client-only preference would be invisible to
+ * the code it is supposed to steer.
+ *
+ * **It is a seed, not a setting, since the switch became per-conversation.**
+ * Every flip writes it, so a new chat starts where the last one left off; a
+ * conversation that has ever run carries its own tier on its row and stops
+ * consulting this. The two places that still read it are the resolver
+ * (`lib/inference/tier.server.ts`, step 2 of its order) and the preview header's
+ * latency figure, which has to name some tier and names the one a new chat
+ * takes. Triggered runs and routines have no switch, so they resolve through
+ * here exactly as they always did.
  *
  * Schema bootstraps idempotently on first use (mirrors `users.server.ts` and
  * `session-store.server.ts`), so no shared migration file is touched.
@@ -14,9 +23,10 @@
  * Deliberately NOT a `'use server'` module: every export of one is an RPC the
  * browser can call, and both functions below take a `userId`, which would let
  * the caller choose whose preference to read or write. The `'use server'`
- * surface is `harness-client/preview-header.server.ts`, which resolves the
- * owner from the session and passes it in — the same contract
- * `turn.server.ts` and `action-runner.server.ts` carry.
+ * surface is `harness-client/actions.server.ts` (the switch) and
+ * `preview-header.server.ts` (the strip), both of which resolve the owner from
+ * the session and pass it in — the same contract `turn.server.ts` and
+ * `action-runner.server.ts` carry.
  */
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { query } from './client.server'
@@ -94,12 +104,12 @@ export async function getStoredInferenceTier(userId: string): Promise<InferenceT
   return isInferenceTier(stored) ? stored : null
 }
 
-/** The tier this user's turns actually run on: their choice, else the default
- *  above. The single resolver — the turn runner and the header both call it, so
- *  the switch cannot show one thing while the run does another. */
-export async function resolveInferenceTier(userId: string): Promise<InferenceTier> {
-  return (await getStoredInferenceTier(userId)) ?? defaultInferenceTier()
-}
+// The user-level resolver that used to live here is gone: since the switch
+// became per-conversation the order has a step in front of it (the row's own
+// column), and the whole order lives in `lib/inference/tier.server.ts`, which
+// is the module both the turn runner and the switch call. Two resolvers, one of
+// them a prefix of the other, is how a control ends up showing a tier the run
+// does not take.
 
 /** Store a user's choice. Upsert: one row per user, `updated_at` bumped. */
 export async function setStoredInferenceTier(userId: string, tier: InferenceTier): Promise<void> {

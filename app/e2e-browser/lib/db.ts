@@ -71,11 +71,11 @@ export async function conversationRows(): Promise<Array<{ id: string; status: st
  * no row exists yet (a user who has never chosen — the state every scenario
  * starts in, since `wipeUserRows()` deletes it).
  *
- * The evidence half of clicking the header switch (#280). The Ark segment group
+ * The evidence half of clicking the tier switch (#280). The Ark segment group
  * moves its own selection the moment it is clicked, so `toBeChecked()` says the
  * WIDGET moved and nothing about the server — while the server action that
  * persists it is still in flight. A scenario that clicked and immediately sent
- * therefore ran its turn on whichever tier `resolveInferenceTier()` happened to
+ * therefore ran its turn on whichever tier `resolveConversationTier()` happened to
  * read, and asserted the other one. That is the same "assert on evidence, not on
  * inputs" rule this suite's README states, applied to a PRECONDITION: this row is
  * the exact thing the next turn reads, so waiting for it is waiting for the state
@@ -99,8 +99,9 @@ export async function storedTier(): Promise<string | null> {
 }
 
 /**
- * Force the suite's user onto one inference tier, the way the header switch
- * does — by writing the row `resolveInferenceTier()` reads.
+ * Force the suite's user onto one inference tier, the way the switch
+ * does — by writing the seed row a conversation with no tier of its own
+ * resolves through.
  *
  * Used by global setup's preflight, which since the 2026-08-26 tier widening
  * needs BOTH tiers to prove itself (see `assertHermetic`): every role is now

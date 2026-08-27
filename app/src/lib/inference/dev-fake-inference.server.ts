@@ -46,7 +46,7 @@
  *
  * A `ClientRegistry` primary answers any call that does not name a client. A
  * per-call `client` override — which is how `clientOverrideFor()` routes the
- * self-hosted tier — still wins over it, so `resolveInferenceTier()` and the
+ * self-hosted tier — still wins over it, so `resolveConversationTier()` and the
  * whole tier mechanism run untouched and are still consulted. All this changes
  * is where the resulting HTTP request lands:
  *

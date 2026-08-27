@@ -71,11 +71,11 @@ export function progressRange(page: Page): Locator {
 }
 
 /**
- * The header switch's two positions, by the label a user reads.
+ * The tier switch's two positions, by the label a user reads.
  *
- * Mirrors `TIER_LABELS` in `src/lib/preview-header-format.ts` rather than
- * importing it, for this file's usual reason: a scenario asserting on an
- * accessible name should go red if the app renames it.
+ * Mirrors `TIER_LABELS` in `src/lib/tier-presentation.ts` rather than importing
+ * it, for this file's usual reason: a scenario asserting on an accessible name
+ * should go red if the app renames it.
  */
 export const TIER_LABEL = {
   verda: 'Private (Verda)',
@@ -84,37 +84,42 @@ export const TIER_LABEL = {
 
 export type Tier = keyof typeof TIER_LABEL
 
-/** One position of the header's inference-tier switch. */
+/** One position of the conversation's inference-tier switch, which sits beside
+ *  the agent selector. */
 export function tierOption(page: Page, label: string): Locator {
   return page.locator('[data-scope="segment-group"][data-part="item"]').filter({ hasText: label })
 }
 
 /**
- * Put the app on a tier through the header switch, and wait until the SERVER has
- * it — not just the widget.
+ * Put the OPEN CONVERSATION on a tier through its switch, and wait until the
+ * SERVER has it — not just the widget.
  *
  * Three things had to be got right here, and each of them was a way the browser
  * suite could go red with nothing wrong in the app (#280).
  *
  * **1. `toBeChecked()` is not evidence.** Ark's segment group owns its selection
  * and moves it the instant the click lands, while the server action that persists
- * the preference is still in flight. A scenario that clicked and immediately sent
- * therefore raced the write: `resolveInferenceTier()` read whatever was still
- * stored, the turn ran on the tier the test thought it was leaving, and the
- * failure blamed the app's routing. So this also waits for the persisted
- * `user_prefs` row, which is the exact thing the next turn reads. It is read out
- * of Postgres rather than the DOM because there is no DOM evidence of the write
- * landing — the switch looks identical before and after.
+ * the choice is still in flight. A scenario that clicked and immediately sent
+ * therefore raced the write: the turn resolved whatever was still stored, ran on
+ * the tier the test thought it was leaving, and the failure blamed the app's
+ * routing. So this also waits on Postgres, because there is no DOM evidence of
+ * the write landing — the switch looks identical before and after.
  *
- * **2. Clicking the tier you are already on writes nothing.**
- * `PreviewHeaderStrip`'s handler returns early when the clicked value equals the
- * current one, so no action fires and no row appears. That is not an edge case:
- * every scenario starts with `wipeUserRows()` having deleted the preference, and
- * the private tier is the DEFAULT when the endpoint is configured — so
- * `chooseTier(page, 'verda')` on a fresh page is exactly that no-op. This
- * therefore always goes VIA the other position, unconditionally rather than
- * conditionally: a branch on "is a row already there" would make the wait's
- * behaviour depend on the state it is trying to establish.
+ * What it waits for is the SEED row (`user_prefs`), and that is a deliberate
+ * choice rather than a leftover: a conversation with no row yet — every scenario
+ * that clicks before its first message — resolves through exactly that row, and
+ * `chooseConversationTier` writes the conversation's own column FIRST, so the
+ * seed's arrival implies the conversation's. One wait covers both cases.
+ *
+ * **2. Clicking the tier you are already on writes nothing.** The switch's
+ * handler returns early when the clicked value equals the current one, so no
+ * action fires and no row appears. That is not an edge case: every scenario
+ * starts with `wipeUserRows()` having deleted the seed, and the private tier is
+ * the DEFAULT when the endpoint is configured — so `chooseTier(page, 'verda')`
+ * on a fresh page is exactly that no-op. This therefore always goes VIA the
+ * other position, unconditionally rather than conditionally: a branch on "is a
+ * row already there" would make the wait's behaviour depend on the state it is
+ * trying to establish.
  *
  * **3. The switch is disabled while an action is in flight** (`disabled={busy()}`),
  * so a click sent during one is silently dropped. Each click waits for the control
@@ -137,7 +142,7 @@ export async function chooseTier(page: Page, tier: Tier): Promise<void> {
   await expect
     .poll(async () => storedTier(), {
       message:
-        `the header switch never persisted \`${tier}\` — the next turn would run on ` +
+        `the tier switch never persisted \`${tier}\` — the next turn would run on ` +
         'whatever tier was already stored, and this scenario would blame the routing',
     })
     .toBe(tier)
@@ -151,6 +156,38 @@ async function clickTier(page: Page, tier: Tier): Promise<void> {
   // the `disabled` attribute lands on the input. So the wait is explicit.
   await expect(page.getByRole('radio', { name: label })).toBeEnabled()
   await tierOption(page, label).click()
+}
+
+/** Start a fresh conversation, the way a user does. */
+export async function newChat(page: Page): Promise<void> {
+  await page.getByRole('button', { name: '+ New Chat' }).click()
+  await expect(composer(page)).toBeEnabled()
+}
+
+/**
+ * Every sidebar conversation row, newest-created first — the order
+ * `listConversations` returns and the sidebar preserves.
+ *
+ * By index rather than by title, which sounds worse than it is: the fake
+ * endpoint answers the title generator with one fixed string, so every row in
+ * this suite reads "E2E Fake Conversation" and a title locator cannot tell two
+ * conversations apart. Creation order can, and it is a property the app
+ * documents (#105) rather than an accident of this fake.
+ */
+export function threadRows(page: Page): Locator {
+  return page.locator('[data-testid="thread-row"]')
+}
+
+/**
+ * The tier glyph on one sidebar row, as a tier name.
+ *
+ * Read from `data-tier` rather than from the icon class: the class is what the
+ * app happens to draw with, the attribute is the claim. The glyph is always
+ * visible — unlike the delete and retitle actions above it — so this needs no
+ * hover, and asking for it without one is part of the assertion.
+ */
+export async function rowTier(row: Locator): Promise<string | null> {
+  return row.locator('[role="img"][data-tier]').getAttribute('data-tier')
 }
 
 /** A sidebar conversation row, by the title a user reads on it. */

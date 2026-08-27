@@ -118,7 +118,7 @@ Two things follow that _are_ in our control:
 
 **Update (2026-08-25, widened twice on 2026-08-26) — a self-hosted route now
 exists, and it now covers every role without exception.** A verda tier decision
-— the `USE_VERDA_INFERENCE=1` deployment default or a per-user header switch —
+— the `USE_VERDA_INFERENCE=1` deployment default or a per-conversation switch —
 re-points controller / actor / critic / synthesizer / router / planner /
 describe **and the injection screen** at the company's own Qwen deployment on a
 Verda (DataCrunch) GPU (`baml_src/verda-client.baml`). Read against the paragraph above: no

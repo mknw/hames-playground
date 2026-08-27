@@ -107,7 +107,7 @@ Sessions are split into two layers:
 - **Pattern instances** — non-serializable (BAML clients, tool refs, closures). Cached in-process by `sessionId`; rebuilt from the agent registry on miss.
 - **Serialized `UnifiedContext`** — pure JSON. Persisted in Postgres, scoped by `userId`, so conversations survive restarts and can be listed/resumed.
 
-1. First message: auth → `processMessageStreaming(sessionId, message, agentId)` builds patterns, runs the agent, and `saveSession(sessionId, userId, agentId, serializeContext(ctx))` upserts the row. Title is derived from the first user message and stuck via `COALESCE` on update.
+1. First message: auth → `processMessageStreaming(sessionId, message, agentId)` builds patterns, runs the agent, and `saveSession(sessionId, userId, agentId, serializeContext(ctx), tier)` upserts the row. Title is derived from the first user message and stuck via `COALESCE` on update; `tier` — the inference tier the turn resolved (`lib/inference/tier.server.ts`) — is stuck the same way, so the row RECORDS where it ran and a later flip is never undone by a turn that was still finishing.
 2. Subsequent messages: `loadSession(sessionId, userId)` reads the row, `deserializeContext()` rehydrates state, `continueSession()` runs the next turn.
 3. Sidebar selection: `loadConversation(sessionId)` returns the rehydrated context; `ChatInterface` replays events into graph + observability via the existing pipeline.
 4. Approval flow (plumbing): a paused context (`status: 'paused'`) resumes via `approveAction()` / `rejectAction()` → `resumeHarness()`; the resumed context is re-saved. The gating pattern that pauses a run is being redesigned — see "Execute under Supervision" (#123).

@@ -23,7 +23,12 @@ vi.mock('~/lib/harness-patterns/assert.server', () => ({ assertServerOnImport: v
 const regenerateConversationTitle = vi.fn(
   async (_id: string): Promise<string | null> => 'Fresh title',
 )
-vi.mock('~/lib/harness-client', () => ({ regenerateConversationTitle }))
+type PinResult = import('~/lib/harness-client').PinResult
+const setConversationPinned = vi.fn(async (_id: string, _pinned: boolean): Promise<PinResult> => ({
+  outcome: 'pinned',
+  limit: 3,
+}))
+vi.mock('~/lib/harness-client', () => ({ regenerateConversationTitle, setConversationPinned }))
 
 const { ChatSidebar } = await import('~/components/ark-ui/ChatSidebar')
 const { SessionRegistryContext } = await import('~/lib/session-registry-context')
@@ -116,6 +121,8 @@ const mount = (node: () => JSX.Element, registry: SessionRegistry = stubRegistry
 beforeEach(() => {
   regenerateConversationTitle.mockClear()
   regenerateConversationTitle.mockResolvedValue('Fresh title')
+  setConversationPinned.mockClear()
+  setConversationPinned.mockResolvedValue({ outcome: 'pinned', limit: 3 })
 })
 
 describe('ChatSidebar — expanded list', () => {
@@ -225,6 +232,57 @@ describe('ChatSidebar — expanded list', () => {
     const { container } = mount(() => <ChatSidebar {...baseProps()} onNewChat={onNewChat} />)
     byText(container, '+ New Chat')!.click()
     expect(onNewChat).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ChatSidebar — the tier glyph', () => {
+  const tiered = [
+    thread({ id: 'a', title: 'Graph audit', inferenceTier: 'verda' }),
+    thread({ id: 'b', title: 'Ontology sweep', inferenceTier: 'anthropic' }),
+  ]
+
+  it('shows each row’s OWN tier, not one setting repeated', () => {
+    // The whole point of the switch moving: two conversations, two answers, in
+    // the same list at the same time.
+    const { container } = mount(() => <ChatSidebar {...baseProps()} threads={tiered} />)
+
+    const glyphs = rows(container).map((r) => r.querySelector('[role="img"][data-tier]'))
+    expect(glyphs.map((g) => g?.getAttribute('data-tier'))).toEqual(['verda', 'anthropic'])
+    expect(glyphs[0]!.className).not.toBe(glyphs[1]!.className)
+  })
+
+  it('is visible without hovering, unlike the row actions above it', () => {
+    // Delete and retitle are things you can DO to a row and are hover-revealed
+    // (`opacity-0 group-hover:opacity-100`). Where a conversation runs is
+    // something true of it, and a setting only visible on hover is one a user
+    // has to go looking for to check.
+    const { container } = mount(() => <ChatSidebar {...baseProps()} threads={tiered} />)
+
+    const glyph = rows(container)[0].querySelector('[role="img"][data-tier]')!
+    expect(glyph.className).not.toContain('opacity-0')
+    expect(glyph.className).not.toContain('group-hover')
+  })
+
+  it('names itself, since it is the only place the row says this', () => {
+    const { container } = mount(() => <ChatSidebar {...baseProps()} threads={tiered} />)
+
+    const glyph = rows(container)[0].querySelector('[role="img"][data-tier]')!
+    // A sentence rather than a label: it is read out of context, in a list.
+    expect(glyph.getAttribute('aria-label')).toBe('Runs on Private (Verda)')
+    expect(glyph.getAttribute('title')).toBe('Runs on Private (Verda)')
+    // And it therefore reaches the row button's accessible name.
+    expect(rows(container)[0].textContent).toContain('Graph audit')
+  })
+
+  it('shows nothing for the optimistic placeholder, which has no conversation yet', () => {
+    const { container } = mount(() => (
+      <ChatSidebar
+        {...baseProps()}
+        threads={[thread({ id: 'new', title: null, isPlaceholder: true })]}
+      />
+    ))
+
+    expect(rows(container)[0].querySelector('[role="img"][data-tier]')).toBeNull()
   })
 })
 
@@ -721,5 +779,151 @@ describe('ChatSidebar — select mode (#71)', () => {
     rows(container)[0].click()
     await tick()
     expect(checkboxes(container)[0].getAttribute('aria-checked')).toBe('false')
+  })
+})
+
+/**
+ * Pinning.
+ *
+ * The ordering itself is the server's — `listConversations` returns pinned
+ * rows first — so what is asserted here is everything the sidebar is actually
+ * responsible for: the control's pressed state, that a pinned row is legible
+ * WITHOUT hover, the refusal hint, and that a change asks the route to refetch
+ * rather than re-sorting a second copy of the ordering rule.
+ */
+describe('ChatSidebar — pinning', () => {
+  const pinButtons = (root: HTMLElement) => [
+    ...root.querySelectorAll<HTMLButtonElement>('button[data-testid="pin-toggle"]'),
+  ]
+  const pinned = thread({ id: 'p', title: 'Kept thread', pinnedAt: '2026-08-27T09:00:00Z' })
+
+  it('offers one pin toggle per row, unpressed by default', () => {
+    const { container } = mount(() => <ChatSidebar {...baseProps()} />)
+    const pins = pinButtons(container)
+    expect(pins).toHaveLength(chats.length)
+    expect(pins.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false'])
+    expect(pins[0].getAttribute('aria-label')).toBe('Pin conversation to top')
+  })
+
+  it('pins a row and asks the route to refetch the reordered list', async () => {
+    const onPinChanged = vi.fn()
+    const { container } = mount(() => <ChatSidebar {...baseProps()} onPinChanged={onPinChanged} />)
+    pinButtons(container)[1].click()
+    await tick()
+    expect(setConversationPinned).toHaveBeenCalledWith('b', true)
+    expect(onPinChanged).toHaveBeenCalledTimes(1)
+  })
+
+  it('marks a pinned row pressed, and shows its state without hover', () => {
+    const { container } = mount(() => <ChatSidebar {...baseProps()} threads={[pinned, ...chats]} />)
+    const pin = pinButtons(container)[0]
+    expect(pin.getAttribute('aria-pressed')).toBe('true')
+    expect(pin.getAttribute('aria-label')).toBe('Unpin conversation')
+    // The unpinned rows reveal on hover; the pinned one is opaque on its own,
+    // which is what makes the state readable rather than discoverable.
+    expect(pin.getAttribute('op')).toBe('100')
+    expect(pinButtons(container)[1].getAttribute('op')).toContain('group-hover:100')
+    // ...and it reveals on keyboard focus as well, which is the half
+    // `A11Y-CHECKLIST.md`'s `hover-vs-tap` row demands by name for this file:
+    // `op="0"` alone hides a hover-only control from a tabbing user entirely.
+    // Attribute, not resolved opacity — the `[op~="focus:100"]:focus` rule is
+    // in the built sheet, and what jsdom can pin is that the component still
+    // asks for it. Deleting `focus:100` from the `op` list turns this red.
+    expect(pinButtons(container)[1].getAttribute('op')).toContain('focus:100')
+    // Filled glyph for pinned, outline for the rest.
+    expect(pin.querySelector('.i-material-symbols-keep')).not.toBeNull()
+    expect(
+      pinButtons(container)[1].querySelector('.i-material-symbols-keep-outline'),
+    ).not.toBeNull()
+  })
+
+  it('unpins a pinned row', async () => {
+    setConversationPinned.mockResolvedValueOnce({ outcome: 'unpinned', limit: 3 })
+    const onPinChanged = vi.fn()
+    const { container } = mount(() => (
+      <ChatSidebar {...baseProps()} threads={[pinned, ...chats]} onPinChanged={onPinChanged} />
+    ))
+    pinButtons(container)[0].click()
+    await tick()
+    expect(setConversationPinned).toHaveBeenCalledWith('p', false)
+    expect(onPinChanged).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the cap hint instead of refetching when the server refuses', async () => {
+    setConversationPinned.mockResolvedValueOnce({ outcome: 'cap_reached', limit: 3 })
+    const onPinChanged = vi.fn()
+    const { container } = mount(() => <ChatSidebar {...baseProps()} onPinChanged={onPinChanged} />)
+    pinButtons(container)[0].click()
+    await tick()
+    const hint = container.querySelector<HTMLElement>('[data-testid="pin-hint"]')
+    expect(hint?.textContent).toContain('Only 3 conversations can be pinned')
+    expect(hint?.getAttribute('role')).toBe('status')
+    // Nothing moved, so nothing to refetch — and the control is still offered
+    // rather than disabled, so the user can pin after unpinning something.
+    expect(onPinChanged).not.toHaveBeenCalled()
+    expect(pinButtons(container)[0].disabled).toBe(false)
+  })
+
+  it('surfaces a failed pin instead of leaving a dead button', async () => {
+    setConversationPinned.mockRejectedValueOnce(new Error('offline'))
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { container } = mount(() => <ChatSidebar {...baseProps()} />)
+    pinButtons(container)[0].click()
+    await tick()
+    expect(container.querySelector('[data-testid="pin-hint"]')?.textContent).toContain(
+      'Could not update the pin',
+    )
+    spy.mockRestore()
+  })
+
+  it('ignores a second click while the first is in flight, at both gates', async () => {
+    let release: (v: PinResult) => void = () => {}
+    setConversationPinned.mockReturnValueOnce(new Promise<PinResult>((r) => (release = r)))
+    const { container } = mount(() => <ChatSidebar {...baseProps()} />)
+    pinButtons(container)[0].click()
+    await tick()
+
+    // Gate 1 — the DOM one. `disabled` is what actually stops a second click
+    // here, and it is the ONLY gate a jsdom click can reach: neither
+    // `HTMLElement.click()` nor Solid's delegated dispatch runs a handler on a
+    // disabled node, so a click through this path never enters the component.
+    expect(pinButtons(container)[0].disabled).toBe(true)
+    pinButtons(container)[0].click()
+    expect(setConversationPinned).toHaveBeenCalledTimes(1)
+
+    // Gate 2 — `handleTogglePin`'s own early return, which gate 1 hides. It is
+    // not redundant in a real browser: a click dispatched before the reactive
+    // `disabled` update lands still arrives at the handler. jsdom cannot
+    // produce that race, so the attribute is cleared by hand to put the second
+    // click exactly where the browser would put it — past the DOM gate and
+    // into the handler. Deleting `if (pinPending().has(thread.id)) return`
+    // turns this assertion red.
+    const raced = pinButtons(container)[0]
+    raced.disabled = false
+    raced.click()
+    await tick()
+    expect(setConversationPinned).toHaveBeenCalledTimes(1)
+
+    release({ outcome: 'pinned', limit: 3 })
+    await tick()
+    pinButtons(container)[0].click()
+    await tick()
+    expect(setConversationPinned).toHaveBeenCalledTimes(2)
+  })
+
+  it('offers no pin on a placeholder row', () => {
+    const { container } = mount(() => (
+      <ChatSidebar {...baseProps()} threads={[thread({ id: 'new', isPlaceholder: true })]} />
+    ))
+    expect(pinButtons(container)).toHaveLength(0)
+  })
+
+  it('keeps the pin offered while a run is in flight, unlike delete', () => {
+    const { container } = mount(
+      () => <ChatSidebar {...baseProps()} threads={[chats[0]]} />,
+      stubRegistry({ runState: () => busy }),
+    )
+    expect(pinButtons(container)).toHaveLength(1)
+    expect(container.querySelectorAll('span[title="Delete conversation"]')).toHaveLength(0)
   })
 })

@@ -19,6 +19,9 @@ import {
   listConversations as dbListConversations,
   promoteConversation as dbPromoteConversation,
   deleteConversations as dbDeleteConversations,
+  getConversationInferenceTier as dbGetConversationInferenceTier,
+  setConversationPinned as dbSetConversationPinned,
+  CONVERSATION_PIN_LIMIT,
   shareConversation as dbShareConversation,
   unshareConversation as dbUnshareConversation,
   getShareToken as dbGetShareToken,
@@ -28,6 +31,9 @@ import {
 } from '../db/conversations.server'
 import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
+import { chooseConversationTier, resolveTier, verdaConfigured } from '../inference/tier.server'
+import { getStoredInferenceTier } from '../db/user-prefs.server'
+import type { InferenceTier } from '../harness-patterns/clients.server'
 
 // ============================================================================
 // Auth helper
@@ -139,6 +145,36 @@ export async function deleteConversationsBulk(ids: string[]): Promise<{ deleted:
   return { deleted }
 }
 
+/** What a pin request did, plus the cap the server applied. `limit` rides along
+ *  so the sidebar's refusal hint names the real number without keeping its own
+ *  copy of it — the client cannot import the `.server` module that owns it. */
+export interface PinResult {
+  outcome: 'pinned' | 'unpinned' | 'cap_reached' | 'not_found'
+  limit: number
+}
+
+/**
+ * Pin or unpin a conversation for the current user (sidebar pin affordance).
+ *
+ * Self-authenticating, like every other export here: the owner comes from the
+ * session via `requireUser()` and is never a parameter, so a browser can only
+ * ever pin its own rows — a foreign id comes back 'not_found' rather than
+ * touching someone else's conversation (SD-13).
+ *
+ * The {@link CONVERSATION_PIN_LIMIT} cap is applied in the repository's own
+ * statement, not here: this is one caller of that rule and the UI is another,
+ * so the check has to sit below both. A refused pin is a normal result, not an
+ * exception — the sidebar renders it as a hint.
+ */
+export async function setConversationPinned(
+  sessionId: string,
+  pinned: boolean,
+): Promise<PinResult> {
+  const user = await requireUser()
+  const outcome = await dbSetConversationPinned(sessionId, user.id, pinned)
+  return { outcome, limit: CONVERSATION_PIN_LIMIT }
+}
+
 // ============================================================================
 // Share by link (owner half)
 // ============================================================================
@@ -221,8 +257,19 @@ export interface ConversationSummary {
   source: ConversationSource
   /** Lifted status — drives the in-flight spinner/badge. */
   status: ConversationStatus
+  /** The tier this conversation's next turn runs on, already RESOLVED (never
+   *  null): the row's own value, else this user's last-used, else the
+   *  deployment default. The sidebar always shows a glyph, so it always needs
+   *  an answer — and it must be the same answer the turn runner reaches, which
+   *  is why both go through `resolveTier`. */
+  inferenceTier: InferenceTier
   /** ISO 8601 — Date doesn't survive server-action serialization unscathed. */
   updatedAt: string
+  /** When the user pinned this conversation, or null when it is not pinned.
+   *  ISO 8601 for the same serialization reason as `updatedAt`. The sidebar
+   *  reads only its presence (pinned or not); the ORDER BY that puts pinned
+   *  rows on top is the server's, so there is one ordering rule, not two. */
+  pinnedAt: string | null
 }
 
 /**
@@ -240,7 +287,13 @@ export async function listConversations(): Promise<ConversationSummary[]> {
   } catch {
     return []
   }
-  const rows = await dbListConversations(userId)
+  // The seed is read ONCE for the whole list, not per row: it is the same
+  // value for every conversation this user owns, and 200 rows would otherwise
+  // be 200 identical lookups.
+  const [rows, seed] = await Promise.all([
+    dbListConversations(userId),
+    getStoredInferenceTier(userId),
+  ])
   return rows.map((r) => ({
     id: r.id,
     agentId: r.agentId,
@@ -250,8 +303,57 @@ export async function listConversations(): Promise<ConversationSummary[]> {
     kind: r.kind,
     source: r.source,
     status: r.status,
+    inferenceTier: resolveTier(r.inferenceTier, seed),
     updatedAt: r.updatedAt.toISOString(),
+    pinnedAt: r.pinnedAt ? r.pinnedAt.toISOString() : null,
   }))
+}
+
+/** What the switch beside the agent selector needs to render itself. */
+export interface ConversationTierState {
+  /** The tier this conversation's next turn will run on. */
+  tier: InferenceTier
+  /** False when the self-hosted endpoints are unconfigured — the switch renders
+   *  its private position disabled rather than offering a choice the server
+   *  refuses (and that `runWithInferenceTier` would throw on). */
+  verdaAvailable: boolean
+}
+
+/**
+ * The tier state for one conversation.
+ *
+ * Answers for an id that has no row yet — every chat before its first message —
+ * by falling through to this user's last-used tier, which is exactly what that
+ * chat's first turn will resolve. So the switch shows the truth from the moment
+ * the composer is empty, rather than after the first answer lands.
+ */
+export async function getConversationTier(sessionId: string): Promise<ConversationTierState> {
+  const user = await requireUser()
+  const [stored, seed] = await Promise.all([
+    dbGetConversationInferenceTier(sessionId, user.id),
+    getStoredInferenceTier(user.id),
+  ])
+  return { tier: resolveTier(stored, seed), verdaAvailable: verdaConfigured() }
+}
+
+/**
+ * Put this conversation on `tier`, and make it the user's seed for the next new
+ * chat. Returns the state the switch should now show, so the control settles on
+ * server truth rather than on its own optimistic guess — the server refuses the
+ * private position on a deployment with no endpoint, and a switch that kept the
+ * click would show one tier while the next turn ran on another.
+ *
+ * Owner-scoped by construction: `sessionId` names a conversation, never an
+ * owner, and both writes are keyed by the session's resolved user. A foreign id
+ * silently changes nothing rather than re-routing someone else's chat.
+ */
+export async function setConversationTier(
+  sessionId: string,
+  tier: unknown,
+): Promise<ConversationTierState> {
+  const user = await requireUser()
+  const chosen = await chooseConversationTier(sessionId, user.id, tier)
+  return { tier: chosen, verdaAvailable: verdaConfigured() }
 }
 
 // Replay helper extracted to a dependency-free module so it can be unit-tested

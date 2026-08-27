@@ -26,7 +26,6 @@ import {
   defaultInferenceTier,
   getStoredInferenceTier,
   isInferenceTier,
-  resolveInferenceTier,
   setStoredInferenceTier,
 } from '../../../lib/db/user-prefs.server'
 
@@ -145,29 +144,11 @@ describe('getStoredInferenceTier', () => {
   })
 })
 
-describe('resolveInferenceTier', () => {
-  it('prefers the stored choice over the default', async () => {
-    configureVerda() // default would be 'verda'
-    query.mockResolvedValue({ rows: [{ inference_tier: 'anthropic' }] })
-
-    expect(await resolveInferenceTier('user-1')).toBe('anthropic')
-  })
-
-  it('falls back to the default when nothing is stored', async () => {
-    configureVerda()
-    query.mockResolvedValue({ rows: [] })
-
-    expect(await resolveInferenceTier('user-1')).toBe('verda')
-  })
-
-  it('is the single resolver the header and the run both use', async () => {
-    // If these two ever diverged the switch would show one thing while the
-    // turn did another, which is the failure that makes a preview switch worse
-    // than no switch.
-    query.mockResolvedValue({ rows: [{ inference_tier: 'verda' }] })
-    expect(await resolveInferenceTier('user-1')).toBe(await getStoredInferenceTier('user-1'))
-  })
-})
+// The resolution ORDER moved to `lib/inference/tier.server.ts` with the switch:
+// a conversation's own tier comes first now, and this row is only the seed a
+// brand-new one starts from. `src/__tests__/lib/inference/tier.test.ts` owns
+// those tests — including the "one resolver, so the control cannot show a tier
+// the run does not take" claim that used to be asserted here.
 
 describe('setStoredInferenceTier', () => {
   it('upserts one row per user and bumps updated_at', async () => {

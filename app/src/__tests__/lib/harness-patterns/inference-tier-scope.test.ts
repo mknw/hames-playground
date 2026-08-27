@@ -333,7 +333,7 @@ describe('verdaConfigured — the non-throwing sibling', () => {
 
   it('is false with the 27B configured and the 4B missing', async () => {
     // What this controls is user-visible: `verdaConfigured()` is what disables
-    // the header switch's private position and what `defaultInferenceTier()`
+    // the switch's private position and what `defaultInferenceTier()`
     // reads. A half-configured deployment must not OFFER a tier whose first
     // tool-result summary would fail — offering it and failing per turn is
     // strictly worse than showing one disabled control.

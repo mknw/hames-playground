@@ -73,12 +73,14 @@
 // and never answered is exactly what "still unanswered at 600 000ms" looks like
 // from inside the client — and it is also why no timeout on this client can be
 // the answer: a request that is never going to be answered is not made more
-// likely to be answered by waiting longer for it. Only sending another one is. What the wake ping does is make the disagreement
-// stop mattering for this number: the case FOR 600s was only ever "a cold start
-// must be able to finish", and nothing here pays a cold start any more. The case
-// AGAINST it is untouched — a request that is silently dropped is
-// indistinguishable from a working one for the whole timeout, and ten minutes of
-// that is ten minutes of a user watching nothing.
+// likely to be answered by waiting longer for it. Only sending another one is.
+//
+// What the wake POLL does is make the disagreement stop mattering for this
+// number: the case FOR 600s was only ever "a cold start must be able to finish",
+// and nothing here pays a cold start any more. The case AGAINST it is untouched
+// — a request that is silently dropped is indistinguishable from a working one
+// for the whole timeout, and ten minutes of that is ten minutes of a user
+// watching nothing.
 //
 // WHERE 180 000 COMES FROM, AND WHY IT IS DERIVED FROM `max_tokens` RATHER THAN
 // FROM THE p95. The load test measured this deployment WARM at a 2.75k-token

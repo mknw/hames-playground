@@ -63,16 +63,16 @@ export interface AppHandles {
   wipe(): Promise<void>
   /**
    * Forget that this process ever saw the self-hosted box answer, so the next
-   * private-tier turn treats it as asleep and sends a wake ping.
+   * private-tier turn treats it as asleep and polls it awake.
    *
    * NEEDED BECAUSE THIS SUITE IS ONE PROCESS (`isolate: false`, deliberately —
    * see `e2e/vitest.config.ts`), and the warm clock is process state with a
-   * 300s default window. A successful wake ping stamps that clock, which is
+   * 300s default window. The poll's answered attempt stamps that clock, which is
    * correct in production and means the SECOND scenario to want a cold box
-   * would silently get a warm one: no ping, so nothing to arm a cold start on
+   * would silently get a warm one: no poll, so nothing to arm a cold start on
    * and nothing to assert about sharing one. The suite used to get "cold" by
    * accident — the usage observer that stamps the clock is installed in
-   * `middleware.ts`, which these scenarios do not load — and #279 made the ping
+   * `middleware.ts`, which these scenarios do not load — and #279 made the wake
    * itself stamp it, which turned the accident into a visible failure.
    *
    * Call it in `beforeEach` of any scenario whose subject is the cold path. It

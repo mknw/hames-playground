@@ -320,6 +320,15 @@ describe('the three budgets', () => {
     expect(verdaWakePollIntervalMs()).toBe(DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS)
     expect(verdaWakeTimeoutMs()).toBe(DEFAULT_VERDA_WAKE_TIMEOUT_MS)
     expect(warn).toHaveBeenCalledTimes(3)
+
+    // A FRACTION UNDER 1ms is the same refusal, and it is the case the three
+    // above cannot cover: `'0.5'` is finite and positive, so it passes any guard
+    // that reads the raw parse, and only BECOMES the forbidden `0` at the floor
+    // the caller actually receives — silently, the warning already skipped. The
+    // guard therefore floors first and validates the floored value.
+    process.env.VERDA_WAKE_ATTEMPT_TIMEOUT_MS = '0.5'
+    expect(verdaWakeAttemptTimeoutMs()).toBe(DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS)
+    expect(warn).toHaveBeenCalledTimes(4)
     warn.mockRestore()
   })
 })

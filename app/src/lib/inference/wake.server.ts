@@ -232,19 +232,25 @@ export const DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS = 5_000
  * honoured — `VERDA_WAKE_ATTEMPT_TIMEOUT_MS=0` would abort every attempt before
  * it left the process and turn the wake into a silent, instant failure loop,
  * which is the one outcome worse than a wrong number.
+ *
+ * The floor is applied BEFORE the check, not after, because the value that
+ * reaches the poll is the floored one: validating the raw parse let a fraction
+ * under 1ms (`'0.5'`) pass the guard and then become the very `0` the paragraph
+ * above says is refused — silently, since the warning had already been skipped.
  */
 function envMs(name: string, fallback: number): number {
   const raw = process.env[name]
   if (raw === undefined) return fallback
   const parsed = Number(raw)
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const ms = Math.floor(parsed)
+  if (!Number.isFinite(ms) || ms <= 0) {
     console.warn(
       `[verda] ${name}=${JSON.stringify(raw)} is not a positive number of ms; ` +
         `falling back to ${fallback}.`,
     )
     return fallback
   }
-  return Math.floor(parsed)
+  return ms
 }
 
 /** `VERDA_WAKE_TIMEOUT_MS`, or {@link DEFAULT_VERDA_WAKE_TIMEOUT_MS}. */

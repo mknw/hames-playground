@@ -91,10 +91,11 @@ exactly two of the 600s per-call ceilings in force at the time, which is what
 CLAUDE.md measures a burst into a sleeping box spending in ONE turn; a 21-minute
 live turn was duly reaped. The number tightens on its own when the per-call
 ceiling drops, and did: #279 took that ceiling from 600s to 180s and this
-threshold from five hours to 90 minutes, with no edit here. The wake ping #279
-puts in front of a turn (up to 300s) is the one term outside the product and is
-covered by the margin — 75 + 5 = 80 minutes against 90 — which
-`stuck-run-reaper.test.ts` pins against the real constant.
+threshold from five hours to 90 minutes, with no edit here. The wake #279 puts
+in front of a turn — a poll since 2026-08-27, for up to **600s** — is the one
+term outside the product and is covered by the margin: 75 + 10 = **85 minutes
+against 90**, 5 minutes clear, which `stuck-run-reaper.test.ts` pins against the
+real constant.
 
 **What the reap is visible AS** is honest data at rest, not a spinner stopping —
 a live run's spinner is `session-registry`'s per-tab `isProcessing` signal,

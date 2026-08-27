@@ -116,6 +116,20 @@ export const FAKE_TITLE = 'E2E Fake Conversation'
 export const COLD_START_HEADLINE = 'starting GPU'
 
 /**
+ * What the header's cold indicator offers under the pointer
+ * (`IGNITE_LABEL`, `src/components/ark-ui/PreviewHeaderStrip.tsx`).
+ *
+ * Restated for {@link COLD_START_HEADLINE}'s reason, and here the reason is
+ * sharper: the constant lives on a COMPONENT, and importing that into the
+ * Playwright runner drags `auth/dev-bypass.ts`'s `import.meta.env` into a plain
+ * node process, which throws at import time before a single test is collected.
+ * Drift is not silent — scenario 9 asserts this exact string appears in the
+ * page, so a rename in the component turns that scenario red rather than
+ * quietly weakening it.
+ */
+export const IGNITE_LABEL = 'start RTX PRO 6000'
+
+/**
  * `VERDA_SCALEDOWN_SECONDS` for the dev server under test.
  *
  * Two seconds instead of the shipped default (300 since 2026-08-26, when the

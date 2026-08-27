@@ -20,6 +20,8 @@ import {
   promoteConversation as dbPromoteConversation,
   deleteConversations as dbDeleteConversations,
   getConversationInferenceTier as dbGetConversationInferenceTier,
+  setConversationPinned as dbSetConversationPinned,
+  CONVERSATION_PIN_LIMIT,
   type ConversationKind,
   type ConversationSource,
   type ConversationStatus,
@@ -140,6 +142,36 @@ export async function deleteConversationsBulk(ids: string[]): Promise<{ deleted:
   return { deleted }
 }
 
+/** What a pin request did, plus the cap the server applied. `limit` rides along
+ *  so the sidebar's refusal hint names the real number without keeping its own
+ *  copy of it — the client cannot import the `.server` module that owns it. */
+export interface PinResult {
+  outcome: 'pinned' | 'unpinned' | 'cap_reached' | 'not_found'
+  limit: number
+}
+
+/**
+ * Pin or unpin a conversation for the current user (sidebar pin affordance).
+ *
+ * Self-authenticating, like every other export here: the owner comes from the
+ * session via `requireUser()` and is never a parameter, so a browser can only
+ * ever pin its own rows — a foreign id comes back 'not_found' rather than
+ * touching someone else's conversation (SD-13).
+ *
+ * The {@link CONVERSATION_PIN_LIMIT} cap is applied in the repository's own
+ * statement, not here: this is one caller of that rule and the UI is another,
+ * so the check has to sit below both. A refused pin is a normal result, not an
+ * exception — the sidebar renders it as a hint.
+ */
+export async function setConversationPinned(
+  sessionId: string,
+  pinned: boolean,
+): Promise<PinResult> {
+  const user = await requireUser()
+  const outcome = await dbSetConversationPinned(sessionId, user.id, pinned)
+  return { outcome, limit: CONVERSATION_PIN_LIMIT }
+}
+
 /**
  * Get list of available agents (metadata only).
  */
@@ -190,6 +222,11 @@ export interface ConversationSummary {
   inferenceTier: InferenceTier
   /** ISO 8601 — Date doesn't survive server-action serialization unscathed. */
   updatedAt: string
+  /** When the user pinned this conversation, or null when it is not pinned.
+   *  ISO 8601 for the same serialization reason as `updatedAt`. The sidebar
+   *  reads only its presence (pinned or not); the ORDER BY that puts pinned
+   *  rows on top is the server's, so there is one ordering rule, not two. */
+  pinnedAt: string | null
 }
 
 /**
@@ -225,6 +262,7 @@ export async function listConversations(): Promise<ConversationSummary[]> {
     status: r.status,
     inferenceTier: resolveTier(r.inferenceTier, seed),
     updatedAt: r.updatedAt.toISOString(),
+    pinnedAt: r.pinnedAt ? r.pinnedAt.toISOString() : null,
   }))
 }
 

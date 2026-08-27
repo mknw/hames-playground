@@ -94,6 +94,9 @@ export interface ConversationListItem {
    *  glyph per row, so the caller resolves a `null` the same way a turn does. */
   inferenceTier: StoredInferenceTier
   updatedAt: Date
+  /** When the user pinned this row, or null when it is not pinned. Drives both
+   *  the sidebar's pin glyph and the list ordering below. */
+  pinnedAt: Date | null
 }
 
 interface DbRow {
@@ -120,6 +123,7 @@ interface DbListRow {
   status: ConversationStatus
   inference_tier: string | null
   updated_at: Date
+  pinned_at: Date | null
 }
 
 function rowToConversation(row: DbRow): ConversationRow {
@@ -580,17 +584,36 @@ export async function reapStuckConversations(): Promise<string[]> {
 }
 
 /**
- * List a user's conversations, newest-created first.
+ * List a user's conversations: pinned rows first, then newest-created first.
  *
  * Deliberately `created_at`, not `updated_at` (#105): every turn-save bumps
  * `updated_at`, so with concurrent runs an activity-ordered list reshuffles
  * on each refetch — the thread under the cursor jumps to the top. Creation
  * order is stable for a conversation's whole lifetime. `updated_at` is still
  * returned for display ("x ago" shows activity, it just doesn't sort).
+ *
+ * **Pinning is a third, higher key and it does not disturb that.** The sort is
+ * `(pinned_at IS NULL)` — false sorts before true, so pinned rows lead —
+ * then `pinned_at DESC` so the most recently pinned sits at the very top, then
+ * the existing `created_at DESC` for everything else. An unpinned list is
+ * byte-identical to what this returned before pinning existed, because every
+ * row shares the same leading key.
+ *
+ * The `LIMIT` interacts with this in the one direction that matters: pinned
+ * rows sort first, so a pin can never be cut off by the ceiling — which is
+ * precisely what a user pins a conversation to prevent. It is the unpinned
+ * tail that loses a row per pin, which is the honest trade.
+ *
+ * `pinned_at` is a plaintext column like the rest of the ordering inputs; only
+ * `title` comes back encrypted.
  */
 export async function listConversations(userId: string): Promise<ConversationListItem[]> {
   const { rows } = await query<DbListRow>(
-    'SELECT id, agent_id, title, kind, source, status, inference_tier, updated_at FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200',
+    `SELECT id, agent_id, title, kind, source, status, inference_tier, updated_at, pinned_at
+       FROM conversations
+      WHERE user_id = $1
+      ORDER BY (pinned_at IS NULL), pinned_at DESC, created_at DESC
+      LIMIT 200`,
     [userId],
   )
   return rows.map((r) => ({
@@ -602,6 +625,7 @@ export async function listConversations(userId: string): Promise<ConversationLis
     status: r.status,
     inferenceTier: r.inference_tier,
     updatedAt: r.updated_at,
+    pinnedAt: r.pinned_at,
   }))
 }
 
@@ -708,6 +732,126 @@ export async function updateConversationTitle(
      WHERE id = $2 AND user_id = $3`,
     [encryptField(title), id, userId],
   )
+}
+
+/**
+ * How many conversations one user may pin at once.
+ *
+ * The cap is a product decision, and it is enforced HERE rather than in the UI
+ * because the UI is not the only caller: `setConversationPinned` is reachable
+ * as a server action, so a browser can ask for a fourth pin whatever the
+ * sidebar renders. The client reads this number back off a refusal (it cannot
+ * import a `.server` module) instead of hard-coding its own copy.
+ */
+export const CONVERSATION_PIN_LIMIT = 3
+
+/**
+ * What {@link setConversationPinned} did.
+ *
+ *   'pinned'      — the row is pinned (including the idempotent case: it
+ *                   already was, and its original `pinned_at` is preserved so
+ *                   a repeat call cannot silently reorder the pinned block).
+ *   'unpinned'    — the row is no longer pinned.
+ *   'cap_reached' — refused: the user already holds
+ *                   {@link CONVERSATION_PIN_LIMIT} pins.
+ *   'not_found'   — no such row for this user. Same wrong-user contract as
+ *                   every other write here: a foreign id is indistinguishable
+ *                   from an absent one, on purpose.
+ */
+export type PinOutcome = 'pinned' | 'unpinned' | 'cap_reached' | 'not_found'
+
+/**
+ * Pin or unpin a conversation, scoped to its owner.
+ *
+ * **The cap is counted and applied in one statement.** The count is a subquery
+ * of the same UPDATE, so no caller can read a count and then act on it after it
+ * has gone stale, and `user_id` appears in both halves — a user's pins are
+ * counted against their own rows only, and a foreign id no-ops rather than
+ * pinning someone else's conversation.
+ *
+ * **The residual race, named rather than assumed away:** two pins issued for
+ * the same user close enough to overlap (two browser tabs, one click each) both
+ * take their snapshot before either commits, so both can see `n = 2` and both
+ * succeed — leaving four pinned rows. Closing it needs the count and the write
+ * in one explicit transaction, and `query()` deliberately exposes no
+ * transaction seam (it takes opaque SQL and runs it on a pooled connection);
+ * adding one for a sidebar cap is a bigger change than the defect. The
+ * overshoot is at most one row per race, costs nothing but a longer pinned
+ * block, is visible to the user, and is undone by unpinning. It is a fail-OPEN
+ * cap under concurrency and a hard one otherwise. If that trade stops being
+ * acceptable, the fix is a transaction here, not a check in the UI.
+ *
+ * **`updated_at` is deliberately not bumped**, for the same two reasons
+ * {@link reapStuckConversations} leaves it alone: it is the app's record of
+ * "this user did something" ({@link countActiveUsers} reads exactly that), and
+ * it is what the sidebar renders as "x ago" for the CONVERSATION. Pinning is a
+ * statement about the list, not about the thread, and bumping it would report
+ * every pinned conversation as freshly active. Nothing depends on it moving —
+ * the list's pinned ordering reads `pinned_at`.
+ */
+export async function setConversationPinned(
+  id: string,
+  userId: string,
+  pinned: boolean,
+): Promise<PinOutcome> {
+  if (!pinned) {
+    const { rows } = await query<{ id: string }>(
+      `UPDATE conversations SET pinned_at = NULL
+        WHERE id = $1 AND user_id = $2 AND pinned_at IS NOT NULL
+       RETURNING id`,
+      [id, userId],
+    )
+    // Nothing matched: either the row is not this user's, or it was already
+    // unpinned. The second is the caller's goal, so it is reported as success —
+    // only a genuinely absent row is 'not_found'.
+    if (rows.length > 0) return 'unpinned'
+    return (await getOwnedConversationExists(id, userId)) ? 'unpinned' : 'not_found'
+  }
+
+  const { rows } = await query<{
+    pin_count: string | number
+    found: string | number
+    previously_pinned_at: Date | null
+    new_pinned_at: Date | null
+  }>(
+    `WITH pinned AS (
+       SELECT COUNT(*) AS n FROM conversations
+        WHERE user_id = $2 AND pinned_at IS NOT NULL
+     ),
+     target AS (
+       SELECT pinned_at FROM conversations WHERE id = $1 AND user_id = $2
+     ),
+     promoted AS (
+       UPDATE conversations SET pinned_at = NOW()
+        WHERE id = $1 AND user_id = $2 AND pinned_at IS NULL
+          AND (SELECT n FROM pinned) < $3
+       RETURNING pinned_at
+     )
+     SELECT (SELECT n FROM pinned)               AS pin_count,
+            (SELECT COUNT(*) FROM target)        AS found,
+            (SELECT pinned_at FROM target)       AS previously_pinned_at,
+            (SELECT pinned_at FROM promoted)     AS new_pinned_at`,
+    [id, userId, CONVERSATION_PIN_LIMIT],
+  )
+  const row = rows[0]
+  if (!row) return 'not_found'
+  if (row.new_pinned_at !== null) return 'pinned'
+  // Already pinned before this call — idempotent success, and it does NOT
+  // rewrite `pinned_at`, so re-pinning cannot jump a row to the top of the
+  // pinned block.
+  if (row.previously_pinned_at !== null) return 'pinned'
+  if (Number(row.found) === 0) return 'not_found'
+  return 'cap_reached'
+}
+
+/** Does this id name a row this user owns? Used only to tell an already-unpinned
+ *  row (success) from a foreign or absent one (`not_found`). Reads no content. */
+async function getOwnedConversationExists(id: string, userId: string): Promise<boolean> {
+  const { rows } = await query<{ id: string }>(
+    'SELECT id FROM conversations WHERE id = $1 AND user_id = $2',
+    [id, userId],
+  )
+  return rows.length > 0
 }
 
 /**

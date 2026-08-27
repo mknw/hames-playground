@@ -66,11 +66,16 @@ const dbDeleteConversations = vi.fn(async (ids: string[]) => ids)
 const dbGetConversationInferenceTier = vi.fn<
   (id: string, userId: string) => Promise<string | null>
 >(async () => null)
+const dbSetConversationPinned = vi.fn<
+  (id: string, userId: string, pinned: boolean) => Promise<string>
+>(async () => 'pinned')
 vi.mock('../../../lib/db/conversations.server', () => ({
   listConversations: dbListConversations,
   promoteConversation: dbPromoteConversation,
   deleteConversations: dbDeleteConversations,
   getConversationInferenceTier: dbGetConversationInferenceTier,
+  setConversationPinned: dbSetConversationPinned,
+  CONVERSATION_PIN_LIMIT: 3,
 }))
 
 // ── the tier resolver (its own order is pinned by lib/inference/tier.test.ts) ─
@@ -130,6 +135,8 @@ beforeEach(() => {
   getStoredInferenceTier.mockResolvedValue(null)
   verdaConfigured.mockReturnValue(true)
   chooseConversationTier.mockImplementation(async (_s, _u, tier) => tier as 'verda' | 'anthropic')
+  dbSetConversationPinned.mockResolvedValue('pinned')
+  getAuthenticatedUser.mockResolvedValue({ id: 'entra-user', email: 'e@x.dev' })
 })
 
 describe('processMessage / processMessageWithAgent', () => {
@@ -232,6 +239,7 @@ describe('sidebar actions', () => {
         status: 'done',
         inferenceTier: 'verda',
         updatedAt: new Date('2026-01-02T03:04:05.000Z'),
+        pinnedAt: new Date('2026-01-03T00:00:00.000Z'),
       },
       {
         id: 'c2',
@@ -245,6 +253,7 @@ describe('sidebar actions', () => {
         // nothing, because the glyph is on every row.
         inferenceTier: null,
         updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+        pinnedAt: null,
       },
     ])
     getStoredInferenceTier.mockResolvedValue('anthropic')
@@ -262,6 +271,10 @@ describe('sidebar actions', () => {
       status: 'done',
       inferenceTier: 'verda',
       updatedAt: '2026-01-02T03:04:05.000Z',
+      // Serialized like `updatedAt`: a Date does not survive the server-action
+      // boundary, and an unpinned row carries an explicit null rather than an
+      // absent key.
+      pinnedAt: '2026-01-03T00:00:00.000Z',
     })
     // A removed agent leaves icon/accent undefined rather than breaking the list.
     expect(rows[1].agentIcon).toBeUndefined()
@@ -271,6 +284,7 @@ describe('sidebar actions', () => {
     expect(rows[1].inferenceTier).toBe('anthropic')
     // One seed read for the whole list, not one per row.
     expect(getStoredInferenceTier).toHaveBeenCalledTimes(1)
+    expect(rows[1].pinnedAt).toBeNull()
   })
 
   it('returns an empty list rather than throwing for an unauthenticated page load', async () => {
@@ -402,5 +416,42 @@ describe('getConversationTier / setConversationTier — the switch’s RPC surfa
     await expect(actions.setConversationTier('c1', 'verda')).rejects.toThrow(
       /not configured on this deployment/,
     )
+  })
+})
+
+describe('setConversationPinned (server action)', () => {
+  it('scopes the write to the session user, who is never a parameter', async () => {
+    isBypassEnabled.mockReturnValue(false)
+    getAuthenticatedUser.mockResolvedValue({ id: 'entra-user', email: 'e@x.dev' })
+
+    const result = await actions.setConversationPinned('c1', true)
+
+    // The owner is resolved from the session, not taken from the caller — a
+    // browser cannot ask to pin a row on someone else's behalf (SD-13).
+    expect(dbSetConversationPinned).toHaveBeenCalledWith('c1', 'entra-user', true)
+    expect(result).toEqual({ outcome: 'pinned', limit: 3 })
+  })
+
+  it('attributes the write to the bypass user in dev', async () => {
+    isBypassEnabled.mockReturnValue(true)
+    await actions.setConversationPinned('c1', false)
+    expect(dbSetConversationPinned).toHaveBeenCalledWith('c1', 'bypass-user', false)
+  })
+
+  it('returns a refusal as a value, with the cap the server applied', async () => {
+    dbSetConversationPinned.mockResolvedValueOnce('cap_reached')
+    // A refused pin is a normal answer the sidebar renders as a hint, not an
+    // exception the route has to catch.
+    await expect(actions.setConversationPinned('c9', true)).resolves.toEqual({
+      outcome: 'cap_reached',
+      limit: 3,
+    })
+  })
+
+  it('refuses an unauthenticated caller rather than pinning anything', async () => {
+    isBypassEnabled.mockReturnValue(false)
+    getAuthenticatedUser.mockRejectedValueOnce(new Error('no session'))
+    await expect(actions.setConversationPinned('c1', true)).rejects.toThrow('no session')
+    expect(dbSetConversationPinned).not.toHaveBeenCalled()
   })
 })

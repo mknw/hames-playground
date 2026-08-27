@@ -89,6 +89,25 @@ const SCHEMA_SQL = `
   -- the tier only where the user actually recorded one.
   ALTER TABLE conversations
     ADD COLUMN IF NOT EXISTS inference_tier TEXT;
+  -- When the user pinned this conversation to the top of the sidebar, or NULL
+  -- for the overwhelming majority that are not pinned. A lifted, plaintext
+  -- column for the same reason as kind/source/status: the list ORDER BY reads
+  -- it in SQL, and a timestamp says nothing about what was said. The doctrine
+  -- is in \`crypto.server.ts\`; \`encryption-coverage.test.ts\` pins that only
+  -- the repository module names this table.
+  --
+  -- NULLABLE with no DEFAULT, and there is no backfill: "not pinned" is the
+  -- truthful state of every row written before pinning existed, so the absent
+  -- value is already the right answer. Ordering pinned rows by this timestamp
+  -- (most recently pinned first) is what makes a pin a stack rather than a set
+  -- — see \`listConversations\` and \`CONVERSATION_PIN_LIMIT\`.
+  --
+  -- No index of its own. The list query filters on \`user_id\` and sorts the
+  -- rows it finds; it already sorted by \`created_at\`, which has no index
+  -- either, so this adds sort keys to an in-memory sort of one user's rows
+  -- rather than a scan. Adding a partial index here would be speculative.
+  ALTER TABLE conversations
+    ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
 
   -- Session ownership claims. A Data Stash upload can arrive before the
   -- session has any conversation row (a file dropped before the first chat

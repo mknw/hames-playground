@@ -20,8 +20,10 @@ export {
   regenerateConversationTitle,
   getConversationTier,
   setConversationTier,
+  setConversationPinned,
   type ConversationSummary,
   type ConversationTierState,
+  type PinResult,
   type LoadedConversation,
   type ReplayedMessage,
 } from './actions.server'

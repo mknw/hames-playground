@@ -82,6 +82,12 @@ const ENV_KEYS = [
   // asks about both — so a fixture that configures only the 27B leaves the
   // switch's private position DISABLED.
   'SMALL_LLM_BASE_URL',
+  // Cleared per test and restored after, so the wake's own defaults apply
+  // everywhere except where a case sets its budget deliberately — see
+  // `shortWakeBudget`.
+  'VERDA_WAKE_TIMEOUT_MS',
+  'VERDA_WAKE_ATTEMPT_TIMEOUT_MS',
+  'VERDA_WAKE_POLL_INTERVAL_MS',
 ] as const
 let saved: Record<string, string | undefined>
 
@@ -92,6 +98,28 @@ function configureVerda(): void {
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
+}
+
+/**
+ * A wake budget measured in milliseconds, for the one case that lets the poll
+ * run out.
+ *
+ * The wake POLLS (#291): a 5xx is a box that is coming up, so it is retried for
+ * the whole of `VERDA_WAKE_TIMEOUT_MS` — 600s by default. A rejection case that
+ * stubs a 503 and waits for the poll to give up therefore does not assert
+ * anything at all; it hangs until vitest kills the test at 5s, which reports as
+ * a timeout rather than as the behaviour the case is named for. The fix is to
+ * make the budget the test's own: the box still never comes up, the poll still
+ * ends the only way it can, and it does so in milliseconds.
+ *
+ * All three are set together — a budget below one attempt would be the wake's
+ * own edge case rather than this file's subject, and a poll interval left at 5s
+ * would sleep out the budget between two attempts.
+ */
+function shortWakeBudget(): void {
+  process.env.VERDA_WAKE_TIMEOUT_MS = '60'
+  process.env.VERDA_WAKE_ATTEMPT_TIMEOUT_MS = '20'
+  process.env.VERDA_WAKE_POLL_INTERVAL_MS = '1'
 }
 
 beforeEach(() => {
@@ -327,9 +355,30 @@ describe('igniteVerdaBox', () => {
     // A wake that failed and a box that is merely cold look identical in the
     // returned state, so the failure has to travel as a rejection or the strip
     // would settle back to "cold" and say nothing happened.
+    //
+    // The 503 is a box that is starting and never finishes, which is exactly
+    // what the name says — and under #291's poll it is RETRIED, so the case only
+    // reaches its assertion inside a budget it sets itself (`shortWakeBudget`).
     configureVerda()
+    shortWakeBudget()
     fetchMock.mockResolvedValue(new Response('nope', { status: 503 }))
 
     await expect(igniteVerdaBox()).rejects.toThrow(VERDA_WAKE_FAILED)
+    // It kept trying rather than giving up on the first 5xx — the property that
+    // makes this case a poll running out, and not a refusal by another name.
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(1)
+  })
+
+  it('REJECTS at once when the deployment refuses the request outright', async () => {
+    // The other half of the wake's failure policy (`isRefusal`): a 400 for an
+    // unknown model id is a property of the REQUEST, so no retry can fix it and
+    // the poll ends on the spot. Here that is the difference between a user
+    // being told and a spinner running out a budget on a one-line
+    // misconfiguration.
+    configureVerda()
+    fetchMock.mockResolvedValue(new Response('unknown model', { status: 400 }))
+
+    await expect(igniteVerdaBox()).rejects.toThrow(VERDA_WAKE_FAILED)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

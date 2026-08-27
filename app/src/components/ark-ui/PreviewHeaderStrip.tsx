@@ -40,8 +40,9 @@
  * ## Why nobody had seen the countdown
  *
  * It shipped working and unreachable, which is the failure mode a screenshot
- * cannot catch and a green suite does not either. Two independent causes, both
- * fixed here, both pinned:
+ * cannot catch and a green suite does not either. Three independent causes, all
+ * fixed here, all pinned — the third only became visible once the first two had
+ * put the number on screen where a reviewer could watch it:
  *
  *  1. **The render site asked the wrong question.** It gated the number on
  *     `warmthKey() === 'warm'`, but `verdaWarmth()` also computes one for
@@ -55,6 +56,13 @@
  *     state, the `cold` → `warm` flip a user's own message causes landed up to
  *     fifteen seconds after the answer they were watching for — by which time
  *     they had stopped looking. Hence the two rates.
+ *  3. **The number `running` then showed did not count down.** It reset on every
+ *     poll — `5:00 | 4:59 | 5:00 | 5:00 | 4:59` traced at one-second intervals —
+ *     because the server re-sends the FULL window for that state and the client
+ *     ran its local clock over it. The two fixes above are what made it visible:
+ *     they put the figure on screen and then re-read it every three seconds
+ *     instead of every fifteen. `running`'s figure is now rendered statically,
+ *     which is what it always was (`shownSeconds`).
  *
  * ## Starting the box from here
  *
@@ -64,6 +72,13 @@
  * `ensureVerdaAwake` a turn uses — so a click during an in-flight wake joins it
  * and a click on a warm box costs nothing. The reasoning for reusing that entry
  * point rather than issuing a second wake is on the action itself.
+ *
+ * A start that FAILS has its own report ({@link IGNITE_FAILED_LABEL}, and
+ * `igniteError`), separate from the poll's "stale". A wake can legitimately take
+ * minutes, so the user who pressed it is by then somewhere else; a failure on
+ * the poll's channel was worded as though some numbers were old and was cleared
+ * by the next successful poll three seconds later, which left that user with a
+ * cold indicator and nothing to read.
  *
  * ## Accessibility
  *
@@ -152,6 +167,13 @@ export const TICK_INTERVAL_MS = 1_000
  *  reads rather than one it chose itself. */
 export const IGNITE_LABEL = 'start RTX PRO 6000'
 
+/** What the strip says when a start this browser asked for did not happen.
+ *  Deliberately NOT "stale", which is the word for numbers that are merely old:
+ *  a user who pressed {@link IGNITE_LABEL} and waited minutes has to be able to
+ *  tell "the figures are a moment behind" from "the box never came up".
+ *  Exported for the same reason as {@link IGNITE_LABEL}. */
+export const IGNITE_FAILED_LABEL = 'start failed'
+
 /** Warm state → the word and the glyph that carry it. The word is not
  *  decoration: a bare coloured dot fails `color-not-only`, and "warm" vs "cold"
  *  is the whole content of the indicator anyway.
@@ -162,26 +184,39 @@ export const IGNITE_LABEL = 'start RTX PRO 6000'
  *  all. Written this way the colour cannot be resolved at runtime, so it cannot
  *  silently fail to exist.
  *
- *  `countdown` says whether this state MEANS the box is up, and is therefore
- *  entitled to render the seconds the server sent. It lives here rather than as
- *  a `=== 'warm'` comparison at the render site because that comparison is the
- *  bug this file shipped with: `verdaWarmth()` computes a countdown for
- *  `running` too — the state's whole documented promise is that it implies warm
- *  — and the render site silently dropped it, so the one state a user watching
- *  their own turn is actually looking at never showed a number. A flag beside
- *  the word cannot go out of step with the word the way a second literal can. */
+ *  `countdown` says whether this state MEANS the box is up — and so is entitled
+ *  to render the seconds the server sent — AND how those seconds behave. It
+ *  lives here rather than as a `=== 'warm'` comparison at the render site
+ *  because that comparison is the bug this file shipped with: `verdaWarmth()`
+ *  computes a countdown for `running` too — the state's whole documented promise
+ *  is that it implies warm — and the render site silently dropped it, so the one
+ *  state a user watching their own turn is actually looking at never showed a
+ *  number. A flag beside the word cannot go out of step with the word the way a
+ *  second literal can.
+ *
+ *  The three values are not two-and-a-half: `'ticking'` and `'static'` are
+ *  different numbers, not different renderings of one. `warm` sends what is LEFT
+ *  of the window, so the client ticks it between polls. `running` sends the
+ *  WHOLE window on every poll — correctly, because the box cannot scale down
+ *  while a turn is on it — so ticking that one drew a figure that fell for a
+ *  poll interval and then snapped back to the top, twice a minute at the active
+ *  rate. It is a standing figure (how long the box stays up once the turn ends),
+ *  and it is rendered as one. */
 export const WARMTH_PRESENTATION = {
   running: {
     word: 'answering',
-    countdown: true,
+    countdown: 'static',
     glyph: () => (
       <span class="i-material-symbols-bolt" w="3.5" h="3.5" text="cyan-400" aria-hidden="true" />
     ),
-    hint: 'A chat is running on the self-hosted endpoint, which was already up when it started.',
+    hint:
+      'A chat is running on the self-hosted endpoint, which was already up when it started. The ' +
+      'figure is how long it then stays up once the turn ends — it does not count down while a ' +
+      'turn is on the box, because the box cannot scale down under one.',
   },
   starting: {
     word: 'starting',
-    countdown: false,
+    countdown: 'none',
     glyph: () => (
       <span
         class="i-material-symbols-hourglass-top"
@@ -197,7 +232,7 @@ export const WARMTH_PRESENTATION = {
   },
   warm: {
     word: 'warm',
-    countdown: true,
+    countdown: 'ticking',
     glyph: () => (
       <span
         class="i-material-symbols-local-fire-department-outline"
@@ -213,7 +248,7 @@ export const WARMTH_PRESENTATION = {
   },
   cold: {
     word: 'cold',
-    countdown: false,
+    countdown: 'none',
     glyph: () => (
       <span
         class="i-material-symbols-ac-unit"
@@ -227,7 +262,7 @@ export const WARMTH_PRESENTATION = {
   },
   unknown: {
     word: 'unknown',
-    countdown: false,
+    countdown: 'none',
     glyph: () => (
       <span
         class="i-material-symbols-help-outline"
@@ -321,6 +356,22 @@ export const PreviewHeaderStrip = () => {
    *  instead of just reporting the state. */
   const [hovering, setHovering] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
+  /**
+   * A start THIS browser asked for and did not get.
+   *
+   * A separate signal from `error` above, and the separation is the fix rather
+   * than tidiness. A failed ignition used to ride the poll's error channel,
+   * which gave it that channel's two properties, both wrong for it: it was
+   * rendered as the word *stale* — the vocabulary for "these numbers are old",
+   * where nothing here is old and the thing a user pressed for simply did not
+   * happen — and it was cleared by `load()` on the next successful poll, which
+   * at the active rate is three seconds later. A user who pressed
+   * {@link IGNITE_LABEL}, was told to expect minutes, and looked away therefore
+   * came back to an indicator reading "cold" and no account of the failure at
+   * all. This one is cleared by exactly two things: pressing start again, and
+   * evidence that the box is now up (`load`).
+   */
+  const [igniteError, setIgniteError] = createSignal<string | null>(null)
   /** Bumped only when the server's answer disagrees with the click — see
    *  `chooseTier`. Used as a `keyed` Show value, so the switch is rebuilt on
    *  server truth instead of keeping its own optimistic selection. */
@@ -332,6 +383,12 @@ export const PreviewHeaderStrip = () => {
       setState(next)
       setReceivedAt(Date.now())
       setError(null)
+      // A failed START is NOT cleared by a poll succeeding — see `igniteError`.
+      // It is cleared by the box being UP, whoever brought it up: at that point
+      // the report is false rather than merely old, and "the start failed" is
+      // the one thing the strip must not keep saying about a running box.
+      // `running` counts because it is `warm` plus a turn (`verdaWarmth`).
+      if (next.warmth.state === 'warm' || next.warmth.state === 'running') setIgniteError(null)
     } catch {
       // A poll that cannot reach the server leaves the last known values on
       // screen rather than blanking the bar — but it must not keep presenting
@@ -358,9 +415,11 @@ export const PreviewHeaderStrip = () => {
     onCleanup(() => clearInterval(poll))
   })
 
-  /** The countdown, ticked locally between polls; `null` when there is nothing
-   *  to count down. */
-  const countdown = createMemo(() => {
+  /** The server's number, ticked down locally against this browser's receipt
+   *  time; `null` when the payload carries none. This is the number for a state
+   *  whose window is genuinely running out — see {@link shownSeconds} for which
+   *  states those are, and it is also what expires a `warm` window early below. */
+  const tickedSeconds = createMemo(() => {
     const s = state()
     if (!s) return null
     return remainingSeconds(s.warmth.secondsUntilScaledown, receivedAt(), now())
@@ -372,8 +431,29 @@ export const PreviewHeaderStrip = () => {
     // The local clock is allowed to EXPIRE the window early; it is never
     // allowed to extend one, which is why only this direction is derived here
     // and the other waits for the server.
-    if (s.warmth.state === 'warm' && countdown() === 0) return 'cold'
+    if (s.warmth.state === 'warm' && tickedSeconds() === 0) return 'cold'
     return s.warmth.state
+  })
+
+  /**
+   * The seconds the indicator SHOWS, or `null` when this state has no number.
+   *
+   * Which of the two it is belongs to the state (`WARMTH_PRESENTATION`), and the
+   * distinction is not cosmetic. `warm` carries what is LEFT of the window, so
+   * ticking it locally between polls is what makes it a countdown at all.
+   * `running` carries the WHOLE window on every poll — `verdaWarmth()` is right
+   * to send it, because a box cannot scale down while a turn is on it — so
+   * running the same local clock over it drew a figure that fell for one poll
+   * interval and snapped back to the top, twice a minute at the active rate.
+   * A number that resets is worse than no number: it reads as a countdown that
+   * cannot make up its mind rather than as the standing figure it is.
+   */
+  const shownSeconds = createMemo<number | null>(() => {
+    const s = state()
+    if (!s) return null
+    const mode = WARMTH_PRESENTATION[warmthKey()].countdown
+    if (mode === 'none') return null
+    return mode === 'ticking' ? tickedSeconds() : s.warmth.secondsUntilScaledown
   })
 
   /** Is the box mid-transition, so the next poll is worth taking sooner? Both
@@ -420,13 +500,15 @@ export const PreviewHeaderStrip = () => {
     if (igniting()) return
     setIgniting(true)
     setError(null)
+    setIgniteError(null)
     try {
       setState(await igniteVerdaBox())
       setReceivedAt(Date.now())
     } catch (err) {
-      // Surfaced, never swallowed: a wake that failed is the difference between
-      // "the next message is slow" and "the next message will not work at all".
-      setError(
+      // Surfaced, never swallowed, and on its OWN channel: a wake that failed is
+      // the difference between "the next message is slow" and "the next message
+      // will not work at all", and it has to outlive the poll that follows it.
+      setIgniteError(
         err instanceof Error ? err.message : 'The self-hosted endpoint could not be started.',
       )
     } finally {
@@ -451,13 +533,14 @@ export const PreviewHeaderStrip = () => {
       <span text="xs ui-text-primary" aria-hidden="true">
         {ignitionWord()}
       </span>
-      {/* Whether a state gets a number is the state's own property, not a
-          comparison written here — see `WARMTH_PRESENTATION`. This line read
+      {/* Whether a state gets a number — and whether that number moves — is the
+          state's own property, not a comparison written here (see
+          `WARMTH_PRESENTATION` and `shownSeconds`). This line read
           `warmthKey() === 'warm'`, and that is the whole countdown bug:
           `running` carries one and never rendered it. */}
-      <Show when={WARMTH_PRESENTATION[warmthKey()].countdown && countdown() !== null}>
+      <Show when={shownSeconds() !== null}>
         <span text="xs ui-text-tertiary right" font="mono" min-w="9" aria-hidden="true">
-          {formatCountdown(countdown() ?? 0)}
+          {formatCountdown(shownSeconds() ?? 0)}
         </span>
       </Show>
       {/* The only announced part: the state word, which changes rarely. The
@@ -770,6 +853,25 @@ export const PreviewHeaderStrip = () => {
                   and amber on the light ground is about 2:1. */}
               <span role="status" text="xs ui-danger" title={error() ?? undefined}>
                 stale
+              </span>
+            </Show>
+
+            {/* A start that failed, in its own words and on its own channel.
+                `role="alert"` rather than the `status` beside it: this is the
+                outcome of something the user pressed and then stopped watching,
+                so it is worth interrupting for, where a stale poll is not. The
+                sentence the box actually gave is in the `title` — it names the
+                attempts and the elapsed time and does not fit a top bar — but
+                the visible words are the ones that matter: the start failed, and
+                it says so until it is retried or the box comes up. */}
+            <Show when={igniteError()}>
+              <span
+                role="alert"
+                text="xs ui-danger"
+                title={igniteError() ?? undefined}
+                data-testid="verda-ignite-failed"
+              >
+                {IGNITE_FAILED_LABEL}
               </span>
             </Show>
           </div>

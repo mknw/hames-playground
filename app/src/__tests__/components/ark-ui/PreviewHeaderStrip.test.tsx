@@ -29,7 +29,7 @@ vi.mock('~/lib/harness-client/preview-header.server', () => ({
 }))
 
 const { render, waitFor, fireEvent } = await import('@solidjs/testing-library')
-const { PreviewHeaderStrip, IGNITE_LABEL } =
+const { PreviewHeaderStrip, IGNITE_LABEL, IGNITE_FAILED_LABEL } =
   await import('../../../components/ark-ui/PreviewHeaderStrip')
 
 type State = Awaited<
@@ -262,6 +262,60 @@ describe('the warm indicator', () => {
     await waitFor(() => expect(container.textContent).toContain('answering'))
 
     expect(container.textContent).toContain('5:00')
+  })
+
+  it('holds the ANSWERING figure still instead of ticking it down and resetting it', async () => {
+    // `verdaWarmth()` re-sends the FULL window for `running` on every poll —
+    // correctly, since a box cannot scale down while a turn is on it — so the
+    // local countdown ran it down for one poll interval and then snapped it back
+    // to the top: traced at one-second intervals as 5:00 | 4:59 | 5:00 | 5:00.
+    // At the active 3s rate that happens twice a minute, on the state a user
+    // watches for the whole of their own turn.
+    vi.useFakeTimers()
+    try {
+      getPreviewHeaderState.mockResolvedValue(
+        state({ warmth: { state: 'running', secondsUntilScaledown: 300, scaledownSeconds: 300 } }),
+      )
+      const { container } = render(() => <PreviewHeaderStrip />)
+      await vi.waitFor(() => expect(container.textContent).toContain('answering'))
+      expect(container.textContent).toContain('5:00')
+
+      // Five local ticks, and one poll's worth of them, so both the ticking and
+      // the re-stamp that used to reset it have happened.
+      await vi.advanceTimersByTimeAsync(5_000)
+
+      expect(container.textContent).toContain('5:00')
+      expect(container.textContent).not.toMatch(/4:5\d/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('still TICKS the warm window down, which is a different number', async () => {
+    // The other half of the fix above: `warm` carries what is LEFT of the
+    // window, so holding it still would freeze a real countdown — the failure
+    // "render everything statically" would introduce while making the test
+    // above pass.
+    vi.useFakeTimers()
+    try {
+      getPreviewHeaderState.mockResolvedValue(
+        state({ warmth: { state: 'warm', secondsUntilScaledown: 120, scaledownSeconds: 300 } }),
+      )
+      const { container } = render(() => <PreviewHeaderStrip />)
+      await vi.waitFor(() => expect(container.textContent).toContain('2:00'))
+
+      // Inside the settled poll interval, so nothing re-stamps: this moves only
+      // because the client ticks it. Asserted as "it moved down", not as an
+      // exact second — the tick and the receipt stamp are a microtask apart, so
+      // the rendered figure is one of 1:55/1:56 depending on which side of a
+      // tick the payload landed, and pinning either would be pinning that race.
+      await vi.advanceTimersByTimeAsync(5_000)
+
+      expect(container.textContent).not.toContain('2:00')
+      expect(container.textContent).toMatch(/1:5\d/)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('polls faster while the box is mid-transition than when it has settled', async () => {
@@ -543,8 +597,67 @@ describe('starting the box from the header', () => {
     await waitFor(() => expect(container.textContent).toContain('cold'))
     fireEvent.click(indicator(container))
 
-    await waitFor(() => expect(container.textContent).toContain('stale'))
-    const banner = container.querySelector('[role="status"]')!
+    await waitFor(() => expect(container.textContent).toContain(IGNITE_FAILED_LABEL))
+    const banner = container.querySelector('[data-testid="verda-ignite-failed"]')!
+    // The words say a START failed. "stale" is the vocabulary for numbers that
+    // are merely old, and it was what this reported: a user who pressed start,
+    // was told to expect minutes and looked away could not tell the two apart.
+    expect(container.textContent).not.toContain('stale')
+    // Worth interrupting for — unlike a stale poll, this is the outcome of
+    // something the user pressed and then stopped watching.
+    expect(banner.getAttribute('role')).toBe('alert')
+    // The sentence the box gave is still reachable; it does not fit a top bar.
     expect(banner.getAttribute('title')).toContain('did not wake')
+  })
+
+  it('keeps saying so when the polls that follow succeed', async () => {
+    // The other half of the defect, and the half a user actually met: the
+    // failure rode the poll's error channel, so `load()`'s `setError(null)`
+    // wiped it on the next successful poll — three seconds later at the active
+    // rate, against a wake the same strip had just said would take minutes.
+    vi.useFakeTimers()
+    try {
+      getPreviewHeaderState.mockResolvedValue(cold())
+      igniteVerdaBox.mockRejectedValue(new Error('the private inference box did not wake'))
+
+      const { container } = render(() => <PreviewHeaderStrip />)
+      await vi.waitFor(() => expect(container.textContent).toContain('cold'))
+      fireEvent.click(indicator(container))
+      await vi.waitFor(() => expect(container.textContent).toContain(IGNITE_FAILED_LABEL))
+
+      // Several polls, all of them fine, all of them still reporting a cold box.
+      const before = getPreviewHeaderState.mock.calls.length
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(getPreviewHeaderState.mock.calls.length).toBeGreaterThan(before)
+
+      expect(container.textContent).toContain(IGNITE_FAILED_LABEL)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('drops the failure once the box is actually up, whoever brought it up', async () => {
+    // The one thing that clears it, and the reason it is not simply permanent:
+    // "the start failed" is false about a box that is running, and the strip
+    // must not keep saying it. Note this is the box coming UP, not a poll
+    // merely succeeding — that distinction is the whole of the case above.
+    vi.useFakeTimers()
+    try {
+      getPreviewHeaderState.mockResolvedValue(cold())
+      igniteVerdaBox.mockRejectedValue(new Error('the private inference box did not wake'))
+
+      const { container } = render(() => <PreviewHeaderStrip />)
+      await vi.waitFor(() => expect(container.textContent).toContain('cold'))
+      fireEvent.click(indicator(container))
+      await vi.waitFor(() => expect(container.textContent).toContain(IGNITE_FAILED_LABEL))
+
+      getPreviewHeaderState.mockResolvedValue(state())
+      await vi.advanceTimersByTimeAsync(20_000)
+
+      await vi.waitFor(() => expect(container.textContent).toContain('warm'))
+      expect(container.textContent).not.toContain(IGNITE_FAILED_LABEL)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

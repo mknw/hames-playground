@@ -36,6 +36,12 @@ export interface GraphVisualizationProps {
   onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void
   onElementsChange?: (elements: ElementDefinition[]) => void
+  /** Reset the accumulated elements this canvas is fed from. Supplying it is
+   *  what renders the clear control, because a clear is only meaningful where
+   *  something owns `elements` and can empty it: a caller that does not own its
+   *  elements — one that re-derives them from somewhere else — would have the
+   *  clear undone by its next re-derivation. */
+  onClearGraph?: () => void
   layout?: 'cose' | 'cola' | 'dagre' | 'circle' | 'grid' | 'breadthfirst'
   /** Additional Cytoscape stylesheets appended after base styles (e.g. per-turn colors) */
   extraStyles?: StylesheetJsonBlock[]
@@ -493,6 +499,34 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
     cy.layout(getLayoutOptions(layoutName)).run()
   }
 
+  /**
+   * Empty the view: the canvas, the counts, and the accumulated elements
+   * behind them. Nothing here touches Neo4j — re-running a query repopulates.
+   *
+   * Both halves are load-bearing, and each covers the other's blind spot.
+   * `props.elements` is the source of truth, so without the owner's reset the
+   * next element to arrive re-renders the whole accumulated set (the effect
+   * above treats an empty canvas as a first load). But manual-query results are
+   * added straight to the Cytoscape instance and never enter `props.elements`
+   * (see `renderQueryResult`), so when that array is ALREADY empty — the
+   * ordinary case for a manual query before any chat turn — the owner's reset
+   * changes no signal, the effect never re-runs, and those elements would
+   * survive a clear that only reset the source.
+   *
+   * The two node panels go with it: both are anchored to a node that is no
+   * longer on the canvas, and relation mode is waiting for a second click that
+   * can no longer happen.
+   */
+  const handleClearGraph = () => {
+    cy?.elements().remove()
+    setNodeCount(0)
+    setEdgeCount(0)
+    setRejectedCount(0)
+    setSelectedNode(null)
+    setRelationMode(null)
+    props.onClearGraph?.()
+  }
+
   // ========================================
   // Manual Cypher Handler
   // ========================================
@@ -767,6 +801,35 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
         >
           + Node
         </button>
+
+        {/* Clear the VIEW. Deliberately not a destructive-red affordance and
+            deliberately without a confirmation: nothing leaves the database and
+            re-running a query brings the graph back. R3 icon-button recipe. */}
+        <Show when={props.onClearGraph}>
+          <button
+            onClick={handleClearGraph}
+            title="Clear the graph view (does not change the database)"
+            aria-label="Clear graph view"
+            w="7"
+            h="7"
+            flex="~"
+            items="center"
+            justify="center"
+            bg="transparent hover:ui-bg-hover"
+            border="1 ui-border-secondary"
+            rounded="md"
+            cursor="pointer"
+            transition="all"
+          >
+            <span
+              class="i-material-symbols-layers-clear-outline"
+              w="4"
+              h="4"
+              text="ui-text-primary"
+              aria-hidden="true"
+            />
+          </button>
+        </Show>
       </div>
 
       {/* Create Node Form */}

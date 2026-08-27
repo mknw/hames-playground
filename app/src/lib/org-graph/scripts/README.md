@@ -16,22 +16,35 @@ See the header of `../schema.server.ts`.
   with the **`User.Read.All` application permission** admin-consented on the app
   registration. Client credentials, not a delegated sign-in — the roster is the
   whole tenant, so there is no user whose delegated view would be right.
+- For `enrich-sharepoint-edges.ts` only: `ORG_GRAPH_OWNER_EMAIL` in `.env`, the
+  email of an account that has signed into this app at least once (via
+  `/auth/signin`, so a Graph token cache exists for it) with `Sites.Read.All`
+  and `Files.Read.All` consented. This is the **opposite** credential shape
+  from the other three scripts — a delegated per-user token, not client
+  credentials — see that script's own header for why.
 
 Run from `app/`. The `--env-file=.env` flag is how these pick up `.env` without
 a `dotenv` import (same convention as `../../sandbox/scripts/`).
 
 ## The scripts
 
-| File                  | Touches       | Destructive                                                         |
-| --------------------- | ------------- | ------------------------------------------------------------------- |
-| `setup-org-graph.ts`  | Neo4j schema  | only with `--wipe`                                                  |
-| `ingest-roster.ts`    | Graph → Neo4j | no (upsert)                                                         |
-| `enrich-org-edges.ts` | Neo4j only    | no (idempotent — clears/re-derives its own inferred structure only) |
+| File                         | Touches       | Destructive                                                          |
+| ---------------------------- | ------------- | -------------------------------------------------------------------- |
+| `setup-org-graph.ts`         | Neo4j schema  | only with `--wipe`                                                   |
+| `ingest-roster.ts`           | Graph → Neo4j | no (upsert)                                                          |
+| `enrich-org-edges.ts`        | Neo4j only    | no (idempotent — clears/re-derives its own inferred structure only)  |
+| `enrich-sharepoint-edges.ts` | Graph → Neo4j | no (idempotent — clears/re-derives only its own `COLLABORATES_WITH`) |
 
 `enrich-org-edges.ts` needs no Graph credential and no `AZURE_*` env — it reads
 and writes the local graph only, deriving `MEMBER_OF` groupings and `Resource`
 reclassification from the roster `ingest-roster.ts` already wrote. Run it after
 that, any time; see `docs/org-graph.md` §8.
+
+`enrich-sharepoint-edges.ts` also needs the roster written first (it matches
+Graph identities against `Member.entraId`/`Member.mail`), but its Graph
+credential is the **owner's own delegated sign-in**, not the app-only
+client-credentials grant the other Graph-touching script uses — see
+`docs/org-graph.md` §9.
 
 ```sh
 # idempotent: creates missing constraints, deletes nothing
@@ -43,7 +56,16 @@ pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/setup-org-graph.ts --wipe
 pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/ingest-roster.ts
 
 pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/enrich-org-edges.ts
+
+pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/enrich-sharepoint-edges.ts
 ```
+
+**Ordering note:** `enrich-org-edges.ts` clears **every** relationship
+carrying `inferred: true`, of any type, by design (its own header explains
+why). Running it after `enrich-sharepoint-edges.ts` therefore also clears that
+script's `COLLABORATES_WITH` edges — re-run `enrich-sharepoint-edges.ts`
+afterwards if you need both kinds of inferred structure present at once. This
+is pre-existing behaviour of the older script, not something introduced here.
 
 A third, `smoke-pseudonymise.ts`, is run the same way but lives elsewhere:
 
@@ -97,3 +119,8 @@ masks the id out before printing (see `maskGraphIds` in `_redact.ts`).
   `0` everywhere in the report body is not a failure by itself — it means the
   roster has nothing the current bases can see yet (see `docs/org-graph.md`
   §1 on how sparse `department` is on the live tenant).
+- `enrich-sharepoint-edges.ts`: non-conformance `none` afterwards. `0` pairs
+  written is not a failure — it means the owner's own SharePoint visibility
+  showed no cross-member folder activity in this run. A `GraphAuthRequiredError`
+  means exactly one thing: the `ORG_GRAPH_OWNER_EMAIL` account's sign-in has
+  expired or was never completed — sign in again at `/auth/signin` and re-run.

@@ -428,17 +428,125 @@ the no-reports-to decision takes (§2, "There is deliberately no reports-to")
 — and this lane does not touch that file. Every inferred edge points a
 `Member` at a `Team`.
 
-**What this lane does not attempt.** A second, evidence-based half — co-work
-edges from M365 activity such as recently-edited file titles or shared
-calendar events — was scoped for the same change and is **not implemented**:
-the app-only credential this doc's ingest uses holds `User.Read.All` only (no
-`Files.Read.All` / `Sites.Read.All` / `Calendars.Read`), and the app's
-delegated Graph path (`lib/auth/graph-token.server.ts`'s `getUserGraphToken`,
-what the `microsoft-365` agent's `graph_files_recent` etc. run on) is scoped to
-whichever single user is signed in, not the roster — neither reaches "this
-activity, for all 48 members" today. Filed as a scope/consent gap for the
-owner rather than worked around. Also unimplemented, and left for that same
-gap to unblock: any `Member`↔`Member` collaboration edge would need a relation
-type this ontology does not declare, since §2's structural rule forbids one on
-`Team`-mediated relations too (COORDINATES points at a team) — a real design
-question for whenever the missing scopes land, not answered here.
+**What this lane did not attempt — and §9 is what replaced the plan.** A
+second, evidence-based half — co-work edges from M365 activity such as
+recently-edited file titles or shared calendar events — was scoped for the
+same change and was **not implemented** here: the app-only credential this
+doc's ingest uses holds `User.Read.All` only (no `Files.Read.All` /
+`Sites.Read.All` / `Calendars.Read`), and the app's delegated Graph path
+(`lib/auth/graph-token.server.ts`'s `getUserGraphToken`, what the
+`microsoft-365` agent's `graph_files_recent` etc. run on) is scoped to
+whichever single user is signed in, not the roster — neither reached "this
+activity, for all 48 members" at the time. Filed as a scope/consent gap for
+the owner rather than worked around.
+
+The owner's answer (2026-08-27) was not to widen the app-only credential — see
+§9 for why, and for the `COLLABORATES_WITH` relation type that closes the
+"any collaboration edge would need a relation this ontology does not declare"
+gap this section used to end on.
+
+## 9. The second enrichment lane: co-work edges from the owner's own SharePoint visibility
+
+§8's gap stood on a false choice: either widen the roster ingest's app-only
+credential to `Files.Read.All` / `Sites.Read.All` — which, granted at the
+**application** level, would see every private file in the tenant, not just
+internally-public ones — or leave co-work structure unimplemented. The
+owner's ruling closed it differently: **"the delegated file permission does
+not allow to see private users' files (and it shouldn't)"**, so use the
+owner's own **delegated** token instead of a new application permission.
+`Sites.Read.All` and `Files.Read.All` were already in `DEFAULT_GRAPH_SCOPES`
+(`auth/entra-config.server.ts`) — the same scopes the `microsoft-365` agent's
+`graph_files_search` etc. already run on — and already consented at the
+owner's last interactive sign-in. What made this reachable from a background
+script rather than only from a live chat turn is `#205`'s offline-token
+machinery (`docs/plan/offline-agent-auth.md`): an encrypted, per-user MSAL
+cache that outlives any browser session and is redeemed with
+`acquireTokenSilent`. Nothing about that machinery changed here — this lane
+is Pattern C (#110), consumed for one named user (`ORG_GRAPH_OWNER_EMAIL`)
+instead of "whoever is signed in".
+
+The consequence worth stating plainly: this lane's coverage is bounded by
+what the owner personally has access to. A site the owner cannot open is
+invisible to this run, by construction — not a bug to fix, but the whole
+point of using a delegated token instead of an app-only one. "Internally
+public" SharePoint content is exactly the content a delegated org member's
+own sign-in reaches; a colleague's private OneDrive never enters this token's
+reach at all, so there is no scoping logic in this lane standing between the
+identities it sees and the identities it is allowed to see — Entra already
+drew that line before any Graph response reaches this code.
+
+### The evidence, and what never reaches the graph
+
+`lib/org-graph/sharepoint-coactivity.ts` (pure) and
+`lib/org-graph/enrich-sharepoint-edges.server.ts` (the Graph reads and Neo4j
+writes) enumerate the SharePoint sites and document-library drives the
+owner's token can see, and read each drive's items via Graph's `/delta`
+endpoint — `createdBy`, `lastModifiedBy`, `lastModifiedDateTime` and
+`parentReference` only. **File names and titles are never requested at all**:
+the `$select` list has no `name` field, so there is nothing to redact on the
+way out — a title can carry sensitive content verbatim, and the lane never
+holds one in memory to begin with. `parentReference.path` is read only long
+enough to count its segments (a folder-depth integer); the path text itself
+is discarded in the same expression. What is kept, briefly, per item: an
+opaque site id, an opaque folder id, the depth integer, the timestamp, and
+whichever of `createdBy`/`lastModifiedBy` resolves against the roster already
+in the graph (by `entraId`, then by `mail`) — an identity matching neither is
+dropped without a trace.
+
+**Co-work is inferred from folder co-occurrence, not edit history**: Graph's
+driveItem carries only the creator and the last editor, never a full history,
+so "two people worked together" is read off two _different_ items landing in
+the _same folder_ — weighted by how deep that folder sits (a specific
+project folder is stronger evidence than a document library's root) and how
+recently the more recent of the two touches happened. A shared _site_ with no
+shared folder is kept as a much weaker, separate signal, for the same reason
+a shared department outweighs a shared job title in §8's grouping: a fact
+everyone in a large group shares proves less than one only a few people
+share. A pair's confidence is the sum of its evidence-event weights, capped
+below 1.0 (this is always an inference over metadata) and floored — a pair
+scoring under the noise threshold is dropped rather than written. The full
+formula, as constants rather than prose, is `sharepoint-coactivity.ts`'s own
+header and exports (`FOLDER_BASE_WEIGHT`, `SITE_BASE_WEIGHT`, `depthWeight`,
+`recencyWeight`, `MAX_CONFIDENCE`, `MIN_CONFIDENCE`).
+
+**No LLM reads any of this.** Pair extraction is the pure, deterministic
+function above — re-running it on the same Graph state reproduces the same
+edges — so there is no `tool_result` here and no injection-guard boundary to
+cross. An LLM pass that names or summarises a pair's basis in prose was
+scoped as optional by the task this lane was built for; it was not added,
+because it would trade determinism and re-runnability for a description this
+doc, the PR body and the edge's own `basis` string already give in full.
+
+### The one ontology change this lane authorised
+
+`Member`↔`Member` was structurally forbidden (§2, "There is deliberately no
+reports-to") to keep a hierarchy unexpressible, not merely absent. Observed
+collaboration is not a hierarchy, so `ontology.ts` adds exactly one relation,
+`COLLABORATES_WITH` (`from: ['Member'], to: ['Member']`), undirected in
+meaning — written once per pair in an arbitrary canonical direction, never
+read as "A reports into B" — and marked `requiresInferred: true`, the first
+use of that field. That flag is what keeps the no-reports-to decision intact
+rather than merely relocated: `COLLABORATES_WITH` can express observed
+co-work, but **can never be an ingested fact**, and
+`NON_CONFORMING_CYPHER` now flags any instance missing `inferred: true` as
+drift, the same way it already flags an out-of-ontology label. `ontology.test.ts`
+pins both halves — that `COLLABORATES_WITH` is the only Member↔Member relation
+declared, and that a non-inferred instance is non-conforming.
+
+### Idempotence, and what it does not attempt
+
+Every run clears every `COLLABORATES_WITH` edge (scoped to that type only —
+**not** the blanket "every `inferred: true` relationship" delete
+`enrich-org-edges.server.ts` uses, because this lane must not clear that
+one's `MEMBER_OF` groupings, or vice versa; see the scripts' `README.md` for
+the one ordering consequence this leaves) before re-deriving from Graph's
+current state, so a re-run reproduces the same edges from the same tenant
+state and nothing is left half-written by an interrupted run. This is the
+same "resumable/re-runnable" contract §8's lane already uses — **idempotent
+full re-derivation**, not an incremental delta-token resume. A true
+incremental resume (persisting Graph's own `/delta` link between runs) was
+judged more machinery than a first cut over a tenant this small needs;
+flagged here rather than silently assumed. Requests are sequential and every
+collection read is capped (`MAX_SITES`, `MAX_DRIVES_PER_SITE`,
+`MAX_PAGES_PER_DRIVE` in `enrich-sharepoint-edges.server.ts`) as the
+rate-limit courtesy a background job owes a live tenant.

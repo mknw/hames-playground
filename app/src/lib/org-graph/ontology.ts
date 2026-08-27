@@ -55,11 +55,21 @@ export interface RelationSpec {
   readonly from: readonly NodeLabel[]
   readonly to: readonly NodeLabel[]
   readonly why: string
+  /**
+   * True when EVERY instance of this relation must carry `inferred: true`.
+   * Declared per-relation rather than assumed, because it is what lets a
+   * `Member`→`Member` edge exist at all without reopening the no-reports-to
+   * decision below: an ingested fact can misrepresent authority, but a
+   * relation that can only ever be machine-derived cannot, and
+   * {@link NON_CONFORMING_CYPHER} enforces the stamp is actually present.
+   */
+  readonly requiresInferred?: boolean
 }
 
 /**
  * The relation set. `MEMBER_OF` and `COORDINATES` are given; the other four are
  * the minimum that lets resources and knowledge attach to anything at all.
+ * `COLLABORATES_WITH` is the one addition since (see its own entry below).
  *
  * **No reports-to, by decision.** No `REPORTS_TO` / `MANAGES` / `LEADS` edge
  * exists here, and `COORDINATES` is not a stand-in for one: it points at a
@@ -104,9 +114,22 @@ export const RELATIONS: readonly RelationSpec[] = [
     to: ['Knowledge'],
     why: 'Provenance of a knowledge item; the only Member→Knowledge edge needed, and the reason Knowledge needs no author property.',
   },
+  {
+    type: 'COLLABORATES_WITH',
+    from: ['Member'],
+    to: ['Member'],
+    why: 'Evidence-based co-work observed in shared SharePoint activity. The one exception to "no relation joins two Members": it is authority-free by construction (undirected in meaning — written once per pair, in an arbitrary canonical direction, never read as "A reports into B") and, per requiresInferred below, can only ever exist as a machine-derived observation, never an ingested fact.',
+    requiresInferred: true,
+  },
 ] as const
 
 export const RELATION_TYPES: readonly string[] = RELATIONS.map((r) => r.type)
+
+/** Relation types where every instance MUST carry `inferred: true` — see
+ *  {@link RelationSpec.requiresInferred}. Today just `COLLABORATES_WITH`. */
+export const INFERRED_ONLY_RELATION_TYPES: readonly string[] = RELATIONS.filter(
+  (r) => r.requiresInferred,
+).map((r) => r.type)
 
 /**
  * Required properties per label, split into the two tiers the module header
@@ -226,9 +249,16 @@ export function validateMember(record: Partial<MemberRecord>): {
 // ============================================================================
 
 /**
- * Counts every node whose label set is outside {@link NODE_LABELS} and every
- * relationship whose type is outside {@link RELATION_TYPES}, plus nodes missing
- * a hard property.
+ * Counts every node whose label set is outside {@link NODE_LABELS}, every
+ * relationship whose type is outside {@link RELATION_TYPES}, every node
+ * missing a hard property, and every instance of an
+ * {@link INFERRED_ONLY_RELATION_TYPES} relation that lacks `inferred: true`.
+ *
+ * The last check is what keeps `COLLABORATES_WITH` from becoming a silent
+ * back door around the no-reports-to decision: the relation type itself is
+ * conforming (it is declared), but a non-inferred instance — one written by
+ * a future caller that skipped the enrichment writer — is drift, exactly like
+ * an out-of-ontology label would be.
  *
  * This exists because app-side validation binds only the callers that route
  * through it. `neo4j/graph-edit.server.ts` mints labels and relationship types
@@ -254,13 +284,22 @@ export const NON_CONFORMING_CYPHER = `
     MATCH (n:Member)
     WHERE n.entraId IS NULL OR n.displayName IS NULL OR n.mail IS NULL
     RETURN 'member_missing_hard' AS kind, [] AS detail, count(*) AS count
+    UNION ALL
+    MATCH ()-[r]->()
+    WHERE type(r) IN $inferredOnlyRelationTypes AND coalesce(r.inferred, false) = false
+    RETURN 'relation_missing_inferred_flag' AS kind, [type(r)] AS detail, count(*) AS count
   }
   WITH kind, detail, count WHERE count > 0
   RETURN kind, detail, count ORDER BY kind, count DESC
 `
 
 /** Parameters {@link NON_CONFORMING_CYPHER} expects. */
-export const conformanceParams = (): { labels: string[]; relationTypes: string[] } => ({
+export const conformanceParams = (): {
+  labels: string[]
+  relationTypes: string[]
+  inferredOnlyRelationTypes: string[]
+} => ({
   labels: [...NODE_LABELS],
   relationTypes: [...RELATION_TYPES],
+  inferredOnlyRelationTypes: [...INFERRED_ONLY_RELATION_TYPES],
 })

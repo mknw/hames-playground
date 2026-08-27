@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest'
 import {
   CONSTRAINT_NAMES,
   CONSTRAINT_STATEMENTS,
+  INFERRED_ONLY_RELATION_TYPES,
   LABEL_SPECS,
   NODE_LABELS,
   NON_CONFORMING_CYPHER,
@@ -45,12 +46,25 @@ describe('shape of the ontology', () => {
     for (const forbidden of ['REPORTS_TO', 'MANAGES', 'LEADS', 'SUPERVISES', 'MANAGER']) {
       expect(RELATION_TYPES).not.toContain(forbidden)
     }
-    // Nothing points Member → Member either, which is the structural form the
-    // decision takes: a hierarchy needs an edge between two people.
+    // COLLABORATES_WITH is the one admitted Member → Member relation, and it
+    // is authority-free by construction rather than by omission: it is the
+    // ONLY thing pointing Member at Member, and the next test pins that it
+    // can never exist without inferred:true — see that test for why that is
+    // what keeps it from being a reports-to edge in disguise.
     const personToPerson = RELATIONS.filter(
       (r) => r.from.includes('Member') && r.to.includes('Member'),
     )
-    expect(personToPerson).toEqual([])
+    expect(personToPerson.map((r) => r.type)).toEqual(['COLLABORATES_WITH'])
+  })
+
+  it('gates the one Member<->Member relation to inferred instances only', () => {
+    // This is the structural enforcement for COLLABORATES_WITH: it may express
+    // observed co-work, never an ingested fact, so every instance MUST be
+    // machine-derived. `NON_CONFORMING_CYPHER`'s "checks... inferred-only
+    // relations" test below pins that the query actually flags a violation.
+    const collaboratesWith = RELATIONS.find((r) => r.type === 'COLLABORATES_WITH')!
+    expect(collaboratesWith.requiresInferred).toBe(true)
+    expect([...INFERRED_ONLY_RELATION_TYPES]).toEqual(['COLLABORATES_WITH'])
   })
 
   it('points COORDINATES at a team, never at a person', () => {
@@ -161,15 +175,35 @@ describe('conformance query', () => {
   it('parameterises the label and relation allowlists rather than interpolating', () => {
     expect(NON_CONFORMING_CYPHER).toContain('$labels')
     expect(NON_CONFORMING_CYPHER).toContain('$relationTypes')
+    expect(NON_CONFORMING_CYPHER).toContain('$inferredOnlyRelationTypes')
     expect(conformanceParams()).toEqual({
       labels: [...NODE_LABELS],
       relationTypes: [...RELATION_TYPES],
+      inferredOnlyRelationTypes: [...INFERRED_ONLY_RELATION_TYPES],
     })
   })
 
-  it('checks nodes, relationships and hard-property presence', () => {
-    for (const kind of ['node_label', 'relation_type', 'member_missing_hard']) {
+  it('checks nodes, relationships, hard-property presence and inferred-only relations', () => {
+    for (const kind of [
+      'node_label',
+      'relation_type',
+      'member_missing_hard',
+      'relation_missing_inferred_flag',
+    ]) {
       expect(NON_CONFORMING_CYPHER).toContain(kind)
     }
+  })
+
+  it('flags a non-inferred COLLABORATES_WITH instance as non-conforming, never a real one', () => {
+    // The Cypher WHERE clause, isolated as a boolean expression: this is what
+    // makes "requiresInferred" more than a comment on the ontology.
+    const isViolation = (relInferred: boolean | undefined, type: string): boolean =>
+      [...INFERRED_ONLY_RELATION_TYPES].includes(type) && (relInferred ?? false) === false
+    expect(isViolation(undefined, 'COLLABORATES_WITH')).toBe(true)
+    expect(isViolation(false, 'COLLABORATES_WITH')).toBe(true)
+    expect(isViolation(true, 'COLLABORATES_WITH')).toBe(false)
+    // An ordinary ingested relation (MEMBER_OF from a real Team) is never
+    // flagged by this check, inferred or not.
+    expect(isViolation(undefined, 'MEMBER_OF')).toBe(false)
   })
 })

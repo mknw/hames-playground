@@ -125,8 +125,8 @@ export const SURFACES: readonly Surface[] = [
   {
     name: 'header-strip',
     // No turn needed: the strip is chrome and renders before anything else. Its
-    // live figures are masked (see VOLATILE), so a turn would change nothing
-    // here except the wall clock.
+    // live figures are removed before the shot (see VOLATILE_SELECTORS), so a
+    // turn would change nothing here except the wall clock.
     reach: async (page, appUrl, theme) => {
       await open(page, appUrl, { theme })
       const strip = page.getByTestId('app-header-strip')

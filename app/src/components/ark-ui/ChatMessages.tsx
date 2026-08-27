@@ -470,10 +470,14 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                     </Switch>
 
                     {/* `data-testid` so the browser suite's screenshot
-                        comparison can mask it: a wall-clock time differs between
-                        two otherwise identical runs, and a baseline that diffed
-                        on the minute hand would be re-recorded until nobody
-                        looked at it. */}
+                        comparison can take it OUT of the page before the shot
+                        (`e2e-browser/lib/surfaces.ts#hideVolatile`): a wall-clock
+                        time differs between two otherwise identical runs, and a
+                        baseline that diffed on the minute hand would be
+                        re-recorded until nobody looked at it. Removed rather
+                        than masked — a mask paints over an element and leaves it
+                        in the flow, so a varying WIDTH still moves everything
+                        beside it. */}
                     <div data-testid="message-time" text="xs ui-text-tertiary" m="t-1">
                       {message.timestamp.toLocaleTimeString([], {
                         hour: '2-digit',

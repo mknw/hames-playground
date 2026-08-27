@@ -16,6 +16,16 @@ export default tseslint.config(
       'dist/**',
       'coverage/**',
       'node_modules/**',
+      // Browser-e2e run output. Gitignored, which is NOT enough — eslint does
+      // not read `.gitignore`, so a directory only git knows to skip is still
+      // linted as source. Playwright's HTML reporter copies its own minified
+      // trace-viewer bundles in here, and `pnpm lint` reported ~200 no-undef /
+      // no-unused-expressions errors inside them. Repointing that reporter out
+      // of `app/playwright-report/` (#280) moved the directory; it did not stop
+      // eslint walking it, and the trace viewer is only copied once a run has a
+      // FAILURE — so the break appears exactly when someone is already
+      // debugging a red run.
+      'e2e-browser/.runtime/**',
     ],
   },
   js.configs.recommended,

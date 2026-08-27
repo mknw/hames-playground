@@ -944,9 +944,11 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             same per-session controller that feeds the
                             in-chat bar (#105). Reappears when the run ends. */}
                         {/* The fallback's `data-testid` lets the browser suite
-                            mask it in a screenshot comparison: it is a RELATIVE
-                            time ("just now", "3m ago"), so it changes between two
-                            otherwise identical runs. */}
+                            take it OUT of the page before a screenshot
+                            comparison: it is a RELATIVE time ("just now", "3m
+                            ago"), so it changes between two otherwise identical
+                            runs — and its WIDTH changes with it, which is why it
+                            is removed rather than masked. */}
                         <Show
                           when={live()}
                           fallback={

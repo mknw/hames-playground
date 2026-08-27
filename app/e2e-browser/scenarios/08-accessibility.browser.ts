@@ -83,9 +83,9 @@ const NOT_GATED = [
  * line.
  *
  * These are the app's existing accessibility debt, already measured and written up
- * in `A11Y-CHECKLIST.md`. Fixing them is UI work with its own review, not
- * something to smuggle into the commit that adds the gate — the gate's job is to
- * stop the list growing.
+ * in `A11Y-CHECKLIST.md`. The gate's job is to stop the list GROWING; shrinking it
+ * is UI work with its own review, and each entry below says why it has not had one
+ * yet. Two entries have already left that way — see the note above `header-strip`.
  */
 const KNOWN_OPEN: Record<string, readonly string[]> = {
   // Present on all three surfaces in both themes, because all three are the same
@@ -101,14 +101,17 @@ const KNOWN_OPEN: Record<string, readonly string[]> = {
   //    labels. The checklist already records `dark-text-tertiary` (#71717a) as a
   //    MUTED LABEL colour that fails as body copy — this is that judgement showing
   //    up as a machine finding, and changing it is a palette decision.
-  //  - `document-title` (serious): the app renders no `<title>` at all. This is the
-  //    cheapest fix on the list and it is a real WCAG A failure on every route —
-  //    flagged for its own change rather than recorded as acceptable.
-  //  - `label-title-only` (serious): the composer is a `placeholder`-only field
-  //    (`form-labels` in the checklist: "a bare `<input placeholder="…">` has no
-  //    label"). Also cheap, also its own change.
-  'header-strip:dark': ['button-name', 'color-contrast', 'document-title', 'label-title-only'],
-  'header-strip:light': ['button-name', 'color-contrast', 'document-title', 'label-title-only'],
+  //
+  // TWO ARE GONE, and how they left is the point of the equality. `document-title`
+  // (the app rendered no `<title>` at all) and `label-title-only` (the composer was
+  // a `placeholder`-only field with no accessible name) were recorded here as
+  // known-open, and this list is what made deleting them a REQUIRED edit rather
+  // than an optional one: fixing them turned all six tests red — "a rule was FIXED:
+  // delete its line" — until the lines went. That is the direction a known-open
+  // list usually cannot fail in, and it is why this one is an equality.
+  // `entry-server.tsx` and `ChatInput.tsx` carry the fixes and the reasoning.
+  'header-strip:dark': ['button-name', 'color-contrast'],
+  'header-strip:light': ['button-name', 'color-contrast'],
 
   // Plus, wherever a scrolling list is on screen:
   //  - `scrollable-region-focusable` (serious): the thread list and the transcript
@@ -116,34 +119,10 @@ const KNOWN_OPEN: Record<string, readonly string[]> = {
   //    A `tabindex="0"` on a scroll container is a real fix with a real
   //    consequence for the tab order, which is `keyboard-nav` on the checklist and
   //    a thing a person has to try rather than a line to add.
-  'sidebar-with-rows:dark': [
-    'button-name',
-    'color-contrast',
-    'document-title',
-    'label-title-only',
-    'scrollable-region-focusable',
-  ],
-  'sidebar-with-rows:light': [
-    'button-name',
-    'color-contrast',
-    'document-title',
-    'label-title-only',
-    'scrollable-region-focusable',
-  ],
-  'chat-view:dark': [
-    'button-name',
-    'color-contrast',
-    'document-title',
-    'label-title-only',
-    'scrollable-region-focusable',
-  ],
-  'chat-view:light': [
-    'button-name',
-    'color-contrast',
-    'document-title',
-    'label-title-only',
-    'scrollable-region-focusable',
-  ],
+  'sidebar-with-rows:dark': ['button-name', 'color-contrast', 'scrollable-region-focusable'],
+  'sidebar-with-rows:light': ['button-name', 'color-contrast', 'scrollable-region-focusable'],
+  'chat-view:dark': ['button-name', 'color-contrast', 'scrollable-region-focusable'],
+  'chat-view:light': ['button-name', 'color-contrast', 'scrollable-region-focusable'],
 }
 
 for (const theme of THEMES) {

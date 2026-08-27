@@ -95,8 +95,8 @@ problem the first two already close.
 ## Determinism is a property of the suites, not of the machine (#280)
 
 A flaky net trains people to re-run instead of trust, so a flake here is treated
-as a defect in the test rather than as noise. Five were found and fixed by
-mechanism, not by widening a tolerance:
+as a defect in the test rather than as noise. Eight were found and fixed by
+mechanism, not by widening a tolerance — the table below has one row each:
 
 | Where                                                                                                | The dependence                                                                                                                                                                            | The fix                                                                                                                                                                                                                          |
 | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

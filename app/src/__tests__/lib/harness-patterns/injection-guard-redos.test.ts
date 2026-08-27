@@ -312,7 +312,20 @@ beforeAll(() => {
   for (const [, input] of shapes(trigger, N)) {
     corpusMs += bestOf(() => sanitizeUntrusted(input, ctx))
   }
-})
+  // The hook timeout is a DIAGNOSABILITY budget, not a tolerance: no assertion
+  // reads it, and the grid is still bounded by TOTAL_BUDGET_MS as before. What it
+  // buys is that a quadratic rule fails as the grid's own named failure — the
+  // `ABORTED at <rule> [<shape>]` message the abort exists to produce — instead of
+  // as a bare `Hook timed out`, which names nothing.
+  //
+  // It is needed because {@link REPEATS} multiplies the ABORT's worst case, not
+  // just the healthy grid's: the budget is checked after a cell is measured, so
+  // the one quadratic cell that trips it is now paid for three times before the
+  // abort can fire. Measured by reintroducing the `[ \t]*` runs in
+  // `instruction-turn-spoof`: on one pass the grid aborted at the 12.5k canary and
+  // six assertions failed by name in ~4s; on three it reached vitest's default 10s
+  // hook timeout first and reported 11 SKIPPED tests and no rule id.
+}, 60_000)
 
 describe('ReDoS: the corpus is bounded by test, not by claim', () => {
   it('TRIGGERS covers every corpus rule', () => {

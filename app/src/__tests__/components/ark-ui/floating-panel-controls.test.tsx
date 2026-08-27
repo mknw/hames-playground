@@ -55,13 +55,20 @@ const { AllGraphTabWrapper } = await import('../../../components/ark-ui/AllGraph
 /**
  * Block until `read()` matches `want`.
  *
- * The 5s is a fuse (see the header): the poll returns the instant the state is
+ * The 2s is a fuse (see the header): the poll returns the instant the state is
  * reached, so on an idle box this costs one interval and on a loaded one it
  * costs whatever the machine actually needed. `label` is what a genuinely stuck
  * panel reports, so a red run names the step rather than a bare timeout.
+ *
+ * It must stay UNDER vitest's own budget for the test, or that promise is empty:
+ * `vitest.config.ts` sets no `testTimeout`, so the default is 5000ms, and a fuse
+ * of the same length loses the race — measured, with the close behaviour broken
+ * on purpose: `Error: Test timed out in 5000ms`, no step named. 2s is still 100x
+ * the slowest step measured under load (20ms), and three stuck steps in one `it`
+ * would be the first one's diagnosis anyway.
  */
 async function settle<T>(label: string, read: () => T, want: T): Promise<void> {
-  await waitFor(() => expect(read(), label).toEqual(want), { timeout: 5_000, interval: 10 })
+  await waitFor(() => expect(read(), label).toEqual(want), { timeout: 2_000, interval: 10 })
 }
 
 const part = (root: HTMLElement | Document, name: string) =>

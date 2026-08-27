@@ -823,6 +823,13 @@ describe('ChatSidebar — pinning', () => {
     // which is what makes the state readable rather than discoverable.
     expect(pin.getAttribute('op')).toBe('100')
     expect(pinButtons(container)[1].getAttribute('op')).toContain('group-hover:100')
+    // ...and it reveals on keyboard focus as well, which is the half
+    // `A11Y-CHECKLIST.md`'s `hover-vs-tap` row demands by name for this file:
+    // `op="0"` alone hides a hover-only control from a tabbing user entirely.
+    // Attribute, not resolved opacity — the `[op~="focus:100"]:focus` rule is
+    // in the built sheet, and what jsdom can pin is that the component still
+    // asks for it. Deleting `focus:100` from the `op` list turns this red.
+    expect(pinButtons(container)[1].getAttribute('op')).toContain('focus:100')
     // Filled glyph for pinned, outline for the rest.
     expect(pin.querySelector('.i-material-symbols-keep')).not.toBeNull()
     expect(
@@ -869,14 +876,34 @@ describe('ChatSidebar — pinning', () => {
     spy.mockRestore()
   })
 
-  it('ignores a second click while the first is in flight', async () => {
+  it('ignores a second click while the first is in flight, at both gates', async () => {
     let release: (v: PinResult) => void = () => {}
     setConversationPinned.mockReturnValueOnce(new Promise<PinResult>((r) => (release = r)))
     const { container } = mount(() => <ChatSidebar {...baseProps()} />)
     pinButtons(container)[0].click()
     await tick()
+
+    // Gate 1 — the DOM one. `disabled` is what actually stops a second click
+    // here, and it is the ONLY gate a jsdom click can reach: neither
+    // `HTMLElement.click()` nor Solid's delegated dispatch runs a handler on a
+    // disabled node, so a click through this path never enters the component.
+    expect(pinButtons(container)[0].disabled).toBe(true)
     pinButtons(container)[0].click()
     expect(setConversationPinned).toHaveBeenCalledTimes(1)
+
+    // Gate 2 — `handleTogglePin`'s own early return, which gate 1 hides. It is
+    // not redundant in a real browser: a click dispatched before the reactive
+    // `disabled` update lands still arrives at the handler. jsdom cannot
+    // produce that race, so the attribute is cleared by hand to put the second
+    // click exactly where the browser would put it — past the DOM gate and
+    // into the handler. Deleting `if (pinPending().has(thread.id)) return`
+    // turns this assertion red.
+    const raced = pinButtons(container)[0]
+    raced.disabled = false
+    raced.click()
+    await tick()
+    expect(setConversationPinned).toHaveBeenCalledTimes(1)
+
     release({ outcome: 'pinned', limit: 3 })
     await tick()
     pinButtons(container)[0].click()

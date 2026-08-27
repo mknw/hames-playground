@@ -254,8 +254,14 @@ describe('ChatSidebar — live run readout (#105)', () => {
       stubRegistry({ runState: () => busy }),
     )
     expect(container.textContent).toContain('Starting…')
-    // No denominator yet → the indeterminate shimmer, not a 0%-wide fill.
-    expect(container.querySelector('.thread-progress-indeterminate')).toBeTruthy()
+    // No denominator yet → the indeterminate shimmer, not a 0%-wide fill. The
+    // class was `.thread-progress-indeterminate` until #295 folded this strip
+    // onto the shared `ProgressBar`, which is also where the sweep now comes
+    // from; the row asks for it by passing `percent: null`.
+    expect(container.querySelector('.progress-indeterminate')).toBeTruthy()
+    expect(container.querySelector('[data-part="root"]')?.getAttribute('data-state')).toBe(
+      'indeterminate',
+    )
   })
 
   it('shows the relative timestamp for an idle row', () => {

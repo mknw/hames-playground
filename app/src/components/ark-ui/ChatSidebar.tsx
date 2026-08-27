@@ -1,6 +1,7 @@
 import { For, Show, Switch, Match, createSignal, createEffect, onCleanup } from 'solid-js'
 import { Dialog } from '@ark-ui/solid/dialog'
 import { SettingsPanel } from './SettingsPanel'
+import { ProgressBar } from './ProgressBar'
 import { regenerateConversationTitle } from '../../lib/harness-client'
 import { accentColor } from '../../lib/agent-palette'
 import type { CompletionMark } from '../../lib/run-registry'
@@ -287,59 +288,29 @@ export function allEligibleSelected(
   return any
 }
 
-/** Shared with the in-chat LiveProgressBar so the two read as one system. */
-const STRIP_GRADIENT = 'linear-gradient(90deg, rgba(0,255,255,0.85), rgba(157,0,255,0.85))'
-
 /**
- * Row-sized live-run readout: current status line + a 3px progress strip.
+ * Row-sized live-run readout: current status line + the shared 3px bar.
  * Replaces the "{x} ago" timestamp while the run streams. Reuses the chat
  * bar's *mechanics* (ChainProgressSnapshot from the route's per-session
- * controller) but not the component — this is a strip, not a labelled bar.
+ * controller) AND, since #295, its bar — this used to be hand-rolled `<div>`s
+ * carrying their own copy of the gradient under a comment claiming the literal
+ * was shared with `LiveProgressBar`. It was not; it was the second of three
+ * copies. `progressPercent`'s `number | null` is already `ProgressBar`'s
+ * determinate/indeterminate contract, so the strip is now that component with
+ * this row's own label passed in.
  */
 const RowProgress = (props: { snapshot: ChainProgressSnapshot }) => {
   const pct = () => progressPercent(props.snapshot)
   return (
-    // m="t-1" and gap="1", not t-1.5: verified against the built sheet —
-    // the extractor drops [m~=t-1.5] while these both emit.
-    <div m="t-1" flex="~ col" gap="1">
-      <div text="xs ui-text-tertiary" truncate>
-        {props.snapshot.status ?? 'Starting…'}
-      </div>
-      <div
-        style={{
-          height: '3px',
-          'border-radius': '9999px',
-          overflow: 'hidden',
-          'background-color': 'rgb(58, 58, 74)',
-        }}
-      >
-        <Show
-          when={pct() !== null}
-          fallback={
-            // Projection not seeded yet — indeterminate shimmer so the row
-            // reacts the instant the run starts, before the first estimate.
-            <div
-              class="thread-progress-indeterminate"
-              style={{
-                height: '100%',
-                width: '40%',
-                'border-radius': '9999px',
-                'background-image': STRIP_GRADIENT,
-              }}
-            />
-          }
-        >
-          <div
-            style={{
-              height: '100%',
-              width: `${pct()}%`,
-              'background-image': STRIP_GRADIENT,
-              'box-shadow': '0 0 8px rgba(0,255,255,0.45)',
-              transition: 'width 420ms cubic-bezier(0.22, 1, 0.36, 1)',
-            }}
-          />
-        </Show>
-      </div>
+    // m="t-1", not t-1.5: verified against the built sheet — the extractor
+    // drops [m~=t-1.5] while this emits. The column gap is ProgressBar's
+    // gap-1.5 now (was gap-1 here), which is 2px and unifies the two bars.
+    <div m="t-1">
+      <ProgressBar percent={pct()}>
+        <div text="xs ui-text-tertiary" truncate>
+          {props.snapshot.status ?? 'Starting…'}
+        </div>
+      </ProgressBar>
     </div>
   )
 }

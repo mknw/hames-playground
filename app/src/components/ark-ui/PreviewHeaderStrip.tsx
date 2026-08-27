@@ -105,7 +105,6 @@ import {
   Show,
   type JSX,
 } from 'solid-js'
-import { Dynamic } from 'solid-js/web'
 import { SegmentGroup } from '@ark-ui/solid/segment-group'
 import {
   getPreviewHeaderState,
@@ -435,6 +434,42 @@ export const PreviewHeaderStrip = () => {
     }
   }
 
+  /** The indicator's contents, shared by the button a cold box renders and the
+   *  plain div every other state does — written once so the two branches can
+   *  differ in what they ARE without differing in what they say. */
+  const indicatorBody = () => (
+    <>
+      <Show when={!igniting()} fallback={ignitingGlyph()}>
+        <Show when={canIgnite() && hovering()} fallback={WARMTH_PRESENTATION[warmthKey()].glyph()}>
+          {igniteGlyph()}
+        </Show>
+      </Show>
+      {/* The WORD is themed text, not the glyph's hue: `amber-500` on the light
+          ground is around 2:1, and the state has to be readable in both. The hue
+          rides the glyph beside it, which carries no information of its own
+          (`color-not-only`). */}
+      <span text="xs ui-text-primary" aria-hidden="true">
+        {ignitionWord()}
+      </span>
+      {/* Whether a state gets a number is the state's own property, not a
+          comparison written here — see `WARMTH_PRESENTATION`. This line read
+          `warmthKey() === 'warm'`, and that is the whole countdown bug:
+          `running` carries one and never rendered it. */}
+      <Show when={WARMTH_PRESENTATION[warmthKey()].countdown && countdown() !== null}>
+        <span text="xs ui-text-tertiary right" font="mono" min-w="9" aria-hidden="true">
+          {formatCountdown(countdown() ?? 0)}
+        </span>
+      </Show>
+      {/* The only announced part: the state word, which changes rarely. The
+          countdown above is aria-hidden on purpose, and so is the hover swap —
+          the button already has its accessible name from `aria-label`, and a
+          live region that re-read it on every pointer crossing would be noise. */}
+      <span sr-only aria-live="polite">
+        Self-hosted endpoint {WARMTH_PRESENTATION[warmthKey()].word}
+      </span>
+    </>
+  )
+
   const chooseTier = async (value: string) => {
     if (value !== 'verda' && value !== 'anthropic') return
     if (value === state()?.tier) return
@@ -571,75 +606,66 @@ export const PreviewHeaderStrip = () => {
 
             {/* ---- Warm state -------------------------------------------- */}
             <Show when={s().verdaAvailable}>
-              {/* Two elements, one `data-testid`. A cold box is the one state a
-                  click can act on, so THERE it is a real `<button>` — not a
-                  `<div onClick>` — which is what buys the keyboard, the focus
-                  ring and the role for free. In every other state there is
-                  nothing to press, and a permanently-disabled button would
-                  advertise an affordance that never applies. `Dynamic` rather
-                  than two branches so the contents below are written once. */}
-              <Dynamic
-                component={canIgnite() ? 'button' : 'div'}
-                type={canIgnite() ? 'button' : undefined}
-                onClick={canIgnite() ? () => void igniteBox() : undefined}
-                onMouseEnter={() => setHovering(true)}
-                onMouseLeave={() => setHovering(false)}
-                onFocus={() => setHovering(true)}
-                onBlur={() => setHovering(false)}
-                disabled={canIgnite() ? igniting() : undefined}
-                aria-label={canIgnite() ? IGNITE_LABEL : undefined}
-                flex="~"
-                items="center"
-                gap="1"
-                p={canIgnite() ? 'x-1.5 y-0.5' : undefined}
-                m={canIgnite() ? 'x--1.5' : undefined}
-                rounded={canIgnite() ? 'md' : undefined}
-                cursor={canIgnite() ? 'pointer' : undefined}
-                bg={canIgnite() ? 'transparent hover:ui-bg-hover' : undefined}
-                ring={canIgnite() ? '2 transparent focus-visible:ui-accent/40' : undefined}
-                transition="all"
-                title={
-                  igniting()
-                    ? 'Starting the self-hosted endpoint. The first call after it has scaled to zero takes minutes.'
-                    : canIgnite() && hovering()
-                      ? 'Start the self-hosted endpoint now, so your next message does not pay the cold start.'
-                      : WARMTH_PRESENTATION[warmthKey()].hint
-                }
-                data-testid="verda-warmth"
-              >
-                <Show when={!igniting()} fallback={ignitingGlyph()}>
-                  <Show
-                    when={canIgnite() && hovering()}
-                    fallback={WARMTH_PRESENTATION[warmthKey()].glyph()}
+              {/* Two elements, one `data-testid` and one body. A cold box is the
+                  one state a click can act on, so THERE it is a real `<button>`
+                  — not a `<div onClick>` — which is what buys the role, the
+                  keyboard and the focus ring for free. In every other state
+                  there is nothing to press, and a permanently-disabled button
+                  would advertise an affordance that never applies.
+
+                  Written as two branches with their utilities spelled out,
+                  rather than one element carrying `p={cold ? 'x-1.5' : …}`:
+                  UnoCSS extracts attributify from LITERAL `attr="value"` text,
+                  so a utility that only ever exists inside a ternary can emit no
+                  CSS at all and fail silently — an element that simply renders
+                  unstyled. That is the same trap the `Metric` glyphs below
+                  document, and it had already cost this file one missing colour. */}
+              <Show
+                when={canIgnite()}
+                fallback={
+                  <div
+                    flex="~"
+                    items="center"
+                    gap="1"
+                    transition="all"
+                    title={WARMTH_PRESENTATION[warmthKey()].hint}
+                    data-testid="verda-warmth"
+                    onMouseEnter={() => setHovering(true)}
+                    onMouseLeave={() => setHovering(false)}
                   >
-                    {igniteGlyph()}
-                  </Show>
-                </Show>
-                {/* The WORD is themed text, not the glyph's hue: `amber-500` on
-                    the light ground is around 2:1, and the state has to be
-                    readable in both. The hue rides the glyph beside it, which
-                    carries no information of its own (`color-not-only`). */}
-                <span text="xs ui-text-primary" aria-hidden="true">
-                  {ignitionWord()}
-                </span>
-                {/* Whether a state gets a number is the state's own property, not
-                    a comparison written here — see `WARMTH_PRESENTATION`. This
-                    line read `warmthKey() === 'warm'` and that is the whole
-                    countdown bug: `running` carries one and never rendered it. */}
-                <Show when={WARMTH_PRESENTATION[warmthKey()].countdown && countdown() !== null}>
-                  <span text="xs ui-text-tertiary right" font="mono" min-w="9" aria-hidden="true">
-                    {formatCountdown(countdown() ?? 0)}
-                  </span>
-                </Show>
-                {/* The only announced part: the state word, which changes rarely.
-                  The countdown above is aria-hidden on purpose. The hover swap is
-                  NOT announced either — the button already has its accessible
-                  name from `aria-label`, and a live region that re-read it on
-                  every pointer crossing would be noise. */}
-                <span sr-only aria-live="polite">
-                  Self-hosted endpoint {WARMTH_PRESENTATION[warmthKey()].word}
-                </span>
-              </Dynamic>
+                    {indicatorBody()}
+                  </div>
+                }
+              >
+                <button
+                  type="button"
+                  onClick={() => void igniteBox()}
+                  onMouseEnter={() => setHovering(true)}
+                  onMouseLeave={() => setHovering(false)}
+                  onFocus={() => setHovering(true)}
+                  onBlur={() => setHovering(false)}
+                  disabled={igniting()}
+                  aria-label={IGNITE_LABEL}
+                  flex="~"
+                  items="center"
+                  gap="1"
+                  p="x-1.5 y-0.5"
+                  m="x--1.5"
+                  rounded="md"
+                  cursor="pointer"
+                  bg="transparent hover:ui-bg-hover"
+                  ring="2 transparent focus-visible:ui-accent/40"
+                  transition="all"
+                  title={
+                    igniting()
+                      ? 'Starting the self-hosted endpoint. The first call after it has scaled to zero takes minutes.'
+                      : 'Start the self-hosted endpoint now, so your next message does not pay the cold start.'
+                  }
+                  data-testid="verda-warmth"
+                >
+                  {indicatorBody()}
+                </button>
+              </Show>
             </Show>
 
             {/* ---- Metrics ----------------------------------------------- */}

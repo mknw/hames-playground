@@ -12,8 +12,9 @@
  *      (`@supabase/mcp-server-supabase`; env `SUPABASE_URL`,
  *      `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SCHEMA`).
  *   2. Implement `search()` to `callTool(<supabase match tool>, { query: text, k })`
- *      and map rows → RetrievalHit (n8n already uses this Supabase, so a match
- *      surface likely exists).
+ *      and map rows → RetrievalHit. Whether a match surface already exists is
+ *      **unconfirmed** — nothing in this tree names a system that queries this
+ *      Supabase. Confirm with IT rather than assuming the RPC is there.
  *
  * Until then `search()` throws; the retriever's per-backend guard turns that into
  * an error event + empty results, so a misconfigured backend never sinks a run.

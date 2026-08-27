@@ -380,7 +380,7 @@ cd /opt/kg-agent
 docker build -t kg-sandbox:base rootfs/
 
 # The whole stack: app, Postgres, Neo4j, redis-stack, MCP gateway, doc-convert,
-# and Caddy in front. n8n is deliberately parked behind its own profile.
+# and Caddy in front.
 docker compose up -d --build
 ```
 
@@ -821,8 +821,8 @@ means concretely:
 - The merged production configuration (`docker compose config`): every data-tier
   port on `127.0.0.1`, both passwords substituted into the services _and_ into
   the app's `DATABASE_URL`, a stray `app/.env` correctly contributing nothing,
-  n8n parked, no Arm redis override loaded, and the gateway's merged `command:`
-  carrying `--servers=…` with no `--enable-all-servers` left in it.
+  no Arm redis override loaded, and the gateway's merged `command:` carrying
+  `--servers=…` with no `--enable-all-servers` left in it.
 - **§3a's tool surface, by running the gateway three ways against the same
   catalog.** `--enable-all-servers` with a five-server `mcp-config.yaml`:
   _nine_ servers enabled, 134 tools — the config file does not narrow anything,

@@ -167,7 +167,7 @@ to the app and closes the exposure.
 
 ```bash
 cd /opt/kg-agent
-docker compose up -d                 # neo4j, postgres, redis-stack, mcp-gateway (+ n8n if wanted)
+docker compose up -d                 # neo4j, postgres, redis-stack, mcp-gateway, doc-convert
 docker compose ps                    # all healthy?
 
 # Build the sandbox base image — the compute sandbox needs it or every run fails

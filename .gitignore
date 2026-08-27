@@ -33,9 +33,6 @@ neo4j_data/
 # them deliberately — it is not this line's job either way.
 neo4j_dumps/export-*.cypher
 
-# n8n data
-n8n_data/
-
 # UI Solid Start Frontend
 **/node_modules
 **/.env

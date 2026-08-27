@@ -85,13 +85,7 @@ export type {
   ToolSet,
 } from './types'
 
-export {
-  MAX_TOOL_TURNS,
-  MAX_RETRIES,
-  DEFAULT_TRACK_HISTORY,
-  DEFAULT_COMMIT_STRATEGY,
-  DEFAULT_ERROR_SEVERITY,
-} from './types'
+export { DEFAULT_TRACK_HISTORY, DEFAULT_COMMIT_STRATEGY, DEFAULT_ERROR_SEVERITY } from './types'
 
 // ============================================================================
 // Tools

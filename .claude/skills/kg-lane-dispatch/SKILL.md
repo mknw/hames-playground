@@ -157,6 +157,52 @@ gate results. Do not merge. Send only ask / escalation / worker_done messages �
 `Do not merge` and the message-type line stay explicit in every spec — both are
 guardrails a lane otherwise talks itself past.
 
+## Starting the worker: worktree first
+
+A lane runs in its own worktree — created first, then pinned at start:
+
+```bash
+orca worktree create --name <lane> --repo path:<repo-root> --base-branch main --setup run
+orca orchestration worker-start --run <run> --task <task> \
+  --worktree name:<lane> --agent claude --model opus
+```
+
+`--worktree` is what puts the worker there: `worker-start` without it opens the
+agent's terminal in the coordinator's own checkout — the one with the owner's
+dev server attached — where every save hot-reloads the app under the owner's
+hands and two lanes' edits interleave in one working tree (observed 2026-08-27:
+two lanes stopped mid-flight, their mixed WIP stashed to a salvage branch, the
+owner's checkout restored by hand).
+
+After each dispatch, verify the pin took: `git -C <repo-root> status --short`
+stays empty while lanes run. A lane that needs something from the main checkout
+(a gitignored log, a local config) gets the absolute path in its spec, marked
+read-only.
+
+**Under heavy load, `worker-start` can return `agent_prompt_stalled`.** The
+condition is load, not the worktree: a fresh worktree's first agent terminal
+pays the nix shell + direnv startup before the TUI can take the prompt, and
+with many lanes running concurrently that startup outlasts the dispatch window
+(observed 2026-08-27: nine dispatches succeeded at two-three concurrent lanes;
+all four stalls came at six lanes, load average 75+). The terminal usually
+comes up moments later, so recover by **attaching, not respawning**:
+`orca terminal list` to find the live Claude terminal in the worktree, then
+`orca orchestration dispatch --task <id> --to <terminal-handle>`; if the spec
+sits unsubmitted in the composer, `orca terminal send --terminal <handle>
+--enter`. Each stalled attempt marks its task failed, and a failed task cannot
+be started — recreate it from the same spec file. Prevention is fewer
+concurrent lanes.
+
+**A dispatch receipt is not a running lane.** After every dispatch or attach,
+read the terminal and confirm the agent is *generating* — the TUI spinner with
+a climbing token counter ("Puttering… ↓ 12k tokens"), not merely a delivered
+prompt. `worker-start` exiting 0, a `dispatched` task row, and the spec landing
+in the composer are all receipts about the hand-off; every one of them was
+observed (2026-08-27) on a lane whose spec sat unsubmitted in the composer for
+over an hour while the coordinator reported it running. The same discipline
+closes the loop at the far end: verify **outcomes** — the commit on the lane's
+branch, the push, the posted comment — never bookkeeping.
+
 ## Writing the spec safely
 
 Pass a long spec through a **file**, not an inline shell string:

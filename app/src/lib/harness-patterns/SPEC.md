@@ -317,12 +317,11 @@ usually one tool call, but the controller may emit a **multi-call turn**
 simpleLoop(b.Neo4jController.bind(b), tools.neo4j, {
   patternId: 'neo4j-query',
   schema,
-  maxTurns: 5,
 })
 
 interface SimpleLoopConfig extends PatternConfig {
   schema?: string // Injected as context to controller
-  maxTurns?: number // Default: 5
+  maxTurns?: number // Round budget. Default: settings.maxToolTurns (8). See below.
   rememberPriorTurns?: boolean // Include prior tool results (default: true)
   priorTurnCount?: number // How many prior user turns (default: 3)
   includeFailedResults?: boolean // Include failed tool results in prior context (default: false)
@@ -339,6 +338,46 @@ interface FewShot {
   tool: string // Tool name selected
   args: string // JSON-encoded tool arguments
 }
+
+**Round budgets — `maxTurns`, and what it does NOT count.**
+
+The budget is **controller round-trips, not tool calls**. Under the default
+`multiToolCalls: 'parallel'` one round can carry up to `MAX_PARALLEL_TOOL_CALLS`
+(4) calls, so the same `maxTurns: 12` is 12 tool calls for a strictly sequential
+loop and up to ~48 for a batching one. That asymmetry is deliberate: what a loop
+runs out of is chances to THINK, and a batch is one decision. Size the number
+against the plan's shape (how many decisions), never against the tool count.
+
+Two values can supply it, and one rule picks between them
+(`resolveTurnBudget`, `lib/settings.ts` — read by the loop body, by
+`estimateTurns`, and by the exhaustion event, so the three cannot disagree):
+
+- **The pattern's own `maxTurns` wins over `settings.maxToolTurns`**, in both
+  directions. A loop pinning a small budget means it and a user's slider may not
+  widen it; a loop pinning a large one keeps it while the slider sits at the
+  default. The consequence is that the slider is **inert for a pinned loop** —
+  which is why the exhaustion hint names whichever of the two actually bound
+  (`budgetHint`). Before #269 it always named the setting, on the one agent
+  where that advice did nothing.
+- **A declared budget is clamped to `SETTINGS_BOUNDS`** (`[1, 15]` for
+  `maxToolTurns`), which a call-site literal otherwise bypasses. Load-bearing,
+  not hygiene: the stuck-run reaper derives the longest turn the app may
+  legitimately run from that ceiling (`MAX_SEQUENTIAL_LLM_CALLS`,
+  `lib/db/conversations.server.ts`), so an agent pinning `maxTurns: 40` would
+  not raise the threshold — it would make an honest turn outlast it and be
+  reaped mid-flight. Raising a budget past the ceiling is therefore a deliberate
+  edit to the bound (and so to the reaper), never a side effect of one agent's
+  config. The floor matters too: a declared `0` used to run zero rounds and
+  record nothing at all.
+
+**Exhaustion is a truncation, and says so.** Reaching the budget without
+`Return`/`is_final` records a `recoverable` error event carrying
+`kind: 'budget_exhausted'` and `maxTurns` — a marker, not a sentence to match,
+so the observability panel badges it ("stopped by round budget", turn rendered
+as `7 / 8`) and a test can pin it without depending on wording. `actorCritic`
+stamps the identical pair when `maxRetries` runs out. Nothing failed in either
+case: the completed rounds are preserved on scope and the `compactExecution`
+answers from them (#83).
 
 type OnToolResult = (
   toolName: string,
@@ -486,7 +525,10 @@ actorCritic(b.ActorController.bind(b), b.Critic.bind(b), tools.all, {
 })
 
 interface ActorCriticConfig extends PatternConfig {
-  maxRetries?: number // Default: 3
+  maxRetries?: number // Attempt budget. Default: settings.maxRetries (3).
+  // Resolved and clamped exactly like simpleLoop's `maxTurns` — see
+  // "Round budgets" under simpleLoop — and its exhaustion carries the same
+  // `kind: 'budget_exhausted'` marker.
   onToolResult?: OnToolResult // Same shape + semantics as in SimpleLoopConfig
   criticCadence?: number // Default: 1 (critic every turn). See below.
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Same semantics as simpleLoop's (see above);
@@ -1337,8 +1379,9 @@ decision:
 - **`recoverable`** — the chain continues. The failure cost something (a turn
   budget, a plan, a set of matches) but the patterns after it can still produce
   an honest answer. A `simpleLoop` that exhausts `maxTurns` is the canonical
-  case: it records a recoverable error and the `compactExecution` answers from
-  the partial results.
+  case: it records a recoverable error — marked `kind: 'budget_exhausted'`, see
+  "Round budgets" — and the `compactExecution` answers from the partial
+  results.
 - **`irrecoverable`** — the chain stops at that pattern. `ctx.status` becomes
   `'error'`, `ctx.error` carries the message, and the pattern's own error event
   is what the user sees (no second event is pushed, so the transcript shows one
@@ -1568,7 +1611,9 @@ BAML Return → string (assistant response text)
 > so errors expire with the view instead of being carried forward by hand.
 
 > **Raw LLM output on a failed call**: an `error` event whose failure is
-> attributable to an LLM call carries `ErrorEventData.kind: 'llm_call'` and the
+> attributable to an LLM call carries `ErrorEventData.kind: 'llm_call'` (the
+> field's other value, `budget_exhausted`, marks a loop truncated by its round
+> budget — nothing failed there, so no call data is attached) and the
 > full `ContextEvent.llmCall` — crucially `rawOutput`, the only record of what
 > the model actually said. Two families qualify and both must attach it:
 >

@@ -37,7 +37,10 @@ export interface SandboxSettings {
 }
 
 export interface HarnessSettings {
-  maxToolTurns: number // simpleLoop max iterations (default: 5)
+  /** simpleLoop round budget for a loop that declares no `maxTurns` of its own
+   *  (default: 8). A pattern that DOES declare one wins — see
+   *  {@link resolveTurnBudget}, the only place either value is read. */
+  maxToolTurns: number
   maxRetries: number // actorCritic max attempts (default: 3)
   maxResultChars: number // tool result truncation chars (default: 8000)
   maxResultForSummary: number // summarizer input limit chars (default: 3000)
@@ -54,7 +57,13 @@ export interface HarnessSettings {
 }
 
 export const DEFAULT_SETTINGS: HarnessSettings = {
-  maxToolTurns: 5,
+  // Raised 5 → 8 (#269, 2026-08-27). 5 was the value no tuned agent kept: both
+  // agents that hand a model more than one namespace (`general`,
+  // `microsoft-365`) pinned 8 at their own call site, so the fallback only ever
+  // bound the loops nobody had measured yet — including the DEFAULT `search`
+  // agent, which pins `maxTurns` on neither of its loops. SETTINGS_BOUNDS is
+  // unchanged, so this widens nothing a browser could not already ask for.
+  maxToolTurns: 8,
   maxRetries: 3,
   // Raised 2000 → 8000 (2026-07-30): at 2000 a 14-hit Graph search showed ~3
   // hits and the controller re-queried for data it already had (its own
@@ -163,6 +172,44 @@ export function sanitizeHarnessSettings(input: unknown): HarnessSettings | undef
     maxConcurrentRuns: clampSetting('maxConcurrentRuns', raw.maxConcurrentRuns),
     sandbox: DEFAULT_SETTINGS.sandbox,
   }
+}
+
+/**
+ * Resolve the round budget one loop pattern may spend this turn — the ONE place
+ * `maxTurns` / `maxRetries` are read, so the loop body, the progress bar's
+ * denominator (`estimateTurns`) and the exhaustion event cannot disagree about
+ * how many rounds the loop had.
+ *
+ * Two rules, in this order:
+ *
+ *  - **A pattern's own declaration wins over the request's setting** (`declared
+ *    ?? fromSettings`), in both directions. A loop that pins a SMALL budget
+ *    means it, and a user's slider does not get to widen it; a loop that pins a
+ *    large one keeps it when the slider sits at the default. The cost is that
+ *    the slider is inert for a pinned loop, which is why the loops' exhaustion
+ *    hint names whichever of the two actually bound (before #269 it always
+ *    named the setting — advice that did nothing on the agent that hit the cap).
+ *
+ *  - **The declaration is clamped to {@link SETTINGS_BOUNDS}**, which a call-site
+ *    literal otherwise bypasses entirely. This is load-bearing and not hygiene:
+ *    the stuck-run reaper derives the longest turn the app can legitimately run
+ *    from `SETTINGS_BOUNDS.maxToolTurns[1]` / `maxRetries[1]`
+ *    (`MAX_SEQUENTIAL_LLM_CALLS`, `lib/db/conversations.server.ts`). An agent
+ *    pinning `maxTurns: 40` would not raise that threshold — it would make a
+ *    legitimate turn outlast it and be reaped mid-flight, which reads to the
+ *    user as a run that died for no reason. Clamping here keeps the derivation
+ *    true by construction: raising a pattern's budget past the ceiling is a
+ *    deliberate edit to the bound (and therefore to the reaper), never a
+ *    side effect of one agent's config. The floor matters too — a declared `0`
+ *    used to run zero rounds and record NOTHING, since the exhaustion event is
+ *    gated on having completed at least one.
+ */
+export function resolveTurnBudget(
+  key: 'maxToolTurns' | 'maxRetries',
+  declared: number | undefined,
+  fromSettings: number,
+): number {
+  return clampSetting(key, declared ?? fromSettings)
 }
 
 /** Context window limits per BAML client (tokens) */

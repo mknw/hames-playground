@@ -88,7 +88,9 @@ return [
   simpleLoop<SessionData>(createLoopControllerAdapter(tools.all), tools.all, {
     patternId: 'execute',
     schema,
-    maxTurns: 8,
+    // Rounds, not tool calls: with the default `multiToolCalls: 'parallel'` one
+    // round carries up to 4 calls. Raised 8 → 12 on a captured run (#269).
+    maxTurns: 12,
   }),
   compactExecution<SessionData>({ mode: 'thread', patternId: 'response-synth' }),
 ]

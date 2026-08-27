@@ -324,10 +324,11 @@ const MAX_SEQUENTIAL_LLM_CALLS =
  * the thing being asked for.
  *
  * **The wake is the one term not in the product, and it fits.** #279 parks a
- * turn on a wake ping before its first LLM call, for up to
- * `VERDA_WAKE_TIMEOUT_MS` (300s, `lib/inference/wake.server.ts`), and the row is
- * pre-seeded before that wait — so the worst legitimate turn is really 75 + 5 =
- * **80 minutes against a 90-minute threshold**, 10 minutes clear. It is folded
+ * turn on a wake before its first LLM call, for up to
+ * `DEFAULT_VERDA_WAKE_TIMEOUT_MS` (600s since 2026-08-27, when the single ping
+ * became a poll — `lib/inference/wake.server.ts`), and the row is pre-seeded
+ * before that wait — so the worst legitimate turn is really 75 + 10 =
+ * **85 minutes against a 90-minute threshold**, 5 minutes clear. It is folded
  * into the margin rather than added as a term because it is bounded, once per
  * turn (concurrent turns share one ping) and two orders of magnitude below the
  * chain; `stuck-run-reaper.test.ts` pins the inequality against the real

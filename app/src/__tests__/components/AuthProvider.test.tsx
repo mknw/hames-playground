@@ -67,14 +67,20 @@ describe('AuthProvider', () => {
       </AuthProvider>
     ))
 
-    expect(container.textContent).toContain('Please wait while we verify your authentication')
+    // Found by its test id, not by its copy. This gate's fallback is the shared
+    // `AppLoadingSplash` since #295, and the sentence it used to assert —
+    // "Please wait while we verify your authentication" — was deliberately
+    // deleted: the same screen now also covers the route load that follows, so
+    // a line about authentication was wrong for half of the wait it was on
+    // screen for.
+    expect(container.querySelector('[data-testid="app-loading-splash"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="app"]')).toBeNull()
 
     resolve(ada)
     await tick()
 
     expect(container.querySelector('[data-testid="app"]')).toBeTruthy()
-    expect(container.textContent).not.toContain('Please wait')
+    expect(container.querySelector('[data-testid="app-loading-splash"]')).toBeNull()
   })
 
   it('redirects an unauthenticated visitor to sign-in and keeps the app hidden', async () => {

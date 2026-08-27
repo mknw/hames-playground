@@ -94,15 +94,19 @@ async function noticesFrom(body: () => void | Promise<void>): Promise<ColdStartE
 }
 
 describe('the estimate', () => {
-  it('falls back to the single published reading before anything is measured', () => {
+  it('falls back to the LONGEST published reading before anything is measured', () => {
     expect(coldStartEstimate()).toEqual({
       estimateMs: COLD_START_FALLBACK_MS,
       basis: 'default',
       samples: 0,
     })
-    // The provenance is the point: 146s is what one completion into a sleeping
-    // box took on 2026-08-26, not a rounded guess.
-    expect(COLD_START_FALLBACK_MS).toBe(146_000)
+    // The provenance is the point: ~360s is what the box took from first request
+    // to available on 2026-08-27, not a rounded guess. Three readings exist
+    // (71.7s, 146s, ~360s) and this is deliberately the largest rather than
+    // their median — the errors are asymmetric and the owner settled the
+    // direction, because a pessimistic countdown clears early and an optimistic
+    // one is a promise the box breaks.
+    expect(COLD_START_FALLBACK_MS).toBe(360_000)
   })
 
   it('is the median of what was measured, and says so', () => {
@@ -147,16 +151,28 @@ describe('the estimate', () => {
  * live box) but still one env var away on any host whose box differs — and a
  * second app instance that has seen a call finish and then gone quiet. Both admit a warm ~4s call, and a
  * handful of those turn the estimate into a confident "~10 sec" promise for a
- * 146-second wait, which is the exact dishonesty the whole `basis` apparatus
+ * multi-minute wait, which is the exact dishonesty the whole `basis` apparatus
  * exists to prevent.
  */
 describe('the plausibility floor', () => {
   it('is a duration no container start plus 27B weight load could match', () => {
-    // Pinned as a relation, not a literal: it is a quarter of the one measured
-    // cold start, and the load test's WARM p95 at 8-way concurrency is 9.9s —
-    // so every warm reading is far below it and every cold one far above.
-    expect(COLD_START_PLAUSIBILITY_FLOOR_MS).toBe(COLD_START_FALLBACK_MS / 4)
+    // Pinned inside the BAND the live numbers define rather than derived from
+    // another constant. It used to be a quarter of COLD_START_FALLBACK_MS, and
+    // that tie broke on 2026-08-27 when the fallback rose to 360s: a derived
+    // floor would have become 90s and started silently discarding the genuine
+    // 71.7s cold start measured on 2026-08-26. The two constants answer
+    // different questions — how long a cold start TYPICALLY takes (errs long) vs
+    // the fastest one that could be real (must sit under the fastest seen) — so
+    // they are pinned against their own evidence.
+    expect(COLD_START_PLAUSIBILITY_FLOOR_MS).toBe(36_500)
+    // Above the load test's WARM p95 at 8-way concurrency (9.9s, 2026-08-25),
+    // with room, so no warm call can pass for a cold start...
     expect(COLD_START_PLAUSIBILITY_FLOOR_MS).toBeGreaterThan(10_000)
+    // ...and below the FASTEST cold start ever measured (71.7s, 2026-08-26), so
+    // no real one is discarded.
+    expect(COLD_START_PLAUSIBILITY_FLOOR_MS).toBeLessThan(71_700)
+    // And explicitly NOT the old derivation, which is the regression this pins.
+    expect(COLD_START_PLAUSIBILITY_FLOOR_MS).not.toBe(COLD_START_FALLBACK_MS / 4)
   })
 
   it('drops a reading too short to be a cold start, however the gate voted', () => {

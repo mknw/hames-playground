@@ -1,5 +1,5 @@
 /**
- * Scenario 9 — a conversation gets a URL, and a link someone else can open.
+ * Scenario 10 — a conversation gets a URL, and a link someone else can open.
  *
  * Two features, one scenario, because they are one flow from the chair: the
  * conversation acquires an address, the owner turns that into a share link, and

@@ -43,7 +43,7 @@ import {
   CHAIN_OVERHEAD_CALLS,
 } from '../../../lib/db/conversations.server'
 import { SETTINGS_BOUNDS } from '../../../lib/settings'
-import { VERDA_WAKE_TIMEOUT_MS } from '../../../lib/inference/wake.server'
+import { DEFAULT_VERDA_WAKE_TIMEOUT_MS } from '../../../lib/inference/wake.server'
 
 beforeEach(() => {
   query.mockReset()
@@ -171,12 +171,17 @@ describe('the reap statement', () => {
     // than added as a term — bounded, once per turn, and two orders of magnitude
     // below the chain — which is only defensible while the inequality holds.
     // Pinned against the real constant so a longer wake fails here instead of
-    // quietly shortening how long a live turn is protected for.
+    // quietly shortening how long a live turn is protected for — which it has
+    // already caught once: the wake doubled to 600s on 2026-08-27 when it became
+    // a poll, taking the worst legitimate turn from 80 to 85 minutes against this
+    // 90-minute threshold. Against the SHIPPED default rather than
+    // `verdaWakeTimeoutMs()`, because a host that raises the env var past the
+    // margin is making its own call and this is a claim about what we ship.
     const worstTurnMinutes =
       (Math.max(SETTINGS_BOUNDS.maxToolTurns[1], 2 * SETTINGS_BOUNDS.maxRetries[1]) +
         CHAIN_OVERHEAD_CALLS) *
       PER_CALL_TIMEOUT_MINUTES
-    const wakeMinutes = VERDA_WAKE_TIMEOUT_MS / 60_000
+    const wakeMinutes = DEFAULT_VERDA_WAKE_TIMEOUT_MS / 60_000
 
     expect(
       STUCK_RUN_TIMEOUT_MINUTES,

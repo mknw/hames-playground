@@ -5,6 +5,13 @@
  * finish before the bar ever appears. Fake timers let that be asserted rather
  * than slept through. The fill is checked through `Progress.Root`'s ARIA
  * value, which is the same number the width is derived from.
+ *
+ * Since #295 that value is a PERCENTAGE. The bar itself moved to the shared
+ * `ProgressBar`, whose one prop is `percent`, so `aria-valuenow` is now 0..100
+ * rather than the chain's own 0..maxProjection turn scale. The fill is
+ * unchanged — `percent()` in the component is the same expression it always
+ * was, and every figure below is the old one expressed on the new base — but
+ * the assertions have to name the base they read.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { createSignal } from 'solid-js'
@@ -19,7 +26,8 @@ const MOUNT_DELAY_MS = 350
 const EXIT_FADE_MS = 360
 
 const bar = (root: HTMLElement) => root.querySelector<HTMLElement>('[data-progress]')
-const ariaValue = (root: HTMLElement) =>
+/** The fill, as a percentage string — see the header for why it is not turns. */
+const fillPercent = (root: HTMLElement) =>
   root.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')
 
 beforeEach(() => {
@@ -86,8 +94,8 @@ describe('LiveProgressBar', () => {
     ))
     vi.advanceTimersByTime(MOUNT_DELAY_MS + 10)
 
-    // 2 of a 4-step path == half way, expressed on the stable 0..8 bar.
-    expect(ariaValue(container)).toBe('4')
+    // 2 of a 4-step path == half way. Was `'4'` on the old 0..8 turn scale.
+    expect(fillPercent(container)).toBe('50')
   })
 
   it('clamps the fill to the bar maximum when a chain overruns its projection', () => {
@@ -96,7 +104,8 @@ describe('LiveProgressBar', () => {
     ))
     vi.advanceTimersByTime(MOUNT_DELAY_MS + 10)
 
-    expect(ariaValue(container)).toBe('8')
+    // Was `'8'`, the old scale's own maximum.
+    expect(fillPercent(container)).toBe('100')
   })
 
   it('fills completely once the chain is no longer visible', () => {
@@ -111,11 +120,11 @@ describe('LiveProgressBar', () => {
       />
     ))
     vi.advanceTimersByTime(MOUNT_DELAY_MS + 10)
-    expect(ariaValue(container)).toBe('2')
+    expect(fillPercent(container)).toBe('25')
 
     setVisible(false)
     // Still mounted through the exit fade, but topped out.
-    expect(ariaValue(container)).toBe('8')
+    expect(fillPercent(container)).toBe('100')
   })
 
   it('unmounts only after the exit transition has run', () => {
@@ -163,6 +172,8 @@ describe('LiveProgressBar', () => {
     ))
     vi.advanceTimersByTime(MOUNT_DELAY_MS + 10)
 
-    expect(ariaValue(container)).toBe('1')
+    // The guard holds: a 0 denominator becomes 1, so the fill is 1/1 rather
+    // than NaN. Was `'1'` when the numerator and the base were both turns.
+    expect(fillPercent(container)).toBe('100')
   })
 })

@@ -23,6 +23,7 @@ import { FileRoutes } from '@solidjs/start/router'
 import { Suspense } from 'solid-js'
 import Nav from '~/components/Nav'
 import { AuthProvider } from '~/components/AuthProvider'
+import { AppLoadingSplash } from '~/components/ark-ui/AppLoadingSplash'
 
 export default function App() {
   return (
@@ -30,7 +31,22 @@ export default function App() {
       root={(props) => (
         <AuthProvider>
           <Nav />
-          <Suspense>{props.children}</Suspense>
+          {/* THE FALLBACK IS THE FIX (#295). This boundary was fallback-less,
+              and everything that suspends on the post-login path suspends HERE:
+              the route component's own lazy `import()` (`FileRoutes` wraps each
+              route in `lazy()`) and, once that lands, `AgentSelector`'s
+              `createResource(getAgentList)` — reproduced with a paint timeline,
+              and each confirmed by mutation. A fallback-less `<Suspense>`
+              renders NOTHING while it waits, which is the 3–4 s of white the
+              owner reported, and it arrives the instant `AuthProvider`'s own
+              spinner unmounts: hence "superseded".
+
+              PR #294 recorded this trap and dodged it in one component by
+              swapping a resource for a plain signal. That works per call site
+              and cannot hold — a fallback here is the property itself, so the
+              next resource added under this boundary degrades to a splash
+              rather than to a blank page. */}
+          <Suspense fallback={<AppLoadingSplash />}>{props.children}</Suspense>
         </AuthProvider>
       )}
     >

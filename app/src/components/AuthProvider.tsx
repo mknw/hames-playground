@@ -15,6 +15,7 @@ import type { AuthUser } from '~/lib/auth/types'
 import { BYPASS_USER, isBypassEnabled } from '~/lib/auth/dev-bypass'
 import { isPublicRoute } from '~/lib/share-link'
 import { safeReturnTo } from '~/lib/auth/return-to'
+import { AppLoadingSplash } from '~/components/ark-ui/AppLoadingSplash'
 
 // Auth context type
 interface AuthContextType {
@@ -149,36 +150,19 @@ export function AuthProvider(props: AuthProviderProps) {
       <Show
         when={mounted() && (isPublicPage() || (user() && !user.loading))}
         fallback={
-          // Same design language as the auth pages (#226 B8): attributify and
-          // the theme-aware `ui-*` tokens, so this screen — the very first
-          // thing a cold visit paints — is not the one surface still on a
-          // light Tailwind default.
-          <div
-            flex="~"
-            items="center"
-            justify="center"
-            min-h="screen"
-            bg="ui-bg-primary"
-            role="status"
-            aria-live="polite"
-          >
-            <div flex="~ col" items="center" gap="2" text="center">
-              <div
-                w="12"
-                h="12"
-                m="b-2"
-                rounded="full"
-                border="2 transparent b-ui-accent"
-                animate="spin"
-              />
-              <div text="xl ui-text-primary" font="medium">
-                Loading DTalk.ai Knowledge System
-              </div>
-              <div text="sm ui-text-secondary">
-                Please wait while we verify your authentication...
-              </div>
-            </div>
-          </div>
+          // THE SAME COMPONENT the root `<Suspense>` in `app.tsx` falls back to
+          // (#295), and that is the point rather than a convenience. This gate
+          // and that one are two waits in a row on one page load: this one ends
+          // the moment the session read resolves, and the other begins in the
+          // same tick. Two different loading screens would make the handover a
+          // visible swap — which is what the owner saw when the second screen
+          // was BLANK. One component, whose elapsed clock deliberately survives
+          // the remount (`lib/splash-progress.ts`), makes it one wait.
+          //
+          // It also drops a line that was lying for half of the wait: the
+          // spinner here said "verify your authentication", which was still on
+          // screen after authentication was done and the route was loading.
+          <AppLoadingSplash />
         }
       >
         {props.children}

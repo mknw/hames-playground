@@ -33,8 +33,11 @@ export function getEventPreview(type: EventType, data: unknown): string {
     case 'controller_action': {
       const d = data as ControllerActionEventData
       const extra = d.action.additional_calls?.length
+      // Plain text, no glyph: this preview is rendered as a string in a narrow
+      // ellipsized cell, so it is the one chrome site an icon class cannot
+      // reach. The `⚡` that used to lead it went out with the emoji sweep.
       return extra
-        ? `⚡×${extra + 1} ${d.action.tool_name}, ${d.action.additional_calls!.map((c) => c.tool_name).join(', ')}`
+        ? `×${extra + 1} ${d.action.tool_name}, ${d.action.additional_calls!.map((c) => c.tool_name).join(', ')}`
         : d.action.tool_name
     }
     case 'user_message':

@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import type { EventType } from '~/lib/harness-patterns'
-import { eventColors, eventIcons, getPatternColor } from '~/lib/observability/event-styles'
+import { eventColors, eventIconClasses, getPatternColor } from '~/lib/observability/event-styles'
 
 describe('getPatternColor', () => {
   it('resolves a known pattern to a colour and a tint', () => {
@@ -25,15 +25,26 @@ describe('getPatternColor', () => {
   })
 })
 
-describe('eventIcons / eventColors', () => {
+describe('eventIconClasses / eventColors', () => {
   it('gives every event type both an icon and a colour', () => {
-    const types = Object.keys(eventIcons) as EventType[]
+    const types = Object.keys(eventIconClasses) as EventType[]
     expect(types.length).toBeGreaterThan(0)
     for (const type of types) {
-      expect(eventIcons[type]).toBeTruthy()
+      expect(eventIconClasses[type]).toBeTruthy()
       expect(eventColors[type]).toMatch(/^#[0-9a-f]{6}$/i)
     }
     expect(Object.keys(eventColors).sort()).toEqual(types.sort())
+  })
+
+  // The table held emoji until the alpha-preview sweep. `material-symbols` and
+  // `material-symbols-light` are the only collections registered in
+  // `uno.config.ts`, so a glyph from anywhere else — an emoji, or an `i-mdi-*`
+  // — emits no CSS and renders as an empty span with no error.
+  it('names a registered icon collection for every event type, and no emoji', () => {
+    for (const [type, cls] of Object.entries(eventIconClasses)) {
+      expect(cls, type).toMatch(/^i-material-symbols(-light)?-[a-z0-9-]+$/)
+      expect(cls, type).not.toMatch(/\p{Extended_Pictographic}/u)
+    }
   })
 
   it('keeps content_sanitized visually distinct from error', () => {

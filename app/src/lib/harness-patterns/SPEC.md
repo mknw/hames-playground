@@ -779,7 +779,7 @@ silently degraded second layer must be visible).
   becomes `scope.data.response`, which `compactExecution` puts into the
   `Synthesize` prompt — a full report there would turn a neutralized mid-loop
   injection into a synthesizer-stage one
-- a **`content_sanitized`** event lands in the timeline (orange 🛡️ in the
+- a **`content_sanitized`** event lands in the timeline (an orange shield in the
   ObservabilityPanel, with a per-finding detail view), and is in
   `ALWAYS_COMMIT_TYPES` so a later failure cannot discard the proof a control
   fired

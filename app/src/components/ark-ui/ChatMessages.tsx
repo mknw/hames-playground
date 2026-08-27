@@ -116,7 +116,8 @@ function annotateEntities(html: string, entityNames: Map<string, string[]>): str
 
 /**
  * Wrap retriever-cited filename mentions in the rendered markdown with a
- * clickable `.doc-ref` span + a "↗" superscript (mirrors {@link annotateEntities}).
+ * clickable `.doc-ref` span + a superscript open-in-new glyph (mirrors
+ * {@link annotateEntities}).
  * Skips HTML tags and code blocks. The click opens the inline file viewer.
  */
 function annotateReferences(html: string, references: RetrievalReference[]): string {
@@ -147,7 +148,12 @@ function annotateReferences(html: string, references: RetrievalReference[]): str
       // Filenames and document ids are user/tool supplied — escape them so a
       // quote in a filename cannot terminate the attribute it lands in.
       const docId = escapeHtmlAttribute(byName.get(key)!)
-      return `<span class="doc-ref" data-doc-id="${docId}" title="Open ${escapeHtmlAttribute(key)} in viewer">${match}<sup class="doc-ref-mark">↗</sup></span>`
+      // The mark is an empty <sup> carrying an icon utility class — the
+      // `.doc-ref-mark` preflight gives it the `inline-block` an icon needs, and
+      // its `color` is what the mask paints with. It used to be a "↗"
+      // character. Both classes are literals here, so UnoCSS extracts them even
+      // though this markup is built as a string.
+      return `<span class="doc-ref" data-doc-id="${docId}" title="Open ${escapeHtmlAttribute(key)} in viewer">${match}<sup class="doc-ref-mark i-material-symbols-arrow-outward" aria-hidden="true"></sup></span>`
     })
   }
 

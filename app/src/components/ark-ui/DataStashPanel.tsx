@@ -190,9 +190,12 @@ const CollapsibleSection = (props: {
         text="sm ui-text-secondary"
         gap="2"
       >
-        <span text="xs" style={{ 'font-family': 'monospace' }}>
-          {open() ? '▼' : '▶'}
-        </span>
+        <span
+          class={open() ? 'i-material-symbols-expand-more' : 'i-material-symbols-chevron-right'}
+          w="4"
+          h="4"
+          aria-hidden="true"
+        />
         <span font="medium">{props.title}</span>
         <span text="xs ui-text-tertiary" font="mono">
           ({props.count})

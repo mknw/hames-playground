@@ -512,7 +512,12 @@ export default defineConfig({
           background: rgba(34,211,238,0.15);
           border-bottom-color: #22d3ee;
         }
+        /* display:inline-block is load-bearing: the mark is an empty <sup>
+           whose glyph comes from an i-material-symbols-* utility, and those set
+           a 1em box but no display — on a bare inline element the box is
+           ignored and the icon vanishes. */
         .doc-ref-mark {
+          display: inline-block;
           font-size: 0.7em;
           color: #22d3ee;
           margin-left: 1px;

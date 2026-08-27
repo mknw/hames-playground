@@ -26,6 +26,7 @@ import { createSignal, createEffect, createMemo, untrack, Show } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { AgentSelector } from './AgentSelector'
+import { ShareConversationButton } from './ShareConversationButton'
 import { LiveProgressBar } from './LiveProgressBar'
 import {
   approveAction,
@@ -533,6 +534,13 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
             onAgentChange={handleAgentChange}
             disabled={isProcessing()}
           />
+        </div>
+        {/* Share sits at the far end of the conversation header, beside the
+            agent picker and under the top bar's private/cloud switch. It is not
+            disabled during a turn: sharing reads and writes one plaintext
+            column and touches nothing the run is using. */}
+        <div m="l-auto">
+          <ShareConversationButton sessionId={props.sessionId} />
         </div>
       </div>
 

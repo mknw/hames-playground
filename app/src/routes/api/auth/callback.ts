@@ -17,11 +17,15 @@ import { upsertUser } from '~/lib/auth/users.server'
 import { saveUserTokenCache } from '~/lib/auth/user-tokens.server'
 import { isEmailAllowed } from '~/lib/auth/allowList'
 import { onSessionStart } from '~/lib/routines/dispatch.server'
+import { safeReturnTo } from '~/lib/auth/return-to'
 
 interface Handshake {
   state: string
   verifier: string
   nonce: string
+  /** Where to land after a successful sign-in (`/api/auth/login?returnTo=`).
+   *  Absent on an ordinary sign-in; validated again below whatever it says. */
+  returnTo?: string
 }
 
 function redirect(location: string, ...cookies: string[]): Response {
@@ -97,8 +101,12 @@ export async function GET(event: APIEvent): Promise<Response> {
     // routine failure must never cost the user their sign-in.
     onSessionStart(identity.userId)
 
+    // Re-validated rather than trusted: the payload is signed, which proves
+    // this app stamped it and says nothing about whether the value was ever a
+    // safe redirect target. `/` is the default for absent, malformed and
+    // off-origin alike (`lib/auth/return-to.ts`).
     return redirect(
-      '/',
+      safeReturnTo(handshake.returnTo) ?? '/',
       sessionCookie(sessionId, DEFAULT_SESSION_TTL_SECONDS),
       clearCookie(HANDSHAKE_COOKIE),
     )

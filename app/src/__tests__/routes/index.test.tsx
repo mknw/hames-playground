@@ -14,9 +14,35 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup } from '@solidjs/testing-library'
-import type { JSX } from 'solid-js'
+import { createSignal, type JSX } from 'solid-js'
 import { useSessionRegistry } from '~/lib/session-registry-context'
 import type { SessionRegistry } from '~/lib/session-registry'
+
+// ── The URL ─────────────────────────────────────────────────────────────────
+// The route reads the conversation on screen out of `?c=` and writes it back
+// there on every navigation (bookmarkable, shareable conversation URLs). A
+// stand-in for `useSearchParams` rather than a `<MemoryRouter>` wrapper, so
+// these cases can also ASSERT on what the URL became — which is the half a
+// router wrapper would hide.
+const [searchParams, setSearchParams] = createSignal<Record<string, string | undefined>>({})
+/** Every `setSearchParams` call, so a case can check `replace` as well as the
+ *  value: a fresh chat acquiring an id must not become a history entry. */
+const navigations: Array<{ params: Record<string, unknown>; options?: { replace?: boolean } }> = []
+
+vi.mock('@solidjs/router', () => ({
+  useSearchParams: () => [
+    new Proxy(
+      {},
+      {
+        get: (_t, key: string) => searchParams()[key],
+      },
+    ),
+    (params: Record<string, unknown>, options?: { replace?: boolean }) => {
+      navigations.push({ params, options })
+      setSearchParams((prev) => ({ ...prev, ...(params as Record<string, string>) }))
+    },
+  ],
+}))
 
 // ── Child stubs ─────────────────────────────────────────────────────────────
 // Solid props are getters, so holding the props object keeps reading live values.
@@ -106,6 +132,8 @@ const threadIds = () => sidebar.threads.map((t: Thread) => t.id)
 
 beforeEach(() => {
   vi.clearAllMocks()
+  setSearchParams({})
+  navigations.length = 0
   nextId = 0
   sidebar = chat = support = undefined
   listConversations.mockResolvedValue([])
@@ -117,6 +145,92 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+})
+
+describe('chat route — the conversation in the URL', () => {
+  it('opens the conversation the URL names, not a fresh one', async () => {
+    setSearchParams({ c: 'from-a-bookmark' })
+    await mount()
+    // The whole point of a shareable link: the id in the address bar is the
+    // conversation on screen, in every panel.
+    expect(chat.sessionId).toBe('from-a-bookmark')
+    expect(sidebar.selectedId).toBe('from-a-bookmark')
+    expect(support.sessionId).toBe('from-a-bookmark')
+  })
+
+  it('puts a selected thread in the URL, as a history entry', async () => {
+    listConversations.mockResolvedValue([thread('t1')])
+    await mount()
+
+    sidebar.onSelectThread('t1')
+    await tick()
+
+    expect(navigations.at(-1)).toEqual({ params: { c: 't1' }, options: { replace: false } })
+    expect(chat.sessionId).toBe('t1')
+  })
+
+  it('puts a new chat in the URL too, so it can be returned to', async () => {
+    await mount()
+    sidebar.onNewChat()
+    await tick()
+    expect(navigations.at(-1)).toEqual({ params: { c: 'new-2' }, options: { replace: false } })
+  })
+
+  it('records a URL-less chat’s id when its first run starts, WITHOUT a history entry', async () => {
+    await mount()
+    expect(navigations).toHaveLength(0) // a bare `/` has nothing to record yet
+
+    chat.onRunStarted('new-1')
+    await tick(10)
+
+    // `replace`: the user pressed Send, not Back. A history entry here would
+    // send Back to the same conversation with its id stripped off.
+    expect(navigations.at(-1)).toEqual({ params: { c: 'new-1' }, options: { replace: true } })
+  })
+
+  it('does not re-navigate when the URL already names the running conversation', async () => {
+    setSearchParams({ c: 't1' })
+    await mount()
+
+    chat.onRunStarted('t1')
+    await tick(10)
+
+    expect(navigations).toHaveLength(0)
+  })
+
+  it('does not hijack the URL for a run that landed in another thread', async () => {
+    setSearchParams({ c: 't1' })
+    await mount()
+
+    chat.onRunStarted('some-other-thread')
+    await tick(10)
+
+    expect(navigations).toHaveLength(0)
+    expect(chat.sessionId).toBe('t1')
+  })
+
+  it('follows the URL when the browser moves it — Back and Forward for free', async () => {
+    listConversations.mockResolvedValue([thread('t1'), thread('t2')])
+    await mount()
+    sidebar.onSelectThread('t1')
+    await tick()
+    expect(chat.sessionId).toBe('t1')
+
+    // What a Back button does: the URL changes underneath, nothing else.
+    setSearchParams({ c: 't2' })
+    await tick()
+
+    expect(chat.sessionId).toBe('t2')
+    expect(sidebar.selectedId).toBe('t2')
+  })
+
+  it('takes the first value when the URL names a conversation twice', async () => {
+    // `?c=a&c=b` arrives as an array. Reading it as a string would show a
+    // conversation called "a,b" and hydrate nothing.
+    setSearchParams({ c: ['a', 'b'] as unknown as string })
+    await mount()
+    expect(chat.sessionId).toBe('a')
+  })
 })
 
 describe('chat route — session selection', () => {

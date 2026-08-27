@@ -1,5 +1,6 @@
 import { Splitter } from '@ark-ui/solid/splitter'
 import { createSignal, createMemo, createEffect, onCleanup, onMount } from 'solid-js'
+import { useSearchParams } from '@solidjs/router'
 import { ChatInterface } from '~/components/ark-ui/ChatInterface'
 import { ChatSidebar, mergeThreadsWithPlaceholder } from '~/components/ark-ui/ChatSidebar'
 import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
@@ -7,6 +8,7 @@ import type { UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns
 import { isEdgeElement, isNodeElement } from '~/lib/harness-client/graph-extractor'
 import type { OpenReferenceTarget } from '~/lib/harness-client'
 import { newSessionId } from '~/lib/session-id'
+import { CONVERSATION_PARAM } from '~/lib/share-link'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 import { applyToolResultAction } from '~/lib/api-client'
 import { hasPendingIngest, refreshDocuments } from '~/lib/stash-documents'
@@ -24,10 +26,45 @@ export default function Home() {
   // `ThreadListStore`.
   // ---------------------------------------------------------------------------
 
-  // Conversation a user is currently viewing. Initial value is a fresh id so
-  // the first message creates a new persisted row; switching threads via the
-  // sidebar (or "+ New Chat") swaps this signal.
-  const [selectedSessionId, setSelectedSessionId] = createSignal(newSessionId())
+  // ---------------------------------------------------------------------------
+  // The conversation on screen lives in the URL (`/?c=<id>`), so it can be
+  // bookmarked, reloaded and sent to a colleague — who, if signed out, goes
+  // through sign-in and comes back to this exact conversation (`AuthProvider`
+  // carries the target; `lib/auth/return-to.ts` decides what is a safe one).
+  //
+  // A SEARCH parameter rather than a path segment, and that is a lifetime
+  // decision rather than a cosmetic one — see `CONVERSATION_PARAM`. In short:
+  // this component owns the `SessionRegistry`, a run deliberately keeps filling
+  // its own conversation after the user switches threads (#47 / #105), and
+  // moving between two file routes would unmount the component and take that
+  // registry — and the live view of everything still running — with it. A
+  // search parameter changes on the same mounted route.
+  //
+  // The id is READ from the URL rather than mirrored into a signal, so the
+  // browser's own back and forward buttons move between conversations for free
+  // and there is no second copy to fall out of step. `fallbackSessionId` covers
+  // the one case the URL cannot: a bare `/`, which is a brand-new chat whose id
+  // nothing has any reason to know yet. It gains a URL the moment its first run
+  // starts (`handleRunStarted`).
+  // ---------------------------------------------------------------------------
+  const [searchParams, setSearchParams] = useSearchParams<{ c?: string }>()
+  const [fallbackSessionId, setFallbackSessionId] = createSignal(newSessionId())
+  const selectedSessionId = createMemo(() => {
+    // `useSearchParams` hands back `string | string[] | undefined`: a URL with
+    // `?c=a&c=b` is an array, and taking the first is the only reading that is
+    // not a crash or a lie.
+    const raw = searchParams[CONVERSATION_PARAM]
+    const fromUrl = Array.isArray(raw) ? raw[0] : raw
+    return fromUrl ? fromUrl : fallbackSessionId()
+  })
+
+  /** Put a conversation in the URL. `replace` is for the case where the user
+   *  did not navigate — a fresh chat acquiring an id — so it does not become a
+   *  history entry they have to press Back through. */
+  const goToConversation = (id: string, options: { replace?: boolean } = {}) => {
+    setSearchParams({ [CONVERSATION_PARAM]: id }, { replace: options.replace ?? false })
+  }
+
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
 
   // Optimistic placeholder for a freshly-minted "+ New Chat" id that hasn't
@@ -129,8 +166,14 @@ export default function Home() {
   // First SSE event of a run — the early-persisted row is now in Postgres, so
   // a refetch surfaces the new conversation (derived title + live indicator)
   // while it is still streaming. Replaces the placeholder in the same pass.
-  const handleRunStarted = (_sid: string) => {
+  const handleRunStarted = (sid: string) => {
     threadList.refetch()
+    // A chat opened at a bare `/` now has a row, so it now has a URL. Recorded
+    // with `replace`: the user pressed Send, not Back, and a history entry here
+    // would make Back return them to the same conversation with its id removed.
+    if (sid === selectedSessionId() && !searchParams[CONVERSATION_PARAM]) {
+      goToConversation(sid, { replace: true })
+    }
   }
 
   const handleRunSettled = (sid: string, outcome: RunOutcome) => {
@@ -165,7 +208,8 @@ export default function Home() {
     // A fresh id has no state to clear; what matters is not clearing the
     // outgoing thread's (it may still be streaming into it).
     registry.pruneIdle(id)
-    setSelectedSessionId(id)
+    setFallbackSessionId(id)
+    goToConversation(id)
     threadList.showPlaceholder(id)
     setFocusInputToken((t) => t + 1)
   }
@@ -175,7 +219,7 @@ export default function Home() {
     // Opening the thread is the acknowledgement — drop its completion mark.
     registry.clearCompletion(threadId)
     registry.pruneIdle(threadId)
-    setSelectedSessionId(threadId)
+    goToConversation(threadId)
     // User picked an existing thread — drop the optimistic row.
     threadList.clearPlaceholder()
   }

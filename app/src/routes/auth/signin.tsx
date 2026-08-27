@@ -9,12 +9,25 @@ import { useSearchParams } from '@solidjs/router'
  * `?error=…` is set by the callback route on a failed sign-in so we can show a
  * hint here without leaking details.
  *
+ * `?returnTo=…` is set by `AuthProvider` when the gate turned an unauthenticated
+ * visitor away from a real page — a deep-linked conversation, typically. It is
+ * passed straight through to `/api/auth/login`, which validates it before
+ * signing it into the handshake; this page does not interpret it.
+ *
  * On the house design language since #226 B8: attributify only, the `ui-*`
  * theme-aware tokens (so the page follows the switcher in `Nav`), the
  * `cyber-button` shortcut for the primary action, and material-symbols glyphs.
  */
 export default function SignIn() {
   const [params] = useSearchParams()
+
+  // `returnTo` arrives already-encoded in this page's own query string, and
+  // `useSearchParams` hands it back decoded — so it is re-encoded here rather
+  // than concatenated raw, or a conversation id's `?`/`&` would truncate it.
+  const loginHref = () => {
+    const target = typeof params.returnTo === 'string' ? params.returnTo : ''
+    return target ? `/api/auth/login?returnTo=${encodeURIComponent(target)}` : '/api/auth/login'
+  }
 
   return (
     <div
@@ -78,7 +91,7 @@ export default function SignIn() {
           browser navigation that hits the API route and 302s to Entra.
         */}
         <a
-          href="/api/auth/login"
+          href={loginHref()}
           rel="external"
           cyber-button
           flex="~"

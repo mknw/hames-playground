@@ -1,6 +1,15 @@
 /**
- * Preview header strip — the inference-tier switch, the self-hosted box's warm
- * state, and a few global counters.
+ * Preview header strip — the self-hosted box's warm state, and a few global
+ * counters.
+ *
+ * **The tier switch is not here any more.** It moved beside the agent selector
+ * and became per-conversation (`ConversationTierSwitch`), because the thing
+ * people want is to start an Anthropic chat while a private one is still
+ * waking. What is left in this strip describes the BOX and the deployment —
+ * warm or cold, how many people are active, what today cost — none of which is
+ * a claim about the conversation on screen, so nothing here can contradict the
+ * switch. The one exception is the p50, which has to name a tier to be
+ * meaningful; it names the one a NEW chat starts on and says so.
  *
  * One compact cluster in the top bar, not a dashboard: `/dashboard` is where
  * numbers get room, and anything needing a second line belongs there. Every
@@ -54,27 +63,20 @@
  * labels, the warm-state word and both degradation chips are `ui-text-*` /
  * `ui-danger`, because `amber-500` on the light ground is about 2:1.
  *
- * The tier switch marks its selection with `ui-accent` in BOTH positions rather
- * than a hue per tier. The tiers are already distinguished by an icon, a word
- * and the radio state; the second hue it used to carry was `neon-magenta`,
- * which the light palette has no darkened twin for and which nothing else in
- * the chrome uses any more.
  */
 import { createSignal, createMemo, onMount, onCleanup, Show, type JSX } from 'solid-js'
-import { SegmentGroup } from '@ark-ui/solid/segment-group'
 import {
   getPreviewHeaderState,
-  setPreviewInferenceTier,
   type PreviewHeaderState,
 } from '~/lib/harness-client/preview-header.server'
 import {
-  TIER_LABELS,
   formatCompactNumber,
   formatCountdown,
   formatLatency,
   formatShare,
   remainingSeconds,
 } from '~/lib/preview-header-format'
+import { TIER_LABELS } from '~/lib/tier-presentation'
 
 /** How often the strip re-reads the server. Slower than the countdown ticks
  *  (which are local arithmetic): the numbers behind it move on the scale of a
@@ -204,12 +206,7 @@ export const PreviewHeaderStrip = () => {
    *  difference is elapsed time and nothing else. */
   const [receivedAt, setReceivedAt] = createSignal(Date.now())
   const [now, setNow] = createSignal(Date.now())
-  const [busy, setBusy] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
-  /** Bumped only when the server's answer disagrees with the click — see
-   *  `chooseTier`. Used as a `keyed` Show value, so the switch is rebuilt on
-   *  server truth instead of keeping its own optimistic selection. */
-  const [revision, setRevision] = createSignal(0)
 
   const load = async () => {
     try {
@@ -253,31 +250,6 @@ export const PreviewHeaderStrip = () => {
     return s.warmth.state
   })
 
-  const chooseTier = async (value: string) => {
-    if (value !== 'verda' && value !== 'anthropic') return
-    if (value === state()?.tier) return
-    setBusy(true)
-    try {
-      const next = await setPreviewInferenceTier(value)
-      setState(next)
-      setReceivedAt(Date.now())
-      setError(null)
-      // The server is the authority and may not agree with the click (it
-      // refuses the self-hosted position on a deployment with no endpoint).
-      // The segment group holds its own selection internally, and re-rendering
-      // it with the SAME `value` it started with does not move it back — so
-      // when the answer differs from what was asked, remount it on the
-      // authoritative value. Anything less leaves the switch showing one tier
-      // while the next turn runs on another, which is worse than no switch.
-      if (next.tier !== value) setRevision((r) => r + 1)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not change the inference tier.')
-      setRevision((r) => r + 1)
-    } finally {
-      setBusy(false)
-    }
-  }
-
   return (
     <>
       {/* A failing FIRST poll leaves `state()` null, and the strip below is
@@ -307,86 +279,6 @@ export const PreviewHeaderStrip = () => {
             op={error() ? '60' : '100'}
             transition="opacity"
           >
-            {/* ---- Inference-tier switch --------------------------------- */}
-            {/* `keyed` on the revision: the segment group owns its selection
-              internally, so the only way to force it back onto server truth is
-              to rebuild it. The value changes rarely (see `chooseTier`), so
-              this is not a per-poll remount. */}
-            <Show when={revision() + 1} keyed>
-              <SegmentGroup.Root
-                value={s().tier}
-                onValueChange={(details) => void chooseTier(details.value ?? '')}
-                disabled={busy()}
-                flex="~"
-                items="center"
-                gap="2"
-              >
-                <SegmentGroup.Label text="xs ui-text-tertiary">Model</SegmentGroup.Label>
-                <div
-                  flex="~"
-                  items="center"
-                  gap="0.5"
-                  p="0.5"
-                  rounded="md"
-                  bg="ui-bg-tertiary"
-                  border="1 ui-border-primary"
-                >
-                  <SegmentGroup.Item
-                    value="verda"
-                    disabled={!s().verdaAvailable}
-                    flex="~"
-                    items="center"
-                    gap="1"
-                    p="x-2 y-1"
-                    rounded="sm"
-                    cursor="pointer"
-                    transition="all"
-                    ring="2 transparent focus-within:ui-accent/40"
-                    text={s().tier === 'verda' ? 'xs ui-accent' : 'xs ui-text-secondary'}
-                    bg={s().tier === 'verda' ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
-                    op={s().verdaAvailable ? '100' : '50'}
-                    title={
-                      s().verdaAvailable
-                        ? 'Run your chats on the company-hosted deployment — prompts stay on infrastructure we control.'
-                        : 'The self-hosted endpoint is not configured on this deployment.'
-                    }
-                  >
-                    <span
-                      class="i-material-symbols-shield-lock-outline"
-                      w="3.5"
-                      h="3.5"
-                      aria-hidden="true"
-                    />
-                    <SegmentGroup.ItemText>{TIER_LABELS.verda}</SegmentGroup.ItemText>
-                    <SegmentGroup.ItemHiddenInput />
-                  </SegmentGroup.Item>
-                  <SegmentGroup.Item
-                    value="anthropic"
-                    flex="~"
-                    items="center"
-                    gap="1"
-                    p="x-2 y-1"
-                    rounded="sm"
-                    cursor="pointer"
-                    transition="all"
-                    ring="2 transparent focus-within:ui-accent/40"
-                    text={s().tier === 'anthropic' ? 'xs ui-accent' : 'xs ui-text-secondary'}
-                    bg={s().tier === 'anthropic' ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
-                    title="Run your chats on Anthropic's hosted models."
-                  >
-                    <span
-                      class="i-material-symbols-cloud-outline"
-                      w="3.5"
-                      h="3.5"
-                      aria-hidden="true"
-                    />
-                    <SegmentGroup.ItemText>{TIER_LABELS.anthropic}</SegmentGroup.ItemText>
-                    <SegmentGroup.ItemHiddenInput />
-                  </SegmentGroup.Item>
-                </div>
-              </SegmentGroup.Root>
-            </Show>
-
             {/* ---- Warm state -------------------------------------------- */}
             <Show when={s().verdaAvailable}>
               <div
@@ -481,7 +373,7 @@ export const PreviewHeaderStrip = () => {
                 hint={
                   s().latency.samples === 0
                     ? `No model call that the tier switch moves has completed on ${TIER_LABELS[s().tier]} on this server yet, so there is no median to show.`
-                    : `Median duration of the last ${s().latency.samples} model call(s) on ${TIER_LABELS[s().tier]} — the tier your next message runs on. Counting only the calls the switch actually moves, so the two positions are comparable — which is now every model call a turn makes, with no exception. A mix of long and short calls, so this is well under what a reply takes: one model call, not one reply — a turn makes several. Counted by this server only, so another instance may show a different figure, and a restart clears it. A cold start is included, because it is time someone waited.`
+                    : `Median duration of the last ${s().latency.samples} model call(s) on ${TIER_LABELS[s().tier]} — the tier a NEW chat starts on. Each conversation now picks its own next to the agent selector, so an open thread may be on the other one. Counting only the calls the switch actually moves, so the two positions are comparable — which is now every model call a turn makes, with no exception. A mix of long and short calls, so this is well under what a reply takes: one model call, not one reply — a turn makes several. Counted by this server only, so another instance may show a different figure, and a restart clears it. A cold start is included, because it is time someone waited.`
                 }
               >
                 {/* A NEW glyph takes a theme token, not a fifth fixed hue: §4

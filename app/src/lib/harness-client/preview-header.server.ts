@@ -1,10 +1,18 @@
 /**
  * Preview header — server actions.
  *
- * The one round trip behind the top-bar strip: which inference tier the
- * signed-in user's chats run on, whether the self-hosted box is warm, and a few
- * global counters. One action rather than three, because the strip refreshes on
- * a timer and three polls would be three connections for one row of numbers.
+ * The one round trip behind the top-bar strip: whether the self-hosted box is
+ * warm, a few global counters, and the latency of the tier a NEW chat starts
+ * on. One action rather than three, because the strip refreshes on a timer and
+ * three polls would be three connections for one row of numbers.
+ *
+ * **It no longer CHANGES the tier.** That control moved beside the agent
+ * selector and became per-conversation (`harness-client/actions.server.ts`'s
+ * `setConversationTier`), because the thing people want is to start an
+ * Anthropic chat while a private one is still waking — which one global setting
+ * cannot express. What is left here describes the BOX and the deployment, not a
+ * conversation: nothing in this payload can disagree with the switch, because
+ * nothing in it is a per-conversation claim.
  *
  * ## The gate, and why it is a copy
  *
@@ -23,12 +31,7 @@
 
 import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
-import {
-  defaultInferenceTier,
-  getStoredInferenceTier,
-  isInferenceTier,
-  setStoredInferenceTier,
-} from '../db/user-prefs.server'
+import { defaultInferenceTier, getStoredInferenceTier } from '../db/user-prefs.server'
 import { verdaConfigured, type InferenceTier } from '../harness-patterns/clients.server'
 import { verdaWarmth, type VerdaWarmth } from '../inference/verda-activity.server'
 import { ACTIVE_WINDOW_MINUTES, countActiveUsers } from '../db/conversations.server'
@@ -43,10 +46,16 @@ async function requireUser(): Promise<{ id: string }> {
 
 /** Everything the header strip renders, in one payload. */
 export interface PreviewHeaderState {
-  /** The tier this user's next turn will run on. */
+  /**
+   * The tier a NEW chat starts on — this user's last-used, else the deployment
+   * default. Not "the tier your next message runs on": since the switch became
+   * per-conversation that is a property of whichever thread is open, and the
+   * strip does not know which one that is. It is here for the latency figure
+   * below, which has to name the tier it measured.
+   */
   tier: InferenceTier
-  /** False when the endpoint is unconfigured — the switch renders its Verda
-   *  position disabled rather than offering a choice that would throw. */
+  /** False when the endpoint is unconfigured. Gates the warm indicator: a
+   *  countdown for a box this deployment cannot reach is noise. */
   verdaAvailable: boolean
   warmth: VerdaWarmth
   /** Distinct users with chat activity in the last {@link activeWindowMinutes}
@@ -54,9 +63,9 @@ export interface PreviewHeaderState {
   activeUsers: number
   activeWindowMinutes: number
   usage: UsageToday
-  /** Rolling median duration of recent model calls **on `tier`** — the tier
-   *  this user's next turn will run on, so the switch above it and the number
-   *  beside it describe the same thing. Over the roles a tier decision actually
+  /** Rolling median duration of recent model calls **on `tier`** — the tier a
+   *  new chat starts on, which is the one question this strip can still answer
+   *  without knowing which conversation is open. Over the roles a tier decision actually
    *  moves and no others, which is what makes the figure comparable with the
    *  other switch position; the tooltip says so. Process-local, with the same
    *  multi-instance caveat as `warmth` (`metrics/call-latency.server.ts`). */
@@ -89,37 +98,11 @@ export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
     activeUsers,
     activeWindowMinutes: ACTIVE_WINDOW_MINUTES,
     usage,
-    // Read for the ACTIVE tier, and after it is resolved: the latency of a tier
-    // the user is not on answers a question nobody asked, and the strip has one
-    // slot for it.
+    // Read for the SEED tier, and after it is resolved: the strip has one slot
+    // for this, and the one tier it can still name honestly is the one a new
+    // chat starts on. Which tier the OPEN conversation is on is the switch's
+    // question, and the strip does not know which conversation that is.
     latency: tierLatency(tier),
     generatedAt: Date.now(),
   }
-}
-
-/**
- * Store this user's tier choice and return the state the header should now
- * show, so the control settles on server truth rather than on its own
- * optimistic guess.
- *
- * Rejects `'verda'` when the endpoint is unconfigured. That refusal matters
- * more than it looks: accepting it would store a preference that
- * `runWithInferenceTier` throws on, turning a header click into a broken chat
- * on the user's next message — and the one thing that must never happen
- * instead, a quiet fall-through to Anthropic, is refused by design upstream.
- */
-export async function setPreviewInferenceTier(tier: unknown): Promise<PreviewHeaderState> {
-  const user = await requireUser()
-  if (!isInferenceTier(tier)) {
-    throw new Error(`Unknown inference tier: ${JSON.stringify(tier)}`)
-  }
-  if (tier === 'verda' && !verdaConfigured()) {
-    throw new Error(
-      'The self-hosted inference endpoint is not configured on this deployment, so it cannot ' +
-        'be selected. Set VERDA_INFERENCE_ENDPOINT and VERDA_INFERENCE_API_KEY (see ' +
-        'app/.env.example).',
-    )
-  }
-  await setStoredInferenceTier(user.id, tier)
-  return getPreviewHeaderState()
 }

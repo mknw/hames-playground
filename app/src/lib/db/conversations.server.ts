@@ -21,6 +21,7 @@
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { query } from './client.server'
+import type { QueryRunner } from './migrate-encryption.server'
 import { SETTINGS_BOUNDS } from '../settings'
 import {
   decryptFieldOrNull,
@@ -46,6 +47,25 @@ export type ConversationSource = 'chat' | 'post' | 'routine'
 /** Lifted copy of UnifiedContext.status for cheap list filtering + UI badge. */
 export type ConversationStatus = 'running' | 'paused' | 'done' | 'error'
 
+/**
+ * The tier column, exactly as stored: `'verda'`, `'anthropic'`, or `null` for a
+ * row that has none of its own.
+ *
+ * Deliberately `string | null` rather than the `InferenceTier` union, and this
+ * module deliberately does NOT narrow it. Narrowing here would mean importing
+ * `isInferenceTier`, whose module imports `clients.server.ts`, whose module load
+ * asserts the private tier's configuration when `USE_VERDA_INFERENCE=1` — and
+ * this repository is reached from the schema bootstrap, i.e. from the boot path
+ * that assert documents itself as being off (see `assertVerdaConfigured`).
+ * Pulling it in would move a documented first-harness-call failure onto boot.
+ *
+ * The narrowing belongs to `lib/inference/tier.server.ts`, which owns the
+ * resolution order and already imports both halves. A value this build does not
+ * recognise therefore reads as "no tier of its own" there rather than being
+ * passed through — see the note on {@link setConversationInferenceTier}.
+ */
+export type StoredInferenceTier = string | null
+
 export interface ConversationRow {
   id: string
   userId: string
@@ -56,6 +76,9 @@ export interface ConversationRow {
   kind: ConversationKind
   source: ConversationSource
   status: ConversationStatus
+  /** The tier this conversation's turns run on, as stored. See
+   *  {@link StoredInferenceTier} — unnarrowed on purpose. */
+  inferenceTier: StoredInferenceTier
   createdAt: Date
   updatedAt: Date
 }
@@ -67,6 +90,9 @@ export interface ConversationListItem {
   kind: ConversationKind
   source: ConversationSource
   status: ConversationStatus
+  /** As stored — see {@link StoredInferenceTier}. The sidebar renders a tier
+   *  glyph per row, so the caller resolves a `null` the same way a turn does. */
+  inferenceTier: StoredInferenceTier
   updatedAt: Date
 }
 
@@ -80,6 +106,7 @@ interface DbRow {
   kind: ConversationKind
   source: ConversationSource
   status: ConversationStatus
+  inference_tier: string | null
   created_at: Date
   updated_at: Date
 }
@@ -91,6 +118,7 @@ interface DbListRow {
   kind: ConversationKind
   source: ConversationSource
   status: ConversationStatus
+  inference_tier: string | null
   updated_at: Date
 }
 
@@ -104,6 +132,7 @@ function rowToConversation(row: DbRow): ConversationRow {
     kind: row.kind,
     source: row.source,
     status: row.status,
+    inferenceTier: row.inference_tier,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -118,7 +147,7 @@ export async function loadConversation(
   userId: string,
 ): Promise<ConversationRow | null> {
   const { rows } = await query<DbRow>(
-    'SELECT id, user_id, agent_id, title, context, kind, source, status, created_at, updated_at FROM conversations WHERE id = $1 AND user_id = $2',
+    'SELECT id, user_id, agent_id, title, context, kind, source, status, inference_tier, created_at, updated_at FROM conversations WHERE id = $1 AND user_id = $2',
     [id, userId],
   )
   if (rows.length === 0) return null
@@ -166,6 +195,21 @@ export interface SaveConversationInput {
    * 'chat'. The POST-trigger route passes 'post'.
    */
   source?: ConversationSource
+  /**
+   * The tier this turn ran on, RECORDED rather than set: written on INSERT, and
+   * on UPDATE only when the row has none yet (`COALESCE`, the same stickiness
+   * `title` has). A caller that does not know the tier omits it and changes
+   * nothing.
+   *
+   * Sticky because this path runs on every save: refreshing it from the caller
+   * would overwrite a mid-conversation flip with whatever tier the turn started
+   * on. Fillable because the rows that reach here without one are real — an
+   * action row seeded by `seedActionRow` before any tier is resolved, and a
+   * legacy row the backfill left alone — and one turn under a tier is exactly
+   * what makes that tier this conversation's. {@link setConversationInferenceTier}
+   * is the only mutator.
+   */
+  inferenceTier?: string
 }
 
 /**
@@ -177,6 +221,9 @@ export interface SaveConversationInput {
  *     values. This is what lets the route insert `kind='action'` once and have
  *     the background run's later status saves preserve it. Promotion is the
  *     only mutator of `kind` (see {@link promoteConversation}).
+ *   - `inference_tier`  — sticky via COALESCE, like `title`: a save fills it if
+ *     the row has none and never overwrites one. The dedicated setter
+ *     ({@link setConversationInferenceTier}) is what a user's flip goes through.
  *   - `status`          — always refreshed from the latest context.
  *
  * Owner-scoped like every other write in this module: the UPDATE fires only
@@ -189,14 +236,15 @@ export interface SaveConversationInput {
  */
 export async function saveConversation(input: SaveConversationInput): Promise<void> {
   await query(
-    `INSERT INTO conversations (id, user_id, agent_id, title, context, kind, source, status)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
+    `INSERT INTO conversations (id, user_id, agent_id, title, context, kind, source, status, inference_tier)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
      ON CONFLICT (id) DO UPDATE SET
-       agent_id   = EXCLUDED.agent_id,
-       context    = EXCLUDED.context,
-       title      = COALESCE(conversations.title, EXCLUDED.title),
-       status     = EXCLUDED.status,
-       updated_at = NOW()
+       agent_id       = EXCLUDED.agent_id,
+       context        = EXCLUDED.context,
+       title          = COALESCE(conversations.title, EXCLUDED.title),
+       status         = EXCLUDED.status,
+       inference_tier = COALESCE(conversations.inference_tier, EXCLUDED.inference_tier),
+       updated_at     = NOW()
      WHERE conversations.user_id = EXCLUDED.user_id`,
     [
       input.id,
@@ -207,6 +255,7 @@ export async function saveConversation(input: SaveConversationInput): Promise<vo
       input.kind ?? 'conversation',
       input.source ?? 'chat',
       input.status ?? 'running',
+      input.inferenceTier ?? null,
     ],
   )
 }
@@ -238,6 +287,109 @@ export async function setConversationStatus(
     `UPDATE conversations SET status = $1, updated_at = NOW()
      WHERE id = $2 AND user_id = $3`,
     [status, id, userId],
+  )
+}
+
+/**
+ * Set a conversation's inference tier — the per-conversation switch's only
+ * write. Scoped by `user_id`, so a wrong userId silently no-ops rather than
+ * re-routing someone else's chat.
+ *
+ * Unconditional, unlike the `COALESCE` in {@link saveConversation}: this IS the
+ * deliberate act, and a mid-conversation flip has to be able to replace a tier
+ * the row already carries. The scope is per turn (`runWithInferenceTier`), so
+ * the flip takes effect on the next turn and no in-flight one changes provider
+ * underneath itself.
+ *
+ * **`updated_at` is deliberately left alone**, for the reason
+ * {@link reapStuckConversations} spells out: the column is the app's record of
+ * chat activity ({@link countActiveUsers} reads exactly that) and it is what the
+ * sidebar renders as "x ago". Choosing where the next turn runs is not a turn,
+ * and bumping it would reorder the list and report the owner as chatting.
+ *
+ * The value is written as given. Validation is the caller's — `lib/inference/
+ * tier.server.ts` is the one that narrows to the union and refuses `'verda'` on
+ * a deployment with no endpoint, because that refusal is about the deployment
+ * rather than about the row.
+ */
+/**
+ * A conversation's tier column alone, or `null` when the row does not exist,
+ * belongs to someone else, or has no tier of its own — three cases that mean
+ * the same thing to the caller (resolve through the seed) and are deliberately
+ * not distinguished.
+ *
+ * A projection rather than a {@link loadConversation}, because both callers ask
+ * this on a hot path — once per turn, and once per conversation the user opens —
+ * and loading the row would pull the whole `context` blob across the wire and
+ * decrypt it (249 KiB on the dev table, see
+ * {@link CONVERSATION_EVENTS_SCAN_LIMIT}) to read one short plaintext column.
+ */
+export async function getConversationInferenceTier(
+  id: string,
+  userId: string,
+): Promise<StoredInferenceTier> {
+  const { rows } = await query<{ inference_tier: string | null }>(
+    'SELECT inference_tier FROM conversations WHERE id = $1 AND user_id = $2',
+    [id, userId],
+  )
+  return rows[0]?.inference_tier ?? null
+}
+
+export async function setConversationInferenceTier(
+  id: string,
+  userId: string,
+  tier: string,
+): Promise<void> {
+  await query(
+    `UPDATE conversations SET inference_tier = $1
+     WHERE id = $2 AND user_id = $3`,
+    [tier, id, userId],
+  )
+}
+
+/**
+ * One-time migration: give conversations written before the tier column the
+ * tier their turns actually ran under.
+ *
+ * Runs from `initSchema` (`db/client.server.ts`) on the direct runner, like the
+ * encryption backfill beside it — `query()` awaits the init promise, so a
+ * backfill going through `query()` would wait on itself. It lives HERE because
+ * this module owns SQL against `conversations`; `encryption-coverage.test.ts`
+ * pins that nothing else does, and dodging that pin by building the statement
+ * out of fragments would be worse than the split.
+ *
+ * **Only from a recorded preference, never from a guess.** Before this change a
+ * turn resolved its tier from `user_prefs`, so a user who chose one has a fact
+ * about their past runs and it is copied here. A user who never chose does not:
+ * their turns ran on `defaultInferenceTier()`, which is host state read per
+ * turn, and materialising today's answer onto old rows would claim a routing
+ * nobody observed — on a deployment that configured its endpoint late, it would
+ * claim the opposite of what happened. Those rows stay NULL and resolve live,
+ * which is exactly what they did yesterday.
+ *
+ * The residual, stated rather than hidden: a NULL row follows its owner's
+ * last-used tier, so once such a user flips any conversation's switch their old
+ * conversations follow it. That is the pre-existing behaviour, unchanged; what
+ * the backfill buys is that everyone who HAD expressed a preference is pinned
+ * out of it.
+ *
+ * Idempotent (`IS NULL` guard) and safe before `user_prefs` exists — that table
+ * is bootstrapped lazily by its own repository, so `to_regclass` decides whether
+ * there is anything to copy rather than the statement failing the whole boot.
+ */
+export async function backfillConversationInferenceTier(run: QueryRunner): Promise<void> {
+  await run(
+    `DO $$
+     BEGIN
+       IF to_regclass('public.user_prefs') IS NOT NULL THEN
+         UPDATE conversations c
+            SET inference_tier = p.inference_tier
+           FROM user_prefs p
+          WHERE p.user_id = c.user_id
+            AND c.inference_tier IS NULL
+            AND p.inference_tier IN ('verda', 'anthropic');
+       END IF;
+     END $$;`,
   )
 }
 
@@ -437,7 +589,7 @@ export async function reapStuckConversations(): Promise<string[]> {
  */
 export async function listConversations(userId: string): Promise<ConversationListItem[]> {
   const { rows } = await query<DbListRow>(
-    'SELECT id, agent_id, title, kind, source, status, updated_at FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200',
+    'SELECT id, agent_id, title, kind, source, status, inference_tier, updated_at FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200',
     [userId],
   )
   return rows.map((r) => ({
@@ -447,6 +599,7 @@ export async function listConversations(userId: string): Promise<ConversationLis
     kind: r.kind,
     source: r.source,
     status: r.status,
+    inferenceTier: r.inference_tier,
     updatedAt: r.updated_at,
   }))
 }

@@ -62,7 +62,7 @@ export const MODE: E2eMode = resolveMode()
 export const IS_HERMETIC = MODE === 'hermetic'
 export const IS_LIVE = MODE === 'live-verda'
 
-/** The two positions of the header switch. */
+/** The two positions of the tier switch. */
 export type Tier = 'anthropic' | 'verda'
 
 /**

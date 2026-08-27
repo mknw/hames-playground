@@ -187,12 +187,20 @@ export async function loadSession(
  * Persist the latest serialized context for this conversation. Title is
  * derived from the first user_message on the very first save and never
  * overwritten after that (sticky in the DB layer).
+ *
+ * `inferenceTier` is the tier the caller's turn ran on, and is RECORDED rather
+ * than set: the DB layer COALESCEs it, so it fills a row that has none and
+ * never overwrites a user's flip. Callers with no turn behind them (the Data
+ * Stash route re-saving a context) omit it and change nothing — stamping the
+ * deployment default from outside a turn would claim a routing that never
+ * happened.
  */
 export async function saveSession(
   sessionId: string,
   userId: string,
   agentId: string,
   serializedContext: string,
+  inferenceTier?: string,
 ): Promise<void> {
   const title = extractTitleFromContext(serializedContext)
   const status = extractStatusFromContext(serializedContext)
@@ -203,6 +211,7 @@ export async function saveSession(
     title,
     serializedContext,
     status,
+    inferenceTier,
     // kind/source omitted → only used on the row's first INSERT (a fresh chat
     // defaults to 'conversation'/'chat'). For an already-inserted action row
     // the ON CONFLICT UPDATE leaves kind/source untouched, so this save just

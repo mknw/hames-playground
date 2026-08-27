@@ -6,11 +6,14 @@ import { accentColor } from '../../lib/agent-palette'
 import type { CompletionMark } from '../../lib/run-registry'
 import type { ChainProgressSnapshot } from './useChainProgress'
 import { useSessionRegistry } from '../../lib/session-registry-context'
+import { TIER_ICONS, tierRowLabel } from '../../lib/tier-presentation'
 
 /** Mirror of the server's ConversationKind/Status (kept local so the sidebar
  *  has no server-module import). */
 export type ThreadKind = 'conversation' | 'action'
 export type ThreadStatus = 'running' | 'paused' | 'done' | 'error'
+/** Mirror of `InferenceTier`, local for the same reason. */
+export type ThreadTier = 'verda' | 'anthropic'
 
 export interface ChatThreadSummary {
   id: string
@@ -30,6 +33,15 @@ export interface ChatThreadSummary {
   kind: ThreadKind
   /** Lifted run status — drives the in-flight spinner / error badge. */
   status: ThreadStatus
+  /**
+   * Which infrastructure this conversation's next turn runs on, already
+   * resolved server-side — never null, because the glyph is always shown and a
+   * row with no answer would be the one row a user could not read.
+   *
+   * Absent only on the optimistic placeholder below, which has no conversation
+   * behind it yet. Every persisted row carries one.
+   */
+  inferenceTier?: ThreadTier
   /** Optimistic client-side row for a brand-new chat that hasn't been
    *  persisted yet. Replaced in place once the real row appears in the
    *  threadsResource refetch. */
@@ -849,6 +861,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                           isSelected() ? '1 ui-accent/40' : '1 transparent hover:ui-accent/30'
                         }
                         cursor="pointer"
+                        data-testid="thread-row"
                         data-placeholder={thread.isPlaceholder ? '' : undefined}
                         data-completed={completion()?.outcome}
                         title={completionTitle()}
@@ -949,15 +962,59 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             ago"), so it changes between two otherwise identical
                             runs — and its WIDTH changes with it, which is why it
                             is removed rather than masked. */}
-                        <Show
-                          when={live()}
-                          fallback={
-                            <div data-testid="thread-time" text="xs ui-text-tertiary" m="t-1">
-                              {formatTimestamp(thread.updatedAt)}
-                            </div>
-                          }
-                        >
-                          <RowProgress snapshot={registry.progress(thread.id).snapshot()} />
+                        {/* Inline padding-right for the tier glyph below,
+                            which is absolutely positioned at the same corner:
+                            without it the running row's progress strip runs
+                            under it. Same reason and same idiom as the title
+                            row's clearance above. */}
+                        <div style={{ 'padding-right': '1.5rem' }}>
+                          <Show
+                            when={live()}
+                            fallback={
+                              <div data-testid="thread-time" text="xs ui-text-tertiary" m="t-1">
+                                {formatTimestamp(thread.updatedAt)}
+                              </div>
+                            }
+                          >
+                            <RowProgress snapshot={registry.progress(thread.id).snapshot()} />
+                          </Show>
+                        </div>
+                        {/* Which infrastructure this conversation runs on.
+                            ALWAYS visible, unlike the two hover actions above
+                            it: those are things you can do to the row, this is
+                            something true of it — and a setting only visible
+                            on hover is one a user has to go looking for to
+                            check. Bottom-right, so the corner reads top-down
+                            as delete / retitle / where it runs.
+
+                            Not decorative, so not `aria-hidden`: it is the only
+                            place the row says this. `role="img"` + `aria-label`
+                            makes it part of the row button's accessible name
+                            ("… Runs on Private (Verda)"), and the same words
+                            ride in `title` for a pointer. Sized by inline style
+                            like the other glyphs in this file — a 14px box is
+                            not on the spacing scale — and coloured with a theme
+                            token, since the tier is not a status and has no hue
+                            of its own to claim. */}
+                        <Show when={thread.inferenceTier}>
+                          {(tier) => (
+                            <span
+                              role="img"
+                              aria-label={tierRowLabel(tier())}
+                              title={tierRowLabel(tier())}
+                              data-tier={tier()}
+                              class={TIER_ICONS[tier()]}
+                              text="ui-text-tertiary"
+                              style={{
+                                position: 'absolute',
+                                bottom: '0.5rem',
+                                right: '0.5rem',
+                                width: '14px',
+                                height: '14px',
+                                display: 'block',
+                              }}
+                            />
+                          )}
                         </Show>
                         {/* Hover-reveal delete button (#71). Hidden — not
                             disabled — for placeholders and running rows: a

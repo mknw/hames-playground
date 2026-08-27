@@ -10,7 +10,6 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  TIER_LABELS,
   formatCompactNumber,
   formatCountdown,
   formatLatency,
@@ -162,14 +161,5 @@ describe('formatLatency', () => {
     // understating a wait is the dishonest direction for this number.
     expect(formatLatency(4_160)).toBe('4.2s')
     expect(formatLatency(4_149)).toBe('4.1s')
-  })
-})
-
-describe('TIER_LABELS', () => {
-  it('names both positions in words a preview user can act on', () => {
-    // The switch has to be self-explanatory without documentation, which means
-    // the label leads with the property, not the vendor.
-    expect(TIER_LABELS.verda).toBe('Private (Verda)')
-    expect(TIER_LABELS.anthropic).toBe('Anthropic')
   })
 })

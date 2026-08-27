@@ -172,7 +172,8 @@ export async function assertHermetic(backend: Backend, appUrl: string): Promise<
     )
   }
 
-  // The row `resolveInferenceTier()` reads, written the way the header switch
+  // The seed row a conversation with no tier of its own resolves through,
+  // written the way the switch
   // writes it. Only reachable now that the turn above has run `ensureSchema()`.
   await setStoredTier('anthropic')
   const onAnthropicTier = await probeTurn(backend, appUrl, 'anthropic')

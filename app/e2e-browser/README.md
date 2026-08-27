@@ -133,7 +133,7 @@ so pointing that variable at the fake is what a developer does to run the
 deployment locally.
 
 **The Anthropic chains have no such seam**, and the anthropic position of the
-header switch runs every role on them. `app/e2e/` solves this with a test-only
+the tier switch runs every role on them. `app/e2e/` solves this with a test-only
 `ClientRegistry` installed on the `b` it imported. **This suite cannot**: the app
 is a different process and there is no handle to install anything on. Without a
 redirect, those calls would leave the machine on the developer's own key, from a
@@ -165,7 +165,8 @@ needs the real server to behave differently":
 Production tier resolution is untouched and still consulted: a per-call `client`
 override (how `clientOverrideFor` routes the self-hosted tier) still wins over
 the registry primary, so which tier a turn takes is still decided by
-`resolveInferenceTier()` reading the user's stored preference. All that changes
+`resolveConversationTier()` reading the conversation's tier (else the user's
+last-used seed). All that changes
 is where the resulting HTTP request lands. That split is also what makes the
 routing assertions honest — the fake records the `model` on every request, so
 `Qwen/Qwen3.8-27B-FP8` versus `e2e-fake-anthropic-tier` is direct evidence of
@@ -181,7 +182,7 @@ carrying `e2e-fake-anthropic-tier`. Two turns rather than one because of the
 widening above: "something arrived" was never enough, and since every role is
 self-hosted on the private tier there is no longer any Anthropic-chain call on a
 default-tier turn to observe. The tier is forced by writing the same
-`user_prefs` row the header switch writes, and `wipeUserRows()` deletes it
+`user_prefs` seed row every flip of the switch writes, and `wipeUserRows()` deletes it
 again, so scenarios still start from the default a preview user gets.
 
 **Something else on the port is refused, not driven.** `startDevServer` TCP-probes
@@ -216,7 +217,7 @@ of it.
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `01-send-and-reply.browser.ts`     | A message typed into the composer gets an answer **painted** in the transcript, the composer comes back, and the conversation appears in the sidebar under the title the server pushed down the same stream.                                                                                                                                                                                                                                                                                                                                                                  |
 | `02-cold-start-spinner.browser.ts` | **The reason this layer exists.** A cold self-hosted box shows the warming spinner with its headline and estimate, the progress bar is suppressed in its favour, and the notice RETRACTS — asserted with the turn provably still running (the box's requests are PARKED by the `hold` fault and released by name, Stop still visible), because otherwise the teardown unmount discharges it. Then the failure twin: a box that will not serve ends the turn as a VISIBLE error with no spinner left behind.                                                                   |
-| `03-tier-switch.browser.ts`        | Clicking the header switch moves the controller and synthesizer calls — read off the `model` the fake recorded, per position — without forking the conversation, and the position survives a reload because it lives on the server. The MAPPING (which roles move) belongs to `app/e2e/scenarios/05`; what is only checkable here is that a click reaches it.                                                                                                                                                                                                                 |
+| `03-tier-switch.browser.ts`        | Clicking a conversation's switch moves the controller and synthesizer calls — read off the `model` the fake recorded, per position — without forking the conversation, and the position survives a reload because it lives on the server. A second test opens two chats on different tiers and checks neither drags the other, and that each sidebar row shows its own tier glyph without hovering. The MAPPING (which roles move) belongs to `app/e2e/scenarios/05`; what is only checkable here is that a click reaches it, per conversation.                               |
 | `04-mid-turn-reload.browser.ts`    | Reloading with a turn in flight keeps the conversation in the list, rebuilds its history from Postgres on reopen, and does not cancel the run whose reader went away — both turns are there afterwards.                                                                                                                                                                                                                                                                                                                                                                       |
 | `05-multi-turn.browser.ts`         | Three turns, all still on screen, alternating question/answer in document order — plus one wire assertion that turn 3 was handed turn 1, so this is a conversation and not a list.                                                                                                                                                                                                                                                                                                                                                                                            |
 | `06-theme-sanity.browser.ts`       | In dark AND light: the tier label and the Send button are not invisible on their own (composited) background, and two icon spans actually paint a glyph — the shape an unregistered `i-mdi-*` leaves behind.                                                                                                                                                                                                                                                                                                                                                                  |

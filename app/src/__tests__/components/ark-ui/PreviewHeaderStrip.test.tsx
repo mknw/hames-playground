@@ -1,14 +1,14 @@
 /**
- * PreviewHeaderStrip — the top-bar cluster: tier switch, warm state, counters.
+ * PreviewHeaderStrip — the top-bar cluster: warm state and counters.
+ *
+ * The tier SWITCH is not here any more — it is per-conversation and lives
+ * beside the agent selector (`ConversationTierSwitch.test.tsx` owns its tests).
+ * What that leaves this strip is the box and the deployment, and one case here
+ * pins the absence: a second control that still set a tier would silently fight
+ * the per-conversation one.
  *
  * The server action is mocked, so what is asserted is the surface a preview
  * user actually meets:
- *   - both switch positions are LABELLED, because the control has to be
- *     understandable without documentation;
- *   - clicking a position writes it through the server and settles on what the
- *     server says, not on an optimistic guess;
- *   - the self-hosted position is disabled, not hidden, when the endpoint is
- *     unconfigured — a missing control explains nothing;
  *   - the warm state is carried by a WORD, not only a colour (`color-not-only`),
  *     and the per-second countdown is not announced (a live region that
  *     re-reads a number every second is noise);
@@ -20,14 +20,13 @@ import { installDomStubs } from './dom-stubs'
 beforeAll(() => installDomStubs())
 
 const getPreviewHeaderState = vi.fn()
-const setPreviewInferenceTier = vi.fn()
 vi.mock('~/lib/harness-client/preview-header.server', () => ({
   getPreviewHeaderState: () => getPreviewHeaderState(),
-  setPreviewInferenceTier: (tier: string) => setPreviewInferenceTier(tier),
 }))
 
-const { render, waitFor, fireEvent } = await import('@solidjs/testing-library')
-const { PreviewHeaderStrip } = await import('../../../components/ark-ui/PreviewHeaderStrip')
+const { render, waitFor } = await import('@solidjs/testing-library')
+const { PreviewHeaderStrip, POLL_INTERVAL_MS } =
+  await import('../../../components/ark-ui/PreviewHeaderStrip')
 
 type State = Awaited<
   ReturnType<typeof import('~/lib/harness-client/preview-header.server').getPreviewHeaderState>
@@ -49,80 +48,23 @@ const state = (over: Partial<State> = {}): State =>
 beforeEach(() => {
   vi.clearAllMocks()
   getPreviewHeaderState.mockResolvedValue(state())
-  setPreviewInferenceTier.mockImplementation(async (tier: string) => state({ tier } as never))
 })
 
 /** Render and wait for the first poll to land. */
 async function mounted(container: HTMLElement) {
-  await waitFor(() => expect(container.textContent).toContain('Anthropic'))
+  await waitFor(() => expect(container.textContent).toContain('active'))
 }
 
-describe('the tier switch', () => {
-  it('labels both positions in words rather than a bare toggle', async () => {
+describe('the tier switch is gone from here', () => {
+  it('offers no way to change a tier from the header', async () => {
+    // The control is per-conversation now. A second one here would be a global
+    // setting sitting next to a per-thread one, and whichever a user reached
+    // first would silently contradict the other.
     const { container } = render(() => <PreviewHeaderStrip />)
     await mounted(container)
 
-    // A preview user has to be able to tell what the switch does without
-    // documentation — the label leads with the property, not the vendor.
-    expect(container.textContent).toContain('Private (Verda)')
-    expect(container.textContent).toContain('Anthropic')
-  })
-
-  it('marks the stored tier as the selected radio', async () => {
-    const { container } = render(() => <PreviewHeaderStrip />)
-    await mounted(container)
-
-    const checked = container.querySelector('input[type="radio"]:checked') as HTMLInputElement
-    expect(checked?.value).toBe('verda')
-  })
-
-  it('writes the other position through the server when clicked', async () => {
-    const { container } = render(() => <PreviewHeaderStrip />)
-    await mounted(container)
-
-    const anthropic = [...container.querySelectorAll('input[type="radio"]')].find(
-      (i) => (i as HTMLInputElement).value === 'anthropic',
-    ) as HTMLInputElement
-    fireEvent.click(anthropic)
-
-    await waitFor(() => expect(setPreviewInferenceTier).toHaveBeenCalledWith('anthropic'))
-  })
-
-  it('settles on what the server returned, not on the click', async () => {
-    // The server is the authority: it can refuse, or normalise. An optimistic
-    // control that kept the clicked position would show one tier while the
-    // next turn ran on another.
-    setPreviewInferenceTier.mockResolvedValue(state({ tier: 'verda' }))
-    const { container } = render(() => <PreviewHeaderStrip />)
-    await mounted(container)
-
-    const anthropic = [...container.querySelectorAll('input[type="radio"]')].find(
-      (i) => (i as HTMLInputElement).value === 'anthropic',
-    ) as HTMLInputElement
-    fireEvent.click(anthropic)
-
-    await waitFor(() => expect(setPreviewInferenceTier).toHaveBeenCalled())
-    await waitFor(() => {
-      const checked = container.querySelector('input[type="radio"]:checked') as HTMLInputElement
-      expect(checked?.value).toBe('verda')
-    })
-  })
-
-  it('disables the self-hosted position instead of hiding it', async () => {
-    // Hiding it would leave a preview user with no explanation for why the
-    // choice they were told about is absent.
-    getPreviewHeaderState.mockResolvedValue(
-      state({ tier: 'anthropic', verdaAvailable: false, warmth: undefined as never }),
-    )
-    getPreviewHeaderState.mockResolvedValue(state({ tier: 'anthropic', verdaAvailable: false }))
-    const { container } = render(() => <PreviewHeaderStrip />)
-    await mounted(container)
-
-    expect(container.textContent).toContain('Private (Verda)')
-    const verda = [...container.querySelectorAll('input[type="radio"]')].find(
-      (i) => (i as HTMLInputElement).value === 'verda',
-    ) as HTMLInputElement
-    expect(verda.disabled).toBe(true)
+    expect(container.querySelectorAll('[data-scope="segment-group"]')).toHaveLength(0)
+    expect(container.querySelectorAll('input[type="radio"]')).toHaveLength(0)
   })
 })
 
@@ -357,19 +299,22 @@ describe('degradation', () => {
   })
 
   it('keeps the last values and says "stale" when a poll fails', async () => {
-    const { container } = render(() => <PreviewHeaderStrip />)
-    await mounted(container)
+    // Driven through the POLL now that the switch is gone: the strip's only
+    // remaining refresh is its timer, and that is the path that has to keep the
+    // last known numbers on screen instead of blanking the bar.
+    vi.useFakeTimers()
+    try {
+      const { container } = render(() => <PreviewHeaderStrip />)
+      await vi.waitFor(() => expect(container.textContent).toContain('12.5k'))
 
-    getPreviewHeaderState.mockRejectedValue(new Error('offline'))
-    // Force a refresh through the switch path, which shares the error channel.
-    setPreviewInferenceTier.mockRejectedValue(new Error('offline'))
-    const anthropic = [...container.querySelectorAll('input[type="radio"]')].find(
-      (i) => (i as HTMLInputElement).value === 'anthropic',
-    ) as HTMLInputElement
-    fireEvent.click(anthropic)
+      getPreviewHeaderState.mockRejectedValue(new Error('offline'))
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS + 1)
 
-    await waitFor(() => expect(container.textContent).toContain('stale'))
-    // The numbers are still there — they were true a moment ago.
-    expect(container.textContent).toContain('12.5k')
+      await vi.waitFor(() => expect(container.textContent).toContain('stale'))
+      // The numbers are still there — they were true a moment ago.
+      expect(container.textContent).toContain('12.5k')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

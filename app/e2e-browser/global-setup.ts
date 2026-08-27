@@ -68,13 +68,13 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     // and BAML resolves `env.*` at call time. Pointing it at the fake is what a
     // developer does to run the deployment locally; `assertVerdaConfigured()`
     // still runs its `/v1` check. Setting it also makes the self-hosted tier
-    // AVAILABLE, which is what the header switch's verda position needs — and
+    // AVAILABLE, which is what the switch's verda position needs — and
     // what makes it the default tier for a user who has never chosen.
     VERDA_INFERENCE_ENDPOINT: backend.llm.baseUrl,
     VERDA_INFERENCE_API_KEY: 'e2e-browser-fake-key',
     // The private tier's SECOND model (2026-08-26): `describe` runs on the 4B
     // `LocalQwenSmall` over this var, and `verdaConfigured()` asks about BOTH
-    // endpoints — so without this line the header switch renders its private
+    // endpoints — so without this line the switch renders its private
     // position DISABLED and every scenario that clicks it fails on the click,
     // not on anything it was written to test. Same fake as above: it records
     // the request's `model`, which is what lets a scenario tell the 4B's calls
@@ -93,7 +93,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     // instead of quietly billing a run advertised as hermetic.
     ANTHROPIC_API_KEY: POISONED_ANTHROPIC_KEY,
     // Never the process default: each scenario decides its tier the way the
-    // header switch does, so a stray deployment default would mask a broken
+    // switch does, so a stray deployment default would mask a broken
     // preference read.
     USE_VERDA_INFERENCE: undefined,
 

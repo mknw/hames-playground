@@ -1,5 +1,5 @@
 /**
- * Scenario 5 — flipping the header switch mid-conversation.
+ * Scenario 5 — flipping a conversation's tier switch mid-conversation.
  *
  * The control in the header writes `user_prefs.inference_tier`; every turn
  * reads it once, in `runTurnAndPersist`, and opens an AsyncLocalStorage scope
@@ -98,6 +98,11 @@ describe('switching tier between turns', () => {
   it.runIf(IS_HERMETIC)('routes each turn per the switch and keeps one conversation', async () => {
     const sessionId = newSessionId('tier-switch')
 
+    // The flips below name the SESSION, because the tier is a property of the
+    // conversation now. The first turn stamps the row, so from turn 2 on a
+    // seed-only write is correctly ignored — a scenario that omitted the id
+    // here would be asserting on a change the app was right to drop.
+
     // Each turn's window is closed before the next one opens, so a call can
     // only ever be attributed to the turn that made it.
     const turns: Array<{ tier: Tier; from: number; to: number }> = []
@@ -106,7 +111,7 @@ describe('switching tier between turns', () => {
       ['verda', 'And how many relationships?'],
       ['anthropic', 'Summarise both answers.'],
     ] as const) {
-      await app.setTier(tier)
+      await app.setTier(tier, sessionId)
       const from = app.fakeLlm.calls.length
       await app.runTurn(sessionId, message)
       turns.push({ tier, from, to: app.fakeLlm.calls.length })

@@ -115,11 +115,12 @@ vi.mock('../../../lib/harness-patterns/clients.server', async () => {
   }
 })
 
-const resolveInferenceTier = vi.fn<(userId: string) => Promise<'verda' | 'anthropic'>>(
-  async () => 'anthropic',
-)
-vi.mock('../../../lib/db/user-prefs.server', () => ({
-  resolveInferenceTier: (userId: string) => resolveInferenceTier(userId),
+const resolveConversationTier = vi.fn<
+  (sessionId: string, userId: string) => Promise<'verda' | 'anthropic'>
+>(async () => 'anthropic')
+vi.mock('../../../lib/inference/tier.server', () => ({
+  resolveConversationTier: (sessionId: string, userId: string) =>
+    resolveConversationTier(sessionId, userId),
 }))
 
 const beginVerdaTurn = vi.fn()
@@ -127,6 +128,16 @@ const endVerdaTurn = vi.fn()
 vi.mock('../../../lib/inference/verda-activity.server', () => ({
   beginVerdaTurn: () => beginVerdaTurn(),
   endVerdaTurn: () => endVerdaTurn(),
+  // The cold-start watch reads these three to decide whether a wait is worth
+  // announcing. Stubbed as a box nobody has called ("starting", never seen), so
+  // a turn that arms a watch actually fires its notice — otherwise the
+  // concurrent-wake test below would pass by announcing nothing at all.
+  verdaWarmth: () => ({ state: 'starting', secondsUntilScaledown: null }),
+  verdaLastCallCompletedAt: () => null,
+  verdaScaledownSeconds: () => 300,
+  // The name `clientOverrideFor` compares against to decide whether a bag is
+  // about to wait on the scale-to-zero box.
+  VERDA_CLIENT_NAME: 'VerdaQwen',
 }))
 
 // The wake ping is MOCKED here, and the split is deliberate: what this file owns
@@ -205,7 +216,7 @@ beforeEach(() => {
   // The private tier is two models, and the scope refuses to open without both.
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
   ensureVerdaAwake.mockResolvedValue(undefined)
-  resolveInferenceTier.mockResolvedValue('anthropic')
+  resolveConversationTier.mockResolvedValue('anthropic')
   loadSession.mockResolvedValue(null)
   runFirstTurnTitleGen.mockResolvedValue(null)
   logged = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -244,6 +255,11 @@ describe('interactive turns', () => {
       agentId: 'search',
       status: 'running',
       title: 'hello worl',
+      // The row it creates RECORDS the tier this turn resolved. For a brand-new
+      // chat that value came from the user's last-used seed, and writing it here
+      // is what stops the conversation following a later flip made in a
+      // different thread — the whole point of the tier being per conversation.
+      inferenceTier: 'anthropic',
     })
     expect(dbSaveConversation.mock.invocationCallOrder[0]).toBeLessThan(
       runFresh.mock.invocationCallOrder[0],
@@ -251,7 +267,13 @@ describe('interactive turns', () => {
 
     expect(continueSession).not.toHaveBeenCalled()
     expect(result.response).toBe('fresh:hello world, this is long')
-    expect(saveSession).toHaveBeenCalledWith('sess-1', 'user-1', 'search', 'serialized:sess-1')
+    expect(saveSession).toHaveBeenCalledWith(
+      'sess-1',
+      'user-1',
+      'search',
+      'serialized:sess-1',
+      'anthropic',
+    )
   })
 
   it('continues a stored context instead of re-running it fresh', async () => {
@@ -270,7 +292,13 @@ describe('interactive turns', () => {
       undefined,
     )
     expect(result.response).toBe('continued:follow up')
-    expect(saveSession).toHaveBeenCalledWith('sess-2', 'user-1', 'search', 'ctx-a+follow up')
+    expect(saveSession).toHaveBeenCalledWith(
+      'sess-2',
+      'user-1',
+      'search',
+      'ctx-a+follow up',
+      'anthropic',
+    )
   })
 
   it('starts fresh when the agent changed under an existing sessionId', async () => {
@@ -283,7 +311,13 @@ describe('interactive turns', () => {
     expect(continueSession).not.toHaveBeenCalled()
     expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-3', 'general')
     expect(result.response).toBe('fresh:hi')
-    expect(saveSession).toHaveBeenCalledWith('sess-3', 'user-1', 'general', 'serialized:sess-3')
+    expect(saveSession).toHaveBeenCalledWith(
+      'sess-3',
+      'user-1',
+      'general',
+      'serialized:sess-3',
+      'anthropic',
+    )
   })
 
   it('exposes the user + conversation to the run as ambient request scope', async () => {
@@ -372,12 +406,17 @@ describe('interactive turns', () => {
 
     expect(seen).toEqual({ max: 12_345, userId: 'user-1', sessionId: 'sess-1' })
     // Two writes: the turn, then the summarized context on top of it.
+    // The turn's own save records the tier it ran on; the summarization save
+    // below does NOT pass one, because by then the row already has it and
+    // `saveConversation` COALESCEs — re-sending it would be a second writer of
+    // the same fact.
     expect(saveSession).toHaveBeenNthCalledWith(
       1,
       'sess-1',
       'user-1',
       'search',
       'serialized:sess-1',
+      'anthropic',
     )
     expect(saveSession).toHaveBeenNthCalledWith(
       2,
@@ -474,7 +513,14 @@ describe('triggered turns', () => {
     expect(harness).toHaveBeenCalledWith('patterns:search')
     expect(runFresh).toHaveBeenCalledWith('do the thing', 'run-1', { trigger: TRIGGER }, undefined)
     expect(seenScopes).toEqual([{ userId: 'user-1', sessionId: 'run-1' }])
-    expect(saveSession).toHaveBeenNthCalledWith(1, 'run-1', 'user-1', 'search', 'serialized:run-1')
+    expect(saveSession).toHaveBeenNthCalledWith(
+      1,
+      'run-1',
+      'user-1',
+      'search',
+      'serialized:run-1',
+      'anthropic',
+    )
   })
 
   // #226 C5. The background path skipped `compactBulkData` entirely, so a
@@ -555,7 +601,14 @@ describe('approval turns', () => {
     expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-7', 'general')
     expect(resumeHarness).toHaveBeenCalledWith('ctx-a', ['patterns:general'], true, undefined)
     expect(result.response).toBe('approved')
-    expect(saveSession).toHaveBeenNthCalledWith(1, 'sess-7', 'user-1', 'general', 'resumed:true')
+    expect(saveSession).toHaveBeenNthCalledWith(
+      1,
+      'sess-7',
+      'user-1',
+      'general',
+      'resumed:true',
+      'anthropic',
+    )
   })
 
   it('resumes as rejected', async () => {
@@ -617,13 +670,15 @@ describe('approval turns', () => {
   })
 })
 
-describe('the inference-tier scope — the per-user switch, plumbed', () => {
-  it('opens the scope with the tier the user actually chose', async () => {
-    resolveInferenceTier.mockResolvedValue('verda')
+describe('the inference-tier scope — the per-conversation switch, plumbed', () => {
+  it('opens the scope with the tier the CONVERSATION is on', async () => {
+    resolveConversationTier.mockResolvedValue('verda')
 
     await runTurnAndPersist(interactive())
 
-    expect(resolveInferenceTier).toHaveBeenCalledWith('user-1')
+    // Resolved per conversation, not per user: that is what lets an Anthropic
+    // chat start while a private one is still waking.
+    expect(resolveConversationTier).toHaveBeenCalledWith('sess-1', 'user-1')
     expect(tierScopes).toEqual(['verda'])
   })
 
@@ -631,20 +686,20 @@ describe('the inference-tier scope — the per-user switch, plumbed', () => {
     // The scope must be entered in BOTH positions: a run with no scope falls
     // back to the deployment default, so "skip it when the user picked
     // Anthropic" would silently ignore an opt-out on a Verda-default host.
-    resolveInferenceTier.mockResolvedValue('anthropic')
+    resolveConversationTier.mockResolvedValue('anthropic')
 
     await runTurnAndPersist(interactive())
 
     expect(tierScopes).toEqual(['anthropic'])
   })
 
-  it('resolves the preference of the run’s OWNER, not of any caller', async () => {
-    // The tier is looked up from the turn's `userId` — the id the entry point
-    // authenticated — which is what stops one user's setting steering another
-    // user's triggered run.
+  it('resolves against the run’s OWNER, not any caller', async () => {
+    // The tier is looked up under the turn's `userId` — the id the entry point
+    // authenticated — which is both what stops one user's setting steering
+    // another user's triggered run and what scopes the conversation read.
     await runTurnAndPersist(interactive({ userId: 'user-7' }))
 
-    expect(resolveInferenceTier).toHaveBeenCalledWith('user-7')
+    expect(resolveConversationTier).toHaveBeenCalledWith('sess-1', 'user-7')
   })
 
   it('covers every mode, so no entry point runs untiered', async () => {
@@ -669,7 +724,7 @@ describe('the inference-tier scope — the per-user switch, plumbed', () => {
 
   it('runs the turn anyway when the preference cannot be read', async () => {
     // A Postgres blip must cost the user their *preference*, not their answer.
-    resolveInferenceTier.mockRejectedValue(new Error('postgres is down'))
+    resolveConversationTier.mockRejectedValue(new Error('postgres is down'))
 
     const result = await runTurnAndPersist(interactive())
 
@@ -681,7 +736,7 @@ describe('the inference-tier scope — the per-user switch, plumbed', () => {
 
 describe('what the header learns from a turn', () => {
   it('counts the turn against its tier', async () => {
-    resolveInferenceTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('verda')
 
     await runTurnAndPersist(interactive())
 
@@ -689,7 +744,7 @@ describe('what the header learns from a turn', () => {
   })
 
   it('brackets a Verda turn with the in-flight gauge', async () => {
-    resolveInferenceTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('verda')
 
     await runTurnAndPersist(interactive())
 
@@ -700,7 +755,7 @@ describe('what the header learns from a turn', () => {
   it('releases the gauge even when the turn throws', async () => {
     // Without the `finally`, one failed turn pins the header to "answering"
     // for the life of the process.
-    resolveInferenceTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('verda')
     getOrBuildPatterns.mockRejectedValueOnce(new Error('gateway down'))
 
     await expect(runTurnAndPersist(interactive())).rejects.toThrow('gateway down')
@@ -716,7 +771,7 @@ describe('what the header learns from a turn', () => {
     // would fail. Asserted by call order against the first thing the run does
     // rather than by "was it called", because a wake that happens after the
     // controller is not a wake.
-    resolveInferenceTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('verda')
     const order: string[] = []
     dbSaveConversation.mockImplementation(async () => {
       order.push('seed')
@@ -739,6 +794,61 @@ describe('what the header learns from a turn', () => {
     expect(order).toEqual(['seed', 'wake', 'patterns'])
   })
 
+  it('leaves an anthropic conversation out of another conversation’s wait', async () => {
+    // The point of the per-conversation switch: start an Anthropic chat while a
+    // private one is still waking. The Anthropic turn must not inherit the other
+    // one's cold-start notice — and both halves of that are AsyncLocalStorage,
+    // so the claim is about SCOPE rather than about a flag.
+    //
+    // It is asserted through the real seam rather than a stub: each turn asks
+    // `clientOverrideFor('controller')` from inside its own scopes, which is
+    // what every adapter does and what fires the notice. The private turn is
+    // parked in its wake while the Anthropic one runs, so the two scopes are
+    // genuinely open at once.
+    const { clientOverrideFor } = await import('../../../lib/harness-patterns/clients.server')
+    const privateWarming = vi.fn()
+    const anthropicWarming = vi.fn()
+    const overrides: Record<string, { client: string } | undefined> = {}
+
+    let releaseWake: (() => void) | undefined
+    const waking = new Promise<void>((resolve) => {
+      releaseWake = resolve
+    })
+    ensureVerdaAwake.mockImplementation(async () => {
+      await waking
+    })
+    getOrBuildPatterns.mockImplementation(async (sessionId: string) => {
+      overrides[sessionId] = clientOverrideFor('controller')
+      return ['patterns:search']
+    })
+
+    resolveConversationTier.mockResolvedValue('verda')
+    const privateTurn = runTurnAndPersist(
+      interactive({ sessionId: 'sess-private', onWarming: privateWarming }),
+    )
+    // Let the private turn open its scopes and park on the wake.
+    await Promise.resolve()
+    await Promise.resolve()
+
+    resolveConversationTier.mockResolvedValue('anthropic')
+    await runTurnAndPersist(
+      interactive({ sessionId: 'sess-anthropic', onWarming: anthropicWarming }),
+    )
+
+    // The Anthropic turn took no override and announced no wait, while the
+    // other conversation's scope was open the whole time.
+    expect(overrides['sess-anthropic']).toBeUndefined()
+    expect(anthropicWarming).not.toHaveBeenCalled()
+
+    releaseWake?.()
+    await privateTurn
+
+    // Not vacuous: the private turn really was on the self-hosted route and
+    // really did announce its wait, from the same seam.
+    expect(overrides['sess-private']).toEqual({ client: 'VerdaQwen' })
+    expect(privateWarming).toHaveBeenCalled()
+  })
+
   it('does not wake anything on an anthropic turn', async () => {
     // A metered always-on API has no box to start, and a ping to one would be a
     // request to a deployment this turn is not using.
@@ -755,7 +865,7 @@ describe('what the header learns from a turn', () => {
     // as an `error` frame, and the in-flight gauge is still released — otherwise
     // one dead deployment pins the header to "answering" for the life of the
     // process.
-    resolveInferenceTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('verda')
     ensureVerdaAwake.mockRejectedValueOnce(
       new Error('the private inference box did not wake: no answer within 300s.'),
     )
@@ -787,7 +897,7 @@ describe('what the header learns from a turn', () => {
     // wake outside the `catch` did neither, so an unattended routine that met a
     // sleeping box left a row spinning forever with no trace anywhere: no chat,
     // no error frame, no log.
-    resolveInferenceTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('verda')
     ensureVerdaAwake.mockRejectedValueOnce(
       new Error('the private inference box did not wake: no answer within 300s.'),
     )

@@ -26,6 +26,7 @@ import { createSignal, createEffect, createMemo, untrack, Show } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { AgentSelector } from './AgentSelector'
+import { ConversationTierSwitch } from './ConversationTierSwitch'
 import { LiveProgressBar } from './LiveProgressBar'
 import {
   approveAction,
@@ -165,6 +166,22 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   /** The cold-start notice for the thread on screen, if its turn hit one. */
   const warming = () => currentRunState().warming
 
+  /**
+   * The tier switch's most recent write, while it is in flight.
+   *
+   * `runSend` awaits it before starting the turn. For a conversation with no row
+   * yet the flip lands in the user's seed and the first turn's pre-seed reads
+   * that seed, so a send that overtook the write would start the conversation on
+   * the tier the user had just left — and RECORD it, since the pre-seed stamps
+   * the row. One await removes the ordering question rather than trusting a
+   * person to be slower than a round trip. Failures are swallowed here: the
+   * switch already reports them, and a send must not be lost to one.
+   */
+  let pendingTierWrite: Promise<unknown> | null = null
+  const setPendingTierWrite = (write: Promise<unknown>) => {
+    pendingTierWrite = write
+  }
+
   // Sessions the user explicitly stopped. `runSend`'s catch cannot otherwise
   // tell a deliberate cancel from the page-unload abort, and the two want
   // different transcripts: teardown stays silent, a cancel gets a bubble.
@@ -188,6 +205,32 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       thisSessionRunning: isProcessing(),
     })
 
+  /**
+   * Does `sid`'s buffer hold something a hydration must not replace?
+   *
+   * The hydration effect below asks this three times — once before wiping, and
+   * once in each branch of the load. Only the first used to exist, and it asked
+   * a narrower question: "is a run in flight". That reads as "do not clobber a
+   * live run" and only holds if the load resolves before the run starts. The
+   * load is a network round trip, so that is a race — and for a brand-new chat
+   * it is the REJECT path that races, because `loadConversation` fails for an id
+   * with no row. A rejection landing after the first `send` replaced the user's
+   * message and its answer with the welcome bubble: nothing wrong on the wire —
+   * the turn ran, the row was written — and a transcript missing its first
+   * exchange on screen. `05-multi-turn.browser.ts` is what caught it.
+   *
+   * In flight is the wrong question at RESOLUTION time, and that is the part
+   * worth reading twice: a short turn is already finished by then, so the run
+   * state says idle while its transcript is the only copy of what happened. The
+   * effect empties the buffer before loading, so a non-empty one means something
+   * else filled it — which is exactly the thing to keep.
+   *
+   * Untracked for the same reason the entry check is: subscribing would re-run
+   * the effect the instant a run finished, wiping the panels that just streamed.
+   */
+  const hasLocalTurn = (sid: string) =>
+    untrack(() => registry.runState(sid).isProcessing || registry.messages(sid).length > 0)
+
   // When the parent swaps in a different sessionId (sidebar selection or
   // "+ New Chat"), reset local state and try to rehydrate from persisted
   // history. Brand-new sessions throw and we fall through to the welcome msg.
@@ -201,7 +244,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     // Read untracked — if this effect subscribed to run state it would re-run
     // the instant a run finished, clearing the graph/observability panels that
     // just streamed in and flashing the freshly-landed assistant message.
-    if (untrack(() => registry.runState(sid).isProcessing)) return
+    if (hasLocalTurn(sid)) return
 
     registry.setMessages(sid, [])
     prevEventCount = 0
@@ -216,6 +259,11 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
 
     loadConversation(sid)
       .then((loaded) => {
+        // A turn happened while this load was in flight — see `hasLocalTurn`.
+        // Its buffer is the only copy of what is on screen; replacing it with
+        // the persisted history would drop the message the user just sent, and
+        // replaying the stored events would double the panels.
+        if (hasLocalTurn(sid)) return
         // Hydration is async: the user may have moved on. The messages still
         // belong in `sid`'s buffer, but view-level state and the parent's
         // graph/observability callbacks must not stomp the thread now on screen.
@@ -264,7 +312,11 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         }
       })
       .catch(() => {
-        // Either a brand-new session id or no row yet — show welcome.
+        // Either a brand-new session id or no row yet — show welcome. Same
+        // guard as the success branch, and it is the one that actually bit: a
+        // brand-new chat REJECTS here, and the rejection is a round trip that
+        // can land after the user has already sent into it.
+        if (hasLocalTurn(sid)) return
         registry.setMessages(sid, [WELCOME_MESSAGE])
       })
   })
@@ -369,6 +421,9 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       content,
       timestamp: new Date(),
     })
+
+    // Settle any tier flip first — see `pendingTierWrite`.
+    if (pendingTierWrite) await pendingTierWrite.catch(() => {})
 
     const abortController = new AbortController()
     registry.registerAbort(runSessionId, abortController)
@@ -518,7 +573,11 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
 
   return (
     <div data-testid="chat-column" flex="~ col" h="full" bg="ui-bg-secondary">
-      {/* Agent Selector Header */}
+      {/* Agent selector + the conversation's inference tier. Two settings of
+          the same weight: which harness answers, and which infrastructure it
+          answers on. They differ in one way that is not visual — changing the
+          agent mints a NEW conversation (see `handleAgentChange`), while the
+          tier is a property of THIS one and may be flipped mid-thread. */}
       <div
         flex="~ items-center gap-4"
         border="b ui-border-primary"
@@ -534,6 +593,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
             disabled={isProcessing()}
           />
         </div>
+        <ConversationTierSwitch sessionId={props.sessionId} onPendingWrite={setPendingTierWrite} />
       </div>
 
       {/* Messages — the live progress bar rides as a trailing slot so it

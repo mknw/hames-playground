@@ -75,6 +75,21 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS conversations_user_kind_updated_idx
     ON conversations (user_id, kind, updated_at DESC);
 
+  -- Which inference tier this conversation's turns run on ('verda' | 'anthropic').
+  -- A lifted enum like kind/source/status, and plaintext for the same reason:
+  -- it is scoped/filtered in SQL and says nothing about what was said. See the
+  -- doctrine in \`crypto.server.ts\`; \`encryption-coverage.test.ts\` pins it.
+  --
+  -- NULLABLE, unlike its three neighbours, and that is the whole design: NULL
+  -- means "this row has no tier of its own", which resolves through the user's
+  -- last-used tier and then the deployment default
+  -- (\`lib/inference/tier.server.ts\`). A NOT NULL DEFAULT would have claimed
+  -- every pre-existing conversation ran on whichever literal was chosen here,
+  -- which is a statement about runs nobody observed. The backfill below writes
+  -- the tier only where the user actually recorded one.
+  ALTER TABLE conversations
+    ADD COLUMN IF NOT EXISTS inference_tier TEXT;
+
   -- Session ownership claims. A Data Stash upload can arrive before the
   -- session has any conversation row (a file dropped before the first chat
   -- message), so there is a window in which \`conversations.user_id\` cannot
@@ -112,6 +127,21 @@ async function initSchema(): Promise<void> {
   // catch below) when encrypted rows exist without a key, after logging the
   // reason itself; that is the intended loud failure, not a bug to soften.
   await ensureEncryptionReady(directRunner)
+  // Give pre-existing conversations the tier their turns actually ran under.
+  //
+  // The statement lives in the repository that owns SQL against
+  // `conversations` — the #260 seam `encryption-coverage.test.ts` pins — and is
+  // handed the direct runner for the same reason the encryption backfill is:
+  // `query()` awaits this promise, so routing it through `query()` would make
+  // the init wait on itself.
+  //
+  // Imported HERE rather than at the top of the file because that repository
+  // imports `query` from this module: a static import back would make the two
+  // modules a cycle, which ESM tolerates and nothing about this call needs. By
+  // the time any schema init runs, the module is already loaded in every real
+  // process.
+  const { backfillConversationInferenceTier } = await import('./conversations.server')
+  await backfillConversationInferenceTier(directRunner)
   console.log('[db] schema ready')
 }
 

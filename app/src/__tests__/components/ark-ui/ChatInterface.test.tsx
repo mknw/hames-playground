@@ -58,6 +58,11 @@ const AGENTS = [
 ]
 const getAgentList = vi.fn(async () => AGENTS)
 
+const getConversationTier = vi.fn(async () => ({ tier: 'anthropic', verdaAvailable: true }))
+const setConversationTier = vi.fn(async (_id: string, tier: string) => ({
+  tier,
+  verdaAvailable: true,
+}))
 vi.mock('~/lib/harness-client', async () => {
   const graph = await import('~/lib/harness-client/graph-extractor')
   const refs = await import('~/lib/harness-client/reference-extractor')
@@ -69,6 +74,11 @@ vi.mock('~/lib/harness-client', async () => {
     rejectAction,
     promoteAction,
     getAgentList,
+    // The tier switch beside the agent selector reads on mount and on every
+    // session change. Its own behaviour is `ConversationTierSwitch.test.tsx`;
+    // here it only has to answer, so the header renders.
+    getConversationTier,
+    setConversationTier,
   }
 })
 
@@ -193,6 +203,39 @@ describe('ChatInterface — hydration', () => {
 
     expect(transcript(container)).toContain("I'm your knowledge assistant")
     expect(host.registry.messages('s1')).toHaveLength(1)
+  })
+
+  it('does not let a LATE hydration wipe the turn the user already sent', async () => {
+    // Caught by `05-multi-turn.browser.ts`, pinned here because it is provable
+    // at this layer and layer 3 costs minutes.
+    //
+    // A brand-new chat REJECTS `loadConversation` — there is no row yet — and
+    // that rejection is a network round trip. The effect's "a run is in flight,
+    // leave the buffer alone" guard sat only at ENTRY, so a rejection landing
+    // after the first send replaced the user's message and its answer with the
+    // welcome bubble: nothing wrong on the wire, a transcript missing its first
+    // exchange on screen.
+    let rejectLoad: ((err: Error) => void) | undefined
+    loadConversation.mockReturnValue(
+      new Promise((_resolve, reject) => {
+        rejectLoad = reject
+      }),
+    )
+
+    const host = makeHost()
+    const { container } = host.mount(() => <ChatInterface sessionId="s-late" />)
+    await settle()
+
+    send(container, 'the first question')
+    await settle()
+    expect(host.registry.messages('s-late').map((m) => m.content)).toContain('the first question')
+
+    // The hydration finally answers, after the turn has come and gone.
+    rejectLoad?.(new Error('not found'))
+    await settle()
+
+    expect(host.registry.messages('s-late').map((m) => m.content)).toContain('the first question')
+    expect(transcript(container)).not.toContain("I'm your knowledge assistant")
   })
 
   it('rehydrates a persisted thread, reporting its agent and replaying its events', async () => {

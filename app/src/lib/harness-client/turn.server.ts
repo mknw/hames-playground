@@ -63,7 +63,7 @@ import {
   runWithInferenceTier,
   type InferenceTier,
 } from '../harness-patterns/clients.server'
-import { resolveInferenceTier } from '../db/user-prefs.server'
+import { resolveConversationTier } from '../inference/tier.server'
 import { beginVerdaTurn, endVerdaTurn } from '../inference/verda-activity.server'
 import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold-start.server'
 import { ensureVerdaAwake } from '../inference/wake.server'
@@ -158,13 +158,14 @@ export async function runTurnAndPersist(
 ): Promise<HarnessResultScoped<SessionData>> {
   const { sessionId, userId } = req
   // ---------------------------------------------------------------------------
-  // Inference tier — the per-user switch, resolved ONCE per turn.
+  // Inference tier — the per-CONVERSATION switch, resolved ONCE per turn.
   //
-  // This is the whole mechanism behind the header's "Private (Verda)" /
-  // "Anthropic" control: the user's stored preference (or the preview default)
-  // opens an AsyncLocalStorage scope, and every adapter deep inside the run
-  // reads it through `clientOverrideFor(role)` — a PER-CALL client override in
-  // the BAML options bag, which is the seam `clients.server.ts` owns.
+  // This is the whole mechanism behind the control beside the agent selector:
+  // the conversation's own tier (else the user's last-used, else the preview
+  // default — `lib/inference/tier.server.ts` owns that order) opens an
+  // AsyncLocalStorage scope, and every adapter deep inside the run reads it
+  // through `clientOverrideFor(role)` — a PER-CALL client override in the BAML
+  // options bag, which is the seam `clients.server.ts` owns.
   //
   // It is emphatically NOT a re-pointing of the chains in `baml_src/`. That
   // class of edit moves whole ROLES at once and would move the injection screen
@@ -185,10 +186,16 @@ export async function runTurnAndPersist(
   //
   // Resolved here rather than at each entry point so all three modes
   // (interactive, triggered, approval) get it from one place, and a failure to
-  // read the preference falls back to the default rather than failing the turn.
+  // read it falls back to the deployment default rather than failing the turn.
+  //
+  // Per conversation since the switch moved off the header: a turn's tier is
+  // now a fact about the thread it belongs to, which is what lets an Anthropic
+  // chat start while a private one is still waking. It is read at TURN start,
+  // so a flip lands on the next turn and never changes provider underneath a
+  // run already in flight.
   const tier =
-    (await resolveInferenceTier(userId).catch((err: unknown) => {
-      console.error(`[turn] could not read the inference-tier preference for ${userId}:`, err)
+    (await resolveConversationTier(sessionId, userId).catch((err: unknown) => {
+      console.error(`[turn] could not read the inference tier for ${sessionId}:`, err)
       return undefined
     })) ?? activeInferenceTier()
   // Establish the request scope so pattern closures and app-side tools that
@@ -264,6 +271,11 @@ async function runOneTurn(
       title: deriveTitle(req.message),
       serializedContext: serializeContext(createContext(req.message, undefined, sessionId)),
       status: 'running',
+      // The tier this turn resolved, recorded on the row it is creating. For a
+      // brand-new chat that value came from the user's last-used seed, and
+      // writing it here is what stops the conversation following a later flip
+      // made in a different thread.
+      inferenceTier: tier,
     })
   }
 
@@ -382,7 +394,11 @@ async function runAndSave(
     // `catch` below for the row.
     if (tier === 'verda') await ensureVerdaAwake()
     const result = await run(await getOrBuildPatterns(sessionId, agentId))
-    await saveSession(sessionId, userId, agentId, result.serialized)
+    // The tier goes with the save so a row that has none yet — an action row
+    // `seedActionRow` wrote before any tier was resolved, a legacy row the
+    // backfill left alone — records the one it just ran on. `saveConversation`
+    // COALESCEs it, so this never overwrites a flip.
+    await saveSession(sessionId, userId, agentId, result.serialized, tier)
     return result
   } catch (err) {
     console.error(`[turn] run failed for ${sessionId}:`, err)

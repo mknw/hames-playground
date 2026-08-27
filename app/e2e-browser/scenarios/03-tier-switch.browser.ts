@@ -1,5 +1,6 @@
 /**
- * Scenario 3 — clicking the header switch changes where the NEXT call lands.
+ * Scenario 3 — clicking a conversation's switch changes where its NEXT call
+ * lands, and only that conversation's.
  *
  * The claim is deliberately about the wire, not about the widget. A segment
  * group that moves under the cursor proves nothing: the failure worth catching
@@ -7,6 +8,12 @@
  * which is the state `PreviewHeaderStrip` remounts itself to avoid. So each
  * position is checked twice — the header reflects it, AND the fake endpoint
  * recorded the matching `model` on the calls the switch is supposed to move.
+ *
+ * The second test is the one the per-conversation move exists for: two chats
+ * open at once, on different tiers, neither dragging the other. It is here
+ * rather than in `app/e2e/` because that layer can set a tier directly — only a
+ * browser can prove the CONTROL is per-conversation, i.e. that flipping one and
+ * flipping back in the other does not converge them onto one setting.
  *
  * `app/e2e/scenarios/05-tier-switch` is the authority on the MAPPING — which
  * roles a tier decision moves. It used to prove that `router` / `describe` /
@@ -18,7 +25,16 @@
  */
 import { test, expect } from '../lib/fixtures'
 import { FAKE_ANTHROPIC_TIER_MODEL, VERDA_MODEL } from '../lib/env'
-import { chooseTier, open, send, TIER_LABEL, waitForReplies } from '../lib/chat'
+import {
+  chooseTier,
+  newChat,
+  open,
+  rowTier,
+  send,
+  threadRows,
+  TIER_LABEL,
+  waitForReplies,
+} from '../lib/chat'
 import type { FakeCall } from '../lib/control'
 
 const PRIVATE = TIER_LABEL.verda
@@ -39,7 +55,7 @@ const ANTHROPIC = TIER_LABEL.anthropic
 const SWITCHED = (calls: FakeCall[]) =>
   calls.filter((call) => call.fn === 'LoopController' || call.fn === 'Synthesize')
 
-test('the header switch moves the next turn to the other endpoint, and shows the position it moved to', async ({
+test('the switch moves the next turn to the other endpoint, and shows the position it moved to', async ({
   page,
   appUrl,
   backend,
@@ -80,11 +96,58 @@ test('the header switch moves the next turn to the other endpoint, and shows the
     expect(call.model, `${call.fn} did not take the self-hosted route`).toBe(VERDA_MODEL)
   }
 
-  // The switch is a preference, not a fork: both turns are in ONE conversation.
+  // The switch is a setting, not a fork: both turns are in ONE conversation, so
+  // a mid-thread flip changes where the next turn runs and nothing else.
   await expect(page.locator('[data-role="user"]')).toHaveCount(2)
 
   // And the position survives a reload, because it lives on the server rather
   // than in this tab — which is the whole reason it is a server action.
   await page.reload()
   await expect(page.getByRole('radio', { name: PRIVATE })).toBeChecked()
+})
+
+test('flips one conversation without moving its neighbour, and says so on every row', async ({
+  page,
+  appUrl,
+  backend,
+}) => {
+  // The motivation for the move, in one scenario: start an Anthropic chat while
+  // a private one is waiting on a cold box.
+  await open(page, appUrl)
+
+  await chooseTier(page, 'verda')
+  await send(page, 'the private one')
+  await waitForReplies(page, 1)
+
+  await newChat(page)
+  await chooseTier(page, 'anthropic')
+  await send(page, 'the anthropic one')
+  await waitForReplies(page, 1)
+
+  // Newest-created first, so row 0 is the Anthropic chat and row 1 the private
+  // one. Addressed by position because the fake endpoint gives every
+  // conversation the same generated title — see `threadRows`.
+  await expect(threadRows(page)).toHaveCount(2)
+  const newer = threadRows(page).nth(0)
+  const older = threadRows(page).nth(1)
+
+  // The sidebar says which is which without hovering anything — the glyph is
+  // always visible, unlike the delete and retitle actions above it.
+  expect(await rowTier(older)).toBe('verda')
+  expect(await rowTier(newer)).toBe('anthropic')
+
+  // Back to the first thread: it kept its own tier, even though the LAST thing
+  // the user clicked said Anthropic. Before the move this was one setting and
+  // the two would have agreed.
+  await older.click()
+  await expect(page.getByRole('radio', { name: PRIVATE })).toBeChecked()
+
+  // Not a claim about the widget alone: the second conversation's turn really
+  // was served by the other endpoint while the first one's row said verda.
+  const models = new Set(
+    SWITCHED(await backend.calls())
+      .slice(-2)
+      .map((call) => call.model),
+  )
+  expect(models.size, `expected both endpoints across the two chats, saw ${[...models]}`).toBe(2)
 })

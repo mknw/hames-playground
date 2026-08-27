@@ -25,10 +25,14 @@ import {
   getConversationOwner,
   promoteConversation,
   setConversationStatus,
+  setConversationInferenceTier,
+  getConversationInferenceTier,
+  backfillConversationInferenceTier,
   reapStuckConversations,
   STUCK_RUN_TIMEOUT_MINUTES,
 } from '../../../lib/db/conversations.server'
 import { closePool, query } from '../../../lib/db/client.server'
+import { setStoredInferenceTier } from '../../../lib/db/user-prefs.server'
 
 const TEST_USER = `test-user-${Math.random().toString(36).slice(2, 10)}`
 
@@ -449,6 +453,164 @@ describe('action kind/source/status (agent trigger endpoint)', () => {
  * about specific ids rather than about the size of the returned list — another
  * suite's abandoned row may legitimately ride along.
  */
+describe('inference_tier (the per-conversation switch)', () => {
+  it('is absent until something records one — NULL is not a tier', async () => {
+    if (!dbAvailable) return
+    const id = `tier-${Math.random().toString(36).slice(2, 10)}`
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'search',
+      title: 't',
+      serializedContext: '{}',
+    })
+    // A row with no tier of its own. The resolver reads this as "fall through
+    // to the seed", which is what a legacy row has to do — a NOT NULL DEFAULT
+    // would have claimed every one of them ran on whichever literal was picked.
+    expect(await getConversationInferenceTier(id, TEST_USER)).toBeNull()
+    expect((await loadConversation(id, TEST_USER))!.inferenceTier).toBeNull()
+  })
+
+  it('is recorded by the save that creates the row, and STICKS across later saves', async () => {
+    if (!dbAvailable) return
+    const id = `tier-${Math.random().toString(36).slice(2, 10)}`
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'search',
+      title: 't',
+      serializedContext: '{"turn":1}',
+      inferenceTier: 'verda',
+    })
+    // The user flips mid-conversation…
+    await setConversationInferenceTier(id, TEST_USER, 'anthropic')
+    // …and the NEXT turn saves under the tier it started on. If that save
+    // refreshed the column instead of COALESCing it, the flip would be undone
+    // by the very turn that was still finishing when it was made.
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'search',
+      title: 't',
+      serializedContext: '{"turn":2}',
+      inferenceTier: 'verda',
+    })
+    expect(await getConversationInferenceTier(id, TEST_USER)).toBe('anthropic')
+  })
+
+  it('is FILLED by a later save when the row was created without one', async () => {
+    if (!dbAvailable) return
+    // The action-row shape: `seedActionRow` writes the row before any tier is
+    // resolved, so the run's own save is what records where it ran.
+    const id = `act-${Math.random().toString(36).slice(2, 10)}`
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'search',
+      title: 'triggered',
+      serializedContext: '{}',
+      kind: 'action',
+      source: 'post',
+    })
+    expect(await getConversationInferenceTier(id, TEST_USER)).toBeNull()
+
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'search',
+      title: 'triggered',
+      serializedContext: '{"done":true}',
+      inferenceTier: 'verda',
+    })
+    expect(await getConversationInferenceTier(id, TEST_USER)).toBe('verda')
+  })
+
+  it('setConversationInferenceTier is scoped to the owner and reads back on the list', async () => {
+    if (!dbAvailable) return
+    const id = `tier-${Math.random().toString(36).slice(2, 10)}`
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'search',
+      title: 't',
+      serializedContext: '{}',
+      inferenceTier: 'anthropic',
+    })
+
+    // Someone else's write must change nothing — a wrong userId re-routing a
+    // conversation is the failure this scoping exists to prevent.
+    await setConversationInferenceTier(id, `${TEST_USER}-other`, 'verda')
+    expect(await getConversationInferenceTier(id, TEST_USER)).toBe('anthropic')
+    // …and it must not leak the row to the wrong reader either.
+    expect(await getConversationInferenceTier(id, `${TEST_USER}-other`)).toBeNull()
+
+    await setConversationInferenceTier(id, TEST_USER, 'verda')
+    const listed = (await listConversations(TEST_USER)).find((r) => r.id === id)
+    expect(listed!.inferenceTier).toBe('verda')
+  })
+
+  it('does NOT bump updated_at — choosing a tier is not chat activity', async () => {
+    if (!dbAvailable) return
+    // `updated_at` is what the sidebar renders as "x ago" and what
+    // `countActiveUsers` reads as "this user did something". A flip is neither.
+    const id = `tier-${Math.random().toString(36).slice(2, 10)}`
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'search',
+      title: 't',
+      serializedContext: '{}',
+    })
+    const before = (await loadConversation(id, TEST_USER))!.updatedAt
+    await setConversationInferenceTier(id, TEST_USER, 'verda')
+    expect((await loadConversation(id, TEST_USER))!.updatedAt).toEqual(before)
+  })
+})
+
+describe('backfillConversationInferenceTier', () => {
+  it('copies a RECORDED preference onto that user’s untiered rows, and nothing else', async () => {
+    if (!dbAvailable) return
+    const withPref = `${TEST_USER}-pref`
+    const noPref = `${TEST_USER}-nopref`
+    const untiered = `bf-${Math.random().toString(36).slice(2, 10)}`
+    const alreadyTiered = `bf-${Math.random().toString(36).slice(2, 10)}`
+    const foreign = `bf-${Math.random().toString(36).slice(2, 10)}`
+    const base = { agentId: 'search', title: 't', serializedContext: '{}' }
+
+    await saveConversation({ id: untiered, userId: withPref, ...base })
+    await saveConversation({ id: alreadyTiered, userId: withPref, ...base, inferenceTier: 'verda' })
+    await saveConversation({ id: foreign, userId: noPref, ...base })
+    // Through the repository that owns the table, so this does not depend on
+    // `user_prefs` already existing — it bootstraps its own schema, exactly as
+    // it does on a deployment where nobody has flipped the switch yet. (That
+    // case is also why the backfill is guarded by `to_regclass`: on a fresh
+    // database `initSchema` runs it BEFORE anything creates that table.)
+    await setStoredInferenceTier(withPref, 'anthropic')
+
+    try {
+      const run = (text: string, params?: unknown[]) => query(text, params)
+      await backfillConversationInferenceTier(run)
+
+      // A recorded choice is a FACT about the runs that already happened.
+      expect(await getConversationInferenceTier(untiered, withPref)).toBe('anthropic')
+      // An existing tier is never overwritten…
+      expect(await getConversationInferenceTier(alreadyTiered, withPref)).toBe('verda')
+      // …and a user who never chose gets nothing written: their turns ran on
+      // `defaultInferenceTier()`, which is host state read per turn, so
+      // materialising today's answer would claim a routing nobody observed.
+      expect(await getConversationInferenceTier(foreign, noPref)).toBeNull()
+
+      // Idempotent: running it again changes nothing.
+      await backfillConversationInferenceTier(run)
+      expect(await getConversationInferenceTier(untiered, withPref)).toBe('anthropic')
+      expect(await getConversationInferenceTier(alreadyTiered, withPref)).toBe('verda')
+    } finally {
+      await query('DELETE FROM conversations WHERE user_id = ANY($1)', [[withPref, noPref]])
+      await query('DELETE FROM user_prefs WHERE user_id = $1', [withPref])
+    }
+  })
+})
+
 describe('reapStuckConversations', () => {
   /** Seed one row, then age its `updated_at` by `ageMinutes`. */
   async function seed(id: string, status: 'running' | 'paused' | 'done', age: number) {

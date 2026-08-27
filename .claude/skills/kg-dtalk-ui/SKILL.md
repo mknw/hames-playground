@@ -96,9 +96,9 @@ them is the whole theming story:
 | `dark-bg-*`, `dark-text-*`, `dark-border-*`, `neon-*`, `cyber-*`              | fixed hexes   | **no** — the same colour in either mode |
 
 **Write `ui-*`.** The fixed family is not a second option for chrome; what is
-left of it is _data_ colour — the Cytoscape node/edge styles, the per-turn and
-per-agent graph palettes in `lib/turn-colors.ts` and `lib/agent-palette.ts`,
-xterm's terminal theme. None of those can read a CSS variable, which is the
+left of it is _data_ colour — the Cytoscape node/edge styles, the per-agent
+graph palette in `lib/agent-palette.ts` (`lib/turn-colors.ts` was its per-turn
+twin, deleted with the All tab), xterm's terminal theme. None of those can read a CSS variable, which is the
 only reason they are still hexes. `cyber-{600,700,800}` (indigo) is the one
 chrome exception, kept fixed because it reads on both grounds.
 

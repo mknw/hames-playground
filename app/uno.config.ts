@@ -447,19 +447,21 @@ export default defineConfig({
           color: var(--agent-accent, var(--ui-text-tertiary));
         }
 
-        /* Sidebar mini progress strip, indeterminate mode (#105) — shown
-           between run start and the chain projection seed arriving. A 40%-
-           wide segment sweeps the 3px track (RowProgress in ChatSidebar). */
-        @keyframes thread-progress-slide {
+        /* The shared bar's indeterminate mode (#105, generalised in #295) — a
+           40%-wide segment sweeping the 3px track, for any consumer of
+           ProgressBar that passes percent: null. Named for the component
+           rather than for the sidebar row that was its first caller: since
+           #295 it is also the chain bar's and the boot splash's. */
+        @keyframes progress-slide {
           0%   { transform: translateX(-100%); }
           100% { transform: translateX(250%); }
         }
-        .thread-progress-indeterminate {
-          animation: thread-progress-slide 1.2s ease-in-out infinite;
+        .progress-indeterminate {
+          animation: progress-slide 1.2s ease-in-out infinite;
         }
         @media (prefers-reduced-motion: reduce) {
           /* Motionless fallback: a dim full-width fill still signals "running". */
-          .thread-progress-indeterminate {
+          .progress-indeterminate {
             animation: none;
             width: 100% !important;
             opacity: 0.35;

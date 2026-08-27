@@ -181,7 +181,14 @@ async function warmTheClientBundle(appUrl: string): Promise<void> {
   const browser = await chromium.launch()
   try {
     const page = await browser.newPage()
-    await page.goto(appUrl)
+    // The BUDGET HAS TO COVER THE NAVIGATION TOO, not only the wait after it.
+    // Left at Playwright's 30s default this line was the first thing a fresh
+    // worktree hit: `goto` waits for `load`, which under `vinxi dev` means the
+    // whole on-demand module graph, and it timed out at 30s while the message
+    // below blamed the client bundle for being broken. The budget for "a cold
+    // vite start is not fast" already exists — this is the same one every other
+    // step of the boot uses.
+    await page.goto(appUrl, { timeout: SERVER_BOOT_TIMEOUT_MS })
     await page
       .getByPlaceholder('Type your message')
       .waitFor({ state: 'visible', timeout: SERVER_BOOT_TIMEOUT_MS })

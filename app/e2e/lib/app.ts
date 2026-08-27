@@ -21,7 +21,13 @@
  * calls, and `runTurnOverSse` calls the route handler the browser POSTs to.
  */
 
-import { IS_HERMETIC, IS_LIVE, HERMETIC_ANTHROPIC_KEY, TURN_TIMEOUT_MS } from './mode'
+import {
+  IS_HERMETIC,
+  IS_LIVE,
+  HERMETIC_ANTHROPIC_KEY,
+  TURN_TIMEOUT_MS,
+  WAKE_ATTEMPT_TIMEOUT_MS,
+} from './mode'
 import { startFakeLlm, type FakeLlm } from './fake-llm'
 import { startFakeGateway, type FakeGateway } from './fake-gateway'
 import { installHermeticRouting, assertHermeticRouting } from './baml-route'
@@ -166,6 +172,11 @@ async function boot(): Promise<AppHandles> {
     process.env.SMALL_LLM_API_KEY = 'e2e-fake-key'
     // Poison the real credential — see HERMETIC_ANTHROPIC_KEY.
     process.env.ANTHROPIC_API_KEY = HERMETIC_ANTHROPIC_KEY
+    // The wake is a POLL since 2026-08-27, and its shipped per-attempt bound
+    // (30s) would cut every one of this fake's injected delays into attempt
+    // slices — see WAKE_ATTEMPT_TIMEOUT_MS for why that would make scenarios 3,
+    // 4 and 8 measure the poll's cadence instead of the thing each is named for.
+    process.env.VERDA_WAKE_ATTEMPT_TIMEOUT_MS = String(WAKE_ATTEMPT_TIMEOUT_MS)
   }
   // Never the process default: every scenario decides its tier per user, the
   // way the header switch does, so a stray deployment default would mask a

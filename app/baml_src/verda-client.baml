@@ -32,15 +32,28 @@
 // SCALE TO ZERO, AND THE COLD START IS NO LONGER THIS CLIENT'S PROBLEM. The
 // endpoint sleeps when idle, bills only while awake, and pays a cold start
 // (container + 27B weight load) before answering the first request after a
-// sleep. Measured 2026-08-26: 146s for a 21-token completion on a single
-// request to a sleeping box.
+// sleep. Measured three times, all against this deployment: 146s for a 21-token
+// completion (2026-08-26), 71.7s for a 1-token wake ping (2026-08-26), and
+// ~360s from first request to available (2026-08-27).
 //
-// That wait is now paid OUT IN FRONT of the harness, by one throwaway wake
-// request with its own 300s bound (`app/src/lib/inference/wake.server.ts`,
-// wired in `harness-client/turn.server.ts`). No BAML call on this client starts
-// until the box has answered something, so `request_timeout_ms` below no longer
-// has to survive a cold start — it is a WARM-CALL budget, which is what makes
-// the number below defensible instead of merely generous.
+// That wait is now paid OUT IN FRONT of the harness, by throwaway wake requests
+// with their own budget (`app/src/lib/inference/wake.server.ts`, wired in
+// `harness-client/turn.server.ts`). No BAML call on this client starts until the
+// box has answered one, so `request_timeout_ms` below no longer has to survive a
+// cold start — it is a WARM-CALL budget, which is what makes the number below
+// defensible instead of merely generous.
+//
+// THE WAKE IS A POLL, since 2026-08-27, and the reason is a SECOND platform
+// behaviour that makes the two readings below into three. On that date the box
+// took ~360s to come up and NO REQUEST SENT DURING THAT STARTUP EVER COMPLETED,
+// not even after it became available — confirmed outside the app by a 1-token
+// probe held open for 590s that returned nothing, while the same request
+// answered in seconds once the box was warm. That is incompatible with
+// 2026-08-26, where cold-start requests DID eventually answer (the 146s and
+// 71.7s readings are exactly such requests). Neither is a contract, so the wake
+// assumes neither: short attempts, retried until one lands, which ends on an
+// early attempt under queue-and-answer and on a later one under
+// drop-during-startup. Its overall bound went 300s -> 600s in the same change.
 //
 // WHY THE OLD 600 000 HAD TO GO, and it was not tidiness. The measurements that
 // set it also condemned it. Three chats sent in quick succession into a sleeping
@@ -55,7 +68,12 @@
 //     said so PROMPTLY: `504 {"error":"inference request was canceled"}` at
 //     55s. That client learned within a minute and burned no timeout.
 // Which behaviour applies when is still UNMEASURED; 55s is one observation under
-// queueing, not a contract. What the wake ping does is make the disagreement
+// queueing, not a contract. The 2026-08-27 reading above is the strongest
+// evidence yet for the FIRST of the two — a request abandoned by the platform
+// and never answered is exactly what "still unanswered at 600 000ms" looks like
+// from inside the client — and it is also why no timeout on this client can be
+// the answer: a request that is never going to be answered is not made more
+// likely to be answered by waiting longer for it. Only sending another one is. What the wake ping does is make the disagreement
 // stop mattering for this number: the case FOR 600s was only ever "a cold start
 // must be able to finish", and nothing here pays a cold start any more. The case
 // AGAINST it is untouched — a request that is silently dropped is
@@ -111,14 +129,15 @@
 //
 // Three things it must stay clear of, in both directions:
 //   - the ~150s FLOOR the old comment named no longer binds this client, because
-//     the wake ping absorbs the first call of a session — that floor moved to
-//     `VERDA_WAKE_TIMEOUT_MS`, and lowering THAT below ~150s would reliably fail
-//     the first turn of every session;
+//     the wake absorbs the first call of a session — that floor moved to
+//     `VERDA_WAKE_TIMEOUT_MS`, and lowering THAT below the measured cold-start
+//     tail (~360s, 2026-08-27) would reliably fail the first turn of every
+//     session, which is exactly what happened at 300s;
 //   - it is above the 55s at which the platform's own gateway was once seen to
 //     cancel, so a prompt 504 still surfaces as a 504 rather than as our
 //     timeout — which is the more diagnosable of the two;
-//   - it stays BELOW `VERDA_WAKE_TIMEOUT_MS` (300s), so the wait a user sits
-//     through on a cold box is bounded by the request whose whole job is to
+//   - it stays BELOW `VERDA_WAKE_TIMEOUT_MS` (600s), so the wait a user sits
+//     through on a cold box is bounded by the requests whose whole job is to
 //     wait, not by a real call that will be retried.
 // What is NOT a judgement call, and is fixed: a turn that spends that time and
 // comes back with nothing is no longer recorded as a success (`settleTurn` in
@@ -129,18 +148,23 @@
 // wait is now VISIBLE: a turn-level `warming` frame carries a spinner, the
 // words "starting GPU" and a counting-down estimate into the chat, in place of
 // the progress bar, for as long as the box is starting
-// (`lib/inference/cold-start.server.ts`) — emitted by the wake ping, before it
-// goes on the wire, so the notice lands inside the wait rather than beside it.
-// The keep-alive was never that — a
+// (`lib/inference/cold-start.server.ts`) — emitted by the wake, before its first
+// attempt goes on the wire, so the notice lands inside the wait rather than
+// beside it. The keep-alive was never that — a
 // comment frame is invisible to a human by construction — so the two are
 // complementary rather than one covering for the other. The estimate defaults
-// to the 146s above until a server has measured one of its own; that constant
-// is `COLD_START_FALLBACK_MS`, and this comment is its provenance. It is also
-// the floor's provenance: a reading below a quarter of it is dropped rather
-// than recorded, because nothing that fast starts a container and loads 27B of
+// to the LONGEST of the three readings above (~360s) until a server has measured
+// one of its own; that constant is `COLD_START_FALLBACK_MS`, and this comment is
+// its provenance. Largest rather than median, because the errors are not
+// symmetric: a pessimistic countdown clears early and an optimistic one is a
+// promise the box breaks. The plausibility FLOOR is its own literal (36.5s) and
+// no longer a quarter of it — a reading that fast is dropped rather than
+// recorded, because nothing that fast starts a container and loads 27B of
 // weights, and the alternative is a warm ~4s call entering the history as a
 // measured "cold start" whenever the app's configured scale-down window is
-// shorter than the deployment's own.
+// shorter than the deployment's own. Deriving it from the fallback broke the
+// moment the fallback rose: a quarter of 360s is 90s, which would have rejected
+// the genuine 71.7s cold start above.
 client<llm> VerdaQwen {
   provider openai-generic
   options {
@@ -206,7 +230,7 @@ client<llm> VerdaQwen {
       // allowance. The derivation, the alternative not taken and the reason the
       // inequality must hold in this direction are all in WHERE 180 000 COMES
       // FROM above; `clients-verda.test.ts` pins it against both literals. It is
-      // no longer sized for a cold start — the wake ping ahead of the harness
+      // no longer sized for a cold start — the wake poll ahead of the harness
       // pays that, and its own bound is `VERDA_WAKE_TIMEOUT_MS`. Read the SCALE
       // TO ZERO note above before changing either number; raising this one back
       // towards ten minutes would quietly re-create the

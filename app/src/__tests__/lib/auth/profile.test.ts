@@ -46,9 +46,14 @@ vi.mock('../../../lib/auth/users.server', () => ({
   getUser: (id: string) => getUser(id),
 }))
 
-const resolveInferenceTier = vi.fn<(id: string) => Promise<'verda' | 'anthropic'>>()
+const getStoredInferenceTier = vi.fn<(id: string) => Promise<'verda' | 'anthropic' | null>>()
 vi.mock('../../../lib/db/user-prefs.server', () => ({
-  resolveInferenceTier: (id: string) => resolveInferenceTier(id),
+  getStoredInferenceTier: (id: string) => getStoredInferenceTier(id),
+}))
+
+const resolveTier = vi.fn<(conv: string | null, seed: string | null) => 'verda' | 'anthropic'>()
+vi.mock('../../../lib/inference/tier.server', () => ({
+  resolveTier: (conv: string | null, seed: string | null) => resolveTier(conv, seed),
 }))
 
 const { getProfile } = await import('../../../lib/auth/profile.server')
@@ -72,7 +77,8 @@ beforeEach(() => {
     displayName: 'Session Name',
   })
   getUser.mockResolvedValue(row())
-  resolveInferenceTier.mockResolvedValue('verda')
+  getStoredInferenceTier.mockResolvedValue('verda')
+  resolveTier.mockReturnValue('verda')
 })
 
 describe('getProfile', () => {
@@ -84,7 +90,7 @@ describe('getProfile', () => {
     await getProfile()
 
     expect(getUser).toHaveBeenCalledWith('user-1')
-    expect(resolveInferenceTier).toHaveBeenCalledWith('user-1')
+    expect(getStoredInferenceTier).toHaveBeenCalledWith('user-1')
   })
 
   it('returns the stored row and the resolved tier', async () => {
@@ -98,11 +104,14 @@ describe('getProfile', () => {
   })
 
   it('reads the tier through the shared resolver, not a rule of its own', async () => {
-    // `resolveInferenceTier` is what the turn runner and the header switch both
-    // call. Re-deriving "stored choice, else default" here is how a page ends up
-    // naming a tier the next turn will not take.
-    resolveInferenceTier.mockResolvedValue('anthropic')
+    // `resolveTier` is what the turn runner and the conversation switch both go
+    // through. Re-deriving "stored choice, else default" here is how a page ends
+    // up naming a tier the next turn will not take.
+    resolveTier.mockReturnValue('anthropic')
     await expect(getProfile()).resolves.toMatchObject({ tier: 'anthropic' })
+    // No conversation to ask about on this page, so the seed is the whole
+    // question — passing one would make this a claim about a thread.
+    expect(resolveTier).toHaveBeenCalledWith(null, 'verda')
   })
 
   it('falls back to the session snapshot when there is no users row', async () => {
@@ -122,7 +131,7 @@ describe('getProfile', () => {
 
     await expect(getProfile()).rejects.toThrow('Authentication required')
     expect(getUser).not.toHaveBeenCalled()
-    expect(resolveInferenceTier).not.toHaveBeenCalled()
+    expect(getStoredInferenceTier).not.toHaveBeenCalled()
   })
 
   it('serves the shared bypass identity when the dev bypass is on', async () => {

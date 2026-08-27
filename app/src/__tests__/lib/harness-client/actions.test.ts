@@ -63,11 +63,46 @@ vi.mock('../../../lib/harness-client/registry.server', () => ({ getAgent, getAge
 const dbListConversations = vi.fn(async () => [] as Array<Record<string, unknown>>)
 const dbPromoteConversation = vi.fn<(id: string, userId: string) => Promise<void>>(async () => {})
 const dbDeleteConversations = vi.fn(async (ids: string[]) => ids)
+const dbGetConversationInferenceTier = vi.fn<
+  (id: string, userId: string) => Promise<string | null>
+>(async () => null)
 vi.mock('../../../lib/db/conversations.server', () => ({
   listConversations: dbListConversations,
   promoteConversation: dbPromoteConversation,
   deleteConversations: dbDeleteConversations,
+  getConversationInferenceTier: dbGetConversationInferenceTier,
 }))
+
+// ── the tier resolver (its own order is pinned by lib/inference/tier.test.ts) ─
+const getStoredInferenceTier = vi.fn<(id: string) => Promise<'verda' | 'anthropic' | null>>(
+  async () => null,
+)
+vi.mock('../../../lib/db/user-prefs.server', async () => {
+  const actual = await vi.importActual<typeof import('../../../lib/db/user-prefs.server')>(
+    '../../../lib/db/user-prefs.server',
+  )
+  // Only the DB read is stubbed. `isInferenceTier` and `defaultInferenceTier`
+  // are the real ones, because `resolveTier` below is the real one.
+  return { ...actual, getStoredInferenceTier }
+})
+
+const chooseConversationTier = vi.fn<
+  (sessionId: string, userId: string, tier: unknown) => Promise<'verda' | 'anthropic'>
+>(async (_s, _u, tier) => tier as 'verda' | 'anthropic')
+const verdaConfigured = vi.fn(() => true)
+vi.mock('../../../lib/inference/tier.server', async () => {
+  const actual = await vi.importActual<typeof import('../../../lib/inference/tier.server')>(
+    '../../../lib/inference/tier.server',
+  )
+  return {
+    // The ORDER is the real implementation: the list's glyph and the switch have
+    // to reach the same answer the turn runner does, and a stubbed resolver here
+    // would assert that this module calls something rather than that it agrees.
+    resolveTier: actual.resolveTier,
+    chooseConversationTier: (s: string, u: string, t: unknown) => chooseConversationTier(s, u, t),
+    verdaConfigured: () => verdaConfigured(),
+  }
+})
 
 // ── auth ────────────────────────────────────────────────────────────────────
 const isBypassEnabled = vi.fn(() => true)
@@ -91,6 +126,10 @@ beforeEach(() => {
   isBypassEnabled.mockReturnValue(true)
   loadSession.mockResolvedValue(null)
   dbDeleteConversations.mockImplementation(async (ids: string[]) => ids)
+  dbGetConversationInferenceTier.mockResolvedValue(null)
+  getStoredInferenceTier.mockResolvedValue(null)
+  verdaConfigured.mockReturnValue(true)
+  chooseConversationTier.mockImplementation(async (_s, _u, tier) => tier as 'verda' | 'anthropic')
 })
 
 describe('processMessage / processMessageWithAgent', () => {
@@ -191,6 +230,7 @@ describe('sidebar actions', () => {
         kind: 'conversation',
         source: 'chat',
         status: 'done',
+        inferenceTier: 'verda',
         updatedAt: new Date('2026-01-02T03:04:05.000Z'),
       },
       {
@@ -200,9 +240,14 @@ describe('sidebar actions', () => {
         kind: 'action',
         source: 'post',
         status: 'running',
+        // No tier of its own — a legacy row, or an action seeded before one was
+        // resolved. It resolves through the seed below rather than showing
+        // nothing, because the glyph is on every row.
+        inferenceTier: null,
         updatedAt: new Date('2026-01-01T00:00:00.000Z'),
       },
     ])
+    getStoredInferenceTier.mockResolvedValue('anthropic')
 
     const rows = await actions.listConversations()
 
@@ -215,11 +260,17 @@ describe('sidebar actions', () => {
       kind: 'conversation',
       source: 'chat',
       status: 'done',
+      inferenceTier: 'verda',
       updatedAt: '2026-01-02T03:04:05.000Z',
     })
     // A removed agent leaves icon/accent undefined rather than breaking the list.
     expect(rows[1].agentIcon).toBeUndefined()
     expect(rows[1].agentAccent).toBeUndefined()
+    // Resolved, never null: an untiered row falls through to the seed, so every
+    // row carries an answer the sidebar can render.
+    expect(rows[1].inferenceTier).toBe('anthropic')
+    // One seed read for the whole list, not one per row.
+    expect(getStoredInferenceTier).toHaveBeenCalledTimes(1)
   })
 
   it('returns an empty list rather than throwing for an unauthenticated page load', async () => {
@@ -286,5 +337,70 @@ describe('regenerateConversationTitle', () => {
     loadSession.mockResolvedValue(null)
     await expect(actions.regenerateConversationTitle('gone')).resolves.toBeNull()
     expect(runRegenerateTitle).not.toHaveBeenCalled()
+  })
+})
+
+describe('getConversationTier / setConversationTier — the switch’s RPC surface', () => {
+  it('answers for the conversation, resolving an untiered row through the seed', async () => {
+    getStoredInferenceTier.mockResolvedValue('anthropic')
+    dbGetConversationInferenceTier.mockResolvedValue('verda')
+    await expect(actions.getConversationTier('c1')).resolves.toEqual({
+      tier: 'verda',
+      verdaAvailable: true,
+    })
+
+    // Every chat before its first message: no row, so the answer is the seed —
+    // which is exactly what that chat's first turn will record.
+    dbGetConversationInferenceTier.mockResolvedValue(null)
+    await expect(actions.getConversationTier('never-persisted')).resolves.toMatchObject({
+      tier: 'anthropic',
+    })
+  })
+
+  it('reads under the SESSION’s user, never a supplied one', async () => {
+    isBypassEnabled.mockReturnValue(false)
+    await actions.getConversationTier('c1')
+    expect(dbGetConversationInferenceTier).toHaveBeenCalledWith('c1', 'entra-user')
+    expect(getStoredInferenceTier).toHaveBeenCalledWith('entra-user')
+  })
+
+  it('tells the switch to disable the private position on an unconfigured deployment', async () => {
+    verdaConfigured.mockReturnValue(false)
+    await expect(actions.getConversationTier('c1')).resolves.toMatchObject({
+      verdaAvailable: false,
+    })
+  })
+
+  it('writes against the session’s user, and takes no owner argument', async () => {
+    await expect(actions.setConversationTier('c1', 'verda')).resolves.toEqual({
+      tier: 'verda',
+      verdaAvailable: true,
+    })
+    expect(chooseConversationTier).toHaveBeenCalledWith('c1', 'bypass-user', 'verda')
+    // Two arguments — the conversation and the tier. A third for the owner would
+    // let the caller choose whose conversation to re-route.
+    expect(actions.setConversationTier.length).toBe(2)
+  })
+
+  it('refuses an unauthenticated caller before writing anything', async () => {
+    isBypassEnabled.mockReturnValue(false)
+    getAuthenticatedUser.mockRejectedValueOnce(new Error('Authentication required'))
+
+    await expect(actions.setConversationTier('c1', 'verda')).rejects.toThrow(
+      'Authentication required',
+    )
+    expect(chooseConversationTier).not.toHaveBeenCalled()
+  })
+
+  it('reports the refusal rather than settling the switch on a tier it did not get', async () => {
+    // The resolver refuses the private position on a deployment with no
+    // endpoint. A switch that swallowed that would show one tier while the next
+    // turn ran on another, which is worse than no switch at all.
+    chooseConversationTier.mockRejectedValueOnce(
+      new Error('The self-hosted inference endpoint is not configured on this deployment'),
+    )
+    await expect(actions.setConversationTier('c1', 'verda')).rejects.toThrow(
+      /not configured on this deployment/,
+    )
   })
 })

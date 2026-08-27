@@ -60,6 +60,11 @@ const AGENTS = [
 ]
 const getAgentList = vi.fn(async () => AGENTS)
 
+const getConversationTier = vi.fn(async () => ({ tier: 'anthropic', verdaAvailable: true }))
+const setConversationTier = vi.fn(async (_id: string, tier: string) => ({
+  tier,
+  verdaAvailable: true,
+}))
 vi.mock('~/lib/harness-client', async () => {
   const graph = await import('~/lib/harness-client/graph-extractor')
   const refs = await import('~/lib/harness-client/reference-extractor')
@@ -71,6 +76,11 @@ vi.mock('~/lib/harness-client', async () => {
     rejectAction,
     promoteAction,
     getAgentList,
+    // The tier switch beside the agent selector reads on mount and on every
+    // session change. Its own behaviour is `ConversationTierSwitch.test.tsx`;
+    // here it only has to answer, so the header renders.
+    getConversationTier,
+    setConversationTier,
   }
 })
 
@@ -224,6 +234,48 @@ describe('ChatInterface — hydration', () => {
     await settle()
 
     expect(transcript(container)).toContain('Start a conversation')
+  })
+
+  it('does not let a LATE hydration wipe the turn the user already sent', async () => {
+    // Caught by `05-multi-turn.browser.ts`, pinned here because it is provable
+    // at this layer and layer 3 costs minutes.
+    //
+    // A brand-new chat REJECTS `loadConversation` — there is no row yet — and
+    // that rejection is a network round trip. The effect's "a run is in flight,
+    // leave the buffer alone" guard sat only at ENTRY, so a rejection landing
+    // after the first send replaced the user's message and its answer with a
+    // planted welcome bubble: nothing wrong on the wire, a transcript missing
+    // its first exchange on screen.
+    //
+    // The greeting is no longer planted at all — an empty transcript is what
+    // makes `ChatMessages` render the selected agent's own welcome — so what is
+    // pinned here is the property that outlives the plant: a hydration that
+    // answers late writes NOTHING over a turn that has already happened.
+    let rejectLoad: ((err: Error) => void) | undefined
+    loadConversation.mockReturnValue(
+      new Promise((_resolve, reject) => {
+        rejectLoad = reject
+      }),
+    )
+
+    const host = makeHost()
+    const { container } = host.mount(() => <ChatInterface sessionId="s-late" />)
+    await settle()
+
+    send(container, 'the first question')
+    await settle()
+    expect(host.registry.messages('s-late').map((m) => m.content)).toContain('the first question')
+
+    // The hydration finally answers, after the turn has come and gone.
+    rejectLoad?.(new Error('not found'))
+    await settle()
+
+    // The turn survives, and it is still the FIRST thing in the transcript:
+    // nothing was written in front of it and nothing replaced it, whichever of
+    // the two round trips lands first.
+    const contents = host.registry.messages('s-late').map((m) => m.content)
+    expect(contents).toContain('the first question')
+    expect(contents[0]).toBe('the first question')
   })
 
   it('rehydrates a persisted thread, reporting its agent and replaying its events', async () => {

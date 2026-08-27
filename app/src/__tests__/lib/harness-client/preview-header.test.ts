@@ -33,9 +33,6 @@ vi.mock('../../../lib/auth/dev-bypass', () => ({
 const getStoredInferenceTier = vi.fn<(id: string) => Promise<'verda' | 'anthropic' | null>>(
   async () => null,
 )
-const setStoredInferenceTier = vi.fn<(id: string, tier: 'verda' | 'anthropic') => Promise<void>>(
-  async () => {},
-)
 vi.mock('../../../lib/db/user-prefs.server', async () => {
   const actual = await vi.importActual<typeof import('../../../lib/db/user-prefs.server')>(
     '../../../lib/db/user-prefs.server',
@@ -43,8 +40,6 @@ vi.mock('../../../lib/db/user-prefs.server', async () => {
   return {
     ...actual,
     getStoredInferenceTier: (id: string) => getStoredInferenceTier(id),
-    setStoredInferenceTier: (id: string, tier: 'verda' | 'anthropic') =>
-      setStoredInferenceTier(id, tier),
   }
 })
 
@@ -66,7 +61,6 @@ vi.mock('../../../lib/metrics/preview-counters.server', () => ({
 import {
   getPreviewHeaderState,
   igniteVerdaBox,
-  setPreviewInferenceTier,
 } from '../../../lib/harness-client/preview-header.server'
 import { noteCallLatency, resetCallLatency } from '../../../lib/metrics/call-latency.server'
 import { resetVerdaWake, VERDA_WAKE_FAILED } from '../../../lib/inference/wake.server'
@@ -156,7 +150,7 @@ afterEach(() => {
 })
 
 describe('getPreviewHeaderState', () => {
-  it('reports the signed-in user’s tier and the counters', async () => {
+  it('reports the tier a new chat starts on, and the counters', async () => {
     configureVerda()
     getStoredInferenceTier.mockResolvedValue('anthropic')
 
@@ -224,58 +218,11 @@ describe('getPreviewHeaderState', () => {
   })
 })
 
-describe('setPreviewInferenceTier', () => {
-  it('stores the choice against the SESSION’s user, never a supplied one', async () => {
-    configureVerda()
-    await setPreviewInferenceTier('anthropic')
-
-    expect(setStoredInferenceTier).toHaveBeenCalledWith('user-1', 'anthropic')
-    // The signature takes exactly one argument — the tier. An owner id here
-    // would let the caller choose whose preference to write.
-    expect(setPreviewInferenceTier.length).toBe(1)
-  })
-
-  it('returns the state the header should now show, from the server', async () => {
-    configureVerda()
-    getStoredInferenceTier.mockResolvedValue('verda')
-
-    const state = await setPreviewInferenceTier('verda')
-    expect(state.tier).toBe('verda')
-  })
-
-  it('refuses an unauthenticated caller before writing', async () => {
-    configureVerda()
-    getAuthenticatedUser.mockRejectedValue(new Error('Unauthorized'))
-
-    await expect(setPreviewInferenceTier('verda')).rejects.toThrow('Unauthorized')
-    expect(setStoredInferenceTier).not.toHaveBeenCalled()
-  })
-
-  it('refuses a tier it does not recognise rather than storing it', async () => {
-    await expect(setPreviewInferenceTier('openai')).rejects.toThrow(/Unknown inference tier/)
-    await expect(setPreviewInferenceTier(null)).rejects.toThrow(/Unknown inference tier/)
-    await expect(setPreviewInferenceTier({ tier: 'verda' })).rejects.toThrow(
-      /Unknown inference tier/,
-    )
-    expect(setStoredInferenceTier).not.toHaveBeenCalled()
-  })
-
-  it('refuses the verda position when the endpoint is unconfigured', async () => {
-    // Storing it would park a preference that `runWithInferenceTier` throws on,
-    // so the user's next message breaks — and the alternative the flag exists
-    // to prevent (quietly running on Anthropic instead) is worse still.
-    await expect(setPreviewInferenceTier('verda')).rejects.toThrow(
-      /self-hosted inference endpoint is not configured/,
-    )
-    expect(setStoredInferenceTier).not.toHaveBeenCalled()
-  })
-
-  it('still allows opting OUT when the endpoint is unconfigured', async () => {
-    await expect(setPreviewInferenceTier('anthropic')).resolves.toMatchObject({
-      tier: 'anthropic',
-    })
-  })
-})
+// The SETTER moved with the switch: it is `setConversationTier` in
+// `harness-client/actions.server.ts` now, and its tests moved with it (the
+// owner-from-session rule, the unknown-tier refusal, the unconfigured-verda
+// refusal, and that opting OUT still works). This module no longer changes
+// anything — the strip describes the box and the deployment, not a conversation.
 
 describe('igniteVerdaBox', () => {
   it('authenticates before it starts anything', async () => {

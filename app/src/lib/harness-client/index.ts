@@ -18,9 +18,12 @@ export {
   listConversations,
   loadConversation,
   regenerateConversationTitle,
+  getConversationTier,
+  setConversationTier,
   type ConversationSummary,
+  type ConversationTierState,
   type LoadedConversation,
-  type ReplayedMessage
+  type ReplayedMessage,
 } from './actions.server'
 
 // Agent Registry - MUST be imported separately to avoid loading all example agents
@@ -28,16 +31,13 @@ export {
 export type { AgentConfig } from './registry.server'
 
 // Graph Extraction (client-safe)
-export {
-  extractGraphElements,
-  extractGraphFromResult
-} from './graph-extractor'
+export { extractGraphElements, extractGraphFromResult } from './graph-extractor'
 
 // Reference Extraction (client-safe) — retriever citations
 export {
   extractReferences,
   referencesForDoc,
-  type OpenReferenceTarget
+  type OpenReferenceTarget,
 } from './reference-extractor'
 
 // Types

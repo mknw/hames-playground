@@ -121,12 +121,11 @@ describe('two conversations in flight together', () => {
   it.runIf(IS_HERMETIC)(
     'keeps each conversation on its own tier when the two run together',
     async () => {
-      // Both conversations belong to the same (bypass) user, so the stored
-      // preference cannot differ between them — the per-run scope is what has to
-      // hold, and the only way to open two different ones concurrently is to
-      // start each turn under a different preference. Setting it between the two
-      // `runTurn` calls is exactly how the header switch behaves when a user
-      // flips it while a turn is already running.
+      // Two conversations of the same (bypass) user, each started under a
+      // different seed — which is what the per-conversation switch does when a
+      // user flips it and opens a new chat while another is still running. What
+      // has to hold is the per-run SCOPE: each turn keeps the tier it started
+      // under even though the seed moved underneath it.
       await app.setTier('anthropic')
       app.fakeLlm.arm({ kind: 'cold-start', ms: COLD_MS, times: 1 })
       const slow = app.runTurn(newSessionId('tier-slow'), 'How many nodes are in the graph?')

@@ -33,7 +33,8 @@
 import { getAuthenticatedUser } from './server'
 import { BYPASS_USER, isBypassEnabled } from './dev-bypass'
 import { getUser } from './users.server'
-import { resolveInferenceTier } from '../db/user-prefs.server'
+import { getStoredInferenceTier } from '../db/user-prefs.server'
+import { resolveTier } from '../inference/tier.server'
 import type { InferenceTier } from '../harness-patterns/clients.server'
 
 async function requireUser(): Promise<{ id: string; email: string; displayName: string | null }> {
@@ -54,10 +55,12 @@ export interface ProfileView {
    *  that predates the table. */
   firstLogin: number | null
   lastLogin: number | null
-  /** The tier this user's next turn will actually run on: their stored choice,
-   *  else the deployment's default. Read through `resolveInferenceTier`, the
-   *  single resolver the turn runner and the header switch also use, so this
-   *  page cannot show one tier while the run takes another. */
+  /** The tier this user's NEXT NEW chat starts on: their last-used choice,
+   *  else the deployment's default. Read through `resolveTier` — the one
+   *  resolver the turn runner and the conversation switch also go through, so
+   *  this page cannot show a tier the run does not take. It is the SEED and not
+   *  a per-conversation answer: every thread now carries its own tier, which is
+   *  its row's business and not this page's. */
   tier: InferenceTier
 }
 
@@ -67,7 +70,10 @@ export async function getProfile(): Promise<ProfileView> {
   // The durable record is the `users` row (refreshed from Entra at every
   // sign-in). The session's own snapshot is the fallback, not the primary: a
   // bypassed dev user has no row at all.
-  const [record, tier] = await Promise.all([getUser(caller.id), resolveInferenceTier(caller.id)])
+  const [record, seed] = await Promise.all([getUser(caller.id), getStoredInferenceTier(caller.id)])
+  // No conversation to ask about here, so the seed decides — `resolveTier`
+  // falls to the deployment default when there is not even one of those.
+  const tier = resolveTier(null, seed)
   return {
     email: record?.email ?? caller.email,
     displayName: record?.displayName ?? caller.displayName,

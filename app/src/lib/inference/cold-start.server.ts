@@ -2,8 +2,9 @@
  * Cold-start notice — Server Only
  *
  * The self-hosted deployment scales to zero, so the first call after an idle
- * period pays a container start plus a 27B weight load: **146 seconds**,
- * measured against the live deployment on 2026-08-26 (PR #273). For that whole
+ * period pays a container start plus a 27B weight load: **71.7s, 146s and
+ * ~360s** on the three occasions it has been measured against the live
+ * deployment (2026-08-26, #273/#279, and 2026-08-27). For that whole
  * window the chat produces nothing — the SSE keep-alive proves the connection
  * is alive but is invisible to a human by construction
  * (`SSE_KEEPALIVE_MS`), which is why #273 left "no user-visible signal that a
@@ -36,7 +37,7 @@
  * licence, because a wrong reading here poisons every future estimate — and in
  * the understating direction, which is the dishonest one: a four-second warm
  * call entering the history as a "cold start" makes the notice promise "~10
- * sec" for a 146-second wait, with `basis: 'measured'` behind it.
+ * sec" for a multi-minute wait, with `basis: 'measured'` behind it.
  *
  * So recording is gated **twice**, because neither gate is sufficient alone.
  *
@@ -93,14 +94,27 @@ assertServerOnImport()
 /**
  * The estimate used until this process has measured a cold start of its own.
  *
- * 146_000 ms is the single reading taken against the live deployment on
- * 2026-08-26 and written up in `baml_src/verda-client.baml` and CLAUDE.md: one
- * completion into a sleeping box took 146s. It is deliberately ONE named
- * constant with its provenance attached rather than a rounded "about two
- * minutes" spelled into a label — a number the UI states as an expectation has
- * to be traceable to something that happened.
+ * **360_000 ms**, raised from 146_000 on 2026-08-27. Three readings exist
+ * against the live deployment, all of them real and all of them of the same
+ * box: **71.7s** and **146s** (2026-08-26, #273/#279) and **~360s**
+ * (2026-08-27, the reading that also overran the wake's old 300s bound).
+ *
+ * This is the LARGEST of the three and deliberately not their median, because
+ * the two errors are not symmetric and the owner settled the direction: a
+ * pessimistic countdown costs a user a spinner that clears early, and an
+ * optimistic one is a promise the box breaks — which is the exact failure the
+ * notice was built to end (#273's D-c was "a user watching a still screen has no
+ * way to tell a warming GPU from a hung app"). A "~2 min" that runs on for
+ * another four minutes tells them nothing they can trust twice.
+ *
+ * It is deliberately ONE named constant with its provenance attached rather than
+ * a rounded "about six minutes" spelled into a label — a number the UI states as
+ * an expectation has to be traceable to something that happened. And it is a
+ * FALLBACK: any process that has measured cold starts of its own reports their
+ * median instead, with `basis: 'measured'`, so a deployment faster than this one
+ * stops being described by it after the first wait.
  */
-export const COLD_START_FALLBACK_MS = 146_000
+export const COLD_START_FALLBACK_MS = 360_000
 
 /**
  * How many measured cold starts the estimate is taken over.
@@ -115,23 +129,43 @@ export const COLD_START_WINDOW = 8
 /**
  * Shortest duration the history will accept as a cold start.
  *
- * A quarter of {@link COLD_START_FALLBACK_MS} — 36.5s. The recording gate in
- * {@link noteVerdaCallStarting} can only prove that THIS process was quiet for
- * longer than the scale-down it was configured with (see the module docstring),
- * and two ordinary situations make that false: a `VERDA_SCALEDOWN_SECONDS`
- * lower than the deployment's own, and a second app instance. Both let a warm
- * ~4s call through the gate, and five of those in an eight-sample window pull
- * the median to 4s while still reporting `basis: 'measured'`.
+ * 36.5s. The recording gate in {@link noteVerdaCallStarting} can only prove that
+ * THIS process was quiet for longer than the scale-down it was configured with
+ * (see the module docstring), and two ordinary situations make that false: a
+ * `VERDA_SCALEDOWN_SECONDS` lower than the deployment's own, and a second app
+ * instance. Both let a warm ~4s call through the gate, and five of those in an
+ * eight-sample window pull the median to 4s while still reporting
+ * `basis: 'measured'`.
  *
  * This is the backstop that cannot be misconfigured. Nothing anywhere near this
- * fast starts a container and loads 27B of weights — the one measured cold start
- * is 146s and the load test's WARM p95 at 8-way concurrency is 9.9s — so a
- * reading below the floor is a warm call the gate misread, and dropping it
- * cannot cost a real cold start. Deliberately generous rather than tight: the
- * cost of dropping a genuine 30s cold start is one lost sample, and the cost of
- * keeping a warm one is a confidently wrong promise to every future user.
+ * fast starts a container and loads 27B of weights — the FASTEST cold start ever
+ * measured on this deployment is 71.7s and the load test's WARM p95 at 8-way
+ * concurrency is 9.9s — so a reading below the floor is a warm call the gate
+ * misread, and dropping it cannot cost a real cold start. Deliberately generous
+ * rather than tight: the cost of dropping a genuine 30s cold start is one lost
+ * sample, and the cost of keeping a warm one is a confidently wrong promise to
+ * every future user.
+ *
+ * **ITS OWN LITERAL SINCE 2026-08-27, where it used to be a quarter of
+ * {@link COLD_START_FALLBACK_MS}.** The derivation was arithmetic convenience,
+ * not a relationship: the two constants answer different questions and move on
+ * different evidence. The fallback is a claim about how long a cold start
+ * TYPICALLY takes, and it errs LONG on purpose; the floor is a claim about the
+ * fastest one that could possibly be real, and it must sit under the fastest one
+ * ever seen. Keeping them tied broke the moment the fallback rose to 360s — a
+ * derived floor would have become 90s and rejected the genuine 71.7s reading,
+ * i.e. erring long on the estimate would have silently started discarding
+ * measurements. So the floor stays where it was, and `cold-start.test.ts` pins it
+ * inside the band the two live numbers define: comfortably above the 9.9s warm
+ * p95, comfortably below the 71.7s cold start.
+ *
+ * The poll gives it a second, mechanical reading it did not have before. With a
+ * 30s per-attempt timeout and a ~5s gap (`wake.server.ts`), a wake that needed
+ * even ONE retry has taken at least 35s — so a reading under this floor is
+ * necessarily a wake whose FIRST attempt answered, which is a box that was
+ * already up.
  */
-export const COLD_START_PLAUSIBILITY_FLOOR_MS = COLD_START_FALLBACK_MS / 4
+export const COLD_START_PLAUSIBILITY_FLOOR_MS = 36_500
 
 /** Warm states that count as PROOF the box is up. Everything else — `starting`,
  *  `cold`, `unknown` — shows the notice. */
@@ -288,10 +322,11 @@ export function noteVerdaCallStarting(now: number = Date.now()): void {
  * A call to the box finished. When it is the one this turn announced a cold
  * start for, its duration becomes the next estimate's raw material.
  *
- * `durationMs` is BAML's own `FunctionLog.timing` for the call — the same
- * number the latency window uses — so the cold start is measured by the thing
- * that waited for it rather than by a stopwatch around the adapter. Absent
- * means BAML measured nothing, which is not a zero.
+ * `durationMs` is the wake poll's TOTAL wait — first attempt's start to the
+ * attempt that answered (`wake.server.ts`), which is what the user actually sat
+ * through and therefore what the countdown has to predict. Absent means the
+ * caller measured nothing, which is not a zero: a turn that ATTACHED to a poll
+ * already in flight passes `undefined` rather than its own fragment of the wait.
  */
 export function settleColdStart(durationMs: number | undefined): void {
   const watch = watchStore.getStore()

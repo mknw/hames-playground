@@ -201,14 +201,25 @@ two steps later, blaming the redirect for a stale vinxi.
 | `TEST_DATABASE_URL`           | `…/kgagent_test_browser` | This suite's OWN throwaway database. Point two suites at one and their dev-bypass identities still keep them apart. |
 | `BAML_LOG`                    | `warn`                   | Passed through to the dev server.                                                                                   |
 
-One value is **not** a knob and is set unconditionally: `VERDA_SCALEDOWN_SECONDS=2`
-on the server under test. The cold-start notice only fires when nothing says the
-box is up, and a completed self-hosted call marks it warm for the whole
-scale-down window — with the shipped default (300s), the suite's own preflight
-would leave the box "warm" for the entire run and scenario 2 could never reach
-the feature. See `lib/env.ts`. The cost is stated there too: this suite says
-nothing about the shipped window itself, only about what happens on either side
-of it.
+Two values are **not** knobs and are set unconditionally on the server under
+test, both in `global-setup.ts`:
+
+- `VERDA_SCALEDOWN_SECONDS=2`. The cold-start notice only fires when nothing says
+  the box is up, and a completed self-hosted call marks it warm for the whole
+  scale-down window — with the shipped default (300s), the suite's own preflight
+  would leave the box "warm" for the entire run and scenario 2 could never reach
+  the feature. See `lib/env.ts`. The cost is stated there too: this suite says
+  nothing about the shipped window itself, only about what happens on either side
+  of it.
+- `VERDA_WAKE_ATTEMPT_TIMEOUT_MS=600000`. The wake is a POLL, so its shipped 30s
+  per-attempt bound would put a clock back into the one scenario #280 took the
+  clocks out of: scenario 2 parks the wake and then makes browser assertions
+  against a turn that provably cannot advance, and a machine slow enough to spend
+  30s on them would watch the poll abandon the parked request and send a second —
+  turning `held.length === 1` red for the load on the box rather than for
+  anything about the app. Ten minutes outlasts any scenario's hold, so one parked
+  wake stays one parked wake. What the poll RETRIES is pinned a layer down, in
+  `app/e2e/scenarios/08-cold-start-ux` and `verda-wake.test.ts`.
 
 ## The scenarios
 

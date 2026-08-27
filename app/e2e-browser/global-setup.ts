@@ -86,6 +86,17 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     // would leave the box "warm" for the whole run and the cold-start notice
     // could never fire again.
     VERDA_SCALEDOWN_SECONDS: String(VERDA_SCALEDOWN_SECONDS),
+    // The wake is a POLL since 2026-08-27, and its shipped 30s per-attempt bound
+    // would put a clock back into the one scenario #280 took the clocks OUT of.
+    // Scenario 2 PARKS the wake ping and then makes several browser assertions
+    // against a turn that provably cannot advance; with a 30s bound, a machine
+    // slow enough to spend 30s on those assertions would see the poll abandon the
+    // parked request and send a second, and `held.length === 1` would go red for
+    // the load on the box rather than for anything about the app. Ten minutes is
+    // longer than any scenario holds a request (the fake's own fuse is 60s), so
+    // one parked wake stays one parked wake. What the poll RETRIES is covered a
+    // layer down, in `app/e2e/scenarios/08-cold-start-ux` and `verda-wake.test.ts`.
+    VERDA_WAKE_ATTEMPT_TIMEOUT_MS: String(10 * 60 * 1000),
     // The Anthropic half, which has no such seam. See
     // `src/lib/inference/dev-fake-inference.server.ts`.
     E2E_FAKE_INFERENCE_URL: backend.llm.baseUrl,

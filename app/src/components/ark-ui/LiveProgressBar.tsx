@@ -28,8 +28,9 @@
  * (`warming`), the same mounted shell renders a SPINNER and a counting-down
  * estimate INSTEAD of the bar. The bar's denominator is seeded by the first
  * event of the turn, so without this it would appear at 0/N and sit there for
- * the whole cold start — measured at 146s on 2026-08-26 — which reads as a
- * hung chat rather than as a wait.
+ * the whole cold start — measured at 71.7s, 146s and ~360s on the three
+ * occasions it has been timed — which reads as a hung chat rather than as a
+ * wait.
  *
  * The two variants share the avatar and the outer row, and the column reserves
  * the same `min-h` in BOTH, so the swap changes what is in the box and never

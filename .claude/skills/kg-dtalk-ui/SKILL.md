@@ -96,9 +96,9 @@ them is the whole theming story:
 | `dark-bg-*`, `dark-text-*`, `dark-border-*`, `neon-*`, `cyber-*`              | fixed hexes   | **no** — the same colour in either mode |
 
 **Write `ui-*`.** The fixed family is not a second option for chrome; what is
-left of it is _data_ colour — the Cytoscape node/edge styles, the per-turn and
-per-agent graph palettes in `lib/turn-colors.ts` and `lib/agent-palette.ts`,
-xterm's terminal theme. None of those can read a CSS variable, which is the
+left of it is _data_ colour — the Cytoscape node/edge styles, the per-agent
+graph palette in `lib/agent-palette.ts` (`lib/turn-colors.ts` was its per-turn
+twin, deleted with the All tab), xterm's terminal theme. None of those can read a CSS variable, which is the
 only reason they are still hexes. `cyber-{600,700,800}` (indigo) is the one
 chrome exception, kept fixed because it reads on both grounds.
 
@@ -185,6 +185,17 @@ the only two collections registered in `presetIcons` in `uno.config.ts`.
 - Size and colour the glyph with attributify (`w="5" h="5" text="ui-accent"`),
   not with an inline `style` object. Inline `style` on an icon is only correct
   when the colour is genuinely dynamic — see §4.
+- **A glyph needs a flex parent, or `w`/`h` do nothing.** The generated rule is
+  `width: 1em; height: 1em; background-color: currentColor` + a mask, and **no
+  `display`** — so on a bare inline element the box is ignored and the icon is
+  invisible with no error. Every house use puts the glyph in a `flex="~"` row,
+  which blockifies it; outside one, wrap it (`<div flex="~" justify="center">`).
+- **It also declares `color: inherit`**, which is why a glyph picks up its
+  surroundings — the tab strip's icons take the active tab's colour from the
+  trigger's inline `style`. When a CSS RULE has to set the colour instead,
+  remember that the utility layer comes after the preflights: a class-only
+  selector loses to `color: inherit` at equal specificity, and element+class
+  wins. That is why the citation mark's rule is `sup.doc-ref-mark`.
 
 Decorative glyphs sitting next to visible text take `aria-hidden="true"`. An
 icon that is the button's only content means the **button** needs an

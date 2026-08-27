@@ -159,7 +159,11 @@ describe('renderAssistantMarkdown — annotation spans', () => {
     expect(span).not.toBeNull()
     expect(span!.getAttribute('data-doc-id')).toBe('doc-1')
     expect(span!.getAttribute('title')).toBe('Open notes.md in viewer')
-    expect(host.querySelector('sup.doc-ref-mark')?.textContent).toBe('↗')
+    // The mark is an empty <sup> carrying an icon utility class — it was a "↗"
+    // character until the emoji sweep, so an empty textContent is the point.
+    const mark = host.querySelector('sup.doc-ref-mark')
+    expect(mark?.textContent).toBe('')
+    expect(mark?.classList.contains('i-material-symbols-arrow-outward')).toBe(true)
   })
 
   it('escapes a quote in a document id instead of letting it open a new attribute', () => {

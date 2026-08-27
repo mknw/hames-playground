@@ -1,11 +1,11 @@
 /**
  * turn-utils — the turn boundary in the accumulated event stream.
  *
- * `splitIntoTurns` / `extractTurnGraphElements` are exercised through the Turn
- * Explorer in `AllGraphTab.test.tsx`. What is covered here is
- * `findLastUserMessageIndex`, which became a shared export for SA-H7: the Data
- * Stash partition and the citation extractor both derive "this turn" from it,
- * and they must not disagree.
+ * `findLastUserMessageIndex` is the module's only export, and this file covers
+ * it. It became a shared one for SA-H7: the Data Stash partition and the
+ * citation extractor both derive "this turn" from it, and they must not
+ * disagree. (The per-turn graph derivation this header used to point at went
+ * with the "All" tab in the alpha sweep — `turn-utils.ts` records what left.)
  */
 import { describe, it, expect } from 'vitest'
 import { findLastUserMessageIndex } from '~/lib/turn-utils'

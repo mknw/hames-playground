@@ -269,11 +269,16 @@ const PromptAccordionItem = (props: {
           <span text="xs ui-text-tertiary">{props.hint}</span>
         </Show>
       </div>
+      {/* `flex` is load-bearing on the indicator for the reason ThemeSwitcher's
+          carries it: the icon utility sets no `display`, so an un-blockified
+          glyph ignores w/h and collapses. The colour stays on the indicator —
+          the utility declares `color: inherit`. */}
       <Accordion.ItemIndicator
-        text="xs ui-text-secondary"
+        flex="~"
+        text="ui-text-secondary"
         style={{ transition: 'transform 150ms', 'transform-origin': 'center' }}
       >
-        ▼
+        <span class="i-material-symbols-expand-more" w="4" h="4" aria-hidden="true" />
       </Accordion.ItemIndicator>
     </Accordion.ItemTrigger>
     <Accordion.ItemContent p="3" bg="ui-bg-secondary">

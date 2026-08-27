@@ -274,14 +274,16 @@ describe('GraphVisualization — mounting and elements', () => {
     const { container } = render(() => (
       <GraphVisualization
         elements={[]}
-        emptyIcon="🗄️"
+        emptyIconClass="i-material-symbols-database-outline"
         emptyMessage="No Neo4j graph data yet. Query your knowledge base to see results."
       />
     ))
     await tick()
 
     expect(container.textContent).toContain('No Neo4j graph data yet')
-    expect(container.textContent).toContain('🗄️')
+    // The glyph is an icon utility class, not a character in the text — an
+    // emoji here was what #294's follow-up swept out of the chrome.
+    expect(container.querySelector('.i-material-symbols-database-outline')).toBeTruthy()
     expect(container.textContent).toContain('Manual Cypher Query')
   })
 

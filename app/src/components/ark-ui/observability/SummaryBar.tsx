@@ -59,11 +59,13 @@ export const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void
             {fmtTok(tokenTotals().inputUncached)}
           </span>
           <Show when={tokenTotals().cacheRead > 0 || tokenTotals().cacheWrite > 0}>
-            <span text="sm violet-400" font="mono">
-              +{fmtTok(tokenTotals().cacheRead)}⚡
+            <span text="sm violet-400" font="mono" flex="~" items="center" gap="0.5">
+              +{fmtTok(tokenTotals().cacheRead)}
+              <span class="i-material-symbols-bolt" w="3.5" h="3.5" aria-hidden="true" />
             </span>
-            <span text="sm amber-400" font="mono">
-              +{fmtTok(tokenTotals().cacheWrite)}✎
+            <span text="sm amber-400" font="mono" flex="~" items="center" gap="0.5">
+              +{fmtTok(tokenTotals().cacheWrite)}
+              <span class="i-material-symbols-edit-outline" w="3.5" h="3.5" aria-hidden="true" />
             </span>
           </Show>
         </div>

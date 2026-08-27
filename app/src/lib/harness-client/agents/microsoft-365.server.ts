@@ -122,6 +122,10 @@ export const microsoft365Agent: AgentConfig = {
   id: 'microsoft-365',
   name: 'Microsoft 365',
   description: 'Answers from your own Microsoft 365 account (delegated, per-user via Entra)',
+  welcome:
+    "I read your own Microsoft 365 as you — today's calendar, recent mail and " +
+    'its attachments, and your OneDrive/SharePoint files. Ask what your day looks ' +
+    'like, or where a file got to.',
   icon: 'i-material-symbols-window-sharp',
   accent: 'blue',
   // Not an MCP gateway server: these tools run in-process so the per-user

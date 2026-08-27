@@ -39,7 +39,7 @@ describe('getEventPreview', () => {
         additional_calls: [{ tool_name: 'hset' }, { tool_name: 'sadd' }],
       },
     })
-    expect(preview).toBe('⚡×3 json_get, hset, sadd')
+    expect(preview).toBe('×3 json_get, hset, sadd')
   })
 
   it('truncates message content at 50 characters', () => {

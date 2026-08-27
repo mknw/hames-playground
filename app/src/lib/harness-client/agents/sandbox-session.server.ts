@@ -153,6 +153,10 @@ export const sandboxSessionAgent: AgentConfig = {
   name: 'Sandbox · Session',
   description:
     'Persistent sandbox VM shared across turns and with the interactive Shell — build incrementally, inspect files live.',
+  welcome:
+    'I have a Linux box for this conversation — I can write files and run shell ' +
+    'or Python in it, and it keeps everything between messages. The Terminal tab ' +
+    'opens the same box, and anything I put in /work/out is kept for next time.',
   icon: 'i-material-symbols-castle-outline',
   accent: 'orange',
   servers: [],

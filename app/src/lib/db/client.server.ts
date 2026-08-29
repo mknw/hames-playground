@@ -109,6 +109,31 @@ const SCHEMA_SQL = `
   ALTER TABLE conversations
     ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
 
+  -- Share-by-link. ONE column carries the whole sharing state: a row is
+  -- public-with-link exactly when \`share_token\` IS NOT NULL. A separate
+  -- boolean flag was the obvious alternative and is the worse one — a flag and
+  -- a token are two facts that can disagree, and the disagreement that matters
+  -- (flag off, token still resolving) is an unrevoked share that reads as
+  -- revoked everywhere in the UI.
+  --
+  -- Plaintext, deliberately, like \`kind\`/\`source\`/\`status\` and every
+  -- timestamp: SQL has to look the token UP, so an encrypted column could not
+  -- be indexed or compared. \`title\` and \`context\` stay encrypted — sharing
+  -- changes who may ask for a conversation, never how it is stored.
+  --
+  -- The index is UNIQUE and PARTIAL. Unique because a token is an
+  -- authenticator and two rows answering to one value is a bug that would
+  -- otherwise surface as "someone else's conversation"; partial because
+  -- unshared rows are the overwhelming majority and NULLs do not belong in an
+  -- authenticator's index. It is also what makes the public lookup an index
+  -- seek rather than a scan of every conversation ever.
+  ALTER TABLE conversations
+    ADD COLUMN IF NOT EXISTS share_token TEXT;
+  ALTER TABLE conversations
+    ADD COLUMN IF NOT EXISTS shared_at   TIMESTAMPTZ;
+  CREATE UNIQUE INDEX IF NOT EXISTS conversations_share_token_idx
+    ON conversations (share_token) WHERE share_token IS NOT NULL;
+
   -- Session ownership claims. A Data Stash upload can arrive before the
   -- session has any conversation row (a file dropped before the first chat
   -- message), so there is a window in which \`conversations.user_id\` cannot

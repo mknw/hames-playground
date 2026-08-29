@@ -3,6 +3,7 @@ import { useLocation } from '@solidjs/router'
 import { UserMenu } from '~/components/ark-ui/UserMenu'
 import { ThemeSwitcher } from '~/components/ark-ui/ThemeSwitcher'
 import { PreviewHeaderStrip } from '~/components/ark-ui/PreviewHeaderStrip'
+import { isPublicRoute, SHARE_ROUTE_PREFIX } from '~/lib/share-link'
 
 /**
  * Top bar. The old "Home"/"About" text links are gone (#132) — the chat is the
@@ -22,47 +23,64 @@ import { PreviewHeaderStrip } from '~/components/ark-ui/PreviewHeaderStrip'
  * page every poll is a rejected call — and since a first poll that fails now
  * says so rather than rendering nothing, leaving it in would greet every
  * signed-out visitor with a failure notice for a feature they cannot use yet.
+ *
+ * A shared-conversation page (`/s/:token`) hides BOTH clusters. The same
+ * argument covers the strip; the right-hand controls go for a different reason
+ * — the dashboard is another user's metrics, the user menu is a session the
+ * visitor does not have, and a read-only transcript that offers them is a page
+ * making promises it cannot keep. The theme switcher stays: it is the one
+ * control that is purely about how this page looks, it touches nothing but
+ * `localStorage`, and a shared link opened in a light-mode browser needs it.
  */
 export default function Nav() {
   const location = useLocation()
   const onDashboard = () => location.pathname === '/dashboard'
-  const onAuthRoute = () => location.pathname.startsWith('/auth')
+  /** Sign-in and the share page — neither has a session for the strip to read. */
+  const onPublicRoute = () => isPublicRoute(location.pathname)
+  /** The anonymous share page — no session, so no session-shaped controls. */
+  const onSharePage = () => location.pathname.startsWith(SHARE_ROUTE_PREFIX)
 
   return (
     <nav data-testid="app-header-strip" bg="ui-bg-secondary" border="b ui-border-primary">
       <ul text="ui-text-primary" p="3" container flex items-center>
         <li flex items-center>
-          <Show when={!onAuthRoute()}>
+          <Show when={!onPublicRoute()}>
             <PreviewHeaderStrip />
           </Show>
         </li>
         <li flex items-center gap-3 m="l-auto">
-          <a
-            href={onDashboard() ? '/' : '/dashboard'}
-            flex="~"
-            items="center"
-            justify="center"
-            w="10"
-            h="10"
-            rounded="full"
-            bg={onDashboard() ? 'cyber-700/40' : 'cyber-800/20 hover:cyber-700/30'}
-            border="1 cyber-700/50"
-            transition="all"
-            title={onDashboard() ? 'Back to chat' : 'Metrics dashboard — tokens, cache, costs'}
-            aria-label={onDashboard() ? 'Back to chat' : 'Metrics dashboard'}
-          >
-            <span
-              class={
-                onDashboard() ? 'i-material-symbols-chat-outline' : 'i-material-symbols-monitoring'
-              }
-              w="5"
-              h="5"
-              text="ui-accent"
-              aria-hidden="true"
-            />
-          </a>
+          <Show when={!onSharePage()}>
+            <a
+              href={onDashboard() ? '/' : '/dashboard'}
+              flex="~"
+              items="center"
+              justify="center"
+              w="10"
+              h="10"
+              rounded="full"
+              bg={onDashboard() ? 'cyber-700/40' : 'cyber-800/20 hover:cyber-700/30'}
+              border="1 cyber-700/50"
+              transition="all"
+              title={onDashboard() ? 'Back to chat' : 'Metrics dashboard — tokens, cache, costs'}
+              aria-label={onDashboard() ? 'Back to chat' : 'Metrics dashboard'}
+            >
+              <span
+                class={
+                  onDashboard()
+                    ? 'i-material-symbols-chat-outline'
+                    : 'i-material-symbols-monitoring'
+                }
+                w="5"
+                h="5"
+                text="ui-accent"
+                aria-hidden="true"
+              />
+            </a>
+          </Show>
           <ThemeSwitcher />
-          <UserMenu />
+          <Show when={!onSharePage()}>
+            <UserMenu />
+          </Show>
         </li>
       </ul>
     </nav>

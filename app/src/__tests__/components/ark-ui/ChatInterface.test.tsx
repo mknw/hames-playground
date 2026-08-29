@@ -81,6 +81,12 @@ vi.mock('~/lib/harness-client', async () => {
     // here it only has to answer, so the header renders.
     getConversationTier,
     setConversationTier,
+    // The header's share control reads its state on mount. Stubbed to "not
+    // shared" so this file stays about the chat view; the button's own flow is
+    // covered in `ShareConversationButton.test.tsx`.
+    getShareToken: async () => ({ token: null }),
+    shareConversation: async () => ({ token: null }),
+    unshareConversation: async () => {},
   }
 })
 

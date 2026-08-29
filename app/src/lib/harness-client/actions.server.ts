@@ -22,6 +22,9 @@ import {
   getConversationInferenceTier as dbGetConversationInferenceTier,
   setConversationPinned as dbSetConversationPinned,
   CONVERSATION_PIN_LIMIT,
+  shareConversation as dbShareConversation,
+  unshareConversation as dbUnshareConversation,
+  getShareToken as dbGetShareToken,
   type ConversationKind,
   type ConversationSource,
   type ConversationStatus,
@@ -170,6 +173,46 @@ export async function setConversationPinned(
   const user = await requireUser()
   const outcome = await dbSetConversationPinned(sessionId, user.id, pinned)
   return { outcome, limit: CONVERSATION_PIN_LIMIT }
+}
+
+// ============================================================================
+// Share by link (owner half)
+// ============================================================================
+//
+// The three actions below MUTATE and READ sharing state and are owner-scoped
+// through `requireUser()` like everything else in this module. The other half —
+// the anonymous read a share link performs — is deliberately NOT here: it lives
+// in `shared-conversation.server.ts`, alone, so that "this file's exports are
+// all owner-scoped" stays a property of a whole file rather than of a habit
+// (SD-13).
+
+/** The current share state of one of the caller's conversations. `null` when it
+ *  is not shared — and also when the id is not theirs or does not exist, which
+ *  the owner's own dialog cannot reach and which keeps this from being a probe
+ *  for whether an id exists. */
+export async function getShareToken(sessionId: string): Promise<{ token: string | null }> {
+  const user = await requireUser()
+  return { token: await dbGetShareToken(sessionId, user.id) }
+}
+
+/**
+ * Turn a conversation into a public-with-link one, or return the link it
+ * already has (see `shareConversation` in the repository for why re-sharing
+ * does not rotate).
+ *
+ * `token: null` means the mint matched no row of the caller's — in practice a
+ * conversation with no persisted turn yet, which the dialog reports rather than
+ * silently showing a dead link.
+ */
+export async function shareConversation(sessionId: string): Promise<{ token: string | null }> {
+  const user = await requireUser()
+  return { token: await dbShareConversation(sessionId, user.id) }
+}
+
+/** Revoke a share. Idempotent, and a no-op on an id that is not the caller's. */
+export async function unshareConversation(sessionId: string): Promise<void> {
+  const user = await requireUser()
+  await dbUnshareConversation(sessionId, user.id)
 }
 
 /**

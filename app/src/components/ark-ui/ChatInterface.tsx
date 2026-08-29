@@ -27,6 +27,7 @@ import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { AgentSelector } from './AgentSelector'
 import { ConversationTierSwitch } from './ConversationTierSwitch'
+import { ShareConversationButton } from './ShareConversationButton'
 import { LiveProgressBar } from './LiveProgressBar'
 import {
   approveAction,
@@ -610,6 +611,13 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           />
         </div>
         <ConversationTierSwitch sessionId={props.sessionId} onPendingWrite={setPendingTierWrite} />
+        {/* Share sits at the far end of the conversation header, after the
+            agent picker and the tier switch. It is not disabled during a turn:
+            sharing reads and writes one plaintext column and touches nothing
+            the run is using. */}
+        <div m="l-auto">
+          <ShareConversationButton sessionId={props.sessionId} />
+        </div>
       </div>
 
       {/* Messages — the live progress bar rides as a trailing slot so it

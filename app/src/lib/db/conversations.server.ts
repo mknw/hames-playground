@@ -19,6 +19,8 @@
  * runs SQL against it.
  */
 
+import { randomBytes } from 'node:crypto'
+
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { query } from './client.server'
 import type { QueryRunner } from './migrate-encryption.server'
@@ -862,6 +864,140 @@ export function deriveTitle(firstUserMessage: string): string | null {
   const cleaned = firstUserMessage.replace(/\s+/g, ' ').trim()
   if (!cleaned) return null
   return cleaned.length > 60 ? cleaned.slice(0, 60) + '…' : cleaned
+}
+
+// ============================================================================
+// Share by link
+// ============================================================================
+
+/**
+ * Bytes of entropy in a share token. 32 → 256 bits, base64url-encoded to 43
+ * characters.
+ *
+ * The token is the ONLY thing standing between an anonymous request and a
+ * decrypted conversation, so it is sized as an authenticator rather than as an
+ * id: it must survive being pasted into a chat, a bookmark bar and a browser
+ * history without becoming guessable by anyone who has seen a different one.
+ * A conversation id would have been the convenient choice and is exactly the
+ * wrong one — since URLs now carry ids (`?c=…`), an id that also granted access
+ * would make every bookmark a share.
+ */
+const SHARE_TOKEN_BYTES = 32
+
+/**
+ * The shape `SHARE_TOKEN_BYTES` of base64url produces, as a whole-string match.
+ *
+ * Used to reject a malformed token BEFORE it reaches the index probe. Not a
+ * security control — the unique index and the token's own entropy are that —
+ * but it keeps arbitrary browser-supplied text out of a query, and it makes the
+ * "unknown token" answer identical for garbage and for a revoked share.
+ */
+const SHARE_TOKEN_SHAPE = /^[A-Za-z0-9_-]{43}$/
+
+/** A conversation reached by share token: content, and nothing that identifies
+ *  its owner. `user_id` is deliberately absent from the projection — no caller
+ *  on the public path has any use for it, and a field that is never selected
+ *  cannot be returned by accident. */
+export interface SharedConversationRow {
+  id: string
+  title: string | null
+  serializedContext: string
+  sharedAt: Date
+}
+
+/**
+ * Make a conversation public-with-link, or return the link it already has.
+ *
+ * Owner-scoped like every other write here: a wrong `userId` matches no row and
+ * returns `null` rather than minting anything.
+ *
+ * **Sharing twice returns the SAME token** (`COALESCE`), which is the point of
+ * the whole function being an upsert rather than an assignment. The owner
+ * re-opens the dialog to copy a link they already sent; rotating on every open
+ * would silently break the copy they sent yesterday. Rotation happens on the
+ * one action that means it — {@link unshareConversation}, after which a fresh
+ * {@link shareConversation} mints a new value and the revoked one stays dead.
+ *
+ * **`updated_at` is left alone**, for {@link reapStuckConversations}' reason:
+ * the column is the app's record of *chat* activity — `countActiveUsers` reads
+ * exactly that, and the sidebar renders it as "x ago". Sharing is not a turn,
+ * and bumping it would reorder a sidebar and inflate an active-user count for
+ * an action that added no content. `shared_at` records when the share began,
+ * which is the thing that actually happened.
+ */
+export async function shareConversation(id: string, userId: string): Promise<string | null> {
+  const minted = randomBytes(SHARE_TOKEN_BYTES).toString('base64url')
+  const { rows } = await query<{ share_token: string }>(
+    `UPDATE conversations
+        SET share_token = COALESCE(share_token, $1),
+            shared_at   = COALESCE(shared_at, NOW())
+      WHERE id = $2 AND user_id = $3
+      RETURNING share_token`,
+    [minted, id, userId],
+  )
+  return rows.length > 0 ? rows[0].share_token : null
+}
+
+/**
+ * Revoke a share. The token is cleared, so the link that carried it stops
+ * resolving immediately and permanently — nothing anywhere else records it, and
+ * a later re-share mints a value unrelated to the revoked one.
+ *
+ * Owner-scoped; a wrong `userId` silently no-ops, the same contract as
+ * {@link deleteConversation}.
+ */
+export async function unshareConversation(id: string, userId: string): Promise<void> {
+  await query(
+    `UPDATE conversations SET share_token = NULL, shared_at = NULL
+      WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  )
+}
+
+/**
+ * The share token a conversation currently has, for its OWNER.
+ *
+ * `null` covers three states on purpose — not shared, not yours, not there —
+ * because the only caller is the owner's own share dialog, where the last two
+ * are unreachable, and conflating them costs the caller nothing while keeping
+ * this from becoming a probe for whether an id exists.
+ */
+export async function getShareToken(id: string, userId: string): Promise<string | null> {
+  const { rows } = await query<{ share_token: string | null }>(
+    'SELECT share_token FROM conversations WHERE id = $1 AND user_id = $2',
+    [id, userId],
+  )
+  return rows.length > 0 ? rows[0].share_token : null
+}
+
+/**
+ * Load a conversation by share token — the ONE read in this module that is not
+ * scoped to an owner, because on this path the token *is* the authorization.
+ *
+ * `null` for an unknown token, a revoked token and a malformed one alike: the
+ * caller cannot tell "never existed" from "was shared and is not any more",
+ * which is what keeps the public route's answer a 404 rather than a 403 that
+ * confirms a conversation is there.
+ *
+ * It selects content and `shared_at`, never `user_id`, `agent_id`, `kind`,
+ * `source` or `status` — see {@link SharedConversationRow}. What the *viewer*
+ * gets is narrowed once more above this, in the public `'use server'` module.
+ */
+export async function loadSharedConversation(token: string): Promise<SharedConversationRow | null> {
+  if (!SHARE_TOKEN_SHAPE.test(token)) return null
+  const { rows } = await query<{
+    id: string
+    title: string | null
+    context: unknown
+    shared_at: Date
+  }>('SELECT id, title, context, shared_at FROM conversations WHERE share_token = $1', [token])
+  if (rows.length === 0) return null
+  return {
+    id: rows[0].id,
+    title: decryptFieldOrNull(rows[0].title, 'conversations.title'),
+    serializedContext: decryptJsonb(rows[0].context, 'conversations.context'),
+    sharedAt: rows[0].shared_at,
+  }
 }
 
 // ============================================================================

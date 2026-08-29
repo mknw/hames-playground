@@ -32,10 +32,14 @@ vi.mock('~/lib/harness-client/preview-header.server', () => ({
   setPreviewInferenceTier: () => new Promise(() => {}),
 }))
 
-// The bar renders UserMenu, whose auth context is exercised elsewhere.
+// The bar renders UserMenu, whose auth context is exercised elsewhere. The
+// signed-in variant matters here for one case: `UserMenu` renders NOTHING
+// without a user, so "the share page has no user menu" would be vacuously true
+// against a signed-out stub.
+const [signedInUser, setSignedInUser] = createSignal<{ id: string; email: string } | null>(null)
 vi.mock('~/components/AuthProvider', () => ({
   useAuth: () => ({
-    user: () => null,
+    user: () => signedInUser(),
     loading: () => false,
     refetch: vi.fn(),
     signOut: vi.fn(async () => {}),
@@ -48,6 +52,7 @@ const { default: Nav } = await import('../../components/Nav')
 beforeEach(() => {
   localStorage.clear()
   setPathname('/')
+  setSignedInUser(null)
 })
 
 describe('Nav', () => {
@@ -80,6 +85,41 @@ describe('Nav', () => {
     expect(container.querySelector('button')!.getAttribute('title')).toMatch(
       /^Theme: (Light|Dark|System)$/,
     )
+  })
+
+  it('offers a visitor on a share link nothing they cannot have', () => {
+    // Signed IN, deliberately: someone who has a session can still open a share
+    // link, and that is the case where hiding the controls has to be a decision
+    // by this component rather than a side effect of `UserMenu` rendering
+    // nothing. The control assertion below is the same render on `/`.
+    setSignedInUser({ id: 'oid-1', email: 'ada@example.test' })
+    setPathname('/s/' + 'k'.repeat(43))
+    const { container } = render(() => <Nav />)
+
+    // No dashboard link (another user's metrics) and no user menu (a session
+    // the visitor does not have). A control that fails when pressed is a worse
+    // answer than one that is not there.
+    expect(container.querySelector('a')).toBeNull()
+    expect(container.querySelector('[role="group"][aria-label="Preview status"]')).toBeNull()
+
+    // The theme control stays: it is purely about how THIS page looks, touches
+    // nothing but localStorage, and a link opened in a light-mode browser needs
+    // it. `UserMenu` renders a button too, so its absence is what makes the
+    // count meaningful here.
+    const buttons = [...container.querySelectorAll('button')]
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].getAttribute('title')).toMatch(/^Theme: (Light|Dark|System)$/)
+  })
+
+  it('does render the user menu for that same user on an ordinary route', () => {
+    // The control for the case above: without this, "no user menu on /s/" would
+    // pass against a bar that never renders one at all.
+    setSignedInUser({ id: 'oid-1', email: 'ada@example.test' })
+    setPathname('/')
+    const { container } = render(() => <Nav />)
+
+    expect(container.querySelectorAll('button').length).toBeGreaterThan(1)
+    expect(container.querySelector('a')).not.toBeNull()
   })
 
   it('leaves the preview strip off the auth routes', () => {

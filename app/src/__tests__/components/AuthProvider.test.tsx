@@ -16,6 +16,9 @@ const getSessionUser = vi.fn<() => Promise<AuthUser | null>>()
 const isBypassEnabled = vi.fn(() => false)
 const navigate = vi.fn()
 const [pathname, setPathname] = createSignal('/')
+/** The query string, because the gate carries the WHOLE target across sign-in
+ *  and a conversation link is `/?c=…` — the interesting part is in here. */
+const [search, setSearch] = createSignal('')
 
 vi.mock('~/lib/auth/server', () => ({
   getSessionUser: () => getSessionUser(),
@@ -30,6 +33,9 @@ vi.mock('@solidjs/router', () => ({
   useLocation: () => ({
     get pathname() {
       return pathname()
+    },
+    get search() {
+      return search()
     },
   }),
   useNavigate: () => navigate,
@@ -47,6 +53,7 @@ beforeEach(() => {
   isBypassEnabled.mockReturnValue(false)
   navigate.mockReset()
   setPathname('/')
+  setSearch('')
 })
 
 describe('AuthProvider', () => {
@@ -131,6 +138,73 @@ describe('AuthProvider', () => {
     await tick()
 
     expect(navigate).not.toHaveBeenCalled()
+  })
+
+  it('carries a deep-linked conversation across sign-in', async () => {
+    setPathname('/')
+    setSearch('?c=8f14e45f-ceea-467a-9575-2c1c1a1a1a1a')
+    getSessionUser.mockResolvedValue(null)
+
+    render(() => (
+      <AuthProvider>
+        <div />
+      </AuthProvider>
+    ))
+    await tick()
+
+    // Without this a link a colleague sent lands the recipient on the front
+    // page after sign-in, having lost the conversation they were sent to.
+    expect(navigate).toHaveBeenCalledWith(
+      '/auth/signin?returnTo=%2F%3Fc%3D8f14e45f-ceea-467a-9575-2c1c1a1a1a1a',
+      { replace: true },
+    )
+  })
+
+  it('carries no target when there is nothing to come back to', async () => {
+    getSessionUser.mockResolvedValue(null)
+
+    render(() => (
+      <AuthProvider>
+        <div />
+      </AuthProvider>
+    ))
+    await tick()
+
+    // `/` is where sign-in lands anyway; a round trip through `returnTo` would
+    // be a longer URL saying the same thing.
+    expect(navigate).toHaveBeenCalledWith('/auth/signin', { replace: true })
+  })
+
+  it('renders a shared conversation for a visitor who has no session at all', async () => {
+    setPathname('/s/' + 'k'.repeat(43))
+    getSessionUser.mockResolvedValue(null)
+
+    const { container } = render(() => (
+      <AuthProvider>
+        <div data-testid="shared">a shared transcript</div>
+      </AuthProvider>
+    ))
+    await tick()
+
+    // The one page in the app that is served to someone who will never sign in.
+    // Redirecting here would make every share link a sign-in prompt.
+    expect(container.querySelector('[data-testid="shared"]')).toBeTruthy()
+    expect(navigate).not.toHaveBeenCalled()
+  })
+
+  it('does not treat a path that merely starts with /s as public', async () => {
+    setPathname('/sabotage')
+    getSessionUser.mockResolvedValue(null)
+
+    const { container } = render(() => (
+      <AuthProvider>
+        <div data-testid="app" />
+      </AuthProvider>
+    ))
+    await tick()
+
+    expect(container.querySelector('[data-testid="app"]')).toBeNull()
+    expect(navigate).toHaveBeenCalledWith('/auth/signin?returnTo=%2Fsabotage', { replace: true })
   })
 
   it('treats a failed session read as signed out instead of crashing', async () => {

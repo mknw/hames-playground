@@ -166,12 +166,14 @@ const ALLOWLIST: Exception[] = [
   },
   {
     file: 'src/routes/auth/signin.tsx',
-    match: 'href="/api/auth/login"',
+    match: 'href={loginHref()}',
     reason:
       "Starts the Entra sign-in redirect on the app's own endpoint and returns to this same " +
       'tab. In a new tab the OAuth callback would land in the popup and leave the tab the ' +
       'user is looking at signed out. (Its `rel="external"` is load-bearing for a different ' +
-      'reason — see the comment there.)',
+      'reason — see the comment there.) The href is computed since deep-linked conversation ' +
+      'URLs: it forwards `?returnTo=`, which `/api/auth/login` validates before signing it ' +
+      'into the handshake (`lib/auth/return-to.ts`).',
   },
   {
     file: 'src/components/AuthProvider.tsx',

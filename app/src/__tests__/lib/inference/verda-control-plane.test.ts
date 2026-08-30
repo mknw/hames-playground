@@ -341,6 +341,21 @@ describe('degradation', () => {
       await probeVerdaReplicas()
       expect(warn).toHaveBeenCalledTimes(2)
       expect(warn.mock.calls[1]?.[0]).toContain('HTTP 403')
+
+      // RECOVERY clears the memory: a later failure with a SEEN reason is a
+      // new transition too, and must warn again.
+      fetchMock = stubFetch({ status: 200 })
+      vi.stubGlobal('fetch', fetchMock)
+      resetControlPlaneCache()
+      await probeVerdaReplicas()
+      expect(warn).toHaveBeenCalledTimes(2)
+
+      fetchMock = stubFetch({ status: 500 })
+      vi.stubGlobal('fetch', fetchMock)
+      resetControlPlaneCache()
+      await probeVerdaReplicas()
+      expect(warn).toHaveBeenCalledTimes(3)
+      expect(warn.mock.calls[2]?.[0]).toContain('HTTP 500')
     } finally {
       warn.mockRestore()
     }

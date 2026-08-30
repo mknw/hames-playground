@@ -336,5 +336,6 @@ export async function probeVerdaReplicas(): Promise<VerdaControlPlaneProbe> {
 
   state.probe = { result, fetchedAt: Date.now() }
   if (!result.ok && result.reason) warnOnce(result.reason)
+  else if (result.ok) state.lastWarnedReason = null // recovered: a LATER failure with the same reason is a new transition
   return result
 }

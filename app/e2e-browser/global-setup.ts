@@ -93,7 +93,15 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     // `cold` assertion. Pointed at the SAME fake as the model endpoints, which
     // answers an empty replica list — the deterministic scaled-down observation
     // the pre-message display is built on.
-    VERDA_CONTROL_PLANE_BASE: backend.llm.baseUrl,
+    // The fake's `baseUrl` ends in `/v1` because the MODEL endpoints want it
+    // there, but the control plane is a different API whose paths (`/v1/oauth2/
+    // token`, `/v1/container-deployments/...`) carry the prefix themselves
+    // (`verda-control-plane.server.ts` appends them to the base) — handing it
+    // the model base verbatim produced `…/v1/v1/oauth2/token`, the fake's routes
+    // matched nothing, and the strip degraded to `unknown`, red for all of
+    // scenario 9. Strip the suffix so the base is host + port, like the real
+    // `https://api.verda.com` default.
+    VERDA_CONTROL_PLANE_BASE: backend.llm.baseUrl.replace(/\/v1$/, ''),
     VERDA_CLIENT_ID: 'e2e-browser-fake-client-id',
     VERDA_CLIENT_SECRET: 'e2e-browser-fake-client-secret',
     VERDA_DEPLOYMENT_ID: 'e2e-browser-fake-deployment',

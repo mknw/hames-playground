@@ -164,7 +164,7 @@ A lane runs in its own worktree — created first, then pinned at start:
 ```bash
 orca worktree create --name <lane> --repo path:<repo-root> --base-branch main --setup run
 orca orchestration worker-start --run <run> --task <task> \
-  --worktree name:<lane> --agent claude --model opus
+  --worktree name:<lane> --agent pi --model <tier-model>
 ```
 
 `--worktree` is what puts the worker there: `worker-start` without it opens the
@@ -178,6 +178,15 @@ After each dispatch, verify the pin took: `git -C <repo-root> status --short`
 stays empty while lanes run. A lane that needs something from the main checkout
 (a gitignored log, a local config) gets the absolute path in its spec, marked
 read-only.
+
+**Lane agent and model (pi era, owner ruling 2026-08-29):** lanes run
+`--agent pi` with the tier model — `z-ai/glm-5.3` for security/critical work
+(auth, routing, secrets, tests-as-evidence), `z-ai/glm-5.3-flash` for complex
+work (reviews, fix rounds bound to written terms, coordination),
+`deepseek/deepseek-v4-flash-3107` for normal/mechanical work. The Claude-era
+`--agent claude --model opus` remains the default only in Claude-side
+sessions; both mappings coexist. Verify agent availability against the
+runtime's registry of record, never against examples in help text or skills.
 
 **Under heavy load, `worker-start` can return `agent_prompt_stalled`.** The
 condition is load, not the worktree: a fresh worktree's first agent terminal

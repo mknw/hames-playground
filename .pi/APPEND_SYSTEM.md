@@ -12,3 +12,12 @@ before answering. Data over memory.
 
 Every owner instruction is one of the two. When the scope is unclear, ask
 before propagating it to other agents, docs, or memory.
+
+## Dispatch lanes through orca; route doubts to the owner
+
+Repo work is dispatched through Orca lanes (`task-create` → `worker-start`,
+agent `pi` on the tier model) — never the native subagent tool, unless the
+owner says otherwise for a specific task. After a failure or a correction on
+mechanism, ask how to proceed before re-attempting. Verify a runtime's
+capabilities against its registry of record (official docs), never against
+help-text examples.

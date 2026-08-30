@@ -183,6 +183,16 @@ async function boot(): Promise<AppHandles> {
     process.env.SMALL_LLM_API_KEY = 'e2e-fake-key'
     // Poison the real credential — see HERMETIC_ANTHROPIC_KEY.
     process.env.ANTHROPIC_API_KEY = HERMETIC_ANTHROPIC_KEY
+    // The strip's control-plane probe (`verda-control-plane.server.ts`) reads
+    // these three and would otherwise — on a host that exports them, or a
+    // future .env-loading change — ask the real api.verda.com from a hermetic
+    // run. Unset means the probe degrades to `missing-credentials` with no
+    // network at all, which is exactly what this layer wants: no scenario here
+    // reads the strip's warmth, and the display's degraded mode is its own
+    // tested behaviour.
+    delete process.env.VERDA_CLIENT_ID
+    delete process.env.VERDA_CLIENT_SECRET
+    delete process.env.VERDA_DEPLOYMENT_ID
     // The wake is a POLL since 2026-08-27, and its shipped per-attempt bound
     // (30s) would cut every one of this fake's injected delays into attempt
     // slices — see WAKE_ATTEMPT_TIMEOUT_MS for why that would make scenarios 3,

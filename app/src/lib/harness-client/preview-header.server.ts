@@ -34,6 +34,11 @@ import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
 import { defaultInferenceTier, getStoredInferenceTier } from '../db/user-prefs.server'
 import { verdaConfigured, type InferenceTier } from '../harness-patterns/clients.server'
 import { verdaWarmth, type VerdaWarmth } from '../inference/verda-activity.server'
+import {
+  probeVerdaReplicas,
+  type VerdaControlPlaneProbe,
+} from '../inference/verda-control-plane.server'
+import { coldStartEstimate } from '../inference/cold-start.server'
 import { ensureVerdaAwake } from '../inference/wake.server'
 import { ACTIVE_WINDOW_MINUTES, countActiveUsers } from '../db/conversations.server'
 import { getUsageToday, type UsageToday } from '../metrics/preview-counters.server'
@@ -43,6 +48,53 @@ async function requireUser(): Promise<{ id: string }> {
   if (isBypassEnabled()) return { id: BYPASS_USER.id }
   const u = await getAuthenticatedUser()
   return { id: u.id }
+}
+
+/**
+ * The warmth the strip DISPLAYS, after both of its sources have had their say.
+ *
+ * Two sources, deliberately not merged into one module's opinion: the
+ * process-local completion clock (`verdaWarmth`) is the only thing allowed to
+ * say `ready` — a real completion answered by the deployment, zero-second
+ * accurate, never a timer — and the control-plane probe
+ * (`inference/verda-control-plane.server.ts`) is the shared observation that
+ * replaces the old pre-message `unknown` with a real answer about the box.
+ *
+ * - `answering` — a turn is on the box AND the completion clock proves it was
+ *   already warm. The turn-in-flight flavour of `ready`.
+ * - `ready` — a completion was answered within the scale-down window.
+ * - `starting` — the box is engaged but nothing proves the model is loaded: a
+ *   turn is running without completion evidence, or the control plane reports
+ *   a replica whose insides are still loading weights (measured ~360s).
+ * - `cold` — the control plane reports NO replicas: observed scaled-down, not
+ *   guessed. This is what retires the old failure where a warm box looked
+ *   forever `unknown` to a process that had never seen a call.
+ * - `unknown` — the DEGRADED display, and an error path: the probe is
+ *   unconfigured, or it failed. Unreachable on every happy path. The ignite
+ *   button stays available here (`igniteVerdaBox` is independent of the probe).
+ */
+export type WarmthDisplayState = 'answering' | 'starting' | 'ready' | 'cold' | 'unknown'
+
+/** The `warmth` field of the payload — the display state plus whatever the
+ *  countdown for it needs. One object rather than two parallel fields, so the
+ *  number and the word it belongs to cannot be recombined wrongly. */
+export interface HeaderWarmth {
+  state: WarmthDisplayState
+  /** `ready`/`answering`: whole seconds left of the scale-down window. The
+   *  client ticks the `ready` one locally; `answering`'s is re-sent whole each
+   *  poll (a box cannot scale down under a turn) and rendered statically. */
+  secondsUntilScaledown: number | null
+  scaledownSeconds: number
+  /** `starting` only: the estimated time to first token STILL REMAINING, from
+   *  `coldStartEstimate()` minus the oldest replica's age — the same estimate
+   *  the chat's warming notice uses, spent by what the control plane has
+   *  actually observed. `null` once the estimate is spent (the word stays; the
+   *  figure does not sit at 0:00) or for every other state. An estimate with a
+   *  basis on the wire, never a measurement dressed as one. */
+  coldStartEstimateMs: number | null
+  coldStartBasis: 'measured' | 'default' | null
+  /** How many cold starts the median is over; `0` on the fallback. */
+  coldStartSamples: number | null
 }
 
 /** Everything the header strip renders, in one payload. */
@@ -58,7 +110,7 @@ export interface PreviewHeaderState {
   /** False when the endpoint is unconfigured. Gates the warm indicator: a
    *  countdown for a box this deployment cannot reach is noise. */
   verdaAvailable: boolean
-  warmth: VerdaWarmth
+  warmth: HeaderWarmth
   /** Distinct users with chat activity in the last {@link activeWindowMinutes}
    *  minutes. */
   activeUsers: number
@@ -78,24 +130,84 @@ export interface PreviewHeaderState {
   generatedAt: number
 }
 
+/**
+ * Map the two warmth sources onto the display state.
+ *
+ * The order IS the state machine, and each line is one of the settled rules:
+ * completion evidence outranks everything (`ready` flips only on it, never on a
+ * timer or a probe); a turn without that evidence is `starting`, whatever the
+ * probe saw (the turn itself is the engagement, and degrading an ACTIVE turn to
+ * `unknown` because a status API blinked would hide information the old strip
+ * already had); and only the no-turn, no-evidence cases ask the control plane,
+ * where an unavailable probe — the one error path — is `unknown`.
+ */
+function displayWarmth(w: VerdaWarmth, probe: VerdaControlPlaneProbe | null): HeaderWarmth {
+  let state: WarmthDisplayState
+  if (w.state === 'running') state = 'answering'
+  else if (w.state === 'warm') state = 'ready'
+  else if (w.state === 'starting') state = 'starting'
+  else if (!probe || !probe.ok) state = 'unknown'
+  else state = (probe.replicaCount ?? 0) > 0 ? 'starting' : 'cold'
+
+  // The estimate is read only for the state that shows it. `coldStartEstimate()`
+  // is cheap (a median over a handful of samples), but a field that is always
+  // populated invites a consumer to render it for a state that must not claim
+  // one — the same reason `secondsUntilScaledown` is null for the states below.
+  //
+  // What is sent is the REMAINING estimate, not the whole one: the oldest
+  // replica's `started_at` is how long the container has actually been coming
+  // up, and a figure re-sent whole on every 3s poll would snap back instead of
+  // falling — the exact defect the strip's `answering` state litigated. The
+  // client renders it statically; each poll re-sends a genuinely smaller
+  // number. Past the estimate it sends null rather than a figure pinned at
+  // zero — running long is expected (a burst queues on one replica), and "0:00"
+  // would read as done for a box that is merely slow. When the base is unknown
+  // (no parseable `started_at`, or the probe is down and a TURN made this
+  // `starting`), the whole estimate goes out — pessimistic, and static.
+  const estimate = state === 'starting' ? coldStartEstimate() : null
+  let estimateMs: number | null = null
+  if (estimate) {
+    const startedAt = probe?.ok ? probe.oldestReplicaStartedAtMs : null
+    const elapsedMs = startedAt !== null ? Math.max(0, Date.now() - startedAt) : 0
+    const remainingMs = estimate.estimateMs - elapsedMs
+    estimateMs = remainingMs > 0 ? remainingMs : null
+  }
+  return {
+    state,
+    secondsUntilScaledown: w.secondsUntilScaledown,
+    scaledownSeconds: w.scaledownSeconds,
+    coldStartEstimateMs: estimateMs,
+    coldStartBasis: estimate?.basis ?? null,
+    coldStartSamples: estimate?.samples ?? null,
+  }
+}
+
 /** The strip's whole payload. Cheap by construction: two indexed reads and two
  *  process-local readings (the warm clock and the latency window) — no event
  *  blob is opened, which is what makes it safe to poll. "Indexed" is
  *  load-bearing for the active-user read and was not true when this shipped: it
  *  needs `conversations_updated_idx` (`db/client.server.ts`), the only index on
- *  that table that leads on `updated_at`. */
+ *  that table that leads on `updated_at`.
+ *
+ * The control-plane probe rides the same `Promise.all` and is cached
+ * process-side for 12s, so a settled poll pays it at most once per interval —
+ * and when it cannot be answered, it degrades to `unknown` inside its own
+ * 5s-per-fetch bound instead of hanging a poll that is supposed to be safe
+ * beside a live chat. Skipped entirely when there is no endpoint: the whole
+ * indicator is hidden for that deployment, so a probe would be noise. */
 export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
   const user = await requireUser()
-  const [stored, activeUsers, usage] = await Promise.all([
+  const [stored, activeUsers, usage, probe] = await Promise.all([
     getStoredInferenceTier(user.id),
     countActiveUsers(),
     getUsageToday(),
+    verdaConfigured() ? probeVerdaReplicas() : Promise.resolve(null),
   ])
   const tier = stored ?? defaultInferenceTier()
   return {
     tier,
     verdaAvailable: verdaConfigured(),
-    warmth: verdaWarmth(),
+    warmth: displayWarmth(verdaWarmth(), probe),
     activeUsers,
     activeWindowMinutes: ACTIVE_WINDOW_MINUTES,
     usage,

@@ -58,6 +58,15 @@ vi.mock('../../../lib/metrics/preview-counters.server', () => ({
   getUsageToday: () => getUsageToday(),
 }))
 
+/** The control-plane probe, mocked at the seam: the mapping tests below write
+ *  probe results and read display states. The probe module's own behaviour —
+ *  its fetches, caches and degraded results — is `verda-control-plane.test.ts`'s
+ *  subject. */
+const probeVerdaReplicas = vi.fn<() => Promise<VerdaControlPlaneProbe>>()
+vi.mock('../../../lib/inference/verda-control-plane.server', () => ({
+  probeVerdaReplicas: () => probeVerdaReplicas(),
+}))
+
 import {
   getPreviewHeaderState,
   igniteVerdaBox,
@@ -67,7 +76,11 @@ import { resetVerdaWake, VERDA_WAKE_FAILED } from '../../../lib/inference/wake.s
 import {
   noteVerdaCallCompleted,
   resetVerdaActivity,
+  beginVerdaTurn,
+  endVerdaTurn,
+  verdaScaledownSeconds,
 } from '../../../lib/inference/verda-activity.server'
+import type { VerdaControlPlaneProbe } from '../../../lib/inference/verda-control-plane.server'
 
 const ENV_KEYS = [
   'VERDA_INFERENCE_ENDPOINT',
@@ -123,6 +136,16 @@ beforeEach(() => {
   isBypassEnabled.mockReturnValue(false)
   getAuthenticatedUser.mockResolvedValue({ id: 'user-1', email: 'a@example.invalid' })
   getStoredInferenceTier.mockResolvedValue(null)
+  // The control plane answers, and the deployment has scaled to zero — the
+  // happy path's resting answer, so every case below only overrides what it
+  // is about.
+  probeVerdaReplicas.mockResolvedValue({
+    ok: true,
+    replicaCount: 0,
+    oldestReplicaStartedAtMs: null,
+    reason: null,
+    at: 0,
+  })
   resetCallLatency()
   resetVerdaWake()
   resetVerdaActivity()
@@ -218,6 +241,122 @@ describe('getPreviewHeaderState', () => {
   })
 })
 
+// The display state machine: completion evidence (`verdaWarmth`'s clock) says
+// `ready`; the control-plane probe decides cold vs starting when there is none;
+// and `unknown` is reachable ONLY through the probe failing. Each case here
+// pins one rule, named in `displayWarmth`.
+describe('the warmth display mapping', () => {
+  // The probe is only consulted when the deployment itself is configured — an
+  // unconfigured endpoint hides the whole indicator, so every case here needs
+  // the endpoint vars too.
+  beforeEach(configureVerda)
+
+  it('answers cold from the control plane before any message has been sent', async () => {
+    // THE PRE-MESSAGE CASE this whole feature exists for: a fresh process used
+    // to say `unknown` until its own first message. The probe replaces the
+    // guess with an observation.
+    const state = await getPreviewHeaderState()
+
+    expect(state.warmth.state).toBe('cold')
+    expect(state.warmth.secondsUntilScaledown).toBeNull()
+  })
+
+  it('answers starting when the control plane sees a replica but nothing has completed', async () => {
+    // A replica present is NOT ready — the weight load happens inside the
+    // container — so the replica alone must never read as an up box.
+    probeVerdaReplicas.mockResolvedValue({
+      ok: true,
+      replicaCount: 1,
+      oldestReplicaStartedAtMs: null,
+      reason: null,
+      at: 0,
+    })
+
+    expect((await getPreviewHeaderState()).warmth.state).toBe('starting')
+  })
+
+  it('answers ready ONLY on completion evidence, even while the probe is failing', async () => {
+    // The one thing allowed to say ready is a real completion answered by the
+    // deployment — never a timer, never the control plane. A probe outage must
+    // not be able to demote it either.
+    probeVerdaReplicas.mockResolvedValue({
+      ok: false,
+      replicaCount: null,
+      oldestReplicaStartedAtMs: null,
+      reason: 'http 500',
+      at: 0,
+    })
+    noteVerdaCallCompleted()
+
+    expect((await getPreviewHeaderState()).warmth.state).toBe('ready')
+  })
+
+  it('answers unknown when the probe fails, and carries no numbers', async () => {
+    // `unknown` is the degraded display and an error path — unreachable on
+    // every happy path. It must never render a plausible figure.
+    probeVerdaReplicas.mockResolvedValue({
+      ok: false,
+      replicaCount: null,
+      oldestReplicaStartedAtMs: null,
+      reason: 'timeout',
+      at: 0,
+    })
+
+    const warmth = (await getPreviewHeaderState()).warmth
+    expect(warmth.state).toBe('unknown')
+    expect(warmth.secondsUntilScaledown).toBeNull()
+    expect(warmth.coldStartEstimateMs).toBeNull()
+  })
+
+  it('answers starting for a turn in flight without completion evidence, even when the probe fails', async () => {
+    // A turn IS engagement — degrading an ACTIVE turn to `unknown` because a
+    // status API blinked would hide information the strip already had. The
+    // turn-in-flight state claims nothing, which is exactly right here.
+    probeVerdaReplicas.mockResolvedValue({
+      ok: false,
+      replicaCount: null,
+      oldestReplicaStartedAtMs: null,
+      reason: 'timeout',
+      at: 0,
+    })
+    beginVerdaTurn()
+    try {
+      expect((await getPreviewHeaderState()).warmth.state).toBe('starting')
+    } finally {
+      endVerdaTurn()
+    }
+  })
+
+  it('answers cold again when the window has elapsed and the control plane reports no replicas', async () => {
+    // The warm-to-cold regression: the process-local window has run out and
+    // the control plane OBSERVES the scale-down, rather than the strip
+    // guessing from silence.
+    noteVerdaCallCompleted(Date.now() - (verdaScaledownSeconds() + 5) * 1000)
+
+    expect((await getPreviewHeaderState()).warmth.state).toBe('cold')
+  })
+
+  it('answers starting when the window has elapsed but a replica is still present', async () => {
+    // Replica present + no completion evidence = starting, per the settled
+    // rule — the count is all the display machine asks of the probe.
+    noteVerdaCallCompleted(Date.now() - (verdaScaledownSeconds() + 5) * 1000)
+    probeVerdaReplicas.mockResolvedValue({
+      ok: true,
+      replicaCount: 2,
+      oldestReplicaStartedAtMs: null,
+      reason: null,
+      at: 0,
+    })
+
+    const warmth = (await getPreviewHeaderState()).warmth
+    expect(warmth.state).toBe('starting')
+    // The estimate rides ONLY the state that shows it.
+    expect(warmth.coldStartEstimateMs).toBeGreaterThan(0)
+    expect(warmth.coldStartBasis).toBeDefined()
+    expect(warmth.coldStartSamples).toBeGreaterThanOrEqual(0)
+  })
+})
+
 // The SETTER moved with the switch: it is `setConversationTier` in
 // `harness-client/actions.server.ts` now, and its tests moved with it (the
 // owner-from-session rule, the unknown-tier refusal, the unconfigured-verda
@@ -252,9 +391,10 @@ describe('igniteVerdaBox', () => {
     const state = await igniteVerdaBox()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    // The ping stamps the warm clock, so the strip's next render has a number to
-    // count down — which is the point of the button.
-    expect(state.warmth.state).toBe('warm')
+    // The ping stamps the warm clock, so the strip's next render has a number
+    // to count down — which is the point of the button. `ready` is the display
+    // state that completion evidence earns, whatever the probe said.
+    expect(state.warmth.state).toBe('ready')
     expect(state.warmth.secondsUntilScaledown).toBeGreaterThan(0)
   })
 
@@ -295,7 +435,7 @@ describe('igniteVerdaBox', () => {
     const state = await igniteVerdaBox()
 
     expect(fetchMock).not.toHaveBeenCalled()
-    expect(state.warmth.state).toBe('warm')
+    expect(state.warmth.state).toBe('ready')
   })
 
   it('REJECTS when the box does not come up, rather than reporting cold', async () => {

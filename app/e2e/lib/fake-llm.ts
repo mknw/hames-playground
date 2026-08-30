@@ -268,6 +268,25 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       })
       return
     }
+    // The Verda CONTROL-PLANE probe (`verda-control-plane.server.ts`), which
+    // the header strip's state machine consults on every poll. Pointed here by
+    // `VERDA_CONTROL_PLANE_BASE` in this suite's global setup, so a hermetic
+    // run never asks the real api.verda.com anything. Always an EMPTY replica
+    // list: the fake box is observed scaled down, which is what makes the
+    // strip's pre-message answer the deterministic `cold` scenario 9 asserts —
+    // and never a real deployment's state leaking into a hermetic run.
+    if (req.method === 'POST' && req.url?.startsWith('/v1/oauth2/token')) {
+      json(res, 200, {
+        access_token: 'fake-control-plane-token',
+        token_type: 'Bearer',
+        expires_in: 3600,
+      })
+      return
+    }
+    if (req.method === 'GET' && req.url?.startsWith('/v1/container-deployments/')) {
+      json(res, 200, { list: [] })
+      return
+    }
     if (req.method !== 'POST' || !req.url?.startsWith('/v1/chat/completions')) {
       json(res, 404, { error: { message: `no fake route for ${req.method} ${req.url}` } })
       return

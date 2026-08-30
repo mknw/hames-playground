@@ -18,8 +18,24 @@
  * here opens a conversation blob — the whole strip is one round trip over two
  * small indexed reads and two process-local readings, which is what makes it
  * safe to poll beside a live chat. Two of the numbers are what THIS server has
- * seen (the warm state and the latency median) rather than deployment-wide, and
- * both say so in their tooltip.
+ * seen (the latency median, and the completion evidence behind `ready`) rather
+ * than deployment-wide, and both say so in their tooltip; the cold/starting
+ * halves of the warm state are an observation of the deployment itself, read
+ * from the Verda control plane (`lib/inference/verda-control-plane.server.ts`)
+ * and shared by every user of this process.
+ *
+ * ## The warm state's two sources
+ *
+ * `ready` is completion evidence ONLY — a real call the deployment answered
+ * within the scale-down window (`verdaWarmth`'s clock). It never flips on a
+ * timer or on the control plane. Everything else consults the control plane:
+ * no replicas is `cold` (observed scaled-down, which is what retires the old
+ * pre-message `unknown` — a process that had never seen a call used to be able
+ * to say nothing about a box another instance was using), a replica present is
+ * `starting` (the weight load happens inside the container, after the replica
+ * reports), and only a probe failure — an error path — is `unknown`. The start
+ * button renders in `cold` AND in `unknown`: the probe being down is not a
+ * reason to strand a user who wants to warm the box.
  *
  * ## No layout shift
  *
@@ -129,7 +145,7 @@ import {
   igniteVerdaBox,
   type PreviewHeaderState,
 } from '~/lib/harness-client/preview-header.server'
-import { COLD_START_HEADLINE } from '~/lib/cold-start-format'
+import { COLD_START_HEADLINE, coldStartBasisHint } from '~/lib/cold-start-format'
 import {
   formatCompactNumber,
   formatCountdown,
@@ -177,8 +193,18 @@ export const IGNITE_LABEL = 'start RTX PRO 6000'
 export const IGNITE_FAILED_LABEL = 'start failed'
 
 /** Warm state → the word and the glyph that carry it. The word is not
- *  decoration: a bare coloured dot fails `color-not-only`, and "warm" vs "cold"
- *  is the whole content of the indicator anyway.
+ *  decoration: a bare coloured dot fails `color-not-only`, and what the box is
+ *  doing is the whole content of the indicator anyway.
+ *
+ *  The states are the display state machine the server assembly computes
+ *  (`HeaderWarmth['state']`): `ready` is completion evidence — a real call the
+ *  deployment answered, never a timer; `answering` is its turn-in-flight
+ *  flavour; `starting` and `cold` come from the control-plane probe when there
+ *  is no completion evidence; and `unknown` is the DEGRADED display, an error
+ *  path. Before the control plane existed, `unknown` was what this strip showed
+ *  until the first message of a session — a guess that a box another instance
+ *  was keeping warm hid behind. That pre-message `unknown` is gone; one here
+ *  now means the control plane could not be asked.
  *
  *  The glyph is a THUNK returning literal JSX rather than an icon-name/tone
  *  pair, for the reason spelled out on `Metric` below: a colour applied as
@@ -186,26 +212,28 @@ export const IGNITE_FAILED_LABEL = 'start failed'
  *  all. Written this way the colour cannot be resolved at runtime, so it cannot
  *  silently fail to exist.
  *
- *  `countdown` says whether this state MEANS the box is up — and so is entitled
- *  to render the seconds the server sent — AND how those seconds behave. It
- *  lives here rather than as a `=== 'warm'` comparison at the render site
- *  because that comparison is the bug this file shipped with: `verdaWarmth()`
- *  computes a countdown for `running` too — the state's whole documented promise
- *  is that it implies warm — and the render site silently dropped it, so the one
- *  state a user watching their own turn is actually looking at never showed a
- *  number. A flag beside the word cannot go out of step with the word the way a
- *  second literal can.
+ *  `countdown` says what number this state MEANS to show — and how it behaves.
+ *  It lives here rather than as a comparison at the render site because that
+ *  comparison is the bug this file shipped with: the render site silently
+ *  dropped `answering`'s figure. A flag beside the word cannot go out of step
+ *  with the word the way a second literal can.
  *
- *  The three values are not two-and-a-half: `'ticking'` and `'static'` are
- *  different numbers, not different renderings of one. `warm` sends what is LEFT
- *  of the window, so the client ticks it between polls. `running` sends the
- *  WHOLE window on every poll — correctly, because the box cannot scale down
- *  while a turn is on it — so ticking that one drew a figure that fell for a
- *  poll interval and then snapped back to the top, twice a minute at the active
- *  rate. It is a standing figure (how long the box stays up once the turn ends),
- *  and it is rendered as one. */
+ *  The values are not renderings of one number. `ready` sends what is LEFT of
+ *  the scale-down window, so the client ticks it between polls. `answering`
+ *  sends the WHOLE window on every poll — correctly, because the box cannot
+ *  scale down while a turn is on it — so ticking that one drew a figure that
+ *  fell for a poll interval and then snapped back to the top; it is rendered as
+ *  the standing figure it is. `starting`'s figure is not a scale-down at all:
+ *  it is the ESTIMATED time to first token still remaining
+ *  (`HeaderWarmth.coldStartEstimateMs` — estimate minus what the control plane
+ *  has watched the replica spend), and the server re-sends a genuinely smaller
+ *  number on every poll, so the client renders it STATICALLY: ticking it
+ *  locally would draw a figure that falls for one poll interval and snaps back
+ *  to the top, the defect `answering`'s mode exists for. It disappears once the
+ *  estimate is spent rather than sitting at 0:00 — running long is expected (a
+ *  burst queues on one replica), and the word stays to say so. */
 export const WARMTH_PRESENTATION = {
-  running: {
+  answering: {
     word: 'answering',
     countdown: 'static',
     glyph: () => (
@@ -218,7 +246,7 @@ export const WARMTH_PRESENTATION = {
   },
   starting: {
     word: 'starting',
-    countdown: 'none',
+    countdown: 'estimate',
     glyph: () => (
       <span
         class="i-material-symbols-hourglass-top"
@@ -229,11 +257,13 @@ export const WARMTH_PRESENTATION = {
       />
     ),
     hint:
-      'A chat is running on the self-hosted endpoint, but nothing recent shows the endpoint was ' +
-      'up — so it is probably paying a cold start of minutes. Sending now joins the same wait.',
+      'The self-hosted box is engaged but has not answered a call yet — a chat is running on it, ' +
+      'or the control plane reports a replica whose model is still loading (a cold start takes ' +
+      'minutes). The figure is the estimated time to the first token; it is an estimate, and ' +
+      'running long is expected when several chats queue on the one replica.',
   },
-  warm: {
-    word: 'warm',
+  ready: {
+    word: 'ready',
     countdown: 'ticking',
     glyph: () => (
       <span
@@ -245,8 +275,9 @@ export const WARMTH_PRESENTATION = {
       />
     ),
     hint:
-      'The self-hosted endpoint is up. It scales to zero when the countdown reaches nought, and ' +
-      'the next message then pays a cold start of minutes.',
+      'The self-hosted endpoint answered a call within the last few minutes, so it is up. It ' +
+      'scales to zero when the countdown reaches nought, and the next message then pays a cold ' +
+      'start of minutes.',
   },
   cold: {
     word: 'cold',
@@ -260,7 +291,9 @@ export const WARMTH_PRESENTATION = {
         aria-hidden="true"
       />
     ),
-    hint: 'The self-hosted endpoint has scaled to zero. The next message pays a cold start of minutes.',
+    hint:
+      'The control plane reports no replicas for the self-hosted deployment, so it has scaled to ' +
+      'zero. The next message pays a cold start of minutes.',
   },
   unknown: {
     word: 'unknown',
@@ -275,8 +308,9 @@ export const WARMTH_PRESENTATION = {
       />
     ),
     hint:
-      'This server has not seen a call to the self-hosted endpoint yet, so it cannot tell cold ' +
-      'from warm.',
+      'The deployment control plane could not be asked (it is unreachable, or its credentials ' +
+      'are missing on this server), so the box’s state cannot be read. You can still try to ' +
+      'start it.',
   },
 } as const
 
@@ -384,8 +418,8 @@ export const PreviewHeaderStrip = () => {
       // It is cleared by the box being UP, whoever brought it up: at that point
       // the report is false rather than merely old, and "the start failed" is
       // the one thing the strip must not keep saying about a running box.
-      // `running` counts because it is `warm` plus a turn (`verdaWarmth`).
-      if (next.warmth.state === 'warm' || next.warmth.state === 'running') setIgniteError(null)
+      // `answering` counts because it is `ready` plus a turn (`verdaWarmth`).
+      if (next.warmth.state === 'ready' || next.warmth.state === 'answering') setIgniteError(null)
     } catch {
       // A poll that cannot reach the server leaves the last known values on
       // screen rather than blanking the bar — but it must not keep presenting
@@ -415,11 +449,20 @@ export const PreviewHeaderStrip = () => {
   /** The server's number, ticked down locally against this browser's receipt
    *  time; `null` when the payload carries none. This is the number for a state
    *  whose window is genuinely running out — see {@link shownSeconds} for which
-   *  states those are, and it is also what expires a `warm` window early below. */
+   *  states those are, and it is also what expires a `ready` window early below. */
   const tickedSeconds = createMemo(() => {
     const s = state()
     if (!s) return null
     return remainingSeconds(s.warmth.secondsUntilScaledown, receivedAt(), now())
+  })
+
+  /** The `starting` state's figure: the estimated time to first token still
+   *  remaining, as sent by the server (`HeaderWarmth.coldStartEstimateMs`).
+   *  Rendered statically — see `shownSeconds` for why it must not be ticked. */
+  const estimateSeconds = createMemo(() => {
+    const s = state()
+    if (!s || s.warmth.coldStartEstimateMs === null) return null
+    return Math.round(s.warmth.coldStartEstimateMs / 1000)
   })
 
   const warmthKey = createMemo<WarmthKey>(() => {
@@ -427,52 +470,79 @@ export const PreviewHeaderStrip = () => {
     if (!s) return 'unknown'
     // The local clock is allowed to EXPIRE the window early; it is never
     // allowed to extend one, which is why only this direction is derived here
-    // and the other waits for the server.
-    if (s.warmth.state === 'warm' && tickedSeconds() === 0) return 'cold'
+    // and the other waits for the server. `ready` is the only state this
+    // applies to: expiry makes it `cold` on screen until the next poll either
+    // re-proves warmth (a completion) or the control plane re-observes a
+    // replica. `starting`'s estimate spends itself into `null` (see
+    // `shownSeconds`) but never into a different STATE — running long is the
+    // expected case, and no local arithmetic may turn it into anything.
+    if (s.warmth.state === 'ready' && tickedSeconds() === 0) return 'cold'
     return s.warmth.state
   })
 
   /**
    * The seconds the indicator SHOWS, or `null` when this state has no number.
    *
-   * Which of the two it is belongs to the state (`WARMTH_PRESENTATION`), and the
-   * distinction is not cosmetic. `warm` carries what is LEFT of the window, so
-   * ticking it locally between polls is what makes it a countdown at all.
-   * `running` carries the WHOLE window on every poll — `verdaWarmth()` is right
-   * to send it, because a box cannot scale down while a turn is on it — so
-   * running the same local clock over it drew a figure that fell for one poll
-   * interval and snapped back to the top, twice a minute at the active rate.
-   * A number that resets is worse than no number: it reads as a countdown that
-   * cannot make up its mind rather than as the standing figure it is.
+   * Which number — or none — belongs to the state (`WARMTH_PRESENTATION`), and
+   * the distinction is not cosmetic. `ready` carries what is LEFT of the
+   * window, so ticking it locally between polls is what makes it a countdown at
+   * all. `answering` carries the WHOLE window on every poll — the server is
+   * right to send it, because a box cannot scale down while a turn is on it —
+   * so running the same local clock over it drew a figure that fell for one
+   * poll interval and snapped back to the top, twice a minute at the active
+   * rate. A number that resets is worse than no number: it reads as a countdown
+   * that cannot make up its mind rather than as the standing figure it is.
+   * `starting` shows the estimate REMAINING as the server re-sends it — each
+   * poll's figure is genuinely smaller than the last — and shows nothing once
+   * the estimate is spent: sitting at 0:00 would read as "done" for a box that
+   * is merely slow.
    */
   const shownSeconds = createMemo<number | null>(() => {
     const s = state()
     if (!s) return null
     const mode = WARMTH_PRESENTATION[warmthKey()].countdown
     if (mode === 'none') return null
-    return mode === 'ticking' ? tickedSeconds() : s.warmth.secondsUntilScaledown
+    if (mode === 'static') return s.warmth.secondsUntilScaledown
+    if (mode === 'estimate') return estimateSeconds()
+    return tickedSeconds()
   })
 
-  /** Is the box mid-transition, so the next poll is worth taking sooner? Both
-   *  transitional states mean a turn is on the box right now; `igniting` is this
-   *  browser having just asked it to wake. Anything else is settled — a warm box
-   *  ticking down, or a cold one nobody is starting — and re-reading that three
-   *  times a minute is enough. */
+  /** Is the box mid-transition, so the next poll is worth taking sooner? The
+   *  transitional states mean a turn is on the box right now, or this browser
+   *  has just asked it to wake. Anything else is settled — a `ready` box ticking
+   *  down, or a cold one nobody is starting — and re-reading that three times a
+   *  minute is enough. */
   const pollInterval = () =>
-    igniting() || warmthKey() === 'starting' || warmthKey() === 'running'
+    igniting() || warmthKey() === 'starting' || warmthKey() === 'answering'
       ? ACTIVE_POLL_INTERVAL_MS
       : POLL_INTERVAL_MS
 
-  /** The cold indicator is the one state a click can do something about, and it
-   *  is only then that it becomes a button (see `igniteBox`).
+  /** The states a click can do something about, and the only ones where the
+   *  indicator becomes a button (see `igniteBox`).
    *
-   *  `cold` and not also `unknown`: `unknown` means this process has never seen
-   *  a call, which is exactly as consistent with a box another instance is
-   *  keeping warm as with one that is down. Offering "start it" there would put
-   *  a claim about the box behind a control whose whole state is "we do not
-   *  know" — and the wake ping already runs on `unknown` at the start of a turn,
-   *  so nothing is lost by not offering the button. */
-  const canIgnite = () => warmthKey() === 'cold'
+   *  `cold` because that is the state the click acts on. `unknown` too, and
+   *  that is an owner decision (2026-08-29) that reverses this file's old
+   *  policy: before the control plane, `unknown` meant "this process has never
+   *  seen a call" and the button was withheld there. Now `unknown` means the
+   *  CONTROL PLANE could not be asked — a probe failure, not an unknown box —
+   *  and `igniteVerdaBox` is independent of the probe, so withholding the one
+   *  control that could fix the situation would punish the user for a status
+   *  API's downtime. `starting` and `ready`/`answering` hide it: a replica is
+   *  already engaged, and a second wake would only queue behind the first. */
+  const canIgnite = () => warmthKey() === 'cold' || warmthKey() === 'unknown'
+
+  /** The starting state's tooltip carries the estimate's basis (`measured` vs
+   *  `default`) — a fallback figure must never read as a local measurement,
+   *  which is the same rule the chat notice's tooltip follows. */
+  const indicatorHint = () => {
+    const key = warmthKey()
+    if (key !== 'starting') return WARMTH_PRESENTATION[key].hint
+    const w = state()?.warmth
+    if (!w || w.coldStartBasis === null || w.coldStartSamples === null) {
+      return WARMTH_PRESENTATION.starting.hint
+    }
+    return `${WARMTH_PRESENTATION.starting.hint} ${coldStartBasisHint(w.coldStartBasis, w.coldStartSamples)}`
+  }
 
   /** The word in the indicator: what the box is doing, unless this browser is
    *  mid-wake or offering to start one. */
@@ -603,7 +673,7 @@ export const PreviewHeaderStrip = () => {
                     items="center"
                     gap="1"
                     transition="all"
-                    title={WARMTH_PRESENTATION[warmthKey()].hint}
+                    title={indicatorHint()}
                     data-testid="verda-warmth"
                     onMouseEnter={() => setHovering(true)}
                     onMouseLeave={() => setHovering(false)}

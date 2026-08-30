@@ -82,6 +82,29 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     // authenticates nothing) and set here only for symmetry with the 27B.
     SMALL_LLM_BASE_URL: backend.llm.baseUrl,
     SMALL_LLM_API_KEY: 'e2e-browser-fake-key',
+    // ---- The deployment CONTROL PLANE ---------------------------------------
+    // The header strip asks api.verda.com how many replicas the deployment has
+    // (`verda-control-plane.server.ts`). WITHOUT these lines, `vinxi dev` loads
+    // them from the developer's `app/.env` (dotenv does not override keys the
+    // environment already carries — but these three are NOT otherwise set here),
+    // and a hermetic run would probe the REAL control plane with REAL
+    // credentials on every strip poll — a live external dependency in a layer
+    // advertised as hermetic, and the real box's state leaking into scenario 9's
+    // `cold` assertion. Pointed at the SAME fake as the model endpoints, which
+    // answers an empty replica list — the deterministic scaled-down observation
+    // the pre-message display is built on.
+    // The fake's `baseUrl` ends in `/v1` because the MODEL endpoints want it
+    // there, but the control plane is a different API whose paths (`/v1/oauth2/
+    // token`, `/v1/container-deployments/...`) carry the prefix themselves
+    // (`verda-control-plane.server.ts` appends them to the base) — handing it
+    // the model base verbatim produced `…/v1/v1/oauth2/token`, the fake's routes
+    // matched nothing, and the strip degraded to `unknown`, red for all of
+    // scenario 9. Strip the suffix so the base is host + port, like the real
+    // `https://api.verda.com` default.
+    VERDA_CONTROL_PLANE_BASE: backend.llm.baseUrl.replace(/\/v1$/, ''),
+    VERDA_CLIENT_ID: 'e2e-browser-fake-client-id',
+    VERDA_CLIENT_SECRET: 'e2e-browser-fake-client-secret',
+    VERDA_DEPLOYMENT_ID: 'e2e-browser-fake-deployment',
     // See the constant: with the shipped 180s, the suite's own preflight turn
     // would leave the box "warm" for the whole run and the cold-start notice
     // could never fire again.

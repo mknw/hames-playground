@@ -34,11 +34,27 @@ type State = Awaited<
   ReturnType<typeof import('~/lib/harness-client/preview-header.server').getPreviewHeaderState>
 >
 
+/** A `HeaderWarmth` fixture. The display states are the server assembly's
+ *  machine (`preview-header.server.ts`): `ready` for completion evidence,
+ *  `answering` its turn-in-flight flavour, `starting`/`cold` from the
+ *  control-plane probe, `unknown` only when the probe fails. The estimate
+ *  fields ride only `starting`. */
+const warmth = (over: Partial<State['warmth']> = {}): State['warmth'] =>
+  ({
+    state: 'ready',
+    secondsUntilScaledown: 120,
+    scaledownSeconds: 180,
+    coldStartEstimateMs: null,
+    coldStartBasis: null,
+    coldStartSamples: null,
+    ...over,
+  }) as State['warmth']
+
 const state = (over: Partial<State> = {}): State =>
   ({
     tier: 'verda',
     verdaAvailable: true,
-    warmth: { state: 'warm', secondsUntilScaledown: 120, scaledownSeconds: 180 },
+    warmth: warmth({ state: 'ready' }),
     activeUsers: 3,
     activeWindowMinutes: 15,
     usage: { totalTokens: 12_500, llmCalls: 40, turns: 9, verdaCallShare: 0.75 },
@@ -51,12 +67,13 @@ beforeEach(() => {
   vi.clearAllMocks()
   getPreviewHeaderState.mockResolvedValue(state())
   igniteVerdaBox.mockResolvedValue(
-    state({ warmth: { state: 'warm', secondsUntilScaledown: 300, scaledownSeconds: 300 } }),
+    state({
+      warmth: warmth({ state: 'ready', secondsUntilScaledown: 300, scaledownSeconds: 300 }),
+    }),
   )
 })
 
-const cold = () =>
-  state({ warmth: { state: 'cold', secondsUntilScaledown: null, scaledownSeconds: 300 } })
+const cold = () => state({ warmth: warmth({ state: 'cold', secondsUntilScaledown: null }) })
 
 /** The warm indicator, whichever element it currently is. */
 const indicator = (container: HTMLElement) =>
@@ -85,7 +102,7 @@ describe('the warm indicator', () => {
     const { container } = render(() => <PreviewHeaderStrip />)
     await mounted(container)
 
-    expect(container.textContent).toContain('warm')
+    expect(container.textContent).toContain('ready')
   })
 
   it('shows the countdown as m:ss', async () => {
@@ -105,7 +122,7 @@ describe('the warm indicator', () => {
     getPreviewHeaderState.mockResolvedValue(
       state({
         generatedAt: Date.now() - 60_000,
-        warmth: { state: 'warm', secondsUntilScaledown: 120, scaledownSeconds: 180 },
+        warmth: warmth({ state: 'ready' }),
       }),
     )
     const { container } = render(() => <PreviewHeaderStrip />)
@@ -120,7 +137,7 @@ describe('the warm indicator', () => {
     await mounted(container)
 
     const live = container.querySelector('[aria-live="polite"]')!
-    expect(live.textContent).toContain('warm')
+    expect(live.textContent).toContain('ready')
     // A live region re-read once a second is noise, so the countdown is
     // deliberately outside it and aria-hidden.
     expect(live.textContent).not.toContain(':')
@@ -128,7 +145,9 @@ describe('the warm indicator', () => {
 
   it('says "cold" with no countdown once the box has scaled down', async () => {
     getPreviewHeaderState.mockResolvedValue(
-      state({ warmth: { state: 'cold', secondsUntilScaledown: null, scaledownSeconds: 180 } }),
+      state({
+        warmth: warmth({ state: 'cold', secondsUntilScaledown: null, scaledownSeconds: 180 }),
+      }),
     )
     const { container } = render(() => <PreviewHeaderStrip />)
     await mounted(container)
@@ -138,15 +157,66 @@ describe('the warm indicator', () => {
   })
 
   it('distinguishes "unknown" from "cold"', async () => {
-    // A process that has never seen a call cannot tell them apart, and saying
-    // "cold" would present a guess as a measurement.
+    // `unknown` is now the DEGRADED display — the control plane could not be
+    // asked (probe failure, missing credentials) — and must stay visibly
+    // different from `cold`, which is an observation. Saying "cold" there would
+    // present a guess as a measurement.
     getPreviewHeaderState.mockResolvedValue(
-      state({ warmth: { state: 'unknown', secondsUntilScaledown: null, scaledownSeconds: 180 } }),
+      state({
+        warmth: warmth({ state: 'unknown', secondsUntilScaledown: null, scaledownSeconds: 180 }),
+      }),
     )
     const { container } = render(() => <PreviewHeaderStrip />)
     await mounted(container)
 
     expect(container.textContent).toContain('unknown')
+  })
+
+  it('shows the REMAINING cold-start estimate while the box is starting', async () => {
+    // The gate the design settled: the `starting` state renders a countdown —
+    // how much of the estimated wait is left, spent by what the control plane
+    // has actually watched the replica do (the server sends the remainder; see
+    // `displayWarmth`).
+    getPreviewHeaderState.mockResolvedValue(
+      state({
+        warmth: warmth({
+          state: 'starting',
+          secondsUntilScaledown: null,
+          coldStartEstimateMs: 120_000,
+          coldStartBasis: 'measured',
+          coldStartSamples: 3,
+        }),
+      }),
+    )
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await waitFor(() => expect(container.textContent).toContain('starting'))
+
+    expect(container.textContent).toContain('2:00')
+    // The figure says where it came from: an estimate with a basis, never a
+    // measurement dressed as one.
+    const el = indicator(container)
+    expect(el.getAttribute('title')).toContain('Median of the 3 most recent')
+  })
+
+  it('shows nothing once the estimate is spent, and keeps saying "starting"', async () => {
+    // Running long is the EXPECTED case (a burst queues on one replica). A
+    // figure pinned at 0:00 would read as done for a box that is merely slow;
+    // the number goes and the word stays.
+    getPreviewHeaderState.mockResolvedValue(
+      state({
+        warmth: warmth({
+          state: 'starting',
+          secondsUntilScaledown: null,
+          coldStartEstimateMs: null,
+          coldStartBasis: 'default',
+          coldStartSamples: 0,
+        }),
+      }),
+    )
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await waitFor(() => expect(container.textContent).toContain('starting'))
+
+    expect(container.textContent).not.toMatch(/\d:\d\d/)
   })
 
   it('says "starting", not "answering", while the box is waking up', async () => {
@@ -155,7 +225,9 @@ describe('the warm indicator', () => {
     // is paying a cold start, and anyone else reading the strip would conclude
     // the box is up and send into the same wait.
     getPreviewHeaderState.mockResolvedValue(
-      state({ warmth: { state: 'starting', secondsUntilScaledown: null, scaledownSeconds: 180 } }),
+      state({
+        warmth: warmth({ state: 'starting', secondsUntilScaledown: null, scaledownSeconds: 180 }),
+      }),
     )
     const { container } = render(() => <PreviewHeaderStrip />)
     await mounted(container)
@@ -173,10 +245,12 @@ describe('the warm indicator', () => {
     vi.useFakeTimers()
     try {
       getPreviewHeaderState.mockResolvedValue(
-        state({ warmth: { state: 'warm', secondsUntilScaledown: 3, scaledownSeconds: 180 } }),
+        state({
+          warmth: warmth({ state: 'ready', secondsUntilScaledown: 3, scaledownSeconds: 180 }),
+        }),
       )
       const { container } = render(() => <PreviewHeaderStrip />)
-      await vi.waitFor(() => expect(container.textContent).toContain('warm'))
+      await vi.waitFor(() => expect(container.textContent).toContain('ready'))
 
       // Past the window, with NO new poll landing.
       await vi.advanceTimersByTimeAsync(4000)
@@ -197,7 +271,9 @@ describe('the warm indicator', () => {
     // costs minutes is most of the time anyone looks at this strip: hence
     // "never once seen".
     getPreviewHeaderState.mockResolvedValue(
-      state({ warmth: { state: 'running', secondsUntilScaledown: 300, scaledownSeconds: 300 } }),
+      state({
+        warmth: warmth({ state: 'answering', secondsUntilScaledown: 300, scaledownSeconds: 300 }),
+      }),
     )
     const { container } = render(() => <PreviewHeaderStrip />)
     await waitFor(() => expect(container.textContent).toContain('answering'))
@@ -215,7 +291,9 @@ describe('the warm indicator', () => {
     vi.useFakeTimers()
     try {
       getPreviewHeaderState.mockResolvedValue(
-        state({ warmth: { state: 'running', secondsUntilScaledown: 300, scaledownSeconds: 300 } }),
+        state({
+          warmth: warmth({ state: 'answering', secondsUntilScaledown: 300, scaledownSeconds: 300 }),
+        }),
       )
       const { container } = render(() => <PreviewHeaderStrip />)
       await vi.waitFor(() => expect(container.textContent).toContain('answering'))
@@ -240,7 +318,9 @@ describe('the warm indicator', () => {
     vi.useFakeTimers()
     try {
       getPreviewHeaderState.mockResolvedValue(
-        state({ warmth: { state: 'warm', secondsUntilScaledown: 120, scaledownSeconds: 300 } }),
+        state({
+          warmth: warmth({ state: 'ready', secondsUntilScaledown: 120, scaledownSeconds: 300 }),
+        }),
       )
       const { container } = render(() => <PreviewHeaderStrip />)
       await vi.waitFor(() => expect(container.textContent).toContain('2:00'))
@@ -267,7 +347,7 @@ describe('the warm indicator', () => {
     try {
       getPreviewHeaderState.mockResolvedValue(
         state({
-          warmth: { state: 'starting', secondsUntilScaledown: null, scaledownSeconds: 300 },
+          warmth: warmth({ state: 'starting', secondsUntilScaledown: null, scaledownSeconds: 300 }),
         }),
       )
       const { container } = render(() => <PreviewHeaderStrip />)
@@ -286,7 +366,7 @@ describe('the warm indicator', () => {
     vi.useFakeTimers()
     try {
       const { container } = render(() => <PreviewHeaderStrip />)
-      await vi.waitFor(() => expect(container.textContent).toContain('warm'))
+      await vi.waitFor(() => expect(container.textContent).toContain('ready'))
       const afterMount = getPreviewHeaderState.mock.calls.length
 
       await vi.advanceTimersByTimeAsync(10_000)
@@ -470,12 +550,73 @@ describe('starting the box from the header', () => {
 
   it('is NOT a button when the box is already up — there is nothing to press', async () => {
     const { container } = render(() => <PreviewHeaderStrip />)
-    await waitFor(() => expect(container.textContent).toContain('warm'))
+    await waitFor(() => expect(container.textContent).toContain('ready'))
 
     expect(indicator(container).tagName).not.toBe('BUTTON')
     fireEvent.mouseEnter(indicator(container))
-    await waitFor(() => expect(container.textContent).toContain('warm'))
+    await waitFor(() => expect(container.textContent).toContain('ready'))
     expect(container.textContent).not.toContain(IGNITE_LABEL)
+  })
+
+  it('is NOT a button while STARTING — a replica is already engaged', async () => {
+    // The suppression rule the design settled: the start button renders ONLY in
+    // `cold` (and `unknown`, below). A replica present means a wake is already
+    // underway or the container is loading weights — a second start would only
+    // queue behind the first on a single-replica deployment.
+    getPreviewHeaderState.mockResolvedValue(
+      state({
+        warmth: warmth({
+          state: 'starting',
+          secondsUntilScaledown: null,
+          coldStartEstimateMs: 120_000,
+          coldStartBasis: 'default',
+          coldStartSamples: 0,
+        }),
+      }),
+    )
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await waitFor(() => expect(container.textContent).toContain('starting'))
+
+    expect(indicator(container).tagName).not.toBe('BUTTON')
+    fireEvent.mouseEnter(indicator(container))
+    await waitFor(() => expect(container.textContent).toContain('starting'))
+    expect(container.textContent).not.toContain(IGNITE_LABEL)
+  })
+
+  it('is NOT a button while ANSWERING — a turn is on the box', async () => {
+    getPreviewHeaderState.mockResolvedValue(
+      state({
+        warmth: warmth({ state: 'answering', secondsUntilScaledown: 300, scaledownSeconds: 300 }),
+      }),
+    )
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await waitFor(() => expect(container.textContent).toContain('answering'))
+
+    expect(indicator(container).tagName).not.toBe('BUTTON')
+    fireEvent.mouseEnter(indicator(container))
+    await waitFor(() => expect(container.textContent).toContain('answering'))
+    expect(container.textContent).not.toContain(IGNITE_LABEL)
+  })
+
+  it('KEEPS the start button available in "unknown" — the probe failing is not a reason to strand the user', async () => {
+    // The reversed policy (owner decision, 2026-08-29): `unknown` now means the
+    // CONTROL PLANE could not be asked, not that the box is unknowable — and
+    // `igniteVerdaBox` is independent of the probe. Withholding the one control
+    // that could fix the situation would punish the user for a status API's
+    // downtime. This is the case the old file deliberately refused; the
+    // decision is new and the button follows it.
+    getPreviewHeaderState.mockResolvedValue(
+      state({ warmth: warmth({ state: 'unknown', secondsUntilScaledown: null }) }),
+    )
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await waitFor(() => expect(container.textContent).toContain('unknown'))
+
+    const el = indicator(container)
+    expect(el.tagName).toBe('BUTTON')
+    expect(el.getAttribute('aria-label')).toBe(IGNITE_LABEL)
+
+    fireEvent.mouseEnter(el)
+    await waitFor(() => expect(container.textContent).toContain(IGNITE_LABEL))
   })
 
   it('clicking starts the box and settles on what the server then says', async () => {
@@ -485,7 +626,7 @@ describe('starting the box from the header', () => {
 
     fireEvent.click(indicator(container))
 
-    await waitFor(() => expect(container.textContent).toContain('warm'))
+    await waitFor(() => expect(container.textContent).toContain('ready'))
     expect(igniteVerdaBox).toHaveBeenCalledTimes(1)
     // The countdown the server returned is on screen — the whole point.
     expect(container.textContent).toContain('5:00')
@@ -507,8 +648,12 @@ describe('starting the box from the header', () => {
     fireEvent.click(indicator(container))
 
     expect(igniteVerdaBox).toHaveBeenCalledTimes(1)
-    release(state({ warmth: { state: 'warm', secondsUntilScaledown: 300, scaledownSeconds: 300 } }))
-    await waitFor(() => expect(container.textContent).toContain('warm'))
+    release(
+      state({
+        warmth: warmth({ state: 'ready', secondsUntilScaledown: 300, scaledownSeconds: 300 }),
+      }),
+    )
+    await waitFor(() => expect(container.textContent).toContain('ready'))
   })
 
   it('says it is starting while the wake is out, rather than still reading "cold"', async () => {
@@ -526,8 +671,12 @@ describe('starting the box from the header', () => {
     await waitFor(() => expect(container.textContent).toContain('starting GPU'))
     expect(container.querySelector('.cold-start-spin'), 'no spinner glyph').toBeTruthy()
 
-    release(state({ warmth: { state: 'warm', secondsUntilScaledown: 300, scaledownSeconds: 300 } }))
-    await waitFor(() => expect(container.textContent).toContain('warm'))
+    release(
+      state({
+        warmth: warmth({ state: 'ready', secondsUntilScaledown: 300, scaledownSeconds: 300 }),
+      }),
+    )
+    await waitFor(() => expect(container.textContent).toContain('ready'))
   })
 
   it('surfaces a wake that failed instead of quietly going back to "cold"', async () => {
@@ -598,7 +747,7 @@ describe('starting the box from the header', () => {
       getPreviewHeaderState.mockResolvedValue(state())
       await vi.advanceTimersByTimeAsync(20_000)
 
-      await vi.waitFor(() => expect(container.textContent).toContain('warm'))
+      await vi.waitFor(() => expect(container.textContent).toContain('ready'))
       expect(container.textContent).not.toContain(IGNITE_FAILED_LABEL)
     } finally {
       vi.useRealTimers()

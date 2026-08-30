@@ -190,29 +190,45 @@ read-only.
 `--agent pi` with the tier model — `z-ai/glm-5.3` for security/critical work
 (auth, routing, secrets, tests-as-evidence), `z-ai/glm-5.3-flash` for complex
 work (reviews, fix rounds bound to written terms, coordination),
-`deepseek/deepseek-v4-flash-3107` for normal/mechanical work. The Claude-era
+`deepseek/deepseek-v4-flash-3107` for normal/mechanical work (owner-ruled id;
+⚠ pi's local catalog lists `-flash`, `-0731`, `-vision-exp`, `-pro`, `-pro-0813` but
+not `-3107` — pi accepts unknown ids as custom models and routes silently, so verify
+with `pi update` or against the catalog before relying on it; flagged to the owner
+2026-08-30). The Claude-era
 `--agent claude --model opus` remains the default only in Claude-side
-sessions; both mappings coexist. The orchestration docs confirm `--model` applies to
-Claude, Codex and Cursor only — pi takes no launch-time model, so its model comes from
-pi's own settings (whose default must be the tier model you want). Verify agent
+sessions; both mappings coexist. Orca cannot set pi's model (the docs scope `--model`
+to Claude, Codex and Cursor), and orca launches `pi` directly — the pi-kg.sh wrapper
+was removed 2026-08-29 — so the live lever is pi's own `defaultModel` in
+`~/.pi/agent/settings.json` (verify it equals the tier model you want before
+dispatching; a changed setting takes effect on the next launched lane). Verify agent
 availability against the
 runtime's registry of record, never against examples in help text or skills.
 
-**Dispatch after the TUI is ready — `agent_prompt_stalled` is a bootstrap race, not
-load.** orca.yaml's setup hook (direnv `use flake` eval, `pnpm install`,
-`pnpm baml-generate`, config copies) runs tens of seconds per fresh worktree; a prompt
-arriving mid-bootstrap never reaches the TUI. The documented dispatch sequence for a
-terminal you create is: `orca worktree create` → `orca terminal wait --terminal
-<handle> --for tui-idle --timeout-ms 60000` → `orca orchestration dispatch --task
-<id> --to <handle> --inject`. For `worker-start`, reuse a worktree whose setup has
-already completed (observed to succeed on every attempt) or wait out its Setup
-terminal first. A stall marks its task failed and a failed task cannot start —
-recreate it from the same spec file and dispatch into the now-warm worktree. Recovery
-hygiene: read `orca terminal list` UNFILTERED (a grep truncated at 30 lines once hid a
-live terminal behind a page of others and produced a false ghost-binding diagnosis);
-a terminal idling at its composer takes `orca terminal send --terminal <handle>
---enter`; and a low-level `dispatch --to` MUST carry `--inject`, or the spec is
-registered without ever entering the terminal.
+**Dispatch after the TUI can accept input — the stall is the setup race.** A prompt
+delivered before the agent TUI can accept input is lost; the runtime reports
+`agent_prompt_stalled` (stall semantics are not documented; observed 2026-08-29/30 to
+coincide with fresh-worktree setup windows). orca.yaml's setup hook (direnv `use
+flake` eval, `pnpm install`, `pnpm baml-generate`, config copies) runs tens of
+seconds per fresh worktree, and load is a contributing factor, not a rival cause — it
+lengthens the same window (2026-08-27: nine dispatches succeeded at two–three
+concurrent lanes; four stalls came at six, load average 75+ — all also fresh
+worktrees, so the two explanations were confounded; a busy box is exactly when the
+wait matters most). The documented dispatch sequence for a terminal you create is:
+`orca worktree create` → `orca terminal wait --terminal <handle> --for tui-idle
+--timeout-ms 60000` (this proves the TUI can accept input, not that setup finished)
+→ `orca orchestration dispatch --task <id> --to <handle> --inject`. The runtime also
+documents a repo-level `wait-for-setup` startup policy that gates agent launch on
+setup success — the structural fix, cheaper than remembering a procedure. For
+`worker-start`, reuse a worktree whose setup has already completed (observed to
+succeed on every attempt) or wait out its Setup terminal first. A stall marks its
+task failed and a failed task cannot start — recreate it from the same spec file and
+dispatch into the now-warm worktree. Recovery hygiene: read `orca terminal list`
+UNFILTERED (a grep truncated at 30 lines once hid a live terminal behind a page of
+others and produced a false ghost-binding diagnosis); a terminal idling at its
+composer takes `orca terminal send --terminal <handle> --enter`; and a low-level
+`dispatch --to` carries `--inject` for a recognized agent TUI — for a bare shell the
+docs prescribe the opposite (dispatch for tracking if needed, then send the prompt
+manually).
 
 **A dispatch receipt is not a running lane.** After every dispatch or attach, confirm
 the agent is *generating* — the TUI spinner with a climbing token counter

@@ -227,21 +227,20 @@ export const EventRow = (props: {
 
 export const ToolPairRow = (props: {
   call: ContextEvent
-  result?: ContextEvent
+  result: ContextEvent
   index: number
   expanded: boolean
   onExpand: () => void
   bgTint?: string
 }) => {
   const callData = () => props.call.data as ToolCallEventData
-  const resultData = () => props.result?.data as ToolResultEventData | undefined
-  const success = () => resultData()?.success ?? true
-  const preview = () =>
-    `${callData().tool}: ${resultData() ? (success() ? 'ok' : 'error') : 'pending'}`
+  const resultData = () => props.result.data as ToolResultEventData
+  const success = () => resultData().success
+  const preview = () => `${callData().tool}: ${success() ? 'ok' : 'error'}`
   // A guarded result is marked on the row itself, not only inside the detail
   // panel — otherwise the only way to learn a result was rewritten is to open
   // every one of them (SA-H10).
-  const sanitized = () => resultData()?.sanitized
+  const sanitized = () => resultData().sanitized
 
   return (
     <div

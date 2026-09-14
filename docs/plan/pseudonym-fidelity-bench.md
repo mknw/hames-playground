@@ -59,7 +59,7 @@ response rather than through a Collector). This is the plumbing of
 **Arms.** Language forced from the user message (`Antwoord in het Nederlands.` /
 `Répondez en français.` / `Answer in English.`) × guidance off/on. The guidance
 is injected through `Synthesize`'s `intent` argument, **not** by editing
-`baml_src/compactExecution.baml`: the question is whether guidance is worth wiring,
+`baml_src/compact-execution.baml`: the question is whether guidance is worth wiring,
 and changing the production prompt in order to measure that would beg it.
 Verbatim text of the on-arm:
 
@@ -268,7 +268,7 @@ wiring it:
   does not apply.
 
 So: wire it _if and when_ the prompt seam is chosen, as a one-paragraph addition
-to `compactExecution.baml`. It is not a prerequisite for `reverse` to work.
+to `compact-execution.baml`. It is not a prerequisite for `reverse` to work.
 
 **3. Open question 4 can be closed** for the Anthropic compactExecution chain. It
 should not be closed in general — see below.

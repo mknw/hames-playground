@@ -14,49 +14,49 @@ pnpm dev                      # Dev server on port 3444
 ## Architecture
 
 ```
-src/
-├── routes/
-│   ├── index.tsx              # Main page (Splitter: Chat + SupportPanel)
-│   └── api/events.ts          # SSE endpoint for streaming agent events
-├── components/ark-ui/
-│   ├── ChatInterface.tsx      # Sends messages, streams SSE, entity highlighting (message buffers live in routes/index.tsx, #105)
-│   ├── ChatSidebar.tsx        # Thread list: live progress strip + completion marks (#105), agent icons + collapsed rail (#60), delete + select mode (#71)
-│   ├── ChatMessages.tsx       # Markdown rendering with interactive graph entity spans
-│   ├── GraphVisualization.tsx  # Cytoscape.js graph with controls, editing, extraStyles
-│   ├── SupportPanel.tsx       # Tabbed panel (lazyMount): Neo4j, Memory, Context manager, Data, Terminal
-│   ├── SettingsPanel.tsx      # Harness settings FloatingPanel (sliders, number inputs)
-│   └── ObservabilityPanel.tsx  # Event timeline + LLM call detail
-├── lib/
-│   ├── harness-patterns/      # Core agent framework (see harness-patterns/README.md)
-│   ├── harness-client/
-│   │   ├── actions.server.ts        # processMessage(), processMessageStreaming(), listConversations(), loadConversation()
-│   │   ├── session.server.ts        # In-process pattern cache + Postgres-backed serialized context (per-user)
-│   │   ├── registry.server.ts       # Registers all agents
-│   │   ├── graph-extractor.ts       # ContextEvent → GraphElement[] (MCP + driver + enriched payload)
-│   │   ├── neo4j-enricher.server.ts # `onToolResult` recipe — fetches 1-hop neighborhood for touched nodes
-│   │   └── agents/                  # 6 pre-built agent configurations
-│   ├── db/
-│   │   ├── client.server.ts         # Lazy pg.Pool singleton + idempotent schema bootstrap
-│   │   └── conversations.server.ts  # Conversations repo (load/save/list/delete + deriveTitle)
-│   ├── document-store.server.ts # Data Stash: RedisJSON document storage (#6)
-│   ├── chunking.server.ts       # Data Stash: fixed/sentence/paragraph chunking (#9)
-│   ├── embeddings.server.ts     # Data Stash: provider-pluggable embeddings (#8)
-│   ├── document-ingest.server.ts # Data Stash: chunk→embed→HNSW index + KNN search
-│   ├── stash/                   # Data Stash upload HTTP helpers (parse + auth). See docs/DATA_STASH.md
-│   ├── sandbox/                 # Compute sandbox: withSandbox, Docker backend, warm pool, durable /work⇄DataStash sync (#89). See docs/plan/sandbox.md
-│   ├── run-registry.ts        # Multi-session run state: SessionRunState, completion marks, concurrency-cap policy (#105)
-│   ├── settings.ts            # HarnessSettings type, defaults, MODEL_CONTEXT_WINDOWS
-│   ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
-│   ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
-│   ├── turn-utils.ts          # findLastUserMessageIndex() — where "this turn" starts
-│   ├── graph-merge.ts         # mergeGraphElements() — accumulator dedup + touched-flag refresh
-│   ├── neo4j/
-│   │   ├── queries.ts         # Schema, manual Cypher, node properties
-│   │   └── write-action.ts    # Parameterized Cypher writes from graph UI
-│   └── graph/
-│       ├── transform.ts       # Neo4j driver → Cytoscape transforms
-│       └── extractors.ts      # ToolEvent → graph element extraction
-└── baml_client/               # Auto-generated from baml_src/ (never edit)
+app/
+├── src/
+│   ├── routes/
+│   │   ├── index.tsx              # Main page (Splitter: Chat + SupportPanel)
+│   │   └── api/events.ts          # SSE endpoint for streaming agent events
+│   ├── components/ark-ui/
+│   │   ├── ChatInterface.tsx      # Sends messages, streams SSE, entity highlighting (message buffers live in routes/index.tsx, #105)
+│   │   ├── ChatSidebar.tsx        # Thread list: live progress strip + completion marks (#105), agent icons + collapsed rail (#60), delete + select mode (#71)
+│   │   ├── ChatMessages.tsx       # Markdown rendering with interactive graph entity spans
+│   │   ├── GraphVisualization.tsx  # Cytoscape.js graph with controls, editing, extraStyles
+│   │   ├── SupportPanel.tsx       # Tabbed panel (lazyMount): Neo4j, Memory, Context manager, Data, Terminal
+│   │   ├── SettingsPanel.tsx      # Harness settings FloatingPanel (sliders, number inputs)
+│   │   └── ObservabilityPanel.tsx  # Event timeline + LLM call detail
+│   ├── lib/
+│   │   ├── harness-patterns/      # Core agent framework (see harness-patterns/README.md)
+│   │   ├── harness-client/
+│   │   │   ├── actions.server.ts        # processMessage(), processMessageStreaming(), listConversations(), loadConversation()
+│   │   │   ├── session.server.ts        # In-process pattern cache + Postgres-backed serialized context (per-user)
+│   │   │   ├── registry.server.ts       # Registers all agents
+│   │   │   ├── graph-extractor.ts       # ContextEvent → GraphElement[] (MCP + driver + enriched payload)
+│   │   │   ├── neo4j-enricher.server.ts # `onToolResult` recipe — fetches 1-hop neighborhood for touched nodes
+│   │   │   └── agents/                  # 6 pre-built agent configurations
+│   │   ├── db/
+│   │   │   ├── client.server.ts         # Lazy pg.Pool singleton + idempotent schema bootstrap
+│   │   │   └── conversations.server.ts  # Conversations repo (load/save/list/delete + deriveTitle)
+│   │   ├── document-store.server.ts # Data Stash: RedisJSON document storage (#6)
+│   │   ├── chunking.server.ts       # Data Stash: fixed/sentence/paragraph chunking (#9)
+│   │   ├── embeddings.server.ts     # Data Stash: provider-pluggable embeddings (#8)
+│   │   ├── document-ingest.server.ts # Data Stash: chunk→embed→HNSW index + KNN search
+│   │   ├── stash/                   # Data Stash upload HTTP helpers (parse + auth). See docs/DATA_STASH.md
+│   │   ├── sandbox/                 # Compute sandbox: withSandbox, Docker backend, warm pool, durable /work⇄DataStash sync (#89). See docs/plan/sandbox.md
+│   │   ├── run-registry.ts        # Multi-session run state: SessionRunState, completion marks, concurrency-cap policy (#105)
+│   │   ├── settings.ts            # HarnessSettings type, defaults, MODEL_CONTEXT_WINDOWS
+│   │   ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
+│   │   ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
+│   │   ├── turn-utils.ts          # findLastUserMessageIndex() — where "this turn" starts
+│   │   ├── graph-merge.ts         # mergeGraphElements() — accumulator dedup + touched-flag refresh
+│   │   ├── neo4j/
+│   │   │   ├── queries.ts         # Schema, manual Cypher, node properties
+│   │   │   └── graph-edit.server.ts # Parameterized Cypher writes from graph UI
+│   │   └── graph/
+│   │       └── transform.ts      # Neo4j driver → Cytoscape transforms
+├── baml_client/               # Auto-generated from baml_src/ (never edit)
 ```
 
 ## Key Features

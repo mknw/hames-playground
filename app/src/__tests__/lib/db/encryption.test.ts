@@ -428,6 +428,58 @@ describe('backfill migration', () => {
     }
   })
 
+  it('does not write a stale snapshot over a column a concurrent writer encrypted', async () => {
+    if (!dbAvailable) return
+    // A rolling restart over a legacy store, which is the only shape that
+    // reaches this. Instance B snapshots the row at t0 (plaintext title + the
+    // conversation so far); instance A finishes the user's next turn at t1,
+    // which encrypts `context` and leaves `title` alone (saveConversation
+    // COALESCEs it); instance B's UPDATE lands at t2 writing BOTH columns from
+    // its t0 snapshot. That UPDATE's guard used to be the row-selection
+    // predicate — OR-joined across every encrypted column — so the
+    // still-plaintext TITLE kept it true and the stale CONTEXT went through:
+    // the turn was gone, rowCount was 1, and it was tallied as a row encrypted.
+    // The guard is AND-joined over exactly the columns being written.
+    const id = `enc-interleave-${SUFFIX}`
+    await query(
+      `INSERT INTO conversations (id, user_id, agent_id, title, context, status)
+       VALUES ($1, $2, 'general', $3, $4::jsonb, 'done')`,
+      [id, OTHER_USER, SECRET_TITLE, context('-turn-3')],
+    )
+
+    // Instance A's turn, landing between instance B's SELECT and its UPDATE.
+    let interleaved = false
+    const raced: QueryRunner = async (text, params) => {
+      const result = await query(text, params)
+      if (!interleaved && text.startsWith('SELECT') && text.includes('FROM conversations')) {
+        interleaved = true
+        await saveConversation({
+          id,
+          userId: OTHER_USER,
+          agentId: 'general',
+          title: null,
+          serializedContext: context('-turn-4'),
+          status: 'done',
+        })
+      }
+      return result as never
+    }
+
+    await encryptExistingRows(raced)
+    expect(interleaved).toBe(true)
+
+    const loaded = await loadConversation(id, OTHER_USER)
+    expect(JSON.parse(loaded!.serializedContext)).toEqual(JSON.parse(context('-turn-4')))
+    // The column that WAS still due is still converted — a row the guard now
+    // refuses is picked up by the next batch, which is the designed behaviour.
+    const { rows } = await query<{ title: string }>(
+      'SELECT title FROM conversations WHERE id = $1',
+      [id],
+    )
+    expect(looksEncrypted(rows[0].title)).toBe(true)
+    expect(loaded!.title).toBe(SECRET_TITLE)
+  })
+
   it('skips tables that do not exist in this database', async () => {
     if (!dbAvailable) return
     const report = await encryptExistingRows(runner)

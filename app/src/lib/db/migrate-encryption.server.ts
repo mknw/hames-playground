@@ -20,6 +20,9 @@
  * matches zero rows, so a boot costs one cheap `SELECT ... LIMIT` per table.
  * Each `UPDATE` re-checks the same predicate in its `WHERE`, so two processes
  * booting at once cannot double-encrypt: the loser's write affects no rows.
+ * The UPDATE's guard covers exactly the columns it writes, AND-joined — the
+ * row-selection predicate is OR-joined and re-using it there let a row that was
+ * still due for ONE column accept a stale snapshot of ALL of them.
  *
  * ## Table discovery
  *
@@ -126,13 +129,19 @@ export interface EncryptionMigrationReport {
   totalRowsEncrypted: number
 }
 
-/** Not-an-envelope for TEXT (see `NOT_ENCRYPTED_SQL`), `jsonb_typeof <> 'string'` for JSONB. */
+/**
+ * One column is due: not-an-envelope for TEXT (see `NOT_ENCRYPTED_SQL`),
+ * `jsonb_typeof <> 'string'` for JSONB.
+ */
+function dueClause(spec: TableSpec, column: string): string {
+  return spec.jsonbColumns.includes(column)
+    ? `(jsonb_typeof(${column}) <> 'string')`
+    : `(${NOT_ENCRYPTED_SQL(column)})`
+}
+
+/** A row is worth SELECTing when ANY of its encrypted columns is still due. */
 function duePredicate(spec: TableSpec): string {
-  const clauses = [
-    ...spec.textColumns.map((c) => `(${NOT_ENCRYPTED_SQL(c)})`),
-    ...spec.jsonbColumns.map((c) => `(jsonb_typeof(${c}) <> 'string')`),
-  ]
-  return clauses.join(' OR ')
+  return [...spec.textColumns, ...spec.jsonbColumns].map((c) => dueClause(spec, c)).join(' OR ')
 }
 
 async function tableExists(run: QueryRunner, table: string): Promise<boolean> {
@@ -175,12 +184,14 @@ async function migrateTable(run: QueryRunner, spec: TableSpec): Promise<TableMig
 
     for (const row of rows) {
       const sets: string[] = []
+      const guards: string[] = []
       const params: unknown[] = [row[spec.pk]]
       for (const col of spec.textColumns) {
         const value = row[col]
         if (typeof value !== 'string' || looksEncrypted(value)) continue
         params.push(encryptField(value))
         sets.push(`${col} = $${params.length}`)
+        guards.push(dueClause(spec, col))
       }
       for (const col of spec.jsonbColumns) {
         const jsonType = row[`${col}__type`]
@@ -189,13 +200,24 @@ async function migrateTable(run: QueryRunner, spec: TableSpec): Promise<TableMig
         if (jsonType == null || jsonType === 'string') continue
         params.push(encryptJsonb(JSON.stringify(row[col] ?? null)))
         sets.push(`${col} = $${params.length}::jsonb`)
+        guards.push(dueClause(spec, col))
       }
       if (sets.length === 0) continue
       attempted++
-      // Predicate repeated in the WHERE so a concurrent booter's write wins
-      // once rather than both of us encrypting the same row.
+      // The guard is AND-joined over EXACTLY the columns this statement writes,
+      // and is deliberately not the OR-joined row-selection predicate. Every
+      // value here is a snapshot taken before the SELECT, so the write must be
+      // refused unless every one of them is still the value that was read. With
+      // the OR, one column still due let the whole stale snapshot through: a
+      // legacy row whose `title` was untouched but whose `context` a concurrent
+      // instance had just re-saved (a finished turn) was reverted to the
+      // snapshot, counted as encrypted, and logged nowhere. A row that now
+      // matches nothing is picked up by the next batch, which is what the
+      // batching already does for a concurrent booter's write.
       const { rowCount } = await run(
-        `UPDATE ${spec.table} SET ${sets.join(', ')} WHERE ${spec.pk} = $1 AND (${due})`,
+        `UPDATE ${spec.table} SET ${sets.join(', ')} WHERE ${spec.pk} = $1 AND (${guards.join(
+          ' AND ',
+        )})`,
         params,
       )
       result.rowsEncrypted += rowCount ?? 0

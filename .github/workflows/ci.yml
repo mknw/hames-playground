@@ -37,14 +37,18 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: app/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       # Both steps are load-bearing, in this order. A node_modules that predates
       # the lockfile makes `baml-generate` fail on a @boundaryml/baml version
       # mismatch, which leaves a stale generated client and surfaces as ~7
       # phantom test failures plus an inflated type-error count — failures with
       # nothing to do with the change under test.
+      #
+      # The lockfile is the workspace root's (#225 Step 0), so the install runs
+      # from the repo root, not from the `app` default below.
       - run: pnpm install --frozen-lockfile
+        working-directory: .
 
       # baml_client/ is generated and gitignored. Without it ~270 tests fail on
       # `Failed to resolve import "../../../baml_client/inlinedbaml"`.
@@ -139,10 +143,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # `defaults.run.working-directory` is app/, which is also the build
-      # context — the Dockerfile needs nothing outside it (baml_src/ lives here).
+      # `defaults.run.working-directory` is app/, which is still the main build
+      # context — but since #225 Step 0 the workspace lockfile lives at the repo
+      # root, the build also receives the three root workspace files (package.json,
+      # pnpm-workspace.yaml, pnpm-lock.yaml) through the scoped additional context
+      # `root=.` (--build-context needs BuildKit; ubuntu-latest's docker ≥23 runs
+      # `docker build` on buildx). Only COPY-named files can cross it, and
+      # app/.dockerignore is untouched. Bridge until #225 Step 1 widens the
+      # build context to the repo root.
       - name: Build the image
-        run: docker build --tag kg-agent-app:ci .
+        working-directory: .
+        run: docker build --build-context root=. -f app/Dockerfile --tag kg-agent-app:ci app
 
       # Booting proves less than it looks: /api/health touches neither native
       # package, so an image whose traced node_modules lost node-pty's .node

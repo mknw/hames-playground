@@ -81,3 +81,7 @@ neo4j_password.txt
 # Regenerated on every invocation and meaningless outside the run that wrote it.
 app/e2e-browser/.runtime/
 app/playwright-report/
+
+# Orca per-session task output (background command logs). Untracked runtime
+# state; meaningless outside the session that wrote it.
+.pi/tasks/

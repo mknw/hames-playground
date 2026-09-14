@@ -5,7 +5,7 @@
   "scripts": {
     "baml-test": "baml-cli test",
     "baml-generate": "baml-cli generate",
-    "postinstall": "find node_modules -path '*/node-pty/prebuilds/*/spawn-helper' -exec chmod +x {} + 2>/dev/null || true",
+    "postinstall": "find node_modules ../node_modules -path '*/node-pty/prebuilds/*/spawn-helper' -exec chmod +x {} + 2>/dev/null || true",
     "predev": "pnpm baml-generate",
     "dev": "vinxi dev --port 3444",
     "predev:exposed": "pnpm baml-generate",
@@ -48,11 +48,6 @@
   },
   "engines": {
     "node": ">=22"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "node-pty"
-    ]
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",

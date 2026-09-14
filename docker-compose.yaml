@@ -115,6 +115,13 @@ services:
     build:
       context: ./app
       dockerfile: Dockerfile
+      # #225 Step 0 bridge: the workspace lockfile lives at the repo root while
+      # the build context is still app/, so the three root workspace files
+      # (package.json, pnpm-workspace.yaml, pnpm-lock.yaml) ride in via this
+      # scoped named context — only files COPY names explicitly can cross it.
+      # Dissolves when #225 Step 1 widens the build context to the repo root.
+      additional_contexts:
+        root: .
     image: kg-agent-app:local
     container_name: kg-agent-app
     restart: unless-stopped

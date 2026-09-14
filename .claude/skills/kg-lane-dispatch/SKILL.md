@@ -171,8 +171,13 @@ A lane runs in its own worktree — created first, then pinned at start:
 ```bash
 orca worktree create --name <lane> --repo path:<repo-root> --base-branch main --setup run
 orca orchestration worker-start --run <run> --task <task> \
-  --worktree name:<lane> --agent pi --model <tier-model>
+  --worktree name:<lane> --agent pi
 ```
+
+No `--model` here: Orca cannot set pi's model (the docs scope `--model` to
+Claude, Codex and Cursor), so the tier model the lane runs is pi's own
+`defaultModel` in `~/.pi/agent/settings.json` — see
+**Lane agent and model** below.
 
 `--worktree` is what puts the worker there: `worker-start` without it opens the
 agent's terminal in the coordinator's own checkout — the one with the owner's

@@ -152,13 +152,18 @@ export interface SimpleLoopData {
  *
  * Calls the BAML controller function directly, extracting params from context.
  *
- * @param controller - BAML controller function (e.g., b.LoopController)
+ * @param controller - Controller function from an adapter factory
+ *   (e.g., `createLoopControllerAdapter(toolNames)` or a domain alias like
+ *   `createNeo4jController(toolNames)`). A raw bound BAML function does NOT
+ *   satisfy this contract — its positional signature differs and it returns a
+ *   bare ControllerAction instead of `{ action, llmCall }` (see
+ *   `ControllerFnWithLLMData`).
  * @param tools - Allowed tool names
  * @param config - Optional configuration (schema, maxTurns, patternId, etc.)
  * @returns ConfiguredPattern ready for chain
  *
  * @example
- * const loop = simpleLoop(b.LoopController, tools.neo4j, {
+ * const loop = simpleLoop(createLoopControllerAdapter(tools.neo4j), tools.neo4j, {
  *   patternId: 'neo4j-query',
  *   schema,
  *   trackHistory: 'tool_result',
@@ -309,8 +314,9 @@ export function simpleLoop<T extends SimpleLoopData>(
           // Apply the contract's documented defaults ONCE, here, before the
           // action is recorded or read: `is_final` is optional (#159) and
           // absent means false. Every controller funnels through this point —
-          // adapters, `b.LoopController` bound directly, custom ones — so
-          // nothing downstream has to re-handle an absent value.
+          // adapter factories and custom ones; a raw BAML function does not
+          // satisfy the contract — so nothing downstream has to re-handle an
+          // absent value.
           action = normalizeControllerAction(controllerResult.action)
           controllerLlmCall = controllerResult.llmCall
 

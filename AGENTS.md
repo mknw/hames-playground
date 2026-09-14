@@ -168,18 +168,18 @@ Framework in `app/src/lib/harness-patterns/`. Front page: [`README.md`](app/src/
      .prettierrc, so prettier's defaults would rewrite these samples to double
      quotes + semicolons, against app/.prettierrc.json. -->
 
-**BAML functions must use `.bind(b)`:**
-
-<!-- prettier-ignore -->
-```typescript
-simpleLoop(b.LoopController.bind(b), tools.neo4j, { patternId: 'neo4j-query', schema })
-```
-
-**Adapter factories:** `baml-adapters.server.ts` provides `createLoopControllerAdapter`, `createActorControllerAdapter`, `createCriticAdapter`, etc. The seven domain names (`createNeo4jController`, `createWebSearchController`, `createMemoryController`, `createContext7Controller`, `createFilesystemController`, `createRedisController`, `createDatabaseController`) are thin aliases of `createLoopControllerAdapter` with no behaviour of their own (#225) — kept for call-site readability, not preferable to it.
+**Patterns take adapter factories, never raw BAML functions.** The generated functions' positional signature does not match a pattern's controller contract — a bound raw function fails typecheck and would die on turn 1 — the adapters do the call-order adaptation and return `{ action, llmCall }`:
 
 <!-- prettier-ignore -->
 ```typescript
 const controller = createNeo4jController(tools.neo4j ?? [])
+simpleLoop(controller, tools.neo4j ?? [], { patternId: 'neo4j-query', schema })
+```
+
+**Adapter factories:** `baml-adapters.server.ts` provides `createLoopControllerAdapter`, `createActorControllerAdapter`, `createCriticAdapter`, etc. The seven domain names (`createNeo4jController`, `createWebSearchController`, `createMemoryController`, `createContext7Controller`, `createFilesystemController`, `createRedisController`, `createDatabaseController`) are thin aliases of `createLoopControllerAdapter` with no behaviour of their own (#225) — kept for call-site readability, not preferable to it. (If you ever detach a generated function from `b` into a variable, `.bind(b)` it first — the generated method reads `this.bamlOptions`.)
+
+<!-- prettier-ignore -->
+```typescript
 const actor = createActorControllerAdapter(tools.all)
 const critic = createCriticAdapter()
 ```

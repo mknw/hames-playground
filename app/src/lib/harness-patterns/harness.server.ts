@@ -163,7 +163,11 @@ export interface HarnessResultScoped<T> extends HarnessResult<T> {
  *
  * @example
  * const agent = harness(
- *   simpleLoop(b.LoopController, tools.neo4j, { patternId: 'neo4j' }),
+ *   simpleLoop<SimpleLoopData & Record<string, unknown>>(
+ *     createLoopControllerAdapter(tools.neo4j),
+ *     tools.neo4j,
+ *     { patternId: 'neo4j' }
+ *   ),
  *   compactExecution({ mode: 'response', patternId: 'compact-execution' })
  * )
  *

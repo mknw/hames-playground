@@ -1094,6 +1094,20 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   const [loading, setLoading] = createSignal(false)
   const [uploading, setUploading] = createSignal(false)
   const [uploadError, setUploadError] = createSignal<string | null>(null)
+  /** The cold list-load failed (#314): distinguishable from "no uploads". */
+  const [loadError, setLoadError] = createSignal<string | null>(null)
+
+  // Tool-result actions go through the route's optimistic handler, which
+  // re-throws when the server refuses (#314). Catch here and report through
+  // the panel's existing error channel — the same one the document actions
+  // use — rather than leaving the rejection unhandled from the menu onClick.
+  const handleStashAction = async (eventId: string, action: StashAction) => {
+    try {
+      await props.onStashAction(eventId, action)
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Action failed')
+    }
+  }
   // Post-upload watch window: ingest runs in the background server-side, so we
   // poll briefly after an upload to catch the (absent → pending → indexed)
   // status transitions even before the first `pending` lands.
@@ -1164,8 +1178,14 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
     if (cold) setLoading(true)
     try {
       applyDocs(sid, await refreshDocuments(sid))
-    } catch {
-      // Unreachable server: keep showing what we last had rather than blanking.
+      setLoadError(null)
+    } catch (err) {
+      // A warm panel keeps showing what we last had rather than blanking. On a
+      // COLD load there is nothing to keep — the empty list is a lie that
+      // invites re-uploading files that exist (#314), so say it failed.
+      if (cold) {
+        setLoadError(err instanceof Error ? err.message : 'Could not load uploads')
+      }
     } finally {
       setLoading(false)
     }
@@ -1174,6 +1194,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   // (Re)seed from cache + refresh whenever the session changes.
   createEffect(() => {
     const sid = props.sessionId
+    setLoadError(null)
     setDocs(sid ? (cachedDocuments(sid) ?? []) : [])
     if (sid) void refresh()
   })
@@ -1364,6 +1385,31 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
             <span>Loading uploads…</span>
           </div>
         </Show>
+        {/* A failed cold load is NOT an empty stash (#314). */}
+        <Show when={loadError()}>
+          <div flex="~" items="center" gap="2" p="x-3 y-2" text="xs ui-danger">
+            <span
+              class="i-material-symbols-error-outline"
+              style={{ width: '14px', height: '14px' }}
+              aria-hidden="true"
+            />
+            <span>Couldn't load uploads — {loadError()}</span>
+            <button
+              type="button"
+              data-testid="uploads-retry"
+              onClick={() => void refresh()}
+              disabled={loading()}
+              p="x-2 y-0.5"
+              text="xs ui-accent"
+              bg="ui-accent/20 hover:ui-accent/30"
+              border="1 ui-accent/50"
+              rounded="md"
+              cursor="pointer"
+            >
+              Retry
+            </button>
+          </div>
+        </Show>
       </CollapsibleSection>
 
       {/* ── Agent Findings ── tool results the agent produced (neo4j, web, …). */}
@@ -1389,7 +1435,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
                 ({partitioned().current.length})
               </span>
             </div>
-            <IconGallery items={partitioned().current} onAction={props.onStashAction} />
+            <IconGallery items={partitioned().current} onAction={handleStashAction} />
           </div>
         </Show>
 
@@ -1400,7 +1446,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
             count={partitioned().previous.length}
             defaultOpen={true}
           >
-            <IconGallery items={partitioned().previous} onAction={props.onStashAction} />
+            <IconGallery items={partitioned().previous} onAction={handleStashAction} />
           </CollapsibleSection>
         </Show>
 
@@ -1411,7 +1457,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
             count={partitioned().archived.length}
             defaultOpen={false}
           >
-            <IconGallery items={partitioned().archived} onAction={props.onStashAction} />
+            <IconGallery items={partitioned().archived} onAction={handleStashAction} />
           </CollapsibleSection>
         </Show>
       </CollapsibleSection>

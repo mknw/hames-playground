@@ -65,8 +65,8 @@ const collection = (ids: string[]): FakeCollection => ({
   empty: () => ids.length === 0,
   union: (other: FakeCollection) => collection([...ids, ...other.ids]),
   remove: () => {
-    nodeIds = []
-    edgeIds = []
+    nodeIds = nodeIds.filter((id) => !ids.includes(id))
+    edgeIds = edgeIds.filter((id) => !ids.includes(id))
   },
   removeClass: () => {
     highlighted = []
@@ -671,6 +671,27 @@ describe('GraphVisualization — node creation and editing', () => {
     expect(container.textContent).not.toContain('Create Node')
     expect(added).toHaveLength(0)
   })
+
+  it('rolls back a node the database refused and says so instead of fabricating success (#314)', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    createGraphNode.mockRejectedValueOnce(new Error('neo4j down'))
+    const { container } = render(() => <GraphVisualization elements={[]} />)
+    await becomeVisible()
+
+    button(container, '+ Node').click()
+    await tick()
+    const name = container.querySelector<HTMLInputElement>(
+      'input:not([type="range"]):not([type="checkbox"])',
+    )!
+    name.value = 'GraphQL'
+    name.dispatchEvent(new Event('input', { bubbles: true }))
+    button(container, 'Create').click()
+    await tick()
+
+    expect(nodeIds, 'the canvas must not keep a node the DB refused').not.toContain('GraphQL')
+    expect(container.textContent).toContain('not saved')
+    consoleError.mockRestore()
+  })
 })
 
 describe('GraphVisualization — node properties panel', () => {
@@ -741,12 +762,14 @@ describe('GraphVisualization — node properties panel', () => {
     button(rendered.container, 'Save').click()
     await tick()
 
-    expect(setGraphNodeProperty).toHaveBeenCalledWith('Alpha', 'summary', 'new summary')
+    // #314: the node's elementId (its Cytoscape id) is what identifies the
+    // node to Neo4j — the display label was never a reliable match key.
+    expect(setGraphNodeProperty).toHaveBeenCalledWith('a', 'summary', 'new summary')
     expect(dataWrites).toContainEqual(['a', 'summary', 'new summary'])
     expect(rendered.container.textContent).toContain('new summary')
   })
 
-  it('survives a rejected property write instead of crashing the panel', async () => {
+  it('rolls back a rejected property write instead of crashing the panel', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     setGraphNodeProperty.mockRejectedValueOnce(new Error('neo4j down'))
     const rendered = render(() => <GraphVisualization elements={nodes(['a'])} />)
@@ -761,6 +784,28 @@ describe('GraphVisualization — node properties panel', () => {
 
     expect(setGraphNodeProperty).toHaveBeenCalled()
     expect(consoleError).toHaveBeenCalledWith('Cypher write failed:', expect.any(Error))
+    // #314: the optimistic write is undone and the failure is visible — the
+    // panel must not keep showing the new value as if it had persisted.
+    expect(dataWrites.at(-1)).toEqual(['a', 'summary', 'old'])
+    expect(rendered.container.textContent).toContain('not saved')
+    expect(rendered.container.textContent).not.toContain('new summary')
+    consoleError.mockRestore()
+  })
+
+  it('persistence failures on the property path surface the edit error in the panel', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    setGraphNodeProperty.mockRejectedValueOnce(new Error('matched no graph node'))
+    const rendered = render(() => <GraphVisualization elements={nodes(['a'])} />)
+    await becomeVisible()
+
+    fire('tap', 'node', fakeNode('a', { label: 'Alpha', properties: { summary: 'old' } }))
+    await tick()
+    rendered.container.querySelector<HTMLElement>('button[title="Edit field"]')!.click()
+    await tick()
+    button(rendered.container, 'Save').click()
+    await tick()
+
+    expect(rendered.container.textContent).toContain('matched no graph node')
     consoleError.mockRestore()
   })
 
@@ -817,10 +862,34 @@ describe('GraphVisualization — relation mode', () => {
     expect(added.at(-1)).toMatchObject({
       data: { id: 'a-DEPENDS_ON-b', source: 'a', target: 'b', label: 'DEPENDS_ON' },
     })
-    expect(linkGraphNodes).toHaveBeenCalledWith('Alpha', 'Beta', 'DEPENDS_ON')
+    // #314: endpoints are matched by elementId, not display label.
+    expect(linkGraphNodes).toHaveBeenCalledWith('a', 'b', 'DEPENDS_ON')
     expect(container.textContent, 'the banner clears once the relation lands').not.toContain(
       'Select target node',
     )
+  })
+
+  it('rolls back an edge the database refused and says so instead of fabricating success (#314)', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    linkGraphNodes.mockRejectedValueOnce(new Error('matched no graph node'))
+    const { container } = render(() => <GraphVisualization elements={nodes(['a', 'b'])} />)
+    await becomeVisible()
+
+    fire('tap', 'node', fakeNode('a', { label: 'Alpha' }))
+    await tick()
+    button(container, 'Create Relation').click()
+    await tick()
+    const relType = container.querySelector<HTMLInputElement>('input[placeholder="REL_TYPE"]')!
+    relType.value = 'DEPENDS_ON'
+    relType.dispatchEvent(new Event('input', { bubbles: true }))
+    fire('tap', 'node', fakeNode('b', { label: 'Beta' }))
+    await tick()
+
+    expect(edgeIds, 'the canvas must not keep an edge the DB refused').not.toContain(
+      'a-DEPENDS_ON-b',
+    )
+    expect(container.textContent).toContain('not saved')
+    consoleError.mockRestore()
   })
 
   it('can be abandoned from the banner', async () => {

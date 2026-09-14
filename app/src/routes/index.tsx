@@ -134,11 +134,14 @@ export default function Home() {
       const documents = await refreshDocuments(sid)
       if (sid !== selectedSessionId()) return // session switched mid-poll
       const pending = hasPendingIngest(documents)
-      setEmbeddingSources(pending)
       embedPolls += 1
-      // Keep watching while pending (cap ~6 min so a stuck ingest can't block forever).
-      if (pending && embedPolls < 120)
-        embedPollTimer = setTimeout(() => void pollEmbedding(sid), 3000)
+      // Watch while pending, but a stuck ingest must not block forever: at the
+      // cap stop polling AND clear the gate (#314) — setting the flag before
+      // the cap check used to stop polling with the gate latched on, leaving
+      // the composer dead while the message promised it would clear.
+      const stillWatching = pending && embedPolls < 120
+      setEmbeddingSources(stillWatching)
+      if (stillWatching) embedPollTimer = setTimeout(() => void pollEmbedding(sid), 3000)
     } catch {
       // A poll that cannot reach the server must not leave the composer
       // blocked — the user can always retry the question.
@@ -254,6 +257,7 @@ export default function Home() {
   // ever shows the displayed session, so that is the buffer this patches.
   const handleStashAction = async (eventId: string, action: StashAction) => {
     const sid = selectedSessionId()
+    const before = registry.events(sid).find((e) => e.id === eventId)
     // Optimistic UI update: mutate the session's event buffer immediately.
     registry.mapEvents(sid, (e) => {
       if (e.id !== eventId || e.type !== 'tool_result') return e
@@ -268,7 +272,15 @@ export default function Home() {
       return { ...e, data: d }
     })
 
-    await applyToolResultAction(sid, eventId, action)
+    try {
+      await applyToolResultAction(sid, eventId, action)
+    } catch (error) {
+      // Undo the optimistic mutation (#314) — a chip left greyed and archived
+      // after a refused write is a fabricated result. Re-throw so the panel's
+      // error channel can show why it snapped back.
+      if (before) registry.mapEvents(sid, (e) => (e.id === eventId ? before : e))
+      throw error
+    }
   }
 
   // Build a set of known entity names/labels from graph elements for chat

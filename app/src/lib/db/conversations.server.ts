@@ -256,6 +256,10 @@ export interface SaveConversationInput {
  * `loadSession` returns null, the app treats it as a new chat, and every write
  * of that turn hits a foreign row). Throwing turns that into a failed turn:
  * `runAndSave` already logs it, flips the row to `status='error'` and re-raises.
+ * The interactive pre-seed (`turn.server.ts:267`) is OUTSIDE that try and is
+ * the first write to hit a foreign row: it surfaces through the SSE route's
+ * own catch as an `event: error` and leaves no row spinning, because nothing
+ * was seeded.
  *
  * Zero rows means exactly one thing — the id exists under a different owner —
  * because a fresh id INSERTs and an owned id UPDATEs. Whether the product
@@ -287,11 +291,15 @@ export async function saveConversation(input: SaveConversationInput): Promise<vo
     ],
   )
   if ((rowCount ?? 0) === 0) {
-    throw new Error(
+    // Detail to the log, not to the browser: this message reaches the user
+    // verbatim (turn.server.ts:267 → events.ts:131 `event: error` → an error
+    // bubble), and "belongs to another user" is an ownership fact the caller
+    // has no business being told.
+    console.error(
       `[db] saving conversation ${input.id} wrote no rows: the id exists and belongs to another ` +
-        'user, so the owner-scoped upsert matched nothing. The turn that produced this context ' +
-        'is not persisted.',
+        'user, so the owner-scoped upsert matched nothing.',
     )
+    throw new Error(`[db] conversation ${input.id} could not be saved; the turn is not persisted.`)
   }
 }
 

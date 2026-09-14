@@ -7,6 +7,9 @@
  * sign-out URL is composed.
  */
 
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
@@ -156,6 +159,17 @@ describe('redeemAuthCode', () => {
 
     expect(acquireTokenByCode.mock.calls[0][0]).not.toHaveProperty('nonce')
     expect(acquireTokenByCode.mock.calls[0][1]).toBeUndefined()
+  })
+
+  // The fix above is only correct while MSAL still reads the nonce from
+  // `acquireTokenByCode`'s SECOND argument. That contract lives in
+  // node_modules, so pin it the way this repo pins its other vendor facts: a
+  // bump that moves the check goes red HERE, beside the call site it justifies,
+  // instead of silently re-opening #314 finding 1.
+  it('MSAL still reads the nonce from the auth-code payload, not the request', () => {
+    const msal = readFileSync(createRequire(import.meta.url).resolve('@azure/msal-node'), 'utf8')
+    expect(msal).toContain('acquireTokenByCode(request, authCodePayLoad)')
+    expect(msal).toContain('idTokenClaims.nonce !== authCodePayload.nonce')
   })
 
   it('reports a null home account when MSAL returns no account', async () => {

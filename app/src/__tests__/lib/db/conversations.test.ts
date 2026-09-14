@@ -170,7 +170,7 @@ describe('conversations CRUD', () => {
         serializedContext: JSON.stringify({ events: [] }),
         status: 'running',
       }),
-    ).rejects.toThrow(/wrote no rows/)
+    ).rejects.toThrow(/could not be saved/)
 
     const row = await loadConversation(id, TEST_USER)
     expect(row).not.toBeNull()

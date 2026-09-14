@@ -170,6 +170,8 @@ async function migrateTable(run: QueryRunner, spec: TableSpec): Promise<TableMig
   // first nullable JSONB column added here does not have to rediscover it.
   const selectColumns = [
     spec.pk,
+    // The row version this snapshot was taken at — see the UPDATE below.
+    'xmin::text AS __version',
     ...spec.textColumns,
     ...spec.jsonbColumns.flatMap((c) => [c, `jsonb_typeof(${c}) AS "${c}__type"`]),
   ].join(', ')
@@ -184,14 +186,12 @@ async function migrateTable(run: QueryRunner, spec: TableSpec): Promise<TableMig
 
     for (const row of rows) {
       const sets: string[] = []
-      const guards: string[] = []
       const params: unknown[] = [row[spec.pk]]
       for (const col of spec.textColumns) {
         const value = row[col]
         if (typeof value !== 'string' || looksEncrypted(value)) continue
         params.push(encryptField(value))
         sets.push(`${col} = $${params.length}`)
-        guards.push(dueClause(spec, col))
       }
       for (const col of spec.jsonbColumns) {
         const jsonType = row[`${col}__type`]
@@ -200,24 +200,25 @@ async function migrateTable(run: QueryRunner, spec: TableSpec): Promise<TableMig
         if (jsonType == null || jsonType === 'string') continue
         params.push(encryptJsonb(JSON.stringify(row[col] ?? null)))
         sets.push(`${col} = $${params.length}::jsonb`)
-        guards.push(dueClause(spec, col))
       }
       if (sets.length === 0) continue
       attempted++
-      // The guard is AND-joined over EXACTLY the columns this statement writes,
-      // and is deliberately not the OR-joined row-selection predicate. Every
-      // value here is a snapshot taken before the SELECT, so the write must be
-      // refused unless every one of them is still the value that was read. With
-      // the OR, one column still due let the whole stale snapshot through: a
-      // legacy row whose `title` was untouched but whose `context` a concurrent
-      // instance had just re-saved (a finished turn) was reverted to the
-      // snapshot, counted as encrypted, and logged nowhere. A row that now
-      // matches nothing is picked up by the next batch, which is what the
-      // batching already does for a concurrent booter's write.
+      // The guard is the ROW VERSION this snapshot was read at, not a re-check
+      // of the due-predicate. Every value here was read before the SELECT
+      // returned, so the write must be refused unless the row has not moved at
+      // all since. A due-predicate guard only refuses a writer that ENCRYPTED
+      // the column; the writer this backfill actually races is an instance of
+      // the app finishing a turn during a rolling restart, and a
+      // still-pre-encryption instance writes PLAINTEXT — which leaves the
+      // column due, passes that guard, and reverts the turn. `xmin` is the
+      // transaction that last wrote the row: exact, integral, changed by every
+      // UPDATE. A row that now matches nothing is picked up by the next batch,
+      // which is what the batching already does for a concurrent booter.
+      params.push(row.__version)
       const { rowCount } = await run(
-        `UPDATE ${spec.table} SET ${sets.join(', ')} WHERE ${spec.pk} = $1 AND (${guards.join(
-          ' AND ',
-        )})`,
+        `UPDATE ${spec.table} SET ${sets.join(', ')} WHERE ${spec.pk} = $1 AND xmin::text = $${
+          params.length
+        }`,
         params,
       )
       result.rowsEncrypted += rowCount ?? 0

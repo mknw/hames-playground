@@ -86,6 +86,13 @@ blocks until something actionable arrives. A lane that wants to report mid-fligh
 either has a question (`ask`) or is blocked (`escalation`); if it is neither, the work
 is not finished and there is nothing to say yet.
 
+**Ack what you process.** `check` replays the Run's oldest unacked Delivery FIFO on
+every call (documented: "Replay until `--ack`") — an unacked `worker_done` makes every
+later `check --wait` return instantly with the same stale message, which reads exactly
+like a new event. After handling a Delivery, run
+`orca orchestration check --ack <deliveryId> --wait --types …` so the next wait blocks
+on the NEXT message rather than replaying the last one.
+
 ## 4. The review loop: the reviewer's terms bind
 
 A lane's work lands through review, not through a green CI run. The loop is the
@@ -183,34 +190,62 @@ read-only.
 `--agent pi` with the tier model — `z-ai/glm-5.3` for security/critical work
 (auth, routing, secrets, tests-as-evidence), `z-ai/glm-5.3-flash` for complex
 work (reviews, fix rounds bound to written terms, coordination),
-`deepseek/deepseek-v4-flash-3107` for normal/mechanical work. The Claude-era
+`deepseek/deepseek-v4-flash-3107` for normal/mechanical work (owner-ruled id;
+⚠ pi's local catalog lists `-flash`, `-0731`, `-vision-exp`, `-pro`, `-pro-0813` but
+not `-3107` — pi accepts unknown ids as custom models and routes silently, so verify
+with `pi update` or against the catalog before relying on it; flagged to the owner
+2026-08-30). The Claude-era
 `--agent claude --model opus` remains the default only in Claude-side
-sessions; both mappings coexist. Verify agent availability against the
+sessions; both mappings coexist. Orca cannot set pi's model (the docs scope `--model`
+to Claude, Codex and Cursor), and orca launches `pi` directly — the pi-kg.sh wrapper
+was removed 2026-08-29 — so the live lever is pi's own `defaultModel` in
+`~/.pi/agent/settings.json` (verify it equals the tier model you want before
+dispatching; a changed setting takes effect on the next launched lane). Verify agent
+availability against the
 runtime's registry of record, never against examples in help text or skills.
 
-**Under heavy load, `worker-start` can return `agent_prompt_stalled`.** The
-condition is load, not the worktree: a fresh worktree's first agent terminal
-pays the nix shell + direnv startup before the TUI can take the prompt, and
-with many lanes running concurrently that startup outlasts the dispatch window
-(observed 2026-08-27: nine dispatches succeeded at two-three concurrent lanes;
-all four stalls came at six lanes, load average 75+). The terminal usually
-comes up moments later, so recover by **attaching, not respawning**:
-`orca terminal list` to find the live Claude terminal in the worktree, then
-`orca orchestration dispatch --task <id> --to <terminal-handle>`; if the spec
-sits unsubmitted in the composer, `orca terminal send --terminal <handle>
---enter`. Each stalled attempt marks its task failed, and a failed task cannot
-be started — recreate it from the same spec file. Prevention is fewer
-concurrent lanes.
+**Dispatch after the TUI can accept input — the stall is the setup race.** A prompt
+delivered before the agent TUI can accept input is lost; the runtime reports
+`agent_prompt_stalled` (stall semantics are not documented; observed 2026-08-29/30 to
+coincide with fresh-worktree setup windows). orca.yaml's setup hook (direnv `use
+flake` eval, `pnpm install`, `pnpm baml-generate`, config copies) runs tens of
+seconds per fresh worktree, and load is a contributing factor, not a rival cause — it
+lengthens the same window (2026-08-27: nine dispatches succeeded at two–three
+concurrent lanes; four stalls came at six, load average 75+ — all also fresh
+worktrees, so the two explanations were confounded; a busy box is exactly when the
+wait matters most). The documented dispatch sequence for a terminal you create is:
+`orca worktree create` → `orca terminal wait --terminal <handle> --for tui-idle
+--timeout-ms 60000` (this proves the TUI can accept input, not that setup finished)
+→ `orca orchestration dispatch --task <id> --to <handle> --inject`. The runtime also
+documents a repo-level `wait-for-setup` startup policy that gates agent launch on
+setup success — the structural fix, cheaper than remembering a procedure. For
+`worker-start`, reuse a worktree whose setup has already completed (observed to
+succeed on every attempt) or wait out its Setup terminal first. A stall marks its
+task failed and a failed task cannot start — recreate it from the same spec file and
+dispatch into the now-warm worktree. Recovery hygiene: read `orca terminal list`
+UNFILTERED (a grep truncated at 30 lines once hid a live terminal behind a page of
+others and produced a false ghost-binding diagnosis); a terminal idling at its
+composer takes `orca terminal send --terminal <handle> --enter`; and a low-level
+`dispatch --to` carries `--inject` for a recognized agent TUI — for a bare shell the
+docs prescribe the opposite (dispatch for tracking if needed, then send the prompt
+manually).
 
-**A dispatch receipt is not a running lane.** After every dispatch or attach,
-read the terminal and confirm the agent is *generating* — the TUI spinner with
-a climbing token counter ("Puttering… ↓ 12k tokens"), not merely a delivered
-prompt. `worker-start` exiting 0, a `dispatched` task row, and the spec landing
-in the composer are all receipts about the hand-off; every one of them was
-observed (2026-08-27) on a lane whose spec sat unsubmitted in the composer for
-over an hour while the coordinator reported it running. The same discipline
+**A dispatch receipt is not a running lane.** After every dispatch or attach, confirm
+the agent is *generating* — the TUI spinner with a climbing token counter
+("Puttering… ↓ 12k tokens"), not merely a delivered prompt. `worker-start` exiting 0,
+a `dispatched` task row, and `dispatch_input: accepted` are receipts about the
+hand-off; every one of them was observed (2026-08-27) on a lane whose spec sat
+unsubmitted in the composer for over an hour while the coordinator reported it
+running. Diagnose with `orca orchestration dispatch-show --task <id> --json` and
+`worker-show --dispatch <id> --json` before touching anything. The same discipline
 closes the loop at the far end: verify **outcomes** — the commit on the lane's
-branch, the push, the posted comment — never bookkeeping.
+branch, the push, the posted comment — never bookkeeping. And after an accepted
+`worker_done`, run `orca orchestration worker-release --dispatch <id> --json` (it
+archives inspectable output and closes only that coordinator-owned terminal; use
+`worker-read` afterwards for the transcript) — completed worker terminals left open
+are how a Run accumulates a terminal zoo (36 observed 2026-08-30). Never substitute
+a broad `terminal close` when release returns `release_pending` or
+`release_unknown`; follow the receipt's recovery action.
 
 ## Writing the spec safely
 

@@ -174,8 +174,8 @@ orca orchestration worker-start --run <run> --task <task> \
   --worktree name:<lane> --agent pi
 ```
 
-No `--model` here: Orca cannot set pi's model (the docs scope `--model` to
-Claude, Codex and Cursor), so the tier model the lane runs is pi's own
+No `--model` here: Orca cannot set pi's model, so the tier model the lane
+runs is pi's own
 `defaultModel` in `~/.pi/agent/settings.json` — see
 **Lane agent and model** below.
 

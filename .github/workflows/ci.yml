@@ -29,9 +29,11 @@ jobs:
           # Needed to diff against the PR base for the formatting check.
           fetch-depth: 0
 
+      # No `version:` input on purpose: the root package.json's packageManager
+      # field (pnpm@10.28.1, matching the Dockerfile's PNPM_VERSION) is the
+      # single pin, and action-setup reads it from the checkout above. Passing
+      # both makes action-setup@v4 fail with "multiple versions specified".
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:

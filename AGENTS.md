@@ -172,10 +172,10 @@ Framework in `app/src/lib/harness-patterns/`. Front page: [`README.md`](app/src/
 
 <!-- prettier-ignore -->
 ```typescript
-simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { patternId: 'neo4j-query', schema })
+simpleLoop(b.LoopController.bind(b), tools.neo4j, { patternId: 'neo4j-query', schema })
 ```
 
-**Preferred: use adapter factories instead:**
+**Adapter factories:** `baml-adapters.server.ts` provides `createLoopControllerAdapter`, `createActorControllerAdapter`, `createCriticAdapter`, etc. The seven domain names (`createNeo4jController`, `createWebSearchController`, `createMemoryController`, `createContext7Controller`, `createFilesystemController`, `createRedisController`, `createDatabaseController`) are thin aliases of `createLoopControllerAdapter` with no behaviour of their own (#225) — kept for call-site readability, not preferable to it.
 
 <!-- prettier-ignore -->
 ```typescript

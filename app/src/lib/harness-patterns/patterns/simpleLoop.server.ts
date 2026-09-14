@@ -152,13 +152,13 @@ export interface SimpleLoopData {
  *
  * Calls the BAML controller function directly, extracting params from context.
  *
- * @param controller - BAML controller function (e.g., b.Neo4jController)
+ * @param controller - BAML controller function (e.g., b.LoopController)
  * @param tools - Allowed tool names
  * @param config - Optional configuration (schema, maxTurns, patternId, etc.)
  * @returns ConfiguredPattern ready for chain
  *
  * @example
- * const loop = simpleLoop(b.Neo4jController, tools.neo4j, {
+ * const loop = simpleLoop(b.LoopController, tools.neo4j, {
  *   patternId: 'neo4j-query',
  *   schema,
  *   trackHistory: 'tool_result',

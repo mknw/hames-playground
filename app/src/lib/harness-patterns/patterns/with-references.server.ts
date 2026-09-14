@@ -232,7 +232,7 @@ const defaultSelector: SelectorFn = async (input) => {
  *
  * @example
  *   const route = withReferences(
- *     simpleLoop(b.Neo4jController, tools.neo4j, { patternId: 'neo4j-query' }),
+ *     simpleLoop(b.LoopController, tools.neo4j, { patternId: 'neo4j-query' }),
  *     { scope: 'global', maxRefs: 5 }
  *   )
  */

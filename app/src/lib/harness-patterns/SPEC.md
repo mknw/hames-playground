@@ -79,7 +79,11 @@ MCP Tools ───────┘
 ## Core Concepts
 
 ```typescript
-// Preferred: use adapter factories from baml-adapters.server.ts
+// Adapter factories from baml-adapters.server.ts. The domain-specific ones
+// (createNeo4jController, createWebSearchController, createMemoryController,
+// createContext7Controller, createFilesystemController, createRedisController,
+// createDatabaseController) are thin aliases of createLoopControllerAdapter —
+// no behaviour of their own, kept for call-site readability (#225).
 const controller = createNeo4jController(tools.neo4j ?? [])
 simpleLoop(controller, tools.neo4j ?? [], { patternId: 'neo4j-query', schema })
 
@@ -88,7 +92,7 @@ const critic = createCriticAdapter()
 actorCritic(actor, critic, tools.all, { patternId: 'actor-loop' })
 
 // Alternative: pass BAML functions directly (bind to preserve 'this' context)
-simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema })
+simpleLoop(b.LoopController.bind(b), tools.neo4j, { schema })
 actorCritic(b.ActorController.bind(b), b.Critic.bind(b), tools.all)
 
 // Router is two composable patterns: classify → dispatch
@@ -314,7 +318,7 @@ usually one tool call, but the controller may emit a **multi-call turn**
 (`additional_calls`) — see `multiToolCalls` below.
 
 ```typescript
-simpleLoop(b.Neo4jController.bind(b), tools.neo4j, {
+simpleLoop(b.LoopController.bind(b), tools.neo4j, {
   patternId: 'neo4j-query',
   schema,
 })
@@ -565,8 +569,8 @@ Execute multiple patterns concurrently via `Promise.allSettled`, then merge resu
 
 ```typescript
 parallel(
-  simpleLoop(b.WebSearchController.bind(b), tools.web ?? [], { patternId: 'web-search' }),
-  simpleLoop(b.Neo4jController.bind(b), tools.neo4j ?? [], { patternId: 'kg-lookup', schema }),
+  simpleLoop(b.LoopController.bind(b), tools.web ?? [], { patternId: 'web-search' }),
+  simpleLoop(b.LoopController.bind(b), tools.neo4j ?? [], { patternId: 'kg-lookup', schema }),
 )
 ```
 
@@ -876,7 +880,7 @@ adapter merges these into BAML's `turns_previous_runs` argument — **zero
 controller-prompt changes**.
 
 ```typescript
-withReferences(simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema }), {
+withReferences(simpleLoop(b.LoopController.bind(b), tools.neo4j, { schema }), {
   scope: 'global',
   maxRefs: 5,
 })

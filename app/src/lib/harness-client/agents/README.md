@@ -248,7 +248,7 @@ async function createDistillationHook(schema: string): Promise<ConfiguredPattern
   }
 
   // Step 3: Write to neo4j KB
-  const persistToKB = simpleLoop(b.Neo4jController.bind(b), tools.neo4j ?? [], {
+  const persistToKB = simpleLoop(b.LoopController.bind(b), tools.neo4j ?? [], {
     patternId: 'distill-persist',
     schema,
   })

@@ -40,6 +40,12 @@ for it re-splits the session state that `UnifiedContext` exists to unify.
   preserve `this`. The `.bind(b)` requirement is a direct consequence of dropping
   the wrapper layer.
 
+> **Correction (2026-09-15, #225 L23):** the example in the last bullet above,
+> `b.Neo4jController.bind(b)`, names a function that does not exist — `baml_src/`
+> declares no per-domain controller functions. The bound-function example is
+> `b.LoopController.bind(b)`. The decision and the `.bind(b)` requirement itself
+> are unchanged.
+
 ## Sources
 
 Back-filled. Rationale mined from commit `a5e57b9` (2026-01-18, `refactor: Remove

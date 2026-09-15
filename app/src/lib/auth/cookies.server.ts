@@ -48,6 +48,29 @@ function isDevServer(): boolean {
   return import.meta.env.DEV === true
 }
 
+/**
+ * Percent-decode one cookie value, or hand it back as it came.
+ *
+ * A raw `%` is legal in a cookie value per RFC 6265 and `decodeURIComponent`
+ * throws `URIError` on it. Decoding the header eagerly meant ONE such value —
+ * set by any other code, by a sibling subdomain's `Domain=` cookie, or by a
+ * third-party script on the origin — threw out of every {@link readCookie},
+ * i.e. out of the session read AND `/api/auth/callback`'s handshake read, which
+ * is a permanent sign-in loop no user action clears.
+ *
+ * Fail-open is safe here rather than merely convenient: {@link serializeCookie}
+ * always `encodeURIComponent`s, so a value that cannot be decoded is definitely
+ * not one of ours, and handing it back raw is what a cookie parser that never
+ * decoded would have done anyway.
+ */
+function decodeCookieValue(raw: string): string {
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    return raw
+  }
+}
+
 /** Parse a `Cookie` header into a name→value map. */
 export function parseCookies(header: string | null): Record<string, string> {
   const out: Record<string, string> = {}
@@ -57,7 +80,7 @@ export function parseCookies(header: string | null): Record<string, string> {
     if (eq < 0) continue
     const name = part.slice(0, eq).trim()
     if (!name) continue
-    out[name] = decodeURIComponent(part.slice(eq + 1).trim())
+    out[name] = decodeCookieValue(part.slice(eq + 1).trim())
   }
   return out
 }

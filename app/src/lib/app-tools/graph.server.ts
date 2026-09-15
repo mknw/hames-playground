@@ -1537,7 +1537,7 @@ registerAppTool({
       // twice; the newest copy survives because the sort already ran. Done
       // before the slice so a duplicate never costs a slot.
       .filter((r) => {
-        const key = `${r.webUrl ?? ''} ${r.name ?? ''}`
+        const key = `${r.webUrl ?? ''}\0${r.name ?? ''}`
         if (seen.has(key)) return false
         seen.add(key)
         return true

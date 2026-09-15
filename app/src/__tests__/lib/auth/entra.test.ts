@@ -7,6 +7,9 @@
  * sign-out URL is composed.
  */
 
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
@@ -126,17 +129,47 @@ describe('redeemAuthCode', () => {
     expect(out.tokenCache).toBe('{"Account":{}}')
   })
 
-  it('passes the nonce only when one was supplied', async () => {
+  // The argument POSITION is the whole test. MSAL reads the nonce from
+  // `acquireTokenByCode`'s SECOND argument only (`ClientApplication.mjs:64` →
+  // `ResponseHandler.mjs:89-92`, msal-node 5.4.2 / msal-common 16.11.2); the
+  // request type has no `nonce` field at all, so passing it there type-checks
+  // via the spread and is then silently dropped — i.e. the ID token is accepted
+  // without being bound to this authorize request. The previous version of this
+  // test asserted `calls[n][0]`, which pinned exactly the shape MSAL ignores.
+  it('hands the nonce to MSAL as the auth-code payload (second argument), not the request', async () => {
+    acquireTokenByCode.mockResolvedValue({
+      idTokenClaims: { oid: 'o', email: 'a@b.c' },
+      account: null,
+    })
+
+    await redeemAuthCode({ code: 'c', codeVerifier: 'v', nonce: 'n-1', cfg: CFG })
+
+    const [request, payload] = acquireTokenByCode.mock.calls[0]
+    expect(request).not.toHaveProperty('nonce')
+    expect(payload).toEqual({ code: 'c', nonce: 'n-1' })
+  })
+
+  it('passes no auth-code payload when no nonce was supplied', async () => {
     acquireTokenByCode.mockResolvedValue({
       idTokenClaims: { oid: 'o', email: 'a@b.c' },
       account: null,
     })
 
     await redeemAuthCode({ code: 'c', codeVerifier: 'v', cfg: CFG })
-    expect(acquireTokenByCode.mock.calls[0][0]).not.toHaveProperty('nonce')
 
-    await redeemAuthCode({ code: 'c', codeVerifier: 'v', nonce: 'n-1', cfg: CFG })
-    expect(acquireTokenByCode.mock.calls[1][0]).toMatchObject({ nonce: 'n-1' })
+    expect(acquireTokenByCode.mock.calls[0][0]).not.toHaveProperty('nonce')
+    expect(acquireTokenByCode.mock.calls[0][1]).toBeUndefined()
+  })
+
+  // The fix above is only correct while MSAL still reads the nonce from
+  // `acquireTokenByCode`'s SECOND argument. That contract lives in
+  // node_modules, so pin it the way this repo pins its other vendor facts: a
+  // bump that moves the check goes red HERE, beside the call site it justifies,
+  // instead of silently re-opening #314 finding 1.
+  it('MSAL still reads the nonce from the auth-code payload, not the request', () => {
+    const msal = readFileSync(createRequire(import.meta.url).resolve('@azure/msal-node'), 'utf8')
+    expect(msal).toContain('acquireTokenByCode(request, authCodePayLoad)')
+    expect(msal).toContain('idTokenClaims.nonce !== authCodePayload.nonce')
   })
 
   it('reports a null home account when MSAL returns no account', async () => {

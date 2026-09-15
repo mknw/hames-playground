@@ -20,6 +20,9 @@
  * matches zero rows, so a boot costs one cheap `SELECT ... LIMIT` per table.
  * Each `UPDATE` re-checks the same predicate in its `WHERE`, so two processes
  * booting at once cannot double-encrypt: the loser's write affects no rows.
+ * The UPDATE's guard covers exactly the columns it writes, AND-joined — the
+ * row-selection predicate is OR-joined and re-using it there let a row that was
+ * still due for ONE column accept a stale snapshot of ALL of them.
  *
  * ## Table discovery
  *
@@ -126,13 +129,19 @@ export interface EncryptionMigrationReport {
   totalRowsEncrypted: number
 }
 
-/** Not-an-envelope for TEXT (see `NOT_ENCRYPTED_SQL`), `jsonb_typeof <> 'string'` for JSONB. */
+/**
+ * One column is due: not-an-envelope for TEXT (see `NOT_ENCRYPTED_SQL`),
+ * `jsonb_typeof <> 'string'` for JSONB.
+ */
+function dueClause(spec: TableSpec, column: string): string {
+  return spec.jsonbColumns.includes(column)
+    ? `(jsonb_typeof(${column}) <> 'string')`
+    : `(${NOT_ENCRYPTED_SQL(column)})`
+}
+
+/** A row is worth SELECTing when ANY of its encrypted columns is still due. */
 function duePredicate(spec: TableSpec): string {
-  const clauses = [
-    ...spec.textColumns.map((c) => `(${NOT_ENCRYPTED_SQL(c)})`),
-    ...spec.jsonbColumns.map((c) => `(jsonb_typeof(${c}) <> 'string')`),
-  ]
-  return clauses.join(' OR ')
+  return [...spec.textColumns, ...spec.jsonbColumns].map((c) => dueClause(spec, c)).join(' OR ')
 }
 
 async function tableExists(run: QueryRunner, table: string): Promise<boolean> {
@@ -161,6 +170,8 @@ async function migrateTable(run: QueryRunner, spec: TableSpec): Promise<TableMig
   // first nullable JSONB column added here does not have to rediscover it.
   const selectColumns = [
     spec.pk,
+    // The row version this snapshot was taken at — see the UPDATE below.
+    'xmin::text AS __version',
     ...spec.textColumns,
     ...spec.jsonbColumns.flatMap((c) => [c, `jsonb_typeof(${c}) AS "${c}__type"`]),
   ].join(', ')
@@ -192,10 +203,22 @@ async function migrateTable(run: QueryRunner, spec: TableSpec): Promise<TableMig
       }
       if (sets.length === 0) continue
       attempted++
-      // Predicate repeated in the WHERE so a concurrent booter's write wins
-      // once rather than both of us encrypting the same row.
+      // The guard is the ROW VERSION this snapshot was read at, not a re-check
+      // of the due-predicate. Every value here was read before the SELECT
+      // returned, so the write must be refused unless the row has not moved at
+      // all since. A due-predicate guard only refuses a writer that ENCRYPTED
+      // the column; the writer this backfill actually races is an instance of
+      // the app finishing a turn during a rolling restart, and a
+      // still-pre-encryption instance writes PLAINTEXT — which leaves the
+      // column due, passes that guard, and reverts the turn. `xmin` is the
+      // transaction that last wrote the row: exact, integral, changed by every
+      // UPDATE. A row that now matches nothing is picked up by the next batch,
+      // which is what the batching already does for a concurrent booter.
+      params.push(row.__version)
       const { rowCount } = await run(
-        `UPDATE ${spec.table} SET ${sets.join(', ')} WHERE ${spec.pk} = $1 AND (${due})`,
+        `UPDATE ${spec.table} SET ${sets.join(', ')} WHERE ${spec.pk} = $1 AND xmin::text = $${
+          params.length
+        }`,
         params,
       )
       result.rowsEncrypted += rowCount ?? 0

@@ -111,6 +111,7 @@ Source-level index: see [app/README.md](../app/README.md#documentation-index).
 | Document                             | Description                                                                                                                                                                                                                                                                                                          |
 | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [AGENT_TRIGGER.md](AGENT_TRIGGER.md) | `POST /api/agents/:id` async agent trigger → **action** rows: endpoint contract, in-process fire-and-forget model, `kind`/`source`/`status` data model, per-user token auth (`configs/action-tokens.yaml`), recording storage + playback via the Data Stash, sidebar filter + promotion gate, status-lifecycle quirk |
+| [ROUTINES.md](ROUTINES.md)           | **Routines — trigger-driven harness runs (#131)**: a persisted "run agent X with input Y when Z happens" — a scheduling layer over the agent-trigger path (interval + session triggers, `source='routine'` action rows, sidebar Actions filter), not a second way to run a harness                                   |
 
 ### Auth & Deployment
 
@@ -195,10 +196,13 @@ kg-agent/
 │   ├── DATA_STASH.md            # Document ingestion pipeline
 │   ├── data-flow.md             # Mermaid data-flow diagrams (Data Stash + sandbox)
 │   ├── AGENT_TRIGGER.md         # POST /api/agents/:id async trigger → actions
+│   ├── ROUTINES.md              # Routines: trigger-driven harness runs (#131)
 │   ├── DOCKER_COMPOSE.md        # Docker setup
 │   ├── MCP_GATEWAY.md           # MCP Gateway reference
 │   ├── MICROSOFT_GRAPH.md       # Per-user Graph access (Pattern C, #110)
 │   ├── graph-api-notes.md       # What Graph actually returns: ids, quirks, deprecations
+│   ├── org-graph.md             # The organizational graph: ontology, ingest, wipe policy
+│   ├── reviewing.md             # Review map for the /reviewing-changes skill
 │   ├── sandbox-flavours.md      # Rootfs flavours (#78): image-processing/data/office
 │   ├── agents/
 │   │   ├── AGENT-BRIEF.md       # Dispatch spec template + standing acceptance criteria
@@ -222,6 +226,10 @@ kg-agent/
 │   ├── PREVIEW-WELCOME.md       # Onboarding note handed to the preview circle
 │   ├── sandbox/
 │   │   └── README.md            # Sandbox operational debugging
+│   ├── testing/
+│   │   └── pyramid.md           # The four test layers + pnpm release:check
+│   ├── data-privacy/
+│   │   └── plan.md              # Data protection findings + plan
 │   ├── user-guides/
 │   │   └── microsoft-graph.md   # Microsoft 365 agent: what you can ask
 │   └── harness-patterns/        # Harness patterns documentation

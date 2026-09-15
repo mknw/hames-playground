@@ -23,8 +23,8 @@ assertServerOnImport()
  *
  * @example
  * const research = parallel<SimpleLoopData & Record<string, unknown>>([
- *   simpleLoop(createWebSearchController(tools.web), tools.web, { patternId: 'web-search' }),
- *   simpleLoop(createNeo4jController(tools.neo4j), tools.neo4j, { patternId: 'graph-lookup' }),
+ *   simpleLoop(createLoopControllerAdapter(), tools.web, { patternId: 'web-search' }),
+ *   simpleLoop(createLoopControllerAdapter(), tools.neo4j, { patternId: 'graph-lookup' }),
  * ])
  */
 export function parallel<T extends Record<string, unknown>>(

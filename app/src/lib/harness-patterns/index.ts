@@ -278,19 +278,15 @@ export {
 } from './injection-guard-scope.server'
 export { normalizeControllerAction } from './controller-action'
 
-// BAML Adapters
+// BAML Adapters. The seven domain controller factories (`createNeo4jController`
+// etc.) were deleted in Lane B3 (#225 L14) — they were argument-only aliases,
+// and the tool list now rides `ControllerInput.tools` (one declaration at the
+// loop). Agents call `createLoopControllerAdapter()` directly.
 export {
   createLoopControllerAdapter,
   createActorControllerAdapter,
   createPlannerAdapter,
   createCriticAdapter,
-  createNeo4jController,
-  createWebSearchController,
-  createMemoryController,
-  createContext7Controller,
-  createFilesystemController,
-  createRedisController,
-  createDatabaseController,
   createInjectionScreen,
   invalidateToolDescriptions,
   accountBamlCall,

@@ -82,7 +82,7 @@ describe('createLoopControllerAdapter', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['read_neo4j_cypher', 'Return'])
+    const controller = createLoopControllerAdapter()
     expect(controller).toBeDefined()
     expect(typeof controller).toBe('function')
   })
@@ -91,7 +91,7 @@ describe('createLoopControllerAdapter', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['read_neo4j_cypher', 'Return'])
+    const controller = createLoopControllerAdapter()
 
     const result = await controller('user message', 'intent', '[]', 0)
 
@@ -103,10 +103,7 @@ describe('createLoopControllerAdapter', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(
-      ['read_neo4j_cypher', 'Return'],
-      'Custom context',
-    )
+    const controller = createLoopControllerAdapter('Custom context')
 
     await controller('user message', 'test intent', '[]', 0)
 
@@ -120,7 +117,7 @@ describe('createLoopControllerAdapter', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['Return'], 'Domain instructions here')
+    const controller = createLoopControllerAdapter('Domain instructions here')
 
     await controller('msg', 'intent', '[]', 0)
 
@@ -133,7 +130,7 @@ describe('createLoopControllerAdapter', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['Return'], 'Domain instructions')
+    const controller = createLoopControllerAdapter('Domain instructions')
 
     // schema is the 5th arg to the controller adapter
     await controller('msg', 'intent', '[]', 0, 'Node: Person, Company')
@@ -148,7 +145,7 @@ describe('createLoopControllerAdapter', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['Return'], 'Domain instructions')
+    const controller = createLoopControllerAdapter('Domain instructions')
 
     // planContext is the 10th (trailing, optional) arg — appended, never
     // inserted, so existing positional args keep their slots.
@@ -180,7 +177,7 @@ describe('createLoopControllerAdapter', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     await controller('msg', 'intent', '[]', 0)
 
@@ -380,87 +377,49 @@ describe('createCriticAdapter', () => {
   })
 })
 
-describe('domain-specific adapters', () => {
+describe('the tool list rides the seam (L14, #225 Lane B3)', () => {
+  // The seven domain controller factories (`createNeo4jController` etc.) were
+  // argument-only aliases, deleted once the tool list moved onto
+  // `ControllerInput.tools` — what these tests pin instead is the property
+  // that made the aliases pointless: the loop's allowlist is what the prompt
+  // advertises, declared once, on the object seam.
   beforeEach(() => {
     vi.clearAllMocks()
     mockLoopController.mockResolvedValue(mockFinalAction())
   })
 
-  it('should create Neo4j controller', async () => {
-    const { createNeo4jController } =
+  it("the object seam's `tools` is what reaches the BAML call", async () => {
+    const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createNeo4jController(['read_neo4j_cypher', 'Return'])
-    expect(controller).toBeDefined()
+    const controller = createLoopControllerAdapter()
+    await controller({
+      userMessage: 'query',
+      intent: 'intent',
+      tools: ['read_neo4j_cypher', 'Return'],
+      turns: [],
+      turn: 0,
+    })
 
+    expect(mockLoopController).toHaveBeenCalled()
+    // 3rd arg of LoopController is the `tools` array — filtered to input.tools.
+    const advertised = (mockLoopController.mock.calls[0][2] as Array<{ name: string }>).map(
+      (t) => t.name,
+    )
+    expect(advertised).toContain('read_neo4j_cypher')
+    expect(advertised).not.toContain('write_neo4j_cypher')
+  })
+
+  it('the legacy positional form advertises nothing from the gateway (it predates the field)', async () => {
+    const { createLoopControllerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const controller = createLoopControllerAdapter()
     await controller('query', 'intent', '[]', 0)
+
     expect(mockLoopController).toHaveBeenCalled()
-  })
-
-  it('should create web search controller', async () => {
-    const { createWebSearchController } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
-
-    const controller = createWebSearchController(['search', 'fetch', 'Return'])
-    expect(controller).toBeDefined()
-
-    await controller('search query', 'intent', '[]', 0)
-    expect(mockLoopController).toHaveBeenCalled()
-  })
-
-  it('should create memory controller', async () => {
-    const { createMemoryController } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
-
-    const controller = createMemoryController(['create_entities', 'Return'])
-    expect(controller).toBeDefined()
-
-    await controller('store this', 'intent', '[]', 0)
-    expect(mockLoopController).toHaveBeenCalled()
-  })
-
-  it('should create Context7 controller', async () => {
-    const { createContext7Controller } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
-
-    const controller = createContext7Controller(['resolve-library-id', 'Return'])
-    expect(controller).toBeDefined()
-
-    await controller('look up docs', 'intent', '[]', 0)
-    expect(mockLoopController).toHaveBeenCalled()
-  })
-
-  it('should create filesystem controller', async () => {
-    const { createFilesystemController } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
-
-    const controller = createFilesystemController(['read_file', 'Return'])
-    expect(controller).toBeDefined()
-
-    await controller('read file', 'intent', '[]', 0)
-    expect(mockLoopController).toHaveBeenCalled()
-  })
-
-  it('should create Redis controller', async () => {
-    const { createRedisController } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
-
-    const controller = createRedisController(['redis_get', 'Return'])
-    expect(controller).toBeDefined()
-
-    await controller('get key', 'intent', '[]', 0)
-    expect(mockLoopController).toHaveBeenCalled()
-  })
-
-  it('should create database controller', async () => {
-    const { createDatabaseController } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
-
-    const controller = createDatabaseController(['query', 'Return'])
-    expect(controller).toBeDefined()
-
-    await controller('run query', 'intent', '[]', 0)
-    expect(mockLoopController).toHaveBeenCalled()
+    const advertised = mockLoopController.mock.calls[0][2] as Array<{ name: string }>
+    expect(advertised).toEqual([])
   })
 })
 
@@ -480,7 +439,7 @@ describe('legacy positional form: previous_results parsing (Lane A4)', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     await controller('user message', 'intent', '[]', 0)
     expect(mockLoopController).toHaveBeenCalled()
@@ -490,7 +449,7 @@ describe('legacy positional form: previous_results parsing (Lane A4)', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     const results = JSON.stringify([{ data: 'result1' }, { data: 'result2' }])
 
@@ -506,7 +465,7 @@ describe('legacy positional form: previous_results parsing (Lane A4)', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     // Invalid JSON used to be swallowed into `[]` (turn 0, no history); now
     // the legacy shim throws loudly.
@@ -518,7 +477,7 @@ describe('legacy positional form: previous_results parsing (Lane A4)', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     // Object instead of array used to be swallowed into `[]`; now it throws.
     await expect(controller('user message', 'intent', '{"key": "value"}', 0)).rejects.toThrow()
@@ -529,7 +488,7 @@ describe('legacy positional form: previous_results parsing (Lane A4)', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     await expect(controller('user message', 'intent', '', 0)).rejects.toThrow()
     expect(mockLoopController).not.toHaveBeenCalled()
@@ -953,7 +912,7 @@ describe('LoopController error propagation', () => {
       new BamlValidationError('Invalid JSON output', 'raw output', 'msg', 'detailed'),
     )
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     await expect(controller('user message', 'intent', '[]', 0)).rejects.toThrow()
     expect(mockLoopController).toHaveBeenCalledTimes(1)
@@ -966,7 +925,7 @@ describe('LoopController error propagation', () => {
     const { Collector } = await import('@boundaryml/baml')
     const collector = new Collector('test')
 
-    await createLoopControllerAdapter(['Return'])('msg', 'intent', '[]', 0, undefined, collector)
+    await createLoopControllerAdapter()('msg', 'intent', '[]', 0, undefined, collector)
 
     // The options bag rides LAST, after the data params — read it off the END
     // rather than a fixed slot, so appending a trailing param (return_style,
@@ -983,7 +942,7 @@ describe('LoopController error propagation', () => {
 
     mockLoopController.mockRejectedValue(new Error('Network timeout'))
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     await expect(controller('user message', 'intent', '[]', 0)).rejects.toThrow('Network timeout')
     expect(mockLoopController).toHaveBeenCalledTimes(1)
@@ -1000,7 +959,7 @@ describe('priorResults parameter passing', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     const priorResults = [{ ref_id: 'ev-abc', tool: 'search', summary: 'Found 3 results' }]
 
@@ -1016,7 +975,7 @@ describe('priorResults parameter passing', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     await controller('user message', 'intent', '[]', 0)
 
@@ -1036,7 +995,7 @@ describe('fewShots parameter passing', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     const fewShots = [
       {
@@ -1059,7 +1018,7 @@ describe('fewShots parameter passing', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     await controller('msg', 'intent', '[]', 0)
 
@@ -1174,7 +1133,7 @@ describe('LLMCallError — failed LLM call capture', () => {
       throw new Error('Network down')
     })
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     let caught: unknown
     try {
@@ -1216,7 +1175,7 @@ describe('LLMCallError — failed LLM call capture', () => {
     // rawInput / rawOutput are undefined.
     mockLoopController.mockRejectedValue(new Error('DNS lookup failed'))
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
     const { Collector } = await import('@boundaryml/baml')
     const collector = new Collector('test')
 
@@ -1250,7 +1209,7 @@ describe('LLMCallError — failed LLM call capture', () => {
       new BamlValidationError('attempt 1 invalid', 'r1', 'm1', 'd1'),
     )
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     let caught: unknown
     try {
@@ -1398,9 +1357,17 @@ describe('sandbox tool descriptions in prompt', () => {
       await import('../../../lib/harness-patterns/baml-adapters.server')
     const { withTransport } = await import('../../../lib/harness-patterns/tool-transport.server')
 
-    const controller = createLoopControllerAdapter(['read_neo4j_cypher', 'Return'])
+    const controller = createLoopControllerAdapter()
 
-    await withTransport(fakeTransport(), () => controller('msg', 'intent', '[]', 0))
+    await withTransport(fakeTransport(), () =>
+      controller({
+        userMessage: 'msg',
+        intent: 'intent',
+        tools: ['read_neo4j_cypher', 'Return'],
+        turns: [],
+        turn: 0,
+      }),
+    )
 
     // 3rd arg of LoopController is the `tools` array.
     const tools = mockLoopController.mock.calls[0][2] as Array<{ name: string }>
@@ -1415,8 +1382,14 @@ describe('sandbox tool descriptions in prompt', () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
-    const controller = createLoopControllerAdapter(['read_neo4j_cypher', 'Return'])
-    await controller('msg', 'intent', '[]', 0)
+    const controller = createLoopControllerAdapter()
+    await controller({
+      userMessage: 'msg',
+      intent: 'intent',
+      tools: ['read_neo4j_cypher', 'Return'],
+      turns: [],
+      turn: 0,
+    })
 
     const tools = mockLoopController.mock.calls[0][2] as Array<{ name: string }>
     const names = tools.map((t) => t.name)
@@ -1441,10 +1414,10 @@ describe('sandbox tool descriptions in prompt', () => {
       ],
     })
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
     await withTransport(scope('sandbox:outer', 'outer box'), () =>
       withTransport(scope('sandbox:inner', 'inner box'), () =>
-        controller('msg', 'intent', '[]', 0),
+        controller({ userMessage: 'msg', intent: 'intent', tools: ['Return'], turns: [], turn: 0 }),
       ),
     )
 
@@ -1530,7 +1503,7 @@ describe('warnIfCollectorEmpty', () => {
     const { Collector } = await import('@boundaryml/baml')
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
     const result = await controller('msg', 'intent', '[]', 0, undefined, new Collector('test'))
 
     expect(result.action).toBeDefined()
@@ -1562,7 +1535,7 @@ describe('warnIfCollectorEmpty', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     mockLoopController.mockRejectedValue(new Error('DNS lookup failed'))
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
 
     await expect(
       controller('msg', 'intent', '[]', 0, undefined, new Collector('test')),

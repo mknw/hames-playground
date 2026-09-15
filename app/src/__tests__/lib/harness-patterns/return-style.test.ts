@@ -204,7 +204,7 @@ type Harness = Awaited<ReturnType<typeof loadHarness>>
 
 function makeLoop(h: Harness, returnStyle?: 'summary' | 'answer') {
   return h.simpleLoop<TestData>(
-    h.createLoopControllerAdapter(['read_neo4j_cypher'], 'GRAPH SCHEMA: (Person)'),
+    h.createLoopControllerAdapter('GRAPH SCHEMA: (Person)'),
     ['read_neo4j_cypher'],
     { patternId: 'return-style-loop', maxTurns: 4, ...(returnStyle ? { returnStyle } : {}) },
   )

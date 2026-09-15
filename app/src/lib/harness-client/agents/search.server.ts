@@ -18,8 +18,7 @@ import {
   withReferences,
   withInjectionGuard,
   Tools,
-  createNeo4jController,
-  createWebSearchController,
+  createLoopControllerAdapter,
   type ConfiguredPattern,
 } from '../../harness-patterns'
 import { mcpNamespace } from '../../app-tools/mcp-catalog'
@@ -33,11 +32,11 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   const tools = await Tools({ namespaces: mcpNamespace })
   const schema = await getGraphSchema('search', sessionId)
 
-  const neo4jController = createNeo4jController(tools.neo4j ?? [])
   const webTools = tools.web ?? []
-  const webController = createWebSearchController(webTools)
 
-  const neo4jPattern = simpleLoop<SessionData>(neo4jController, tools.neo4j ?? [], {
+  // L14 (#225 Lane B3): each list appears exactly once, at the loop — it is
+  // the allowlist AND what the controller advertises, via the seam.
+  const neo4jPattern = simpleLoop<SessionData>(createLoopControllerAdapter(), tools.neo4j ?? [], {
     patternId: 'neo4j-query',
     schema,
     liveEvents: true,
@@ -46,7 +45,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     onToolResult: enrichNeo4jResult,
   })
 
-  const webPattern = simpleLoop<SessionData>(webController, webTools, {
+  const webPattern = simpleLoop<SessionData>(createLoopControllerAdapter(), webTools, {
     patternId: 'web-search',
     liveEvents: true,
     rememberPriorTurns: false,

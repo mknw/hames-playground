@@ -228,7 +228,7 @@ describe('LoopController truncation retry (Anthropic-only path)', () => {
       )
       .mockResolvedValueOnce(mockFinalAction('Recovered'))
 
-    const controller = createLoopControllerAdapter(['read_neo4j_cypher', 'Return'], 'Prefix.')
+    const controller = createLoopControllerAdapter('Prefix.')
     const result = await controller(
       'user message',
       'intent',
@@ -255,7 +255,7 @@ describe('LoopController truncation retry (Anthropic-only path)', () => {
     )
 
     const { LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
     await expect(
       controller(
         'user message',
@@ -280,7 +280,7 @@ describe('the retry stays on the declared chain', () => {
       .mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'truncated', 'truncated'))
       .mockResolvedValueOnce(mockFinalAction('Recovered'))
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
     const result = await controller(
       'user message',
       'intent',
@@ -320,7 +320,7 @@ describe('empty-completion retry', () => {
       .mockRejectedValueOnce(new BamlValidationError('prompt', '', 'missing=5', 'missing=5'))
       .mockResolvedValueOnce(mockFinalAction('Recovered'))
 
-    const controller = createLoopControllerAdapter(['Return'], 'Graph context.')
+    const controller = createLoopControllerAdapter('Graph context.')
     const result = await controller('user message', 'intent', '[]', 2, undefined, emptyCollector())
 
     expect(result.action).toBeDefined()
@@ -363,7 +363,7 @@ describe('empty-completion retry', () => {
       .mockRejectedValueOnce(new BamlValidationError('prompt', '\n  \n', 'missing=5', 'missing=5'))
       .mockResolvedValueOnce(mockFinalAction('Recovered'))
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
     await controller('user message', 'intent', '[]', 1, undefined, emptyCollector(400, '\n  \n'))
     expect(mockLoopController).toHaveBeenCalledTimes(2)
   })
@@ -377,7 +377,7 @@ describe('empty-completion retry', () => {
       .mockRejectedValueOnce(new BamlValidationError('prompt', '', 'missing=5', 'missing=5'))
       .mockResolvedValueOnce(mockFinalAction('Recovered'))
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
     // Empty raw response AND at the cap — a response cut off before any text
     // reached us is still truncation, and the model needs to know why.
     await controller('user message', 'intent', '[]', 1, undefined, emptyCollector(32_768, ''))
@@ -393,7 +393,7 @@ describe('empty-completion retry', () => {
       .mockRejectedValueOnce(new BamlValidationError('prompt', '', 'missing=5', 'missing=5'))
       .mockRejectedValueOnce(new BamlValidationError('prompt', '', 'missing=5', 'missing=5'))
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
     await expect(
       controller('user message', 'intent', '[]', 1, undefined, emptyCollector()),
     ).rejects.toBeInstanceOf(LLMCallError)
@@ -409,7 +409,7 @@ describe('empty-completion retry', () => {
       new BamlValidationError('prompt', 'Turn 2 action: …', 'missing=5', 'missing=5'),
     )
 
-    const controller = createLoopControllerAdapter(['Return'])
+    const controller = createLoopControllerAdapter()
     await expect(
       controller(
         'user message',

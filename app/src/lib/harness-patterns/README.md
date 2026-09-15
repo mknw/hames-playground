@@ -53,7 +53,7 @@ to a guarded loop, synthesize:
 ```typescript
 const tools = await Tools()
 
-const search = simpleLoop(createWebSearchController(tools.web ?? []), tools.web ?? [], {
+const search = simpleLoop(createLoopControllerAdapter(), tools.web ?? [], {
   patternId: 'web-search',
 })
 

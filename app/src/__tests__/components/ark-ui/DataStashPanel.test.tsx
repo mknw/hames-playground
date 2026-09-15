@@ -74,6 +74,8 @@ interface FetchPlan {
   documentBody?: unknown
   documentStatus?: number
   uploadResponse?: { ok?: boolean; body: unknown }
+  /** GET /api/stash/upload fails like this (list-load error states). */
+  listStatus?: number
 }
 let calls: { url: string; init?: RequestInit }[] = []
 const stubFetch = (plan: FetchPlan = {}) => {
@@ -85,7 +87,8 @@ const stubFetch = (plan: FetchPlan = {}) => {
       return { ok: r.ok ?? true, status: r.ok === false ? 500 : 200, json: async () => r.body }
     }
     if (u.startsWith('/api/stash/upload')) {
-      return { ok: true, status: 200, json: async () => ({ documents: plan.documents ?? [] }) }
+      const status = plan.listStatus ?? 200
+      return { ok: status < 400, status, json: async () => ({ documents: plan.documents ?? [] }) }
     }
     if (u.startsWith('/api/stash/document/')) {
       const status = plan.documentStatus ?? 200
@@ -375,6 +378,37 @@ describe('DataStashPanel — uploads', () => {
     await upload(container, [new File(['x'], 'a.md')])
     expect(container.textContent).toContain('Start a conversation before uploading')
     expect(calls.some((c) => c.init?.method === 'POST')).toBe(false)
+  })
+
+  it('a failed uploads load shows an error — never an empty "0 items" (#314)', async () => {
+    stubFetch({ listStatus: 500 })
+    const { container } = await renderPanel()
+
+    expect(container.textContent).toContain("Couldn't load uploads")
+    // And a way back that does not involve re-uploading files that exist.
+    expect(container.textContent).toContain('Retry')
+    expect(container.textContent).not.toContain('Loading uploads')
+  })
+
+  it('the load error clears once a retry succeeds (#314)', async () => {
+    const fetchFn = stubFetch({ listStatus: 500 })
+    const { container } = await renderPanel()
+    await settle()
+    expect(container.textContent).toContain("Couldn't load uploads")
+
+    fetchFn.mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ documents: [doc({ filename: 'recovered.md' })] }),
+    }))
+    const retry = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Retry',
+    )!
+    retry.click()
+    await settle()
+
+    expect(container.textContent).toContain('recovered.md')
+    expect(container.textContent).not.toContain("Couldn't load uploads")
   })
 
   it('accepts a drag-and-drop as an upload', async () => {

@@ -83,6 +83,11 @@ export interface ConversationRow {
   inferenceTier: StoredInferenceTier
   createdAt: Date
   updatedAt: Date
+  /**
+   * Opaque row version for {@link updateConversationContextIfUnchanged} — the
+   * row's `xmin`, which every UPDATE changes. Compare it, never parse it.
+   */
+  version: string
 }
 
 export interface ConversationListItem {
@@ -114,6 +119,7 @@ interface DbRow {
   inference_tier: string | null
   created_at: Date
   updated_at: Date
+  version: string
 }
 
 interface DbListRow {
@@ -141,6 +147,7 @@ function rowToConversation(row: DbRow): ConversationRow {
     inferenceTier: row.inference_tier,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    version: row.version,
   }
 }
 
@@ -153,7 +160,7 @@ export async function loadConversation(
   userId: string,
 ): Promise<ConversationRow | null> {
   const { rows } = await query<DbRow>(
-    'SELECT id, user_id, agent_id, title, context, kind, source, status, inference_tier, created_at, updated_at FROM conversations WHERE id = $1 AND user_id = $2',
+    'SELECT id, user_id, agent_id, title, context, kind, source, status, inference_tier, created_at, updated_at, xmin::text AS version FROM conversations WHERE id = $1 AND user_id = $2',
     [id, userId],
   )
   if (rows.length === 0) return null
@@ -234,14 +241,33 @@ export interface SaveConversationInput {
  *
  * Owner-scoped like every other write in this module: the UPDATE fires only
  * when the row already belongs to `input.userId`, so a save against someone
- * else's conversation id silently no-ops instead of clobbering their context
- * (the same wrong-user contract as {@link promoteConversation} et al.). The
- * user-facing entry points never reach here with a foreign id — `loadSession`
- * is user-scoped, so a foreign session just looks new — which makes this the
- * backstop that keeps the resulting blind INSERT from becoming an UPDATE.
+ * else's conversation id cannot clobber their context. The user-facing entry
+ * points never reach here with a foreign id — `loadSession` is user-scoped, so
+ * a foreign session just looks new — which makes this the backstop that keeps
+ * the resulting blind INSERT from becoming an UPDATE.
+ *
+ * **Unlike {@link promoteConversation} et al., a 0-row write here THROWS.** In
+ * Postgres an `ON CONFLICT DO UPDATE ... WHERE <false>` updates nothing and
+ * raises nothing, and this is the one wrong-user no-op that loses data: the
+ * save is the last step of a turn that has already run, called tools, been
+ * billed and streamed an answer, so swallowing it means `event: done`, an
+ * assistant bubble, a green completion mark — and no conversation on reload,
+ * with no log line. It is reachable from the URL (`/?c=<someone else's id>`:
+ * `loadSession` returns null, the app treats it as a new chat, and every write
+ * of that turn hits a foreign row). Throwing turns that into a failed turn:
+ * `runAndSave` already logs it, flips the row to `status='error'` and re-raises.
+ * The interactive pre-seed (`turn.server.ts:267`) is OUTSIDE that try and is
+ * the first write to hit a foreign row: it surfaces through the SSE route's
+ * own catch as an `event: error` and leaves no row spinning, because nothing
+ * was seeded.
+ *
+ * Zero rows means exactly one thing — the id exists under a different owner —
+ * because a fresh id INSERTs and an owned id UPDATEs. Whether the product
+ * should instead re-mint the id and save under the caller is an open owner
+ * call; this only stops the loss from being silent.
  */
 export async function saveConversation(input: SaveConversationInput): Promise<void> {
-  await query(
+  const { rowCount } = await query(
     `INSERT INTO conversations (id, user_id, agent_id, title, context, kind, source, status, inference_tier)
      VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
      ON CONFLICT (id) DO UPDATE SET
@@ -264,6 +290,57 @@ export async function saveConversation(input: SaveConversationInput): Promise<vo
       input.inferenceTier ?? null,
     ],
   )
+  if ((rowCount ?? 0) === 0) {
+    // Detail to the log, not to the browser: this message reaches the user
+    // verbatim (turn.server.ts:267 → events.ts:131 `event: error` → an error
+    // bubble), and "belongs to another user" is an ownership fact the caller
+    // has no business being told.
+    console.error(
+      `[db] saving conversation ${input.id} wrote no rows: the id exists and belongs to another ` +
+        'user, so the owner-scoped upsert matched nothing.',
+    )
+    throw new Error(`[db] conversation ${input.id} could not be saved; the turn is not persisted.`)
+  }
+}
+
+/**
+ * Replace a conversation's context blob **only if the row is still at the
+ * version the caller read**, reporting whether it wrote.
+ *
+ * For a caller that does read-modify-write on the whole blob — `/api/stash`
+ * flipping `hidden`/`archived` on one event — where {@link saveConversation}'s
+ * last-writer-wins is not good enough. The competing writer is the turn's own
+ * `compactAndSave`, which fires just after the answer lands, i.e. exactly when
+ * a user acts on a finished tool result. Unguarded, whichever write is second
+ * wins outright: the flag silently vanishes, or — the worse direction — the
+ * turn's entire event set is replaced by the blob this caller loaded before it.
+ *
+ * `version` is {@link ConversationRow.version}, i.e. the row's `xmin`. NOT
+ * `updated_at`: it is a microsecond `TIMESTAMPTZ` and `pg` hands it back as a
+ * millisecond JS `Date`, so a round-tripped stamp never compares equal to what
+ * is stored, and its `::text` rendering depends on the session's TimeZone.
+ * `xmin` is the transaction that last wrote the row — exact, integral, and
+ * changed by every UPDATE.
+ *
+ * Context only: `title`, `status`, `agent_id` and `inference_tier` are left
+ * alone, because the blob a flag-flipper holds may be a turn behind and
+ * restamping them from it would undo what the turn just recorded.
+ *
+ * `false` covers row-moved-on, unknown id and wrong owner alike — all three
+ * mean "your write did not land", which is what the caller must report.
+ */
+export async function updateConversationContextIfUnchanged(
+  id: string,
+  userId: string,
+  serializedContext: string,
+  version: string,
+): Promise<boolean> {
+  const { rowCount } = await query(
+    `UPDATE conversations SET context = $1::jsonb, updated_at = NOW()
+     WHERE id = $2 AND user_id = $3 AND xmin::text = $4`,
+    [encryptJsonb(serializedContext), id, userId, version],
+  )
+  return (rowCount ?? 0) > 0
 }
 
 /**

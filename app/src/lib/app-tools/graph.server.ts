@@ -984,9 +984,9 @@ registerAppTool({
     const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
     const query = composeFileQuery({
       query: typeof args.query === 'string' ? args.query : '',
-      site: typeof args.site === 'string' ? args.site : null,
-      fileType: typeof args.file_type === 'string' ? args.file_type : null,
-      author: typeof args.author === 'string' ? args.author : null,
+      site: filterString(args, 'site') || null,
+      fileType: filterString(args, 'file_type') || null,
+      author: filterString(args, 'author') || null,
       modifiedAfter: typeof args.modified_after === 'string' ? args.modified_after : null,
       modifiedBefore: typeof args.modified_before === 'string' ? args.modified_before : null,
     })
@@ -1364,6 +1364,25 @@ function sharedAt(r: GraphSharedFile): number {
 }
 
 /**
+ * Reject-don't-drop for a narrowing string filter (#314). A filter the model
+ * sent in a wrong shape used to degrade to "no filter" and the tool answered
+ * about EVERYONE — e.g. `person: ["Thibault"]` returned the newest attachment
+ * mail to any recipient, narrated as "the files you sent Thibault". Same rule
+ * as the `since` date args and `via`: refuse loudly instead of silently
+ * widening. `undefined`/`null` mean absent (models send explicit nulls for
+ * "unspecified"); anything else non-string is refused.
+ */
+function filterString(args: Record<string, unknown>, key: string): string {
+  const raw = args[key]
+  if (raw === undefined || raw === null) return ''
+  if (typeof raw !== 'string') {
+    const got = Array.isArray(raw) ? 'array' : typeof raw
+    throw new Error(`${key} must be a string (got ${got}). Resend it as a plain string.`)
+  }
+  return raw.trim()
+}
+
+/**
  * Read the `via` argument, throwing on a value outside the set.
  *
  * Unlike `sort` on graph_files_search — which only reorders, so a silently
@@ -1478,7 +1497,7 @@ registerAppTool({
   },
   execute: async (args, { userId }): Promise<GraphSharedFilesResult> => {
     const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
-    const sharedBy = typeof args.shared_by === 'string' ? args.shared_by.trim() : ''
+    const sharedBy = filterString(args, 'shared_by')
     const via = parseVia(args.via)
     // Same inflation rationale as graph_files_recent ($top precedes our row
     // filter), amplified when a filter will discard most rows — a via filter
@@ -1668,7 +1687,7 @@ registerAppTool({
   execute: async (args, { userId }): Promise<GraphMailAttachmentsResult> => {
     const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
     const direction = args.direction === 'received' ? ('received' as const) : ('sent' as const)
-    const person = typeof args.person === 'string' ? args.person.trim() : ''
+    const person = filterString(args, 'person')
 
     // Same reject-don't-drop rule as the search date args: a silently ignored
     // `since` is a silently wrong answer.

@@ -335,6 +335,22 @@ describe('graph_files_search', () => {
     expect(graphFetch).not.toHaveBeenCalled()
   })
 
+  it('present-but-wrong-typed narrowing filters REFUSE instead of silently widening (#314)', async () => {
+    // A dropped site/file_type/author filter searches EVERY site, EVERY type,
+    // EVERY author — the model then narrates an unfiltered answer as scoped.
+    for (const args of [
+      { query: 'x', site: ['https://contoso.sharepoint.com/sites/Finance'] },
+      { query: 'x', file_type: 5 },
+      { query: 'x', author: { name: 'Jane Smith' } },
+    ]) {
+      graphFetch.mockClear()
+      const res = await runAppTool('graph_files_search', args)
+      expect(res.success, JSON.stringify(args)).toBe(false)
+      expect(res.error).toMatch(/must be a string/)
+      expect(graphFetch, 'no unfiltered search may back the answer').not.toHaveBeenCalled()
+    }
+  })
+
   it('flattens a hit to the shape the ingest handoff needs', async () => {
     graphFetch.mockResolvedValue(searchResponse([HIT], 42))
     const res = await runAppTool('graph_files_search', { query: 'budget' })

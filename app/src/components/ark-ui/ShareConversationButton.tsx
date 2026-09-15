@@ -67,8 +67,12 @@ export function ShareConversationButton(props: ShareConversationButtonProps) {
     async (sessionId) => (await getShareToken(sessionId)).token,
   )
 
-  const token = () => stored() ?? null
+  const token = () => (stored.error ? null : (stored() ?? null))
   const isShared = () => token() != null
+  /** The lookup itself failed (#314): the state is UNKNOWN — which is not the
+   *  same claim as "not shared", and this is the app's only surface that says
+   *  whether a conversation is public. */
+  const unknown = () => !!stored.error
 
   /** The link, or null before there is one. `window` is guarded because this
    *  component renders under SSR too, where there is no origin to build from —
@@ -138,8 +142,20 @@ export function ShareConversationButton(props: ShareConversationButtonProps) {
     <>
       <button
         onClick={openDialog}
-        title={isShared() ? 'Shared — manage link' : 'Share'}
-        aria-label={isShared() ? 'Shared conversation — manage link' : 'Share conversation'}
+        title={
+          unknown()
+            ? 'Share state unknown — click to retry'
+            : isShared()
+              ? 'Shared — manage link'
+              : 'Share'
+        }
+        aria-label={
+          unknown()
+            ? 'Share state unknown — click to retry'
+            : isShared()
+              ? 'Shared conversation — manage link'
+              : 'Share conversation'
+        }
         data-testid="share-conversation"
         data-shared={isShared() ? 'true' : undefined}
         w="8"
@@ -153,10 +169,16 @@ export function ShareConversationButton(props: ShareConversationButtonProps) {
         transition="all"
       >
         <span
-          class={isShared() ? 'i-material-symbols-share' : 'i-material-symbols-share-outline'}
+          class={
+            unknown()
+              ? 'i-material-symbols-error-outline'
+              : isShared()
+                ? 'i-material-symbols-share'
+                : 'i-material-symbols-share-outline'
+          }
           w="4"
           h="4"
-          text={isShared() ? 'ui-accent' : 'ui-text-secondary'}
+          text={unknown() ? 'ui-danger' : isShared() ? 'ui-accent' : 'ui-text-secondary'}
           aria-hidden="true"
         />
       </button>
@@ -284,6 +306,28 @@ export function ShareConversationButton(props: ShareConversationButtonProps) {
                   </Show>
                 </div>
               )}
+            </Show>
+
+            {/* Unknown is not "not shared" (#314): say the lookup failed and
+                offer the retry, rather than reading as a private thread. */}
+            <Show when={unknown()}>
+              <p text="xs ui-danger" m="t-3" role="alert" flex="~" items="center" gap="2">
+                Whether this conversation is shared could not be determined.
+                <button
+                  type="button"
+                  data-testid="share-state-retry"
+                  onClick={() => void refetch()}
+                  disabled={stored.loading}
+                  p="x-2 y-0.5"
+                  text="xs ui-accent"
+                  bg="ui-accent/20 hover:ui-accent/30"
+                  border="1 ui-accent/50"
+                  rounded="md"
+                  cursor="pointer"
+                >
+                  Retry
+                </button>
+              </p>
             </Show>
 
             <Show when={error()}>

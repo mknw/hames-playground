@@ -184,6 +184,16 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
   const [isExecuting, setIsExecuting] = createSignal(false)
   const [queryHistory, setQueryHistory] = createSignal<string[]>([])
 
+  // Graph-edit persistence failures (#314): an edit that Neo4j refused is
+  // rolled back on the canvas AND announced here — a console-only catch left
+  // the user looking at an edit that was never saved.
+  const [editError, setEditError] = createSignal<string | null>(null)
+  // Canvas ids of nodes created this session mapped to the elementId Neo4j
+  // actually assigned them (#323 B1) — a freshly created node is keyed on the
+  // canvas by its user-typed name, so edits and relations must translate the
+  // name to the persisted id before calling the graph-edit RPCs.
+  const [freshElementIds, setFreshElementIds] = createSignal<Map<string, string>>(new Map())
+
   // Visual controls
   const [nodeDiameter, setNodeDiameter] = createSignal(50)
   const [edgeThickness, setEdgeThickness] = createSignal(2)
@@ -250,9 +260,12 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
       const rm = relationMode()
       if (rm && rm.sourceId !== nodeId) {
         const relType = newRelationType()
-        const targetLabel = (data.label as string) || nodeId
+        // Resolve canvas ids of session-created nodes to their persisted
+        // elementIds (#323 B1) — Neo4j matches endpoints by elementId.
+        const persistedSourceId = freshElementIds().get(rm.sourceId) ?? rm.sourceId
+        const persistedTargetId = freshElementIds().get(nodeId) ?? nodeId
         // Add edge to graph visually
-        cy?.add({
+        const edge = cy?.add({
           data: {
             id: `${rm.sourceId}-${relType}-${nodeId}`,
             source: rm.sourceId,
@@ -261,8 +274,12 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
           },
         })
         setEdgeCount(cy?.edges().length ?? 0)
-        linkGraphNodes(rm.sourceLabel, targetLabel, relType).catch((error) => {
+        linkGraphNodes(persistedSourceId, persistedTargetId, relType).catch((error) => {
           console.error('Cypher write failed:', error)
+          // Roll the fabricated edge back off the canvas (#314).
+          edge?.remove()
+          setEdgeCount(cy?.edges().length ?? 0)
+          setEditError(`Relation not saved: ${error instanceof Error ? error.message : error}`)
         })
         setRelationMode(null)
         return
@@ -665,10 +682,20 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
 
     setNodeCount(cy?.nodes().length ?? 0)
 
-    // Persist to Neo4j
-    createGraphNode(label, name, description || undefined).catch((error) => {
-      console.error('Cypher write failed:', error)
-    })
+    // Persist to Neo4j — on success record the name → elementId mapping so
+    // later edits/relations this session target the persisted id (#323 B1).
+    createGraphNode(label, name, description || undefined)
+      .then((elementId) => {
+        setFreshElementIds((prev) => new Map(prev).set(name, elementId))
+      })
+      .catch((error) => {
+        console.error('Cypher write failed:', error)
+        // Roll the optimistic node back off the canvas (#314).
+        const placed = cy?.$id(name)
+        placed?.remove()
+        setNodeCount(cy?.nodes().length ?? 0)
+        setEditError(`Node not saved: ${error instanceof Error ? error.message : error}`)
+      })
 
     // Reset form
     setNewNodeName('')
@@ -1030,6 +1057,28 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
           </div>
         </Collapsible.Content>
       </Collapsible.Root>
+
+      {/* Graph-edit persistence failures (#314) */}
+      <Show when={editError()}>
+        <div bg="ui-danger/10" border="b ui-danger/30" p="2 3" text="sm ui-danger">
+          <div flex="~" items="center" justify="between" gap="2">
+            <span font="mono" text="xs">
+              {editError()}
+            </span>
+            <button
+              onClick={() => setEditError(null)}
+              p="x-2 y-0.5"
+              text="xs ui-text-tertiary"
+              bg="ui-bg-tertiary hover:ui-bg-hover"
+              border="1 ui-border-secondary"
+              rounded="md"
+              cursor="pointer"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      </Show>
 
       {/* Visual Controls Panel */}
       <Collapsible.Root>
@@ -1416,15 +1465,29 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                               <button
                                 onClick={() => {
                                   const newVal = editingField()!.value
+                                  const edited = node()
+                                  const oldVal = edited.properties![key]
+                                  // Resolve a session-created node's typed name to the
+                                  // elementId Neo4j assigned it (#323 B1).
+                                  const persistedId = freshElementIds().get(edited.id) ?? edited.id
                                   // Update locally
-                                  cy?.getElementById(node().id).data(key, newVal)
+                                  cy?.getElementById(edited.id).data(key, newVal)
                                   setSelectedNode({
-                                    ...node(),
-                                    properties: { ...node().properties!, [key]: newVal },
+                                    ...edited,
+                                    properties: { ...edited.properties!, [key]: newVal },
                                   })
                                   // Persist to Neo4j
-                                  setGraphNodeProperty(node().label, key, newVal).catch((error) => {
+                                  setGraphNodeProperty(persistedId, key, newVal).catch((error) => {
                                     console.error('Cypher write failed:', error)
+                                    // Roll the optimistic write back (#314).
+                                    cy?.getElementById(edited.id).data(key, oldVal)
+                                    setSelectedNode({
+                                      ...edited,
+                                      properties: { ...edited.properties!, [key]: oldVal },
+                                    })
+                                    setEditError(
+                                      `Edit not saved: ${error instanceof Error ? error.message : error}`,
+                                    )
                                   })
                                   setEditingField(null)
                                 }}

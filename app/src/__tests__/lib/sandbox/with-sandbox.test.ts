@@ -33,7 +33,7 @@ import {
   getDefaultAttachments,
   __resetSandboxDefaultsForTests,
 } from '../../../lib/sandbox/with-sandbox.server'
-import { getActiveSandbox } from '../../../lib/sandbox/scope.server'
+import { activeTransports } from '../../../lib/harness-patterns/tool-transport.server'
 import { WarmPool } from '../../../lib/sandbox/warm-pool.server'
 import { SandboxScheduler } from '../../../lib/sandbox/scheduler.server'
 import { AttachmentTable } from '../../../lib/sandbox/attachment-table.server'
@@ -150,22 +150,28 @@ describe('withSandbox', () => {
     expect(backend.calls.destroy).toHaveLength(1)
   })
 
-  it('exposes the transport to the inner pattern via getActiveSandbox', async () => {
+  // `withSandbox` is the SCOPED registrant on core's tool-transport seam: it no
+  // longer owns an AsyncLocalStorage of its own, it puts the VM's transport on
+  // core's. The id is what a dispatch trace names, so it is asserted.
+  it('registers the transport as the innermost scoped transport for the inner pattern', async () => {
     const backend = fakeBackend()
-    let seenVmId: string | undefined
+    let seenId: string | undefined
     let seenOwns: boolean | undefined
+    let seenDepth = 0
     const inner = fakePattern(async (scope) => {
-      const t = getActiveSandbox()
-      seenVmId = t?.vmId
-      seenOwns = t?.ownsTool('sandbox_bash')
+      const scoped = activeTransports()
+      seenDepth = scoped.length
+      seenId = scoped[0]?.id
+      seenOwns = scoped[0]?.ownsTool('sandbox_bash')
       return scope
     })
 
     await withSandbox({ backend })(inner).fn(fakeScope({}), fakeView)
 
-    expect(seenVmId).toBe('sbx-test')
+    expect(seenDepth).toBe(1)
+    expect(seenId).toBe('sandbox:sbx-test')
     expect(seenOwns).toBe(true)
-    expect(getActiveSandbox()).toBeUndefined()
+    expect(activeTransports()).toEqual([])
   })
 
   it('destroys the VM if connectMcp fails (no leak)', async () => {

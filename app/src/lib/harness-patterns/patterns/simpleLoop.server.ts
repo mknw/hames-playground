@@ -31,7 +31,7 @@ import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { omitResultFields } from '../content-transforms'
 import { getRequestSettings } from '../../settings-context.server'
 import { resolveTurnBudget } from '../../settings'
-import { getActiveSandbox } from '../../sandbox/scope.server'
+import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { resolveClientForRole } from '../clients.server'
@@ -188,10 +188,10 @@ export function simpleLoop<T extends SimpleLoopData>(
     // default (`simpleLoop: 'recoverable'`, which is right for every other
     // failure this loop has): no further iteration can put the tools back, so
     // `runChain` stops the chain here and this error is what reaches the user.
-    // A sandbox scope is the exception — its tools arrive over `docker exec`,
-    // never through the gateway, so a loop inside one is not tool-less and the
-    // allowlist check further down already knows it.
-    const outage = getActiveSandbox() ? null : toolSurfaceOutage(tools)
+    // A run-scoped transport is the exception — its tools never came from the
+    // gateway (today: a sandbox's, over `docker exec`), so a loop inside one is
+    // not tool-less and the allowlist check further down already knows it.
+    const outage = activeTransports().length > 0 ? null : toolSurfaceOutage(tools)
     if (outage) {
       trackEvent(scope, 'error', { ...outage, severity: 'irrecoverable' } as ErrorEventData, true)
       return scope
@@ -510,7 +510,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             { tool_name: action.tool_name, tool_args: action.tool_args },
             ...action.additional_calls,
           ]
-          const sandboxScope = getActiveSandbox()
+          const scopedTransports = activeTransports()
           const MAX_RESULT_CHARS = settings.maxResultChars
           const truncate = (s: string) =>
             s.length > MAX_RESULT_CHARS ? s.slice(0, MAX_RESULT_CHARS) + '…[truncated]' : s
@@ -534,7 +534,7 @@ export function simpleLoop<T extends SimpleLoopData>(
               continue
             }
             const callAllowed =
-              tools.includes(c.tool_name) || (sandboxScope?.ownsTool(c.tool_name) ?? false)
+              tools.includes(c.tool_name) || scopedTransports.some((t) => t.ownsTool(c.tool_name))
             if (!callAllowed) {
               trackedArgs.push(c.tool_args)
               subCalls.push({
@@ -682,14 +682,15 @@ export function simpleLoop<T extends SimpleLoopData>(
           continue
         }
 
-        // Validate tool. The static allowlist is augmented by an active
-        // `withSandbox` scope's tool surface — `sandbox_*` names pass without
+        // Validate tool. The static allowlist is augmented by the tool surface of
+        // every transport scoped to this run — `sandbox_*` names pass without
         // being listed in `tools` (see docs/plan/sandbox.md → "How tools reach
-        // the controller"). Outside any sandbox scope, `getActiveSandbox()`
-        // returns undefined and this collapses to the original check.
-        const sandbox = getActiveSandbox()
+        // the controller"). Outside any scope, `activeTransports()` is empty and
+        // this collapses to the original check.
+        const scopedTransports = activeTransports()
         const allowed =
-          tools.includes(action.tool_name) || (sandbox?.ownsTool(action.tool_name) ?? false)
+          tools.includes(action.tool_name) ||
+          scopedTransports.some((t) => t.ownsTool(action.tool_name))
         if (!allowed) {
           hasError = true
           errorMessage = `Tool not allowed: ${action.tool_name}. Allowed: ${tools.join(', ')}`

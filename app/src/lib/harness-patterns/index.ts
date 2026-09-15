@@ -94,6 +94,22 @@ export { DEFAULT_TRACK_HISTORY, DEFAULT_COMMIT_STRATEGY, DEFAULT_ERROR_SEVERITY 
 export { Tools, ToolsFrom } from './tools.server'
 
 // ============================================================================
+// Tool transports (the containment seam)
+// ============================================================================
+//
+// Two structurally different ways to supply a transport, and the difference
+// between them is the containment invariant. `processTransports()` is
+// deliberately NOT here: dispatch and the tool catalog are its only readers.
+// See `tool-transport.server.ts`.
+
+export {
+  withTransport,
+  registerTransport,
+  activeTransports,
+  type ToolTransport,
+} from './tool-transport.server'
+
+// ============================================================================
 // Router
 // ============================================================================
 

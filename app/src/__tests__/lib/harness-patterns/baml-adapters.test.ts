@@ -1367,8 +1367,7 @@ describe('extractFailureLLMCallData', () => {
 describe('sandbox tool descriptions in prompt', () => {
   function fakeTransport() {
     return {
-      vmId: 'sbx-1',
-      toolNames: async () => ['sandbox_bash', 'sandbox_read'],
+      id: 'sandbox:sbx-1',
       listTools: async () => [
         {
           name: 'sandbox_bash',
@@ -1379,7 +1378,6 @@ describe('sandbox tool descriptions in prompt', () => {
       ],
       ownsTool: (n: string) => n === 'sandbox_bash' || n === 'sandbox_read',
       callTool: vi.fn(),
-      close: async () => {},
     }
   }
 
@@ -1392,11 +1390,11 @@ describe('sandbox tool descriptions in prompt', () => {
   it('prepends sandbox tools to LoopController prompt when scope is active', async () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
-    const { runWithSandbox } = await import('../../../lib/sandbox/scope.server')
+    const { withTransport } = await import('../../../lib/harness-patterns/tool-transport.server')
 
     const controller = createLoopControllerAdapter(['read_neo4j_cypher', 'Return'])
 
-    await runWithSandbox(fakeTransport(), () => controller('msg', 'intent', '[]', 0))
+    await withTransport(fakeTransport(), () => controller('msg', 'intent', '[]', 0))
 
     // 3rd arg of LoopController is the `tools` array.
     const tools = mockLoopController.mock.calls[0][2] as Array<{ name: string }>
@@ -1420,14 +1418,46 @@ describe('sandbox tool descriptions in prompt', () => {
     expect(names).not.toContain('sandbox_read')
   })
 
+  it('lists a name owned by two nested scopes ONCE, from the innermost', async () => {
+    // The prompt has to agree with dispatch: `callTool` sends `sandbox_bash` to
+    // the innermost transport that owns it, so showing the outer one's
+    // description beside it would document a machine the call never reaches.
+    const { createLoopControllerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { withTransport } = await import('../../../lib/harness-patterns/tool-transport.server')
+
+    const scope = (id: string, description: string) => ({
+      id,
+      ownsTool: (n: string) => n === 'sandbox_bash',
+      callTool: vi.fn(),
+      listTools: async () => [
+        { name: 'sandbox_bash', description, inputSchema: { type: 'object' } },
+      ],
+    })
+
+    const controller = createLoopControllerAdapter(['Return'])
+    await withTransport(scope('sandbox:outer', 'outer box'), () =>
+      withTransport(scope('sandbox:inner', 'inner box'), () =>
+        controller('msg', 'intent', '[]', 0),
+      ),
+    )
+
+    const tools = mockLoopController.mock.calls[0][2] as Array<{
+      name: string
+      description: string
+    }>
+    expect(tools.filter((t) => t.name === 'sandbox_bash')).toHaveLength(1)
+    expect(tools.find((t) => t.name === 'sandbox_bash')!.description).toBe('inner box')
+  })
+
   it('prepends sandbox tools to ActorController prompt when scope is active', async () => {
     const { createActorControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
-    const { runWithSandbox } = await import('../../../lib/sandbox/scope.server')
+    const { withTransport } = await import('../../../lib/harness-patterns/tool-transport.server')
 
     const controller = createActorControllerAdapter(['code-mode', 'Return'])
 
-    await runWithSandbox(fakeTransport(), () => controller('msg', 'intent', [], []))
+    await withTransport(fakeTransport(), () => controller('msg', 'intent', [], []))
 
     // 3rd arg of ActorController is the `tools` array.
     const tools = mockActorController.mock.calls[0][2] as Array<{ name: string }>

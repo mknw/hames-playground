@@ -30,7 +30,7 @@ import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
 import { resolveTurnBudget } from '../../settings'
-import { getActiveSandbox } from '../../sandbox/scope.server'
+import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import type { ActorControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
 import { LLMCallError, llmCallHitOutputCap } from '../baml-adapters.server'
@@ -88,10 +88,10 @@ export function actorCritic<T extends ActorCriticData>(
     // Same collapsed-tool-surface refusal as simpleLoop (#276) — see the
     // comment there for why the event, not the pattern default, carries the
     // `irrecoverable`. This pattern's production users are the two sandbox
-    // agents, which pass `[]` on purpose and run inside a sandbox scope, so
+    // agents, which pass `[]` on purpose and run inside a scoped transport, so
     // that guard is what keeps them out of this branch rather than an
     // exemption; a future gateway-backed actorCritic gets the check for free.
-    const outage = getActiveSandbox() ? null : toolSurfaceOutage(availableTools)
+    const outage = activeTransports().length > 0 ? null : toolSurfaceOutage(availableTools)
     if (outage) {
       trackEvent(scope, 'error', { ...outage, severity: 'irrecoverable' } as ErrorEventData, true)
       return scope
@@ -306,7 +306,7 @@ export function actorCritic<T extends ActorCriticData>(
           const dynamicAllowlist = config?.dynamicToolAllowlist
             ? await config.dynamicToolAllowlist()
             : []
-          const sandboxScope = getActiveSandbox()
+          const scopedTransports = activeTransports()
           const callIds: string[] = []
           const trackedArgs: unknown[] = []
           const subCalls: SubCall[] = []
@@ -317,7 +317,7 @@ export function actorCritic<T extends ActorCriticData>(
             const callAllowed =
               tools.includes(c.tool_name) ||
               dynamicAllowlist.includes(c.tool_name) ||
-              (sandboxScope?.ownsTool(c.tool_name) ?? false) ||
+              scopedTransports.some((t) => t.ownsTool(c.tool_name)) ||
               (config?.dynamicToolPattern?.test(c.tool_name) ?? false)
             if (!callAllowed) {
               trackedArgs.push(c.tool_args)
@@ -446,16 +446,15 @@ export function actorCritic<T extends ActorCriticData>(
         const dynamicAllowlist = config?.dynamicToolAllowlist
           ? await config.dynamicToolAllowlist()
           : []
-        // A third augmentation: an active `withSandbox` scope's tool surface.
-        // Sandbox-owned (`sandbox_*`) names pass without being listed in
-        // `tools` or `dynamicToolAllowlist` (see docs/plan/sandbox.md → "How
-        // tools reach the controller"). Outside any sandbox scope this is
-        // a no-op.
-        const sandbox = getActiveSandbox()
+        // A third augmentation: the tool surface of every transport scoped to
+        // this run. Sandbox-owned (`sandbox_*`) names pass without being listed
+        // in `tools` or `dynamicToolAllowlist` (see docs/plan/sandbox.md → "How
+        // tools reach the controller"). Outside any scope this is a no-op.
+        const scopedTransports = activeTransports()
         const allowed =
           tools.includes(action.tool_name) ||
           dynamicAllowlist.includes(action.tool_name) ||
-          (sandbox?.ownsTool(action.tool_name) ?? false) ||
+          scopedTransports.some((t) => t.ownsTool(action.tool_name)) ||
           (config?.dynamicToolPattern?.test(action.tool_name) ?? false)
         if (!allowed) {
           const errMsg = `Tool not allowed: ${action.tool_name}`

@@ -2266,4 +2266,134 @@ describe('simpleLoop execution', () => {
       expect(JSON.stringify((expandEvent.data as { result: unknown }).result)).toContain(BIG_URL)
     })
   })
+
+  // ==========================================================================
+  // The allowlist's second augmentation: transports scoped to this run
+  // ==========================================================================
+  //
+  // `tools` is the ALLOWLIST (the factory's copy only selects prompt
+  // descriptions), so this is the loop's own containment check, not an
+  // ergonomic one. Both sandbox agents pass `tools: []` and rely entirely on
+  // it: without the augmentation every `sandbox_*` call is refused with "Tool
+  // not allowed" and the agent cannot do anything at all.
+  //
+  // Added with #225 L3 because it was NOT pinned before: deleting the
+  // augmentation from this file's subject left the whole suite green (the
+  // actorCritic twin is covered by `sandbox/end-to-end.test.ts`, the simpleLoop
+  // one by nothing).
+  describe('tools owned by a scoped transport pass the allowlist', () => {
+    const scopedTransport = {
+      id: 'sandbox:allowlist',
+      ownsTool: (n: string) => n.startsWith('sandbox_'),
+      callTool: async () => ({ success: true, data: null }),
+      listTools: async () => [],
+    }
+
+    const context = () => ({
+      sessionId: 'scoped-allowlist',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'q' } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'q',
+    })
+
+    it('runs a sandbox-owned tool a loop declaring NO tools never listed', async () => {
+      const { simpleLoop } =
+        await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+      const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+      const { withTransport } =
+        await import('../../../../lib/harness-patterns/tool-transport.server')
+
+      callToolMock.mockResolvedValueOnce({ success: true, data: 'ok' })
+      const mockController = vi
+        .fn()
+        .mockResolvedValueOnce({
+          action: mockAction({ tool_name: 'sandbox_bash', tool_args: '{"command":"ls"}' }),
+          llmCall: undefined,
+        })
+        .mockResolvedValueOnce({ action: mockFinalAction('done'), llmCall: undefined })
+
+      const pattern = simpleLoop(mockController, [], { patternId: 'scoped-ok' })
+      const scope = createScope('scoped-ok', { intent: 'q' })
+      const result = await withTransport(scopedTransport, () =>
+        pattern.fn(scope, createEventView(context())),
+      )
+
+      expect(callToolMock).toHaveBeenCalledWith('sandbox_bash', { command: 'ls' })
+      const refusals = result.events.filter(
+        (e) =>
+          e.type === 'error' &&
+          String((e.data as { error?: string }).error).includes('Tool not allowed'),
+      )
+      expect(refusals).toEqual([])
+    })
+
+    it('still refuses a name NO transport owns', async () => {
+      const { simpleLoop } =
+        await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+      const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+      const { withTransport } =
+        await import('../../../../lib/harness-patterns/tool-transport.server')
+
+      const mockController = vi.fn().mockResolvedValue({
+        action: mockAction({ tool_name: 'rm_rf', tool_args: '{}' }),
+        llmCall: undefined,
+      })
+
+      const pattern = simpleLoop(mockController, [], { patternId: 'scoped-refuse' })
+      const scope = createScope('scoped-refuse', { intent: 'q' })
+      const result = await withTransport(scopedTransport, () =>
+        pattern.fn(scope, createEventView(context())),
+      )
+
+      expect(callToolMock).not.toHaveBeenCalledWith('rm_rf', expect.anything())
+      const refusal = result.events.find(
+        (e) =>
+          e.type === 'error' &&
+          String((e.data as { error?: string }).error).includes('Tool not allowed'),
+      )
+      expect(refusal).toBeDefined()
+    })
+
+    it('passes the same augmentation on a multi-call turn', async () => {
+      // The batch gate is a SECOND copy of the check (`additional_calls` is
+      // pre-screened per sub-call), so it needs its own case: the two have
+      // diverged before.
+      const { simpleLoop } =
+        await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+      const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+      const { withTransport } =
+        await import('../../../../lib/harness-patterns/tool-transport.server')
+
+      callToolMock.mockResolvedValue({ success: true, data: 'ok' })
+      const mockController = vi
+        .fn()
+        .mockResolvedValueOnce({
+          action: mockAction({
+            tool_name: 'sandbox_bash',
+            tool_args: '{"command":"ls"}',
+            additional_calls: [{ tool_name: 'sandbox_read', tool_args: '{"path":"/work/a"}' }],
+          }),
+          llmCall: undefined,
+        })
+        .mockResolvedValueOnce({ action: mockFinalAction('done'), llmCall: undefined })
+
+      const pattern = simpleLoop(mockController, [], { patternId: 'scoped-batch' })
+      const scope = createScope('scoped-batch', { intent: 'q' })
+      const result = await withTransport(scopedTransport, () =>
+        pattern.fn(scope, createEventView(context())),
+      )
+
+      expect(callToolMock).toHaveBeenCalledWith('sandbox_bash', { command: 'ls' })
+      expect(callToolMock).toHaveBeenCalledWith('sandbox_read', { path: '/work/a' })
+      const results = result.events.filter((e) => e.type === 'tool_result')
+      expect(JSON.stringify(results.map((e) => e.data))).not.toContain('Tool not allowed')
+    })
+  })
 })

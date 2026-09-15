@@ -323,7 +323,15 @@ describe('mcp-client', () => {
       expect(gateway!.description).toBe('A test tool')
     })
 
+    // These two used to pass WITHOUT importing `app-tools` at all: core imported
+    // it, so registration happened as a side effect of importing this module.
+    // Core no longer does — the app registers its transport at boot — so the
+    // import below is now the thing under test's PRECONDITION, stated. That the
+    // app's boot path actually performs it is pinned separately, in
+    // `lib/app-tools/transport.test.ts` and in the server-entry closure walk in
+    // `browser-e2e-not-in-ci.test.ts`.
     it('should append in-process app tools to the gateway list (#110)', async () => {
+      await import('../../../lib/app-tools/index.server')
       const { listTools } = await import('../../../lib/harness-patterns/mcp-client.server')
 
       const tools = await listTools()
@@ -333,6 +341,7 @@ describe('mcp-client', () => {
     })
 
     it('should still offer app tools when the gateway fails', async () => {
+      await import('../../../lib/app-tools/index.server')
       mockListTools.mockRejectedValue(new Error('Failed'))
 
       const { listTools } = await import('../../../lib/harness-patterns/mcp-client.server')
@@ -399,49 +408,48 @@ describe('mcp-client', () => {
     })
   })
 
-  // Build-order step 3: callTool dispatches sandbox-owned tool names to the
-  // active `withSandbox` scope's in-VM transport, not the host gateway. See
-  // docs/plan/sandbox.md → "How tools reach the controller".
-  describe('callTool sandbox dispatch', () => {
-    it('routes sandbox-owned tool names to the in-VM transport, not the gateway', async () => {
+  // Build-order step 3: callTool dispatches tool names owned by a transport
+  // scoped to the run — today the `withSandbox` wrapper's in-VM transport — to
+  // that transport, not the host gateway. See docs/plan/sandbox.md → "How tools
+  // reach the controller". The ORDER across all three phases, on colliding
+  // names, is `transport-precedence.test.ts`; these three are the
+  // scoped-vs-gateway cases that have always lived here.
+  describe('callTool scoped-transport dispatch', () => {
+    it('routes scoped tool names to the scoped transport, not the gateway', async () => {
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
-      const { runWithSandbox } = await import('../../../lib/sandbox/scope.server')
+      const { withTransport } = await import('../../../lib/harness-patterns/tool-transport.server')
 
       const sandboxCallTool = vi.fn().mockResolvedValue({ success: true, data: 'from-sandbox' })
       const transport = {
-        vmId: 'sbx-1',
-        toolNames: async () => ['sandbox_bash'],
+        id: 'sandbox:sbx-1',
         listTools: async () => [],
         ownsTool: (n: string) => n === 'sandbox_bash',
         callTool: sandboxCallTool,
-        close: async () => {},
       }
 
-      const result = await runWithSandbox(transport, () =>
+      const result = await withTransport(transport, () =>
         callTool('sandbox_bash', { cmd: 'echo hi' }),
       )
 
       expect(result).toEqual({ success: true, data: 'from-sandbox' })
       expect(sandboxCallTool).toHaveBeenCalledWith('sandbox_bash', { cmd: 'echo hi' })
-      // Gateway path must not have been touched for a sandbox-owned tool.
+      // Gateway path must not have been touched for a scoped tool.
       expect(mockCallTool).not.toHaveBeenCalled()
     })
 
-    it('falls through to the gateway for tools the sandbox does not own', async () => {
+    it('falls through to the gateway for tools the scoped transport does not own', async () => {
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
-      const { runWithSandbox } = await import('../../../lib/sandbox/scope.server')
+      const { withTransport } = await import('../../../lib/harness-patterns/tool-transport.server')
 
       const sandboxCallTool = vi.fn()
       const transport = {
-        vmId: 'sbx-2',
-        toolNames: async () => ['sandbox_bash'],
+        id: 'sandbox:sbx-2',
         listTools: async () => [],
         ownsTool: (n: string) => n === 'sandbox_bash',
         callTool: sandboxCallTool,
-        close: async () => {},
       }
 
-      const result = await runWithSandbox(transport, () =>
+      const result = await withTransport(transport, () =>
         callTool('neo4j_query', { cypher: 'MATCH (n) RETURN n' }),
       )
 
@@ -451,7 +459,7 @@ describe('mcp-client', () => {
       expect(sandboxCallTool).not.toHaveBeenCalled()
     })
 
-    it('routes everything to the gateway outside any sandbox scope', async () => {
+    it('routes everything to the gateway outside any scope', async () => {
       const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
 
       const result = await callTool('whatever', {})

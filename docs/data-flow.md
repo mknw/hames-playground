@@ -140,7 +140,7 @@ flowchart TD
     PHIT -->|"hit"| PARKED["return parked VM · O(ms)"]
     PHIT -->|"miss"| CBOOT["backend.boot · cold"]
 
-    REUSE --> RUN["runWithSandbox: pattern.fn in ALS scope"]
+    REUSE --> RUN["withTransport: pattern.fn in ALS scope"]
     COLD --> RUN
     PARKED --> RUN
     CBOOT --> RUN
@@ -258,7 +258,7 @@ same gateway that fronts the Data Stash Redis in diagram 1).
 flowchart LR
     subgraph hostp["Host process — SolidStart harness"]
         CTRL["Controller pattern<br/>simpleLoop / actorCritic"]
-        ALS["ALS sandbox scope<br/>getActiveSandbox()"]
+        ALS["ALS transport scope<br/>activeTransports()"]
         MCPC["mcp-client.callTool"]
         BAML["BAML adapters<br/>append sandbox listTools to prompt"]
         PTY["PtyManager<br/>SSE-down / POST-up"]

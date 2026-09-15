@@ -263,6 +263,13 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
     expect(ENTRY_CLOSURE).toContain('src/lib/inference/dev-fake-inference.server.ts')
     expect(ENTRY_CLOSURE).toContain('src/lib/metrics/usage-recorder.server.ts')
     expect(ENTRY_CLOSURE).toContain('src/lib/harness-patterns/clients.server.ts')
+    // The app-tool transport registration (#225 L3) is the newest edge and the
+    // largest: the boot hook imports the barrel, and the barrel's own side
+    // effect drags the Graph auth stack, doc-convert and the stash behind it.
+    // If that subtree ever acquires a module-scope `Collector` the assertion
+    // below is what catches it, so the edge is named here to keep it walked.
+    expect(ENTRY_CLOSURE).toContain('src/lib/app-tools/index.server.ts')
+    expect(ENTRY_CLOSURE).toContain('src/lib/app-tools/graph.server.ts')
     expect(ENTRY_CLOSURE.length).toBeGreaterThan(10)
   })
 

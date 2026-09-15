@@ -785,8 +785,7 @@ describe('compactExecution — context-window trimming regression', () => {
   })
 
   it('resolves the trim window from the real client, and every role name is in the map', async () => {
-    const { getContextWindow } =
-      await import('../../../../lib/harness-patterns/token-budget.server')
+    const { getContextWindow } = await import('../../../../lib/harness-patterns/clients.server')
     const { resolveClientForRole } = await import('../../../../lib/harness-patterns/clients.server')
 
     // The key that was missing (→ 16K default → over-trim).

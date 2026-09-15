@@ -24,6 +24,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockAction, mockCriticResult, mockBAMLClient } from '../../mocks/baml'
+import type { ControllerFn } from '../../../lib/harness-patterns/types'
 import { mockCallTool, mockListTools } from '../../mocks/mcp'
 
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
@@ -68,6 +69,10 @@ const contextWith = (input: string) => ({
  *  only way out of the loop is its round budget, which is what these tests are
  *  here to observe. Counts its own calls so "it really ran N rounds" is checked
  *  against the loop's behaviour and not only against the event it emitted. */
+// Lane A5: ControllerFn is an object-callable (optional limits()); bare vi.fn()
+// placeholders are cast.
+const stubController = () => vi.fn() as unknown as ControllerFn
+
 const neverFinishingController = () => {
   const fn = vi.fn().mockResolvedValue({
     action: {
@@ -131,16 +136,20 @@ describe('resolveTurnBudget', () => {
       await import('../../../lib/harness-patterns/patterns/actorCritic.server')
     const { DEFAULT_SETTINGS, SETTINGS_BOUNDS } = await import('../../../lib/settings')
 
-    expect(simpleLoop(vi.fn(), [], { patternId: 'a' }).estimateTurns?.(DEFAULT_SETTINGS)).toBe(
-      DEFAULT_SETTINGS.maxToolTurns,
-    )
     expect(
-      simpleLoop(vi.fn(), [], { patternId: 'b', maxTurns: 12 }).estimateTurns?.(DEFAULT_SETTINGS),
+      simpleLoop(stubController(), [], { patternId: 'a' }).estimateTurns?.(DEFAULT_SETTINGS),
+    ).toBe(DEFAULT_SETTINGS.maxToolTurns)
+    expect(
+      simpleLoop(stubController(), [], { patternId: 'b', maxTurns: 12 }).estimateTurns?.(
+        DEFAULT_SETTINGS,
+      ),
     ).toBe(12)
     // The bar's denominator is clamped too — otherwise a pinned-too-high loop
     // would render a fraction out of a number it could never reach.
     expect(
-      simpleLoop(vi.fn(), [], { patternId: 'c', maxTurns: 99 }).estimateTurns?.(DEFAULT_SETTINGS),
+      simpleLoop(stubController(), [], { patternId: 'c', maxTurns: 99 }).estimateTurns?.(
+        DEFAULT_SETTINGS,
+      ),
     ).toBe(SETTINGS_BOUNDS.maxToolTurns[1])
     expect(
       actorCritic(vi.fn(), vi.fn(), [], { patternId: 'd', maxRetries: 4 }).estimateTurns?.(
@@ -213,10 +222,14 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
     const { createEventView } = await import('../../../lib/harness-patterns/patterns')
 
     const run = async (maxTurns?: number) => {
-      const pattern = simpleLoop(neverFinishingController(), ['read_neo4j_cypher', 'Return'], {
-        patternId: 'execute',
-        ...(maxTurns === undefined ? {} : { maxTurns }),
-      })
+      const pattern = simpleLoop(
+        neverFinishingController() as unknown as ControllerFn,
+        ['read_neo4j_cypher', 'Return'],
+        {
+          patternId: 'execute',
+          ...(maxTurns === undefined ? {} : { maxTurns }),
+        },
+      )
       const result = await pattern.fn(
         createScope('execute', { intent: 'x' }),
         createEventView(contextWith('x')),

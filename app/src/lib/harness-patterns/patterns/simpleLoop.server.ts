@@ -32,8 +32,7 @@ import { getRequestSettings } from '../../settings-context.server'
 import { resolveTurnBudget } from '../../settings'
 import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
-import { trimToFit, getContextWindow } from '../token-budget.server'
-import { resolveClientForRole } from '../clients.server'
+import { trimToFit } from '../token-budget.server'
 import type { ControllerFn } from '../types'
 import { dedupByRefId, annotateExpansions } from '../baml-adapters.server'
 import type { LLMCallRecord } from '../types'
@@ -268,7 +267,11 @@ export function simpleLoop<T extends SimpleLoopData>(
       for (let turn = 0; turn < maxTurns; turn++) {
         // Trim oldest turns if they would overflow the controller's context window
         // (the client this call will actually use, not a hardcoded chain name).
-        const contextWindow = getContextWindow(resolveClientForRole('controller'))
+        // Per-call limits (Lane A5): the seam answers for the model THIS call
+        // takes — a tier decision is an ALS scope, not a construction-time fact.
+        // A seam without limits (custom fn, test mock) falls back to the same
+        // conservative 16K default getContextWindow carried.
+        const contextWindow = controller.limits?.().contextWindow ?? 16_384
         // ~500 chars base prompt overhead (template, schema, intent, etc.)
         // trimToFit keeps the string serializer for SIZE accounting only — the
         // turns themselves are handed to the controller TYPED (Lane A4); no

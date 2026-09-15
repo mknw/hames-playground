@@ -6,7 +6,6 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import { MODEL_CONTEXT_WINDOWS } from '../settings'
 
 assertServerOnImport()
 
@@ -19,17 +18,6 @@ const OUTPUT_RESERVE = 4096
 /** Estimate token count from a string */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN)
-}
-
-/**
- * Get context window (tokens) for a BAML client name.
- * Falls back to 16K if client is unknown.
- */
-export function getContextWindow(clientName?: string): number {
-  if (clientName && MODEL_CONTEXT_WINDOWS[clientName]) {
-    return MODEL_CONTEXT_WINDOWS[clientName]
-  }
-  return 16_384
 }
 
 /**

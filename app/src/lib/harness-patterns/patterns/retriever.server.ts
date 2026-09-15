@@ -46,9 +46,9 @@ import type {
 import { trackEvent, resolveConfig } from '../context.server'
 import { getActiveInjectionGuard } from '../injection-guard-scope.server'
 import { getErrorHint } from '../error-hints'
-import { trimToFit, getContextWindow } from '../token-budget.server'
+import { trimToFit } from '../token-budget.server'
 import { extractLLMCallData, extractFailureLLMCallData } from '../baml-adapters.server'
-import { clientOverrideFor, resolveClientForRole } from '../clients.server'
+import { clientOverrideFor, limitsFor } from '../clients.server'
 
 assertServerOnImport()
 
@@ -401,7 +401,7 @@ async function rewriteQuery<T>(
 ): Promise<{ text: string; llmCall?: LLMCallData }> {
   const collector = new Collector('retriever')
   const startTime = Date.now()
-  const contextWindow = getContextWindow(resolveClientForRole('describe'))
+  const contextWindow = limitsFor('describe').contextWindow
   const trimmed = trimToFit(history, (h) => JSON.stringify(h), 300, contextWindow)
   const variables = { history: trimmed, latest }
   try {

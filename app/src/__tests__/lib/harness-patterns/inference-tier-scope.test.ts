@@ -179,7 +179,7 @@ describe('runWithInferenceTier — both positions reach the right override', () 
 
   it('trims a scoped Verda run against the 131K server window', async () => {
     const { runWithInferenceTier, resolveClientForRole } = await load()
-    const { getContextWindow } = await import('../../../lib/harness-patterns/token-budget.server')
+    const { getContextWindow } = await import('../../../lib/harness-patterns/clients.server')
 
     await runWithInferenceTier('verda', async () => {
       expect(getContextWindow(resolveClientForRole('controller'))).toBe(131_072)

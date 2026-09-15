@@ -455,7 +455,7 @@ describe('compactBulkData', () => {
     // a tier.
     const clients = await import('../../../lib/harness-patterns/clients.server')
     const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
-    const { getContextWindow } = await import('../../../lib/harness-patterns/token-budget.server')
+    const { getContextWindow } = await import('../../../lib/harness-patterns/clients.server')
     const { maxBatchItems, MAX_BATCH_ITEMS } =
       await import('../../../lib/harness-patterns/compactBulkData.server')
 

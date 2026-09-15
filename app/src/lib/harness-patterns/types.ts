@@ -463,11 +463,41 @@ export interface ControllerCallResult {
   llmCall?: LLMCallRecord
 }
 
+/** The model budgets a call must respect — the context window and output cap
+ *  of the model the call will ACTUALLY take (#225 Lane A5).
+ *
+ *  Per CALL, not per construction: a tier decision is an AsyncLocalStorage
+ *  scope, so a value captured at pattern-construction time would budget a
+ *  verda-tier turn against the wrong model. `limitsFor(role)` in
+ *  `clients.server.ts` resolves per call; the adapter-backed seam functions
+ *  expose it as `limits()`. */
+export interface ModelLimits {
+  contextWindow: number
+  /** Absent means UNKNOWN, never "no cap". Preserves the
+   *  `llmCallHitOutputCap` semantics: an unknown client is not-detectable,
+   *  never a false positive. This is the CHAIN FLOOR (the weakest leaf's cap,
+   *  SA-M6) — budget with it; the per-attempt leaf cap is what
+   *  `hitOutputCap` stamping uses, and the two must not be conflated. */
+  maxOutputTokens?: number
+}
+
 /** The controller seam callable (Lane A4): takes the whole input as ONE named
  *  object. `simpleLoop` accepts this; the adapter factories return it (with a
  *  legacy positional form attached for the untouched acceptance tests — see
- *  `baml-adapters.server.ts`). */
-export type ControllerFn = (input: ControllerInput) => Promise<ControllerCallResult>
+ *  `baml-adapters.server.ts`).
+ *
+ *  `limits` (Lane A5) is OPTIONAL because a custom injected implementation
+ *  may not know its model's budgets; the adapter implementations always
+ *  provide it, and a seam without one falls back to the conservative 16K
+ *  window (the same default `getContextWindow` carried). */
+export type ControllerFn = {
+  (input: ControllerInput): Promise<ControllerCallResult>
+  /** Per-call model budgets (Lane A5). Optional: a custom injected
+   *  implementation may not know them — the adapter implementations always
+   *  provide it, and a seam without one falls back to the conservative 16K
+   *  window (the same default `getContextWindow` carried). */
+  limits?: () => ModelLimits
+}
 
 /** The actor seam callable (Lane A4). `actorCritic` accepts this. */
 export type ActorFn = (input: ActorInput) => Promise<ControllerCallResult>

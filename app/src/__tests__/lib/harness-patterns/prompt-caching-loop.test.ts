@@ -235,10 +235,7 @@ beforeEach(() => {
 describe('simpleLoop (scheme B) — real loop, rendered per turn', () => {
   async function runLoop() {
     const h = await loadHarness()
-    const controller = h.createLoopControllerAdapter(
-      ['read_neo4j_cypher', 'Return'],
-      'GRAPH SCHEMA: (Person)',
-    )
+    const controller = h.createLoopControllerAdapter('GRAPH SCHEMA: (Person)')
     const pattern = h.simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
       patternId: 'cache-loop',
       maxTurns: 5,
@@ -296,10 +293,7 @@ describe('simpleLoop with an upstream plan (#27) — the plan stays out of tier 
 
   async function runPlannedLoop() {
     const h = await loadHarness()
-    const controller = h.createLoopControllerAdapter(
-      ['read_neo4j_cypher', 'Return'],
-      'GRAPH SCHEMA: (Person)',
-    )
+    const controller = h.createLoopControllerAdapter('GRAPH SCHEMA: (Person)')
     const pattern = h.simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
       patternId: 'cache-loop',
       maxTurns: 5,
@@ -344,10 +338,7 @@ describe('simpleLoop with an upstream plan (#27) — the plan stays out of tier 
     captured.length = 0
     vi.resetModules()
     const h = await loadHarness()
-    const controller = h.createLoopControllerAdapter(
-      ['read_neo4j_cypher', 'Return'],
-      'GRAPH SCHEMA: (Person)',
-    )
+    const controller = h.createLoopControllerAdapter('GRAPH SCHEMA: (Person)')
     const pattern = h.simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
       patternId: 'cache-loop',
       maxTurns: 5,

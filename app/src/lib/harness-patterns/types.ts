@@ -417,6 +417,13 @@ export interface PatternConfig {
 export interface ControllerInput {
   userMessage: string
   intent: string
+  /** The ONE tool list (L14, #225 Lane B3): the loop's allowlist arrives as
+   *  part of the input, so the controller advertises exactly what the loop
+   *  will accept — the same names, declared once. There is no second channel:
+   *  a factory-captured list (the old divergence where the prompt advertised
+   *  a set the loop could refuse, or silently under-advertised) cannot exist
+   *  any more. */
+  tools: readonly string[]
   /** TYPED. Replaces `previous_results: string`. */
   turns: readonly LoopTurn[]
   turn: number

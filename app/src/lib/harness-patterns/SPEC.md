@@ -80,15 +80,16 @@ MCP Tools ───────┘
 
 ```typescript
 // Adapter factories from baml-adapters.server.ts — the only thing you pass to
-// a pattern's controller/actor/critic slots. The domain-specific ones
-// (createNeo4jController, createWebSearchController, createMemoryController,
-// createContext7Controller, createFilesystemController, createRedisController,
-// createDatabaseController) are thin aliases of createLoopControllerAdapter —
-// no behaviour of their own, kept for call-site readability (#225). They adapt
-// the BAML call order and return { action, llmCall }; a raw bound BAML function
+// a pattern's controller/actor/critic slots. They adapt the BAML call order
+// and return { action, llmCall }; a raw bound BAML function
 // (e.g. b.LoopController.bind(b)) does NOT satisfy the contract and fails
 // typecheck — do not pass one to a pattern.
-const controller = createNeo4jController(tools.neo4j ?? [])
+//
+// The tool list rides the SEAM (L14, #225 Lane B3): `ControllerInput.tools`
+// is the loop's allowlist, declared once — there is no factory-captured copy,
+// and the seven domain controller factories that used to hold one
+// (createNeo4jController, createWebSearchController, …) are deleted.
+const controller = createLoopControllerAdapter()
 simpleLoop(controller, tools.neo4j ?? [], { patternId: 'neo4j-query', schema })
 
 const actor = createActorControllerAdapter(tools.all)
@@ -370,7 +371,7 @@ usually one tool call, but the controller may emit a **multi-call turn**
 (`additional_calls`) — see `multiToolCalls` below.
 
 ```typescript
-simpleLoop(createNeo4jController(tools.neo4j ?? []), tools.neo4j ?? [], {
+simpleLoop(createLoopControllerAdapter(), tools.neo4j ?? [], {
   patternId: 'neo4j-query',
   schema,
 })
@@ -621,10 +622,10 @@ Execute multiple patterns concurrently via `Promise.allSettled`, then merge resu
 
 ```typescript
 parallel<SimpleLoopData & Record<string, unknown>>([
-  simpleLoop(createWebSearchController(tools.web ?? []), tools.web ?? [], {
+  simpleLoop(createLoopControllerAdapter(), tools.web ?? [], {
     patternId: 'web-search',
   }),
-  simpleLoop(createNeo4jController(tools.neo4j ?? []), tools.neo4j ?? [], {
+  simpleLoop(createLoopControllerAdapter(), tools.neo4j ?? [], {
     patternId: 'kg-lookup',
     schema,
   }),
@@ -1812,8 +1813,7 @@ import {
   compactExecution,
   Tools,
   callTool,
-  createNeo4jController,
-  createWebSearchController,
+  createLoopControllerAdapter,
   createActorControllerAdapter,
   createCriticAdapter,
   type ConfiguredPattern,
@@ -1832,16 +1832,14 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools({ namespaces: mcpNamespace })
   const schema = await getSchema()
 
-  // Use adapter factories (preferred over b.bind())
-  const neo4jController = createNeo4jController(tools.neo4j ?? [])
-  const webController = createWebSearchController(tools.web ?? [])
-
-  const neo4jPattern = simpleLoop<SessionData>(neo4jController, tools.neo4j ?? [], {
+  // Use adapter factories (preferred over b.bind()); L14 — the tool list
+  // appears once, at the loop, and rides the seam as ControllerInput.tools.
+  const neo4jPattern = simpleLoop<SessionData>(createLoopControllerAdapter(), tools.neo4j ?? [], {
     patternId: 'neo4j-query',
     schema,
   })
 
-  const webPattern = simpleLoop<SessionData>(webController, tools.web ?? [], {
+  const webPattern = simpleLoop<SessionData>(createLoopControllerAdapter(), tools.web ?? [], {
     patternId: 'web-search',
   })
 
@@ -1881,7 +1879,7 @@ harness-patterns/
 ├── routing.server.ts       # BAML router integration (routeMessageOp)
 ├── tool-transport.server.ts # ToolTransport + withTransport() (scoped, innermost-first) / registerTransport() (process, consulted after every scoped one) / activeTransports(); the difference between the two registration functions IS the containment invariant — there is no priority field and no argument that could express one
 ├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
-├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, etc.
+├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter (tool list rides ControllerInput.tools — L14), createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, etc.
 ├── compactBulkData.server.ts # compactBulkData() — background tool result summarization via the describe-tier client
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
 ├── token-budget.server.ts  # trimToFit(), getContextWindow(), estimateTokens() — rolling context window

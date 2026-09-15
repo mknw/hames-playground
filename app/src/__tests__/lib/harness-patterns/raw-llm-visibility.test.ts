@@ -133,7 +133,7 @@ describe('adapters: a failed BAML call carries rawOutput through the throw', () 
       new BamlValidationError('prompt', RAW_TEXT, 'missing reasoning', 'missing reasoning'),
     )
 
-    const controller = createLoopControllerAdapter(['read_neo4j_cypher'])
+    const controller = createLoopControllerAdapter()
     const err = await controller('q', 'i', '[]', 0, undefined, fakeCollector()).catch((e) => e)
 
     expect(err).toBeInstanceOf(LLMCallError)

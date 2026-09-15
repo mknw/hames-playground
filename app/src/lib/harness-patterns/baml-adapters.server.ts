@@ -805,7 +805,7 @@ export function invalidateToolDescriptions(): void {
  *  call — needed when the toolset may have changed (e.g. the gateway created
  *  a tool on a prior turn that should now be visible). */
 async function filterToolDescriptions(
-  toolNames: string[],
+  toolNames: readonly string[],
   options?: { dynamicPattern?: RegExp; refresh?: boolean },
 ): Promise<ToolDescription[]> {
   const all = await getToolDescriptions(options?.refresh)
@@ -849,12 +849,14 @@ async function activeTransportToolDescriptions(): Promise<ToolDescription[]> {
 /**
  * Create a ControllerFn adapter for simpleLoop that uses the generic LoopController.
  *
- * @param toolNames - Array of tool names available to this controller
+ * The tool list is NOT a factory argument (L14, #225 Lane B3): it arrives on
+ * {@link ControllerInput.tools} per call — the loop's allowlist — so the one
+ * declaration at the loop is the one thing the prompt advertises.
+ *
  * @param contextPrefix - Optional context prefix for the prompt (e.g., domain-specific instructions)
  * @returns ControllerFn compatible with simpleLoop pattern
  */
 export function createLoopControllerAdapter(
-  toolNames: string[],
   contextPrefix?: string,
 ): ControllerFn & LegacyControllerFn {
   const call = async (
@@ -873,9 +875,10 @@ export function createLoopControllerAdapter(
     // Get tool descriptions for available tools. When a transport is scoped to
     // this run (`withTransport` — today the in-VM sandbox), prepend its tool
     // surface so the model sees it in its first-turn prompt without the caller
-    // threading it through `toolNames`.
+    // threading it through a captured list. The gateway half is filtered to
+    // `input.tools` — the loop's allowlist, the ONE declaration (L14).
     const scopedTools = await activeTransportToolDescriptions()
-    const gatewayTools = await filterToolDescriptions(toolNames)
+    const gatewayTools = await filterToolDescriptions(input.tools)
     const tools = [...scopedTools, ...gatewayTools]
 
     // The loop's turns arrive TYPED (Lane A4) — no stringify/re-parse round
@@ -1015,6 +1018,11 @@ export function createLoopControllerAdapter(
       {
         userMessage: first,
         intent,
+        // The legacy positional form predates the seam's `tools` field — its
+        // only callers are the adapter-level acceptance tests, which pin the
+        // BAML call, not the catalog — so it advertises nothing from the
+        // gateway. Scoped transports still prepend their surface.
+        tools: [],
         turns: legacyTurns(previous_results),
         turn: n_turn,
         context: schema,
@@ -1667,41 +1675,8 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
   }
 }
 
-// ============================================================================
-// Domain-Specific Controller Adapters
-// ============================================================================
-
-/** Neo4j controller - uses LoopController with graph schema context (schema injected via config.schema) */
-export function createNeo4jController(toolNames: string[]): ControllerFn & LegacyControllerFn {
-  return createLoopControllerAdapter(toolNames)
-}
-
-/** Web search controller */
-export function createWebSearchController(toolNames: string[]): ControllerFn & LegacyControllerFn {
-  return createLoopControllerAdapter(toolNames)
-}
-
-/** Memory controller */
-export function createMemoryController(toolNames: string[]): ControllerFn & LegacyControllerFn {
-  return createLoopControllerAdapter(toolNames)
-}
-
-/** Context7 documentation controller */
-export function createContext7Controller(toolNames: string[]): ControllerFn & LegacyControllerFn {
-  return createLoopControllerAdapter(toolNames)
-}
-
-/** Filesystem controller */
-export function createFilesystemController(toolNames: string[]): ControllerFn & LegacyControllerFn {
-  return createLoopControllerAdapter(toolNames)
-}
-
-/** Redis controller */
-export function createRedisController(toolNames: string[]): ControllerFn & LegacyControllerFn {
-  return createLoopControllerAdapter(toolNames)
-}
-
-/** Database controller */
-export function createDatabaseController(toolNames: string[]): ControllerFn & LegacyControllerFn {
-  return createLoopControllerAdapter(toolNames)
-}
+// The seven domain controller factories (`createNeo4jController` etc.) were
+// DELETED in Lane B3 (#225 L14): they were argument-only aliases of
+// `createLoopControllerAdapter`, and once the tool list rides the seam they
+// took no arguments at all. Agents call `createLoopControllerAdapter()`
+// directly; the domain name was never more than a comment.

@@ -148,17 +148,17 @@ export interface SimpleLoopData {
  * Calls the BAML controller function directly, extracting params from context.
  *
  * @param controller - Controller function from an adapter factory
- *   (e.g., `createLoopControllerAdapter(toolNames)` or a domain alias like
- *   `createNeo4jController(toolNames)`). A raw bound BAML function does NOT
- *   satisfy this contract — its positional signature differs and it returns a
- *   bare ControllerAction instead of `{ action, llmCall }` (see
+ *   (`createLoopControllerAdapter()`, no tool-list argument — the list rides
+ *   the seam as `ControllerInput.tools`, L14). A raw bound BAML function does
+ *   NOT satisfy this contract — its positional signature differs and it
+ *   returns a bare ControllerAction instead of `{ action, llmCall }` (see
  *   `ControllerFn`).
  * @param tools - Allowed tool names
  * @param config - Optional configuration (schema, maxTurns, patternId, etc.)
  * @returns ConfiguredPattern ready for chain
  *
  * @example
- * const loop = simpleLoop(createLoopControllerAdapter(tools.neo4j), tools.neo4j, {
+ * const loop = simpleLoop(createLoopControllerAdapter(), tools.neo4j, {
  *   patternId: 'neo4j-query',
  *   schema,
  *   trackHistory: 'tool_result',
@@ -299,6 +299,9 @@ export function simpleLoop<T extends SimpleLoopData>(
           const controllerResult = await controller({
             userMessage: userContent,
             intent,
+            // L14 (#225 Lane B3): the loop's allowlist IS the controller's
+            // advertised list — one declaration, on the seam.
+            tools,
             turns: trimmedTurns,
             turn,
             context: config?.schema,

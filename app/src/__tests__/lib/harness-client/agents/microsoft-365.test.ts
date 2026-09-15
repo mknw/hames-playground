@@ -71,7 +71,7 @@ vi.mock('../../../../lib/harness-patterns', () => ({
   }),
   withInjectionGuard: (config: unknown) => injectionGuard(config),
   Tools: async () => ({ graph: graphNamespace, all: graphNamespace }),
-  createLoopControllerAdapter: (tools: string[]) => ({ adapterTools: tools }),
+  createLoopControllerAdapter: (...args: unknown[]) => ({ adapterArgs: args }),
 }))
 
 import {
@@ -147,10 +147,16 @@ describe('createPatterns', () => {
     expect(patterns).toHaveLength(2)
   })
 
-  it('gives the controller the same list as the loop (no wider allowlist)', async () => {
+  it('gives the controller NO tool list of its own (L14: one declaration, on the seam)', async () => {
     await microsoft365Agent.createPatterns('test-session')
-    const controller = lastLoopCall()[0] as { adapterTools: string[] }
-    expect(controller.adapterTools).toEqual([...MICROSOFT_365_TOOLS])
+    // Under L14 the factory takes no tool list at all — the loop's allowlist
+    // IS what the controller advertises, via `ControllerInput.tools`. A call
+    // with a list argument would be the second channel returning; the pin
+    // below fails the day one reappears.
+    const controller = lastLoopCall()[0] as { adapterArgs: unknown[] }
+    expect(controller.adapterArgs).toEqual([])
+    // And the single declaration is the loop's own list:
+    expect(composedTools()).toEqual([...MICROSOFT_365_TOOLS])
   })
 
   it("drops an allowlisted tool that isn't available (gateway down, module unloaded)", async () => {

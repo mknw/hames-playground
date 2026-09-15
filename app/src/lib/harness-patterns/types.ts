@@ -4,15 +4,145 @@
  * Pure TypeScript interfaces. Safe to import from client and server.
  */
 
-// Re-export BAML types for convenience
-export type {
-  ControllerAction,
-  CriticResult,
-  Attempt,
-  FewShot,
-  ToolCallRequest,
-  PlanResult,
-} from '../../../baml_client/types'
+/**
+ * The data types the harness patterns exchange with their LLM layer.
+ *
+ * Declared here (core), not imported from the generated BAML client: these
+ * twelve shapes are the wire contract every pattern reads, and core must own
+ * them so the injected-function seam (#225 Lane A1) can drop the generated
+ * `types` module from the module graph. Field-for-field identical to the
+ * generated definitions in `types.baml` — including the `| null` unions BAML
+ * emits for optional-with-null fields — so no call site's inference changes.
+ * When a field changes in `baml_src/`, it changes HERE in the same PR.
+ */
+
+/** Tool call event */
+export interface ToolCall {
+  tool: string
+  args: string
+}
+
+/** Tool execution result */
+export interface ToolResult {
+  tool: string
+  result: string
+  success: boolean
+  error?: string | null
+}
+
+/**
+ * One extra tool call inside a multi-call turn (ControllerAction.additional_calls).
+ * Field names deliberately match ControllerAction's singular fields — one
+ * vocabulary, demonstrated everywhere (see the few-shot encoding lesson in
+ * simpleLoop.baml: disagreeing demonstrations are defects).
+ */
+export interface ToolCallRequest {
+  tool_name: string
+  tool_args: string
+}
+
+/**
+ * A ref:<id> argument that was expanded inline during a turn
+ */
+export interface ExpandedRef {
+  ref_id: string
+  content: string
+}
+
+/**
+ * Description of an available tool, passed to patterns at runtime
+ */
+export interface ToolDescription {
+  name: string
+  description: string
+  args_schema?: string | null
+}
+
+/**
+ * Action decision returned by loop and actor controllers
+ */
+export interface ControllerAction {
+  reasoning: string
+  tool_name: string
+  tool_args: string
+  additional_calls?: ToolCallRequest[] | null
+  status?: string | null
+  is_final?: boolean | null
+}
+
+/**
+ * A single turn in a loop-based pattern
+ */
+export interface LoopTurn {
+  n: number
+  reasoning?: string | null
+  status?: string | null
+  tool_call?: ToolCall | null
+  additional_calls?: ToolCallRequest[] | null
+  tool_result?: ToolResult | null
+  expansions?: ExpandedRef[] | null
+}
+
+/**
+ * A previous attempt for actor-critic retry loop
+ */
+export interface Attempt {
+  n: number
+  action: ControllerAction
+  result: string
+  error?: string | null
+  feedback?: string | null
+}
+
+/**
+ * Critic evaluation result
+ */
+export interface CriticResult {
+  is_sufficient: boolean
+  explanation: string
+  suggested_approach?: string | null
+}
+
+/**
+ * A compact reference to a tool result from a previous task/turn.
+ * The LLM can pass ref:<ref_id> as a tool argument value to retrieve full data.
+ */
+export interface PriorResult {
+  ref_id: string
+  tool: string
+  summary: string
+  expanded_in_turn?: number | null
+}
+
+/**
+ * A canonical example of how the agent should pick a tool for a given user request.
+ * Few-shots are domain-specific — pass at config time on a per-route basis (e.g., a
+ * neo4j route ships graph-query examples; a web route ships search-formulation examples).
+ */
+export interface FewShot {
+  user: string
+  reasoning: string
+  tool: string
+  args: string
+}
+
+/**
+ * Strategic plan produced by the `planner` pattern BEFORE any tool runs.
+ * The planner never executes a tool — it only describes the approach, which
+ * downstream loop patterns receive as their trailing `planContext` argument
+ * (harness-patterns/patterns/planner.server.ts → `formatPlanContext`).
+ * `LoopController` takes it as its own `plan_context` parameter (tier 2);
+ * `ActorController` merges it into `context`, which is cache-safe there.
+ */
+export interface PlanResult {
+  /**
+   * Field name deliberately matches ControllerAction.reasoning — one
+   * vocabulary for "why this course of action", wherever it is produced.
+   */
+  reasoning: string
+  plan: string
+  n_steps: number
+}
 
 import type { CostBasis } from '../settings'
 
@@ -72,7 +202,7 @@ export interface ScriptExecutionEvent {
   /** Calls 2..N of a multi-call attempt, exactly as the actor emitted them —
    *  carried so the adapter's Attempt construction replays the real batch
    *  action instead of fabricating a singular one. */
-  additionalCalls?: import('../../../baml_client/types').ToolCallRequest[]
+  additionalCalls?: ToolCallRequest[]
 }
 
 // ============================================================================
@@ -285,7 +415,7 @@ export type ControllerFn = (
   n_turn: number,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ...extra: any[]
-) => Promise<import('../../../baml_client/types').ControllerAction>
+) => Promise<ControllerAction>
 
 /**
  * Critic function type for actorCritic pattern.
@@ -294,7 +424,7 @@ export type ControllerFn = (
 export type CriticFn = (
   intent: string,
   previous_attempts: ScriptExecutionEvent[],
-) => Promise<import('../../../baml_client/types').CriticResult>
+) => Promise<CriticResult>
 
 // ============================================================================
 // Pattern Configuration
@@ -334,7 +464,7 @@ export interface SimpleLoopConfig extends PatternConfig {
    *  Each shot is a `(user, reasoning, tool, args)` tuple shown verbatim under
    *  an "EXAMPLES" section. Keep the list short (3-5) — the prompt grows with
    *  every shot and is sent on every turn. */
-  fewShots?: import('../../../baml_client/types').FewShot[]
+  fewShots?: FewShot[]
   /** Hook to enrich/transform a tool result before the `tool_result` event is
    *  committed. See `OnToolResult`. */
   onToolResult?: OnToolResult
@@ -567,7 +697,7 @@ export interface HarnessResult<T> {
 /** Single iteration in a loop pattern */
 export interface LoopIteration {
   turn: number
-  action: import('../../../baml_client/types').ControllerAction
+  action: ControllerAction
   result: unknown
   timestamp: number
 }
@@ -687,7 +817,7 @@ export interface ToolResultEventData {
 
 /** Data payload for controller_action event */
 export interface ControllerActionEventData {
-  action: import('../../../baml_client/types').ControllerAction
+  action: ControllerAction
   /** 0-indexed turn within this loop pass — set by simpleLoop / actorCritic. */
   turn?: number
   /** Effective max turns for this loop instance (post-settings resolution).
@@ -699,7 +829,7 @@ export interface ControllerActionEventData {
 
 /** Data payload for critic_result event */
 export interface CriticResultEventData {
-  result: import('../../../baml_client/types').CriticResult
+  result: CriticResult
 }
 
 /** Data payload for pattern_enter event */
@@ -803,7 +933,7 @@ export interface IntentCompactedEventData {
 export interface PlanCreatedEventData {
   /** The plan written to `scope.data.plan` (post-truncation). Absent when
    *  `skipped` is set — there is no plan in that case. */
-  plan?: import('../../../baml_client/types').PlanResult
+  plan?: PlanResult
   /** Number of tools the planner was shown — the catalog the adapter actually
    *  resolved (sandbox + gateway), not the raw name list the factory took. */
   toolCount: number

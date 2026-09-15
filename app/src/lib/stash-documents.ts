@@ -40,8 +40,9 @@ export function cacheDocuments(sessionId: string, documents: StashDocumentMeta[]
 /**
  * Read the list, coalescing concurrent callers onto one request.
  *
- * Rejects only on a network failure — a non-OK status reads as an empty list
- * (see `listStashDocuments`). A rejection leaves the cache untouched.
+ * Rejects on a network failure OR a non-OK status (#314) — a silent empty list
+ * cached as "no uploads" is a failed load pretending to be an empty stash.
+ * A rejection leaves the cache untouched.
  */
 export function refreshDocuments(sessionId: string): Promise<StashDocumentMeta[]> {
   const pending = inFlight.get(sessionId)

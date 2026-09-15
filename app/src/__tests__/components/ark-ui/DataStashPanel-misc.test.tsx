@@ -207,6 +207,30 @@ describe('DataStashPanel — tool results', () => {
     expect(onStashAction).toHaveBeenCalledWith('ev-1', 'archive')
   })
 
+  it('a rejected stash action shows the error instead of dying as an unhandled rejection (#314)', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const onStashAction = vi.fn(async () => {
+      throw new Error('Stash action failed (404)')
+    })
+    const { container } = render(() => (
+      <DataStashPanel
+        events={[toolResult('ev-1', 'web_search')]}
+        sessionId={sid}
+        onStashAction={onStashAction}
+      />
+    ))
+    await tick()
+
+    container.querySelector<HTMLElement>('[data-part="trigger"] > div')!.click()
+    await tick()
+    menuButton('Hide')!.click()
+    await tick()
+
+    // The same channel the document actions report through.
+    expect(container.textContent).toContain('Stash action failed (404)')
+    consoleError.mockRestore()
+  })
+
   it('offers unarchive — and only that — on an archived result', async () => {
     const onStashAction = vi.fn(async () => {})
     const { container } = render(() => (

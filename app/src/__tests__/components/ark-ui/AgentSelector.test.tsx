@@ -138,7 +138,7 @@ describe('AgentSelector', () => {
     expect(option.textContent).toContain('+2')
   })
 
-  it('survives a failing registry call by rendering no agents', async () => {
+  it('shows a failure on the trigger — never an eternal "Loading agents..." (#314)', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     getAgentList.mockRejectedValue(new Error('registry offline'))
     const { container } = render(() => (
@@ -146,11 +146,46 @@ describe('AgentSelector', () => {
     ))
     await tick()
 
-    expect(container.textContent).toContain('Loading agents...')
+    // This is the control that decides which harness answers: a failure that
+    // looks like an eternal loading state hides a broken registry.
+    expect(container.textContent).toContain('Failed to load agents')
+    expect(container.textContent).not.toContain('Loading agents...')
+
     buttons(container)[0].click()
     await tick()
     expect(container.textContent).not.toContain('does things')
-
     consoleError.mockRestore()
+  })
+
+  it('offers a retry in the dropdown and recovers when it succeeds (#314)', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    getAgentList.mockRejectedValueOnce(new Error('registry offline'))
+    const { container } = render(() => (
+      <AgentSelector selectedAgent="graph" onAgentChange={vi.fn()} />
+    ))
+    await tick()
+
+    buttons(container)[0].click()
+    await tick()
+    const retry = buttons(container).find((b) => b.textContent?.trim() === 'Retry')!
+    expect(retry).toBeTruthy()
+
+    getAgentList.mockResolvedValue([agent('graph', 'Graph Explorer')])
+    retry.click()
+    await tick()
+
+    expect(container.textContent).toContain('Graph Explorer does things')
+    consoleError.mockRestore()
+  })
+
+  it('renders an explicit empty state when the registry answers with nothing', async () => {
+    getAgentList.mockResolvedValue([])
+    const { container } = render(() => (
+      <AgentSelector selectedAgent="graph" onAgentChange={vi.fn()} />
+    ))
+    await tick()
+
+    expect(container.textContent).toContain('No agents available')
+    expect(container.textContent).not.toContain('Loading agents...')
   })
 })

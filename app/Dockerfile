@@ -5,8 +5,13 @@
 #
 #   docker compose build app && docker compose up -d app
 #
-# Build context is `app/` (see ../docker-compose.yaml); nothing outside it is
-# needed, since baml_src/ lives here too.
+# Build context is `app/` (see ../docker-compose.yaml). Since #225 Step 0 the
+# workspace lockfile lives at the repo root, so the build additionally receives
+# the three root workspace files (package.json, pnpm-workspace.yaml,
+# pnpm-lock.yaml) through the scoped `root` build context — see the deps stage
+# below. That bridge dissolves when #225 Step 1 widens the context to the repo
+# root; until then nothing else outside app/ can enter (see the bridge notes
+# on the COPY lines).
 
 ARG NODE_VERSION=22-bookworm-slim
 ARG PNPM_VERSION=10.28.1
@@ -31,8 +36,27 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 make g++ \
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g pnpm@${PNPM_VERSION}
-WORKDIR /app
-COPY package.json pnpm-lock.yaml .npmrc ./
+# --- #225 Step 0 bridge -----------------------------------------------------
+# The lockfile is the workspace root's now, and a frozen install must validate
+# the whole workspace, so the image installs from a minimal workspace: the
+# REAL root manifests + lockfile arrive via the scoped `root` build context
+# (compose `build.additional_contexts` / `docker build --build-context`), and
+# only these three files can ever cross it — COPY names them explicitly.
+# This restructure dissolves at #225 Step 1, when the build context widens to
+# the repo root and the main context carries these files itself.
+#
+# NOTE: this works because pnpm-workspace.yaml lists ONLY `app` and
+# app/package.json arrives via the main (app/) context. A second workspace
+# member would be invisible to this build and the frozen install would fail
+# until the context widens at Step 1.
+WORKDIR /ws
+COPY --from=root package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+# app/.npmrc's enable-pre-post-scripts is load-bearing; pnpm reads .npmrc from
+# the workspace root, so it is placed at BOTH levels until Step 1 removes the
+# distinction.
+COPY .npmrc ./
+COPY package.json .npmrc app/
+WORKDIR /ws/app
 RUN pnpm install --frozen-lockfile
 
 # ---------------------------------------------------------------------------
@@ -45,7 +69,7 @@ RUN pnpm install --frozen-lockfile
 # missing or half-written client.
 # ---------------------------------------------------------------------------
 FROM deps AS build
-WORKDIR /app
+WORKDIR /ws/app
 COPY . .
 RUN pnpm baml-generate \
  && pnpm exec vinxi build
@@ -110,7 +134,7 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0
 
 WORKDIR /app
-COPY --from=build /app/.output ./.output
+COPY --from=build /ws/app/.output ./.output
 COPY --from=build /staging/ ./.output/server/node_modules/
 
 EXPOSE 3444

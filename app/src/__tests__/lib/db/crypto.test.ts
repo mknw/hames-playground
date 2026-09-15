@@ -324,11 +324,12 @@ describe('boot gate', () => {
           ? { rows: [{ sample: foreign }] }
           : { rows: [] }
       }
-      if (text.startsWith('SELECT id, title, context')) {
+      if (text.startsWith('SELECT id,') && text.includes('FROM conversations')) {
         return {
           rows: [
             {
               id: 'c1',
+              __version: '1',
               title: 'legacy plaintext',
               context: { status: 'done' },
               context__type: 'object',
@@ -355,11 +356,12 @@ describe('boot gate', () => {
     const run: QueryRunner = vi.fn(async (text: string) => {
       if (text.includes('to_regclass')) return { rows: [{ oid: 1 }] }
       if (text.includes('AS sample')) return { rows: [] }
-      if (text.startsWith('SELECT id, title, context')) {
+      if (text.startsWith('SELECT id,') && text.includes('FROM conversations')) {
         return {
           rows: [
             {
               id: 'c1',
+              __version: '1',
               title: 'legacy plaintext',
               context: { status: 'done' },
               context__type: 'object',
@@ -413,7 +415,7 @@ describe('backfill selection', () => {
     const run = vi.fn(async (text: string) => {
       if (text.includes('to_regclass')) return { rows: [{ oid: 1 }] }
       if (text.includes('AS sample')) return { rows: [] }
-      if (text.startsWith('SELECT id, title, context')) {
+      if (text.startsWith('SELECT id,') && text.includes('FROM conversations')) {
         if (served && !persist) return { rows: [] }
         served = true
         return { rows }
@@ -433,7 +435,13 @@ describe('backfill selection', () => {
     // prefix test the backfill skipped it, so it survived every pass in the
     // clear — the one class of value the module says it thought about.
     const { run, params } = tableRunner([
-      { id: 'c1', title: 'v1.my notes about versioning', context: 'v1.x', context__type: 'string' },
+      {
+        id: 'c1',
+        __version: '1',
+        title: 'v1.my notes about versioning',
+        context: 'v1.x',
+        context__type: 'string',
+      },
     ])
     const report = await encryptExistingRows(run)
     expect(report.tables.find((t) => t.table === 'conversations')?.batches).toBe(1)
@@ -450,7 +458,7 @@ describe('backfill selection', () => {
     // SELECT to keep them apart; without it the first nullable JSONB column
     // added here would have its absent values overwritten with ciphertext.
     const { run, statements } = tableRunner([
-      { id: 'c1', title: 'plain', context: null, context__type: null },
+      { id: 'c1', __version: '1', title: 'plain', context: null, context__type: null },
     ])
     await encryptExistingRows(run)
     const updates = statements().filter((t) => t.startsWith('UPDATE conversations'))
@@ -463,6 +471,7 @@ describe('backfill selection', () => {
     const { run, statements } = tableRunner([
       {
         id: 'c1',
+        __version: '1',
         title: 'v1.aaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbb.cc',
         context: null,
         context__type: 'null',
@@ -480,14 +489,24 @@ describe('backfill selection', () => {
     // dialects agree; the guard is what keeps a future disagreement from
     // re-reading the same 100 rows MIGRATION_MAX_BATCHES times at every boot.
     const { run, statements } = tableRunner(
-      [{ id: 'c1', title: encryptField('already done'), context: 'v1.x', context__type: 'string' }],
+      [
+        {
+          id: 'c1',
+          __version: '1',
+          title: encryptField('already done'),
+          context: 'v1.x',
+          context__type: 'string',
+        },
+      ],
       { persist: true },
     )
     const report = await encryptExistingRows(run)
     const table = report.tables.find((t) => t.table === 'conversations')!
     expect(table.batches).toBe(1)
     expect(table.incomplete).toBe(true)
-    expect(statements().filter((t) => t.startsWith('SELECT id, title'))).toHaveLength(1)
+    expect(
+      statements().filter((t) => t.startsWith('SELECT id,') && t.includes('FROM conversations')),
+    ).toHaveLength(1)
     expect(MIGRATION_MAX_BATCHES).toBeGreaterThan(1)
     expect(warn.mock.calls.flat().join(' ')).toContain('disagree')
   })

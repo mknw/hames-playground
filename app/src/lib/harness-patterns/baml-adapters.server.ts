@@ -865,8 +865,8 @@ export function createLoopControllerAdapter(
     // `withReferences` → `scope.data.attachedRefs` → `priorResults`.
     planContext?: string,
     // Terminal-action style (#149). Forwarded verbatim: the prompt treats an
-    // absent value as 'summary', so a controller called without it (a bare
-    // `b.LoopController.bind(b)`, an older caller) still gets the default.
+    // absent value as 'summary', so any controller called without it still
+    // gets the default.
     returnStyle?: ReturnStyle,
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')

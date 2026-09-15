@@ -161,4 +161,46 @@ describe('ShareConversationButton', () => {
     expect(getShareToken).toHaveBeenLastCalledWith('conv-2')
     expect(shareButton().getAttribute('data-shared')).toBe('true')
   })
+
+  it('reads as UNKNOWN — never as “not shared” — when the share lookup fails (#314)', async () => {
+    getShareToken.mockRejectedValue(new Error('session expired'))
+    render(() => <ShareConversationButton sessionId="conv-1" />)
+    await tick()
+
+    // This is the app's only “is this shared?” surface: a failed lookup that
+    // renders like a private conversation tells the owner their public link
+    // does not exist.
+    expect(shareButton().getAttribute('data-shared')).toBeNull()
+    expect(shareButton().getAttribute('aria-label')).toBe('Share state unknown — click to retry')
+    // A distinct glyph, not the hollow private-state share icon.
+    expect(shareButton().querySelector('span')?.className).toContain(
+      'i-material-symbols-error-outline',
+    )
+
+    // And the dialog explains and offers the retry.
+    fireEvent.click(shareButton())
+    await tick()
+    expect(document.body.textContent).toContain('could not be determined')
+    expect(confirmButton()).not.toBeNull()
+  })
+
+  it('recovers from an unknown state through the retry (#314)', async () => {
+    // The lookup keeps failing — opening the dialog refetches, and that
+    // refetch must land on the unknown state too, not silently heal.
+    getShareToken.mockRejectedValue(new Error('session expired'))
+    render(() => <ShareConversationButton sessionId="conv-1" />)
+    await tick()
+
+    fireEvent.click(shareButton())
+    await tick()
+    const retry = document.querySelector<HTMLButtonElement>('[data-testid="share-state-retry"]')
+    expect(retry).toBeTruthy()
+
+    getShareToken.mockResolvedValue({ token: TOKEN })
+    fireEvent.click(retry!)
+    await tick()
+
+    expect(linkField()!.value).toContain(`/s/${TOKEN}`)
+    expect(shareButton().getAttribute('data-shared')).toBe('true')
+  })
 })

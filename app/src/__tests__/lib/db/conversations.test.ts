@@ -25,6 +25,7 @@ import {
   getConversationOwner,
   promoteConversation,
   setConversationStatus,
+  updateConversationContextIfUnchanged,
   setConversationInferenceTier,
   getConversationInferenceTier,
   backfillConversationInferenceTier,
@@ -153,9 +154,14 @@ describe('conversations CRUD', () => {
     })
 
     // The attacker's runTurn sees no row (loadSession is user-scoped), so it
-    // blind-INSERTs — which conflicts. The owner-scoped upsert must no-op.
+    // blind-INSERTs — which conflicts. The owner-scoped upsert must write no
+    // rows, and must SAY SO: the write is the last step of a turn that has
+    // already run, answered and been billed, so swallowing the 0-row upsert
+    // loses that turn silently (`event: done`, an assistant bubble, and no
+    // conversation on reload). Reachable from the URL — `/?c=<someone else's
+    // id>` is enough.
     const attacker = `attacker-${Math.random().toString(36).slice(2, 10)}`
-    await saveConversation({
+    const saving = saveConversation({
       id,
       userId: attacker,
       agentId: 'evil-agent',
@@ -163,6 +169,12 @@ describe('conversations CRUD', () => {
       serializedContext: JSON.stringify({ events: [] }),
       status: 'running',
     })
+    await expect(saving).rejects.toThrow(/could not be saved/)
+    // And pins the ABSENCE of the ownership fact, not just the presence of the
+    // new wording: this message is rendered verbatim in the browser
+    // (turn.server.ts:267 -> events.ts:131 -> an error bubble), so "belongs to
+    // another user" belongs in the log and nowhere else.
+    await expect(saving).rejects.not.toThrow(/another user/i)
 
     const row = await loadConversation(id, TEST_USER)
     expect(row).not.toBeNull()
@@ -188,6 +200,110 @@ describe('conversations CRUD', () => {
     const otherUser = `other-${Math.random().toString(36).slice(2, 10)}`
     const stolen = await loadConversation(id, otherUser)
     expect(stolen).toBeNull()
+  })
+
+  // `/api/stash` loads the whole blob, flips a flag on one event and writes the
+  // blob back. Its competing writer is the turn's own `compactAndSave`, which
+  // fires just after the answer lands — so the window opens exactly when a user
+  // acts on a tool result. Unguarded, whichever write is second wins outright:
+  // the flag vanishes, or the turn's whole event set is replaced by the blob
+  // this route loaded before it.
+  describe('updateConversationContextIfUnchanged', () => {
+    it('writes at the version it read, and refuses once the row has moved on', async () => {
+      if (!dbAvailable) return
+      const id = `conv-cas-${Math.random().toString(36).slice(2, 10)}`
+      await saveConversation({
+        id,
+        userId: TEST_USER,
+        agentId: 'search',
+        title: 't',
+        serializedContext: JSON.stringify({ events: ['turn-1'] }),
+      })
+
+      const read = (await loadConversation(id, TEST_USER))!
+      expect(
+        await updateConversationContextIfUnchanged(
+          id,
+          TEST_USER,
+          JSON.stringify({ events: ['turn-1', 'hidden'] }),
+          read.version,
+        ),
+      ).toBe(true)
+
+      // Same version again: the row now carries the one that write produced.
+      expect(
+        await updateConversationContextIfUnchanged(
+          id,
+          TEST_USER,
+          JSON.stringify({ events: ['stale'] }),
+          read.version,
+        ),
+      ).toBe(false)
+
+      const after = (await loadConversation(id, TEST_USER))!
+      expect(JSON.parse(after.serializedContext)).toEqual({ events: ['turn-1', 'hidden'] })
+      expect(after.version).not.toBe(read.version)
+    })
+
+    it('refuses a stale write after a concurrent turn, leaving the turn intact', async () => {
+      if (!dbAvailable) return
+      const id = `conv-cas-${Math.random().toString(36).slice(2, 10)}`
+      await saveConversation({
+        id,
+        userId: TEST_USER,
+        agentId: 'search',
+        title: 't',
+        serializedContext: JSON.stringify({ events: ['turn-1'] }),
+      })
+
+      const read = (await loadConversation(id, TEST_USER))!
+      // The turn's own save lands in between.
+      await saveConversation({
+        id,
+        userId: TEST_USER,
+        agentId: 'search',
+        title: 't',
+        serializedContext: JSON.stringify({ events: ['turn-1', 'turn-2'] }),
+      })
+
+      expect(
+        await updateConversationContextIfUnchanged(
+          id,
+          TEST_USER,
+          JSON.stringify({ events: ['turn-1', 'hidden'] }),
+          read.version,
+        ),
+      ).toBe(false)
+
+      const after = (await loadConversation(id, TEST_USER))!
+      expect(JSON.parse(after.serializedContext)).toEqual({ events: ['turn-1', 'turn-2'] })
+    })
+
+    it('refuses a write from someone who is not the owner', async () => {
+      if (!dbAvailable) return
+      const id = `conv-cas-${Math.random().toString(36).slice(2, 10)}`
+      await saveConversation({
+        id,
+        userId: TEST_USER,
+        agentId: 'search',
+        title: 't',
+        serializedContext: JSON.stringify({ events: ['mine'] }),
+      })
+      const read = (await loadConversation(id, TEST_USER))!
+
+      const attacker = `attacker-${Math.random().toString(36).slice(2, 10)}`
+      expect(
+        await updateConversationContextIfUnchanged(
+          id,
+          attacker,
+          JSON.stringify({ events: [] }),
+          read.version,
+        ),
+      ).toBe(false)
+
+      const after = (await loadConversation(id, TEST_USER))!
+      expect(JSON.parse(after.serializedContext)).toEqual({ events: ['mine'] })
+    })
   })
 
   it('getConversationOwner answers who a row belongs to, and null for an unknown id', async () => {

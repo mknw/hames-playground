@@ -74,22 +74,26 @@ BAML Functions ──┐
 MCP Tools ───────┘
 ```
 
-**Key Principle**: BAML functions are passed directly to patterns. No intermediate wrappers needed.
+**Key Principle**: patterns take adapter factories (`createLoopControllerAdapter` and friends), which wrap the generated BAML functions and adapt their positional call order. A raw BAML function does not satisfy a pattern's controller contract.
 
 ## Core Concepts
 
 ```typescript
-// Preferred: use adapter factories from baml-adapters.server.ts
+// Adapter factories from baml-adapters.server.ts — the only thing you pass to
+// a pattern's controller/actor/critic slots. The domain-specific ones
+// (createNeo4jController, createWebSearchController, createMemoryController,
+// createContext7Controller, createFilesystemController, createRedisController,
+// createDatabaseController) are thin aliases of createLoopControllerAdapter —
+// no behaviour of their own, kept for call-site readability (#225). They adapt
+// the BAML call order and return { action, llmCall }; a raw bound BAML function
+// (e.g. b.LoopController.bind(b)) does NOT satisfy the contract and fails
+// typecheck — do not pass one to a pattern.
 const controller = createNeo4jController(tools.neo4j ?? [])
 simpleLoop(controller, tools.neo4j ?? [], { patternId: 'neo4j-query', schema })
 
 const actor = createActorControllerAdapter(tools.all)
 const critic = createCriticAdapter()
 actorCritic(actor, critic, tools.all, { patternId: 'actor-loop' })
-
-// Alternative: pass BAML functions directly (bind to preserve 'this' context)
-simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema })
-actorCritic(b.ActorController.bind(b), b.Critic.bind(b), tools.all)
 
 // Router is two composable patterns: classify → dispatch
 router({ neo4j: 'Description', web: 'Description' }),
@@ -341,7 +345,7 @@ usually one tool call, but the controller may emit a **multi-call turn**
 (`additional_calls`) — see `multiToolCalls` below.
 
 ```typescript
-simpleLoop(b.Neo4jController.bind(b), tools.neo4j, {
+simpleLoop(createNeo4jController(tools.neo4j ?? []), tools.neo4j ?? [], {
   patternId: 'neo4j-query',
   schema,
 })
@@ -546,7 +550,7 @@ Generate-evaluate loop with retry: the actor proposes a tool call, the loop
 executes it, and the critic decides whether to stop or feed the result back.
 
 ```typescript
-actorCritic(b.ActorController.bind(b), b.Critic.bind(b), tools.all, {
+actorCritic(createActorControllerAdapter(tools.all), createCriticAdapter(), tools.all, {
   patternId: 'actor-loop',
   maxRetries: 3,
 })
@@ -591,10 +595,15 @@ critic can never be disabled.
 Execute multiple patterns concurrently via `Promise.allSettled`, then merge results.
 
 ```typescript
-parallel(
-  simpleLoop(b.WebSearchController.bind(b), tools.web ?? [], { patternId: 'web-search' }),
-  simpleLoop(b.Neo4jController.bind(b), tools.neo4j ?? [], { patternId: 'kg-lookup', schema }),
-)
+parallel<SimpleLoopData & Record<string, unknown>>([
+  simpleLoop(createWebSearchController(tools.web ?? []), tools.web ?? [], {
+    patternId: 'web-search',
+  }),
+  simpleLoop(createNeo4jController(tools.neo4j ?? []), tools.neo4j ?? [], {
+    patternId: 'kg-lookup',
+    schema,
+  }),
+])
 ```
 
 **How it works:**
@@ -903,7 +912,7 @@ adapter merges these into BAML's `turns_previous_runs` argument — **zero
 controller-prompt changes**.
 
 ```typescript
-withReferences(simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema }), {
+withReferences(simpleLoop(createLoopControllerAdapter(tools.neo4j), tools.neo4j, { schema }), {
   scope: 'global',
   maxRefs: 5,
 })
@@ -1782,14 +1791,19 @@ import {
   createWebSearchController,
   createActorControllerAdapter,
   createCriticAdapter,
+  type ConfiguredPattern,
 } from '../harness-patterns'
+// Patterns are data-type invariant: composing heterogeneous patterns under
+// `harness()` requires pinning the SAME data type on every pattern (the real
+// call sites all pin `SessionData` — see agents/search.server.ts).
+import type { SessionData } from './session.server'
 
 async function getSchema(): Promise<string> {
   const result = await callTool('get_neo4j_schema', {})
   return result.success ? JSON.stringify(result.data) : ''
 }
 
-async function createPatterns() {
+async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools()
   const schema = await getSchema()
 
@@ -1797,26 +1811,26 @@ async function createPatterns() {
   const neo4jController = createNeo4jController(tools.neo4j ?? [])
   const webController = createWebSearchController(tools.web ?? [])
 
-  const neo4jPattern = simpleLoop(neo4jController, tools.neo4j ?? [], {
+  const neo4jPattern = simpleLoop<SessionData>(neo4jController, tools.neo4j ?? [], {
     patternId: 'neo4j-query',
     schema,
   })
 
-  const webPattern = simpleLoop(webController, tools.web ?? [], {
+  const webPattern = simpleLoop<SessionData>(webController, tools.web ?? [], {
     patternId: 'web-search',
   })
 
-  const routerPattern = router({
+  const routerPattern = router<SessionData>({
     neo4j: 'Database queries and graph operations',
     web_search: 'Web lookups and information retrieval',
   })
 
-  const routesPattern = routes({
+  const routesPattern = routes<SessionData>({
     neo4j: neo4jPattern,
     web_search: webPattern,
   })
 
-  const responseSynth = compactExecution({
+  const responseSynth = compactExecution<SessionData>({
     mode: 'thread',
     patternId: 'response-synth',
   })
@@ -1869,7 +1883,7 @@ harness-patterns/
 
 ## Design Principles
 
-1. **BAML functions are first-class** - Pass them directly to patterns (use `.bind()`)
+1. **Adapters wrap BAML functions** - Pass adapter factories to patterns; they adapt the generated functions' positional call order (a raw BAML function does not satisfy a pattern's controller contract)
 2. **Patterns extract params** - Patterns pull data from context and call BAML
 3. **Config injects metadata** - Optional config for things like schema injection
 4. **Server-only enforcement** - `.server.ts` files with runtime guards

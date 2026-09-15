@@ -1,0 +1,48 @@
+# Committed default gateway config — matches the docker-compose.yaml defaults
+# (laptop-only credentials; see .gitignore for the deployment story). A fresh
+# clone needs this file to exist BEFORE `docker compose up -d`: compose
+# bind-mounts it into the mcp-gateway, and a missing file becomes an empty
+# directory inside the container, which the gateway refuses to start on.
+# Field reference: configs/template.mcp-config.yaml.
+
+neo4j-cypher:
+  enabled: true
+  uri: bolt://neo4j:7687
+  username: neo4j
+  password: password
+  database: neo4j
+  read_only: false
+
+fetch:
+  enabled: true
+
+web_search:
+  enabled: true
+
+context7:
+  enabled: true
+
+rust-mcp-filesystem:
+  enabled: true
+  allow_write: true
+  enable_roots: false
+  allowed_directories:
+    - /workspace
+
+memory:
+  enabled: true
+
+redis:
+  enabled: true
+  host: redis
+  port: "6379"
+  username: ""
+  password: ""
+  ssl: false
+
+database-server:
+  enabled: true
+  database_url: postgresql://postgres:password@postgres:5432/kgagent
+
+playwright:
+  enabled: true

@@ -379,6 +379,14 @@ describe('graph_files_shared', () => {
     expect(data.note).toMatch(/graph_files_search/)
   })
 
+  it('a present-but-wrong-typed shared_by REFUSES instead of listing every sharer (#314)', async () => {
+    graphFetch.mockClear()
+    const res = await runAppTool('graph_files_shared', { shared_by: { name: 'Quentin' } })
+    expect(res.success).toBe(false)
+    expect(res.error).toMatch(/shared_by must be a string/)
+    expect(graphFetch).not.toHaveBeenCalled()
+  })
+
   it('degrades a 403 (insights disabled by policy) to a successful steer', async () => {
     graphFetch.mockRejectedValue(new GraphAuthRequiredError('denied', 'oid-1', 403))
     const res = await runAppTool('graph_files_shared', {})

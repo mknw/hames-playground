@@ -155,13 +155,13 @@ jobs:
       - uses: actions/checkout@v4
 
       # `defaults.run.working-directory` is app/, which is still the main build
-      # context — but since #225 Step 0 the workspace lockfile lives at the repo
-      # root, the build also receives the three root workspace files (package.json,
-      # pnpm-workspace.yaml, pnpm-lock.yaml) through the scoped additional context
-      # `root=.` (--build-context needs BuildKit; ubuntu-latest's docker ≥23 runs
-      # `docker build` on buildx). Only COPY-named files can cross it, and
-      # app/.dockerignore is untouched. Bridge until #225 Step 1 widens the
-      # build context to the repo root.
+      # context — the repo-root files the build needs (the three workspace
+      # manifests/lockfile plus, since #225 Step 1c, the
+      # packages/harness-patterns source tree) arrive through the scoped
+      # additional context `root=.` (--build-context needs BuildKit;
+      # ubuntu-latest's docker ≥23 runs `docker build` on buildx). Only
+      # COPY-named paths can cross it, and app/.dockerignore is untouched —
+      # the allowlist IS the boundary, deliberately not a repo-root context.
       - name: Build the image
         working-directory: .
         run: docker build --build-context root=. -f app/Dockerfile --tag kg-agent-app:ci app
@@ -190,6 +190,12 @@ jobs:
       # catches its own DB errors, so "serves 200" is the honest bar here.
       # Postgres/Neo4j/gateway wiring is exercised by `docker compose up -d app`,
       # not by CI.
+      #
+      # Since #225 Step 1c the boot also exercises the WORKSPACE PACKAGE:
+      # /api/stash imports @hames/harness-patterns at module scope (its barrel),
+      # so a 200 there proves the server bundle's inlined package source loads
+      # and runs — the runtime half of the workspace-link story the deps stage
+      # canary proves at build time.
       - name: Boot it and hit /api/health
         run: |
           docker run -d --name app-smoke -p 3444:3444 kg-agent-app:ci
@@ -209,6 +215,17 @@ jobs:
           echo "::error::container did not serve /api/health and report HEALTHCHECK=healthy within 30s"
           docker logs app-smoke
           exit 1
+
+      # The runtime half of the Step 1c proof: /api/stash loads the
+      # @hames/harness-patterns barrel at module scope, so any response at all
+      # means the inlined package source parsed and executed (a broken link or
+      # a truncated copy would 500 on module load). Assert 200: verified
+      # unauthenticated and dependency-free in the same kind of container.
+      - name: Assert the workspace package loads at runtime
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' localhost:3444/api/stash)
+          echo "/api/stash -> ${code}"
+          [ "$code" = "200" ] || { echo "::error::/api/stash returned ${code} — the workspace package did not load at runtime"; exit 1; }
 
       - name: Container logs
         if: always()

@@ -5,13 +5,12 @@
 #
 #   docker compose build app && docker compose up -d app
 #
-# Build context is `app/` (see ../docker-compose.yaml). Since #225 Step 0 the
-# workspace lockfile lives at the repo root, so the build additionally receives
-# the three root workspace files (package.json, pnpm-workspace.yaml,
-# pnpm-lock.yaml) through the scoped `root` build context — see the deps stage
-# below. That bridge dissolves when #225 Step 1 widens the context to the repo
-# root; until then nothing else outside app/ can enter (see the bridge notes
-# on the COPY lines).
+# Build context is `app/` (see ../docker-compose.yaml). The repo-root files the
+# build needs — the three workspace manifests/lockfile AND the
+# packages/harness-patterns source tree (#225 Step 1c) — arrive through the
+# scoped `root` build context, whose COPY allowlist is the deliberate boundary:
+# only named paths can enter, nothing else at the repo root can (see the deps
+# stage below for the full statement).
 
 ARG NODE_VERSION=22-bookworm-slim
 ARG PNPM_VERSION=10.28.1
@@ -36,19 +35,23 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 make g++ \
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g pnpm@${PNPM_VERSION}
-# --- #225 Step 0 bridge -----------------------------------------------------
-# The lockfile is the workspace root's now, and a frozen install must validate
-# the whole workspace, so the image installs from a minimal workspace: the
-# REAL root manifests + lockfile arrive via the scoped `root` build context
-# (compose `build.additional_contexts` / `docker build --build-context`), and
-# only these three files can ever cross it — COPY names them explicitly.
-# This restructure dissolves at #225 Step 1, when the build context widens to
-# the repo root and the main context carries these files itself.
+# --- the root= allowlist (#225 Step 0 bridge, widened at Step 1c) -----------
+# The lockfile is the workspace root's, and a frozen install must validate the
+# whole workspace, so the image installs from a minimal workspace: the REAL
+# root manifests + lockfile arrive via the scoped `root` build context (compose
+# `build.additional_contexts` / `docker build --build-context`), and only
+# COPY-named paths can ever cross it. Step 1c widens that allowlist by exactly
+# one path — packages/harness-patterns, the workspace member the app depends
+# on — and this is the DELIBERATE boundary, not a bridge: the plan's original
+# "widen the context to the repo root" (§3.2) is satisfied by the allowlist
+# instead, so the review can prove nothing else can enter (see the Step 1c PR
+# for the boundary statement). What can enter: the three root workspace files
+# and the package's source tree, by name. What cannot: everything else at the
+# repo root — .git, models/, node_modules, secrets, any other packages/*.
 #
-# NOTE: this works because pnpm-workspace.yaml lists ONLY `app` and
-# app/package.json arrives via the main (app/) context. A second workspace
-# member would be invisible to this build and the frozen install would fail
-# until the context widens at Step 1.
+# pnpm-workspace.yaml lists app AND packages/*; app/package.json and the
+# package's own manifest arrive via the contexts below, so the frozen install
+# sees the complete two-member workspace.
 WORKDIR /ws
 COPY --from=root package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 # app/.npmrc's enable-pre-post-scripts is load-bearing; pnpm reads .npmrc from
@@ -56,18 +59,26 @@ COPY --from=root package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 # distinction.
 COPY .npmrc ./
 COPY package.json .npmrc app/
-# --- #225 Step 1a bridge ----------------------------------------------------
-# The harness-patterns library moved to packages/ (#225 Step 1a): the app's
-# imports reach it via relative paths (the workspace:* specifier lands in
-# PR-β), and the build context is still app/, so the package's SOURCE rides in
-# through the same scoped `root` context the root workspace files use. Source
-# only — the package has no node_modules of its own; its one bare dependency
-# (@modelcontextprotocol/sdk) is declared in the ROOT manifest since Step 1a
-# and is installed by the frozen install above. The proper fix is the Step 1
-# build-context widening (plan §3.2), which supersedes this line.
+# The workspace member's SOURCE, in place BEFORE the frozen install: this is
+# what makes `workspace:*` resolve inside the image exactly as it does in dev
+# (plan §3.1 — production builds from the workspace, never the registry; a
+# registry fetch could not even succeed, 0.1.0 is unpublished, but the canary
+# below makes the property readable instead of merely incidental).
 COPY --from=root packages/harness-patterns /ws/packages/harness-patterns
 WORKDIR /ws/app
 RUN pnpm install --frozen-lockfile
+
+# --- #225 Step 1c canary ----------------------------------------------------
+# The workspace link, proven on every build: @hames/harness-patterns must be a
+# SYMLINK into the copied workspace source, and must RESOLVE there — never to
+# a registry path under node_modules/.pnpm. A registry fetch for the package
+# would be a finding against the whole Step 1 design (§3.1); this turns that
+# property into a build failure instead of an audit question.
+RUN test -L /ws/app/node_modules/@hames/harness-patterns \
+ && test -f /ws/packages/harness-patterns/index.ts \
+ && test -f /ws/packages/harness-patterns/package.json \
+ && cd /ws/app \
+ && node -e "const r = require.resolve('@hames/harness-patterns'); if (!r.startsWith('/ws/packages/')) { console.error('resolved OUTSIDE the workspace source (registry fetch?): ' + r); process.exit(1); } console.log('workspace link OK: ' + r)"
 
 # ---------------------------------------------------------------------------
 # build — regenerate the BAML client, then build the server.

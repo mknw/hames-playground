@@ -100,7 +100,11 @@ export const titleAgent = harness<TitleAgentData>(
       const raw = await withUsageAccounting('GenerateConversationTitle', (opts) =>
         b.GenerateConversationTitle(userMessage, { ...opts, ...clientOverrideFor('describe') }),
       )
-      return sanitizeTitle(raw) ?? ''
+      // Lane A3: `SynthesisFn` returns the LLMResult envelope — the override
+      // can now carry a call record the way the default always did. This one
+      // accounts through `withUsageAccounting` instead (the record's channel),
+      // so `call` stays undefined here.
+      return { value: sanitizeTitle(raw) ?? '' }
     },
   }),
 )

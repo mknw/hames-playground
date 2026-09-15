@@ -43,6 +43,12 @@ import { eurPerUsdRate, verdaEurPerHour } from '../cost-rates.server'
 import { clientOverrideFor } from './clients.server'
 import { notifyLlmUsage } from './llm-usage-observer.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
+import type { LLMCallRecord } from './types'
+// The throw contract is the seam's, not this module's: the class lives in
+// core (`types.ts`, Lane A3) and is re-exported here because the acceptance
+// tests (raw-llm-visibility, truncation-retry) import it from this path.
+import { LLMCallError } from './types'
+export { LLMCallError }
 
 assertServerOnImport()
 
@@ -55,22 +61,24 @@ runBamlClientCheckOnce()
 // Types for LLM Call Results
 // ============================================================================
 
-/** Result from a controller call with optional LLM observability data */
+/** Result from a controller call with optional LLM observability data.
+ *  The record carries `hitOutputCap` (Lane A3) — the implementation stamps it
+ *  on both the success and the failure extraction path. */
 export interface ControllerCallResult {
   action: ControllerAction
-  llmCall?: LLMCallData
+  llmCall?: LLMCallRecord
 }
 
 /** Result from a critic call with optional LLM observability data */
 export interface CriticCallResult {
   result: CriticResult
-  llmCall?: LLMCallData
+  llmCall?: LLMCallRecord
 }
 
 /** Result from a planner call with optional LLM observability data */
 export interface PlanCallResult {
   plan: PlanResult
-  llmCall?: LLMCallData
+  llmCall?: LLMCallRecord
   /** How many tool descriptions the model was ACTUALLY shown — the resolved
    *  catalog (an active sandbox scope's in-VM tools + the gateway tools that
    *  resolved), not the raw name list the factory was handed. The pattern
@@ -153,7 +161,7 @@ export function extractLLMCallData(
   variables: Record<string, unknown>,
   startTime: number,
   parsedOutput?: unknown,
-): LLMCallData | undefined {
+): LLMCallRecord | undefined {
   const last = collector.last
   if (!last) {
     // Not a benign miss — see warnIfCollectorEmpty. This is the shared choke
@@ -166,7 +174,9 @@ export function extractLLMCallData(
   const llmCall = buildLLMCallDataFromLog(last, functionName, variables, startTime, parsedOutput)
   llmCall.metrics = computeEventMetrics(collector)
   accountBamlCall(collector, functionName, llmCall.metrics)
-  return llmCall
+  // Lane A3: the implementation stamps the cap-hit on the record; the pattern
+  // layer reads the boolean and never sees the cap table.
+  return { ...llmCall, hitOutputCap: llmCallHitOutputCap(llmCall) }
 }
 
 /**
@@ -530,7 +540,7 @@ export function extractFailureLLMCallData(
   functionName: string,
   variables: Record<string, unknown>,
   startTime: number,
-): LLMCallData {
+): LLMCallRecord {
   const last = collector?.last
   if (last) {
     const llmCall = buildLLMCallDataFromLog(last, functionName, variables, startTime)
@@ -538,13 +548,20 @@ export function extractFailureLLMCallData(
     // before the retry also failed) — account for them.
     llmCall.metrics = computeEventMetrics(collector)
     accountBamlCall(collector, functionName, llmCall.metrics)
-    return llmCall
+    // The FAILURE path stamps hitOutputCap too — this is the twin of the
+    // success path above and of the old llmCallHitOutputCap/collectorHitOutputCap
+    // pair. Missing it would silently revert the loop patterns'
+    // truncation-specific feedback to generic "invalid JSON" (SA-C2's reason
+    // to exist).
+    return { ...llmCall, hitOutputCap: llmCallHitOutputCap(llmCall) }
   }
   return {
     functionName,
     variables,
     promptTemplate: getPromptTemplate(functionName),
     durationMs: Date.now() - startTime,
+    // Nothing reached the collector, so nothing can be cut off at a cap.
+    hitOutputCap: false,
   }
 }
 
@@ -566,6 +583,13 @@ export function extractFailureLLMCallData(
  * mid-`tool_args` → invalid-JSON rejection in the loop. Both used to feed the
  * model generic feedback, so it would regenerate the same oversized response
  * until retries exhausted. Detection lets the retry say WHY it failed.
+ *
+ * Lane A3: this is now the IMPLEMENTATION-side stamping helper — the two
+ * extractors stamp `hitOutputCap` on the record they return and the pattern
+ * layer reads the boolean (`llmCall?.hitOutputCap`), never this function. It
+ * stays here, beside the cap table, which stays beside `baml_src/` (SA-C2's
+ * mirror); A6 moves both with this file. Kept exported because
+ * truncation-retry.test.ts pins the cap boundary against it directly.
  */
 export function llmCallHitOutputCap(
   llmCall: Pick<LLMCallData, 'clientName' | 'usage'> | undefined,
@@ -639,22 +663,6 @@ function planParseRetry(
   if (collectorHitOutputCap(collector)) return { guidance: TRUNCATION_RETRY_GUIDANCE }
   if (collectorReturnedNoText(collector)) return { guidance: null }
   return null
-}
-
-/** Error thrown by BAML adapters when an LLM call fails after all in-adapter
- *  fallbacks have been exhausted. Carries the captured prompt/variables/HTTP
- *  bodies so the catching pattern can attach them to the emitted `error`
- *  event. Recovered fallback attempts never produce this — only the final
- *  propagating failure does. */
-export class LLMCallError extends Error {
-  readonly llmCall: LLMCallData
-  readonly cause?: unknown
-  constructor(message: string, llmCall: LLMCallData, cause?: unknown) {
-    super(message)
-    this.name = 'LLMCallError'
-    this.llmCall = llmCall
-    if (cause !== undefined) this.cause = cause
-  }
 }
 
 /** Re-throw a BAML failure as an `LLMCallError` enriched with collector data.
@@ -847,7 +855,7 @@ export function createLoopControllerAdapter(
     previous_results: string,
     n_turn: number,
     schema?: string,
-    collector?: Collector,
+    passedCollector?: Collector,
     priorResults?: PriorResult[],
     fewShots?: FewShot[],
     // 'off' never reaches the adapter — the pattern maps it to undefined so the
@@ -864,6 +872,12 @@ export function createLoopControllerAdapter(
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
+
+    // Lane A3: the implementation owns the collector when the caller does not
+    // pass one — core patterns no longer create or hand one down. The optional
+    // parameter stays for the direct callers that bring their own (the smoke
+    // scripts and the adapter-level tests, which pin this file's behaviour).
+    const collector = passedCollector ?? new Collector('LoopController')
 
     // Get tool descriptions for available tools. When a transport is scoped to
     // this run (`withTransport` — today the in-VM sandbox), prepend its tool
@@ -903,47 +917,30 @@ export function createLoopControllerAdapter(
       return_style: returnStyle,
     }
 
-    // Call with or without collector. BAML routes the call to
+    // Call with options always: the implementation-owned collector (above) is
+    // in the bag even when no tier override is, so the bag is never empty and
+    // the old with/without-opts dual call is gone. BAML routes the call to
     // `ControllerAnthropic` — its declared client in `simpleLoop.baml` —
     // unless `USE_VERDA_INFERENCE=1` overrides the `controller` role onto the
     // self-hosted deployment (`clients.server.ts`). A structured-output
     // failure that is not a truncation or an empty completion propagates:
     // there is no second provider to escalate to on either route.
-    //
-    // The bag decides whether to pass options at all, NOT `collector`: with
-    // the override active there is something to pass even when no collector
-    // was handed in, and the generated functions take their arguments
-    // positionally, so an empty `{}` is not the same as omitting it (#154).
-    const baseOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('controller') }
-    const hasBaseOpts = Object.keys(baseOpts).length > 0
+    const baseOpts = { collector, ...clientOverrideFor('controller') }
     let action: ControllerAction
     try {
-      action = hasBaseOpts
-        ? await b.LoopController(
-            user_message,
-            intent,
-            tools,
-            turns,
-            context,
-            priorResults,
-            fewShots,
-            multiCallMode,
-            planContext,
-            returnStyle,
-            baseOpts,
-          )
-        : await b.LoopController(
-            user_message,
-            intent,
-            tools,
-            turns,
-            context,
-            priorResults,
-            fewShots,
-            multiCallMode,
-            planContext,
-            returnStyle,
-          )
+      action = await b.LoopController(
+        user_message,
+        intent,
+        tools,
+        turns,
+        context,
+        priorResults,
+        fewShots,
+        multiCallMode,
+        planContext,
+        returnStyle,
+        baseOpts,
+      )
     } catch (e) {
       // Recoverable parse failures (any chain, incl. Anthropic-only): the parse
       // failed because the response was cut off, or because there was no
@@ -956,35 +953,26 @@ export function createLoopControllerAdapter(
           ? [context, plan.guidance].filter(Boolean).join('\n\n')
           : context
         try {
-          action = hasBaseOpts
-            ? await b.LoopController(
-                user_message,
-                intent,
-                tools,
-                turns,
-                retryContext,
-                priorResults,
-                fewShots,
-                multiCallMode,
-                planContext,
-                returnStyle,
-                baseOpts,
-              )
-            : await b.LoopController(
-                user_message,
-                intent,
-                tools,
-                turns,
-                retryContext,
-                priorResults,
-                fewShots,
-                multiCallMode,
-                planContext,
-                returnStyle,
-              )
-          const llmCall = collector
-            ? extractLLMCallData(collector, 'LoopController', variables, startTime, action)
-            : undefined
+          action = await b.LoopController(
+            user_message,
+            intent,
+            tools,
+            turns,
+            retryContext,
+            priorResults,
+            fewShots,
+            multiCallMode,
+            planContext,
+            returnStyle,
+            baseOpts,
+          )
+          const llmCall = extractLLMCallData(
+            collector,
+            'LoopController',
+            variables,
+            startTime,
+            action,
+          )
           return { action, llmCall }
         } catch (eRetry) {
           throw wrapAsLLMCallError(eRetry, 'LoopController', variables, startTime, collector)
@@ -994,9 +982,7 @@ export function createLoopControllerAdapter(
     }
 
     // Extract LLM call data if collector present
-    const llmCall = collector
-      ? extractLLMCallData(collector, 'LoopController', variables, startTime, action)
-      : undefined
+    const llmCall = extractLLMCallData(collector, 'LoopController', variables, startTime, action)
 
     return { action, llmCall }
   }
@@ -1083,11 +1069,15 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData 
   return async (
     user_message: string,
     intent: string,
-    collector?: Collector,
+    passedCollector?: Collector,
     context?: string,
   ): Promise<PlanCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
+
+    // Lane A3: the implementation owns the collector when the caller does not
+    // pass one — the planner pattern no longer creates or hands one down.
+    const collector = passedCollector ?? new Collector('Planner')
 
     const scopedTools = await activeTransportToolDescriptions()
     const gatewayTools = await filterToolDescriptions(toolNames)
@@ -1106,13 +1096,10 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData 
     // anything here: it is the one place the composite consequence of routing
     // this role is stated whole (no thinking, halved output ceiling, one
     // retry, then a silently unplanned chain).
-    const baseOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('planner') }
-    const hasBaseOpts = Object.keys(baseOpts).length > 0
+    const baseOpts = { collector, ...clientOverrideFor('planner') }
     let plan: PlanResult
     try {
-      plan = hasBaseOpts
-        ? await b.Planner(user_message, intent, tools, context, baseOpts)
-        : await b.Planner(user_message, intent, tools, context)
+      plan = await b.Planner(user_message, intent, tools, context, baseOpts)
     } catch (e) {
       // ONE retry on a cut-off or empty completion, with corrective guidance
       // only when there is something to correct; a genuine structured-output
@@ -1124,18 +1111,14 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData 
         ? [context, retry.guidance].filter(Boolean).join('\n\n')
         : context
       try {
-        plan = hasBaseOpts
-          ? await b.Planner(user_message, intent, tools, retryContext, baseOpts)
-          : await b.Planner(user_message, intent, tools, retryContext)
+        plan = await b.Planner(user_message, intent, tools, retryContext, baseOpts)
       } catch (eRetry) {
         throw wrapAsLLMCallError(eRetry, 'Planner', variables, startTime, collector)
       }
     }
 
     // extractLLMCallData fires warnIfCollectorEmpty itself on an empty collector.
-    const llmCall = collector
-      ? extractLLMCallData(collector, 'Planner', variables, startTime, plan)
-      : undefined
+    const llmCall = extractLLMCallData(collector, 'Planner', variables, startTime, plan)
 
     return { plan, llmCall, toolCount: tools.length }
   }
@@ -1219,7 +1202,7 @@ export function createActorControllerAdapter(
     intent: string,
     available_tools: string[],
     previous_attempts: ScriptExecutionEvent[],
-    collector?: Collector,
+    passedCollector?: Collector,
     attemptNumber?: number,
     maxAttempts?: number,
     // 'off' never reaches the adapter — the pattern maps it to undefined so the
@@ -1229,6 +1212,11 @@ export function createActorControllerAdapter(
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
+
+    // Lane A3: the implementation owns the collector when the caller does not
+    // pass one — core patterns no longer create or hand one down (same as the
+    // loop controller above).
+    const collector = passedCollector ?? new Collector('ActorController')
 
     // Resolve the actor's allowlist. `toolNamesProvider` (if set) is called
     // fresh per invocation so user-curated selections persisted to the
@@ -1294,43 +1282,30 @@ export function createActorControllerAdapter(
       multi_call_mode: multiCallMode,
     }
 
-    // Call with or without collector. BAML routes to `ActorAnthropic`
-    // (declared in `actorCritic.baml`) — or to the self-hosted deployment when
-    // `USE_VERDA_INFERENCE=1` re-points the `controller` role, which covers the
-    // actor too. Mirrors `createLoopControllerAdapter` above: a truncated or
-    // empty completion takes one corrective retry, anything else — including a
-    // genuine structured-output failure, a network error or a pre-call throw —
-    // is wrapped as `LLMCallError` so the observability panel keeps the
-    // captured prompt/variables drill-down. Same bag-not-collector branch as
-    // the loop controller, for the same positional-argument reason.
-    const baseOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('controller') }
-    const hasBaseOpts = Object.keys(baseOpts).length > 0
+    // Call with options always — the implementation-owned collector is in the
+    // bag, so the old with/without-opts dual call is gone. BAML routes to
+    // `ActorAnthropic` (declared in `actorCritic.baml`) — or to the self-hosted
+    // deployment when `USE_VERDA_INFERENCE=1` re-points the `controller` role,
+    // which covers the actor too. Mirrors `createLoopControllerAdapter` above:
+    // a truncated or empty completion takes one corrective retry, anything
+    // else — including a genuine structured-output failure, a network error or
+    // a pre-call throw — is wrapped as `LLMCallError` so the observability
+    // panel keeps the captured prompt/variables drill-down.
+    const baseOpts = { collector, ...clientOverrideFor('controller') }
     let action: ControllerAction
     try {
-      action = hasBaseOpts
-        ? await b.ActorController(
-            user_message,
-            intent,
-            tools,
-            attempts,
-            context,
-            fewShots,
-            attemptNumber,
-            maxAttempts,
-            multiCallMode,
-            baseOpts,
-          )
-        : await b.ActorController(
-            user_message,
-            intent,
-            tools,
-            attempts,
-            context,
-            fewShots,
-            attemptNumber,
-            maxAttempts,
-            multiCallMode,
-          )
+      action = await b.ActorController(
+        user_message,
+        intent,
+        tools,
+        attempts,
+        context,
+        fewShots,
+        attemptNumber,
+        maxAttempts,
+        multiCallMode,
+        baseOpts,
+      )
     } catch (e) {
       // Truncated or empty response: one retry, guidance only when there is
       // something to correct — see createLoopControllerAdapter for rationale.
@@ -1340,33 +1315,25 @@ export function createActorControllerAdapter(
           ? [context, plan.guidance].filter(Boolean).join('\n\n')
           : context
         try {
-          action = hasBaseOpts
-            ? await b.ActorController(
-                user_message,
-                intent,
-                tools,
-                attempts,
-                retryContext,
-                fewShots,
-                attemptNumber,
-                maxAttempts,
-                multiCallMode,
-                baseOpts,
-              )
-            : await b.ActorController(
-                user_message,
-                intent,
-                tools,
-                attempts,
-                retryContext,
-                fewShots,
-                attemptNumber,
-                maxAttempts,
-                multiCallMode,
-              )
-          const llmCall = collector
-            ? extractLLMCallData(collector, 'ActorController', variables, startTime, action)
-            : undefined
+          action = await b.ActorController(
+            user_message,
+            intent,
+            tools,
+            attempts,
+            retryContext,
+            fewShots,
+            attemptNumber,
+            maxAttempts,
+            multiCallMode,
+            baseOpts,
+          )
+          const llmCall = extractLLMCallData(
+            collector,
+            'ActorController',
+            variables,
+            startTime,
+            action,
+          )
           return { action, llmCall }
         } catch (eRetry) {
           throw wrapAsLLMCallError(eRetry, 'ActorController', variables, startTime, collector)
@@ -1376,9 +1343,7 @@ export function createActorControllerAdapter(
     }
 
     // Extract LLM call data if collector present
-    const llmCall = collector
-      ? extractLLMCallData(collector, 'ActorController', variables, startTime, action)
-      : undefined
+    const llmCall = extractLLMCallData(collector, 'ActorController', variables, startTime, action)
 
     return { action, llmCall }
   }
@@ -1393,10 +1358,14 @@ export function createCriticAdapter(): CriticFnWithLLMData {
   return async (
     intent: string,
     previous_attempts: ScriptExecutionEvent[],
-    collector?: Collector,
+    passedCollector?: Collector,
   ): Promise<CriticCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
+
+    // Lane A3: the implementation owns the collector when the caller does not
+    // pass one — the actorCritic pattern no longer creates or hands one down.
+    const collector = passedCollector ?? new Collector('Critic')
 
     // Convert ScriptExecutionEvent to Attempt format. See the actor adapter
     // above for why `toolName` carries the actor's real tool name.
@@ -1420,24 +1389,20 @@ export function createCriticAdapter(): CriticFnWithLLMData {
 
     const variables = { intent, attempts }
 
-    // Call with or without collector — `actorCritic.baml` declares
-    // `CriticAnthropic`, overridden onto the self-hosted deployment when
-    // `USE_VERDA_INFERENCE=1` re-points the `critic` role.
-    const criticOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('critic') }
-    const hasCriticOpts = Object.keys(criticOpts).length > 0
+    // Call with options always — the implementation-owned collector is in the
+    // bag, so the old with/without-opts dual call is gone. `actorCritic.baml`
+    // declares `CriticAnthropic`, overridden onto the self-hosted deployment
+    // when `USE_VERDA_INFERENCE=1` re-points the `critic` role.
+    const criticOpts = { collector, ...clientOverrideFor('critic') }
     let result: CriticResult
     try {
-      result = hasCriticOpts
-        ? await b.Critic(intent, attempts, criticOpts)
-        : await b.Critic(intent, attempts)
+      result = await b.Critic(intent, attempts, criticOpts)
     } catch (e) {
       throw wrapAsLLMCallError(e, 'Critic', variables, startTime, collector)
     }
 
     // Extract LLM call data if collector present
-    const llmCall = collector
-      ? extractLLMCallData(collector, 'Critic', variables, startTime, result)
-      : undefined
+    const llmCall = extractLLMCallData(collector, 'Critic', variables, startTime, result)
 
     return { result, llmCall }
   }

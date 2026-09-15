@@ -16,36 +16,36 @@ import type {
   ConfiguredPattern,
   AssistantMessageEventData,
   ToolResultEventData,
-  LLMCallData,
+  LLMResult,
 } from '../types'
+import { LLMCallError } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import type { ErrorEventData } from '../types'
 import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig } from '../context.server'
 import { Collector } from '@boundaryml/baml'
 import { trimToFit, getContextWindow } from '../token-budget.server'
-import { extractFailureLLMCallData, extractLLMCallData } from '../baml-adapters.server'
+import { extractLLMCallData, wrapAsLLMCallError } from '../baml-adapters.server'
 import { clientOverrideFor, resolveClientForRole } from '../clients.server'
 
 assertServerOnImport()
 
-/** Result from synthesis with optional LLM call data */
-interface SynthesisResult {
-  content: string
-  llmCall?: LLMCallData
-}
-
 /**
  * Default synthesis function using BAML Synthesize.
- * Tracks LLM call data when collector is provided.
+ * Returns the {@link LLMResult} envelope (Lane A3): the implementation owns
+ * its collector and stamps the call record, so a custom `synthesize` override
+ * can carry the same observability the default always did — the override used
+ * to return a bare string and emit NO `llmCall` at all. A failure after
+ * reaching the model throws `LLMCallError` carrying the record, per the seam's
+ * throw contract (#232).
  */
-async function defaultSynthesize(
-  input: CompactExecutionInput,
-  collector?: Collector,
-): Promise<SynthesisResult> {
+async function defaultSynthesize(input: CompactExecutionInput): Promise<LLMResult<string>> {
   // Dynamic import to avoid circular dependencies
   const { b } = await import('../../../../baml_client')
   const startTime = Date.now()
+  // Lane A3: the implementation owns the collector — it used to be created by
+  // the pattern and handed down, which is the handle the envelope deletes.
+  const collector = new Collector('compactExecution')
 
   // Convert to LoopTurn format for BAML Synthesize
   const turns: import('../types').LoopTurn[] = []
@@ -106,33 +106,27 @@ async function defaultSynthesize(
     errorMessage: input.errorMessage,
   }
 
-  // Call with or without collector, including error context. `Synthesize`
-  // declares `SynthesizerAnthropic` (Sonnet 5 → Haiku 4.5), overridden onto
-  // the self-hosted deployment when `USE_VERDA_INFERENCE=1` re-points the
-  // `compactExecution` role. The branch is on whether the options bag ended up
-  // empty, not on `collector`: the override can be the only thing in it, and
-  // the generated functions take their arguments positionally (#154).
-  const synthOpts = {
-    ...(collector ? { collector } : {}),
-    ...clientOverrideFor('compactExecution'),
+  // Call with options always: the implementation-owned collector is in the
+  // bag even when no tier override is, so the old with/without-opts dual call
+  // is gone. `Synthesize` declares `SynthesizerAnthropic` (Sonnet 5 → Haiku
+  // 4.5), overridden onto the self-hosted deployment when
+  // `USE_VERDA_INFERENCE=1` re-points the `compactExecution` role.
+  const synthOpts = { collector, ...clientOverrideFor('compactExecution') }
+  let content: string
+  try {
+    content = await b.Synthesize(
+      input.userMessage,
+      input.intent,
+      trimmedTurns,
+      input.hasError ?? false,
+      input.errorMessage,
+      synthOpts,
+    )
+  } catch (e) {
+    // Throw contract: the raw response travels with the throw so the
+    // pattern's error event keeps its drill-down.
+    throw wrapAsLLMCallError(e, 'Synthesize', variables, startTime, collector)
   }
-  const hasSynthOpts = Object.keys(synthOpts).length > 0
-  const content = hasSynthOpts
-    ? await b.Synthesize(
-        input.userMessage,
-        input.intent,
-        trimmedTurns,
-        input.hasError ?? false,
-        input.errorMessage,
-        synthOpts,
-      )
-    : await b.Synthesize(
-        input.userMessage,
-        input.intent,
-        trimmedTurns,
-        input.hasError ?? false,
-        input.errorMessage,
-      )
 
   // Route through the SHARED extractor rather than rebuilding LLMCallData here.
   // This site used to hand-roll it, and the copy had drifted: no cache-write
@@ -143,11 +137,9 @@ async function defaultSynthesize(
   // so the preview header's on-prem share read high and its warm clock started
   // ticking from the controller's last call instead of this one. One extractor,
   // one accounting stamp, one stale-client guard (#154).
-  const llmCall = collector
-    ? extractLLMCallData(collector, 'Synthesize', variables, startTime, content)
-    : undefined
+  const llmCall = extractLLMCallData(collector, 'Synthesize', variables, startTime, content)
 
-  return { content, llmCall }
+  return { value: content, call: llmCall }
 }
 
 /**
@@ -335,11 +327,6 @@ export function compactExecution<T extends CompactExecutionData>(
   const resolved = resolveConfig('compactExecution', config)
 
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
-    // Collector + start time hoisted so the outer catch can recover LLM call
-    // data (prompt template, variables, HTTP body) on a failed BAML call.
-    let collector: Collector | undefined
-    let startTime: number | undefined
-    let synthesizeVariables: Record<string, unknown> | undefined
     try {
       // Skip if already has synthesized response
       if (skipIfHasResponse && scope.data.synthesizedResponse) {
@@ -366,26 +353,14 @@ export function compactExecution<T extends CompactExecutionData>(
         input.data = scope.data
       }
 
-      let synthesizedResponse: string
-      let llmCall: LLMCallData | undefined
-
-      if (synthesize) {
-        // Custom synthesis function - no LLM tracking
-        synthesizedResponse = await synthesize(input)
-      } else {
-        // Use default with collector for LLM observability
-        collector = new Collector('compactExecution')
-        startTime = Date.now()
-        synthesizeVariables = {
-          userMessage: input.userMessage,
-          intent: input.intent,
-          hasError: input.hasError ?? false,
-          errorMessage: input.errorMessage,
-        }
-        const result = await defaultSynthesize(input, collector)
-        synthesizedResponse = result.content
-        llmCall = result.llmCall
-      }
+      // Both paths return the LLMResult envelope now: a custom `synthesize`
+      // override can carry a call record like the default does (the override
+      // used to return a bare string and emit NO llmCall at all — the
+      // no-tracking hole this closes), and the default creates its own
+      // collector internally instead of being handed one.
+      const { value: synthesizedResponse, call: llmCall } = await (synthesize ?? defaultSynthesize)(
+        input,
+      )
 
       // Track assistant message event with LLM call data. `final: true`
       // distinguishes the compactExecution's user-facing response from router
@@ -408,13 +383,12 @@ export function compactExecution<T extends CompactExecutionData>(
       return scope
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
-      // Best-effort: if the BAML Synthesize call threw, surface the prompt
-      // template / variables / HTTP body alongside the error so the panel
-      // can render the same drill-down as a successful call.
-      const failedLlmCall =
-        collector !== undefined && synthesizeVariables !== undefined && startTime !== undefined
-          ? extractFailureLLMCallData(collector, 'Synthesize', synthesizeVariables, startTime)
-          : undefined
+      // Throw contract (Lane A3): the implementation wraps a failure after
+      // reaching the model in `LLMCallError` carrying the record, so the error
+      // event keeps the same prompt/variables/HTTP drill-down a successful
+      // call attaches. A custom `synthesize` that throws its own error still
+      // degrades to a bare message — honestly: there is no record to show.
+      const failedLlmCall = error instanceof LLMCallError ? error.llmCall : undefined
       trackEvent(
         scope,
         'error',

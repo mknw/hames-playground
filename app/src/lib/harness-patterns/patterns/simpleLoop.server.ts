@@ -5,7 +5,6 @@
  * Calls BAML controller function directly, extracting params from context.
  */
 
-import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
 import { repairJson } from '../json-repair'
@@ -36,13 +35,9 @@ import { toolSurfaceOutage } from '../gateway-health.server'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { resolveClientForRole } from '../clients.server'
 import type { ControllerFnWithLLMData } from '../baml-adapters.server'
-import {
-  dedupByRefId,
-  annotateExpansions,
-  LLMCallError,
-  llmCallHitOutputCap,
-} from '../baml-adapters.server'
-import type { LLMCallData } from '../types'
+import { dedupByRefId, annotateExpansions } from '../baml-adapters.server'
+import type { LLMCallRecord } from '../types'
+import { LLMCallError } from '../types'
 import { formatPlanContext, type PlannerData } from './planner.server'
 
 assertServerOnImport()
@@ -221,7 +216,7 @@ export function simpleLoop<T extends SimpleLoopData>(
     let hasError = false
     let errorMessage: string | undefined
     let errorTurn: number | undefined
-    let errorLlmCall: LLMCallData | undefined
+    let errorLlmCall: LLMCallRecord | undefined
     let exitedViaReturn = false
 
     // Build structured references to tool results from previous tasks.
@@ -294,9 +289,10 @@ export function simpleLoop<T extends SimpleLoopData>(
         // so partial results from earlier turns are preserved
         let action: ControllerAction
         // Hoisted so the tool_args-parse branch below can check for output-cap
-        // truncation on the call that produced this turn's action.
-        let controllerLlmCall: LLMCallData | undefined
-        const collector = new Collector('simpleLoop')
+        // truncation on the call that produced this turn's action. The record
+        // comes back on the result (Lane A3) — the implementation owns the
+        // collector, core no longer creates or hands one down.
+        let controllerLlmCall: LLMCallRecord | undefined
         try {
           const controllerResult = await controller(
             userContent,
@@ -304,7 +300,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             previousResults,
             turn,
             config?.schema,
-            collector,
+            undefined,
             priorResults,
             config?.fewShots,
             multiMode === 'off' ? undefined : multiMode,
@@ -550,7 +546,7 @@ export function simpleLoop<T extends SimpleLoopData>(
               trackedArgs.push(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
-                precheckError: llmCallHitOutputCap(controllerLlmCall)
+                precheckError: controllerLlmCall?.hitOutputCap
                   ? `tool_args for ${c.tool_name} were CUT OFF at the output-token limit — the batch was too large; use fewer calls per turn`
                   : `Invalid tool_args JSON: ${c.tool_args}`,
               })
@@ -674,7 +670,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             // an LLM-output failure, not a tool failure: carry the response so
             // the panel can show what was actually generated. Tool-level
             // failures keep no llmCall — the model's output was fine.
-            if (llmCallHitOutputCap(controllerLlmCall)) errorLlmCall = controllerLlmCall
+            if (controllerLlmCall?.hitOutputCap) errorLlmCall = controllerLlmCall
             break
           }
 
@@ -711,7 +707,7 @@ export function simpleLoop<T extends SimpleLoopData>(
           // Truncation-aware message: a response cut off at the client's
           // max_tokens cap is not malformed JSON — name the real cause so the
           // compactExecution/user sees it (actorCritic carries the retrying variant).
-          errorMessage = llmCallHitOutputCap(controllerLlmCall)
+          errorMessage = controllerLlmCall?.hitOutputCap
             ? `tool_args for ${action.tool_name} were CUT OFF at the output-token ` +
               `limit (response truncated mid-generation)`
             : `Invalid tool_args JSON: ${action.tool_args}`

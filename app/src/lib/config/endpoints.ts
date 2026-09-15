@@ -39,6 +39,12 @@ function isDevEnvironment(): boolean {
  * Get endpoints based on current environment
  * - Development: localhost URLs
  * - Docker: service names from docker-compose.yaml
+ *
+ * The Neo4j URLs additionally honour an explicit env override
+ * (`NEO4J_BOLT_URL` / `NEO4J_HTTP_URL`), which wins in BOTH environments —
+ * for a host where the dev ports are taken or the compose service names do
+ * not resolve. Unset, the dev↔compose swap below is exactly what it was
+ * (byte-identical defaults).
  */
 export function getEndpoints(): Endpoints {
   const isDev = isDevEnvironment()
@@ -47,8 +53,8 @@ export function getEndpoints(): Endpoints {
     mcpGateway: isDev ? 'http://localhost:3000/mcp' : 'http://mcp-gateway:3000/mcp',
 
     neo4j: {
-      http: isDev ? 'http://localhost:7474' : 'http://neo4j:7474',
-      bolt: isDev ? 'bolt://localhost:7687' : 'bolt://neo4j:7687',
+      http: process.env.NEO4J_HTTP_URL || (isDev ? 'http://localhost:7474' : 'http://neo4j:7474'),
+      bolt: process.env.NEO4J_BOLT_URL || (isDev ? 'bolt://localhost:7687' : 'bolt://neo4j:7687'),
     },
   }
 }

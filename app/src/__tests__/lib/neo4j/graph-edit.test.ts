@@ -73,9 +73,10 @@ describe('auth gate', () => {
     // fails rather than silently reverting the test to environment-dependent.
     vi.stubEnv('VITE_DEV_BYPASS_AUTH', 'true')
     getAuthenticatedUser.mockRejectedValue(new Error('Authentication required: no session.'))
+    sessionRun.mockResolvedValueOnce({ records: [{ get: () => '4:bypass:1' }] })
     const { createGraphNode } = await repo()
 
-    await expect(createGraphNode('Concept', 'GraphQL')).resolves.toBeUndefined()
+    await expect(createGraphNode('Concept', 'GraphQL')).resolves.toBe('4:bypass:1')
     expect(driverSession).toHaveBeenCalled()
   })
 })
@@ -110,22 +111,27 @@ describe('identifier validation', () => {
 })
 
 describe('createGraphNode', () => {
-  it('creates a node with description, values as parameters', async () => {
+  it('creates a node with description, values as parameters, and returns its elementId', async () => {
+    sessionRun.mockResolvedValueOnce({ records: [{ get: () => '4:abc:99' }] })
     const { createGraphNode } = await repo()
 
-    await createGraphNode('Concept', 'GraphQL', 'A query language')
+    await expect(createGraphNode('Concept', 'GraphQL', 'A query language')).resolves.toBe(
+      '4:abc:99',
+    )
 
-    expect(lastCypher()).toBe('CREATE (n:`Concept` {name: $name, description: $description})')
+    expect(lastCypher()).toBe(
+      'CREATE (n:`Concept` {name: $name, description: $description}) RETURN elementId(n) AS elementId',
+    )
     expect(lastParams()).toEqual({ name: 'GraphQL', description: 'A query language' })
     expect(sessionClose).toHaveBeenCalledTimes(1)
   })
 
-  it('omits the description clause when none is given', async () => {
+  it('resolves with the created node\u2019s elementId when no description is given (#323 B1)', async () => {
+    sessionRun.mockResolvedValueOnce({ records: [{ get: () => '4:abc:7' }] })
     const { createGraphNode } = await repo()
 
-    await createGraphNode('Concept', 'REST')
-
-    expect(lastCypher()).toBe('CREATE (n:`Concept` {name: $name})')
+    await expect(createGraphNode('Concept', 'REST')).resolves.toBe('4:abc:7')
+    expect(lastCypher()).toBe('CREATE (n:`Concept` {name: $name}) RETURN elementId(n) AS elementId')
     expect(lastParams()).toEqual({ name: 'REST' })
   })
 })

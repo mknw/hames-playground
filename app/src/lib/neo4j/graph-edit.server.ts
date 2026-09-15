@@ -53,34 +53,46 @@ async function run(cypher: string, params: Record<string, unknown>) {
   }
 }
 
-/** The write's final `RETURN count(*)` — how many nodes the MATCH bound. A
- *  zero-match MATCH turns the write into a no-op that resolves exactly like a
- *  success (#314), so every op that MATCHes first reads this and rejects. */
+/** The single summary record every op's final RETURN produces. A zero-match
+ *  MATCH turns the write into a no-op that resolves exactly like a success
+ *  (#314), so callers read this rather than assuming a row came back. */
+function summaryRecord(result: { records: { get: (key: string) => unknown }[] }) {
+  const record = result.records[0]
+  if (!record) throw new Error('Graph edit query returned no summary record')
+  return record
+}
+
+/** The write's final `RETURN count(*)` — how many nodes the MATCH bound. */
 function matchedCount(
   result: { records: { get: (key: string) => unknown }[] },
   key: string,
 ): number {
-  const record = result.records[0]
-  if (!record) throw new Error('Graph edit query returned no summary record')
-  return Number(record.get(key))
+  return Number(summaryRecord(result).get(key))
 }
 
-/** Create a node with the given label, name and optional description. */
+/** Create a node with the given label, name and optional description.
+ *  Resolves with the created node's Neo4j elementId: the canvas keys a fresh
+ *  node by its user-typed name (#323 B1), so later edits and relations in the
+ *  same session need the real id to target it with. */
 export async function createGraphNode(
   label: string,
   name: string,
   description?: string,
-): Promise<void> {
+): Promise<string> {
   await requireUserId()
   const safeLabel = assertSafeIdentifier('label', label)
   if (description) {
-    await run(`CREATE (n:\`${safeLabel}\` {name: $name, description: $description})`, {
-      name,
-      description,
-    })
-  } else {
-    await run(`CREATE (n:\`${safeLabel}\` {name: $name})`, { name })
+    const result = await run(
+      `CREATE (n:\`${safeLabel}\` {name: $name, description: $description}) RETURN elementId(n) AS elementId`,
+      { name, description },
+    )
+    return String(summaryRecord(result).get('elementId'))
   }
+  const result = await run(
+    `CREATE (n:\`${safeLabel}\` {name: $name}) RETURN elementId(n) AS elementId`,
+    { name },
+  )
+  return String(summaryRecord(result).get('elementId'))
 }
 
 /** Create a relationship of the given type between two nodes, matched by

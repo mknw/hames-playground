@@ -175,7 +175,7 @@ vi.mock('~/lib/neo4j/queries', () => ({
 
 // Intent-shaped graph edit RPCs (#226 C2) — the component calls these
 // directly instead of shipping raw Cypher through an onCypherWrite prop.
-const createGraphNode = vi.fn(async (..._a: unknown[]) => {})
+const createGraphNode = vi.fn(async (..._a: unknown[]): Promise<unknown> => undefined)
 const linkGraphNodes = vi.fn(async (..._a: unknown[]) => {})
 const setGraphNodeProperty = vi.fn(async (..._a: unknown[]) => {})
 vi.mock('~/lib/neo4j/graph-edit.server', () => ({
@@ -692,6 +692,38 @@ describe('GraphVisualization — node creation and editing', () => {
     expect(container.textContent).toContain('not saved')
     consoleError.mockRestore()
   })
+
+  it('a node created this session is edited by elementId, not by its typed name (#323 B1)', async () => {
+    createGraphNode.mockResolvedValue('4:abc:99')
+    const { container } = render(() => <GraphVisualization elements={[]} />)
+    await becomeVisible()
+
+    // Create the node through the form — the canvas keys it by the typed name.
+    button(container, '+ Node').click()
+    await tick()
+    const name = container.querySelector<HTMLInputElement>(
+      'input:not([type="range"]):not([type="checkbox"])',
+    )!
+    name.value = 'GraphQL'
+    name.dispatchEvent(new Event('input', { bubbles: true }))
+    button(container, 'Create').click()
+    await tick()
+
+    // Then edit one of its properties through the panel.
+    fire('tap', 'node', fakeNode('GraphQL', { label: 'GraphQL', properties: { summary: 'old' } }))
+    await tick()
+    container.querySelector<HTMLElement>('button[title="Edit field"]')!.click()
+    await tick()
+    const box = container.querySelectorAll('textarea')[1]
+    box.value = 'new summary'
+    box.dispatchEvent(new Event('input', { bubbles: true }))
+    button(container, 'Save').click()
+    await tick()
+
+    // #323 B1: Neo4j matches the edit by elementId — the typed name matches
+    // zero nodes and the write is guaranteed to be rejected.
+    expect(setGraphNodeProperty).toHaveBeenCalledWith('4:abc:99', 'summary', 'new summary')
+  })
 })
 
 describe('GraphVisualization — node properties panel', () => {
@@ -890,6 +922,41 @@ describe('GraphVisualization — relation mode', () => {
     )
     expect(container.textContent).toContain('not saved')
     consoleError.mockRestore()
+  })
+
+  it('a relation between two nodes created this session links them by elementId (#323 B1)', async () => {
+    createGraphNode.mockResolvedValueOnce('4:abc:1')
+    createGraphNode.mockResolvedValueOnce('4:abc:2')
+    const { container } = render(() => <GraphVisualization elements={[]} />)
+    await becomeVisible()
+
+    const createViaForm = async (value: string) => {
+      button(container, '+ Node').click()
+      await tick()
+      const name = container.querySelector<HTMLInputElement>(
+        'input:not([type="range"]):not([type="checkbox"])',
+      )!
+      name.value = value
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+      button(container, 'Create').click()
+      await tick()
+    }
+    await createViaForm('Alpha')
+    await createViaForm('Beta')
+
+    fire('tap', 'node', fakeNode('Alpha', { label: 'Alpha' }))
+    await tick()
+    button(container, 'Create Relation').click()
+    await tick()
+    const relType = container.querySelector<HTMLInputElement>('input[placeholder="REL_TYPE"]')!
+    relType.value = 'DEPENDS_ON'
+    relType.dispatchEvent(new Event('input', { bubbles: true }))
+    fire('tap', 'node', fakeNode('Beta', { label: 'Beta' }))
+    await tick()
+
+    // #323 B1: both endpoints are session-created, so both must be resolved
+    // from their typed canvas names to the elementIds Neo4j assigned.
+    expect(linkGraphNodes).toHaveBeenCalledWith('4:abc:1', '4:abc:2', 'DEPENDS_ON')
   })
 
   it('can be abandoned from the banner', async () => {

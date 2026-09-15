@@ -1388,11 +1388,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
         {/* A failed cold load is NOT an empty stash (#314). */}
         <Show when={loadError()}>
           <div flex="~" items="center" gap="2" p="x-3 y-2" text="xs ui-danger">
-            <span
-              class="i-material-symbols-error-outline"
-              style={{ width: '14px', height: '14px' }}
-              aria-hidden="true"
-            />
+            <span class="i-material-symbols-error-outline" w="3.5" h="3.5" aria-hidden="true" />
             <span>Couldn't load uploads — {loadError()}</span>
             <button
               type="button"

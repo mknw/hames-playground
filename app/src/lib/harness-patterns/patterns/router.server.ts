@@ -12,8 +12,7 @@
 
 import { assertServerOnImport } from '../assert.server'
 import { routeMessageOp } from '../routing.server'
-import { LLMCallError } from '../baml-adapters.server'
-import { Collector } from '@boundaryml/baml'
+import { LLMCallError } from '../types'
 import type {
   PatternScope,
   EventView,
@@ -138,9 +137,9 @@ export function router<T extends RouterData>(
         description,
       }))
 
-      // Route message using BAML with collector for observability
-      const collector = new Collector('router')
-      const result = await routeMessageOp(userContent, history, routeArray, collector)
+      // Route the message (Lane A3: no collector is passed — the
+      // implementation owns it and returns the call record on the result).
+      const result = await routeMessageOp(userContent, history, routeArray)
 
       // No tool needed - return conversational response directly
       if (!result.tool_call_needed) {

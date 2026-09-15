@@ -8,7 +8,7 @@ import { assertServerOnImport } from './assert.server'
 import { Collector } from '@boundaryml/baml'
 import { extractLLMCallData, wrapAsLLMCallError } from './baml-adapters.server'
 import { clientOverrideFor } from './clients.server'
-import type { LLMCallData } from './types'
+import type { LLMCallRecord } from './types'
 
 assertServerOnImport()
 
@@ -36,17 +36,22 @@ export interface RouteMessageResult {
   tool_call_needed: boolean
   tool_name: string | null
   response_text: string
-  llmCall?: LLMCallData
+  /** The implementation-stamped record (Lane A3): carries `hitOutputCap`. */
+  llmCall?: LLMCallRecord
 }
 
 export async function routeMessageOp(
   message: string,
   history: Array<{ role: string; content: string }>,
   routes: Array<{ name: string; description: string }> = DEFAULT_ROUTES,
-  collector?: Collector,
+  passedCollector?: Collector,
 ): Promise<RouteMessageResult> {
   const b = await getBAML()
   const startTime = Date.now()
+
+  // Lane A3: the implementation owns the collector when the caller does not
+  // pass one — the router pattern no longer creates or hands one down.
+  const collector = passedCollector ?? new Collector('router')
 
   // Build a lookup from route names for validation
   const validRoutes = new Set(routes.map((r) => r.name))
@@ -56,8 +61,7 @@ export async function routeMessageOp(
   // the user's raw message, which is the payload the private tier is least
   // entitled to send off the box (2026-08-26 owner decision — see
   // `VERDA_CLIENT_BY_ROLE`).
-  const routerOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('router') }
-  const hasRouterOpts = Object.keys(routerOpts).length > 0
+  const routerOpts = { collector, ...clientOverrideFor('router') }
   const variables = { message, routes, history }
   // Wrap like every other adapter does: the router is the FIRST LLM call of a
   // turn, so a parse failure here aborts routing before any tool runs. Bare,
@@ -66,17 +70,13 @@ export async function routeMessageOp(
   // captured in the collector and then thrown away.
   let result: Awaited<ReturnType<typeof b.Router>>
   try {
-    result = hasRouterOpts
-      ? await b.Router(message, routes, history, routerOpts)
-      : await b.Router(message, routes, history)
+    result = await b.Router(message, routes, history, routerOpts)
   } catch (e) {
     throw wrapAsLLMCallError(e, 'Router', variables, startTime, collector)
   }
 
   // Extract LLM call data if collector present
-  const llmCall = collector
-    ? extractLLMCallData(collector, 'Router', variables, startTime, result)
-    : undefined
+  const llmCall = extractLLMCallData(collector, 'Router', variables, startTime, result)
 
   return {
     intent: result.intent,

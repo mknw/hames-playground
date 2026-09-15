@@ -88,7 +88,7 @@ describe('compactExecution', () => {
       const { createScope } = await import('../../../../lib/harness-patterns/context.server')
       const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
-      const customSynthesize = vi.fn(async () => 'Custom synthesized response')
+      const customSynthesize = vi.fn(async () => ({ value: 'Custom synthesized response' }))
 
       const pattern = compactExecution({
         mode: 'message',
@@ -127,7 +127,7 @@ describe('compactExecution', () => {
       const { createScope } = await import('../../../../lib/harness-patterns/context.server')
       const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
-      const customSynthesize = vi.fn(async () => 'New response')
+      const customSynthesize = vi.fn(async () => ({ value: 'New response' }))
 
       const pattern = compactExecution({
         mode: 'message',
@@ -168,7 +168,7 @@ describe('compactExecution execution', () => {
     const pattern = compactExecution({
       mode: 'message',
       trackHistory: 'assistant_message',
-      synthesize: async () => 'Test response',
+      synthesize: async () => ({ value: 'Test response' }),
     })
 
     const scope = createScope('test', {})
@@ -241,7 +241,7 @@ describe('compactExecution execution', () => {
 
     const pattern = compactExecution({
       mode: 'response',
-      synthesize: async (input) => `Response mode: ${input.response}`,
+      synthesize: async (input) => ({ value: `Response mode: ${input.response}` }),
     })
 
     const scope = createScope('test', { response: 'my data' })
@@ -275,8 +275,9 @@ describe('compactExecution execution', () => {
 
     const pattern = compactExecution({
       mode: 'thread',
-      synthesize: async (input) =>
-        `Thread mode with ${input.loopHistory?.iterations.length ?? 0} iterations`,
+      synthesize: async (input) => ({
+        value: `Thread mode with ${input.loopHistory?.iterations.length ?? 0} iterations`,
+      }),
     })
 
     const scope = createScope('test', {})
@@ -344,7 +345,7 @@ describe('compactExecution execution', () => {
 
     const pattern = compactExecution({
       mode: 'thread',
-      synthesize: async (input) => `Mode: ${input.mode}, Response: ${input.response}`,
+      synthesize: async (input) => ({ value: `Mode: ${input.mode}, Response: ${input.response}` }),
     })
 
     const scope = createScope('test', { response: 'fallback response' })
@@ -425,7 +426,7 @@ describe('compactExecution execution', () => {
       mode: 'thread',
       synthesize: async (input) => {
         captured = input
-        return `iters=${input.loopHistory?.iterations.length ?? 0}`
+        return { value: `iters=${input.loopHistory?.iterations.length ?? 0}` }
       },
     })
 
@@ -500,7 +501,7 @@ describe('compactExecution execution', () => {
       mode: 'thread',
       synthesize: async (input) => {
         captured = input
-        return `iters=${input.loopHistory?.iterations.length ?? 0}`
+        return { value: `iters=${input.loopHistory?.iterations.length ?? 0}` }
       },
     })
 
@@ -606,7 +607,9 @@ describe('compactExecution execution', () => {
 
     const pattern = compactExecution({
       mode: 'thread',
-      synthesize: async (input) => `Iterations: ${input.loopHistory?.iterations.length ?? 0}`,
+      synthesize: async (input) => ({
+        value: `Iterations: ${input.loopHistory?.iterations.length ?? 0}`,
+      }),
     })
 
     const scope = createScope('test', {})
@@ -879,7 +882,7 @@ describe('compactExecution synth input fidelity', () => {
       patternId: 'synth',
       synthesize: async (input) => {
         captured = input
-        return 'ok'
+        return { value: 'ok' }
       },
     })
 
@@ -916,7 +919,7 @@ describe('compactExecution synth input fidelity', () => {
       patternId: 'synth',
       synthesize: async (input) => {
         captured = input
-        return 'ok'
+        return { value: 'ok' }
       },
     })
 
@@ -943,7 +946,7 @@ describe('compactExecution synth input fidelity', () => {
       viewConfig: { fromLast: false, fromLastNTurns: 2 },
       synthesize: async (input) => {
         captured = input
-        return 'ok'
+        return { value: 'ok' }
       },
     })
 
@@ -1018,7 +1021,7 @@ describe('compactExecution synth input fidelity', () => {
       patternId: 'synth',
       synthesize: async (input) => {
         captured = input
-        return 'ok'
+        return { value: 'ok' }
       },
     })
 
@@ -1067,7 +1070,7 @@ describe('compactExecution synth input fidelity', () => {
       patternId: 'synth',
       synthesize: async (input) => {
         captured = input
-        return 'ok'
+        return { value: 'ok' }
       },
     })
 

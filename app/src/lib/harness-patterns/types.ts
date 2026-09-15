@@ -1,7 +1,8 @@
 /**
  * Harness Patterns - Types
  *
- * Pure TypeScript interfaces. Safe to import from client and server.
+ * Pure TypeScript interfaces plus the LLM call-envelope error class. Safe to
+ * import from client and server.
  */
 
 /**
@@ -734,7 +735,7 @@ export interface CompactExecutionInput {
 }
 
 /** Custom synthesis function type */
-export type SynthesisFn = (input: CompactExecutionInput) => Promise<string>
+export type SynthesisFn = (input: CompactExecutionInput) => Promise<LLMResult<string>>
 
 /** Configuration for compactExecution pattern */
 export interface CompactExecutionConfig extends PatternConfig {
@@ -1013,6 +1014,56 @@ export interface LLMCallData {
   provider?: string
   /** Client name from BAML config */
   clientName?: string
+}
+
+/** What core knows about a finished model call: {@link LLMCallData} plus one
+ *  field. This is the record an injected LLM function returns inside
+ *  {@link LLMResult} (#225 Lane A3) — core reads the record it is handed back
+ *  instead of passing a `Collector` write-handle down.
+ *
+ *  Why the extra field lives here and not in `LLMCallData`: only the
+ *  IMPLEMENTATION knows the cap its client ran against, so only it may say
+ *  whether the response was cut off — the pattern layer reads the boolean and
+ *  never sees the cap table (SA-C2 stays beside `baml_src/`). */
+export type LLMCallRecord = LLMCallData & {
+  /** The call was cut off at its own client's `max_tokens` cap. Absent means
+   *  the record predates the stamp or the implementation could not know —
+   *  never read as "no cap" (unknown ≠ uncapped). */
+  hitOutputCap?: boolean
+}
+
+/** What an injected LLM function returns: the parsed value plus the record of
+ *  the call that produced it. `call` is optional because some implementations
+ *  legitimately produce a value without a model call (caches, overrides).
+ *
+ *  Rolled out per the design note's migration order: `SynthesisFn` returns it
+ *  as of Lane A3 (closing the no-tracking hole where a custom synthesis
+ *  override emitted no `llmCall` at all); the controller/actor/critic seams
+ *  adopt it at A4 when their positional signatures become object seams. */
+export interface LLMResult<T> {
+  value: T
+  call?: LLMCallRecord
+}
+
+/** Error thrown by an LLM implementation when a call fails AFTER reaching the
+ *  model (#232 MUST: the raw response must survive a parse failure). The
+ *  carried record is what lets the catching pattern attach the same
+ *  Prompt/Output drill-down to its `error` event that a successful call
+ *  attaches — the throw contract is the seam's, not one adapter's, so the
+ *  class lives in core (Lane A3; it moved here from the BAML adapters and is
+ *  re-exported from there for existing import paths).
+ *
+ *  Recovered fallback/retry attempts never produce this — only the final
+ *  propagating failure does. */
+export class LLMCallError extends Error {
+  readonly llmCall: LLMCallRecord
+  readonly cause?: unknown
+  constructor(message: string, llmCall: LLMCallRecord, cause?: unknown) {
+    super(message)
+    this.name = 'LLMCallError'
+    this.llmCall = llmCall
+    if (cause !== undefined) this.cause = cause
+  }
 }
 
 // ============================================================================

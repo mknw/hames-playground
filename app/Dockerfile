@@ -56,6 +56,16 @@ COPY --from=root package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 # distinction.
 COPY .npmrc ./
 COPY package.json .npmrc app/
+# --- #225 Step 1a bridge ----------------------------------------------------
+# The harness-patterns library moved to packages/ (#225 Step 1a): the app's
+# imports reach it via relative paths (the workspace:* specifier lands in
+# PR-β), and the build context is still app/, so the package's SOURCE rides in
+# through the same scoped `root` context the root workspace files use. Source
+# only — the package has no node_modules of its own; its one bare dependency
+# (@modelcontextprotocol/sdk) is declared in the ROOT manifest since Step 1a
+# and is installed by the frozen install above. The proper fix is the Step 1
+# build-context widening (plan §3.2), which supersedes this line.
+COPY --from=root packages/harness-patterns /ws/packages/harness-patterns
 WORKDIR /ws/app
 RUN pnpm install --frozen-lockfile
 

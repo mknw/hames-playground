@@ -131,7 +131,7 @@ ships its own pre-generated copy, see §1.4), `settings.ts` / `settings-store.ts
 / `settings-context.server.ts`, `auth/`, `db/`, `neo4j/` (the direct-driver
 wrapper, as opposed to the neo4j _tool namespace_ which is MCP-side config),
 `app-tools/` (the MCP tool registry and `KNOWN_TOOL_SERVERS`), `graph/`,
-`privacy/`, `routines/`, `turn-utils.ts` / `turn-colors.ts` / `agent-palette.ts`
+`privacy/`, `routines/`, `turn-utils.ts` / `agent-palette.ts`
 (UI-facing), all SolidStart routes/components, and both Docker artifacts.
 None of this moves.
 

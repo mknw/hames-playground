@@ -34,14 +34,6 @@ const TOUCHED_NODE_STYLES: StylesheetJsonBlock[] = [
 // Types
 // ============================================================================
 
-export interface PromptStat {
-  functionName: string
-  tokens: { input: number; output: number }
-  latency: number
-  timestamp: Date
-  status: 'success' | 'error'
-}
-
 // Re-export GraphElement from shared types
 export type { GraphElement } from '~/lib/harness-client/types'
 import type { GraphElement } from '~/lib/harness-client/types'
@@ -50,11 +42,8 @@ import { isEdgeElement, isNodeElement } from '~/lib/harness-client/graph-extract
 export interface SupportPanelProps {
   graphElements: GraphElement[]
   highlightedIds?: string[]
-  promptStats?: PromptStat[]
   contextEvents?: ContextEvent[]
   unifiedContext?: UnifiedContext
-  onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void
-  onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void
   onClearGraph?: () => void
   onClearEvents?: () => void
   /** Session ID for stash API calls */
@@ -207,8 +196,6 @@ export const SupportPanel = (props: SupportPanelProps) => {
             <GraphTabContent
               elements={neo4jElements()}
               highlightedIds={props.highlightedIds}
-              onNodeClick={props.onNodeClick}
-              onEdgeClick={props.onEdgeClick}
               onClearGraph={props.onClearGraph}
               extraStyles={TOUCHED_NODE_STYLES}
               emptyMessage="No Neo4j graph data yet. Query your knowledge base to see results."
@@ -221,8 +208,6 @@ export const SupportPanel = (props: SupportPanelProps) => {
             <GraphTabContent
               elements={memoryElements()}
               highlightedIds={props.highlightedIds}
-              onNodeClick={props.onNodeClick}
-              onEdgeClick={props.onEdgeClick}
               onClearGraph={props.onClearGraph}
               emptyMessage="No memory graph data yet. Use agents that interact with the Memory MCP to see data."
               emptyIconClass="i-material-symbols-psychology-outline"
@@ -281,8 +266,6 @@ export const SupportPanel = (props: SupportPanelProps) => {
 interface GraphTabContentProps {
   elements: ElementDefinition[]
   highlightedIds?: string[]
-  onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void
-  onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void
   onClearGraph?: () => void
   emptyMessage: string
   /** Icon utility class for the empty state — see GraphVisualization. */
@@ -380,8 +363,6 @@ const GraphTabContent = (props: GraphTabContentProps) => {
         <GraphVisualization
           elements={effectiveElements()}
           highlightedIds={props.highlightedIds}
-          onNodeClick={props.onNodeClick}
-          onEdgeClick={props.onEdgeClick}
           extraStyles={props.extraStyles}
           onClearGraph={props.onClearGraph ? clearGraph : undefined}
           emptyIconClass={props.emptyIconClass}

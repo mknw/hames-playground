@@ -1,6 +1,5 @@
 import { ScrollArea } from '@ark-ui/solid/scroll-area'
 import { For, Show, Switch, Match, createEffect, createSignal, type JSX } from 'solid-js'
-import type { ElementDefinition } from 'cytoscape'
 import type { ToolCallInfo } from './types'
 import { ToolCallDisplay } from './ToolCallDisplay'
 import { marked } from 'marked'
@@ -21,7 +20,6 @@ export interface Message {
   content: string
   timestamp: Date
   toolCall?: ToolCallInfo // Single tool call (not array)
-  graphData?: ElementDefinition[]
   /** User-facing hint for error/warning messages */
   hint?: string
   /** Pattern that produced this error/warning */

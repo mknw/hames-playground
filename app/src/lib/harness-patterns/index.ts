@@ -27,9 +27,9 @@ export type {
   CommitStrategy,
   TrackHistory,
 
-  // Controller/Critic Types (BAML function signatures)
-  ControllerFn,
-  CriticFn,
+  // Controller/Critic Types
+  // `ControllerFn` (the object seam, Lane A4) lives beside its implementation;
+  // the dead positional `ControllerFn`/`CriticFn` types are deleted (A4).
 
   // BAML Types (re-exported)
   ControllerAction,
@@ -284,3 +284,8 @@ export {
   withUsageAccounting,
   type ActorAdapterOptions,
 } from './baml-adapters.server'
+
+// The controller/actor object seam (Lane A4) — declared in core, implemented
+// by the adapter factories (which attach a legacy positional form for the
+// untouched acceptance tests).
+export type { ControllerFn, ActorFn, ControllerInput, ActorInput } from './types'

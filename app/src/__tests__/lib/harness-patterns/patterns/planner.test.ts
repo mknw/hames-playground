@@ -9,11 +9,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockListTools } from '../../../mocks/mcp'
 import { mockFinalAction } from '../../../mocks/baml'
 import type { ContextEvent, EventType, UnifiedContext } from '../../../../lib/harness-patterns'
+import type { CriticFnWithLLMData } from '../../../../lib/harness-patterns/baml-adapters.server'
 import type {
-  ControllerFnWithLLMData,
-  ActorControllerFnWithLLMData,
-  CriticFnWithLLMData,
-} from '../../../../lib/harness-patterns/baml-adapters.server'
+  ControllerFn,
+  ActorFn,
+  ControllerInput,
+  ActorInput,
+} from '../../../../lib/harness-patterns/types'
 
 // Mock server-only imports
 vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
@@ -373,7 +375,7 @@ describe('plan plumbing into the loop patterns', () => {
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
-    const controller = vi.fn<ControllerFnWithLLMData>(async () => ({
+    const controller = vi.fn<ControllerFn>(async () => ({
       action: mockFinalAction('done'),
     }))
     const pattern = simpleLoop(controller, ['Return'], { patternId: 'exec' })
@@ -382,8 +384,9 @@ describe('plan plumbing into the loop patterns', () => {
 
     await pattern.fn(scope, view)
 
-    // 10th positional arg of controller(...) is planContext
-    const planContext = controller.mock.calls[0][9] as string
+    // Lane A4: planContext rides the object seam now — same outcome, one
+    // named field instead of a positional slot.
+    const planContext = (controller.mock.calls[0][0] as ControllerInput).planContext ?? ''
     expect(planContext).toContain('PLAN (from previous step')
     expect(planContext).toContain(PLAN.plan)
   })
@@ -394,7 +397,7 @@ describe('plan plumbing into the loop patterns', () => {
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
-    const controller = vi.fn<ControllerFnWithLLMData>(async () => ({
+    const controller = vi.fn<ControllerFn>(async () => ({
       action: mockFinalAction('done'),
     }))
     const pattern = simpleLoop(controller, ['Return'], { patternId: 'exec' })
@@ -403,7 +406,7 @@ describe('plan plumbing into the loop patterns', () => {
 
     await pattern.fn(scope, view)
 
-    expect(controller.mock.calls[0][9]).toBeUndefined()
+    expect((controller.mock.calls[0][0] as ControllerInput).planContext).toBeUndefined()
   })
 
   it('actorCritic forwards a formatted plan to its actor as planContext', async () => {
@@ -412,7 +415,7 @@ describe('plan plumbing into the loop patterns', () => {
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
-    const actor = vi.fn<ActorControllerFnWithLLMData>(async () => ({
+    const actor = vi.fn<ActorFn>(async () => ({
       action: {
         reasoning: 'r',
         tool_name: 'Return',
@@ -430,8 +433,9 @@ describe('plan plumbing into the loop patterns', () => {
 
     await pattern.fn(scope, view)
 
-    // 9th positional arg of actor(...) is planContext
-    const planContext = actor.mock.calls[0][8] as string
+    // Lane A4: planContext rides the object seam now — same outcome, one
+    // named field instead of a positional slot.
+    const planContext = (actor.mock.calls[0][0] as ActorInput).planContext ?? ''
     expect(planContext).toContain('PLAN (from previous step')
     expect(planContext).toContain(PLAN.plan)
   })

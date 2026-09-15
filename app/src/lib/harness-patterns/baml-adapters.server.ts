@@ -11,8 +11,8 @@
  * - Router(message, routes, history)
  * - Synthesize(user_message, intent, turns)
  *
- * The patterns expect:
- * - ControllerFn(user_message, intent, previous_results, n_turn, ...extra)
+ * The patterns expect (Lane A4 object seam):
+ * - ControllerFn({ userMessage, intent, turns, turn, ... })
  * - CriticFn(intent, previous_attempts)
  */
 
@@ -24,6 +24,8 @@ import type {
   LLMCallData,
   EventMetrics,
   ReturnStyle,
+  ControllerInput,
+  ActorInput,
 } from './types'
 import type { ToolDescription, LoopTurn, Attempt, PriorResult, FewShot, PlanResult } from './types'
 import type { InjectionScreen } from './injection-guard'
@@ -43,7 +45,7 @@ import { eurPerUsdRate, verdaEurPerHour } from '../cost-rates.server'
 import { clientOverrideFor } from './clients.server'
 import { notifyLlmUsage } from './llm-usage-observer.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
-import type { LLMCallRecord } from './types'
+import type { LLMCallRecord, ControllerFn, ActorFn, ControllerCallResult } from './types'
 // The throw contract is the seam's, not this module's: the class lives in
 // core (`types.ts`, Lane A3) and is re-exported here because the acceptance
 // tests (raw-llm-visibility, truncation-retry) import it from this path.
@@ -61,13 +63,10 @@ runBamlClientCheckOnce()
 // Types for LLM Call Results
 // ============================================================================
 
-/** Result from a controller call with optional LLM observability data.
- *  The record carries `hitOutputCap` (Lane A3) — the implementation stamps it
- *  on both the success and the failure extraction path. */
-export interface ControllerCallResult {
-  action: ControllerAction
-  llmCall?: LLMCallRecord
-}
+// `ControllerCallResult` moved to core `types.ts` in Lane A4 — it is the
+// controller/actor seam's return type. Re-exported here for existing import
+// paths (tests import it from this module).
+export type { ControllerCallResult } from './types'
 
 /** Result from a critic call with optional LLM observability data */
 export interface CriticCallResult {
@@ -87,13 +86,23 @@ export interface PlanCallResult {
   toolCount: number
 }
 
-/** Controller function that returns action + observability data.
+/** The controller seam (#225 Lane A4): one named {@link ControllerInput} —
+ *  declared in core `types.ts` — whose `turns` are a typed `LoopTurn[]`,
+ *  replacing the eleven-argument positional tail. The loop hands real turn
+ *  objects; the stringify → re-parse round-trip and its silent-`[]` catch are
+ *  deleted with the positional tail.
  *
- *  `planContext` is LAST and optional on purpose (#27): the generated BAML
- *  functions take their arguments POSITIONALLY, so inserting a parameter
- *  anywhere but the end silently shifts every later argument — the failure
- *  mode `warnIfCollectorEmpty` exists to catch (#154). */
-export type ControllerFnWithLLMData = (
+ *  What lives here is the LEGACY positional form, kept ONLY because
+ *  raw-llm-visibility.test.ts and truncation-retry.test.ts pin this file's
+ *  behaviour through it and must not be edited (#232/#225 acceptance
+ *  constraint). No production caller uses it — the pattern calls the object
+ *  form — and it is deleted together with this file at A6. Its
+ *  `previous_results: string` is parsed STRICTLY (garbage throws, never a
+ *  silent `[]`); `parseResultsToTurns` is gone.
+ *
+ *  The factories below return `ControllerFn & LegacyControllerFn`: the seam
+ *  proper is object-only, and the legacy half is what the tests call. */
+export type LegacyControllerFn = (
   user_message: string,
   intent: string,
   previous_results: string,
@@ -104,8 +113,7 @@ export type ControllerFnWithLLMData = (
   fewShots?: FewShot[],
   multiCallMode?: 'parallel' | 'sequential',
   planContext?: string,
-  /** Terminal-action style (#149), from `SimpleLoopConfig.returnStyle`.
-   *  Trailing + optional for the positional-args reason spelled out below. */
+  /** Terminal-action style (#149), from `SimpleLoopConfig.returnStyle`. */
   returnStyle?: ReturnStyle,
 ) => Promise<ControllerCallResult>
 
@@ -843,40 +851,23 @@ async function activeTransportToolDescriptions(): Promise<ToolDescription[]> {
  *
  * @param toolNames - Array of tool names available to this controller
  * @param contextPrefix - Optional context prefix for the prompt (e.g., domain-specific instructions)
- * @returns ControllerFnWithLLMData compatible with simpleLoop pattern
+ * @returns ControllerFn compatible with simpleLoop pattern
  */
 export function createLoopControllerAdapter(
   toolNames: string[],
   contextPrefix?: string,
-): ControllerFnWithLLMData {
-  return async (
-    user_message: string,
-    intent: string,
-    previous_results: string,
-    n_turn: number,
-    schema?: string,
+): ControllerFn & LegacyControllerFn {
+  const call = async (
+    input: ControllerInput,
     passedCollector?: Collector,
-    priorResults?: PriorResult[],
-    fewShots?: FewShot[],
-    // 'off' never reaches the adapter — the pattern maps it to undefined so the
-    // prompt renders no affordance (LoopMultiCalls stays empty).
-    multiCallMode?: 'parallel' | 'sequential',
-    // Pre-formatted plan from an upstream `planner` pattern (#27). simpleLoop
-    // reads it off `scope.data.plan` and formats it — same shape as
-    // `withReferences` → `scope.data.attachedRefs` → `priorResults`.
-    planContext?: string,
-    // Terminal-action style (#149). Forwarded verbatim: the prompt treats an
-    // absent value as 'summary', so any controller called without it still
-    // gets the default.
-    returnStyle?: ReturnStyle,
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
 
     // Lane A3: the implementation owns the collector when the caller does not
-    // pass one — core patterns no longer create or hand one down. The optional
-    // parameter stays for the direct callers that bring their own (the smoke
-    // scripts and the adapter-level tests, which pin this file's behaviour).
+    // pass one — the object seam has no collector slot at all; the optional
+    // parameter exists only for the legacy positional form below (the
+    // adapter-level acceptance tests bring their own).
     const collector = passedCollector ?? new Collector('LoopController')
 
     // Get tool descriptions for available tools. When a transport is scoped to
@@ -887,34 +878,38 @@ export function createLoopControllerAdapter(
     const gatewayTools = await filterToolDescriptions(toolNames)
     const tools = [...scopedTools, ...gatewayTools]
 
-    // Parse previous results into LoopTurn format
-    const turns: LoopTurn[] = parseResultsToTurns(previous_results, n_turn)
+    // The loop's turns arrive TYPED (Lane A4) — no stringify/re-parse round
+    // trip, and therefore no silent-`[]` catch to mis-parse them. Copied once
+    // because the generated BAML functions take mutable arrays.
+    const turns: LoopTurn[] = [...input.turns]
+    const priorResults = input.priorResults ? [...input.priorResults] : undefined
+    const fewShots = input.fewShots ? [...input.fewShots] : undefined
 
-    // Build context from schema and contextPrefix only (prior tool results go
-    // into priorResults). The plan is NOT merged in here: `context` renders
-    // inside the prompt's tier-1 cache marker, which is agent-static, and a
-    // per-question plan in there would turn every tool-catalog cache read into
-    // a write (#122). It travels as its own `plan_context` argument and
-    // renders in tier 2, beside the intent.
+    // Build context from input.context and contextPrefix only (prior tool
+    // results go into priorResults). The plan is NOT merged in here: `context`
+    // renders inside the prompt's tier-1 cache marker, which is agent-static,
+    // and a per-question plan in there would turn every tool-catalog cache
+    // read into a write (#122). It travels as its own `plan_context` argument
+    // and renders in tier 2, beside the intent.
     let context: string | undefined
-    if (schema || contextPrefix) {
+    if (input.context || contextPrefix) {
       const parts: string[] = []
       if (contextPrefix) parts.push(contextPrefix)
-      if (schema) parts.push(`GRAPH SCHEMA:\n${schema}`)
+      if (input.context) parts.push(`GRAPH SCHEMA:\n${input.context}`)
       context = parts.join('\n\n')
     }
 
     const variables = {
-      user_message,
-      intent,
+      user_message: input.userMessage,
+      intent: input.intent,
       tools,
       turns,
       context,
       turns_previous_runs: priorResults,
       few_shots: fewShots,
-      multi_call_mode: multiCallMode,
-      plan_context: planContext,
-      return_style: returnStyle,
+      multi_call_mode: input.multiCallMode,
+      plan_context: input.planContext,
+      return_style: input.returnStyle,
     }
 
     // Call with options always: the implementation-owned collector (above) is
@@ -929,16 +924,16 @@ export function createLoopControllerAdapter(
     let action: ControllerAction
     try {
       action = await b.LoopController(
-        user_message,
-        intent,
+        input.userMessage,
+        input.intent,
         tools,
         turns,
         context,
         priorResults,
         fewShots,
-        multiCallMode,
-        planContext,
-        returnStyle,
+        input.multiCallMode,
+        input.planContext,
+        input.returnStyle,
         baseOpts,
       )
     } catch (e) {
@@ -954,16 +949,16 @@ export function createLoopControllerAdapter(
           : context
         try {
           action = await b.LoopController(
-            user_message,
-            intent,
+            input.userMessage,
+            input.intent,
             tools,
             turns,
             retryContext,
             priorResults,
             fewShots,
-            multiCallMode,
-            planContext,
-            returnStyle,
+            input.multiCallMode,
+            input.planContext,
+            input.returnStyle,
             baseOpts,
           )
           const llmCall = extractLLMCallData(
@@ -986,26 +981,71 @@ export function createLoopControllerAdapter(
 
     return { action, llmCall }
   }
+
+  return (async (
+    first: ControllerInput | string,
+    ...rest: unknown[]
+  ): Promise<ControllerCallResult> => {
+    if (typeof first !== 'string') return call(first)
+    // Legacy positional form — see the overload doc on `ControllerFn`.
+    const [
+      intent,
+      previous_results,
+      n_turn,
+      schema,
+      collector,
+      priorResults,
+      fewShots,
+      multiCallMode,
+      planContext,
+      returnStyle,
+    ] = rest as [
+      string,
+      string,
+      number,
+      string | undefined,
+      Collector | undefined,
+      PriorResult[] | undefined,
+      FewShot[] | undefined,
+      'parallel' | 'sequential' | undefined,
+      string | undefined,
+      ReturnStyle | undefined,
+    ]
+    return call(
+      {
+        userMessage: first,
+        intent,
+        turns: legacyTurns(previous_results),
+        turn: n_turn,
+        context: schema,
+        priorResults,
+        fewShots,
+        multiCallMode,
+        planContext,
+        returnStyle,
+      },
+      collector,
+    )
+  }) as ControllerFn & LegacyControllerFn
 }
 
 /**
- * Parse previous_results JSON string into LoopTurn array.
- * Expects LoopTurn[] JSON produced by simpleLoop's internal turn tracking.
+ * STRICT parse for the legacy positional form's `previous_results` string.
+ *
+ * This replaces `parseResultsToTurns`, whose catch silently returned `[]` on
+ * any non-array or unparseable input — so a controller handed garbage believed
+ * it was on turn 0 with no history and quietly repeated its first tool call.
+ * The object seam needs no parse at all (typed `turns`); the legacy form —
+ * which only the adapter-level acceptance tests still use, always with `'[]'`
+ * — parses strictly and THROWS on anything else, so the silent failure does
+ * not survive the refactor.
  */
-function parseResultsToTurns(previous_results: string, _currentTurn: number): LoopTurn[] {
-  if (!previous_results || previous_results === '[]') return []
-
-  try {
-    const parsed = JSON.parse(previous_results)
-    if (!Array.isArray(parsed)) return []
-    // Accept LoopTurn[] format (has numeric 'n' field from simpleLoop tracking)
-    if (parsed.length > 0 && typeof parsed[0].n === 'number') {
-      return parsed as LoopTurn[]
-    }
-    return []
-  } catch {
-    return []
+function legacyTurns(previous_results: string): LoopTurn[] {
+  const parsed: unknown = JSON.parse(previous_results)
+  if (!Array.isArray(parsed)) {
+    throw new Error(`previous_results must be a JSON array of LoopTurn (got ${typeof parsed})`)
   }
+  return parsed as LoopTurn[]
 }
 
 // ============================================================================
@@ -1128,10 +1168,20 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData 
 // Adapters for actorCritic
 // ============================================================================
 
-/** Actor controller function that returns action + observability data.
- *  `attemptNumber` / `maxAttempts` are passed by `actorCritic.server.ts` so the
- *  actor's prompt can show "Attempt N of M" and prefer Return as budget runs low. */
-export type ActorControllerFnWithLLMData = (
+/** The actor seam (#225 Lane A4): one named {@link ActorInput} — declared in
+ *  core `types.ts` — replacing the positional tail. `attemptNumber` /
+ *  `maxAttempts` are passed by `actorCritic.server.ts` so the actor's prompt
+ *  can show "Attempt N of M" and prefer Return as budget runs low.
+ *
+ *  Note `availableTools` is part of the seam shape (design note §3) but the
+ *  implementation resolves its own allowlist from the factory options — it
+ *  was accepted-and-ignored positionally before A4 and is accepted-and-ignored
+ *  here; the allowlist the adapters and loop enforce is the factory's.
+ *
+ *  The legacy positional form — same acceptance-test constraint and same A6
+ *  deletion as `LegacyControllerFn`'s — rides the factory return as
+ *  `ActorFn & LegacyActorFn`. */
+export type LegacyActorFn = (
   user_message: string,
   intent: string,
   available_tools: string[],
@@ -1140,8 +1190,6 @@ export type ActorControllerFnWithLLMData = (
   attemptNumber?: number,
   maxAttempts?: number,
   multiCallMode?: 'parallel' | 'sequential',
-  /** Pre-formatted plan from an upstream `planner` (#27). Trailing + optional
-   *  for the same positional-args reason as `ControllerFnWithLLMData`. */
   planContext?: string,
 ) => Promise<ControllerCallResult>
 
@@ -1192,30 +1240,21 @@ export interface ActorAdapterOptions {
  */
 export function createActorControllerAdapter(
   toolsOrOptions: string[] | ActorAdapterOptions,
-): ActorControllerFnWithLLMData {
+): ActorFn & LegacyActorFn {
   const options: ActorAdapterOptions = Array.isArray(toolsOrOptions)
     ? { toolNames: toolsOrOptions }
     : toolsOrOptions
 
-  return async (
-    user_message: string,
-    intent: string,
-    available_tools: string[],
-    previous_attempts: ScriptExecutionEvent[],
+  const call = async (
+    input: ActorInput,
     passedCollector?: Collector,
-    attemptNumber?: number,
-    maxAttempts?: number,
-    // 'off' never reaches the adapter — the pattern maps it to undefined so the
-    // prompt renders no affordance (ActorMultiCalls stays empty).
-    multiCallMode?: 'parallel' | 'sequential',
-    planContext?: string,
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
 
     // Lane A3: the implementation owns the collector when the caller does not
-    // pass one — core patterns no longer create or hand one down (same as the
-    // loop controller above).
+    // pass one — the object seam has no collector slot at all; the optional
+    // parameter exists only for the legacy positional form below.
     const collector = passedCollector ?? new Collector('ActorController')
 
     // Resolve the actor's allowlist. `toolNamesProvider` (if set) is called
@@ -1244,7 +1283,7 @@ export function createActorControllerAdapter(
     // constructs the events itself. `additionalCalls` (multi-call attempts)
     // replays into the action so the attempt log shows the batch shape the
     // actor actually emitted (exact-replay invariant).
-    const attempts: Attempt[] = previous_attempts.map((event, i) => ({
+    const attempts: Attempt[] = input.previousAttempts.map((event, i) => ({
       n: i + 1,
       action: {
         reasoning: '',
@@ -1267,19 +1306,19 @@ export function createActorControllerAdapter(
     const ownContext = options.contextProvider
       ? await options.contextProvider()
       : options.contextPrefix
-    const context = [planContext, ownContext].filter(Boolean).join('\n\n') || undefined
+    const context = [input.planContext, ownContext].filter(Boolean).join('\n\n') || undefined
     const fewShots = options.fewShots
 
     const variables = {
-      user_message,
-      intent,
+      user_message: input.userMessage,
+      intent: input.intent,
       tools,
       attempts,
       context,
       few_shots: fewShots,
-      attempt_n: attemptNumber,
-      max_attempts: maxAttempts,
-      multi_call_mode: multiCallMode,
+      attempt_n: input.attemptNumber,
+      max_attempts: input.maxAttempts,
+      multi_call_mode: input.multiCallMode,
     }
 
     // Call with options always — the implementation-owned collector is in the
@@ -1295,15 +1334,15 @@ export function createActorControllerAdapter(
     let action: ControllerAction
     try {
       action = await b.ActorController(
-        user_message,
-        intent,
+        input.userMessage,
+        input.intent,
         tools,
         attempts,
         context,
         fewShots,
-        attemptNumber,
-        maxAttempts,
-        multiCallMode,
+        input.attemptNumber,
+        input.maxAttempts,
+        input.multiCallMode,
         baseOpts,
       )
     } catch (e) {
@@ -1316,15 +1355,15 @@ export function createActorControllerAdapter(
           : context
         try {
           action = await b.ActorController(
-            user_message,
-            intent,
+            input.userMessage,
+            input.intent,
             tools,
             attempts,
             retryContext,
             fewShots,
-            attemptNumber,
-            maxAttempts,
-            multiCallMode,
+            input.attemptNumber,
+            input.maxAttempts,
+            input.multiCallMode,
             baseOpts,
           )
           const llmCall = extractLLMCallData(
@@ -1347,6 +1386,43 @@ export function createActorControllerAdapter(
 
     return { action, llmCall }
   }
+
+  return (async (first: ActorInput | string, ...rest: unknown[]): Promise<ControllerCallResult> => {
+    if (typeof first !== 'string') return call(first)
+    // Legacy positional form — see the overload doc on `ActorFn`.
+    const [
+      intent,
+      available_tools,
+      previous_attempts,
+      collector,
+      attemptNumber,
+      maxAttempts,
+      multiCallMode,
+      planContext,
+    ] = rest as [
+      string,
+      string[],
+      ScriptExecutionEvent[],
+      Collector | undefined,
+      number | undefined,
+      number | undefined,
+      'parallel' | 'sequential' | undefined,
+      string | undefined,
+    ]
+    return call(
+      {
+        userMessage: first,
+        intent,
+        availableTools: available_tools,
+        previousAttempts: previous_attempts,
+        attemptNumber,
+        maxAttempts,
+        multiCallMode,
+        planContext,
+      },
+      collector,
+    )
+  }) as ActorFn & LegacyActorFn
 }
 
 /**
@@ -1596,36 +1672,36 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
 // ============================================================================
 
 /** Neo4j controller - uses LoopController with graph schema context (schema injected via config.schema) */
-export function createNeo4jController(toolNames: string[]): ControllerFnWithLLMData {
+export function createNeo4jController(toolNames: string[]): ControllerFn & LegacyControllerFn {
   return createLoopControllerAdapter(toolNames)
 }
 
 /** Web search controller */
-export function createWebSearchController(toolNames: string[]): ControllerFnWithLLMData {
+export function createWebSearchController(toolNames: string[]): ControllerFn & LegacyControllerFn {
   return createLoopControllerAdapter(toolNames)
 }
 
 /** Memory controller */
-export function createMemoryController(toolNames: string[]): ControllerFnWithLLMData {
+export function createMemoryController(toolNames: string[]): ControllerFn & LegacyControllerFn {
   return createLoopControllerAdapter(toolNames)
 }
 
 /** Context7 documentation controller */
-export function createContext7Controller(toolNames: string[]): ControllerFnWithLLMData {
+export function createContext7Controller(toolNames: string[]): ControllerFn & LegacyControllerFn {
   return createLoopControllerAdapter(toolNames)
 }
 
 /** Filesystem controller */
-export function createFilesystemController(toolNames: string[]): ControllerFnWithLLMData {
+export function createFilesystemController(toolNames: string[]): ControllerFn & LegacyControllerFn {
   return createLoopControllerAdapter(toolNames)
 }
 
 /** Redis controller */
-export function createRedisController(toolNames: string[]): ControllerFnWithLLMData {
+export function createRedisController(toolNames: string[]): ControllerFn & LegacyControllerFn {
   return createLoopControllerAdapter(toolNames)
 }
 
 /** Database controller */
-export function createDatabaseController(toolNames: string[]): ControllerFnWithLLMData {
+export function createDatabaseController(toolNames: string[]): ControllerFn & LegacyControllerFn {
   return createLoopControllerAdapter(toolNames)
 }

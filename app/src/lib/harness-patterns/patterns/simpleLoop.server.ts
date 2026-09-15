@@ -34,7 +34,7 @@ import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { resolveClientForRole } from '../clients.server'
-import type { ControllerFnWithLLMData } from '../baml-adapters.server'
+import type { ControllerFn } from '../types'
 import { dedupByRefId, annotateExpansions } from '../baml-adapters.server'
 import type { LLMCallRecord } from '../types'
 import { LLMCallError } from '../types'
@@ -152,7 +152,7 @@ export interface SimpleLoopData {
  *   `createNeo4jController(toolNames)`). A raw bound BAML function does NOT
  *   satisfy this contract — its positional signature differs and it returns a
  *   bare ControllerAction instead of `{ action, llmCall }` (see
- *   `ControllerFnWithLLMData`).
+ *   `ControllerFn`).
  * @param tools - Allowed tool names
  * @param config - Optional configuration (schema, maxTurns, patternId, etc.)
  * @returns ConfiguredPattern ready for chain
@@ -166,7 +166,7 @@ export interface SimpleLoopData {
  * })
  */
 export function simpleLoop<T extends SimpleLoopData>(
-  controller: ControllerFnWithLLMData,
+  controller: ControllerFn,
   tools: string[],
   config?: SimpleLoopConfig,
 ): ConfiguredPattern<T> {
@@ -270,8 +270,10 @@ export function simpleLoop<T extends SimpleLoopData>(
         // (the client this call will actually use, not a hardcoded chain name).
         const contextWindow = getContextWindow(resolveClientForRole('controller'))
         // ~500 chars base prompt overhead (template, schema, intent, etc.)
+        // trimToFit keeps the string serializer for SIZE accounting only — the
+        // turns themselves are handed to the controller TYPED (Lane A4); no
+        // JSON.stringify round-trip, and nothing re-parses them.
         const trimmedTurns = trimToFit(turns, (t) => JSON.stringify(t), 500, contextWindow)
-        const previousResults = JSON.stringify(trimmedTurns)
 
         // Extract intent from data or use input from view
         // Use ofType('user_message') to get the actual user query, not the router's assistant_message
@@ -294,19 +296,18 @@ export function simpleLoop<T extends SimpleLoopData>(
         // collector, core no longer creates or hands one down.
         let controllerLlmCall: LLMCallRecord | undefined
         try {
-          const controllerResult = await controller(
-            userContent,
+          const controllerResult = await controller({
+            userMessage: userContent,
             intent,
-            previousResults,
+            turns: trimmedTurns,
             turn,
-            config?.schema,
-            undefined,
+            context: config?.schema,
             priorResults,
-            config?.fewShots,
-            multiMode === 'off' ? undefined : multiMode,
+            fewShots: config?.fewShots,
+            multiCallMode: multiMode === 'off' ? undefined : multiMode,
             planContext,
             returnStyle,
-          )
+          })
           // Apply the contract's documented defaults ONCE, here, before the
           // action is recorded or read: `is_final` is optional (#159) and
           // absent means false. Every controller funnels through this point —

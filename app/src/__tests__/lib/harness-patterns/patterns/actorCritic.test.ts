@@ -5,10 +5,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockAction, mockFinalAction, mockCriticResult, mockBAMLClient } from '../../../mocks/baml'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
-import type {
-  ActorControllerFnWithLLMData,
-  CriticFnWithLLMData,
-} from '../../../../lib/harness-patterns/baml-adapters.server'
+import type { CriticFnWithLLMData } from '../../../../lib/harness-patterns/baml-adapters.server'
+import type { ActorFn, ActorInput } from '../../../../lib/harness-patterns/types'
 
 // Mock server-only imports
 vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
@@ -486,7 +484,7 @@ describe('actorCritic criticCadence', () => {
 
   // Minimal scope/view/context builder shared by the cadence tests.
   async function run(
-    mockActor: ActorControllerFnWithLLMData,
+    mockActor: ActorFn,
     mockCritic: CriticFnWithLLMData,
     config: Record<string, unknown>,
   ) {
@@ -655,10 +653,12 @@ describe('actorCritic critic feedback reaches the next attempt', () => {
 
   const REASON = 'the CSV is missing the amount column — re-read it with headers'
 
-  /** previous_attempts is one mutated array across calls, so snapshot per call. */
+  /** previous_attempts is one mutated array across calls, so snapshot per call.
+   *  Lane A4: the attempts arrive on the object seam (`input.previousAttempts`). */
   function snapshottingActor(snapshots: Array<Array<Record<string, unknown>>>) {
     return vi.fn(async (...args: unknown[]) => {
-      const attempts = args[3] as Array<Record<string, unknown>>
+      const input = args[0] as ActorInput
+      const attempts = input.previousAttempts as unknown as Array<Record<string, unknown>>
       snapshots.push(attempts.map((a) => ({ ...a })))
       return {
         action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"read()"}' }),
@@ -668,7 +668,7 @@ describe('actorCritic critic feedback reaches the next attempt', () => {
   }
 
   async function run(
-    actor: ActorControllerFnWithLLMData,
+    actor: ActorFn,
     critic: CriticFnWithLLMData,
     config: Record<string, unknown> = {},
   ) {

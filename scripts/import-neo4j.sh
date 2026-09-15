@@ -50,10 +50,19 @@ if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     exit 1
 fi
 
-# Refuse to silently destroy existing data (use --wipe to confirm)
-NODE_COUNT=$(docker exec ${CONTAINER_NAME} cypher-shell -u ${NEO4J_USER} -p ${NEO4J_PASSWORD} \
-    --format plain "MATCH (n) RETURN count(n);" 2>/dev/null | tail -1 | tr -dc '0-9')
-NODE_COUNT=${NODE_COUNT:-0}
+# Refuse to silently destroy existing data (use --wipe to confirm).
+# Fail CLOSED: if the count cannot be read (auth failure, transient exec
+# failure, …), refuse the import — an unreadable count must never land on the
+# destructive path, which it did before this guard existed (2026-09-14 review:
+# an empty count used to become "0 nodes" and the script wiped a populated
+# graph with no --wipe, no error, exit 0).
+NODE_COUNT=$(docker exec "${CONTAINER_NAME}" cypher-shell -u "${NEO4J_USER}" -p "${NEO4J_PASSWORD}" \
+    --format plain "MATCH (n) RETURN count(n);" | tail -1 | tr -dc '0-9')
+if [ -z "${NODE_COUNT}" ]; then
+    echo "Error: could not read a node count from ${CONTAINER_NAME} (auth? transient exec failure?)."
+    echo "Refusing to import. Pass --wipe only after confirming the graph is disposable."
+    exit 1
+fi
 if [ "${NODE_COUNT}" -gt 0 ] && [ "${WIPE}" -ne 1 ]; then
     echo "Error: ${CONTAINER_NAME} already holds ${NODE_COUNT} nodes."
     echo "This script DELETES ALL DATA in the target graph before importing."
@@ -62,10 +71,12 @@ if [ "${NODE_COUNT}" -gt 0 ] && [ "${WIPE}" -ne 1 ]; then
     exit 1
 fi
 
-# Clear existing data
+# Clear existing data. No `|| echo "Database already empty"` fallback: a
+# failed wipe must fail the script (set -e), not be reported as success while
+# the import runs on top of the old data.
 echo "Clearing existing data..."
 docker exec ${CONTAINER_NAME} cypher-shell -u ${NEO4J_USER} -p ${NEO4J_PASSWORD} \
-    "MATCH (n) DETACH DELETE n;" 2>/dev/null || echo "Database already empty"
+    "MATCH (n) DETACH DELETE n;"
 
 # Import the dump
 # Use --format plain to handle :begin/:commit transaction markers from APOC export

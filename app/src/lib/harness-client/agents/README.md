@@ -84,7 +84,8 @@ serve, because a route can only be one namespace.
 ```typescript
 // app/src/lib/harness-client/agents/general.server.ts
 return [
-  planner<SessionData>(tools.all, { patternId: 'plan', schema }),
+  // Lane A6: the LLM implementations come from harness-baml via bamlPatterns()
+  planner<SessionData>(baml.planner(tools.all), tools.all, { patternId: 'plan', schema }),
   simpleLoop<SessionData>(createLoopControllerAdapter(tools.all), tools.all, {
     patternId: 'execute',
     schema,
@@ -154,8 +155,8 @@ On session close, a background hook distills useful facts from memory into the K
      `b.MemoryCleanupController` are declared nowhere in baml_src/ (see the
      "BAML Functions Needed" table below). And a raw bound BAML function does
      NOT satisfy a pattern's controller contract — pass an adapter factory
-     (e.g. `createLoopControllerAdapter(toolNames)`), which adapts the call
-     order and returns `{ action, llmCall }`. -->
+     (e.g. `createLoopControllerAdapter()` from `harness-baml`), which adapts the
+     call order and returns `{ action, llmCall }`. -->
 
 ```typescript
 // --- Main conversation agent ---
@@ -186,7 +187,7 @@ const sessionTracker: ConfiguredPattern<SessionData> = {
 }
 
 // Router classifies intent; routes dispatches to domain patterns (neo4j, web)
-const routerPattern = router(routeDescriptions)
+const routerPattern = router(routeDescriptions) // default route fn: harness-baml's routeMessageOp
 const routesPattern = routes(domainPatterns)
 
 // Compose: track → route → dispatch → memorize → synthesize

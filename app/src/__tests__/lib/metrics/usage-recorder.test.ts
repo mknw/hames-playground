@@ -36,7 +36,7 @@ import { resetCallLatency, tierLatency } from '../../../lib/metrics/call-latency
 import type { EventMetrics } from '../../../lib/harness-patterns/types'
 // Namespace import: the tier map is read as DATA here, to prove the recorder
 // derives its private-client set from it rather than restating it.
-import * as clients from '../../../lib/harness-patterns/clients.server'
+import * as clients from '../../../lib/harness-baml/clients.server'
 
 const metrics = (over: Partial<EventMetrics> = {}): EventMetrics => ({
   inputUncachedTokens: 100,

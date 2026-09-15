@@ -33,7 +33,7 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
 }))
 
 const mockRouteMessageOp = vi.fn()
-vi.mock('../../../lib/harness-patterns/routing.server', () => ({
+vi.mock('../../../lib/harness-baml/routing.server', () => ({
   routeMessageOp: (...args: unknown[]) => mockRouteMessageOp(...args),
 }))
 

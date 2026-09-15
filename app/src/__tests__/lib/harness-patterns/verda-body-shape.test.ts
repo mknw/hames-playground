@@ -153,7 +153,7 @@ describe('private-tier request bodies', () => {
     // production map, by reading the `model` field off each rendered body — the
     // one field that names the client BAML actually resolved.
     const { VERDA_CLIENT_BY_ROLE, SWITCHED_FUNCTIONS_BY_ROLE } =
-      await import('../../../lib/harness-patterns/clients.server')
+      await import('../../../lib/harness-baml/clients.server')
     const MODEL_OF: Record<string, string> = {
       VerdaQwen: 'Qwen/Qwen3.8-27B-FP8',
       LocalQwenSmall: 'qwen3.5-4b-instruct',
@@ -188,7 +188,7 @@ describe('private-tier request bodies', () => {
     // inversion of what this line pinned until 2026-08-26 (SD-4: the screen
     // moved on an explicit owner decision, so it is checked like every other
     // routed function rather than excluded).
-    const { TIER_SWITCHED_FUNCTIONS } = await import('../../../lib/harness-patterns/clients.server')
+    const { TIER_SWITCHED_FUNCTIONS } = await import('../../../lib/harness-baml/clients.server')
     expect(CALLS.map(([name]) => name).sort()).toEqual([...TIER_SWITCHED_FUNCTIONS].sort())
     expect(CALLS.map(([name]) => name)).toContain('ScreenUntrustedContent')
   })

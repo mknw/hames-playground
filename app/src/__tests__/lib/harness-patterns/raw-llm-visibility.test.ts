@@ -33,7 +33,7 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
  *  overrides it, because a `vi.fn()` BAML mock cannot populate a real
  *  Collector and the invented-route path reads the SUCCESSFUL call's llmCall. */
 const routeMessageOp = vi.fn()
-vi.mock('../../../lib/harness-patterns/routing.server', async (importOriginal) => {
+vi.mock('../../../lib/harness-baml/routing.server', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>
   return { ...actual, routeMessageOp: (...args: unknown[]) => routeMessageOp(...args) }
 })
@@ -114,9 +114,9 @@ const runPattern = async (
 
 beforeEach(async () => {
   vi.clearAllMocks()
-  const actual = await vi.importActual<
-    typeof import('../../../lib/harness-patterns/routing.server')
-  >('../../../lib/harness-patterns/routing.server')
+  const actual = await vi.importActual<typeof import('../../../lib/harness-baml/routing.server')>(
+    '../../../lib/harness-baml/routing.server',
+  )
   routeMessageOp.mockImplementation(actual.routeMessageOp)
 })
 
@@ -127,7 +127,7 @@ beforeEach(async () => {
 describe('adapters: a failed BAML call carries rawOutput through the throw', () => {
   it('LoopController wraps a BamlValidationError as LLMCallError with rawOutput', async () => {
     const { createLoopControllerAdapter, LLMCallError } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
     mockLoopController.mockRejectedValue(
       new BamlValidationError('prompt', RAW_TEXT, 'missing reasoning', 'missing reasoning'),
@@ -141,8 +141,8 @@ describe('adapters: a failed BAML call carries rawOutput through the throw', () 
   })
 
   it('routeMessageOp wraps a failed Router the same way — it used to throw bare', async () => {
-    const { LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
-    const { routeMessageOp } = await import('../../../lib/harness-patterns/routing.server')
+    const { LLMCallError } = await import('../../../lib/harness-baml/baml-adapters.server')
+    const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
     const { Collector: RealCollector } = await import('@boundaryml/baml')
     mockRouter.mockRejectedValue(
@@ -173,7 +173,7 @@ describe('simpleLoop: error events carry the response that caused them', () => {
   }
 
   it('a failed controller call → kind llm_call + rawOutput', async () => {
-    const { LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { LLMCallError } = await import('../../../lib/harness-baml/baml-adapters.server')
     const controller = vi.fn().mockRejectedValue(
       new LLMCallError('BamlValidationError: missing reasoning', {
         functionName: 'LoopController',
@@ -253,7 +253,7 @@ describe('actorCritic: error events carry the actor response', () => {
   }
 
   it('a failed actor call → rawOutput on the error event', async () => {
-    const { LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { LLMCallError } = await import('../../../lib/harness-baml/baml-adapters.server')
     const actor = vi.fn().mockRejectedValue(
       new LLMCallError('BamlValidationError: missing tool_name', {
         functionName: 'ActorController',

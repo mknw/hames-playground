@@ -18,9 +18,9 @@ import {
   withReferences,
   withInjectionGuard,
   Tools,
-  createLoopControllerAdapter,
   type ConfiguredPattern,
 } from '../../harness-patterns'
+import { createLoopControllerAdapter } from '../../harness-baml'
 import { mcpNamespace } from '../../app-tools/mcp-catalog'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'

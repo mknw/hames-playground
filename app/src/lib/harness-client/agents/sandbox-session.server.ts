@@ -18,10 +18,9 @@ import {
   actorCritic,
   compactExecution,
   compactIntent,
-  createActorControllerAdapter,
-  createCriticAdapter,
   type ConfiguredPattern,
 } from '../../harness-patterns'
+import { bamlPatterns, createActorControllerAdapter, createCriticAdapter } from '../../harness-baml'
 import { withSandbox } from '../../sandbox/index.server'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
@@ -139,7 +138,9 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   // runs. This agent is router-less, so without it a follow-up like "I can't
   // find the file" reaches the actor with zero context for which file (#83).
   // On turn 1 (no history) it passes the message through and skips the LLM call.
-  const intent = compactIntent<SessionData>({
+  // Lane A6: the rewrite implementation is REQUIRED injected config now —
+  // the describe-tier implementation comes from `harness-baml`.
+  const intent = compactIntent<SessionData>(bamlPatterns().compactIntent, {
     patternId: 'sandbox-session-intent',
     liveEvents: true,
   })

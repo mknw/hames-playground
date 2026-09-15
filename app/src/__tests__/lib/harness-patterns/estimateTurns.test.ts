@@ -30,7 +30,7 @@ vi.mock('@boundaryml/baml', () => ({
   BamlValidationError: class extends Error {},
 }))
 vi.mock('../../../baml_client', () => ({ b: {} }))
-vi.mock('../../../lib/harness-patterns/routing.server', () => ({
+vi.mock('../../../lib/harness-baml/routing.server', () => ({
   routeMessageOp: vi.fn(),
 }))
 
@@ -72,7 +72,9 @@ describe('estimateTurns', () => {
   it('planner contributes 1 (one call per chain invocation, never a loop)', async () => {
     const { planner } = await import('../../../lib/harness-patterns/patterns/planner.server')
 
-    expect(planner([], { patternId: 'plan' }).estimateTurns?.(settings)).toBe(1)
+    // Lane A6: the plan fn is REQUIRED config; estimateTurns is static, so a
+    // never-called stub stands in for it.
+    expect(planner(vi.fn(), [], { patternId: 'plan' }).estimateTurns?.(settings)).toBe(1)
   })
 
   it('routes: max over branches', async () => {

@@ -21,7 +21,7 @@
  * seam, not on a position in the chain. The moment worth telling the user about
  * is still "a call is about to be made and nothing says the box is up" — not "a
  * verda-tier turn began", which is why {@link noteVerdaCallStarting} is called
- * from `clientOverrideFor()` (`harness-patterns/clients.server.ts`), the per-call
+ * from `clientOverrideFor()` (`harness-baml/clients.server.ts`), the per-call
  * seam that builds a verda-bound options bag, and fires at most once per turn.
  * The move made the notice EARLIER by one call, which is the right direction: on
  * this tier the router is itself a call that waits on the box.

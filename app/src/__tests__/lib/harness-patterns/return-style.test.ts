@@ -196,7 +196,7 @@ async function loadHarness() {
     await import('../../../lib/harness-patterns/patterns/compactExecution.server')
   const { harness } = await import('../../../lib/harness-patterns/harness.server')
   const { createLoopControllerAdapter } =
-    await import('../../../lib/harness-patterns/baml-adapters.server')
+    await import('../../../lib/harness-baml/baml-adapters.server')
   return { simpleLoop, compactExecution, harness, createLoopControllerAdapter }
 }
 

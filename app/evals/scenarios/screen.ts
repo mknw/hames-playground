@@ -47,8 +47,8 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import { resolveClientForRole } from '../../src/lib/harness-patterns/clients.server'
-import { createInjectionScreen } from '../../src/lib/harness-patterns/baml-adapters.server'
+import { resolveClientForRole } from '../../src/lib/harness-baml/clients.server'
+import { createInjectionScreen } from '../../src/lib/harness-baml/baml-adapters.server'
 import { expectedClientFor } from '../client'
 import { check, servedBy, type Check, type Observation, type Scenario } from '../harness'
 

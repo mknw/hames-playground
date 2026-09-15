@@ -51,6 +51,8 @@ Patterns are values, so composing one is ordinary TypeScript — classify, dispa
 to a guarded loop, synthesize:
 
 ```typescript
+import { createLoopControllerAdapter } from '../harness-baml' // the BAML companion (Lane A6)
+
 const tools = await Tools()
 
 const search = simpleLoop(createLoopControllerAdapter(), tools.web ?? [], {

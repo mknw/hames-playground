@@ -70,7 +70,13 @@ async function load() {
   const { createScope } = await import('../../../../lib/harness-patterns/context.server')
   const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
   const { b } = await import('../../../../../baml_client')
-  return { retriever, createScope, createEventView, b }
+  // Lane A6: the rewrite seam is REQUIRED config — the real adapter (which
+  // hits the mocked `b.RetrieveQuery`), what `bamlPatterns().retrieveQuery`
+  // hands an agent.
+  const { createRetrieveQueryAdapter } =
+    await import('../../../../lib/harness-baml/baml-patterns.server')
+  const rewrite = createRetrieveQueryAdapter()
+  return { retriever, rewrite, createScope, createEventView, b }
 }
 
 /** A mock backend that records the query it received and returns canned hits. */
@@ -106,10 +112,10 @@ const userMsg = (content: string, ts = 1): Ev => ({
 async function run(
   scopeData: Record<string, unknown>,
   events: Ev[],
-  config: Parameters<Awaited<ReturnType<typeof load>>['retriever']>[0],
+  config: Omit<Parameters<Awaited<ReturnType<typeof load>>['retriever']>[0], 'rewrite'>,
 ) {
-  const { retriever, createScope, createEventView, b } = await load()
-  const pattern = retriever(config)
+  const { retriever, rewrite, createScope, createEventView, b } = await load()
+  const pattern = retriever({ rewrite, ...config })
   const scope = createScope(PATTERN_ID, scopeData)
   const view = createEventView(ctxOf(events), pattern.config.viewConfig, PATTERN_ID)
   const result = await pattern.fn(scope, view)
@@ -124,16 +130,17 @@ describe('retriever', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('exports a factory that returns a zero-turn ConfiguredPattern', async () => {
-    const { retriever } = await load()
-    const pattern = retriever({ backends: [], patternId: PATTERN_ID })
+    const { retriever, rewrite } = await load()
+    const pattern = retriever({ rewrite, backends: [], patternId: PATTERN_ID })
     expect(pattern.name).toBe('retriever')
     expect(pattern.config.patternId).toBe('retriever')
     expect(pattern.estimateTurns?.({} as never)).toBe(0)
   })
 
   it('stamps backendKinds on its resolved config (the seam pattern-capabilities reads)', async () => {
-    const { retriever } = await load()
+    const { retriever, rewrite } = await load()
     const pattern = retriever({
+      rewrite,
       backends: [mockBackend('redis', []), mockBackend('supabase', [])],
       patternId: PATTERN_ID,
     })
@@ -209,10 +216,15 @@ describe('retriever', () => {
   })
 
   it('falls back to the raw message + tracks an error when RetrieveQuery throws', async () => {
-    const { retriever, createScope, createEventView, b } = await load()
+    const { retriever, rewrite, createScope, createEventView, b } = await load()
     vi.mocked(b.RetrieveQuery).mockRejectedValueOnce(new Error('describe model down'))
     const backend = mockBackend('redis', [hit('redis', 'a', 0.1)])
-    const pattern = retriever({ backends: [backend], generateQuery: true, patternId: PATTERN_ID })
+    const pattern = retriever({
+      rewrite,
+      backends: [backend],
+      generateQuery: true,
+      patternId: PATTERN_ID,
+    })
     const scope = createScope(PATTERN_ID, {})
     const view = createEventView(
       ctxOf([userMsg('first', 1), userMsg('again', 2)]),

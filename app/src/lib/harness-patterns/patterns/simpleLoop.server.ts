@@ -34,7 +34,6 @@ import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import { trimToFit } from '../token-budget.server'
 import type { ControllerFn } from '../types'
-import { dedupByRefId, annotateExpansions } from '../baml-adapters.server'
 import type { LLMCallRecord } from '../types'
 import { LLMCallError } from '../types'
 import { formatPlanContext, type PlannerData } from './planner.server'
@@ -164,6 +163,42 @@ export interface SimpleLoopData {
  *   commitStrategy: 'on-success'
  * })
  */
+// ============================================================================
+// PriorResult Merging — used by simpleLoop to combine `withReferences`
+// attachments with the existing `priorTurnCount` mechanism, and to annotate
+// each ref with the turn it was first inlined via ref:<id>.
+// ============================================================================
+
+/** Drop duplicate `ref_id` entries; first occurrence wins. */
+export function dedupByRefId(refs: PriorResult[]): PriorResult[] {
+  const seen = new Set<string>()
+  const out: PriorResult[] = []
+  for (const r of refs) {
+    if (seen.has(r.ref_id)) continue
+    seen.add(r.ref_id)
+    out.push(r)
+  }
+  return out
+}
+
+/** Annotate each ref with the **first** `turn.n` whose `expansions[]` contains
+ *  its `ref_id`. Refs never expanded get `expanded_in_turn: null` (explicitly,
+ *  not absent) — MiniJinja distinguishes None from undefined, and `is none`
+ *  in the prompt template only matches None. If we left the field absent the
+ *  template's `is not none` test would incorrectly fire for unannotated refs. */
+export function annotateExpansions(refs: PriorResult[], turns: LoopTurn[]): PriorResult[] {
+  const firstTurn = new Map<string, number>()
+  for (const t of turns) {
+    for (const e of t.expansions ?? []) {
+      if (!firstTurn.has(e.ref_id)) firstTurn.set(e.ref_id, t.n)
+    }
+  }
+  return refs.map((r) => ({
+    ...r,
+    expanded_in_turn: firstTurn.get(r.ref_id) ?? null,
+  }))
+}
+
 export function simpleLoop<T extends SimpleLoopData>(
   controller: ControllerFn,
   tools: string[],

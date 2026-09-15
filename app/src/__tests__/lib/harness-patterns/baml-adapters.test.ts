@@ -54,7 +54,7 @@ vi.mock('../../../../baml_client', () => ({
  * exist to satisfy the fail-closed check the scope runs before `fn`.
  */
 async function withVerdaTier<T>(fn: () => Promise<T>): Promise<T> {
-  const clients = await import('../../../lib/harness-patterns/clients.server')
+  const clients = await import('../../../lib/harness-baml/clients.server')
   // BOTH endpoints: the private tier is the 27B plus the 4B summarizer, and a
   // scope naming it without the second is refused outright (2026-08-26).
   const KEYS = ['VERDA_INFERENCE_ENDPOINT', 'VERDA_INFERENCE_API_KEY', 'SMALL_LLM_BASE_URL']
@@ -80,7 +80,7 @@ describe('createLoopControllerAdapter', () => {
 
   it('should create a controller function', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
     expect(controller).toBeDefined()
@@ -89,7 +89,7 @@ describe('createLoopControllerAdapter', () => {
 
   it('should return action and llmCall data', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
 
@@ -101,7 +101,7 @@ describe('createLoopControllerAdapter', () => {
 
   it('should call LoopController with correct parameters', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter('Custom context')
 
@@ -115,7 +115,7 @@ describe('createLoopControllerAdapter', () => {
 
   it('should pass contextPrefix as context when no schema', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter('Domain instructions here')
 
@@ -128,7 +128,7 @@ describe('createLoopControllerAdapter', () => {
 
   it('should combine contextPrefix and schema in context', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter('Domain instructions')
 
@@ -143,7 +143,7 @@ describe('createLoopControllerAdapter', () => {
 
   it('sends planContext as its own BAML argument, never merged into context (#27)', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter('Domain instructions')
 
@@ -175,7 +175,7 @@ describe('createLoopControllerAdapter', () => {
 
   it('should pass undefined context when neither contextPrefix nor schema', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
 
@@ -194,7 +194,7 @@ describe('createActorControllerAdapter', () => {
 
   it('should create a controller function', async () => {
     const { createActorControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createActorControllerAdapter(['code-mode', 'Return'])
     expect(controller).toBeDefined()
@@ -203,7 +203,7 @@ describe('createActorControllerAdapter', () => {
 
   it('should return action and llmCall data', async () => {
     const { createActorControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createActorControllerAdapter(['code-mode', 'Return'])
 
@@ -215,7 +215,7 @@ describe('createActorControllerAdapter', () => {
 
   it('should prepend planContext ahead of its own contextPrefix (#27)', async () => {
     const { createActorControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createActorControllerAdapter({
       toolNames: ['code-mode'],
@@ -249,11 +249,10 @@ describe('createPlannerAdapter', () => {
   })
 
   it('returns the plan and passes the resolved tool catalog + context', async () => {
-    const { createPlannerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { createPlannerAdapter } = await import('../../../lib/harness-baml/baml-adapters.server')
 
     const plannerFn = createPlannerAdapter(['read_neo4j_cypher'])
-    const result = await plannerFn('msg', 'intent', undefined, 'Node: Person')
+    const result = await plannerFn('msg', 'intent', 'Node: Person')
 
     expect(result.plan).toEqual(PLAN)
     const [userMessage, intent, tools, context] = mockPlanner.mock.calls[0]
@@ -276,7 +275,7 @@ describe('createPlannerAdapter', () => {
     // outage guard gets a chance to refuse.
     const health = await import('../../../lib/harness-patterns/gateway-health.server')
     const { createPlannerAdapter, invalidateToolDescriptions } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     invalidateToolDescriptions()
     health.__resetGatewayHealth()
@@ -306,7 +305,7 @@ describe('createPlannerAdapter', () => {
 
   it('propagates a non-recoverable failure as an LLMCallError', async () => {
     const { createPlannerAdapter, LLMCallError } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     mockPlanner.mockRejectedValue(new Error('planner unavailable'))
     const plannerFn = createPlannerAdapter(['read_neo4j_cypher'])
@@ -317,8 +316,7 @@ describe('createPlannerAdapter', () => {
   })
 
   it('reports the tool count the model was actually shown', async () => {
-    const { createPlannerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { createPlannerAdapter } = await import('../../../lib/harness-baml/baml-adapters.server')
 
     // 'ghost_tool' resolves to no description, so the model sees 2 of 3 names.
     const plannerFn = createPlannerAdapter([
@@ -339,8 +337,7 @@ describe('createPlannerAdapter', () => {
     // options bag must carry the collector and NOTHING else. A stray
     // `client` here would silently route the largest prompt in the repo
     // somewhere planner.baml never declared.
-    const { createPlannerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { createPlannerAdapter } = await import('../../../lib/harness-baml/baml-adapters.server')
 
     await createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent')
 
@@ -356,8 +353,7 @@ describe('createCriticAdapter', () => {
   })
 
   it('should create a critic function', async () => {
-    const { createCriticAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { createCriticAdapter } = await import('../../../lib/harness-baml/baml-adapters.server')
 
     const critic = createCriticAdapter()
     expect(critic).toBeDefined()
@@ -365,8 +361,7 @@ describe('createCriticAdapter', () => {
   })
 
   it('should return result and llmCall data', async () => {
-    const { createCriticAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { createCriticAdapter } = await import('../../../lib/harness-baml/baml-adapters.server')
 
     const critic = createCriticAdapter()
 
@@ -390,7 +385,7 @@ describe('the tool list rides the seam (L14, #225 Lane B3)', () => {
 
   it("the object seam's `tools` is what reaches the BAML call", async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
     await controller({
@@ -412,7 +407,7 @@ describe('the tool list rides the seam (L14, #225 Lane B3)', () => {
 
   it('the legacy positional form advertises nothing from the gateway (it predates the field)', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
     await controller('query', 'intent', '[]', 0)
@@ -437,7 +432,7 @@ describe('legacy positional form: previous_results parsing (Lane A4)', () => {
 
   it('should handle empty array previous_results', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
 
@@ -447,7 +442,7 @@ describe('legacy positional form: previous_results parsing (Lane A4)', () => {
 
   it('should handle array of results', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
 
@@ -463,7 +458,7 @@ describe('legacy positional form: previous_results parsing (Lane A4)', () => {
 
   it('THROWS on invalid JSON — the silent-[] catch is gone', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
 
@@ -475,7 +470,7 @@ describe('legacy positional form: previous_results parsing (Lane A4)', () => {
 
   it('THROWS on non-array JSON — the silent-[] catch is gone', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
 
@@ -486,7 +481,7 @@ describe('legacy positional form: previous_results parsing (Lane A4)', () => {
 
   it('THROWS on an empty previous_results string — the silent-[] catch is gone', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
 
@@ -501,8 +496,7 @@ describe('extractLLMCallData', () => {
   })
 
   it('should extract all fields from a collector with full data', async () => {
-    const { extractLLMCallData } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { extractLLMCallData } = await import('../../../lib/harness-baml/baml-adapters.server')
 
     const collector = {
       last: {
@@ -546,8 +540,7 @@ describe('extractLLMCallData', () => {
   })
 
   it('should return undefined when collector has no last property', async () => {
-    const { extractLLMCallData } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { extractLLMCallData } = await import('../../../lib/harness-baml/baml-adapters.server')
 
     const collector = { last: undefined }
 
@@ -557,8 +550,7 @@ describe('extractLLMCallData', () => {
   })
 
   it('should handle missing provider and clientName', async () => {
-    const { extractLLMCallData } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { extractLLMCallData } = await import('../../../lib/harness-baml/baml-adapters.server')
 
     const collector = {
       last: {
@@ -576,8 +568,7 @@ describe('extractLLMCallData', () => {
   })
 
   it('should handle httpRequest body as object', async () => {
-    const { extractLLMCallData } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { extractLLMCallData } = await import('../../../lib/harness-baml/baml-adapters.server')
 
     const bodyObj = { messages: [{ role: 'user', content: 'test' }] }
     const collector = {
@@ -594,8 +585,7 @@ describe('extractLLMCallData', () => {
   })
 
   it('should handle missing usage data', async () => {
-    const { extractLLMCallData } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { extractLLMCallData } = await import('../../../lib/harness-baml/baml-adapters.server')
 
     const collector = {
       last: {
@@ -611,8 +601,7 @@ describe('extractLLMCallData', () => {
   })
 
   it('should handle missing calls array', async () => {
-    const { extractLLMCallData } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { extractLLMCallData } = await import('../../../lib/harness-baml/baml-adapters.server')
 
     const collector = {
       last: {
@@ -629,8 +618,7 @@ describe('extractLLMCallData', () => {
   })
 
   it('should call body.text() when httpRequest.body is an HttpBody class instance', async () => {
-    const { extractLLMCallData } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { extractLLMCallData } = await import('../../../lib/harness-baml/baml-adapters.server')
 
     // Mirrors @boundaryml/baml's HttpBody: class instance with no enumerable own
     // props — JSON.stringify would yield "{}", which is the regression we're guarding against
@@ -661,8 +649,7 @@ describe('extractLLMCallData', () => {
   })
 
   it('should prefer the selected call when fallbacks produce multiple entries', async () => {
-    const { extractLLMCallData } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { extractLLMCallData } = await import('../../../lib/harness-baml/baml-adapters.server')
 
     const failedBody = Object.create({ text: () => 'FAILED_BODY' })
     const goodBody = Object.create({ text: () => 'GOOD_BODY' })
@@ -694,8 +681,7 @@ describe('extractLLMCallData', () => {
   })
 
   it('should populate promptTemplate with the Jinja template (placeholders intact)', async () => {
-    const { extractLLMCallData } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { extractLLMCallData } = await import('../../../lib/harness-baml/baml-adapters.server')
 
     const collector = {
       last: {
@@ -730,8 +716,7 @@ describe('describeToolResultOp', () => {
   })
 
   it('should return summary from ResultDescribe', async () => {
-    const { describeToolResultOp } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { describeToolResultOp } = await import('../../../lib/harness-baml/baml-adapters.server')
     mockResultDescribe.mockResolvedValue('Found 3 nodes in the graph.')
 
     const result = await describeToolResultOp(
@@ -768,8 +753,7 @@ describe('describeToolResultOp', () => {
     // Asserting the specific client rather than "some override" is what makes
     // this the test that would catch summarization being sent to the 27B (or to
     // Anthropic) on a private-tier turn.
-    const { describeToolResultOp } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { describeToolResultOp } = await import('../../../lib/harness-baml/baml-adapters.server')
     mockResultDescribe.mockResolvedValue('ok')
 
     await withVerdaTier(() => describeToolResultOp('search', '{}', '', 'data'))
@@ -778,8 +762,7 @@ describe('describeToolResultOp', () => {
   })
 
   it('should return empty string on failure', async () => {
-    const { describeToolResultOp } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { describeToolResultOp } = await import('../../../lib/harness-baml/baml-adapters.server')
     mockResultDescribe.mockRejectedValue(new Error('Model unavailable'))
 
     const result = await describeToolResultOp('search', '{}', '', 'data')
@@ -800,7 +783,7 @@ describe('describeToolResultsBatchOp', () => {
 
   it('maps each echoed id to its summary and renames args for BAML', async () => {
     const { describeToolResultsBatchOp } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     mockResultDescribeBatch.mockResolvedValue({
       summaries: [
         { id: '2', summary: 'Fetched B.' },
@@ -832,7 +815,7 @@ describe('describeToolResultsBatchOp', () => {
     // but a per-role grep. It is also the call that carries the most user data
     // in one prompt (SD-10: several tool results, verbatim).
     const { describeToolResultsBatchOp } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     mockResultDescribeBatch.mockResolvedValue({ summaries: [{ id: '1', summary: 'A.' }] })
 
     await withVerdaTier(() => describeToolResultsBatchOp(items))
@@ -842,7 +825,7 @@ describe('describeToolResultsBatchOp', () => {
 
   it('omits ids the model dropped or answered blank', async () => {
     const { describeToolResultsBatchOp } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     mockResultDescribeBatch.mockResolvedValue({
       summaries: [{ id: '1', summary: '   ' }],
     })
@@ -855,7 +838,7 @@ describe('describeToolResultsBatchOp', () => {
 
   it('discards summaries for ids that were never requested', async () => {
     const { describeToolResultsBatchOp } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     mockResultDescribeBatch.mockResolvedValue({
       summaries: [
         { id: '1', summary: 'Found A.' },
@@ -870,7 +853,7 @@ describe('describeToolResultsBatchOp', () => {
 
   it('returns an empty map on failure so the caller can retry per item', async () => {
     const { describeToolResultsBatchOp } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     mockResultDescribeBatch.mockRejectedValue(new Error('Model unavailable'))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
@@ -884,7 +867,7 @@ describe('describeToolResultsBatchOp', () => {
 
   it('makes no call at all for an empty batch', async () => {
     const { describeToolResultsBatchOp } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const byId = await describeToolResultsBatchOp([])
 
@@ -905,7 +888,7 @@ describe('LoopController error propagation', () => {
     // truncation / empty-completion retry is a different path and still fires
     // — see truncation-retry.test.ts.)
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController.mockRejectedValue(
@@ -920,7 +903,7 @@ describe('LoopController error propagation', () => {
 
   it('passes no client override on the primary call', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     mockLoopController.mockResolvedValue(mockFinalAction('ok'))
     const { Collector } = await import('@boundaryml/baml')
     const collector = new Collector('test')
@@ -938,7 +921,7 @@ describe('LoopController error propagation', () => {
 
   it('should propagate non-BamlValidationError errors', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     mockLoopController.mockRejectedValue(new Error('Network timeout'))
 
@@ -957,7 +940,7 @@ describe('priorResults parameter passing', () => {
 
   it('should pass priorResults as 6th argument to LoopController', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
 
@@ -973,7 +956,7 @@ describe('priorResults parameter passing', () => {
 
   it('should pass undefined priorResults when not provided', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
 
@@ -993,7 +976,7 @@ describe('fewShots parameter passing', () => {
 
   it('should pass fewShots as 7th argument to LoopController', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
 
@@ -1016,7 +999,7 @@ describe('fewShots parameter passing', () => {
 
   it('should pass undefined fewShots when not provided', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
 
@@ -1029,7 +1012,8 @@ describe('fewShots parameter passing', () => {
 
 describe('dedupByRefId', () => {
   it('drops duplicates, first occurrence wins', async () => {
-    const { dedupByRefId } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { dedupByRefId } =
+      await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
     const out = dedupByRefId([
       { ref_id: 'a', tool: 'x', summary: 'first' },
       { ref_id: 'b', tool: 'y', summary: 'b' },
@@ -1041,7 +1025,8 @@ describe('dedupByRefId', () => {
   })
 
   it('returns empty array when input is empty', async () => {
-    const { dedupByRefId } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { dedupByRefId } =
+      await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
     expect(dedupByRefId([])).toEqual([])
   })
 })
@@ -1049,7 +1034,7 @@ describe('dedupByRefId', () => {
 describe('annotateExpansions', () => {
   it('sets expanded_in_turn to first turn whose expansions contain the ref_id', async () => {
     const { annotateExpansions } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
     const refs = [
       { ref_id: 'a', tool: 'x', summary: 's' },
       { ref_id: 'b', tool: 'y', summary: 's' },
@@ -1079,7 +1064,7 @@ describe('annotateExpansions', () => {
 
   it('always sets expanded_in_turn (null when no turns have expansions)', async () => {
     const { annotateExpansions } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
     const refs = [{ ref_id: 'a', tool: 'x', summary: 's' }]
     const out = annotateExpansions(refs, [{ n: 0 }, { n: 1, expansions: [] }])
     expect(out[0].expanded_in_turn).toBeNull()
@@ -1102,7 +1087,7 @@ describe('LLMCallError — failed LLM call capture', () => {
 
   it('throws LLMCallError carrying promptTemplate and variables when LoopController fails', async () => {
     const { createLoopControllerAdapter, LLMCallError } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     // Non-BamlValidationError fails on first attempt (no adapter retry):
     // adapter must wrap in LLMCallError with the captured context. The
@@ -1168,7 +1153,7 @@ describe('LLMCallError — failed LLM call capture', () => {
 
   it('LLMCallError omits rawInput when the failure is pre-call (collector never recorded a call)', async () => {
     const { createLoopControllerAdapter, LLMCallError } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     // Pre-call failure: collector stays empty (no last entry). Adapter
     // should still throw LLMCallError with promptTemplate + variables;
@@ -1202,7 +1187,7 @@ describe('LLMCallError — failed LLM call capture', () => {
     // immediately — the panel gets the prompt/variables drill-down and the
     // failure stays visible instead of being retried on a weaker model.
     const { createLoopControllerAdapter, LLMCallError } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController.mockRejectedValue(
@@ -1228,7 +1213,7 @@ describe('LLMCallError — failed LLM call capture', () => {
 
   it('throws LLMCallError from ActorController on BAML failure', async () => {
     const { createActorControllerAdapter, LLMCallError } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     mockActorController.mockRejectedValue(new Error('Provider 5xx'))
 
@@ -1250,7 +1235,7 @@ describe('LLMCallError — failed LLM call capture', () => {
 
   it('throws LLMCallError from Critic on BAML failure', async () => {
     const { createCriticAdapter, LLMCallError } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     mockCritic.mockRejectedValue(new Error('Critic timed out'))
 
@@ -1274,7 +1259,7 @@ describe('LLMCallError — failed LLM call capture', () => {
 describe('extractFailureLLMCallData', () => {
   it('returns LLMCallData with promptTemplate and variables when collector is empty', async () => {
     const { extractFailureLLMCallData } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const result = extractFailureLLMCallData(
       undefined,
@@ -1294,7 +1279,7 @@ describe('extractFailureLLMCallData', () => {
 
   it('returns the same shape as success when collector has captured a call', async () => {
     const { extractFailureLLMCallData } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const bodyText = '{"messages":[{"role":"user","content":"hello"}]}'
     const httpBody = Object.create({ text: () => bodyText })
@@ -1354,7 +1339,7 @@ describe('sandbox tool descriptions in prompt', () => {
 
   it('prepends sandbox tools to LoopController prompt when scope is active', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     const { withTransport } = await import('../../../lib/harness-patterns/tool-transport.server')
 
     const controller = createLoopControllerAdapter()
@@ -1380,7 +1365,7 @@ describe('sandbox tool descriptions in prompt', () => {
 
   it('does not include sandbox tools when no scope is active (LoopController)', async () => {
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
     await controller({
@@ -1402,7 +1387,7 @@ describe('sandbox tool descriptions in prompt', () => {
     // the innermost transport that owns it, so showing the outer one's
     // description beside it would document a machine the call never reaches.
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     const { withTransport } = await import('../../../lib/harness-patterns/tool-transport.server')
 
     const scope = (id: string, description: string) => ({
@@ -1431,7 +1416,7 @@ describe('sandbox tool descriptions in prompt', () => {
 
   it('prepends sandbox tools to ActorController prompt when scope is active', async () => {
     const { createActorControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     const { withTransport } = await import('../../../lib/harness-patterns/tool-transport.server')
 
     const controller = createActorControllerAdapter(['code-mode', 'Return'])
@@ -1457,8 +1442,7 @@ describe('warnIfCollectorEmpty', () => {
   })
 
   it('returns false and stays silent when no collector was passed', async () => {
-    const { warnIfCollectorEmpty } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { warnIfCollectorEmpty } = await import('../../../lib/harness-baml/baml-adapters.server')
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     expect(warnIfCollectorEmpty(undefined, 'LoopController')).toBe(false)
@@ -1467,8 +1451,7 @@ describe('warnIfCollectorEmpty', () => {
   })
 
   it('returns false and stays silent when the collector captured a call', async () => {
-    const { warnIfCollectorEmpty } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { warnIfCollectorEmpty } = await import('../../../lib/harness-baml/baml-adapters.server')
     const { Collector } = await import('@boundaryml/baml')
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
@@ -1482,8 +1465,7 @@ describe('warnIfCollectorEmpty', () => {
   })
 
   it('warns naming the BAML function when a collector came back empty', async () => {
-    const { warnIfCollectorEmpty } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { warnIfCollectorEmpty } = await import('../../../lib/harness-baml/baml-adapters.server')
     const { Collector } = await import('@boundaryml/baml')
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
@@ -1499,7 +1481,7 @@ describe('warnIfCollectorEmpty', () => {
     // This is the #154 shape: a stale client drops the options object, so the
     // call succeeds while the collector never reaches BAML.
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     const { Collector } = await import('@boundaryml/baml')
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
@@ -1514,8 +1496,7 @@ describe('warnIfCollectorEmpty', () => {
   })
 
   it('fires for Critic too, naming Critic', async () => {
-    const { createCriticAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { createCriticAdapter } = await import('../../../lib/harness-baml/baml-adapters.server')
     const { Collector } = await import('@boundaryml/baml')
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
@@ -1530,7 +1511,7 @@ describe('warnIfCollectorEmpty', () => {
     // A pre-request failure (DNS, 5xx before a body) leaves the collector
     // empty for a benign reason, so the failure path must not cry wolf.
     const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     const { Collector } = await import('@boundaryml/baml')
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
@@ -1549,7 +1530,7 @@ describe('warnIfCollectorEmpty', () => {
 describe('extractPromptTemplates', () => {
   it('matches a signature whose comment contains a parenthesis', async () => {
     const { extractPromptTemplates } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     const source = `function Planner(
       user_message: string, // the ask (see #27)
     ) -> PlanResult {

@@ -4,7 +4,7 @@
  *
  * CI has no access to that endpoint, so everything here is hermetic: it pins
  * the *routing decision*, not the model. The live proof is manual —
- * `src/lib/harness-patterns/scripts/smoke-verda.ts`.
+ * `src/lib/harness-baml/scripts/smoke-verda.ts`.
  *
  * What is pinned, and why each one is the failure that matters:
  *   - flag unset ⇒ NOTHING changes. Every role still resolves to its Anthropic
@@ -44,7 +44,7 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-import type { BamlRole } from '../../../lib/harness-patterns/clients.server'
+import type { BamlRole } from '../../../lib/harness-baml/clients.server'
 
 const ENV_KEYS = [
   'USE_VERDA_INFERENCE',
@@ -115,7 +115,7 @@ function enable(): void {
 
 async function load() {
   vi.resetModules()
-  return await import('../../../lib/harness-patterns/clients.server')
+  return await import('../../../lib/harness-baml/clients.server')
 }
 
 beforeEach(() => {
@@ -202,7 +202,7 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
 
   it('trims Verda-routed prompts against the 131K server window, not 200K', async () => {
     const { resolveClientForRole } = await load()
-    const { getContextWindow } = await import('../../../lib/harness-patterns/clients.server')
+    const { getContextWindow } = await import('../../../lib/harness-baml/clients.server')
 
     // vLLM ran with `--max-model-len 131072`; a prompt sized for 200K is
     // rejected outright, so this is the difference between "the flag works"

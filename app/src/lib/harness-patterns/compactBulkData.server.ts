@@ -18,20 +18,16 @@
 
 import { assertServerOnImport } from './assert.server'
 import { enrichToolResult } from './context.server'
-import {
-  describeToolResultOp,
-  describeToolResultsBatchOp,
-  type DescribeBatchItem,
-} from './baml-adapters.server'
 import type {
   UnifiedContext,
   ToolResultEventData,
   ToolCallEventData,
   ControllerActionEventData,
+  BulkDescribeFns,
+  DescribeBatchItem,
 } from './types'
 import { getRequestSettings } from '../settings-context.server'
 import { estimateTokens } from './token-budget.server'
-import { limitsFor } from './clients.server'
 
 assertServerOnImport()
 
@@ -61,12 +57,16 @@ const BATCH_OUTPUT_SHARE = 0.5
  * batching exists to avoid. `CLIENT_MAX_OUTPUT_TOKENS` keys the resolved chain
  * names to conservative floors (the weakest leaf), so this sizes batches to
  * worst-case routing whatever the chain becomes.
+ *
+ * Lane A6: the cap is read off the INJECTED batch fn's own `limits()` — the
+ * adapter implementations always provide it; an unknown (fn without limits)
+ * falls back to the fixed ceiling, never to a guessed cap.
  */
-export function maxBatchItems(): number {
-  // The CHAIN FLOOR (Lane A5): limitsFor resolves the role's current client and
-  // reads its floor from CLIENT_MAX_OUTPUT_TOKENS — the same lookup this used
-  // to do inline, now through the app-side seam so core stops reading the table.
-  const cap = limitsFor('describe').maxOutputTokens
+export function maxBatchItems(describeBatch?: BulkDescribeFns['describeBatch']): number {
+  // The CHAIN FLOOR (Lane A5): the adapter implementation resolves the role's
+  // current client per call and reads its floor from CLIENT_MAX_OUTPUT_TOKENS
+  // — core no longer reads the table.
+  const cap = describeBatch?.limits?.().maxOutputTokens
   if (cap === undefined) return MAX_BATCH_ITEMS
   const affordable = Math.floor((cap * BATCH_OUTPUT_SHARE) / SUMMARY_OUTPUT_TOKENS)
   return Math.min(MAX_BATCH_ITEMS, Math.max(1, affordable))
@@ -119,11 +119,15 @@ function batchTargets(
  *
  * @param ctx - The live UnifiedContext object (mutated in-place)
  * @param onPersist - Callback to re-serialize the context to session storage
+ * @param fns - REQUIRED (Lane A6 seam): the two describe implementations —
+ *   pass `bamlPatterns()` from `harness-baml`. Core hosts no BAML default.
  */
 export async function compactBulkData(
   ctx: UnifiedContext,
   onPersist: () => Promise<void>,
+  fns: BulkDescribeFns,
 ): Promise<void> {
+  const { describe: describeFn, describeBatch: describeBatchFn } = fns
   const events = ctx.events
 
   // Find events from the current turn (since last user_message)
@@ -188,12 +192,7 @@ export async function compactBulkData(
   }
 
   const summarizeOne = async (target: CompactionTarget): Promise<void> => {
-    const summary = await describeToolResultOp(
-      target.tool,
-      target.toolArgs,
-      target.reasoning,
-      target.result,
-    )
+    const summary = await describeFn(target.tool, target.toolArgs, target.reasoning, target.result)
     if (summary) enrichToolResult(ctx, target.eventId, { summary })
   }
 
@@ -202,7 +201,7 @@ export async function compactBulkData(
     // single-item prompt is the one tuned for it.
     if (batch.length === 1) return summarizeOne(batch[0])
 
-    const byId = await describeToolResultsBatchOp(batch)
+    const byId = await describeBatchFn(batch)
     const unanswered: CompactionTarget[] = []
     for (const target of batch) {
       const summary = byId.get(target.id)
@@ -216,10 +215,13 @@ export async function compactBulkData(
   }
 
   if (targets.length > 0) {
-    const budgetTokens = Math.floor(limitsFor('describe').contextWindow * BATCH_INPUT_WINDOW_SHARE)
+    // The input budget comes from the batch fn's own `limits()` (Lane A6).
+    const budgetTokens = Math.floor(
+      (describeBatchFn.limits?.().contextWindow ?? 16_384) * BATCH_INPUT_WINDOW_SHARE,
+    )
     // Batches run concurrently — they're independent calls on a fast model.
     await Promise.allSettled(
-      batchTargets(targets, budgetTokens, maxBatchItems()).map(summarizeBatch),
+      batchTargets(targets, budgetTokens, maxBatchItems(describeBatchFn)).map(summarizeBatch),
     )
   }
 

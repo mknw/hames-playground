@@ -22,7 +22,7 @@ vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
 }))
 
 const mockRouteMessageOp = vi.fn()
-vi.mock('../../../../lib/harness-patterns/routing.server', () => ({
+vi.mock('../../../../lib/harness-baml/routing.server', () => ({
   routeMessageOp: (...args: unknown[]) => mockRouteMessageOp(...args),
 }))
 
@@ -88,7 +88,21 @@ async function load() {
   const { createScope } = await import('../../../../lib/harness-patterns/context.server')
   const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
   const { b } = await import('../../../../../baml_client')
-  return { router, routes, compactIntent, retriever, createScope, createEventView, b }
+  // Lane A6: the rewrite/compactIntent seams are REQUIRED config — wire the
+  // real adapters (they hit the mocked `b.*`), what `bamlPatterns()` hands.
+  const { createCompactIntentAdapter, createRetrieveQueryAdapter } =
+    await import('../../../../lib/harness-baml/baml-patterns.server')
+  return {
+    router,
+    routes,
+    compactIntent,
+    compactIntentFn: createCompactIntentAdapter(),
+    retriever,
+    rewrite: createRetrieveQueryAdapter(),
+    createScope,
+    createEventView,
+    b,
+  }
 }
 
 // ============================================================================
@@ -211,7 +225,7 @@ describe('compactIntent: cross-turn intent pollution (SA-H3)', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('a turn-N failure does not hand the actor turn N-1’s brief', async () => {
-    const { compactIntent, createScope, createEventView, b } = await load()
+    const { compactIntent, compactIntentFn, createScope, createEventView, b } = await load()
     vi.mocked(b.CompactIntent).mockRejectedValueOnce(new Error('describe model unavailable'))
 
     const events = [
@@ -219,7 +233,7 @@ describe('compactIntent: cross-turn intent pollution (SA-H3)', () => {
       assistantMsg('Done — /work/fib.py', 2),
       userMsg('now delete it', 3),
     ]
-    const pattern = compactIntent({ patternId: 'compactIntent' })
+    const pattern = compactIntent(compactIntentFn, { patternId: 'compactIntent' })
     // Turn N-1's brief, carried across the turn boundary on scope.data.
     const scope = createScope('compactIntent', {
       intent: 'Write a Fibonacci script to /work/fib.py',
@@ -237,8 +251,8 @@ describe('compactIntent: cross-turn intent pollution (SA-H3)', () => {
   })
 
   it('clears the stale intent when the view holds no message to rewrite', async () => {
-    const { compactIntent, createScope, createEventView, b } = await load()
-    const pattern = compactIntent({ patternId: 'compactIntent' })
+    const { compactIntent, compactIntentFn, createScope, createEventView, b } = await load()
+    const pattern = compactIntent(compactIntentFn, { patternId: 'compactIntent' })
     const scope = createScope('compactIntent', { intent: 'a brief from an earlier turn' })
     const view = createEventView(ctxOf([]), pattern.config.viewConfig, 'compactIntent')
 
@@ -257,7 +271,7 @@ describe('retriever: cross-turn matches pollution (sf-L4)', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('empties matches when the outer catch fires', async () => {
-    const { retriever, createScope, createEventView } = await load()
+    const { retriever, rewrite, createScope, createEventView } = await load()
 
     // Force a throw between the backend fan-out and the `scope.data.matches`
     // write: the merge step reads `score` on every hit, so a hit whose score
@@ -277,7 +291,7 @@ describe('retriever: cross-turn matches pollution (sf-L4)', () => {
       search: async () => [poisoned, { backend: 'redis', id: 'ok', content: 'c', score: 0.1 }],
     }
 
-    const pattern = retriever({ backends: [backend], patternId: 'retriever' })
+    const pattern = retriever({ backends: [backend], patternId: 'retriever', rewrite })
     // Turn N-1's matches, carried across the turn boundary.
     const scope = createScope('retriever', {
       matches: [{ backend: 'redis', id: 'stale', content: 'last turn’s chunk', score: 0.2 }],

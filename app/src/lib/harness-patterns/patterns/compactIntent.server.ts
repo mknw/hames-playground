@@ -25,7 +25,6 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { Collector } from '@boundaryml/baml'
 import type {
   PatternScope,
   EventView,
@@ -37,13 +36,13 @@ import type {
   IntentCompactedEventData,
   ErrorEventData,
   LLMCallData,
+  CompactIntentFn,
 } from '../types'
+import { LLMCallError } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
 import { getErrorHint } from '../error-hints'
 import { stripThinkBlocks } from '../content-transforms'
 import { trimToFit } from '../token-budget.server'
-import { extractLLMCallData, extractFailureLLMCallData } from '../baml-adapters.server'
-import { clientOverrideFor, limitsFor } from '../clients.server'
 
 assertServerOnImport()
 
@@ -56,12 +55,16 @@ export interface CompactIntentData {
 /**
  * Create a compactIntent pattern.
  *
+ * @param compactIntentFn - REQUIRED (Lane A6 seam): the intent-rewrite
+ *   implementation — `bamlPatterns().compactIntent` from `harness-baml`, or
+ *   your own. Core hosts no BAML default any more, so there is no fallback.
  * @param config - Optional pattern configuration. The default `viewConfig`
  *   reads the last 5 user turns of message history (think-blocks stripped);
  *   override it to widen/narrow the window.
  * @returns ConfiguredPattern ready for chain
  */
 export function compactIntent<T extends CompactIntentData>(
+  compactIntentFn: CompactIntentFn,
   config?: CompactIntentConfig,
 ): ConfiguredPattern<T> {
   // Default: cross-turn message history of the last 5 turns, messages only —
@@ -88,9 +91,6 @@ export function compactIntent<T extends CompactIntentData>(
   }
 
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
-    let collector: Collector | undefined
-    let startTime: number | undefined
-    let variables: Record<string, unknown> | undefined
     try {
       // view is pre-configured by viewConfig (last N turns of messages).
       const allMessages = view.get()
@@ -130,28 +130,16 @@ export function compactIntent<T extends CompactIntentData>(
 
       // Trim oldest history if it would overflow the describe-tier model
       // (the client this call will actually use, not a hardcoded chain name).
-      const contextWindow = limitsFor('describe').contextWindow
+      // The window comes from the INJECTED fn's own `limits()` (Lane A6) —
+      // the pattern no longer reads the role map. The trim stays here so the
+      // event below keeps reporting the length actually sent.
+      const contextWindow = compactIntentFn.limits?.().contextWindow ?? 16_384
       const history = trimToFit(rawHistory, (h) => JSON.stringify(h), 300, contextWindow)
 
-      const { b } = await import('../../../../baml_client')
-      collector = new Collector('compactIntent')
-      startTime = Date.now()
-      variables = { history, latest }
-
-      // Routes to `DescribeAnthropic` (Haiku 4.5), or to the self-hosted box
-      // on a verda-tier run — the intent is compacted FROM the conversation's
-      // own history, so it moves with the rest of the describe role.
-      const opts = { collector, ...clientOverrideFor('describe') }
-      const raw = await b.CompactIntent(history, latest, opts)
-      const intent = raw.trim() || latest
-
-      const llmCall: LLMCallData | undefined = extractLLMCallData(
-        collector,
-        'CompactIntent',
-        variables,
-        startTime,
-        intent,
-      )
+      // The injected implementation owns the collector and the client
+      // override; on failure after reaching the model it throws
+      // `LLMCallError` carrying the record (the seam's throw contract).
+      const { value: intent, call: llmCall } = await compactIntentFn({ history, latest })
 
       scope.data = { ...scope.data, intent }
       trackEvent(
@@ -166,11 +154,11 @@ export function compactIntent<T extends CompactIntentData>(
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
       // Best-effort: surface the prompt/variables drill-down for the failed
-      // BAML call. Intent is cleared → actor falls back to the raw message.
+      // LLM call — the injected implementation carries it on `LLMCallError`
+      // (the seam's throw contract). Intent is cleared → actor falls back to
+      // the raw message.
       const failedLlmCall =
-        collector !== undefined && variables !== undefined && startTime !== undefined
-          ? extractFailureLLMCallData(collector, 'CompactIntent', variables, startTime)
-          : undefined
+        error instanceof LLMCallError ? (error.llmCall as LLMCallData) : undefined
       trackEvent(
         scope,
         'error',

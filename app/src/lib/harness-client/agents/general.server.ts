@@ -26,9 +26,9 @@ import {
   simpleLoop,
   compactExecution,
   Tools,
-  createLoopControllerAdapter,
   type ConfiguredPattern,
 } from '../../harness-patterns'
+import { bamlPatterns, createLoopControllerAdapter } from '../../harness-baml'
 import { mcpNamespace } from '../../app-tools/mcp-catalog'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
@@ -39,10 +39,13 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   // Warns and refuses the pattern cache on failure — see `graph-schema.server.ts`,
   // which this function used to be the only correct copy of (sf-M6).
   const schema = await getGraphSchema('general', sessionId)
+  // Lane A6: the BAML-backed implementations come from `harness-baml` — one
+  // factory call, then each pattern takes its injected fn.
+  const baml = bamlPatterns()
 
   // The planner sees exactly the tool surface the executor will have — a plan
   // that names a tool the loop cannot call is worse than no plan.
-  const planPattern = planner<SessionData>(tools.all, {
+  const planPattern = planner<SessionData>(baml.planner(tools.all), tools.all, {
     patternId: 'plan',
     schema,
     liveEvents: true,

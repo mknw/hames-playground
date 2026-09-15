@@ -35,7 +35,7 @@ import {
 import {
   accountBamlCall,
   withUsageAccounting,
-} from '../../../lib/harness-patterns/baml-adapters.server'
+} from '../../../lib/harness-baml/baml-adapters.server'
 
 /** A collector as `accountBamlCall` reads it: one log, one selected call with
  *  usage. Enough for `computeEventMetrics` to count one attempt. */
@@ -232,7 +232,7 @@ describe('accounting coverage across roles', () => {
    * to show.
    */
   const UNACCOUNTED: Record<string, string> = {
-    'src/lib/harness-patterns/scripts/smoke-verda-load.ts:LoopController':
+    'src/lib/harness-baml/scripts/smoke-verda-load.ts:LoopController':
       'A manual live-load measurement run by hand against the endpoint, not a path any turn ' +
       'takes. Counting it would put a benchmark burst into the preview header as if users had ' +
       'spent it. Excluded from coverage for the same reason.',

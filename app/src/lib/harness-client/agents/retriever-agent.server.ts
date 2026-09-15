@@ -42,9 +42,9 @@ import {
   withReferences,
   withInjectionGuard,
   Tools,
-  createLoopControllerAdapter,
   type ConfiguredPattern,
 } from '../../harness-patterns'
+import { bamlPatterns, createLoopControllerAdapter } from '../../harness-baml'
 import { mcpNamespace } from '../../app-tools/mcp-catalog'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
@@ -66,6 +66,9 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     backends: [redisBackend],
     k: 5,
     generateQuery: true,
+    // Lane A6: the query rewrite is REQUIRED injected config now — the
+    // describe-tier implementation comes from `harness-baml`.
+    rewrite: bamlPatterns().retrieveQuery,
     liveEvents: true,
   })
 

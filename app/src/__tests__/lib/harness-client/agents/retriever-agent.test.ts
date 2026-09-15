@@ -105,7 +105,13 @@ describe('retrieverAgent pattern chain', () => {
   it('does not report a redis retriever for a harness without one', () => {
     const otherBackend = { name: 'supabase', type: 'vector' as const, search: async () => [] }
     const patterns = [
-      retriever({ patternId: 'retriever', backends: [otherBackend] }),
+      retriever({
+        patternId: 'retriever',
+        backends: [otherBackend],
+        rewrite: async () => {
+          throw new Error('never called')
+        },
+      }),
       compactExecution({ mode: 'thread', patternId: 'response-synth' }),
     ]
     expect(harnessHasRedisRetriever(patterns)).toBe(false)

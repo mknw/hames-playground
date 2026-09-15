@@ -16,7 +16,7 @@
  * - CriticFn(intent, previous_attempts)
  */
 
-import { assertServerOnImport } from './assert.server'
+import { assertServerOnImport } from '../harness-patterns/assert.server'
 import type {
   ControllerAction,
   CriticResult,
@@ -26,12 +26,22 @@ import type {
   ReturnStyle,
   ControllerInput,
   ActorInput,
-} from './types'
-import type { ToolDescription, LoopTurn, Attempt, PriorResult, FewShot, PlanResult } from './types'
-import type { InjectionScreen } from './injection-guard'
-import { listTools as mcpListTools } from './mcp-client.server'
-import { gatewayDegradation } from './gateway-health.server'
-import { activeTransports } from './tool-transport.server'
+  PlannerFn,
+  PlanCallResult,
+  DescribeBatchItem,
+} from '../harness-patterns/types'
+import type {
+  ToolDescription,
+  LoopTurn,
+  Attempt,
+  PriorResult,
+  FewShot,
+  PlanResult,
+} from '../harness-patterns/types'
+import type { InjectionScreen } from '../harness-patterns/injection-guard'
+import { listTools as mcpListTools } from '../harness-patterns/mcp-client.server'
+import { gatewayDegradation } from '../harness-patterns/gateway-health.server'
+import { activeTransports } from '../harness-patterns/tool-transport.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
 import {
@@ -43,13 +53,18 @@ import {
 } from '../settings'
 import { eurPerUsdRate, verdaEurPerHour } from '../cost-rates.server'
 import { clientOverrideFor, limitsFor } from './clients.server'
-import { notifyLlmUsage } from './llm-usage-observer.server'
+import { notifyLlmUsage } from '../harness-patterns/llm-usage-observer.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
-import type { LLMCallRecord, ControllerFn, ActorFn, ControllerCallResult } from './types'
+import type {
+  LLMCallRecord,
+  ControllerFn,
+  ActorFn,
+  ControllerCallResult,
+} from '../harness-patterns/types'
 // The throw contract is the seam's, not this module's: the class lives in
 // core (`types.ts`, Lane A3) and is re-exported here because the acceptance
 // tests (raw-llm-visibility, truncation-retry) import it from this path.
-import { LLMCallError } from './types'
+import { LLMCallError } from '../harness-patterns/types'
 export { LLMCallError }
 
 assertServerOnImport()
@@ -66,7 +81,7 @@ runBamlClientCheckOnce()
 // `ControllerCallResult` moved to core `types.ts` in Lane A4 — it is the
 // controller/actor seam's return type. Re-exported here for existing import
 // paths (tests import it from this module).
-export type { ControllerCallResult } from './types'
+export type { ControllerCallResult } from '../harness-patterns/types'
 
 /** Result from a critic call with optional LLM observability data */
 export interface CriticCallResult {
@@ -74,17 +89,10 @@ export interface CriticCallResult {
   llmCall?: LLMCallRecord
 }
 
-/** Result from a planner call with optional LLM observability data */
-export interface PlanCallResult {
-  plan: PlanResult
-  llmCall?: LLMCallRecord
-  /** How many tool descriptions the model was ACTUALLY shown — the resolved
-   *  catalog (an active sandbox scope's in-VM tools + the gateway tools that
-   *  resolved), not the raw name list the factory was handed. The pattern
-   *  records this on `plan_created.toolCount`, which documents itself as
-   *  "number of tools the planner was shown". */
-  toolCount: number
-}
+/** `PlanCallResult` moved to core `types.ts` at Lane A6 — it is the planner
+ *  seam's return type and `planner()` (core) declares it. Re-exported here for
+ *  existing import paths (tests import it from this module). */
+export type { PlanCallResult } from '../harness-patterns/types'
 
 /** The controller seam (#225 Lane A4): one named {@link ControllerInput} —
  *  declared in core `types.ts` — whose `turns` are a typed `LoopTurn[]`,
@@ -1065,52 +1073,13 @@ function legacyTurns(previous_results: string): LoopTurn[] {
 }
 
 // ============================================================================
-// PriorResult Merging — used by simpleLoop to combine `withReferences`
-// attachments with the existing `priorTurnCount` mechanism, and to annotate
-// each ref with the turn it was first inlined via ref:<id>.
-// ============================================================================
-
-/** Drop duplicate `ref_id` entries; first occurrence wins. */
-export function dedupByRefId(refs: PriorResult[]): PriorResult[] {
-  const seen = new Set<string>()
-  const out: PriorResult[] = []
-  for (const r of refs) {
-    if (seen.has(r.ref_id)) continue
-    seen.add(r.ref_id)
-    out.push(r)
-  }
-  return out
-}
-
-/** Annotate each ref with the **first** `turn.n` whose `expansions[]` contains
- *  its `ref_id`. Refs never expanded get `expanded_in_turn: null` (explicitly,
- *  not absent) — MiniJinja distinguishes None from undefined, and `is none`
- *  in the prompt template only matches None. If we left the field absent the
- *  template's `is not none` test would incorrectly fire for unannotated refs. */
-export function annotateExpansions(refs: PriorResult[], turns: LoopTurn[]): PriorResult[] {
-  const firstTurn = new Map<string, number>()
-  for (const t of turns) {
-    for (const e of t.expansions ?? []) {
-      if (!firstTurn.has(e.ref_id)) firstTurn.set(e.ref_id, t.n)
-    }
-  }
-  return refs.map((r) => ({
-    ...r,
-    expanded_in_turn: firstTurn.get(r.ref_id) ?? null,
-  }))
-}
-
-// ============================================================================
 // Adapter for planner
 // ============================================================================
 
-/** Planner function that returns a plan + observability data. */
-export type PlannerFnWithLLMData = (
-  user_message: string,
-  intent: string,
-  collector?: Collector,
-  context?: string,
-) => Promise<PlanCallResult>
+/** Planner function that returns a plan + observability data. `PlannerFn`
+ *  moved to core `types.ts` at Lane A6 (no collector slot — core types carry
+ *  no `Collector`); kept as an alias for existing import paths. */
+export type PlannerFnWithLLMData = PlannerFn
 
 /**
  * Create a PlannerFn adapter backed by the generic `Planner` BAML function.
@@ -1121,19 +1090,18 @@ export type PlannerFnWithLLMData = (
  *
  * @param toolNames - Tool names the downstream executor will have available
  */
-export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData {
+export function createPlannerAdapter(toolNames: string[]): PlannerFn {
   return async (
     user_message: string,
     intent: string,
-    passedCollector?: Collector,
     context?: string,
   ): Promise<PlanCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
 
-    // Lane A3: the implementation owns the collector when the caller does not
-    // pass one — the planner pattern no longer creates or hands one down.
-    const collector = passedCollector ?? new Collector('Planner')
+    // The implementation owns its collector (Lane A3) — the seam type carries
+    // no `Collector` slot any more (Lane A6): core types stay BAML-free.
+    const collector = new Collector('Planner')
 
     const scopedTools = await activeTransportToolDescriptions()
     const gatewayTools = await filterToolDescriptions(toolNames)
@@ -1533,16 +1501,10 @@ export async function describeToolResultOp(
   }
 }
 
-/** One tool result to summarize as part of a batch. `id` is a caller-assigned
- *  label, unique within the batch, that the model echoes back on its summary —
- *  it is how the batch's single response is split back per item. */
-export interface DescribeBatchItem {
-  id: string
-  tool: string
-  toolArgs: string
-  reasoning: string
-  result: string
-}
+/** `DescribeBatchItem` moved to core `types.ts` at Lane A6 — it rides the
+ *  batch seam's contract, which `compactBulkData` (core) declares.
+ *  Re-exported here for existing import paths. */
+export type { DescribeBatchItem } from '../harness-patterns/types'
 
 /**
  * Summarize several tool results in ONE describe-tier call (#83 Part E).
@@ -1590,6 +1552,11 @@ export async function describeToolResultsBatchOp(
   }
   return byId
 }
+
+// Lane A6 seam: `compactBulkData` sizes batches against the batch fn's own
+// `limits()` (SA-M6) instead of importing `limitsFor` from core. Same lookup
+// this file's call sites already do — just exposed where the caller can read it.
+describeToolResultsBatchOp.limits = () => limitsFor('describe')
 
 // ============================================================================
 // Injection screen (optional second layer of withInjectionGuard)

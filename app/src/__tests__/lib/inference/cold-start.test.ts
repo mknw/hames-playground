@@ -54,7 +54,7 @@ import {
   clientOverrideFor,
   resolveClientForRole,
   runWithInferenceTier,
-} from '../../../lib/harness-patterns/clients.server'
+} from '../../../lib/harness-baml/clients.server'
 
 /** A fixed "now" so nothing here depends on the wall clock. */
 const NOW = 1_700_000_000_000

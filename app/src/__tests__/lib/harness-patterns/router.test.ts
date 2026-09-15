@@ -6,13 +6,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock server-only imports
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
-  assertServerOnImport: vi.fn()
+  assertServerOnImport: vi.fn(),
 }))
 
 // Mock routing
 const mockRouteMessageOp = vi.fn()
-vi.mock('../../../lib/harness-patterns/routing.server', () => ({
-  routeMessageOp: (...args: unknown[]) => mockRouteMessageOp(...args)
+vi.mock('../../../lib/harness-baml/routing.server', () => ({
+  routeMessageOp: (...args: unknown[]) => mockRouteMessageOp(...args),
 }))
 
 describe('router', () => {
@@ -22,7 +22,7 @@ describe('router', () => {
       intent: 'Test intent',
       tool_call_needed: true,
       tool_name: 'neo4j',
-      response_text: ''
+      response_text: '',
     })
   })
 
@@ -37,7 +37,7 @@ describe('router', () => {
 
     const routeDescriptions = {
       neo4j: 'Database queries',
-      web: 'Web search'
+      web: 'Web search',
     }
 
     const pattern = router(routeDescriptions)
@@ -49,13 +49,14 @@ describe('router', () => {
   it('should set scope.data.route when tool is needed', async () => {
     const { router } = await import('../../../lib/harness-patterns/patterns/router.server')
     const { createContext } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../lib/harness-patterns/patterns/event-view.server')
 
     mockRouteMessageOp.mockResolvedValue({
       intent: 'Query database',
       tool_call_needed: true,
       tool_name: 'neo4j',
-      response_text: ''
+      response_text: '',
     })
 
     const ctx = createContext<{ route?: string; intent?: string }>('test')
@@ -63,14 +64,14 @@ describe('router', () => {
       type: 'user_message',
       ts: Date.now(),
       patternId: 'router',
-      data: { content: 'Query the database' }
+      data: { content: 'Query the database' },
     })
     const view = createEventView(ctx)
 
     const pattern = router({ neo4j: 'Database queries', web: 'Web search' })
     const result = await pattern.fn(
       { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     expect(result.data.route).toBe('neo4j')
@@ -80,28 +81,31 @@ describe('router', () => {
   it('should return conversational response when no tool needed', async () => {
     const { router } = await import('../../../lib/harness-patterns/patterns/router.server')
     const { createContext } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../lib/harness-patterns/patterns/event-view.server')
 
     mockRouteMessageOp.mockResolvedValue({
       intent: 'Greeting',
       tool_call_needed: false,
       tool_name: null,
-      response_text: 'Hello! How can I help you?'
+      response_text: 'Hello! How can I help you?',
     })
 
-    const ctx = createContext<{ response?: string; routerResponse?: string; route?: string }>('test')
+    const ctx = createContext<{ response?: string; routerResponse?: string; route?: string }>(
+      'test',
+    )
     ctx.events.push({
       type: 'user_message',
       ts: Date.now(),
       patternId: 'router',
-      data: { content: 'Hello' }
+      data: { content: 'Hello' },
     })
     const view = createEventView(ctx)
 
     const pattern = router({ neo4j: 'Database queries' })
     const result = await pattern.fn(
       { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     expect(result.data.response).toBe('Hello! How can I help you?')
@@ -111,13 +115,14 @@ describe('router', () => {
   it('should track error when tool_call_needed but no tool_name', async () => {
     const { router } = await import('../../../lib/harness-patterns/patterns/router.server')
     const { createContext } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../lib/harness-patterns/patterns/event-view.server')
 
     mockRouteMessageOp.mockResolvedValue({
       intent: 'Ambiguous',
       tool_call_needed: true,
       tool_name: null,
-      response_text: ''
+      response_text: '',
     })
 
     const ctx = createContext('test')
@@ -125,17 +130,17 @@ describe('router', () => {
       type: 'user_message',
       ts: Date.now(),
       patternId: 'router',
-      data: { content: 'Do something' }
+      data: { content: 'Do something' },
     })
     const view = createEventView(ctx)
 
     const pattern = router({ neo4j: 'Database queries' })
     const result = await pattern.fn(
       { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
-    const errorEvents = result.events.filter(e => e.type === 'error')
+    const errorEvents = result.events.filter((e) => e.type === 'error')
     expect(errorEvents.length).toBeGreaterThan(0)
     expect(JSON.stringify(errorEvents[0].data)).toContain('tool_call_needed but no tool_name')
   })
@@ -143,7 +148,8 @@ describe('router', () => {
   it('should handle errors gracefully', async () => {
     const { router } = await import('../../../lib/harness-patterns/patterns/router.server')
     const { createContext } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../lib/harness-patterns/patterns/event-view.server')
 
     mockRouteMessageOp.mockRejectedValue(new Error('Routing failed'))
 
@@ -152,17 +158,17 @@ describe('router', () => {
       type: 'user_message',
       ts: Date.now(),
       patternId: 'router',
-      data: { content: 'Query' }
+      data: { content: 'Query' },
     })
     const view = createEventView(ctx)
 
     const pattern = router({ neo4j: 'Database queries' })
     const result = await pattern.fn(
       { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
-    const errorEvents = result.events.filter(e => e.type === 'error')
+    const errorEvents = result.events.filter((e) => e.type === 'error')
     expect(errorEvents.length).toBeGreaterThan(0)
     expect(JSON.stringify(errorEvents[0].data)).toContain('Routing failed')
   })
@@ -170,13 +176,14 @@ describe('router', () => {
   it('should update scope data with routing info', async () => {
     const { router } = await import('../../../lib/harness-patterns/patterns/router.server')
     const { createContext } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../lib/harness-patterns/patterns/event-view.server')
 
     mockRouteMessageOp.mockResolvedValue({
       intent: 'Database query intent',
       tool_call_needed: true,
       tool_name: 'neo4j',
-      response_text: 'Router response'
+      response_text: 'Router response',
     })
 
     const ctx = createContext<{ route?: string; intent?: string; routerResponse?: string }>('test')
@@ -184,14 +191,14 @@ describe('router', () => {
       type: 'user_message',
       ts: Date.now(),
       patternId: 'router',
-      data: { content: 'Query' }
+      data: { content: 'Query' },
     })
     const view = createEventView(ctx)
 
     const pattern = router({ neo4j: 'Database queries' })
     const result = await pattern.fn(
       { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     expect(result.data.route).toBe('neo4j')
@@ -219,7 +226,7 @@ describe('routes', () => {
 
     const pattern = routes({
       neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } },
-      web: { name: 'web-loop', fn: webFn, config: { patternId: 'web' } }
+      web: { name: 'web-loop', fn: webFn, config: { patternId: 'web' } },
     })
 
     expect(pattern.name).toContain('neo4j')
@@ -230,7 +237,8 @@ describe('routes', () => {
   it('should dispatch to correct pattern based on scope.data.route', async () => {
     const { routes } = await import('../../../lib/harness-patterns/patterns/router.server')
     const { createContext } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../lib/harness-patterns/patterns/event-view.server')
 
     const neo4jFn = vi.fn(async (scope: any) => {
       scope.data = { ...scope.data, response: 'Neo4j result' }
@@ -243,12 +251,12 @@ describe('routes', () => {
 
     const dispatchPattern = routes({
       neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } },
-      web: { name: 'web-loop', fn: webFn, config: { patternId: 'web' } }
+      web: { name: 'web-loop', fn: webFn, config: { patternId: 'web' } },
     })
 
     await dispatchPattern.fn(
       { id: 'routes', data: { ...ctx.data, route: 'neo4j' }, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     expect(neo4jFn).toHaveBeenCalled()
@@ -258,7 +266,8 @@ describe('routes', () => {
   it('should throw when routes is called without router (route is undefined)', async () => {
     const { routes } = await import('../../../lib/harness-patterns/patterns/router.server')
     const { createContext } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../lib/harness-patterns/patterns/event-view.server')
 
     const neo4jFn = vi.fn(async (scope: any) => scope)
 
@@ -267,7 +276,7 @@ describe('routes', () => {
     const scope = { id: 'routes', data: ctx.data, events: [] as any[], startTime: Date.now() }
 
     const dispatchPattern = routes({
-      neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } }
+      neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } },
     })
 
     await expect(dispatchPattern.fn(scope, view)).rejects.toThrow('routes() called without')
@@ -276,16 +285,22 @@ describe('routes', () => {
   it('should pass through for direct-response route (user)', async () => {
     const { routes } = await import('../../../lib/harness-patterns/patterns/router.server')
     const { createContext } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../lib/harness-patterns/patterns/event-view.server')
 
     const neo4jFn = vi.fn(async (scope: any) => scope)
 
     const ctx = createContext('test')
     const view = createEventView(ctx)
-    const scope = { id: 'routes', data: { ...ctx.data, route: 'user' }, events: [] as any[], startTime: Date.now() }
+    const scope = {
+      id: 'routes',
+      data: { ...ctx.data, route: 'user' },
+      events: [] as any[],
+      startTime: Date.now(),
+    }
 
     const dispatchPattern = routes({
-      neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } }
+      neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } },
     })
 
     const result = await dispatchPattern.fn(scope, view)
@@ -297,7 +312,8 @@ describe('routes', () => {
   it('should track error when route not found in patternMap', async () => {
     const { routes } = await import('../../../lib/harness-patterns/patterns/router.server')
     const { createContext } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../lib/harness-patterns/patterns/event-view.server')
 
     const neo4jFn = vi.fn(async (scope: any) => scope)
 
@@ -305,12 +321,17 @@ describe('routes', () => {
     const view = createEventView(ctx)
 
     const dispatchPattern = routes({
-      neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } }
+      neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } },
     })
 
     const result = await dispatchPattern.fn(
-      { id: 'routes', data: { ...ctx.data, route: 'unknown_route' }, events: [], startTime: Date.now() },
-      view
+      {
+        id: 'routes',
+        data: { ...ctx.data, route: 'unknown_route' },
+        events: [],
+        startTime: Date.now(),
+      },
+      view,
     )
 
     const errorEvents = result.events.filter((e: any) => e.type === 'error')
@@ -321,7 +342,8 @@ describe('routes', () => {
   it('should keep pattern response after dispatch', async () => {
     const { routes } = await import('../../../lib/harness-patterns/patterns/router.server')
     const { createContext } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../lib/harness-patterns/patterns/event-view.server')
 
     const neo4jFn = vi.fn(async (scope: any) => {
       scope.data = { ...scope.data, response: 'Pattern response' }
@@ -332,12 +354,12 @@ describe('routes', () => {
     const view = createEventView(ctx)
 
     const dispatchPattern = routes({
-      neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } }
+      neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } },
     })
 
     const result = await dispatchPattern.fn(
       { id: 'routes', data: { ...ctx.data, route: 'neo4j' }, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     expect(result.data.response).toBe('Pattern response')
@@ -346,14 +368,15 @@ describe('routes', () => {
   it('should merge events from executed pattern', async () => {
     const { routes } = await import('../../../lib/harness-patterns/patterns/router.server')
     const { createContext } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../lib/harness-patterns/patterns/event-view.server')
 
     const neo4jFn = vi.fn(async (scope: any) => {
       scope.events.push({
         type: 'tool_call' as const,
         ts: Date.now(),
         patternId: 'neo4j',
-        data: { tool: 'test' }
+        data: { tool: 'test' },
       })
       return scope
     })
@@ -362,12 +385,12 @@ describe('routes', () => {
     const view = createEventView(ctx)
 
     const dispatchPattern = routes({
-      neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } }
+      neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } },
     })
 
     const result = await dispatchPattern.fn(
       { id: 'routes', data: { ...ctx.data, route: 'neo4j' }, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     const toolCalls = result.events.filter((e: any) => e.type === 'tool_call')
@@ -377,7 +400,8 @@ describe('routes', () => {
   it('should add pattern_enter and pattern_exit events on dispatch', async () => {
     const { routes } = await import('../../../lib/harness-patterns/patterns/router.server')
     const { createContext } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns/event-view.server')
+    const { createEventView } =
+      await import('../../../lib/harness-patterns/patterns/event-view.server')
 
     const neo4jFn = vi.fn(async (scope: any) => scope)
 
@@ -385,12 +409,12 @@ describe('routes', () => {
     const view = createEventView(ctx)
 
     const dispatchPattern = routes({
-      neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } }
+      neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } },
     })
 
     const result = await dispatchPattern.fn(
       { id: 'routes', data: { ...ctx.data, route: 'neo4j' }, events: [], startTime: Date.now() },
-      view
+      view,
     )
 
     const enterEvents = result.events.filter((e: any) => e.type === 'pattern_enter')

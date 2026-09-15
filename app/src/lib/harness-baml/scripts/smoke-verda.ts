@@ -15,7 +15,7 @@
  * Run from `app/`:
  *
  *   USE_VERDA_INFERENCE=1 pnpm dlx tsx --env-file=.env \
- *     src/lib/harness-patterns/scripts/smoke-verda.ts
+ *     src/lib/harness-baml/scripts/smoke-verda.ts
  *
  * `--env-file=.env` supplies `VERDA_INFERENCE_ENDPOINT` (which must END IN
  * `/v1` — see `assertVerdaConfigured`) and `VERDA_INFERENCE_API_KEY`. The flag
@@ -82,7 +82,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Collector } from '@boundaryml/baml'
-import type { Attempt, ToolDescription } from '../types'
+import type { Attempt, ToolDescription } from '../../harness-patterns/types'
 import {
   createCriticAdapter,
   createInjectionScreen,
@@ -91,7 +91,7 @@ import {
   extractLLMCallData,
 } from '../baml-adapters.server'
 import { assertVerdaConfigured, clientOverrideFor, verdaInferenceEnabled } from '../clients.server'
-import { observeLlmUsage } from '../llm-usage-observer.server'
+import { observeLlmUsage } from '../../harness-patterns/llm-usage-observer.server'
 import { routeMessageOp } from '../routing.server'
 
 const EXPECTED_CLIENT = 'VerdaQwen'
@@ -207,7 +207,7 @@ async function preflight(): Promise<void> {
       'USE_VERDA_INFERENCE is not set to 1, so this run would route to Anthropic and prove ' +
         'nothing. Re-run as:\n' +
         '  USE_VERDA_INFERENCE=1 pnpm dlx tsx --env-file=.env ' +
-        'src/lib/harness-patterns/scripts/smoke-verda.ts',
+        'src/lib/harness-baml/scripts/smoke-verda.ts',
     )
   }
   // Same check the module performs at load; called explicitly so the failure

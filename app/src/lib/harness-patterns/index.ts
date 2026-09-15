@@ -74,6 +74,8 @@ export type {
 
   // LLM Observability
   LLMCallData,
+  LLMCallRecord,
+  LLMResult,
 
   // Approval Types
   ApprovalRequest,
@@ -86,6 +88,10 @@ export type {
 } from './types'
 
 export { DEFAULT_TRACK_HISTORY, DEFAULT_COMMIT_STRATEGY, DEFAULT_ERROR_SEVERITY } from './types'
+
+// The LLM call envelope's error class is a runtime value (instanceof checks in
+// the patterns) — exported from the barrel for the first time in Lane A3.
+export { LLMCallError } from './types'
 
 // ============================================================================
 // Tools

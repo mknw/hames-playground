@@ -6,7 +6,6 @@
  * feed the result back for another attempt.
  */
 
-import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
 import { repairJson } from '../json-repair'
@@ -33,7 +32,7 @@ import { resolveTurnBudget } from '../../settings'
 import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import type { ActorControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
-import { LLMCallError, llmCallHitOutputCap } from '../baml-adapters.server'
+import { LLMCallError } from '../types'
 import { formatPlanContext, type PlannerData } from './planner.server'
 
 assertServerOnImport()
@@ -165,12 +164,7 @@ export function actorCritic<T extends ActorCriticData>(
         return 'continue'
       }
 
-      const criticCollector = new Collector('critic')
-      const { result: evalResult, llmCall: criticLlmCall } = await critic(
-        intent,
-        previousAttempts,
-        criticCollector,
-      )
+      const { result: evalResult, llmCall: criticLlmCall } = await critic(intent, previousAttempts)
 
       trackEvent(
         scope,
@@ -241,13 +235,14 @@ export function actorCritic<T extends ActorCriticData>(
         // Call actor. We pass `attempt + 1` (1-indexed for the prompt) and
         // maxRetries so the actor's prompt can surface "Attempt N of M" and
         // nudge the model toward `Return` when the budget is nearly exhausted.
-        const actorCollector = new Collector('actor')
+        // No collector is passed (Lane A3): the implementation owns it and
+        // returns the call record on the result.
         const { action: rawAction, llmCall: actorLlmCall } = await actor(
           userContent,
           intent,
           tools,
           previousAttempts,
-          actorCollector,
+          undefined,
           attempt + 1,
           maxRetries,
           multiMode === 'off' ? undefined : multiMode,
@@ -332,7 +327,7 @@ export function actorCritic<T extends ActorCriticData>(
               trackedArgs.push(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
-                precheckError: llmCallHitOutputCap(actorLlmCall)
+                precheckError: actorLlmCall?.hitOutputCap
                   ? `tool_args for ${c.tool_name} were CUT OFF at the output-token limit — ` +
                     `the batch was too large; use fewer calls per attempt or split large payloads`
                   : `Invalid tool_args JSON for ${c.tool_name}`,
@@ -515,7 +510,7 @@ export function actorCritic<T extends ActorCriticData>(
           // Generic "fix your JSON quoting" feedback makes the model regenerate
           // the same oversized payload until retries exhaust; say the real
           // cause so the retry converges (write smaller, append to continue).
-          const truncated = llmCallHitOutputCap(actorLlmCall)
+          const truncated = actorLlmCall?.hitOutputCap ?? false
           const errMsg = truncated
             ? `tool_args for ${action.tool_name} were CUT OFF at the output-token limit ` +
               `(response truncated mid-generation, not a formatting mistake). Produce a ` +

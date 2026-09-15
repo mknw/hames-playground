@@ -38,7 +38,6 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { Collector } from '@boundaryml/baml'
 import type {
   PatternScope,
   EventView,
@@ -54,7 +53,8 @@ import type { PlanResult } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
 import { getErrorHint } from '../error-hints'
 import { stripThinkBlocks } from '../content-transforms'
-import { createPlannerAdapter, LLMCallError } from '../baml-adapters.server'
+import { createPlannerAdapter } from '../baml-adapters.server'
+import { LLMCallError } from '../types'
 
 assertServerOnImport()
 
@@ -165,12 +165,11 @@ export function planner<T extends PlannerData>(
       }
 
       const intent = scope.data.intent ?? userContent
-      const collector = new Collector('planner')
       const {
         plan: raw,
         llmCall,
         toolCount,
-      } = await plannerFn(userContent, intent, collector, config?.schema)
+      } = await plannerFn(userContent, intent, undefined, config?.schema)
 
       // An empty plan parses fine (`PlanResult.plan` is a required string and
       // `""` satisfies it) but injects NOTHING downstream — `formatPlanContext`
@@ -180,8 +179,9 @@ export function planner<T extends PlannerData>(
       // level but produced nothing usable: this is exactly the failure whose
       // prompt you need to read, so a bare Error here would strip the panel's
       // drill-down on the one path that most needs it. (`llmCall` is optional
-      // — no collector was passed, or it captured nothing — and without one
-      // there is nothing to attach, so a plain Error is the honest throw.)
+      // — it is undefined when the call's collector captured nothing — and
+      // without one there is nothing to attach, so a plain Error is the honest
+      // throw.)
       if (!raw.plan?.trim()) {
         const message = 'Planner returned an empty plan'
         throw llmCall ? new LLMCallError(message, llmCall) : new Error(message)

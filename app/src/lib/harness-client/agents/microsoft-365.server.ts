@@ -24,6 +24,7 @@ import {
   createLoopControllerAdapter,
   type ConfiguredPattern,
 } from '../../harness-patterns'
+import { mcpNamespace } from '../../app-tools/mcp-catalog'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
 
@@ -57,7 +58,7 @@ export const MICROSOFT_365_TOOLS = [
 ] as const
 
 async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
-  const tools = await Tools()
+  const tools = await Tools({ namespaces: mcpNamespace })
   const available = new Set(tools.graph ?? [])
   // Filtering the allowlist (rather than the namespace) keeps a tool that isn't
   // registered — a typo, a module not imported — out of the loop's tool list
@@ -113,7 +114,7 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
   // exactly the "instructions hidden in a document" case, and hidden text in an
   // Office document is the classic delivery vehicle. Behaviour is unchanged
   // unless a detection fires.
-  const guarded = withInjectionGuard({ namespaces: ['graph'] })(graphPattern)
+  const guarded = withInjectionGuard({ namespaces: ['graph'], catalog: tools.all })(graphPattern)
 
   return [guarded, responseSynth]
 }

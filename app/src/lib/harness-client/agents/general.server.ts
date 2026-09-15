@@ -29,12 +29,13 @@ import {
   createLoopControllerAdapter,
   type ConfiguredPattern,
 } from '../../harness-patterns'
+import { mcpNamespace } from '../../app-tools/mcp-catalog'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
 import { getGraphSchema } from './graph-schema.server'
 
 async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
-  const tools = await Tools()
+  const tools = await Tools({ namespaces: mcpNamespace })
   // Warns and refuses the pattern cache on failure — see `graph-schema.server.ts`,
   // which this function used to be the only correct copy of (sf-M6).
   const schema = await getGraphSchema('general', sessionId)

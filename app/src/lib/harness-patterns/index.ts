@@ -97,7 +97,14 @@ export { LLMCallError } from './types'
 // Tools
 // ============================================================================
 
-export { Tools, ToolsFrom } from './tools.server'
+export {
+  Tools,
+  ToolsFrom,
+  inferServer,
+  registerToolNamespaces,
+  type ToolsOptions,
+  type NamespaceResolver,
+} from './tools.server'
 
 // ============================================================================
 // Tool transports (the containment seam)

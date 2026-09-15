@@ -1,7 +1,14 @@
 /**
- * Tools Tests
+ * Tools Tests — CORE's half of the split (#225 L5, Lane B2).
  *
- * Tests for the tools grouping and namespace inference logic.
+ * The 86-entry catalog moved to `app-tools/mcp-catalog.ts` (which deployment's
+ * tool names exist is the app's fact, not the library's), and the cases that
+ * asserted this deployment's 6 namespaces moved with it — they now live in
+ * `__tests__/lib/app-tools/mcp-catalog.test.ts`, beside the data they test.
+ * What stays here is what the design note keeps in core: the heuristic's own
+ * cases, the resolver-registry behaviour (`registerToolNamespaces`), and the
+ * degradation provenance. A catalog registration in THIS file would make the
+ * split decorative, so there is none.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -38,18 +45,17 @@ describe('tools', () => {
       const mockTools = [
         { name: 'read_neo4j_cypher', description: 'Read from Neo4j', inputSchema: {} },
         { name: 'write_neo4j_cypher', description: 'Write to Neo4j', inputSchema: {} },
-        { name: 'search', description: 'Search the web', inputSchema: {} },
-        { name: 'fetch', description: 'Fetch a URL', inputSchema: {} },
+        { name: 'web_search', description: 'Search the web', inputSchema: {} },
       ]
 
       const tools = ToolsFrom(mockTools)
 
+      // Heuristic-resolvable names only: the core tests register no catalog,
+      // so every name here must resolve through the heuristic alone.
       expect(tools.neo4j).toContain('read_neo4j_cypher')
       expect(tools.neo4j).toContain('write_neo4j_cypher')
-      // search and fetch now map to 'web' via KNOWN_TOOL_SERVERS
-      expect(tools.web).toContain('search')
-      expect(tools.web).toContain('fetch')
-      expect(tools.all).toHaveLength(4)
+      expect(tools.web).toContain('web_search')
+      expect(tools.all).toHaveLength(3)
     })
 
     it('should return empty all array for no tools', async () => {
@@ -61,62 +67,54 @@ describe('tools', () => {
     })
   })
 
+  describe('the registered namespace resolver', () => {
+    it('is consulted by inferServer before the heuristic, and unregisters', async () => {
+      const mod = await import('../../../lib/harness-patterns/tools.server')
+
+      // Without registration, the heuristic alone answers.
+      expect(mod.inferServer('search')).toBe('search')
+
+      const off = mod.registerToolNamespaces((name) => (name === 'search' ? 'web' : undefined))
+      expect(mod.inferServer('search')).toBe('web')
+
+      off()
+      expect(mod.inferServer('search')).toBe('search')
+    })
+
+    it('never consults the heuristic when a resolver claims the name', async () => {
+      const mod = await import('../../../lib/harness-patterns/tools.server')
+      const off = mod.registerToolNamespaces((name) =>
+        name === 'read_neo4j_cypher' ? 'graph-db' : undefined,
+      )
+      // The heuristic would say 'neo4j'; the resolver wins.
+      expect(mod.inferServer('read_neo4j_cypher')).toBe('graph-db')
+      off()
+    })
+
+    it('is idempotent to unregister, like the transport registry', async () => {
+      const mod = await import('../../../lib/harness-patterns/tools.server')
+      const off = mod.registerToolNamespaces(() => undefined)
+      off()
+      off()
+      expect(mod.inferServer('anything')).toBe('anything')
+    })
+  })
+
   describe('inferServer (via ToolsFrom)', () => {
-    describe('known tool-server mapping', () => {
-      it('should group memory tools under memory namespace', async () => {
+    describe('heuristic (the deployment-independent core)', () => {
+      it('groups an unknown hyphenated tool under its first segment', async () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
         const tools = ToolsFrom([
-          { name: 'create_entities', description: 'Create entities', inputSchema: {} },
-          { name: 'create_relations', description: 'Create relations', inputSchema: {} },
-          { name: 'add_observations', description: 'Add observations', inputSchema: {} },
-          { name: 'delete_entities', description: 'Delete entities', inputSchema: {} },
-          { name: 'open_nodes', description: 'Open nodes', inputSchema: {} },
-          { name: 'search_nodes', description: 'Search nodes', inputSchema: {} },
-          { name: 'read_graph', description: 'Read graph', inputSchema: {} },
+          { name: 'mcp-exec', description: 'gateway meta-tool', inputSchema: {} },
         ])
 
-        expect(tools.memory).toHaveLength(7)
-        expect(tools.memory).toContain('create_entities')
-        expect(tools.memory).toContain('search_nodes')
-        expect(tools.memory).toContain('read_graph')
+        expect(tools.mcp).toEqual(['mcp-exec'])
       })
 
-      it('should group web tools under web namespace', async () => {
-        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
-
-        const tools = ToolsFrom([
-          { name: 'search', description: 'Search', inputSchema: {} },
-          { name: 'fetch', description: 'Fetch', inputSchema: {} },
-          { name: 'fetch_content', description: 'Fetch content', inputSchema: {} },
-        ])
-
-        expect(tools.web).toHaveLength(3)
-        expect(tools.web).toContain('search')
-        expect(tools.web).toContain('fetch')
-        expect(tools.web).toContain('fetch_content')
-      })
-
-      it('should group neo4j tools under neo4j namespace (explicit mapping)', async () => {
-        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
-
-        const tools = ToolsFrom([
-          { name: 'read_neo4j_cypher', description: 'Read', inputSchema: {} },
-          { name: 'write_neo4j_cypher', description: 'Write', inputSchema: {} },
-          { name: 'get_neo4j_schema', description: 'Schema', inputSchema: {} },
-        ])
-
-        expect(tools.neo4j).toHaveLength(3)
-        expect(tools.neo4j).toContain('read_neo4j_cypher')
-        expect(tools.neo4j).toContain('write_neo4j_cypher')
-        // get_neo4j_schema is pinned explicitly so a future verb-list edit
-        // can't regroup it (it would otherwise rely on the heuristic).
-        expect(tools.neo4j).toContain('get_neo4j_schema')
-      })
-
-      // #226 E3: the GitHub server and its KNOWN_TOOL_SERVERS block are gone, so
-      // these names now fall through to the heuristic. Asserted rather than
-      // deleted: re-adding a `github` namespace should be a deliberate act.
+      // #226 E3: the GitHub server and its catalog block are gone, so these
+      // names fall through to the heuristic. Asserted rather than deleted:
+      // re-adding a `github` namespace should be a deliberate act.
       it('has no github namespace — those names fall through to the heuristic', async () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
@@ -130,113 +128,6 @@ describe('tools', () => {
         expect(tools.issue).toContain('get_issue')
       })
 
-      it('should group context7 tools under context7 namespace', async () => {
-        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
-
-        const tools = ToolsFrom([
-          { name: 'resolve-library-id', description: 'Resolve library', inputSchema: {} },
-          { name: 'get-library-docs', description: 'Get docs', inputSchema: {} },
-        ])
-
-        expect(tools.context7).toHaveLength(2)
-        expect(tools.context7).toContain('resolve-library-id')
-        expect(tools.context7).toContain('get-library-docs')
-      })
-
-      it('should group redis tools under redis namespace', async () => {
-        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
-
-        const tools = ToolsFrom([
-          { name: 'get', description: 'Get key', inputSchema: {} },
-          { name: 'set', description: 'Set key', inputSchema: {} },
-          { name: 'hget', description: 'Hash get', inputSchema: {} },
-          { name: 'json_get', description: 'JSON get', inputSchema: {} },
-          { name: 'vector_search_hash', description: 'Vector search', inputSchema: {} },
-        ])
-
-        expect(tools.redis).toHaveLength(5)
-        expect(tools.redis).toContain('get')
-        expect(tools.redis).toContain('hget')
-        expect(tools.redis).toContain('vector_search_hash')
-      })
-
-      it('groups an unknown hyphenated tool under its first segment', async () => {
-        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
-
-        const tools = ToolsFrom([
-          { name: 'mcp-exec', description: 'gateway meta-tool', inputSchema: {} },
-        ])
-
-        expect(tools.mcp).toEqual(['mcp-exec'])
-      })
-
-      it('should group filesystem tools under filesystem namespace', async () => {
-        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
-
-        const tools = ToolsFrom([
-          { name: 'read_file', description: 'Read file', inputSchema: {} },
-          { name: 'write_file', description: 'Write file', inputSchema: {} },
-          { name: 'list_directory', description: 'List dir', inputSchema: {} },
-          { name: 'search_files', description: 'Search files', inputSchema: {} },
-        ])
-
-        expect(tools.filesystem).toHaveLength(4)
-        expect(tools.filesystem).toContain('read_file')
-        expect(tools.filesystem).toContain('list_directory')
-      })
-    })
-
-    describe('MCP gateway format (double underscore)', () => {
-      it('should handle mcp__server__search → web namespace via known mapping', async () => {
-        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
-
-        const tools = ToolsFrom([
-          { name: 'mcp__kg-agent-mcp-gateway__search', description: 'Search', inputSchema: {} },
-        ])
-
-        expect(tools.web).toContain('mcp__kg-agent-mcp-gateway__search')
-      })
-
-      it('should handle mcp__server__create_entities → memory namespace', async () => {
-        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
-
-        const tools = ToolsFrom([
-          {
-            name: 'mcp__kg-agent-mcp-gateway__create_entities',
-            description: 'Create entities',
-            inputSchema: {},
-          },
-        ])
-
-        expect(tools.memory).toContain('mcp__kg-agent-mcp-gateway__create_entities')
-      })
-
-      it('should handle mcp__server__read_neo4j_cypher → neo4j namespace', async () => {
-        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
-
-        const tools = ToolsFrom([
-          {
-            name: 'mcp__kg-agent-mcp-gateway__read_neo4j_cypher',
-            description: 'Read Neo4j',
-            inputSchema: {},
-          },
-        ])
-
-        expect(tools.neo4j).toContain('mcp__kg-agent-mcp-gateway__read_neo4j_cypher')
-      })
-
-      it('should handle mcp__server__mcp-find → mcp namespace (heuristic)', async () => {
-        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
-
-        const tools = ToolsFrom([
-          { name: 'mcp__kg-agent-mcp-gateway__mcp-find', description: 'Find MCP', inputSchema: {} },
-        ])
-
-        expect(tools.mcp).toContain('mcp__kg-agent-mcp-gateway__mcp-find')
-      })
-    })
-
-    describe('heuristic fallback (underscore-separated)', () => {
       it('should handle read_neo4j_cypher → neo4j namespace', async () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
@@ -267,112 +158,18 @@ describe('tools', () => {
       })
     })
 
-    describe('hyphen-separated format', () => {
-      it('should handle mcp-find → mcp namespace', async () => {
+    describe('MCP gateway format (double underscore)', () => {
+      it('strips the prefix and runs the heuristic on the tool name', async () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
-        const tools = ToolsFrom([{ name: 'mcp-find', description: 'Find', inputSchema: {} }])
-
-        expect(tools.mcp).toContain('mcp-find')
-      })
-    })
-
-    describe('real-world tool combinations', () => {
-      it('should correctly group typical MCP gateway tools', async () => {
-        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
-
+        // `mcp-find` is not in any catalog the core tests register, so this is
+        // the heuristic end to end: split → 'mcp'. The catalog-routed members
+        // of this family live app-side, with the catalog.
         const tools = ToolsFrom([
-          { name: 'mcp__kg-agent-mcp-gateway__search', description: 'Search', inputSchema: {} },
-          { name: 'mcp__kg-agent-mcp-gateway__fetch', description: 'Fetch', inputSchema: {} },
-          {
-            name: 'mcp__kg-agent-mcp-gateway__fetch_content',
-            description: 'Fetch content',
-            inputSchema: {},
-          },
-          {
-            name: 'mcp__kg-agent-mcp-gateway__read_neo4j_cypher',
-            description: 'Read Neo4j',
-            inputSchema: {},
-          },
-          {
-            name: 'mcp__kg-agent-mcp-gateway__write_neo4j_cypher',
-            description: 'Write Neo4j',
-            inputSchema: {},
-          },
-          {
-            name: 'mcp__kg-agent-mcp-gateway__get_neo4j_schema',
-            description: 'Schema',
-            inputSchema: {},
-          },
-          {
-            name: 'mcp__kg-agent-mcp-gateway__create_entities',
-            description: 'Create entities',
-            inputSchema: {},
-          },
-          {
-            name: 'mcp__kg-agent-mcp-gateway__search_nodes',
-            description: 'Search nodes',
-            inputSchema: {},
-          },
+          { name: 'mcp__kg-agent-mcp-gateway__mcp-find', description: 'Find MCP', inputSchema: {} },
         ])
 
-        // Web tools grouped under 'web'
-        expect(tools.web).toHaveLength(3)
-        expect(tools.web).toContain('mcp__kg-agent-mcp-gateway__search')
-        expect(tools.web).toContain('mcp__kg-agent-mcp-gateway__fetch')
-        expect(tools.web).toContain('mcp__kg-agent-mcp-gateway__fetch_content')
-
-        // Neo4j tools grouped under 'neo4j'
-        expect(tools.neo4j).toHaveLength(3)
-        expect(tools.neo4j).toContain('mcp__kg-agent-mcp-gateway__read_neo4j_cypher')
-        expect(tools.neo4j).toContain('mcp__kg-agent-mcp-gateway__write_neo4j_cypher')
-        expect(tools.neo4j).toContain('mcp__kg-agent-mcp-gateway__get_neo4j_schema')
-
-        // Memory tools grouped under 'memory'
-        expect(tools.memory).toHaveLength(2)
-        expect(tools.memory).toContain('mcp__kg-agent-mcp-gateway__create_entities')
-        expect(tools.memory).toContain('mcp__kg-agent-mcp-gateway__search_nodes')
-
-        // Should NOT have scattered groups
-        expect(tools.mcp).toBeUndefined()
-
-        expect(tools.all).toHaveLength(8)
-      })
-
-      it('should handle full agent tool set', async () => {
-        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
-
-        const tools = ToolsFrom([
-          // Web
-          { name: 'search', description: 'Search', inputSchema: {} },
-          { name: 'fetch', description: 'Fetch', inputSchema: {} },
-          // Neo4j
-          { name: 'read_neo4j_cypher', description: 'Read', inputSchema: {} },
-          { name: 'write_neo4j_cypher', description: 'Write', inputSchema: {} },
-          { name: 'get_neo4j_schema', description: 'Schema', inputSchema: {} },
-          // Memory
-          { name: 'create_entities', description: 'Create', inputSchema: {} },
-          { name: 'create_relations', description: 'Relations', inputSchema: {} },
-          { name: 'read_graph', description: 'Read graph', inputSchema: {} },
-          // Filesystem
-          { name: 'read_file', description: 'Read file', inputSchema: {} },
-          { name: 'write_file', description: 'Write file', inputSchema: {} },
-          // Redis
-          { name: 'get', description: 'Get', inputSchema: {} },
-          { name: 'set', description: 'Set', inputSchema: {} },
-          { name: 'hget', description: 'HGet', inputSchema: {} },
-          // Context7
-          { name: 'resolve-library-id', description: 'Resolve lib', inputSchema: {} },
-          { name: 'get-library-docs', description: 'Get docs', inputSchema: {} },
-        ])
-
-        expect(tools.web).toHaveLength(2)
-        expect(tools.neo4j).toHaveLength(3)
-        expect(tools.memory).toHaveLength(3)
-        expect(tools.filesystem).toHaveLength(2)
-        expect(tools.redis).toHaveLength(3)
-        expect(tools.context7).toHaveLength(2)
-        expect(tools.all).toHaveLength(15)
+        expect(tools.mcp).toContain('mcp__kg-agent-mcp-gateway__mcp-find')
       })
     })
 

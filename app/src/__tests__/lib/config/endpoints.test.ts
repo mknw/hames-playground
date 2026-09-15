@@ -14,9 +14,15 @@ import { getEndpoints, getEndpoint, resolveIsDev } from '../../../lib/config/end
 
 const env = import.meta.env as Record<string, unknown>
 const originalDev = env.DEV
+const originalBoltUrl = process.env.NEO4J_BOLT_URL
+const originalHttpUrl = process.env.NEO4J_HTTP_URL
 
 afterEach(() => {
   env.DEV = originalDev
+  if (originalBoltUrl === undefined) delete process.env.NEO4J_BOLT_URL
+  else process.env.NEO4J_BOLT_URL = originalBoltUrl
+  if (originalHttpUrl === undefined) delete process.env.NEO4J_HTTP_URL
+  else process.env.NEO4J_HTTP_URL = originalHttpUrl
 })
 
 describe('getEndpoints', () => {
@@ -36,6 +42,64 @@ describe('getEndpoints', () => {
       mcpGateway: 'http://mcp-gateway:3000/mcp',
       neo4j: { http: 'http://neo4j:7474', bolt: 'bolt://neo4j:7687' },
     })
+  })
+})
+
+describe('Neo4j env overrides', () => {
+  it('override the dev defaults when set', () => {
+    env.DEV = true
+    process.env.NEO4J_BOLT_URL = 'bolt://localhost:17687'
+    process.env.NEO4J_HTTP_URL = 'http://localhost:17474'
+
+    expect(getEndpoints().neo4j).toEqual({
+      http: 'http://localhost:17474',
+      bolt: 'bolt://localhost:17687',
+    })
+  })
+
+  it('override the docker-compose service names too', () => {
+    env.DEV = false
+    process.env.NEO4J_BOLT_URL = 'bolt://neo4j-rv:17687'
+    process.env.NEO4J_HTTP_URL = 'http://neo4j-rv:17474'
+
+    expect(getEndpoints().neo4j).toEqual({
+      http: 'http://neo4j-rv:17474',
+      bolt: 'bolt://neo4j-rv:17687',
+    })
+  })
+
+  it('are independent — one set leaves the other at its default', () => {
+    env.DEV = true
+    process.env.NEO4J_BOLT_URL = 'bolt://localhost:17687'
+    delete process.env.NEO4J_HTTP_URL
+
+    expect(getEndpoints().neo4j).toEqual({
+      http: 'http://localhost:7474',
+      bolt: 'bolt://localhost:17687',
+    })
+  })
+
+  it('leave the defaults byte-identical when unset, in both environments', () => {
+    env.DEV = true
+    delete process.env.NEO4J_BOLT_URL
+    delete process.env.NEO4J_HTTP_URL
+    expect(getEndpoints().neo4j).toEqual({
+      http: 'http://localhost:7474',
+      bolt: 'bolt://localhost:7687',
+    })
+
+    env.DEV = false
+    expect(getEndpoints().neo4j).toEqual({
+      http: 'http://neo4j:7474',
+      bolt: 'bolt://neo4j:7687',
+    })
+  })
+
+  it('the per-service accessor returns the overridden bolt URL', () => {
+    env.DEV = true
+    process.env.NEO4J_BOLT_URL = 'bolt://localhost:17687'
+
+    expect(getEndpoint('neo4jBolt')).toBe('bolt://localhost:17687')
   })
 })
 

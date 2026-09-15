@@ -25,19 +25,22 @@ export interface AgentSelectorProps {
 export const AgentSelector = (props: AgentSelectorProps) => {
   const [isOpen, setIsOpen] = createSignal(false)
 
-  // Fetch agent metadata from server
-  const [agents] = createResource(async () => {
+  // Fetch agent metadata from server. The error state is kept (#314): a
+  // swallow-to-[] used to render an eternal "Loading agents..." — on the
+  // control that decides which harness answers.
+  const [agents, { refetch }] = createResource(async () => {
     try {
       return await getAgentList()
     } catch (error) {
       console.error('Failed to fetch agents:', error)
-      return []
+      throw error
     }
   })
 
   const selectedAgentInfo = () => {
-    const list = agents()
-    if (!list) return null
+    // `agents()` throws while errored — consult `error` first, then `latest`,
+    // so the trigger can render the failure instead of crashing the render.
+    const list = agents.error ? [] : (agents.latest ?? [])
     return list.find((a) => a.id === props.selectedAgent) || list[0]
   }
 
@@ -66,7 +69,15 @@ export const AgentSelector = (props: AgentSelectorProps) => {
       >
         <Show
           when={selectedAgentInfo()}
-          fallback={<span text="ui-text-secondary">Loading agents...</span>}
+          fallback={
+            <span text="ui-text-secondary">
+              {agents.error
+                ? 'Failed to load agents'
+                : agents()?.length === 0
+                  ? 'No agents available'
+                  : 'Loading agents...'}
+            </span>
+          }
         >
           {(info) => (
             <>
@@ -111,7 +122,30 @@ export const AgentSelector = (props: AgentSelectorProps) => {
             </div>
           </Show>
 
-          <Show when={agents()}>
+          <Show when={agents.error}>
+            <div p="4" flex="~ col" items="center" gap="2" text="center">
+              <span text="xs ui-danger">Failed to load agents.</span>
+              <button
+                type="button"
+                onClick={() => refetch()}
+                p="x-3 y-1"
+                text="xs ui-accent"
+                bg="ui-accent/20 hover:ui-accent/30"
+                border="1 ui-accent/50"
+                rounded="md"
+                cursor="pointer"
+              >
+                Retry
+              </button>
+            </div>
+          </Show>
+
+          <Show when={!agents.error && agents()}>
+            <Show when={agents()?.length === 0}>
+              <div p="4" text="center ui-text-secondary">
+                No agents available
+              </div>
+            </Show>
             <For each={agents()}>
               {(agent) => (
                 <button

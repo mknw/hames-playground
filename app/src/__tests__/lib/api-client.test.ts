@@ -126,9 +126,11 @@ describe('api-client — document list', () => {
     expect(docs).toEqual([doc()])
   })
 
-  it('reads a non-OK status as "no documents" — both callers are polls', async () => {
+  it('throws on a non-OK status — a silent empty list feeds the composer gate and the 4s poll (#314)', async () => {
+    // Was: resolves []. A 401/500 cached as "no uploads" rendered a failed
+    // load pixel-identical to an empty stash and invited re-uploads.
     fetchMock.mockResolvedValue(new Response('boom', { status: 500 }))
-    await expect(listStashDocuments('s1')).resolves.toEqual([])
+    await expect(listStashDocuments('s1')).rejects.toThrow('Upload list failed (500)')
   })
 
   it('reads a body without a documents key as empty', async () => {

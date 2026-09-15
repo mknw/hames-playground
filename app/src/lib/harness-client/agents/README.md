@@ -150,6 +150,13 @@ On session close, a background hook distills useful facts from memory into the K
 
 #### Session flow
 
+<!-- Illustrative: `b.MemoryWriter` / `b.MemoryReadController` /
+     `b.MemoryCleanupController` are declared nowhere in baml_src/ (see the
+     "BAML Functions Needed" table below). And a raw bound BAML function does
+     NOT satisfy a pattern's controller contract — pass an adapter factory
+     (e.g. `createLoopControllerAdapter(toolNames)`), which adapts the call
+     order and returns `{ action, llmCall }`. -->
+
 ```typescript
 // --- Main conversation agent ---
 
@@ -248,7 +255,7 @@ async function createDistillationHook(schema: string): Promise<ConfiguredPattern
   }
 
   // Step 3: Write to neo4j KB
-  const persistToKB = simpleLoop(b.Neo4jController.bind(b), tools.neo4j ?? [], {
+  const persistToKB = simpleLoop(createNeo4jController(tools.neo4j ?? []), tools.neo4j ?? [], {
     patternId: 'distill-persist',
     schema,
   })

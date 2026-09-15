@@ -44,57 +44,89 @@ function assertSafeIdentifier(kind: string, value: string): string {
   return value
 }
 
-async function run(cypher: string, params: Record<string, unknown>): Promise<void> {
+async function run(cypher: string, params: Record<string, unknown>) {
   const session = getNeo4jDriver().session()
   try {
-    await session.run(cypher, params)
+    return await session.run(cypher, params)
   } finally {
     await session.close()
   }
 }
 
-/** Create a node with the given label, name and optional description. */
+/** The single summary record every op's final RETURN produces. A zero-match
+ *  MATCH turns the write into a no-op that resolves exactly like a success
+ *  (#314), so callers read this rather than assuming a row came back. */
+function summaryRecord(result: { records: { get: (key: string) => unknown }[] }) {
+  const record = result.records[0]
+  if (!record) throw new Error('Graph edit query returned no summary record')
+  return record
+}
+
+/** The write's final `RETURN count(*)` — how many nodes the MATCH bound. */
+function matchedCount(
+  result: { records: { get: (key: string) => unknown }[] },
+  key: string,
+): number {
+  return Number(summaryRecord(result).get(key))
+}
+
+/** Create a node with the given label, name and optional description.
+ *  Resolves with the created node's Neo4j elementId: the canvas keys a fresh
+ *  node by its user-typed name (#323 B1), so later edits and relations in the
+ *  same session need the real id to target it with. */
 export async function createGraphNode(
   label: string,
   name: string,
   description?: string,
-): Promise<void> {
+): Promise<string> {
   await requireUserId()
   const safeLabel = assertSafeIdentifier('label', label)
   if (description) {
-    await run(`CREATE (n:\`${safeLabel}\` {name: $name, description: $description})`, {
-      name,
-      description,
-    })
-  } else {
-    await run(`CREATE (n:\`${safeLabel}\` {name: $name})`, { name })
+    const result = await run(
+      `CREATE (n:\`${safeLabel}\` {name: $name, description: $description}) RETURN elementId(n) AS elementId`,
+      { name, description },
+    )
+    return String(summaryRecord(result).get('elementId'))
   }
+  const result = await run(
+    `CREATE (n:\`${safeLabel}\` {name: $name}) RETURN elementId(n) AS elementId`,
+    { name },
+  )
+  return String(summaryRecord(result).get('elementId'))
 }
 
-/** Create a relationship of the given type between two nodes, matched by name. */
+/** Create a relationship of the given type between two nodes, matched by
+ *  elementId. MERGE keeps a second click on the same pair idempotent instead of
+ *  stacking duplicate edges. */
 export async function linkGraphNodes(
-  sourceName: string,
-  targetName: string,
+  sourceId: string,
+  targetId: string,
   relType: string,
 ): Promise<void> {
   await requireUserId()
   const safeType = assertSafeIdentifier('relationship type', relType)
-  await run(
-    `MATCH (a {name: $sourceName}), (b {name: $targetName}) CREATE (a)-[:\`${safeType}\`]->(b)`,
-    { sourceName, targetName },
+  const result = await run(
+    `MATCH (a), (b) WHERE elementId(a) = $sourceId AND elementId(b) = $targetId MERGE (a)-[:\`${safeType}\`]->(b) RETURN count(*) AS linked`,
+    { sourceId, targetId },
   )
+  if (matchedCount(result, 'linked') === 0) {
+    throw new Error('Graph edit matched no graph node for that relation — nothing was created')
+  }
 }
 
-/** Set one property on a node matched by name. */
+/** Set one property on the node with the given elementId. */
 export async function setGraphNodeProperty(
-  nodeName: string,
+  nodeId: string,
   key: string,
   value: string,
 ): Promise<void> {
   await requireUserId()
   const safeKey = assertSafeIdentifier('property key', key)
-  await run(`MATCH (n {name: $name}) SET n.\`${safeKey}\` = $value`, {
-    name: nodeName,
-    value,
-  })
+  const result = await run(
+    `MATCH (n) WHERE elementId(n) = $nodeId SET n.\`${safeKey}\` = $value RETURN count(n) AS matched`,
+    { nodeId, value },
+  )
+  if (matchedCount(result, 'matched') === 0) {
+    throw new Error('Graph edit matched no graph node with that id — nothing was written')
+  }
 }

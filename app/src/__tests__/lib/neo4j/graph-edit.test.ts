@@ -10,6 +10,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const sessionRun = vi.fn(async (..._a: unknown[]) => ({ records: [] as unknown[] }))
+
+/** Make the mocked session look like it matched `n` rows — the value of the
+ *  final `RETURN count(*)` column the ops read to detect a zero match. */
+const matchedRows = (n: number) => sessionRun.mockResolvedValueOnce({ records: [{ get: () => n }] })
 const sessionClose = vi.fn(async () => undefined)
 const driverSession = vi.fn(() => ({ run: sessionRun, close: sessionClose }))
 
@@ -69,9 +73,10 @@ describe('auth gate', () => {
     // fails rather than silently reverting the test to environment-dependent.
     vi.stubEnv('VITE_DEV_BYPASS_AUTH', 'true')
     getAuthenticatedUser.mockRejectedValue(new Error('Authentication required: no session.'))
+    sessionRun.mockResolvedValueOnce({ records: [{ get: () => '4:bypass:1' }] })
     const { createGraphNode } = await repo()
 
-    await expect(createGraphNode('Concept', 'GraphQL')).resolves.toBeUndefined()
+    await expect(createGraphNode('Concept', 'GraphQL')).resolves.toBe('4:bypass:1')
     expect(driverSession).toHaveBeenCalled()
   })
 })
@@ -106,58 +111,91 @@ describe('identifier validation', () => {
 })
 
 describe('createGraphNode', () => {
-  it('creates a node with description, values as parameters', async () => {
+  it('creates a node with description, values as parameters, and returns its elementId', async () => {
+    sessionRun.mockResolvedValueOnce({ records: [{ get: () => '4:abc:99' }] })
     const { createGraphNode } = await repo()
 
-    await createGraphNode('Concept', 'GraphQL', 'A query language')
+    await expect(createGraphNode('Concept', 'GraphQL', 'A query language')).resolves.toBe(
+      '4:abc:99',
+    )
 
-    expect(lastCypher()).toBe('CREATE (n:`Concept` {name: $name, description: $description})')
+    expect(lastCypher()).toBe(
+      'CREATE (n:`Concept` {name: $name, description: $description}) RETURN elementId(n) AS elementId',
+    )
     expect(lastParams()).toEqual({ name: 'GraphQL', description: 'A query language' })
     expect(sessionClose).toHaveBeenCalledTimes(1)
   })
 
-  it('omits the description clause when none is given', async () => {
+  it('resolves with the created node\u2019s elementId when no description is given (#323 B1)', async () => {
+    sessionRun.mockResolvedValueOnce({ records: [{ get: () => '4:abc:7' }] })
     const { createGraphNode } = await repo()
 
-    await createGraphNode('Concept', 'REST')
-
-    expect(lastCypher()).toBe('CREATE (n:`Concept` {name: $name})')
+    await expect(createGraphNode('Concept', 'REST')).resolves.toBe('4:abc:7')
+    expect(lastCypher()).toBe('CREATE (n:`Concept` {name: $name}) RETURN elementId(n) AS elementId')
     expect(lastParams()).toEqual({ name: 'REST' })
   })
 })
 
 describe('linkGraphNodes', () => {
-  it('creates a typed edge between name-matched nodes (the normal UI path)', async () => {
+  it('creates a typed edge between elementId-matched nodes (the normal UI path)', async () => {
+    matchedRows(1)
     const { linkGraphNodes } = await repo()
 
-    await linkGraphNodes('Alpha', 'Beta', 'DEPENDS_ON')
+    await linkGraphNodes('4:abc:11', '4:abc:12', 'DEPENDS_ON')
 
     expect(lastCypher()).toBe(
-      'MATCH (a {name: $sourceName}), (b {name: $targetName}) CREATE (a)-[:`DEPENDS_ON`]->(b)',
+      'MATCH (a), (b) WHERE elementId(a) = $sourceId AND elementId(b) = $targetId MERGE (a)-[:`DEPENDS_ON`]->(b) RETURN count(*) AS linked',
     )
-    expect(lastParams()).toEqual({ sourceName: 'Alpha', targetName: 'Beta' })
+    expect(lastParams()).toEqual({ sourceId: '4:abc:11', targetId: '4:abc:12' })
     expect(sessionClose).toHaveBeenCalledTimes(1)
   })
 
-  it('node names are parameters — a hostile name cannot reach the query text', async () => {
+  it('node ids are parameters — a hostile id cannot reach the query text', async () => {
+    matchedRows(1)
     const { linkGraphNodes } = await repo()
 
     const hostile = `"}) MATCH (n) DETACH DELETE n //`
-    await linkGraphNodes(hostile, 'Beta', 'RELATES_TO')
+    await linkGraphNodes(hostile, '4:abc:12', 'RELATES_TO')
 
     expect(lastCypher()).not.toContain('DETACH')
-    expect(lastParams()).toEqual({ sourceName: hostile, targetName: 'Beta' })
+    expect(lastParams()).toEqual({ sourceId: hostile, targetId: '4:abc:12' })
+  })
+
+  it('rejects when an endpoint matches no node instead of resolving as success (#314)', async () => {
+    matchedRows(0)
+    const { linkGraphNodes } = await repo()
+
+    await expect(linkGraphNodes('4:abc:404', '4:abc:12', 'RELATES_TO')).rejects.toThrow(
+      /no graph node/i,
+    )
+    expect(sessionClose).toHaveBeenCalledTimes(1)
   })
 })
 
 describe('setGraphNodeProperty', () => {
-  it('sets one property, key backtick-quoted, value as a parameter', async () => {
+  it('sets one property on the elementId-matched node, key backtick-quoted, value as a parameter', async () => {
+    matchedRows(1)
     const { setGraphNodeProperty } = await repo()
 
-    await setGraphNodeProperty('Alpha', 'summary', 'new summary')
+    await setGraphNodeProperty('4:abc:11', 'summary', 'new summary')
 
-    expect(lastCypher()).toBe('MATCH (n {name: $name}) SET n.`summary` = $value')
-    expect(lastParams()).toEqual({ name: 'Alpha', value: 'new summary' })
+    expect(lastCypher()).toBe(
+      'MATCH (n) WHERE elementId(n) = $nodeId SET n.`summary` = $value RETURN count(n) AS matched',
+    )
+    expect(lastParams()).toEqual({ nodeId: '4:abc:11', value: 'new summary' })
+  })
+
+  it('rejects when the node matches nothing instead of resolving as success (#314)', async () => {
+    // A display label that is not a `name` property (e.g. an org-graph GUID)
+    // used to issue MATCH ... matching zero nodes and still resolve — the edit
+    // reported success and the canvas fabricated the result.
+    matchedRows(0)
+    const { setGraphNodeProperty } = await repo()
+
+    await expect(setGraphNodeProperty('4:abc:404', 'summary', 'v')).rejects.toThrow(
+      /no graph node/i,
+    )
+    expect(sessionClose).toHaveBeenCalledTimes(1)
   })
 
   it('closes the session even when the query throws', async () => {

@@ -128,15 +128,17 @@ export interface StashDocumentBody {
 /**
  * List a session's uploaded documents.
  *
- * A non-OK status reads as "no documents" rather than an error: both callers
- * (the composer's embedding gate and the panel's status poll) are polls, and a
- * transient 500 must not be reported to the user as a failure. A *network*
- * failure still rejects — that is the caller's to interpret.
+ * Throws on a non-OK status (#314): the callers are polls, but a silent empty
+ * list is worse than a handled failure — it rendered a failed uploads load
+ * pixel-identical to an empty stash, was cached by the panel, and read as
+ * "nothing embedding" to the composer's gate. A network failure throws too.
  */
 export async function listStashDocuments(sessionId: string): Promise<StashDocumentMeta[]> {
   const url = `${API.stashDocuments}?sessionId=${encodeURIComponent(sessionId)}`
   const response = await fetch(url)
-  if (!response.ok) return []
+  if (!response.ok) {
+    throw new ApiError(`Upload list failed (${response.status})`, response.status)
+  }
   const body = await readJson<{ documents?: StashDocumentMeta[] }>(response)
   return body?.documents ?? []
 }

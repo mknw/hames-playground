@@ -63,7 +63,6 @@ async function main(): Promise<void> {
 
   const pattern = withSandbox({ rootfs: 'base' })(
     actorCritic(actor, critic, [], {
-      availableTools: [],
       maxRetries: 5,
       patternId: 'smoke-llm',
       trackHistory: true,

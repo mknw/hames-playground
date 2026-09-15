@@ -30,7 +30,7 @@
  */
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { query } from './client.server'
-import { type InferenceTier, verdaConfigured } from '../harness-patterns/clients.server'
+import { type InferenceTier, verdaConfigured } from '../inference/config.server'
 
 assertServerOnImport()
 

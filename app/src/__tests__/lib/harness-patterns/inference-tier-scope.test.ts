@@ -88,6 +88,14 @@ async function load() {
   return await import('../../../lib/harness-patterns/clients.server')
 }
 
+/** `verdaConfigured` moved to its own leaf (#225 Lane A2); this module is its
+ *  home now, and the tests below pin the same four deployment postures
+ *  against it. */
+async function loadTierConfig() {
+  vi.resetModules()
+  return await import('../../../lib/inference/config.server')
+}
+
 beforeEach(() => {
   saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]))
   for (const k of ENV_KEYS) delete process.env[k]
@@ -321,13 +329,13 @@ describe('the verda position fails closed when the endpoint is unset', () => {
 
 describe('verdaConfigured — the non-throwing sibling', () => {
   it('is false with nothing set, and does not throw', async () => {
-    const { verdaConfigured } = await load()
+    const { verdaConfigured } = await loadTierConfig()
     expect(verdaConfigured()).toBe(false)
   })
 
   it('is true once BOTH endpoints are present and shaped as /v1 bases', async () => {
     configureEndpointOnly()
-    const { verdaConfigured } = await load()
+    const { verdaConfigured } = await loadTierConfig()
     expect(verdaConfigured()).toBe(true)
   })
 
@@ -339,14 +347,14 @@ describe('verdaConfigured — the non-throwing sibling', () => {
     // strictly worse than showing one disabled control.
     process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
     process.env.VERDA_INFERENCE_API_KEY = 'test-key'
-    const { verdaConfigured } = await load()
+    const { verdaConfigured } = await loadTierConfig()
     expect(verdaConfigured()).toBe(false)
   })
 
   it('is false for a root URL — offering a tier that throws is worse than hiding it', async () => {
     process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/'
     process.env.VERDA_INFERENCE_API_KEY = 'test-key'
-    const { verdaConfigured } = await load()
+    const { verdaConfigured } = await loadTierConfig()
     expect(verdaConfigured()).toBe(false)
   })
 })

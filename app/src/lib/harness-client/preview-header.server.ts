@@ -32,7 +32,7 @@
 import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
 import { defaultInferenceTier, getStoredInferenceTier } from '../db/user-prefs.server'
-import { verdaConfigured, type InferenceTier } from '../harness-patterns/clients.server'
+import { verdaConfigured, type InferenceTier } from '../inference/config.server'
 import { verdaWarmth, type VerdaWarmth } from '../inference/verda-activity.server'
 import {
   probeVerdaReplicas,

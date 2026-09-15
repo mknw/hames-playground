@@ -33,7 +33,7 @@ import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
 import { chooseConversationTier, resolveTier, verdaConfigured } from '../inference/tier.server'
 import { getStoredInferenceTier } from '../db/user-prefs.server'
-import type { InferenceTier } from '../harness-patterns/clients.server'
+import type { InferenceTier } from '../inference/config.server'
 
 // ============================================================================
 // Auth helper

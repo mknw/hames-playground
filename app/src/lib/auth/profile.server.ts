@@ -35,7 +35,7 @@ import { BYPASS_USER, isBypassEnabled } from './dev-bypass'
 import { getUser } from './users.server'
 import { getStoredInferenceTier } from '../db/user-prefs.server'
 import { resolveTier } from '../inference/tier.server'
-import type { InferenceTier } from '../harness-patterns/clients.server'
+import type { InferenceTier } from '../inference/config.server'
 
 async function requireUser(): Promise<{ id: string; email: string; displayName: string | null }> {
   if (isBypassEnabled()) {

@@ -52,7 +52,7 @@
  */
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { query } from '../db/client.server'
-import type { InferenceTier } from '../harness-patterns/clients.server'
+import type { InferenceTier } from '../inference/config.server'
 
 assertServerOnImport()
 

@@ -19,7 +19,11 @@ services:
     networks:
       - app-network
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider localhost:7474 || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "wget --no-verbose --tries=1 --spider localhost:7474 || exit 1",
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -120,11 +124,13 @@ services:
     build:
       context: ./app
       dockerfile: Dockerfile
-      # #225 Step 0 bridge: the workspace lockfile lives at the repo root while
-      # the build context is still app/, so the three root workspace files
-      # (package.json, pnpm-workspace.yaml, pnpm-lock.yaml) ride in via this
-      # scoped named context — only files COPY names explicitly can cross it.
-      # Dissolves when #225 Step 1 widens the build context to the repo root.
+      # #225 Step 0 bridge, widened at Step 1c: the build context is still
+      # app/, so the repo-root files the build needs (the three workspace
+      # manifests/lockfile plus the packages/harness-patterns source tree) ride
+      # in via this scoped named context — only COPY-named paths can cross it.
+      # The allowlist IS the boundary (see app/Dockerfile's deps stage); the
+      # Dockerfile's build-time canary proves the workspace link on every
+      # build.
       additional_contexts:
         root: .
     image: kg-agent-app:local

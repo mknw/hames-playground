@@ -84,7 +84,14 @@ async function runRetriever(
     await import('../../../lib/harness-patterns/patterns/withInjectionGuard.server')
 
   const backend = stubBackend(hits)
-  const pattern = retriever<TestData>({ patternId: 'retriever', backends: [backend], k: 5 })
+  const pattern = retriever<TestData>({
+    patternId: 'retriever',
+    backends: [backend],
+    k: 5,
+    rewrite: async () => {
+      throw new Error('never called')
+    },
+  })
   const guarded = guardConfig ? withInjectionGuard(guardConfig)(pattern) : pattern
 
   const ctx = createContext<TestData>('what does the board pack say about Q3?')
@@ -157,6 +164,9 @@ describe('retriever hits — guarded', () => {
         patternId: 'retriever',
         backends: [stubBackend([hit(POISONED_CHUNK)])],
         k: 5,
+        rewrite: async () => {
+          throw new Error('never called')
+        },
       }),
     )
     const scope = createScope('retriever', {} as TestData)

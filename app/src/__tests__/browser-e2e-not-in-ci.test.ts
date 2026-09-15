@@ -262,7 +262,7 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
     expect(ENTRY_CLOSURE).toContain(ENTRY)
     expect(ENTRY_CLOSURE).toContain('src/lib/inference/dev-fake-inference.server.ts')
     expect(ENTRY_CLOSURE).toContain('src/lib/metrics/usage-recorder.server.ts')
-    expect(ENTRY_CLOSURE).toContain('src/lib/harness-patterns/clients.server.ts')
+    expect(ENTRY_CLOSURE).toContain('src/lib/harness-baml/clients.server.ts')
     // The app-tool transport registration (#225 L3) is the newest edge and the
     // largest: the boot hook imports the barrel, and the barrel's own side
     // effect drags the Graph auth stack, doc-convert and the stash behind it.
@@ -287,13 +287,13 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
     // THE CLOSURE, not two files. The first version of this checked
     // `dev-fake-inference.server.ts` and `middleware.ts` by name and said
     // "nothing else in `src/` imports BAML at module scope either". That was
-    // false when it was written: `harness-patterns/routing.server.ts`,
+    // false when it was written: `harness-baml/routing.server.ts`,
     // `baml-adapters.server.ts`, eight `patterns/*.server.ts` and
     // `agents/title-generator.server.ts` all do. They are SAFE — none of them
     // is in the entry graph — and that is the actual rule, so it is the rule
     // that is asserted. An independent review walked this closure and found
     // ~19 modules, including `metrics/usage-recorder.server.ts` →
-    // `harness-patterns/clients.server.ts`: any one of those acquiring a
+    // `harness-baml/clients.server.ts`: any one of those acquiring a
     // module-scope `Collector` restores the boot regression with the old
     // two-file pin, `typecheck`, `test:run` and `build` all green.
     //

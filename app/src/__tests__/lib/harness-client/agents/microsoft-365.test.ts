@@ -71,6 +71,11 @@ vi.mock('../../../../lib/harness-patterns', () => ({
   }),
   withInjectionGuard: (config: unknown) => injectionGuard(config),
   Tools: async () => ({ graph: graphNamespace, all: graphNamespace }),
+}))
+
+// Lane A6: the adapter factories moved to `harness-baml` — the fake records
+// the factory args so the tests below can inspect them.
+vi.mock('../../../../lib/harness-baml', () => ({
   createLoopControllerAdapter: (...args: unknown[]) => ({ adapterArgs: args }),
 }))
 

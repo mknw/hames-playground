@@ -53,7 +53,7 @@ describe('simpleLoop', () => {
     const { simpleLoop } =
       await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
     const { createLoopControllerAdapter } =
-      await import('../../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
     const pattern = simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
@@ -74,7 +74,7 @@ describe('simpleLoop', () => {
       await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
     const { DEFAULT_SETTINGS } = await import('../../../../lib/settings')
     const { createLoopControllerAdapter } =
-      await import('../../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
     const pattern = simpleLoop(controller, ['Return'])
@@ -87,7 +87,7 @@ describe('simpleLoop', () => {
     const { simpleLoop } =
       await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
     const { createLoopControllerAdapter } =
-      await import('../../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../../lib/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
     const pattern = simpleLoop(controller, ['Return'], {

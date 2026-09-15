@@ -27,7 +27,7 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-import type { BamlRole } from '../../../lib/harness-patterns/clients.server'
+import type { BamlRole } from '../../../lib/harness-baml/clients.server'
 
 const ENV_KEYS = [
   'USE_VERDA_INFERENCE',
@@ -85,7 +85,7 @@ const PRIVATE_CLIENT: Record<string, string> = {
 
 async function load() {
   vi.resetModules()
-  return await import('../../../lib/harness-patterns/clients.server')
+  return await import('../../../lib/harness-baml/clients.server')
 }
 
 /** `verdaConfigured` moved to its own leaf (#225 Lane A2); this module is its
@@ -179,7 +179,7 @@ describe('runWithInferenceTier — both positions reach the right override', () 
 
   it('trims a scoped Verda run against the 131K server window', async () => {
     const { runWithInferenceTier, resolveClientForRole } = await load()
-    const { getContextWindow } = await import('../../../lib/harness-patterns/clients.server')
+    const { getContextWindow } = await import('../../../lib/harness-baml/clients.server')
 
     await runWithInferenceTier('verda', async () => {
       expect(getContextWindow(resolveClientForRole('controller'))).toBe(131_072)

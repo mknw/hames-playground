@@ -2,7 +2,7 @@
  * The inference tier's vocabulary: which tiers exist, and whether the private
  * one is configured well enough to be offered.
  *
- * Moved here from `harness-patterns/clients.server.ts` (#225 Lane A2,
+ * Moved here from `harness-baml/clients.server.ts` (#225 Lane A2,
  * byte-for-byte): eight app modules imported nothing else from that file, so
  * holding the `InferenceTier` union there made every later seam diff touch
  * modules that have no seam surface. This module is a leaf — its only import
@@ -14,7 +14,7 @@
  * `verdaConfigured` in `tier.server.ts` would have closed that loop).
  */
 import { assertServerOnImport } from '../harness-patterns/assert.server'
-import { assertPrivateTierConfigured } from '../harness-patterns/clients.server'
+import { assertPrivateTierConfigured } from '../harness-baml/clients.server'
 
 assertServerOnImport()
 

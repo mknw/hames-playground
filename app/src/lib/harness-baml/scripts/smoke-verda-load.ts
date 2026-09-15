@@ -13,7 +13,7 @@
  * Run from `app/` (the endpoint bills while awake — run it once, in one burst):
  *
  *   USE_VERDA_INFERENCE=1 pnpm dlx tsx --env-file=.env \
- *     src/lib/harness-patterns/scripts/smoke-verda-load.ts
+ *     src/lib/harness-baml/scripts/smoke-verda-load.ts
  *
  * WHAT IT MEASURES, and why each phase is shaped the way it is:
  *
@@ -49,7 +49,7 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import type { LoopTurn, ToolDescription } from '../types'
+import type { LoopTurn, ToolDescription } from '../../harness-patterns/types'
 import { assertVerdaConfigured, clientOverrideFor, verdaInferenceEnabled } from '../clients.server'
 
 const EXPECTED_CLIENT = 'VerdaQwen'

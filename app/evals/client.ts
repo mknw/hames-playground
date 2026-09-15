@@ -11,7 +11,7 @@
  * `src/` would re-introduce exactly the switch that was deleted on 2026-08-24.
  *
  * So the suite reuses the seam instead of widening it. `clientOverrideFor()` in
- * `src/lib/harness-patterns/clients.server.ts` works by spreading
+ * `src/lib/harness-baml/clients.server.ts` works by spreading
  * `{ client: '<name>' }` into a BAML call's options bag; every scenario here
  * does the same thing with a value this file owns. The production resolution
  * path is untouched and still consulted — `resolveClientForRole()` is what the
@@ -69,7 +69,7 @@ import {
   resolveClientForRole,
   VERDA_CLIENT_BY_ROLE,
   type BamlRole,
-} from '../src/lib/harness-patterns/clients.server'
+} from '../src/lib/harness-baml/clients.server'
 
 /** The roles this suite has scenarios for — every `BamlRole` since the planner
  *  scenario landed — plus `actor`, which shares the `controller` role but a

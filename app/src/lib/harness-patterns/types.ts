@@ -503,6 +503,129 @@ export type ControllerFn = {
 export type ActorFn = (input: ActorInput) => Promise<ControllerCallResult>
 
 // ============================================================================
+// The remaining seam callables (#225 Lane A6) — the six functions that stop
+// being BAML-wired inside core and become REQUIRED config on their patterns.
+// All of them are plain callables the app supplies via `bamlPatterns()`
+// (`lib/harness-baml`); core declares the shapes and hosts no implementation.
+//
+// `limits?` follows the controller seam's Lane A5 shape: OPTIONAL, because a
+// custom injected implementation may not know its model's budgets, while the
+// adapter implementations always provide it (resolved per call — a tier
+// decision is an ALS scope). A seam without one falls back to the
+// conservative 16K window, the same default `getContextWindow` carried.
+// ===========================================================================
+
+/** Shared input for the history-rewriting describe functions (`CompactIntent`,
+ *  `RetrieveQuery`): the conversation history ALREADY TRIMMED by the caller
+ *  against the fn's own `limits().contextWindow`, plus the latest user
+ *  message. The trim stays with the pattern so its event data keeps reporting
+ *  the length it actually sent; the fn is a pure model call. */
+export interface HistoryQueryInput {
+  history: Array<{ role: string; content: string }>
+  latest: string
+}
+
+/** The compactIntent seam: REQUIRED config on `compactIntent`. Rewrites the
+ *  latest message into a self-contained intent brief; on failure it throws
+ *  {@link LLMCallError} (the pattern degrades recoverably to the raw
+ *  message — it never blocks the chain). */
+export type CompactIntentFn = {
+  (input: HistoryQueryInput): Promise<LLMResult<string>>
+  limits?: () => ModelLimits
+}
+
+/** The RetrieveQuery seam: REQUIRED config on `retriever`. Rewrites the latest
+ *  message into a search query; on failure it throws {@link LLMCallError} and
+ *  the retriever falls back to the raw message. */
+export type RetrieveQueryFn = {
+  (input: HistoryQueryInput): Promise<LLMResult<string>>
+  limits?: () => ModelLimits
+}
+
+/** What a planner call returns: the plan plus the record of the call that
+ *  produced it, and the size of the tool catalog the model was ACTUALLY shown
+ *  (the resolved one — an active sandbox scope's in-VM tools plus the gateway
+ *  tools that resolved — not the raw name list). */
+export interface PlanCallResult {
+  plan: PlanResult
+  llmCall?: LLMCallRecord
+  toolCount: number
+}
+
+/** The planner seam: REQUIRED config on `planner`. Positional like the
+ *  adapter it replaces — the schema rides per call (`planner`'s own config
+ *  carries it), and there is no collector slot: the implementation owns its
+ *  collector and returns the record. */
+export type PlannerFn = (
+  userMessage: string,
+  intent: string,
+  context?: string,
+) => Promise<PlanCallResult>
+
+/** One tool result queued for a batched describe call. `id` is a
+ *  caller-assigned label, unique within the batch, that the model echoes back
+ *  on its summary. */
+export interface DescribeBatchItem {
+  id: string
+  tool: string
+  toolArgs: string
+  reasoning: string
+  result: string
+}
+
+/** The single-result describe seam: REQUIRED config on `compactBulkData`.
+ *  Non-throwing by contract: an implementation reports failure as `''` so the
+ *  caller can skip the summary without a fallback of its own. */
+export type DescribeFn = (
+  tool: string,
+  toolArgs: string,
+  reasoning: string,
+  result: string,
+) => Promise<string>
+
+/** The batched describe seam: REQUIRED config on `compactBulkData`. Returns a
+ *  map of item `id` → summary; missing ids (dropped, blank, failed call) are
+ *  the caller's cue to fall back per item. `limits` is what `maxBatchItems`
+ *  sizes batches against (the CHAIN FLOOR, SA-M6). */
+export type DescribeBatchFn = {
+  (items: DescribeBatchItem[]): Promise<Map<string, string>>
+  limits?: () => ModelLimits
+}
+
+/** The two describe fns `compactBulkData` requires. Structurally the
+ *  `describe` / `describeBatch` members of `BamlPatterns` (`harness-baml`). */
+export interface BulkDescribeFns {
+  describe: DescribeFn
+  describeBatch: DescribeBatchFn
+}
+
+/** What a routing call returns. Lives in core so the router's `route`
+ *  override is declarable without core importing the implementation. */
+export interface RouteMessageResult {
+  intent: string
+  tool_call_needed: boolean
+  tool_name: string | null
+  response_text: string
+  llmCall?: LLMCallRecord
+}
+
+/** The router seam. `routeMessageOp` (harness-baml) is the adapter
+ *  implementation and satisfies this shape; unlike the five seams above it is
+ *  an OPTIONAL override with that default — raw-llm-visibility.test.ts pins
+ *  the router pattern end-to-end through the default, and the exit criterion
+ *  forbids editing it semantically (the same shape the design note prescribes
+ *  for `ReferenceSelector`: implementation moves to harness-baml, pattern
+ *  keeps it as the default). */
+export type RouteFn = {
+  (
+    message: string,
+    history: Array<{ role: string; content: string }>,
+    routes?: Array<{ name: string; description: string }>,
+  ): Promise<RouteMessageResult>
+  limits?: () => ModelLimits
+}
+
+// ============================================================================
 // Pattern Configuration
 // ============================================================================
 
@@ -1159,6 +1282,10 @@ export const DIRECT_RESPONSE_ROUTE = 'user'
 export interface RouterConfig extends PatternConfig {
   /** Route name set when responding directly without a tool (default: 'user') */
   directResponseRoute?: string
+  /** Override the routing implementation (Lane A6 seam). Default:
+   *  `routeMessageOp` from `harness-baml` — the implementation moved there
+   *  whole; the pattern keeps it as the default (see {@link RouteFn}). */
+  route?: RouteFn
 }
 
 /** Configuration for routes dispatch pattern */

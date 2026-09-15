@@ -16,132 +16,15 @@ import type {
   ConfiguredPattern,
   AssistantMessageEventData,
   ToolResultEventData,
-  LLMResult,
 } from '../types'
 import { LLMCallError } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import type { ErrorEventData } from '../types'
 import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig } from '../context.server'
-import { Collector } from '@boundaryml/baml'
-import { trimToFit } from '../token-budget.server'
-import { getContextWindow } from '../clients.server'
-import { extractLLMCallData, wrapAsLLMCallError } from '../baml-adapters.server'
-import { clientOverrideFor, resolveClientForRole } from '../clients.server'
+import { defaultSynthesize } from '../../harness-baml/defaults.server'
 
 assertServerOnImport()
-
-/**
- * Default synthesis function using BAML Synthesize.
- * Returns the {@link LLMResult} envelope (Lane A3): the implementation owns
- * its collector and stamps the call record, so a custom `synthesize` override
- * can carry the same observability the default always did — the override used
- * to return a bare string and emit NO `llmCall` at all. A failure after
- * reaching the model throws `LLMCallError` carrying the record, per the seam's
- * throw contract (#232).
- */
-async function defaultSynthesize(input: CompactExecutionInput): Promise<LLMResult<string>> {
-  // Dynamic import to avoid circular dependencies
-  const { b } = await import('../../../../baml_client')
-  const startTime = Date.now()
-  // Lane A3: the implementation owns the collector — it used to be created by
-  // the pattern and handed down, which is the handle the envelope deletes.
-  const collector = new Collector('compactExecution')
-
-  // Convert to LoopTurn format for BAML Synthesize
-  const turns: import('../types').LoopTurn[] = []
-
-  if (input.loopHistory) {
-    // Convert loop history to LoopTurn array. Multi-call iterations carry
-    // additional_calls through (their result is already the index-keyed map
-    // holding every sub-call's tool + result/__error).
-    //
-    // `success: true` below is unconditional, which is only honest because
-    // `buildSynthesisInputFromView` has already dropped the iterations that
-    // have no result to report (the terminal `Return`, and actions whose
-    // `tool_result` never arrived) — see the SA-H4 note there.
-    for (const iteration of input.loopHistory.iterations) {
-      turns.push({
-        n: iteration.turn,
-        reasoning: iteration.action.reasoning,
-        tool_call: {
-          tool: iteration.action.tool_name,
-          args: iteration.action.tool_args,
-        },
-        ...(iteration.action.additional_calls?.length
-          ? { additional_calls: iteration.action.additional_calls }
-          : {}),
-        tool_result: {
-          tool: iteration.action.tool_name,
-          result: JSON.stringify(iteration.result),
-          success: true,
-        },
-      })
-    }
-  } else if (input.response) {
-    // Create a single turn with the response as a result
-    turns.push({
-      n: 0,
-      reasoning: 'Direct response',
-      tool_result: {
-        tool: 'response',
-        result: input.response,
-        success: true,
-      },
-    })
-  }
-
-  // Trim oldest turns if they would overflow the compactExecution's context window
-  // Trim against the window of the client this call will ACTUALLY use.
-  // Hardcoding a chain name here ('SynthesizerFallback') missed the map, fell
-  // through to a 16K default, and dropped real tool results before the LLM saw
-  // them (see .harness-logs/neo4j-no-results.json).
-  const contextWindow = getContextWindow(resolveClientForRole('compactExecution'))
-  const trimmedTurns = trimToFit(turns, (t) => JSON.stringify(t), 500, contextWindow)
-
-  const variables = {
-    userMessage: input.userMessage,
-    intent: input.intent,
-    turns: trimmedTurns,
-    hasError: input.hasError ?? false,
-    errorMessage: input.errorMessage,
-  }
-
-  // Call with options always: the implementation-owned collector is in the
-  // bag even when no tier override is, so the old with/without-opts dual call
-  // is gone. `Synthesize` declares `SynthesizerAnthropic` (Sonnet 5 → Haiku
-  // 4.5), overridden onto the self-hosted deployment when
-  // `USE_VERDA_INFERENCE=1` re-points the `compactExecution` role.
-  const synthOpts = { collector, ...clientOverrideFor('compactExecution') }
-  let content: string
-  try {
-    content = await b.Synthesize(
-      input.userMessage,
-      input.intent,
-      trimmedTurns,
-      input.hasError ?? false,
-      input.errorMessage,
-      synthOpts,
-    )
-  } catch (e) {
-    // Throw contract: the raw response travels with the throw so the
-    // pattern's error event keeps its drill-down.
-    throw wrapAsLLMCallError(e, 'Synthesize', variables, startTime, collector)
-  }
-
-  // Route through the SHARED extractor rather than rebuilding LLMCallData here.
-  // This site used to hand-roll it, and the copy had drifted: no cache-write
-  // token bucket, no step `metrics`, and — the one that mattered — no call to
-  // the usage chokepoint. `Synthesize` is a compactExecution-role call, i.e.
-  // one of the three roles the self-hosted tier moves, and it is the LAST call
-  // of a turn. Successes went uncounted while its failure path (below) counted,
-  // so the preview header's on-prem share read high and its warm clock started
-  // ticking from the controller's last call instead of this one. One extractor,
-  // one accounting stamp, one stale-client guard (#154).
-  const llmCall = extractLLMCallData(collector, 'Synthesize', variables, startTime, content)
-
-  return { value: content, call: llmCall }
-}
 
 /**
  * Build synthesis input from EventView based on mode.

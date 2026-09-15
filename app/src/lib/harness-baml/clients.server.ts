@@ -94,7 +94,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { assertServerOnImport } from './assert.server'
+import { assertServerOnImport } from '../harness-patterns/assert.server'
 // App-side, and in the same direction the patterns already import
 // `settings-context.server` / `tool-transport.server`: a process-local clock
 // with no database behind it, which is the boundary the library extraction
@@ -112,7 +112,7 @@ import type { InferenceTier } from '../inference/config.server'
 // it moves to `harness-baml` at A6 with them. The pattern layer stops reading
 // the tables directly (A5's property).
 import { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS } from '../settings'
-import type { ModelLimits } from './types'
+import type { ModelLimits } from '../harness-patterns/types'
 
 assertServerOnImport()
 

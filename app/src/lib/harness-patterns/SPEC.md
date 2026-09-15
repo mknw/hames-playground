@@ -74,12 +74,12 @@ BAML Functions ──┐
 MCP Tools ───────┘
 ```
 
-**Key Principle**: patterns take adapter factories (`createLoopControllerAdapter` and friends), which wrap the generated BAML functions and adapt their positional call order. A raw BAML function does not satisfy a pattern's controller contract.
+**Key Principle**: patterns take adapter factories (`createLoopControllerAdapter` and friends, from the `harness-baml` companion module — `~/lib/harness-baml`), which wrap the generated BAML functions and adapt their positional call order. A raw BAML function does not satisfy a pattern's controller contract. Since Lane A6 (#225) the six non-controller LLM calls (`Planner`, `Router`, `CompactIntent`, `RetrieveQuery`, `ResultDescribe(+Batch)`) are REQUIRED config on their patterns, supplied by one `bamlPatterns()` factory — see "The LLM seam" below.
 
 ## Core Concepts
 
 ```typescript
-// Adapter factories from baml-adapters.server.ts — the only thing you pass to
+// Adapter factories from `harness-baml` (`~/lib/harness-baml`) — the only thing you pass to
 // a pattern's controller/actor/critic slots. They adapt the BAML call order
 // and return { action, llmCall }; a raw bound BAML function
 // (e.g. b.LoopController.bind(b)) does NOT satisfy the contract and fails
@@ -817,9 +817,9 @@ overwhelmingly common case must cost zero tokens and carry zero mangling risk.
 > callers test `data === input` — not `summary` presence — for "did it change?".
 
 **Optional LLM screen (off by default).** `screen` takes an `InjectionScreen`;
-`createInjectionScreen()` (baml-adapters) is the BAML-backed one, on the cheap
+`createInjectionScreen()` (in `harness-baml`) is the BAML-backed one, on the cheap
 `DescribeAnthropic` client. It has its OWN `screen` role in
-`clients.server.ts` rather than riding `describe`, so re-pointing summarization
+`harness-baml/clients.server.ts` rather than riding `describe`, so re-pointing summarization
 at a cheaper model can never silently re-point prompt-injection screening with
 it (SA-M5). The guard calls it **only for content the
 deterministic layer passed clean** — i.e. gated on `findings.length === 0`, see
@@ -1038,14 +1038,19 @@ type CompactIntentConfig = PatternConfig
 > Part E of [#83](https://github.com/mknw/harness-playground/issues/83) (the
 > `compact*` naming unification) is a deferred follow-up.
 
-### `planner(tools, config?)`
+### `planner(planFn, tools, config?)`
 
 Produces a natural-language plan ONCE, before any tool runs, and hands it to
 the next pattern in the chain. The planner does not execute tools — it reasons
-about them.
+about them. `planFn` is REQUIRED (Lane A6 seam): pass `bamlPatterns().planner(tools)`
+from `harness-baml` — the same tool list the pattern gets.
 
 ```typescript
-chain(planner(tools.all), simpleLoop(controller, tools.all), compactExecution({ mode: 'thread' }))
+chain(
+  planner(baml.planner(tools.all), tools.all),
+  simpleLoop(controller, tools.all),
+  compactExecution({ mode: 'thread' }),
+)
 
 interface PlannerConfig extends PatternConfig {
   schema?: string // Extra context (e.g. neo4j schema) — mirrors simpleLoop's
@@ -1870,23 +1875,31 @@ const result = await agent('Show me all Person nodes', 'session-123')
 ## File Structure
 
 ```
-harness-patterns/
-├── index.ts                # Public exports
-├── types.ts                # Core types (UnifiedContext, PatternScope, RouterConfig, DIRECT_RESPONSE_ROUTE, etc.)
+harness-patterns/                        # CORE — zero baml_client / @boundaryml/baml references (Lane A6 pin)
+├── index.ts                # Public exports (no BAML-side symbols — those moved to harness-baml)
+├── types.ts                # Core types (UnifiedContext, PatternScope, RouterConfig, DIRECT_RESPONSE_ROUTE, the seam callables ControllerFn/PlannerFn/CompactIntentFn/… )
 ├── context.server.ts       # Context factory, createEvent(), generateId()
 ├── tools.server.ts         # Tools({ namespaces }) — groups MCP tools by namespace; the map is REQUIRED (ruling B-iii); inferServer consults transports' namespaceFor → registered resolvers (registerToolNamespaces) → heuristic; NO catalog in core — the 86-entry map lives in app-tools/mcp-catalog.ts and registers at boot
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? callback
-├── routing.server.ts       # BAML router integration (routeMessageOp)
 ├── tool-transport.server.ts # ToolTransport + withTransport() (scoped, innermost-first) / registerTransport() (process, consulted after every scoped one) / activeTransports(); the difference between the two registration functions IS the containment invariant — there is no priority field and no argument that could express one
 ├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
-├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter (tool list rides ControllerInput.tools — L14), createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, etc.
-├── compactBulkData.server.ts # compactBulkData() — background tool result summarization via the describe-tier client
+├── compactBulkData.server.ts # compactBulkData(ctx, onPersist, { describe, describeBatch }) — the two describe fns are REQUIRED config (Lane A6)
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
-├── token-budget.server.ts  # trimToFit(), getContextWindow(), estimateTokens() — rolling context window
+├── token-budget.server.ts  # trimToFit(), estimateTokens() — rolling context window (getContextWindow moved to harness-baml/clients.server with the model tables)
 ├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding
 ├── injection-guard-scope.server.ts # ALS scope carrying the active guard (same shape as tool-transport.server.ts's, opposite nesting rule — it UNIONS, see SD-5); read by callTool + retriever
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values)
 ├── assert.server.ts        # Server-only guards
+
+harness-baml/                            # The BAML companion module (Lane A6) — EVERYTHING that touches baml_client lives here
+├── index.ts                # Public exports (bamlPatterns, adapter factories, routeMessageOp, client/role maps)
+├── baml-patterns.server.ts # bamlPatterns() — the one factory for the six REQUIRED injected fns + the compactIntent/RetrieveQuery adapters
+├── defaults.server.ts      # defaultSynthesize (compactExecution) + defaultSelector (withReferences) — the carried-over optional defaults
+├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter (tool list rides ControllerInput.tools — L14), createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, createInjectionScreen
+├── clients.server.ts       # The role → client maps (CLIENT_BY_ROLE / VERDA_CLIENT_BY_ROLE), clientOverrideFor, limitsFor, the tier ALS — moved byte-for-byte from core (Lane A6/A-i)
+├── routing.server.ts       # routeMessageOp — the router seam's default implementation (with limits())
+├── baml-version-check.server.ts # Boot-time staleness warning for baml_client (#154)
+└── scripts/                # smoke-verda.ts + smoke-verda-load.ts — the live Verda endpoint checks
 └── patterns/
     ├── index.ts
     ├── router.server.ts        # router() + routes() — intent classification + dispatch

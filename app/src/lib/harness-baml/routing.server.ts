@@ -4,11 +4,11 @@
  * Routes user messages to appropriate tool namespaces.
  */
 
-import { assertServerOnImport } from './assert.server'
+import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { Collector } from '@boundaryml/baml'
 import { extractLLMCallData, wrapAsLLMCallError } from './baml-adapters.server'
-import { clientOverrideFor } from './clients.server'
-import type { LLMCallRecord } from './types'
+import { clientOverrideFor, limitsFor } from './clients.server'
+import type { RouteMessageResult, RouteFn } from '../harness-patterns/types'
 
 assertServerOnImport()
 
@@ -31,14 +31,10 @@ const DEFAULT_ROUTES = [
   { name: 'web_search', description: 'Web lookups and information retrieval' },
 ]
 
-export interface RouteMessageResult {
-  intent: string
-  tool_call_needed: boolean
-  tool_name: string | null
-  response_text: string
-  /** The implementation-stamped record (Lane A3): carries `hitOutputCap`. */
-  llmCall?: LLMCallRecord
-}
+// `RouteMessageResult` moved to core `types.ts` at Lane A6 so the router's
+// `route` override is declarable without core importing this module.
+// Re-exported for existing import paths.
+export type { RouteMessageResult }
 
 export async function routeMessageOp(
   message: string,
@@ -86,3 +82,13 @@ export async function routeMessageOp(
     llmCall,
   }
 }
+
+// Lane A6 seam: the router pattern trims its history against the route fn's
+// own `limits()` instead of importing `limitsFor` from core. Same lookup the
+// BAML call below resolves — just exposed where the caller can read it.
+routeMessageOp.limits = () => limitsFor('router')
+
+// `RouteFn` is the seam type core declares for the router's `route` override;
+// this is its adapter implementation. Compile-time check only.
+const _asRouteFn: RouteFn = routeMessageOp
+void _asRouteFn

@@ -55,8 +55,11 @@ import type {
 // pins use); `import.meta.url` is not a file URL in this jsdom environment.
 const CORE = resolve(process.cwd(), 'src/lib/harness-patterns')
 
-/** The generated module must never be referenced again under core. */
-const FORBIDDEN_SPECIFIER = 'baml_client/types'
+/** The generated module must never be referenced again under core. Lane A6
+ *  widened the A1 pin from the types module to EVERYTHING BAML: after the
+ *  adapters/clients/routing move to `harness-baml/`, core holds zero BAML
+ *  vocabulary of any kind — the lane's exit criterion, made a pin. */
+const FORBIDDEN_SPECIFIERS = ['baml_client/types', 'baml_client', '@boundaryml/baml']
 
 async function walk(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true })
@@ -81,10 +84,29 @@ describe('core owns its data types (Lane A1 pin)', () => {
     const offenders: string[] = []
     for (const file of files) {
       const text = await readFile(file, 'utf8')
-      if (text.includes(FORBIDDEN_SPECIFIER)) offenders.push(relative(CORE, file))
+      for (const specifier of FORBIDDEN_SPECIFIERS) {
+        if (text.includes(specifier)) {
+          offenders.push(`${relative(CORE, file)} (${specifier})`)
+          break
+        }
+      }
     }
 
     expect(offenders).toEqual([])
+  })
+
+  it('the exit criterion: zero baml_client / @boundaryml/baml references under harness-patterns/ (Lane A6)', async () => {
+    // Same scan, stated as the lane's exit criterion so the two cannot drift:
+    // the count the design note quotes is what this asserts, every commit.
+    const files = await walk(CORE)
+    const hits: string[] = []
+    for (const file of files) {
+      const text = await readFile(file, 'utf8')
+      if (text.includes('baml_client') || text.includes('@boundaryml/baml')) {
+        hits.push(relative(CORE, file))
+      }
+    }
+    expect(hits).toEqual([])
   })
 
   it('the local declarations stay field-for-field identical to the generated ones', () => {

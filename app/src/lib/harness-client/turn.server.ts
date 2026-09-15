@@ -58,7 +58,8 @@ import {
 } from './session.server'
 import { runWithRequestContext } from './request-user.server'
 import { runWithSettings } from '../settings-context.server'
-import { activeInferenceTier, runWithInferenceTier } from '../harness-patterns/clients.server'
+import { activeInferenceTier, runWithInferenceTier } from '../harness-baml/clients.server'
+import { bamlPatterns } from '../harness-baml'
 import type { InferenceTier } from '../inference/config.server'
 import { resolveConversationTier } from '../inference/tier.server'
 import { beginVerdaTurn, endVerdaTurn } from '../inference/verda-activity.server'
@@ -449,7 +450,13 @@ async function compactAndSave(
   agentId: string,
   result: HarnessResultScoped<SessionData>,
 ): Promise<void> {
-  await compactBulkData(result.context, async () => {
-    await saveSession(req.sessionId, req.userId, agentId, serializeContext(result.context))
-  }).catch((err) => console.error('[summarize] background summarization failed:', err))
+  // Lane A6: the two describe implementations are REQUIRED injected config on
+  // compactBulkData — `bamlPatterns()` supplies the describe-tier pair.
+  await compactBulkData(
+    result.context,
+    async () => {
+      await saveSession(req.sessionId, req.userId, agentId, serializeContext(result.context))
+    },
+    bamlPatterns(),
+  ).catch((err) => console.error('[summarize] background summarization failed:', err))
 }

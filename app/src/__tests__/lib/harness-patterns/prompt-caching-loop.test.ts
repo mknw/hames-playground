@@ -194,7 +194,7 @@ async function loadHarness() {
   const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
   const { actorCritic } = await import('../../../lib/harness-patterns/patterns/actorCritic.server')
   const { createLoopControllerAdapter, createActorControllerAdapter, createCriticAdapter } =
-    await import('../../../lib/harness-patterns/baml-adapters.server')
+    await import('../../../lib/harness-baml/baml-adapters.server')
   const { createScope } = await import('../../../lib/harness-patterns/context.server')
   const { createEventView } = await import('../../../lib/harness-patterns/patterns')
   return {

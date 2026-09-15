@@ -30,7 +30,7 @@ import { actorCritic } from '../../harness-patterns/patterns/actorCritic.server'
 import {
   createActorControllerAdapter,
   createCriticAdapter,
-} from '../../harness-patterns/baml-adapters.server'
+} from '../../harness-baml/baml-adapters.server'
 import { createScope } from '../../harness-patterns/context.server'
 import { createEventView } from '../../harness-patterns/patterns'
 import { printEventSummary, checkRootfsImage } from './_shared'

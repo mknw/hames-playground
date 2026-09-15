@@ -16,6 +16,9 @@ importers:
       '@azure/msal-node':
         specifier: ^5.4.2
         version: 5.4.2
+      '@boundaryml/baml':
+        specifier: 0.224.0
+        version: 0.224.0
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.3.6)
@@ -68,9 +71,6 @@ importers:
       '@axe-core/playwright':
         specifier: ^4.13.0
         version: 4.13.0(playwright-core@1.62.1)
-      '@boundaryml/baml':
-        specifier: 0.224.0
-        version: 0.224.0
       '@eslint/js':
         specifier: ^9.39.4
         version: 9.39.4

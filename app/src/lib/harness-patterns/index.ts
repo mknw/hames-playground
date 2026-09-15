@@ -239,12 +239,11 @@ export {
 
 export { callTool, listTools, closeMcpClient } from './mcp-client.server'
 
-// Lane A5: per-call model budgets. The function lives in clients.server (the
-// role→client map) and moves with it at A6; core pattern files no longer read
-// the model tables directly.
-export { limitsFor } from './clients.server'
+// Lane A6: `limitsFor` moved to `harness-baml` with the role→client map it
+// reads — core pattern files no longer read the model tables, directly or via
+// this barrel. Import it from `harness-baml`.
 export { assertServer, ServerOnlyError } from './assert.server'
-export { routeMessageOp } from './routing.server'
+// Lane A6: `routeMessageOp` moved to `harness-baml` whole.
 export { compactBulkData } from './compactBulkData.server'
 export { getErrorHint } from './error-hints'
 export { stripThinkBlocks, truncateToolResults, omitResultFields } from './content-transforms'
@@ -278,23 +277,28 @@ export {
 } from './injection-guard-scope.server'
 export { normalizeControllerAction } from './controller-action'
 
-// BAML Adapters. The seven domain controller factories (`createNeo4jController`
-// etc.) were deleted in Lane B3 (#225 L14) — they were argument-only aliases,
-// and the tool list now rides `ControllerInput.tools` (one declaration at the
-// loop). Agents call `createLoopControllerAdapter()` directly.
-export {
-  createLoopControllerAdapter,
-  createActorControllerAdapter,
-  createPlannerAdapter,
-  createCriticAdapter,
-  createInjectionScreen,
-  invalidateToolDescriptions,
-  accountBamlCall,
-  withUsageAccounting,
-  type ActorAdapterOptions,
-} from './baml-adapters.server'
+// Lane A6: the BAML adapter factories and their helpers moved to
+// `harness-baml` — core's barrel carries none of them. Import from
+// `~/lib/harness-baml` (createLoopControllerAdapter, createInjectionScreen,
+// withUsageAccounting, routeMessageOp, bamlPatterns, …).
 
-// The controller/actor object seam (Lane A4) — declared in core, implemented
-// by the adapter factories (which attach a legacy positional form for the
-// untouched acceptance tests).
-export type { ControllerFn, ActorFn, ControllerInput, ActorInput } from './types'
+// The object seams (Lane A4) and the Lane A6 seam callables — declared in
+// core, implemented by the adapter factories in `harness-baml` (which attach
+// legacy positional forms for the untouched acceptance tests).
+export type {
+  ControllerFn,
+  ActorFn,
+  ControllerInput,
+  ActorInput,
+  PlannerFn,
+  PlanCallResult,
+  CompactIntentFn,
+  RetrieveQueryFn,
+  HistoryQueryInput,
+  DescribeFn,
+  DescribeBatchFn,
+  DescribeBatchItem,
+  BulkDescribeFns,
+  RouteFn,
+  RouteMessageResult,
+} from './types'

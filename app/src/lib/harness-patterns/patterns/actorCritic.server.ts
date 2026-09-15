@@ -32,7 +32,7 @@ import { resolveTurnBudget } from '../../settings'
 import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import type { ActorFn } from '../types'
-import type { CriticFnWithLLMData } from '../baml-adapters.server'
+import type { CriticFnWithLLMData } from '../../harness-baml/baml-adapters.server'
 import { LLMCallError } from '../types'
 import { formatPlanContext, type PlannerData } from './planner.server'
 

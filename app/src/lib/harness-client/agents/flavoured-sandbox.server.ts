@@ -47,10 +47,9 @@ import {
   routes,
   compactExecution,
   actorCritic,
-  createActorControllerAdapter,
-  createCriticAdapter,
   type ConfiguredPattern,
 } from '../../harness-patterns'
+import { createActorControllerAdapter, createCriticAdapter } from '../../harness-baml'
 import { withSandbox } from '../../sandbox/index.server'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'

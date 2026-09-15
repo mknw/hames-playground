@@ -8,19 +8,36 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { UnifiedContext, ContextEvent } from '../../../lib/harness-patterns/types'
+import type {
+  UnifiedContext,
+  ContextEvent,
+  DescribeBatchItem,
+} from '../../../lib/harness-patterns/types'
+import { CLIENT_MAX_OUTPUT_TOKENS } from '../../../lib/settings'
 
 // Mock server-only imports
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-// Mock both describe ops — the single-item call and its batched twin
+// Mock both describe ops — the single-item call and its batched twin.
+// The batch fake carries `limits()` (Lane A6: the batch geometry derives from
+// the injected fn's own limits) resolving like the real adapter — through the
+// settings table, live at call time — so the cap-driven tests below still
+// steer the derivation.
 const mockDescribe = vi.fn()
-const mockDescribeBatch = vi.fn()
-vi.mock('../../../lib/harness-patterns/baml-adapters.server', () => ({
+const mockDescribeBatch = Object.assign(
+  vi.fn<(items: DescribeBatchItem[]) => Promise<Map<string, string>>>(),
+  {
+    limits: () => ({
+      contextWindow: 200_000,
+      maxOutputTokens: CLIENT_MAX_OUTPUT_TOKENS.DescribeAnthropic,
+    }),
+  },
+)
+vi.mock('../../../lib/harness-baml/baml-adapters.server', () => ({
   describeToolResultOp: (...args: unknown[]) => mockDescribe(...args),
-  describeToolResultsBatchOp: (...args: unknown[]) => mockDescribeBatch(...args),
+  describeToolResultsBatchOp: (items: DescribeBatchItem[]) => mockDescribeBatch(items),
 }))
 
 function createTestContext(events: ContextEvent[]): UnifiedContext {
@@ -94,7 +111,10 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     expect(mockDescribe).toHaveBeenCalledOnce()
     expect(mockDescribe).toHaveBeenCalledWith(
@@ -129,7 +149,10 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     expect(mockDescribe).not.toHaveBeenCalled()
     expect(onPersist).toHaveBeenCalledOnce()
@@ -152,7 +175,10 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     expect(mockDescribe).not.toHaveBeenCalled()
   })
@@ -174,7 +200,10 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     expect(mockDescribe).not.toHaveBeenCalled()
   })
@@ -196,7 +225,10 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     expect(mockDescribe).not.toHaveBeenCalled()
   })
@@ -217,7 +249,10 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     expect(mockDescribe).not.toHaveBeenCalled()
   })
@@ -250,13 +285,16 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     // One batched call, no per-item calls at all
     expect(mockDescribeBatch).toHaveBeenCalledOnce()
     expect(mockDescribe).not.toHaveBeenCalled()
 
-    const batch = mockDescribeBatch.mock.calls[0][0] as Array<Record<string, string>>
+    const batch = mockDescribeBatch.mock.calls[0][0] as unknown as Array<Record<string, string>>
     expect(batch.map((i) => i.id)).toEqual(['1', '2'])
     expect(batch.map((i) => i.tool)).toEqual(['search', 'fetch'])
     expect(batch[0].toolArgs).toBe('{}')
@@ -279,7 +317,10 @@ describe('compactBulkData', () => {
     ]
 
     const ctx = createTestContext(events)
-    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined))
+    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     expect((events[1].data as { summary?: string }).summary).toBe('first')
     expect((events[2].data as { summary?: string }).summary).toBe('second')
@@ -300,7 +341,10 @@ describe('compactBulkData', () => {
     ]
 
     const ctx = createTestContext(events)
-    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined))
+    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     // Exactly ONE repair call, for the missing item only
     expect(mockDescribeBatch).toHaveBeenCalledOnce()
@@ -327,7 +371,10 @@ describe('compactBulkData', () => {
 
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     expect(mockDescribe).toHaveBeenCalledTimes(2)
     expect((events[1].data as { summary?: string }).summary).toBe('per-item summary')
@@ -350,7 +397,10 @@ describe('compactBulkData', () => {
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
     // Must not throw, and must still persist whatever was gathered
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     expect((events[1].data as { summary?: string }).summary).toBeUndefined()
     expect((events[2].data as { summary?: string }).summary).toBeUndefined()
@@ -373,7 +423,10 @@ describe('compactBulkData', () => {
     )
 
     const ctx = createTestContext(events)
-    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined))
+    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     expect(mockDescribeBatch).toHaveBeenCalledTimes(2)
     const sizes = mockDescribeBatch.mock.calls.map((c) => (c[0] as unknown[]).length)
@@ -402,7 +455,7 @@ describe('compactBulkData', () => {
     try {
       const { compactBulkData, maxBatchItems } =
         await import('../../../lib/harness-patterns/compactBulkData.server')
-      expect(maxBatchItems()).toBe(5)
+      expect(maxBatchItems(mockDescribeBatch)).toBe(5)
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -414,7 +467,10 @@ describe('compactBulkData', () => {
       )
 
       const ctx = createTestContext(events)
-      await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined))
+      await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      })
 
       const sizes = mockDescribeBatch.mock.calls.map((c) => (c[0] as unknown[]).length)
       expect(sizes).toEqual([5, 2])
@@ -428,7 +484,7 @@ describe('compactBulkData', () => {
       await import('../../../lib/harness-patterns/compactBulkData.server')
     // DescribeAnthropic floors at Haiku's 16 384-token cap — far more than the
     // ceiling needs, so the derivation clamps to it.
-    expect(maxBatchItems()).toBe(MAX_BATCH_ITEMS)
+    expect(maxBatchItems(mockDescribeBatch)).toBe(MAX_BATCH_ITEMS)
   })
 
   it('shrinks the batch geometry on a verda-tier run, both halves', async () => {
@@ -453,11 +509,17 @@ describe('compactBulkData', () => {
     // Asserted through the real scope rather than by stubbing the map, because
     // "the budget follows the tier" is the claim and the scope is what carries
     // a tier.
-    const clients = await import('../../../lib/harness-patterns/clients.server')
+    const clients = await import('../../../lib/harness-baml/clients.server')
     const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
-    const { getContextWindow } = await import('../../../lib/harness-patterns/clients.server')
+    const { getContextWindow } = await import('../../../lib/harness-baml/clients.server')
     const { maxBatchItems, MAX_BATCH_ITEMS } =
       await import('../../../lib/harness-patterns/compactBulkData.server')
+    // Lane A6: the geometry reads the INJECTED fn's limits(). The fake
+    // resolves like the real adapter — through limitsFor, per call — so the
+    // property pinned is unchanged: the budget follows the tier.
+    const tierAwareBatch = Object.assign(vi.fn(), {
+      limits: () => clients.limitsFor('describe'),
+    })
 
     const KEYS = ['VERDA_INFERENCE_ENDPOINT', 'VERDA_INFERENCE_API_KEY', 'SMALL_LLM_BASE_URL']
     const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
@@ -473,13 +535,13 @@ describe('compactBulkData', () => {
         // The batch floor, not the ceiling — stated as both, because the exact
         // number is derived arithmetic (floor(2048 * 0.5 / 200) = 5) and the
         // PROPERTY is "smaller than on Anthropic".
-        expect(maxBatchItems()).toBeLessThan(MAX_BATCH_ITEMS)
-        expect(maxBatchItems()).toBe(5)
+        expect(maxBatchItems(tierAwareBatch)).toBeLessThan(MAX_BATCH_ITEMS)
+        expect(maxBatchItems(tierAwareBatch)).toBe(5)
         expect(getContextWindow(clients.resolveClientForRole('describe'))).toBe(32_768)
       })
       // Outside the scope the geometry is Anthropic's again — the mirror is not
       // a module-load constant.
-      expect(maxBatchItems()).toBe(MAX_BATCH_ITEMS)
+      expect(maxBatchItems(tierAwareBatch)).toBe(MAX_BATCH_ITEMS)
       expect(getContextWindow(clients.resolveClientForRole('describe'))).toBe(200_000)
     } finally {
       for (const k of KEYS) {
@@ -498,7 +560,10 @@ describe('compactBulkData', () => {
     ]
 
     const ctx = createTestContext(events)
-    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined))
+    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     expect(mockDescribeBatch).not.toHaveBeenCalled()
     expect(mockDescribe).toHaveBeenCalledOnce()
@@ -517,7 +582,10 @@ describe('compactBulkData', () => {
     ]
 
     const ctx = createTestContext(events)
-    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined))
+    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     // One target left → single-item path, and the done one is untouched
     expect(mockDescribeBatch).not.toHaveBeenCalled()
@@ -544,7 +612,10 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     expect(mockDescribe).toHaveBeenCalledOnce()
     // The 4th arg (result) should be truncated
@@ -572,7 +643,10 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     // Empty string should not be stored as summary
     expect((events[1].data as { summary?: string }).summary).toBeUndefined()
@@ -599,7 +673,10 @@ describe('compactBulkData', () => {
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
     // Should not throw — Promise.allSettled handles rejections
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     // Summary should not be set
     expect((events[1].data as { summary?: string }).summary).toBeUndefined()
@@ -618,7 +695,10 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     expect(mockDescribe).not.toHaveBeenCalled()
     // onPersist should NOT be called when there's nothing to summarize
@@ -652,7 +732,10 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     // Should only be called for ev-new (current turn)
     expect(mockDescribe).toHaveBeenCalledOnce()
@@ -705,7 +788,10 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist)
+    await compactBulkData(ctx, onPersist, {
+      describe: mockDescribe,
+      describeBatch: mockDescribeBatch,
+    })
 
     // Reasoning should be passed as 3rd argument
     expect(mockDescribe.mock.calls[0][2]).toBe('I need to query the graph for person nodes')

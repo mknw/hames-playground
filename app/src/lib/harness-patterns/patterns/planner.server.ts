@@ -5,7 +5,7 @@
  * the next pattern in the chain:
  *
  *   chain(
- *     planner(tools.all),
+ *     planner(baml.planner(tools.all), tools.all),
  *     simpleLoop(controller, tools.all, { patternId: 'execute' }),
  *     compactExecution({ mode: 'thread' }),
  *   )
@@ -48,12 +48,12 @@ import type {
   PlanCreatedEventData,
   ErrorEventData,
   LLMCallData,
+  PlannerFn,
 } from '../types'
 import type { PlanResult } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
 import { getErrorHint } from '../error-hints'
 import { stripThinkBlocks } from '../content-transforms'
-import { createPlannerAdapter } from '../baml-adapters.server'
 import { LLMCallError } from '../types'
 
 assertServerOnImport()
@@ -106,14 +106,19 @@ export function formatPlanContext(plan?: PlanResult): string | undefined {
 /**
  * Create a planner pattern.
  *
+ * @param planFn - REQUIRED (Lane A6 seam): the planner implementation —
+ *   `bamlPatterns().planner(tools)` from `harness-baml`, or your own. Core
+ *   hosts no BAML default any more, so there is no fallback.
  * @param tools - Tool names the DOWNSTREAM executor will have available. The
- *   planner only reads their descriptions; it never calls one.
+ *   planner only reads their descriptions; it never calls one. Pass the SAME
+ *   list to `bamlPatterns().planner(tools)` — the pattern reports its length.
  * @param config - Optional pattern configuration. The default `viewConfig`
  *   reads the last 2 user turns of message history (think-blocks stripped) so
  *   a multi-turn intent shift is visible — same shape as `router`.
  * @returns ConfiguredPattern ready for chain
  */
 export function planner<T extends PlannerData>(
+  planFn: PlannerFn,
   tools: string[],
   config?: PlannerConfig,
 ): ConfiguredPattern<T> {
@@ -128,7 +133,6 @@ export function planner<T extends PlannerData>(
     ...config,
   })
   const maxPlanChars = config?.maxPlanChars ?? DEFAULT_MAX_PLAN_CHARS
-  const plannerFn = createPlannerAdapter(tools)
 
   /** Drop a plan carried over from an earlier turn. Every exit path that does
    *  not produce a NEW plan goes through this: `scope.data` survives the turn
@@ -165,11 +169,7 @@ export function planner<T extends PlannerData>(
       }
 
       const intent = scope.data.intent ?? userContent
-      const {
-        plan: raw,
-        llmCall,
-        toolCount,
-      } = await plannerFn(userContent, intent, undefined, config?.schema)
+      const { plan: raw, llmCall, toolCount } = await planFn(userContent, intent, config?.schema)
 
       // An empty plan parses fine (`PlanResult.plan` is a required string and
       // `""` satisfies it) but injects NOTHING downstream — `formatPlanContext`

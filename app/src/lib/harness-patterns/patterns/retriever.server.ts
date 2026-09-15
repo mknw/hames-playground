@@ -31,7 +31,6 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { Collector } from '@boundaryml/baml'
 import type {
   PatternScope,
   EventView,
@@ -42,13 +41,13 @@ import type {
   ToolResultEventData,
   ErrorEventData,
   LLMCallData,
+  RetrieveQueryFn,
 } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
 import { getActiveInjectionGuard } from '../injection-guard-scope.server'
 import { getErrorHint } from '../error-hints'
 import { trimToFit } from '../token-budget.server'
-import { extractLLMCallData, extractFailureLLMCallData } from '../baml-adapters.server'
-import { clientOverrideFor, limitsFor } from '../clients.server'
+import { LLMCallError } from '../types'
 
 assertServerOnImport()
 
@@ -132,7 +131,14 @@ export interface RetrieverConfig extends PatternConfig {
   /** Max hits to return (per backend cap + final cap). Default 5. */
   k?: number
   /**
-   * Rewrite the query with a cheap `RetrieveQuery` LLM call **only when the
+   * REQUIRED (Lane A6 seam): the query-rewrite implementation —
+   * `bamlPatterns().retrieveQuery` from `harness-baml`, or your own. Core
+   * hosts no BAML default any more, so there is no fallback. Invoked only
+   * when `generateQuery` is set AND the conversation has history.
+   */
+  rewrite: RetrieveQueryFn
+  /**
+   * Rewrite the query with the injected rewrite fn **only when the
    * conversation has history** — to resolve back-references ("more on that",
    * "those sections") into a self-contained search query. Turn-1 messages are
    * already standalone, so they're searched verbatim (no call). Off by default:
@@ -165,7 +171,14 @@ export interface RetrieverConfigMarker extends PatternConfig {
 // ============================================================================
 
 export function retriever<T extends RetrieverData>(config: RetrieverConfig): ConfiguredPattern<T> {
-  const { backends = [], k = 5, turnWindow, generateQuery = false, ...patternConfig } = config
+  const {
+    backends = [],
+    k = 5,
+    turnWindow,
+    rewrite,
+    generateQuery = false,
+    ...patternConfig
+  } = config
   const backendKinds = backends.map((b) => b.name)
 
   const resolved = resolveConfig('retriever', { patternId: 'retriever', ...patternConfig })
@@ -198,9 +211,36 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
         // Only rewrite when there's history to resolve against — turn 1 is
         // already a standalone query, so it's searched verbatim (no LLM call).
         if (rawHistory.length > 0) {
-          const rewritten = await rewriteQuery(scope, rawHistory, latest, resolved)
-          text = rewritten.text
-          llmCall = rewritten.llmCall
+          // Trim against the window of the client the rewrite call will
+          // actually take — read off the INJECTED fn's own `limits()` (Lane A6).
+          const contextWindow = rewrite.limits?.().contextWindow ?? 16_384
+          const trimmedHistory = trimToFit(rawHistory, (h) => JSON.stringify(h), 300, contextWindow)
+          try {
+            const { value: rewritten, call } = await rewrite({
+              history: trimmedHistory,
+              latest,
+            })
+            text = rewritten
+            llmCall = call as LLMCallData | undefined
+          } catch (err) {
+            // Recoverable by contract: a failed rewrite falls back to the raw
+            // message so retrieval still runs. The injected implementation
+            // carries the record on `LLMCallError` (the throw contract).
+            const msg = err instanceof Error ? err.message : String(err)
+            trackEvent(
+              scope,
+              'error',
+              {
+                error: `retriever query rewrite: ${msg}`,
+                severity: resolved.errorSeverity,
+                hint: getErrorHint(msg),
+                kind: 'llm_call' as const,
+              } as ErrorEventData,
+              true,
+              err instanceof LLMCallError ? (err.llmCall as LLMCallData) : undefined,
+            )
+            text = latest
+          }
         }
       } else if (latest && turnWindow && turnWindow > 0) {
         const recent = view
@@ -386,49 +426,4 @@ function emitMatches<T>(
     trackHistory,
     llmCall,
   )
-}
-
-/**
- * Rewrite the latest message into a concise search query via the `RetrieveQuery`
- * BAML call (cheap describe-tier client). Best-effort: on failure it returns the
- * raw latest text and tracks a recoverable error, so retrieval still runs.
- */
-async function rewriteQuery<T>(
-  scope: PatternScope<T>,
-  history: Array<{ role: string; content: string }>,
-  latest: string,
-  resolved: ReturnType<typeof resolveConfig>,
-): Promise<{ text: string; llmCall?: LLMCallData }> {
-  const collector = new Collector('retriever')
-  const startTime = Date.now()
-  const contextWindow = limitsFor('describe').contextWindow
-  const trimmed = trimToFit(history, (h) => JSON.stringify(h), 300, contextWindow)
-  const variables = { history: trimmed, latest }
-  try {
-    const { b } = await import('../../../../baml_client')
-    // describe-tier, and it moves with a verda tier decision: the rewrite is
-    // built from the user's own question and the conversation history.
-    const opts = { collector, ...clientOverrideFor('describe') }
-    const raw = await b.RetrieveQuery(trimmed, latest, opts)
-    const text = raw.trim() || latest
-    return {
-      text,
-      llmCall: extractLLMCallData(collector, 'RetrieveQuery', variables, startTime, text),
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    trackEvent(
-      scope,
-      'error',
-      {
-        error: `retriever query rewrite: ${msg}`,
-        severity: resolved.errorSeverity,
-        hint: getErrorHint(msg),
-        kind: 'llm_call' as const,
-      } as ErrorEventData,
-      true,
-      extractFailureLLMCallData(collector, 'RetrieveQuery', variables, startTime),
-    )
-    return { text: latest }
-  }
 }

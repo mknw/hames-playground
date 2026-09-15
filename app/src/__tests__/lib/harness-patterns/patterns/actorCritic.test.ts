@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockAction, mockFinalAction, mockCriticResult, mockBAMLClient } from '../../../mocks/baml'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
-import type { CriticFnWithLLMData } from '../../../../lib/harness-patterns/baml-adapters.server'
+import type { CriticFnWithLLMData } from '../../../../lib/harness-baml/baml-adapters.server'
 import type { ActorFn, ActorInput } from '../../../../lib/harness-patterns/types'
 
 // Mock server-only imports
@@ -55,7 +55,7 @@ describe('actorCritic', () => {
     const { actorCritic } =
       await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
     const { createActorControllerAdapter, createCriticAdapter } =
-      await import('../../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../../lib/harness-baml/baml-adapters.server')
 
     const actor = createActorControllerAdapter(['code-mode', 'Return'])
     const critic = createCriticAdapter()
@@ -77,7 +77,7 @@ describe('actorCritic', () => {
       await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
     const { DEFAULT_SETTINGS } = await import('../../../../lib/settings')
     const { createActorControllerAdapter, createCriticAdapter } =
-      await import('../../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../../lib/harness-baml/baml-adapters.server')
 
     const actor = createActorControllerAdapter(['Return'])
     const critic = createCriticAdapter()
@@ -92,7 +92,7 @@ describe('actorCritic', () => {
     const { actorCritic } =
       await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
     const { createActorControllerAdapter, createCriticAdapter } =
-      await import('../../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../../lib/harness-baml/baml-adapters.server')
 
     const actor = createActorControllerAdapter(['Return'])
     const critic = createCriticAdapter()

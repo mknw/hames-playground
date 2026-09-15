@@ -224,7 +224,7 @@ describe('withSandbox(actorCritic) end-to-end — word count', () => {
     const { createScope } = await import('../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../lib/harness-patterns/patterns')
     const { createActorControllerAdapter, createCriticAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
+      await import('../../../lib/harness-baml/baml-adapters.server')
     const { withSandbox } = await import('../../../lib/sandbox/with-sandbox.server')
 
     const script =

@@ -17,7 +17,7 @@
  * - It is **per call, not per turn.** A turn makes several calls; the number
  *   here is not how long a message takes to answer.
  * - It is **the switched roles only** — `TIER_SWITCHED_FUNCTIONS` in
- *   `harness-patterns/clients.server.ts`. This is what makes the two tiers'
+ *   `harness-baml/clients.server.ts`. This is what makes the two tiers'
  *   figures comparable, which is the whole point of a number that sits beside
  *   a switch: a function that runs on Anthropic in BOTH positions would leave
  *   each window holding a different role mix, and a user comparing the two

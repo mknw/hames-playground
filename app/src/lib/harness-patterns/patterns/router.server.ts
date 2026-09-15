@@ -11,7 +11,7 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { routeMessageOp } from '../routing.server'
+import { routeMessageOp } from '../../harness-baml/routing.server'
 import { LLMCallError } from '../types'
 import type {
   PatternScope,
@@ -23,6 +23,7 @@ import type {
   RoutesConfig,
   ViewConfig,
   ErrorEventData,
+  RouteFn,
 } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import { trackEvent, resolveConfig, createEvent, createScope } from '../context.server'
@@ -30,7 +31,6 @@ import { emitLive } from '../live-event-context.server'
 import { getRequestSettings } from '../../settings-context.server'
 import { stripThinkBlocks } from '../content-transforms'
 import { trimToFit } from '../token-budget.server'
-import { limitsFor } from '../clients.server'
 
 assertServerOnImport()
 
@@ -95,6 +95,11 @@ export function router<T extends RouterData>(
     ...config, // caller's config overrides defaults (including viewConfig)
   })
   const directRoute = config?.directResponseRoute ?? DIRECT_RESPONSE_ROUTE
+  // Lane A6 seam: the routing implementation is an override — its default is
+  // `routeMessageOp`, which moved whole to `harness-baml` (the same shape the
+  // design note prescribes for `ReferenceSelector`; raw-llm-visibility pins
+  // the pattern end-to-end through this default, so it stays the default).
+  const routeFn: RouteFn = config?.route ?? routeMessageOp
 
   /** Drop a route + intent carried over from an earlier turn. Every exit path
    *  that does NOT produce a fresh routing decision goes through this:
@@ -128,7 +133,7 @@ export function router<T extends RouterData>(
           role: e.type === 'user_message' ? 'user' : 'assistant',
           content: (e.data as UserMessageEventData | AssistantMessageEventData).content,
         }))
-      const contextWindow = limitsFor('router').contextWindow
+      const contextWindow = routeFn.limits?.().contextWindow ?? 16_384
       const history = trimToFit(rawHistory, (h) => JSON.stringify(h), 300, contextWindow)
 
       // Convert routes Record<string,string> to Array<{name,description}>
@@ -139,7 +144,7 @@ export function router<T extends RouterData>(
 
       // Route the message (Lane A3: no collector is passed — the
       // implementation owns it and returns the call record on the result).
-      const result = await routeMessageOp(userContent, history, routeArray)
+      const result = await routeFn(userContent, history, routeArray)
 
       // No tool needed - return conversational response directly
       if (!result.tool_call_needed) {

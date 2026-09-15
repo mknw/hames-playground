@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockListTools } from '../../../mocks/mcp'
 import { mockFinalAction } from '../../../mocks/baml'
 import type { ContextEvent, EventType, UnifiedContext } from '../../../../lib/harness-patterns'
-import type { CriticFnWithLLMData } from '../../../../lib/harness-patterns/baml-adapters.server'
+import type { CriticFnWithLLMData } from '../../../../lib/harness-baml/baml-adapters.server'
 import type {
   ControllerFn,
   ActorFn,
@@ -86,6 +86,16 @@ async function load() {
   return { planner, formatPlanContext, DEFAULT_MAX_PLAN_CHARS, createScope, createEventView }
 }
 
+/** Lane A6: the planner seam is REQUIRED config. This wires the pattern to the
+ *  real adapter (which hits the mocked `b.Planner`) — the same shape an agent
+ *  builds with `bamlPatterns().planner(tools)`. */
+async function loadWithFn() {
+  const loaded = await load()
+  const { createPlannerAdapter } = await import('../../../../lib/harness-baml/baml-adapters.server')
+  const planFn = createPlannerAdapter(TOOLS)
+  return { ...loaded, planFn }
+}
+
 function userTurn(content: string): Ev[] {
   return [{ type: 'user_message', ts: Date.now(), patternId: 'harness', data: { content } }]
 }
@@ -97,8 +107,8 @@ describe('planner', () => {
   })
 
   it('exports a factory returning a ConfiguredPattern with the planner defaults', async () => {
-    const { planner } = await load()
-    const pattern = planner(TOOLS, { patternId: PATTERN_ID })
+    const { planner, planFn } = await loadWithFn()
+    const pattern = planner(planFn, TOOLS, { patternId: PATTERN_ID })
 
     expect(pattern.name).toBe('planner')
     expect(pattern.config.patternId).toBe(PATTERN_ID)
@@ -112,9 +122,9 @@ describe('planner', () => {
   })
 
   it('writes scope.data.plan and emits a plan_created event with LLM call data', async () => {
-    const { planner, createScope, createEventView } = await load()
+    const { planner, planFn, createScope, createEventView } = await loadWithFn()
     const ctx = ctxOf(userTurn('Which concepts are missing from the graph?'))
-    const pattern = planner(TOOLS, { patternId: PATTERN_ID })
+    const pattern = planner(planFn, TOOLS, { patternId: PATTERN_ID })
     const scope = createScope(PATTERN_ID, {})
     const view = createEventView(ctx, pattern.config.viewConfig, PATTERN_ID)
 
@@ -133,9 +143,9 @@ describe('planner', () => {
   })
 
   it('passes the user message, the intent and the schema to the BAML call', async () => {
-    const { planner, createScope, createEventView } = await load()
+    const { planner, planFn, createScope, createEventView } = await loadWithFn()
     const ctx = ctxOf(userTurn('raw question'))
-    const pattern = planner(TOOLS, { patternId: PATTERN_ID, schema: 'Node: Concept' })
+    const pattern = planner(planFn, TOOLS, { patternId: PATTERN_ID, schema: 'Node: Concept' })
     const scope = createScope(PATTERN_ID, { intent: 'compacted intent' })
     const view = createEventView(ctx, pattern.config.viewConfig, PATTERN_ID)
 
@@ -150,10 +160,10 @@ describe('planner', () => {
   })
 
   it('caps the plan at maxPlanChars and flags the event as truncated', async () => {
-    const { planner, createScope, createEventView } = await load()
+    const { planner, planFn, createScope, createEventView } = await loadWithFn()
     mockPlanner.mockResolvedValueOnce({ ...PLAN, plan: 'x'.repeat(500) })
     const ctx = ctxOf(userTurn('long plan please'))
-    const pattern = planner(TOOLS, { patternId: PATTERN_ID, maxPlanChars: 50 })
+    const pattern = planner(planFn, TOOLS, { patternId: PATTERN_ID, maxPlanChars: 50 })
     const scope = createScope(PATTERN_ID, {})
     const view = createEventView(ctx, pattern.config.viewConfig, PATTERN_ID)
 
@@ -167,10 +177,10 @@ describe('planner', () => {
   })
 
   it('records the tool count the model was actually shown, not the name list', async () => {
-    const { planner, createScope, createEventView } = await load()
+    const { planner, planFn, createScope, createEventView } = await loadWithFn()
     // 'not_a_real_tool' resolves to nothing in the mocked catalog, so the
     // model sees 2 descriptions while the factory was handed 3 names.
-    const pattern = planner([...TOOLS, 'not_a_real_tool'], { patternId: PATTERN_ID })
+    const pattern = planner(planFn, [...TOOLS, 'not_a_real_tool'], { patternId: PATTERN_ID })
     const scope = createScope(PATTERN_ID, {})
     const view = createEventView(
       ctxOf(userTurn('plan this')),
@@ -185,9 +195,9 @@ describe('planner', () => {
   })
 
   it('emits a skipped plan_created when there is no user message in context', async () => {
-    const { planner, createScope, createEventView } = await load()
+    const { planner, planFn, createScope, createEventView } = await loadWithFn()
     const ctx = ctxOf([])
-    const pattern = planner(TOOLS, { patternId: PATTERN_ID })
+    const pattern = planner(planFn, TOOLS, { patternId: PATTERN_ID })
     const scope = createScope(PATTERN_ID, {})
     const view = createEventView(ctx, pattern.config.viewConfig, PATTERN_ID)
 
@@ -203,11 +213,11 @@ describe('planner', () => {
   })
 
   it('reads the user message through a view its own viewConfig cannot hide', async () => {
-    const { planner, createScope, createEventView } = await load()
+    const { planner, planFn, createScope, createEventView } = await loadWithFn()
     // A caller-supplied viewConfig REPLACES the default. This one scopes to the
     // last pattern, which excludes the harness-level user_message — `fromAll()`
     // would inherit that filter and leave the planner with nothing to plan for.
-    const pattern = planner(TOOLS, {
+    const pattern = planner(planFn, TOOLS, {
       patternId: PATTERN_ID,
       viewConfig: { fromLastNTurns: 3 },
     })
@@ -226,11 +236,11 @@ describe('planner', () => {
   })
 
   it('treats an empty plan as an error, not as a plan', async () => {
-    const { planner, createScope, createEventView } = await load()
+    const { planner, planFn, createScope, createEventView } = await loadWithFn()
     // `PlanResult.plan` is a required string and '' satisfies it: the pattern
     // would store it, report "0 steps" in the panel, and inject nothing.
     mockPlanner.mockResolvedValue({ reasoning: 'thought about it', plan: '   ', n_steps: 0 })
-    const pattern = planner(TOOLS, { patternId: PATTERN_ID })
+    const pattern = planner(planFn, TOOLS, { patternId: PATTERN_ID })
     const scope = createScope(PATTERN_ID, {})
     const view = createEventView(
       ctxOf(userTurn('plan this')),
@@ -255,10 +265,10 @@ describe('planner', () => {
   })
 
   it('is best-effort: a BAML failure leaves the plan unset and tracks an error', async () => {
-    const { planner, createScope, createEventView } = await load()
+    const { planner, planFn, createScope, createEventView } = await loadWithFn()
     mockPlanner.mockRejectedValue(new Error('planner model unavailable'))
     const ctx = ctxOf(userTurn('plan this'))
-    const pattern = planner(TOOLS, { patternId: PATTERN_ID })
+    const pattern = planner(planFn, TOOLS, { patternId: PATTERN_ID })
     const scope = createScope(PATTERN_ID, {})
     const view = createEventView(ctx, pattern.config.viewConfig, PATTERN_ID)
 
@@ -287,9 +297,9 @@ describe('planner — a carried-over plan never survives a turn without one', ()
   })
 
   it('clears turn 1s plan when the BAML call fails on turn 2', async () => {
-    const { planner, formatPlanContext, createScope, createEventView } = await load()
+    const { planner, planFn, formatPlanContext, createScope, createEventView } = await loadWithFn()
     mockPlanner.mockRejectedValue(new Error('overloaded'))
-    const pattern = planner(TOOLS, { patternId: PATTERN_ID })
+    const pattern = planner(planFn, TOOLS, { patternId: PATTERN_ID })
     // Turn 2 opens with turn 1's plan already in data — exactly what the chain
     // forwards and what `deserializeContext` restores.
     const scope = createScope(PATTERN_ID, { plan: PLAN })
@@ -310,8 +320,8 @@ describe('planner — a carried-over plan never survives a turn without one', ()
   })
 
   it('clears a carried plan when there is no user message to plan for', async () => {
-    const { planner, createScope, createEventView } = await load()
-    const pattern = planner(TOOLS, { patternId: PATTERN_ID })
+    const { planner, planFn, createScope, createEventView } = await loadWithFn()
+    const pattern = planner(planFn, TOOLS, { patternId: PATTERN_ID })
     const scope = createScope(PATTERN_ID, { plan: PLAN })
     const view = createEventView(ctxOf([]), pattern.config.viewConfig, PATTERN_ID)
 
@@ -321,9 +331,9 @@ describe('planner — a carried-over plan never survives a turn without one', ()
   })
 
   it('clears a carried plan when the new plan comes back empty', async () => {
-    const { planner, createScope, createEventView } = await load()
+    const { planner, planFn, createScope, createEventView } = await loadWithFn()
     mockPlanner.mockResolvedValue({ reasoning: '', plan: '', n_steps: 0 })
-    const pattern = planner(TOOLS, { patternId: PATTERN_ID })
+    const pattern = planner(planFn, TOOLS, { patternId: PATTERN_ID })
     const scope = createScope(PATTERN_ID, { plan: PLAN })
     const view = createEventView(
       ctxOf(userTurn('a new question')),
@@ -339,7 +349,7 @@ describe('planner — a carried-over plan never survives a turn without one', ()
 
 describe('formatPlanContext', () => {
   it('renders reasoning and steps under a labelled heading', async () => {
-    const { formatPlanContext } = await load()
+    const { formatPlanContext } = await loadWithFn()
     const formatted = formatPlanContext(PLAN)!
 
     expect(formatted).toContain('PLAN (from previous step')
@@ -349,14 +359,14 @@ describe('formatPlanContext', () => {
   })
 
   it('returns undefined for an absent or empty plan', async () => {
-    const { formatPlanContext } = await load()
+    const { formatPlanContext } = await loadWithFn()
 
     expect(formatPlanContext(undefined)).toBeUndefined()
     expect(formatPlanContext({ reasoning: 'why', plan: '   ', n_steps: 0 })).toBeUndefined()
   })
 
   it('omits the reasoning line when the planner returned none', async () => {
-    const { formatPlanContext } = await load()
+    const { formatPlanContext } = await loadWithFn()
     const formatted = formatPlanContext({ reasoning: '', plan: '1. Do it.', n_steps: 1 })!
 
     expect(formatted).toContain('1. Do it.')

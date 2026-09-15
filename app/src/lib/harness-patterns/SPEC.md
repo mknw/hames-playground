@@ -1764,14 +1764,19 @@ import {
   createWebSearchController,
   createActorControllerAdapter,
   createCriticAdapter,
+  type ConfiguredPattern,
 } from '../harness-patterns'
+// Patterns are data-type invariant: composing heterogeneous patterns under
+// `harness()` requires pinning the SAME data type on every pattern (the real
+// call sites all pin `SessionData` — see agents/search.server.ts).
+import type { SessionData } from './session.server'
 
 async function getSchema(): Promise<string> {
   const result = await callTool('get_neo4j_schema', {})
   return result.success ? JSON.stringify(result.data) : ''
 }
 
-async function createPatterns() {
+async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools()
   const schema = await getSchema()
 
@@ -1779,26 +1784,26 @@ async function createPatterns() {
   const neo4jController = createNeo4jController(tools.neo4j ?? [])
   const webController = createWebSearchController(tools.web ?? [])
 
-  const neo4jPattern = simpleLoop(neo4jController, tools.neo4j ?? [], {
+  const neo4jPattern = simpleLoop<SessionData>(neo4jController, tools.neo4j ?? [], {
     patternId: 'neo4j-query',
     schema,
   })
 
-  const webPattern = simpleLoop(webController, tools.web ?? [], {
+  const webPattern = simpleLoop<SessionData>(webController, tools.web ?? [], {
     patternId: 'web-search',
   })
 
-  const routerPattern = router({
+  const routerPattern = router<SessionData>({
     neo4j: 'Database queries and graph operations',
     web_search: 'Web lookups and information retrieval',
   })
 
-  const routesPattern = routes({
+  const routesPattern = routes<SessionData>({
     neo4j: neo4jPattern,
     web_search: webPattern,
   })
 
-  const responseSynth = compactExecution({
+  const responseSynth = compactExecution<SessionData>({
     mode: 'thread',
     patternId: 'response-synth',
   })
@@ -1850,7 +1855,7 @@ harness-patterns/
 
 ## Design Principles
 
-1. **BAML functions are first-class** - Pass them directly to patterns (use `.bind()`)
+1. **Adapters wrap BAML functions** - Pass adapter factories to patterns; they adapt the generated functions' positional call order (a raw BAML function does not satisfy a pattern's controller contract)
 2. **Patterns extract params** - Patterns pull data from context and call BAML
 3. **Config injects metadata** - Optional config for things like schema injection
 4. **Server-only enforcement** - `.server.ts` files with runtime guards

@@ -678,6 +678,26 @@ describe('chat route — support panel wiring', () => {
     }
   })
 
+  it('rolls back the optimistic stash mutation when the server refuses, and re-throws (#314)', async () => {
+    await mount()
+    registry.appendEvents('new-1', [{ id: 'e1', type: 'tool_result', ts: 1, data: {} } as never])
+    await tick()
+
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).startsWith('/api/stash')
+        ? new Response('nope', { status: 500 })
+        : jsonResponse({ documents: [] }),
+    )
+
+    // The handler re-throws so the panel can surface the failure.
+    await expect(support.onStashAction('e1', 'hide')).rejects.toThrow(/Stash action failed/)
+    await tick()
+
+    // The optimistic `hidden: true` is undone — the chip must not stay greyed
+    // and filed under Archived when nothing was recorded (#314).
+    expect(support.contextEvents[0].data).toEqual({})
+  })
+
   it('tracks the agent the chat view reports, for the agent-aware panels', async () => {
     await mount()
     expect(support.agentId).toBe('search')
@@ -707,6 +727,34 @@ describe('chat route — the embedding guard', () => {
       // The poll keeps watching until the ingest finishes.
       fetchMock.mockResolvedValue(jsonResponse({ documents: [{ ingestStatus: 'done' }] }))
       await vi.advanceTimersByTimeAsync(3000)
+      expect(chat.embeddingSources).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('releases the composer when the poll hits its cap instead of latching the gate on forever (#314)', async () => {
+    vi.useFakeTimers()
+    try {
+      // An ingest that never finishes: every poll sees `pending`. (A fresh
+      // Response per call — a Response body reads once, and 120 polls would
+      // drain it.)
+      fetchMock.mockImplementation(async () =>
+        jsonResponse({ documents: [{ ingestStatus: 'pending' }] }),
+      )
+      render(() => <Home />)
+      await vi.advanceTimersByTimeAsync(10)
+      expect(chat.embeddingSources).toBe(true)
+
+      // Poll 2..119 — the gate stays up while the poll keeps watching.
+      for (let i = 1; i < 119; i++) {
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(chat.embeddingSources, `poll ${i + 1}`).toBe(true)
+      }
+      await vi.advanceTimersByTimeAsync(3000) // the 120th and last poll
+      expect(chat.embeddingSources, 'at the cap the gate must clear').toBe(false)
+      // And the poll really has stopped — the flag stays down afterwards.
+      await vi.advanceTimersByTimeAsync(30000)
       expect(chat.embeddingSources).toBe(false)
     } finally {
       vi.useRealTimers()

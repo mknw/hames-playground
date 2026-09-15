@@ -15,7 +15,6 @@ app.config.timestamp_*.js
 # Generated BAML client — regenerated from baml_src/ inside the build, which is
 # the whole point of doing it there (a stale copy fails silently).
 baml_client
-baml_src.bak
 
 # Secrets. The image is tenant-agnostic; config arrives at runtime via compose
 # env_file / environment.

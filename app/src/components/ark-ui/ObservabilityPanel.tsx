@@ -246,10 +246,10 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
           >
             <ToolPairDetail
               call={
-                (item() as { kind: 'tool_pair'; call: ContextEvent; result?: ContextEvent }).call
+                (item() as { kind: 'tool_pair'; call: ContextEvent; result: ContextEvent }).call
               }
               result={
-                (item() as { kind: 'tool_pair'; call: ContextEvent; result?: ContextEvent }).result
+                (item() as { kind: 'tool_pair'; call: ContextEvent; result: ContextEvent }).result
               }
               onClose={handleClose}
               onJumpToEvent={handleJumpToEvent}

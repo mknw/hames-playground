@@ -47,7 +47,7 @@ import {
   isInferenceTier,
   setStoredInferenceTier,
 } from '../db/user-prefs.server'
-import { verdaConfigured, type InferenceTier } from '../harness-patterns/clients.server'
+import { verdaConfigured, type InferenceTier } from './config.server'
 
 assertServerOnImport()
 

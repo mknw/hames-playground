@@ -18,7 +18,7 @@
  *
  * @unocss-include
  */
-import type { InferenceTier } from './harness-patterns/clients.server'
+import type { InferenceTier } from './inference/config.server'
 
 /** Tier labels, in the words a preview user can act on. "Private" is the
  *  property they care about; the deployment name is the parenthetical. */

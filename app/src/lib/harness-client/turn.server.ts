@@ -58,11 +58,8 @@ import {
 } from './session.server'
 import { runWithRequestContext } from './request-user.server'
 import { runWithSettings } from '../settings-context.server'
-import {
-  activeInferenceTier,
-  runWithInferenceTier,
-  type InferenceTier,
-} from '../harness-patterns/clients.server'
+import { activeInferenceTier, runWithInferenceTier } from '../harness-patterns/clients.server'
+import type { InferenceTier } from '../inference/config.server'
 import { resolveConversationTier } from '../inference/tier.server'
 import { beginVerdaTurn, endVerdaTurn } from '../inference/verda-activity.server'
 import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold-start.server'

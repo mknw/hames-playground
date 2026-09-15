@@ -5,6 +5,13 @@
  * here rather than constructing a backend directly, so substrate choice stays
  * a single operational decision (see docs/plan/sandbox.md → "macOS
  * development" / "Substrate options").
+ *
+ * This is also the package's PUBLIC surface: `withSandbox` — the scoped
+ * registrant on core's tool-transport seam — is exported here rather than
+ * deep-imported, so a consumer never names a file inside this package. The
+ * exceptions are app files reaching an app module (`pty-manager.server`, and
+ * `TerminalPanel`'s type import), which are not library consumers and would
+ * otherwise drag `DockerBackend` into a browser component's graph.
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
@@ -13,9 +20,19 @@ import type { ComputeBackend } from './types'
 
 assertServerOnImport()
 
-export type { ComputeBackend, VMHandle, McpTransport, RootfsId, RuntimeConfig, HealthStatus, HealthState, InVmMcpServer } from './types'
+export type {
+  ComputeBackend,
+  VMHandle,
+  McpTransport,
+  RootfsId,
+  RuntimeConfig,
+  HealthStatus,
+  HealthState,
+  InVmMcpServer,
+} from './types'
 export { SANDBOX_TOOL_PREFIX, V0_IN_VM_SERVERS } from './types'
 export { DockerBackend, SandboxBootError } from './docker-backend.server'
+export { withSandbox, type WithSandboxConfig } from './with-sandbox.server'
 
 let backendSingleton: ComputeBackend | null = null
 
@@ -41,7 +58,9 @@ export function getComputeBackend(): ComputeBackend {
   if (kind === 'firecracker') {
     // Deferred (#78). Fall back to Docker rather than crash so dev on Linux
     // hosts still works before the Firecracker driver lands.
-    console.warn('[sandbox] COMPUTE_BACKEND=firecracker requested but not implemented (#78); using docker')
+    console.warn(
+      '[sandbox] COMPUTE_BACKEND=firecracker requested but not implemented (#78); using docker',
+    )
   }
   backendSingleton = new DockerBackend()
   return backendSingleton

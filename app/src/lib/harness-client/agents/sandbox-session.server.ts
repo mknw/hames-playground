@@ -22,7 +22,7 @@ import {
   createCriticAdapter,
   type ConfiguredPattern,
 } from '../../harness-patterns'
-import { withSandbox } from '../../sandbox/with-sandbox.server'
+import { withSandbox } from '../../sandbox/index.server'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
 import type { FewShot } from '../../../../baml_client/types'

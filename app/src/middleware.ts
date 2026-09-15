@@ -3,16 +3,16 @@
  *
  * SolidStart imports this module once when the server handler graph loads,
  * before any request is served, which makes it the natural place to arm
- * process-wide background work. Three things today: the routine scheduler
+ * process-wide background work. Four things today: the routine scheduler
  * (#131) — whose tick also reconciles runs abandoned at `status='running'`, and
  * which sweeps once here at boot for exactly the rows the previous process left
  * behind (#273 D-a) — the LLM-usage recorder behind the preview header's global
- * counters, and the dev-only inference redirect the browser e2e layer reaches
- * through.
+ * counters, the app-side tool transport, and the dev-only inference redirect the
+ * browser e2e layer reaches through.
  *
- * The first two are import side effects, so they cost nothing per request. The
- * third needs an `await`, and must not be reachable from module scope at all;
- * see below.
+ * The first three are import side effects, so they cost nothing per request.
+ * The fourth needs an `await`, and must not be reachable from module scope at
+ * all; see below.
  */
 
 import { createMiddleware } from '@solidjs/start/middleware'
@@ -22,6 +22,14 @@ import {
   devFakeInferenceUrl,
   installDevFakeInference,
 } from './lib/inference/dev-fake-inference.server'
+// Side effect only: registers the app-side tools AND the process transport that
+// makes `callTool` dispatch to them. `harness-patterns` deliberately does not
+// import `app-tools` any more — core owns the seam and the ORDER, the app owns
+// what goes on it — so this import is what puts the app's tools in reach of a
+// tool call. `browser-e2e-not-in-ci.test.ts` walks this module's static-import
+// closure, so the subtree it drags in is held to the no-BAML-at-module-scope
+// rule stated below.
+import './lib/app-tools/index.server'
 
 // Both are idempotent and HMR-safe (the armed timer / install flag are parked
 // on globalThis symbols), so a dev-server module reload doesn't stack a second

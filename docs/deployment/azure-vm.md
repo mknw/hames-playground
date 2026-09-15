@@ -120,11 +120,25 @@ Keep the repo layout intact — **`app/` and `configs/` must stay siblings**: th
 server resolves the MCP catalog via `path.resolve(process.cwd(), '..', 'configs', …)`
 with cwd = `app/` (`server-catalog.server.ts:42`).
 
-Create the git-ignored config files with **real** values:
+Create the config files with **real** values (`docker-config.json` and
+`app/.env` are git-ignored; **`configs/mcp-config.yaml` is tracked**):
 
 - **`configs/mcp-config.yaml`** — the enabled-servers list + secrets (neo4j
-  password, …). Pre-provision them statically; there is no runtime
-  secret-setting on a Linux host.
+  password, …). The tracked copy ships the compose file's laptop-only
+  placeholder credentials; on the VM, overwrite it with the real values, then
+  keep Git from committing or overwriting your edit:
+
+  ```bash
+  git update-index --skip-worktree configs/mcp-config.yaml
+  # before pulling config updates: --no-skip-worktree, move your values aside,
+  # pull, re-apply them, re-run the command above
+  ```
+
+  `skip-worktree` is load-bearing here: a gitignore rule cannot protect a
+  tracked file, so it is the only thing standing between `git add -A` and
+  publishing a real password to a public repo. Pre-provision statically;
+  there is no runtime secret-setting on a Linux host.
+
 - **`docker-config.json`** — Docker registry auth so the gateway can pull MCP
   server images (mounted read-only into the gateway).
 - **`app/.env`** — see the env table in step 9.

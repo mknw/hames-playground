@@ -10,7 +10,7 @@ import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
 import { repairJson } from '../json-repair'
 import { normalizeControllerAction } from '../controller-action'
-import type { LoopTurn, PriorResult, ExpandedRef } from '../../../../baml_client/types'
+import type { LoopTurn, PriorResult, ExpandedRef } from '../types'
 import type {
   ControllerAction,
   SimpleLoopConfig,

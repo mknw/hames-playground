@@ -25,14 +25,7 @@ import type {
   EventMetrics,
   ReturnStyle,
 } from './types'
-import type {
-  ToolDescription,
-  LoopTurn,
-  Attempt,
-  PriorResult,
-  FewShot,
-  PlanResult,
-} from '../../../baml_client/types'
+import type { ToolDescription, LoopTurn, Attempt, PriorResult, FewShot, PlanResult } from './types'
 import type { InjectionScreen } from './injection-guard'
 import { listTools as mcpListTools } from './mcp-client.server'
 import { gatewayDegradation } from './gateway-health.server'

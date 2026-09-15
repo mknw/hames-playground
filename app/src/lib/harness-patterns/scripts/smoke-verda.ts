@@ -82,7 +82,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Collector } from '@boundaryml/baml'
-import type { Attempt, ToolDescription } from '../../../../baml_client/types'
+import type { Attempt, ToolDescription } from '../types'
 import {
   createCriticAdapter,
   createInjectionScreen,

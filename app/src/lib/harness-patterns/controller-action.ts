@@ -5,7 +5,7 @@
  * Pure (no server imports) so both loop patterns and the tests can use it.
  */
 
-import type { ControllerAction } from '../../../baml_client/types'
+import type { ControllerAction } from './types'
 
 /**
  * Fill `is_final` when the model omitted it.

@@ -48,7 +48,7 @@ async function defaultSynthesize(
   const startTime = Date.now()
 
   // Convert to LoopTurn format for BAML Synthesize
-  const turns: import('../../../../baml_client/types').LoopTurn[] = []
+  const turns: import('../types').LoopTurn[] = []
 
   if (input.loopHistory) {
     // Convert loop history to LoopTurn array. Multi-call iterations carry

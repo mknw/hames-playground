@@ -49,7 +49,7 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import type { LoopTurn, ToolDescription } from '../../../../baml_client/types'
+import type { LoopTurn, ToolDescription } from '../types'
 import { assertVerdaConfigured, clientOverrideFor, verdaInferenceEnabled } from '../clients.server'
 
 const EXPECTED_CLIENT = 'VerdaQwen'

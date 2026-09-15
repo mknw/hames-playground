@@ -54,7 +54,7 @@ import {
 import { withSandbox } from '../../sandbox/index.server'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
-import type { FewShot } from '../../../../baml_client/types'
+import type { FewShot } from '../../harness-patterns/types'
 
 const WORKSPACE_NOTE = `
 Files under /work/in are restored inputs; write deliverables the user should keep

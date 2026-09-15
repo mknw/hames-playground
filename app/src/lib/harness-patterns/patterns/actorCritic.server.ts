@@ -54,18 +54,26 @@ export interface ActorCriticData {
  *
  * Calls BAML actor and critic functions directly.
  *
- * @param actor - BAML actor controller function (e.g., b.ActorController)
- * @param critic - BAML critic function (e.g., b.Critic)
+ * @param actor - Actor function from `createActorControllerAdapter(toolNames)`
+ *   — NOT a raw bound `b.ActorController`, whose positional signature differs
+ *   from the `ActorControllerFnWithLLMData` contract (same rule as
+ *   simpleLoop's controller)
+ * @param critic - Critic function from `createCriticAdapter()`
  * @param tools - Allowed tool names
  * @param config - Configuration (availableTools, maxRetries, patternId, etc.)
  * @returns ConfiguredPattern ready for chain
  *
  * @example
- * const loop = actorCritic(b.ActorController.bind(b), b.Critic.bind(b), tools.all, {
- *   patternId: 'sandbox-loop',
- *   availableTools,
- *   maxRetries: 3
- * })
+ * const loop = actorCritic(
+ *   createActorControllerAdapter(availableTools),
+ *   createCriticAdapter(),
+ *   tools.all,
+ *   {
+ *     patternId: 'sandbox-loop',
+ *     availableTools,
+ *     maxRetries: 3
+ *   }
+ * )
  */
 export function actorCritic<T extends ActorCriticData>(
   actor: ActorControllerFnWithLLMData,

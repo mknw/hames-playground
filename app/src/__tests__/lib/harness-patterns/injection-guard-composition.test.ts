@@ -16,6 +16,10 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockCallTool, mockListTools } from '../../mocks/mcp'
+// Lane B2 (#225 L5): the catalog left core, so the guard scenarios here arm the
+// same resolver the boot hook registers — real seam, no stub. Imported
+// dynamically in beforeEach (a static import would pull tools.server above
+// this module's mock fixtures).
 // Type-only: erased at compile time, so it does not defeat the vi.mock below.
 import type { SimpleLoopData } from '../../../lib/harness-patterns/patterns/simpleLoop.server'
 
@@ -101,7 +105,11 @@ async function expectNoVerbatimLeak(
 // ============================================================================
 
 describe('verbatim spans never reach an LLM-facing serialization', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(async () => {
+    const { registerAppNamespaceCatalog } = await import('../../mocks/namespace-catalog')
+    registerAppNamespaceCatalog()
+    vi.clearAllMocks()
+  })
 
   it('keeps a content_sanitized event out of every prompt serializer', async () => {
     const { createContext } = await import('../../../lib/harness-patterns/context.server')
@@ -413,6 +421,54 @@ describe('unmatchable declared namespaces warn (sf-H5)', () => {
 
     expect(warn).not.toHaveBeenCalled()
     expect(guard.isUntrusted('web_search')).toBe(true)
+    warn.mockRestore()
+  })
+
+  // The SECOND check (#225 L5, §3): a bare single word is always its own fixed
+  // point — `inferServer('wikipedia') === 'wikipedia'` — so the first check is
+  // structurally blind to it. When the agent hands the guard the catalog it
+  // just built (`catalog: tools.all`), a declared namespace that no catalog
+  // name resolves to is warned about too.
+  it('warns for a fixed-point namespace no catalog name resolves to', async () => {
+    const { createInjectionGuard } = await load()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    createInjectionGuard(
+      { namespaces: ['wikipedia'], catalog: ['search', 'fetch', 'fetch_content'] },
+      () => {},
+      'p',
+    )
+
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain("'wikipedia'")
+    expect(warn.mock.calls[0][0]).toContain('matches no tool in the current catalog')
+    warn.mockRestore()
+  })
+
+  it('stays silent when a catalog name DOES resolve to the declared namespace', async () => {
+    const { createInjectionGuard } = await load()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // 'web' is a fixed point AND produced: inferServer('search') is 'web'.
+    createInjectionGuard(
+      { namespaces: ['web'], catalog: ['search', 'fetch', 'fetch_content'] },
+      () => {},
+      'p',
+    )
+
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('skips the catalog check when the caller supplies no catalog', async () => {
+    const { createInjectionGuard } = await load()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // No catalog in hand — tests, and any caller that has not built a ToolSet.
+    // Only the fixed-point check runs, so 'wikipedia' is silent here.
+    createInjectionGuard({ namespaces: ['wikipedia'] }, () => {}, 'p')
+
+    expect(warn).not.toHaveBeenCalled()
     warn.mockRestore()
   })
 })

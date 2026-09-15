@@ -78,6 +78,16 @@ export interface ToolTransport {
   callTool(name: string, args: Record<string, unknown>): Promise<ToolCallResult>
   /** Advertised surface, in the shared descriptor shape. */
   listTools(): Promise<MCPToolDescription[]>
+  /**
+   * This transport's own namespace for `toolName`, or undefined when it does
+   * not know the name. Consulted by `inferServer` BEFORE the registered
+   * namespace resolver and the heuristic (#225 L5) — grouping and the
+   * injection guard resolve through the same chain. Optional: the gateway has
+   * no transport at all, and a transport whose names all resolve through the
+   * catalog need not declare one. NOT read by dispatch — this is vocabulary
+   * for the tool surface, never a routing input.
+   */
+  namespaceFor?(toolName: string): string | undefined
 }
 
 /** Shared empty result, so `activeTransports()` outside any scope allocates

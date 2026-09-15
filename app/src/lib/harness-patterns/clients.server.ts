@@ -96,7 +96,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { assertServerOnImport } from './assert.server'
 // App-side, and in the same direction the patterns already import
-// `settings-context.server` / `sandbox/scope.server`: a process-local clock
+// `settings-context.server` / `tool-transport.server`: a process-local clock
 // with no database behind it, which is the boundary the library extraction
 // actually cares about (see `llm-usage-observer.server.ts`).
 import { noteVerdaCallStarting } from '../inference/cold-start.server'

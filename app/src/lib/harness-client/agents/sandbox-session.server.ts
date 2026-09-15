@@ -93,7 +93,6 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
 
   const loop = actorCritic<SessionData>(actor, critic, [], {
     patternId: 'sandbox-session-loop',
-    availableTools: [],
     liveEvents: true,
     maxRetries: 6,
     // Sandbox work is linear (write file → run script → read output): calls in

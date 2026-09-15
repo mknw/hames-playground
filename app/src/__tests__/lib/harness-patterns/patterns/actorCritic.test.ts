@@ -476,56 +476,6 @@ describe('actorCritic execution', () => {
     expect(errorEvents.length).toBeGreaterThan(0)
     expect(JSON.stringify(errorEvents[0].data)).toContain('Actor crashed')
   })
-
-  it('should use availableTools from config', async () => {
-    const { actorCritic } =
-      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
-
-    callToolMock.mockResolvedValue({ success: true, data: { result: 'ok' } })
-
-    let receivedAvailableTools: string[] = []
-    const mockActor = vi.fn().mockImplementation(async (_user, _intent, availableTools) => {
-      receivedAvailableTools = availableTools
-      return {
-        action: mockAction({ tool_name: 'code-mode', tool_args: '{}' }),
-        llmCall: undefined,
-      }
-    })
-
-    const mockCritic = vi.fn().mockResolvedValue({
-      result: mockCriticResult({ is_sufficient: true }),
-      llmCall: undefined,
-    })
-
-    const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], {
-      patternId: 'test',
-      availableTools: ['custom-tool-1', 'custom-tool-2'],
-    })
-
-    const scope = createScope('test', {})
-    const mockContext = {
-      sessionId: 'test',
-      createdAt: Date.now(),
-      events: [
-        {
-          type: 'user_message' as const,
-          ts: Date.now(),
-          patternId: 'harness',
-          data: { content: 'test' },
-        },
-      ],
-      status: 'running' as const,
-      data: {},
-      input: 'test',
-    }
-    const view = createEventView(mockContext)
-
-    await pattern.fn(scope, view)
-
-    expect(receivedAvailableTools).toEqual(['custom-tool-1', 'custom-tool-2'])
-  })
 })
 
 describe('actorCritic criticCadence', () => {

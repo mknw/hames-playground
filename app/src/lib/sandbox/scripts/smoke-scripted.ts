@@ -96,7 +96,6 @@ async function runOnce(
   const { actor, critic, counts } = makeScriptedActorCritic()
   const pattern = withSandbox({ backend, pool, scheduler, rootfs: 'base' })(
     actorCritic(actor, critic, [], {
-      availableTools: [],
       maxRetries: 3,
       patternId: 'smoke-scripted',
       trackHistory: true,

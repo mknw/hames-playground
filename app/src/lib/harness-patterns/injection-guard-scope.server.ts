@@ -1,7 +1,7 @@
 /**
  * Request-scoped injection-guard context — AsyncLocalStorage.
  *
- * Same shape and rationale as `sandbox/scope.server.ts`: a wrapper pattern
+ * Same shape and rationale as `tool-transport.server.ts`: a wrapper pattern
  * (`withInjectionGuard`) runs the wrapped pattern inside an ALS scope, and
  * readers deep inside the call graph consult it without any intermediate
  * pattern having to be guard-aware. `chain` / `router` / `routes` /

@@ -2,8 +2,8 @@
 
 Visual companion to [`DATA_STASH.md`](DATA_STASH.md) (the store → chunk → embed →
 search pipeline) and the sandbox docs [`plan/sandbox.md`](plan/sandbox.md) /
-[`sandbox/README.md`](sandbox/README.md). Those cover the *what* and *why* in
-prose; this doc is the *how data moves* at a glance — four Mermaid diagrams
+[`sandbox/README.md`](sandbox/README.md). Those cover the _what_ and _why_ in
+prose; this doc is the _how data moves_ at a glance — four Mermaid diagrams
 covering the two subsystems and the bridge between them.
 
 The diagrams reflect the code as of the durable-workspace (#89), retriever +
@@ -72,15 +72,15 @@ flowchart TD
 
 **Notes**
 
-- `storeDocument` writes the doc (`json_set`, 7-day TTL) *and* registers it in
+- `storeDocument` writes the doc (`json_set`, 7-day TTL) _and_ registers it in
   the per-session index set (`sadd`, TTL refreshed). The index self-heals:
   `listDocuments` prunes ids whose doc key has expired.
 - One embedding space per session corpus: `recordSpace` stamps
   `stash:space:SID`; re-ingesting under a different model throws unless
-  `allowSpaceChange`, and queries are always embedded with the *recorded* model
+  `allowSpaceChange`, and queries are always embedded with the _recorded_ model
   (`assertSameSpace`) — a search can never compare across spaces.
 - Auto-ingest is best-effort and decoupled from the upload's `201`: the gate is
-  decided *before* the first write, so `ingestStatus: 'pending'` is persisted in
+  decided _before_ the first write, so `ingestStatus: 'pending'` is persisted in
   that write (kills the status-flicker), then embedding runs in the background. A
   retriever also runs `ensureSessionIngested` on first search as a safety net for
   uploads that predated the agent being known.
@@ -89,7 +89,7 @@ flowchart TD
   arm64 `redisearch.so` SIGILLs on vector ops — see `DATA_STASH.md`).
 - **Transport (#111).** The Data Stash layer is parameterised on an injectable
   `CallTool`; `stashCallTool()` resolves to the **MCP gateway** (default) or a
-  **direct `ioredis`** client (`STASH_DIRECT_REDIS=1`) against the *same*
+  **direct `ioredis`** client (`STASH_DIRECT_REDIS=1`) against the _same_
   redis-stack, with a byte-identical key + FLOAT32 vector schema — so a corpus can
   mix gateway- and direct-written chunks. The gateway's serial stdio pipe is
   ~1.6s/call, so ingest (still a sequential 2-writes-per-chunk loop) drops from
@@ -160,12 +160,12 @@ flowchart TD
 
 **Notes**
 
-- **Scheduler** gates *whether* a sandbox may exist (`globalCap` +
-  `perSessionCap`); the **warm pool** decides *where it comes from* (parked VM vs
+- **Scheduler** gates _whether_ a sandbox may exist (`globalCap` +
+  `perSessionCap`); the **warm pool** decides _where it comes from_ (parked VM vs
   cold boot). `withSandbox` always allocates the slot first and releases it in
   the outer `finally`, regardless of branch.
 - The reaper is label-scoped (`kg-sandbox=1`) and fires once per process,
-  fire-and-forget, before the first acquire. Caveat: it removes *all* labelled
+  fire-and-forget, before the first acquire. Caveat: it removes _all_ labelled
   containers, so it's correct for single-process dev but would need a grace
   window if multiple harness processes ever shared one Docker host (#97).
 - The health-check costs ~1 `docker inspect` per reuse. On a non-healthy verdict
@@ -188,7 +188,7 @@ opts into `syncWorkspace`, the session's stored documents are **hydrated** into
 container eviction and show up in the DataStash UI.
 
 The interactive Shell (#97 Gap 3) shares the same attachment, so if a user opens
-a terminal *before* the agent's first turn, the Shell hydrates `/work/in` itself.
+a terminal _before_ the agent's first turn, the Shell hydrates `/work/in` itself.
 The shared `Attachment.isFirstBoot` flag coordinates: whoever boots the container
 first hydrates; the other skips.
 
@@ -226,9 +226,9 @@ sequenceDiagram
 
 **Notes**
 
-- Hydration writes only *visible* docs (hidden/archived are skipped, matching
+- Hydration writes only _visible_ docs (hidden/archived are skipped, matching
   their exclusion from the agent's context elsewhere).
-- Promotion is diff-based: `snapshotOutputs` hashes `/work/out` *in-VM* before
+- Promotion is diff-based: `snapshotOutputs` hashes `/work/out` _in-VM_ before
   the turn (via `sha256sum`, so unchanged bytes never cross the transport), and
   `promoteOutputs` stores only new/changed files afterward. Deletions are
   ignored — promotion never removes an already-stored document.
@@ -260,7 +260,7 @@ flowchart LR
         CTRL["Controller pattern<br/>simpleLoop / actorCritic"]
         ALS["ALS transport scope<br/>activeTransports()"]
         MCPC["mcp-client.callTool"]
-        BAML["BAML adapters<br/>append sandbox listTools to prompt"]
+        BAML["BAML adapters<br/>append scoped listTools to prompt"]
         PTY["PtyManager<br/>SSE-down / POST-up"]
         STASH["Data Stash lib<br/>document-store · ingest · vector-store"]
     end

@@ -128,7 +128,7 @@ const FLAVOURED_SANDBOX_FEW_SHOTS: FewShot[] = [
 ]
 
 /** A sandbox tool-loop; the actor sees the in-VM `sandbox_*` tools via the ALS
- *  scope `withSandbox` sets up, so `availableTools` is left empty. */
+ *  scope `withSandbox` sets up, so the tools argument is left empty. */
 function sandboxLoop(patternId: string, guidance: string) {
   const actor = createActorControllerAdapter({
     contextPrefix: guidance,
@@ -137,7 +137,6 @@ function sandboxLoop(patternId: string, guidance: string) {
   const critic = createCriticAdapter()
   return actorCritic<SessionData>(actor, critic, [], {
     patternId,
-    availableTools: [],
     liveEvents: true,
     maxRetries: 6,
     // Deliverable-producing routes: the actor typically inspects inputs, WRITES

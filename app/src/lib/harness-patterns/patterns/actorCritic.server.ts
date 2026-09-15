@@ -60,17 +60,16 @@ export interface ActorCriticData {
  *   simpleLoop's controller)
  * @param critic - Critic function from `createCriticAdapter()`
  * @param tools - Allowed tool names
- * @param config - Configuration (availableTools, maxRetries, patternId, etc.)
+ * @param config - Configuration (maxRetries, patternId, etc.)
  * @returns ConfiguredPattern ready for chain
  *
  * @example
  * const loop = actorCritic(
- *   createActorControllerAdapter(availableTools),
+ *   createActorControllerAdapter(tools.all),
  *   createCriticAdapter(),
  *   tools.all,
  *   {
  *     patternId: 'sandbox-loop',
- *     availableTools,
  *     maxRetries: 3
  *   }
  * )
@@ -81,7 +80,6 @@ export function actorCritic<T extends ActorCriticData>(
   tools: string[],
   config?: ActorCriticConfig,
 ): ConfiguredPattern<T> {
-  const availableTools = config?.availableTools ?? tools
   const resolved = resolveConfig('actorCritic', config)
 
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
@@ -91,7 +89,7 @@ export function actorCritic<T extends ActorCriticData>(
     // agents, which pass `[]` on purpose and run inside a scoped transport, so
     // that guard is what keeps them out of this branch rather than an
     // exemption; a future gateway-backed actorCritic gets the check for free.
-    const outage = activeTransports().length > 0 ? null : toolSurfaceOutage(availableTools)
+    const outage = activeTransports().length > 0 ? null : toolSurfaceOutage(tools)
     if (outage) {
       trackEvent(scope, 'error', { ...outage, severity: 'irrecoverable' } as ErrorEventData, true)
       return scope
@@ -247,7 +245,7 @@ export function actorCritic<T extends ActorCriticData>(
         const { action: rawAction, llmCall: actorLlmCall } = await actor(
           userContent,
           intent,
-          availableTools,
+          tools,
           previousAttempts,
           actorCollector,
           attempt + 1,

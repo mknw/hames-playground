@@ -494,8 +494,6 @@ export interface SimpleLoopConfig extends PatternConfig {
 
 /** Configuration for actorCritic pattern */
 export interface ActorCriticConfig extends PatternConfig {
-  /** Available tools for the actor */
-  availableTools?: string[]
   /** Max retries before giving up (default: 3) */
   maxRetries?: number
   /** Hook to enrich/transform a tool result before the `tool_result` event is

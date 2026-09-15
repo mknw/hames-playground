@@ -41,7 +41,10 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
 // `DockerBackend` shells out to `docker run` / `rm` / `inspect`. Each spawn
 // returns a fake child whose behavior is `spawnPlan`-driven (set per test
 // when needed; otherwise returns stdout = a stable container id).
-type SpawnPlan = (cmd: string, args: string[]) => { stdout?: string; stderr?: string; code?: number }
+type SpawnPlan = (
+  cmd: string,
+  args: string[],
+) => { stdout?: string; stderr?: string; code?: number }
 let spawnPlan: SpawnPlan = (_cmd, args) =>
   args[0] === 'run' ? { stdout: 'cid-integration', code: 0 } : { stdout: '', code: 0 }
 const spawnCalls: Array<{ cmd: string; args: string[] }> = []
@@ -111,7 +114,11 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
             { name: 'write_file', description: 'write', inputSchema: { type: 'object' } },
             { name: 'edit_file', description: 'edit', inputSchema: { type: 'object' } },
             { name: 'list_directory', description: 'list', inputSchema: { type: 'object' } },
-            { name: 'search_files_content', description: 'search', inputSchema: { type: 'object' } },
+            {
+              name: 'search_files_content',
+              description: 'search',
+              inputSchema: { type: 'object' },
+            },
           ],
         }
       }
@@ -120,9 +127,19 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
       }
       return { tools: [] }
     }
-    async callTool({ name, arguments: args }: { name: string; arguments: Record<string, unknown> }) {
+    async callTool({
+      name,
+      arguments: args,
+    }: {
+      name: string
+      arguments: Record<string, unknown>
+    }) {
       inVmCalls.push({ server: this.serverKey, name, args })
-      if (name === 'write_file' && typeof args.path === 'string' && typeof args.content === 'string') {
+      if (
+        name === 'write_file' &&
+        typeof args.path === 'string' &&
+        typeof args.content === 'string'
+      ) {
         sandboxFiles.set(args.path, args.content)
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true }) }], isError: false }
       }
@@ -181,7 +198,8 @@ vi.mock('../../../../baml_client/inlinedbaml', () => ({
 // The adapter's gateway-side `filterToolDescriptions` calls `mcpListTools()`.
 // In a sandbox-only test the gateway returns nothing (no host tools needed).
 vi.mock('../../../lib/harness-patterns/mcp-client.server', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../lib/harness-patterns/mcp-client.server')>()
+  const actual =
+    await importOriginal<typeof import('../../../lib/harness-patterns/mcp-client.server')>()
   return {
     ...actual,
     listTools: vi.fn().mockResolvedValue([]),
@@ -201,13 +219,12 @@ beforeEach(() => {
 
 describe('withSandbox(actorCritic) end-to-end — word count', () => {
   it('writes a script, runs it, and returns the count via the critic-accepted result', async () => {
-    const { actorCritic } = await import('../../../lib/harness-patterns/patterns/actorCritic.server')
+    const { actorCritic } =
+      await import('../../../lib/harness-patterns/patterns/actorCritic.server')
     const { createScope } = await import('../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../lib/harness-patterns/patterns')
-    const {
-      createActorControllerAdapter,
-      createCriticAdapter,
-    } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { createActorControllerAdapter, createCriticAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
     const { withSandbox } = await import('../../../lib/sandbox/with-sandbox.server')
 
     const script =
@@ -236,7 +253,7 @@ describe('withSandbox(actorCritic) end-to-end — word count', () => {
     const actor = createActorControllerAdapter([])
     const critic = createCriticAdapter()
     const pattern = withSandbox({ rootfs: 'base' })(
-      actorCritic(actor, critic, [], { availableTools: [], maxRetries: 3, patternId: 'e2e' }),
+      actorCritic(actor, critic, [], { maxRetries: 3, patternId: 'e2e' }),
     )
 
     const scope = createScope('e2e', { intent: 'count words in the string' })

@@ -8,25 +8,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockListTools } from '../../../mocks/mcp'
 import { mockFinalAction } from '../../../mocks/baml'
-import type {
-  ContextEvent,
-  EventType,
-  UnifiedContext,
-} from '../../../../../../packages/harness-patterns'
+import type { ContextEvent, EventType, UnifiedContext } from '@hames/harness-patterns'
 import type { CriticFnWithLLMData } from '../../../../lib/harness-baml/baml-adapters.server'
 import type {
   ControllerFn,
   ActorFn,
   ControllerInput,
   ActorInput,
-} from '../../../../../../packages/harness-patterns/types'
+} from '@hames/harness-patterns/types'
 
 // Mock server-only imports
-vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-vi.mock('../../../../../../packages/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   callTool: vi.fn(async () => ({ success: true, data: {} })),
   listTools: mockListTools(['read_neo4j_cypher', 'search']),
 }))
@@ -84,9 +80,9 @@ const PLAN = {
 
 async function load() {
   const { planner, formatPlanContext, DEFAULT_MAX_PLAN_CHARS } =
-    await import('../../../../../../packages/harness-patterns/patterns/planner.server')
-  const { createScope } = await import('../../../../../../packages/harness-patterns/context.server')
-  const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    await import('@hames/harness-patterns/patterns/planner.server')
+  const { createScope } = await import('@hames/harness-patterns/context.server')
+  const { createEventView } = await import('@hames/harness-patterns/patterns')
   return { planner, formatPlanContext, DEFAULT_MAX_PLAN_CHARS, createScope, createEventView }
 }
 
@@ -384,11 +380,9 @@ describe('plan plumbing into the loop patterns', () => {
   })
 
   it('simpleLoop forwards a formatted plan to its controller as planContext', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const controller = vi.fn<ControllerFn>(async () => ({
       action: mockFinalAction('done'),
@@ -407,11 +401,9 @@ describe('plan plumbing into the loop patterns', () => {
   })
 
   it('simpleLoop passes planContext undefined when no planner ran', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const controller = vi.fn<ControllerFn>(async () => ({
       action: mockFinalAction('done'),
@@ -426,11 +418,9 @@ describe('plan plumbing into the loop patterns', () => {
   })
 
   it('actorCritic forwards a formatted plan to its actor as planContext', async () => {
-    const { actorCritic } =
-      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const actor = vi.fn<ActorFn>(async () => ({
       action: {

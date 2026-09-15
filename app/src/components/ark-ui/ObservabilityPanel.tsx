@@ -13,7 +13,7 @@
 
 import { For, Show, createSignal, createMemo } from 'solid-js'
 import { Tooltip } from '@ark-ui/solid/tooltip'
-import type { ContextEvent, UnifiedContext } from '../../../../packages/harness-patterns'
+import type { ContextEvent, UnifiedContext } from '@hames/harness-patterns'
 import { getPatternColor } from '~/lib/observability/event-styles'
 import { buildTimelineItems } from '~/lib/observability/projection'
 import { SummaryBar } from './observability/SummaryBar'

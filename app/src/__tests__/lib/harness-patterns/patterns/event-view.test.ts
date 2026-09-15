@@ -3,13 +3,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type {
-  UnifiedContext,
-  ContextEvent,
-} from '../../../../../../packages/harness-patterns/types'
+import type { UnifiedContext, ContextEvent } from '@hames/harness-patterns/types'
 
 // Mock server-only imports
-vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -31,15 +28,14 @@ describe('EventViewImpl', () => {
   })
 
   it('should export createEventView function', async () => {
-    const { createEventView } =
-      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
     expect(createEventView).toBeDefined()
     expect(typeof createEventView).toBe('function')
   })
 
   it('should create an EventView instance', async () => {
     const { createEventView, EventViewImpl } =
-      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      await import('@hames/harness-patterns/patterns/event-view.server')
 
     const ctx = createMockContext()
     const view = createEventView(ctx)
@@ -49,8 +45,7 @@ describe('EventViewImpl', () => {
 
   describe('get()', () => {
     it('should return all events with no filters', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'hi' } },
@@ -67,8 +62,7 @@ describe('EventViewImpl', () => {
 
   describe('fromPattern()', () => {
     it('should filter events by pattern ID', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'tool_call', ts: 1, patternId: 'pattern-a', data: { tool: 'a' } },
@@ -87,8 +81,7 @@ describe('EventViewImpl', () => {
 
   describe('fromPatterns()', () => {
     it('should filter events by multiple pattern IDs', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'tool_call', ts: 1, patternId: 'p1', data: {} },
@@ -107,8 +100,7 @@ describe('EventViewImpl', () => {
 
   describe('fromLastPattern()', () => {
     it('should filter events from the last pattern', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'pattern_enter', ts: 1, patternId: 'first', data: {} },
@@ -126,8 +118,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should return empty when no patterns exist', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const ctx = createMockContext([])
       const view = createEventView(ctx)
@@ -140,8 +131,7 @@ describe('EventViewImpl', () => {
       // Regression test for: in a 4-turn session where web-search ran in turn 3
       // and neo4j-query ran in turn 4, fromLastPattern() must resolve to
       // neo4j-query (last *activated*), not web-search (last *introduced*).
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         // Turn 2: neo4j-query first appears
@@ -193,8 +183,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should only return events from the last execution when a pattern runs multiple times', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       // Simulates two user turns both routing to the same 'neo4j-query' pattern
       const events: ContextEvent[] = [
@@ -258,8 +247,7 @@ describe('EventViewImpl', () => {
 
   describe('fromLastNPatterns()', () => {
     it('should filter events from last N patterns', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'pattern_enter', ts: 1, patternId: 'first', data: {} },
@@ -279,8 +267,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should return all events when N exceeds pattern count', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'pattern_enter', ts: 1, patternId: 'first', data: {} },
@@ -298,8 +285,7 @@ describe('EventViewImpl', () => {
 
   describe('fromAll()', () => {
     it('should return all events without pattern filter', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'tool_call', ts: 1, patternId: 'p1', data: {} },
@@ -314,8 +300,7 @@ describe('EventViewImpl', () => {
     })
 
     it('does NOT drop the filters the ViewConfig installed', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'hi' } },
@@ -334,8 +319,7 @@ describe('EventViewImpl', () => {
 
   describe('unfiltered()', () => {
     it('drops every ViewConfig filter, window and limit', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'hi' } },
@@ -355,8 +339,7 @@ describe('EventViewImpl', () => {
     })
 
     it('leaves the original view untouched', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const ctx = createMockContext([
         { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'hi' } },
@@ -370,8 +353,7 @@ describe('EventViewImpl', () => {
 
   describe('ofType()', () => {
     it('should filter events by type', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'hi' } },
@@ -390,8 +372,7 @@ describe('EventViewImpl', () => {
 
   describe('ofTypes()', () => {
     it('should filter events by multiple types', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'hi' } },
@@ -409,8 +390,7 @@ describe('EventViewImpl', () => {
 
   describe('tools()', () => {
     it('should return tool_call and tool_result events', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'hi' } },
@@ -434,8 +414,7 @@ describe('EventViewImpl', () => {
 
   describe('messages()', () => {
     it('should return user_message and assistant_message events', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'hi' } },
@@ -454,8 +433,7 @@ describe('EventViewImpl', () => {
 
   describe('actions()', () => {
     it('should return controller_action events', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'controller_action', ts: 1, patternId: 'p1', data: { action: 'test' } },
@@ -474,8 +452,7 @@ describe('EventViewImpl', () => {
 
   describe('last()', () => {
     it('should return last N events', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'tool_call', ts: 1, patternId: 'p1', data: { n: 1 } },
@@ -495,8 +472,7 @@ describe('EventViewImpl', () => {
 
   describe('first()', () => {
     it('should return first N events', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'tool_call', ts: 1, patternId: 'p1', data: { n: 1 } },
@@ -516,8 +492,7 @@ describe('EventViewImpl', () => {
 
   describe('since()', () => {
     it('should filter events since timestamp', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'tool_call', ts: 100, patternId: 'p1', data: {} },
@@ -536,8 +511,7 @@ describe('EventViewImpl', () => {
 
   describe('fromLastNTurns()', () => {
     it('should return events from the last N user turns', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         // Turn 1
@@ -578,8 +552,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should return all events when N exceeds turn count', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'only turn' } },
@@ -594,8 +567,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should chain with type filters', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'first' } },
@@ -626,8 +598,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should return all events when no user_messages exist', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'tool_call', ts: 1, patternId: 'p1', data: { tool: 'a' } },
@@ -649,8 +620,7 @@ describe('EventViewImpl', () => {
 
   describe('serialize()', () => {
     it('should serialize events to XML format', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'Hello' } },
@@ -666,8 +636,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should format tool_call events correctly', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         {
@@ -687,8 +656,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should format tool_result events correctly', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         {
@@ -708,8 +676,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should format failed tool_result events with error', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         {
@@ -731,8 +698,7 @@ describe('EventViewImpl', () => {
 
   describe('exists()', () => {
     it('should return true when events match', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [{ type: 'tool_call', ts: 1, patternId: 'p1', data: {} }]
 
@@ -743,8 +709,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should return false when no events match', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const ctx = createMockContext([])
       const view = createEventView(ctx)
@@ -755,8 +720,7 @@ describe('EventViewImpl', () => {
 
   describe('count()', () => {
     it('should return count of matching events', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'tool_call', ts: 1, patternId: 'p1', data: {} },
@@ -773,8 +737,7 @@ describe('EventViewImpl', () => {
 
   describe('chaining', () => {
     it('should support method chaining', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'pattern_enter', ts: 1, patternId: 'p1', data: {} },
@@ -801,8 +764,7 @@ describe('EventViewImpl', () => {
     // These tests verify the actual behavior.
 
     it('should support method chaining with explicit filters', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'pattern_enter', ts: 1, patternId: 'p1', data: {} },
@@ -821,8 +783,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should support method chaining with limit', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'tool_call', ts: 1, patternId: 'p1', data: {} },
@@ -839,8 +800,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should support fromLastN with method chaining', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'pattern_enter', ts: 1, patternId: 'p1', data: {} },
@@ -864,8 +824,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should apply fromLastNTurns via ViewConfig', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         // Turn 1
@@ -903,8 +862,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should combine fromLastNTurns with eventTypes in ViewConfig', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'first' } },
@@ -943,8 +901,7 @@ describe('EventViewImpl', () => {
 
   describe('errors()', () => {
     it('should return error events', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'tool_call', ts: 1, patternId: 'p1', data: { tool: 'test' } },
@@ -963,8 +920,7 @@ describe('EventViewImpl', () => {
 
   describe('hasErrors()', () => {
     it('should return true when errors exist', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'error', ts: 1, patternId: 'p1', data: { error: 'Failed' } },
@@ -977,8 +933,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should return false when no errors exist', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'tool_call', ts: 1, patternId: 'p1', data: { tool: 'test' } },
@@ -993,8 +948,7 @@ describe('EventViewImpl', () => {
 
   describe('lastError()', () => {
     it('should return the last error message', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'error', ts: 1, patternId: 'p1', data: { error: 'First error' } },
@@ -1008,8 +962,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should return undefined when no errors exist', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'tool_call', ts: 1, patternId: 'p1', data: { tool: 'test' } },
@@ -1024,8 +977,7 @@ describe('EventViewImpl', () => {
 
   describe('serializeCompact — hidden/archived filtering', () => {
     it('should exclude hidden tool_result events from compact serialization', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'query' } },
@@ -1054,8 +1006,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should exclude archived tool_result events from compact serialization', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'query' } },
@@ -1084,8 +1035,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should include non-tool_result events even when hidden/archived flags exist on other events', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'query' } },
@@ -1113,8 +1063,7 @@ describe('EventViewImpl', () => {
 
   describe('serializeCompact — summary in compact pointers', () => {
     it('should use LLM summary in compact pointer when available', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         // Turn 1 (older — will be compacted)
@@ -1155,8 +1104,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should fall back to raw result slice when no summary available', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const longResult = 'x'.repeat(200)
       const events: ContextEvent[] = [
@@ -1182,8 +1130,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should include accurate char count in compact pointer', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const resultData = 'Exact length test data'
       const events: ContextEvent[] = [
@@ -1212,8 +1159,7 @@ describe('EventViewImpl', () => {
 
   describe('serialize — tool_result with summary', () => {
     it('should append summary to full tool_result serialization', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         {
@@ -1238,8 +1184,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should not append summary tag when no summary exists', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         {
@@ -1259,8 +1204,7 @@ describe('EventViewImpl', () => {
     })
 
     it('should not append summary for error results', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         {
@@ -1289,8 +1233,7 @@ describe('EventViewImpl', () => {
 
   describe('selfPatternId exclusion', () => {
     it('fromLastPattern() should exclude self when selfPatternId is provided', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'pattern_enter', ts: 1, patternId: 'router-1', data: { pattern: 'router' } },
@@ -1324,8 +1267,7 @@ describe('EventViewImpl', () => {
     })
 
     it('fromLastNPatterns() should exclude self when selfPatternId is provided', async () => {
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
       const events: ContextEvent[] = [
         { type: 'pattern_enter', ts: 1, patternId: 'p1', data: {} },

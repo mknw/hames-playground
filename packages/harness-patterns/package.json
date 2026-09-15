@@ -7,7 +7,9 @@
   "main": "./index.ts",
   "exports": {
     ".": "./index.ts",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./patterns": "./patterns/index.ts",
+    "./*": "./*.ts"
   },
   "files": [
     "*.ts",

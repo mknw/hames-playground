@@ -1,8 +1,9 @@
-# One-member workspace (#225 Step 0, docs/plan/harness-npm-lib.md §5): the repo
-# root becomes the pnpm workspace root and pnpm-lock.yaml lives here. No
-# packages/ yet — nothing has been extracted.
+# Two members (#225 Step 1b, docs/plan/harness-npm-lib.md §2.1): the library
+# moved to packages/ in Step 1a and is now a workspace member, so
+# `@hames/harness-patterns` resolves via workspace:* to live source.
 packages:
   - app
+  - packages/*
 
 # Moved from app/package.json `pnpm.onlyBuiltDependencies`: pnpm 10 reads the
 # dependency build-script allowlist from the workspace manifest, not from a

@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock server-only imports
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -71,8 +71,7 @@ describe('mcp-client', () => {
   // doors to the gateway, so connection lifecycle is asserted through them.
   describe('connection lifecycle', () => {
     it('should create and connect a client on first use', async () => {
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       await callTool('test_tool', {})
 
@@ -81,8 +80,7 @@ describe('mcp-client', () => {
     })
 
     it('should reuse the same warm connection on subsequent calls', async () => {
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       await callTool('test_tool', {})
       await callTool('test_tool', {})
@@ -95,15 +93,13 @@ describe('mcp-client', () => {
 
   describe('callTool', () => {
     it('should export callTool function', async () => {
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
       expect(callTool).toBeDefined()
       expect(typeof callTool).toBe('function')
     })
 
     it('should call the tool and return success result', async () => {
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('test_tool', { arg1: 'value1' })
 
@@ -116,8 +112,7 @@ describe('mcp-client', () => {
         content: [{ type: 'text', text: 'plain text result' }],
       })
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('test_tool', {})
 
@@ -131,8 +126,7 @@ describe('mcp-client', () => {
         structuredContent: { key: 'value' },
       })
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('test_tool', {})
 
@@ -143,8 +137,7 @@ describe('mcp-client', () => {
     it('should handle errors gracefully', async () => {
       mockCallTool.mockRejectedValue(new Error('Connection failed'))
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('test_tool', {})
 
@@ -167,8 +160,7 @@ describe('mcp-client', () => {
         content: [{ type: 'text', text: neo4jErrorText }],
       })
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('write_neo4j_cypher', { query: 'MERGE ...' })
 
@@ -182,8 +174,7 @@ describe('mcp-client', () => {
         content: [{ type: 'text', text: 'Redis Error: WRONGTYPE Operation against a key…' }],
       })
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('some_redis_tool', {})
 
@@ -208,8 +199,7 @@ describe('mcp-client', () => {
         ],
       })
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('write_neo4j_cypher', { query: 'MERGE ...' })
 
@@ -222,8 +212,7 @@ describe('mcp-client', () => {
         content: [{ type: 'text', text: 'Hello world — nothing wrong here.' }],
       })
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('test_tool', {})
 
@@ -240,8 +229,7 @@ describe('mcp-client', () => {
         "Error: Cannot add server 'neo4j-cypher'. Missing required secrets (neo4j-cypher.password)."
       mockCallTool.mockResolvedValue({ content: [{ type: 'text', text }] })
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('mcp-add', { name: 'neo4j-cypher' })
 
@@ -256,8 +244,7 @@ describe('mcp-client', () => {
         content: [{ type: 'text', text: 'The result has no Error: here' }],
       })
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('test_tool', {})
 
@@ -278,8 +265,7 @@ describe('mcp-client', () => {
         ],
       })
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('smembers', { name: 'some:set' })
 
@@ -295,8 +281,7 @@ describe('mcp-client', () => {
         ],
       })
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('search', {})
 
@@ -312,8 +297,7 @@ describe('mcp-client', () => {
         ],
       })
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('some_tool', {})
 
@@ -324,15 +308,13 @@ describe('mcp-client', () => {
 
   describe('listTools', () => {
     it('should export listTools function', async () => {
-      const { listTools } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { listTools } = await import('@hames/harness-patterns/mcp-client.server')
       expect(listTools).toBeDefined()
       expect(typeof listTools).toBe('function')
     })
 
     it('should return gateway tool descriptions', async () => {
-      const { listTools } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { listTools } = await import('@hames/harness-patterns/mcp-client.server')
 
       const tools = await listTools()
 
@@ -350,8 +332,7 @@ describe('mcp-client', () => {
     // `browser-e2e-not-in-ci.test.ts`.
     it('should append in-process app tools to the gateway list (#110)', async () => {
       await import('../../../lib/app-tools/index.server')
-      const { listTools } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { listTools } = await import('@hames/harness-patterns/mcp-client.server')
 
       const tools = await listTools()
 
@@ -363,8 +344,7 @@ describe('mcp-client', () => {
       await import('../../../lib/app-tools/index.server')
       mockListTools.mockRejectedValue(new Error('Failed'))
 
-      const { listTools } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { listTools } = await import('@hames/harness-patterns/mcp-client.server')
 
       const tools = await listTools()
 
@@ -376,15 +356,13 @@ describe('mcp-client', () => {
 
   describe('closeMcpClient', () => {
     it('should export closeMcpClient function', async () => {
-      const { closeMcpClient } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { closeMcpClient } = await import('@hames/harness-patterns/mcp-client.server')
       expect(closeMcpClient).toBeDefined()
       expect(typeof closeMcpClient).toBe('function')
     })
 
     it('should close the client', async () => {
-      const { callTool, closeMcpClient } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool, closeMcpClient } = await import('@hames/harness-patterns/mcp-client.server')
 
       // First create a client
       await callTool('test_tool', {})
@@ -396,8 +374,7 @@ describe('mcp-client', () => {
     })
 
     it('should handle close when no client exists', async () => {
-      const { closeMcpClient } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { closeMcpClient } = await import('@hames/harness-patterns/mcp-client.server')
 
       // Should not throw when no client
       await closeMcpClient()
@@ -409,22 +386,19 @@ describe('mcp-client', () => {
 
   describe('isConnected', () => {
     it('should export isConnected function', async () => {
-      const { isConnected } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { isConnected } = await import('@hames/harness-patterns/mcp-client.server')
       expect(isConnected).toBeDefined()
       expect(typeof isConnected).toBe('function')
     })
 
     it('should return false when no client', async () => {
-      const { isConnected } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { isConnected } = await import('@hames/harness-patterns/mcp-client.server')
 
       expect(isConnected()).toBe(false)
     })
 
     it('should return true after a call has warmed a connection', async () => {
-      const { callTool, isConnected } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool, isConnected } = await import('@hames/harness-patterns/mcp-client.server')
 
       await callTool('test_tool', {})
 
@@ -440,10 +414,8 @@ describe('mcp-client', () => {
   // scoped-vs-gateway cases that have always lived here.
   describe('callTool scoped-transport dispatch', () => {
     it('routes scoped tool names to the scoped transport, not the gateway', async () => {
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
-      const { withTransport } =
-        await import('../../../../../packages/harness-patterns/tool-transport.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
+      const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
 
       const sandboxCallTool = vi.fn().mockResolvedValue({ success: true, data: 'from-sandbox' })
       const transport = {
@@ -464,10 +436,8 @@ describe('mcp-client', () => {
     })
 
     it('falls through to the gateway for tools the scoped transport does not own', async () => {
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
-      const { withTransport } =
-        await import('../../../../../packages/harness-patterns/tool-transport.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
+      const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
 
       const sandboxCallTool = vi.fn()
       const transport = {
@@ -488,8 +458,7 @@ describe('mcp-client', () => {
     })
 
     it('routes everything to the gateway outside any scope', async () => {
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('whatever', {})
 
@@ -512,8 +481,7 @@ describe('mcp-client', () => {
     }
 
     it('scopes a mid-flight reconnect to the failing lease; the other call is untouched', async () => {
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const steadyStarted = deferred()
       const releaseSteady = deferred()
@@ -556,8 +524,7 @@ describe('mcp-client', () => {
     it('retries a transport error exactly once on a rebuilt connection (read-only tool)', async () => {
       mockCallTool.mockRejectedValue(new Error('fetch failed'))
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('read_neo4j_cypher', {})
 
@@ -577,8 +544,7 @@ describe('mcp-client', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
         mockCallTool.mockRejectedValue(new Error('socket hang up'))
 
-        const { callTool } =
-          await import('../../../../../packages/harness-patterns/mcp-client.server')
+        const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
         const result = await callTool('write_neo4j_cypher', {
           query: 'CREATE (:Node {n: 1})',
@@ -597,8 +563,7 @@ describe('mcp-client', () => {
       })
 
       it('classifies reads and writes conservatively', async () => {
-        const { isReadOnlyTool } =
-          await import('../../../../../packages/harness-patterns/mcp-client.server')
+        const { isReadOnlyTool } = await import('@hames/harness-patterns/mcp-client.server')
 
         for (const name of [
           'read_neo4j_cypher',
@@ -658,8 +623,7 @@ describe('mcp-client', () => {
           .mockRejectedValueOnce(new Error('connection closed'))
           .mockResolvedValueOnce({ tools: [{ name: 'later_tool', inputSchema: {} }] })
 
-        const { listTools } =
-          await import('../../../../../packages/harness-patterns/mcp-client.server')
+        const { listTools } = await import('@hames/harness-patterns/mcp-client.server')
 
         const tools = await listTools()
 
@@ -671,8 +635,7 @@ describe('mcp-client', () => {
     it('never retries a tool-level error', async () => {
       mockCallTool.mockRejectedValue(new Error('Tool execution failed: unknown argument'))
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const result = await callTool('test_tool', {})
 
@@ -685,8 +648,7 @@ describe('mcp-client', () => {
     it('releases the lease when the call throws, so the connection is reused', async () => {
       mockCallTool.mockRejectedValueOnce(new Error('Tool execution failed: bad args'))
 
-      const { callTool } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
 
       const failed = await callTool('test_tool', {})
       const ok = await callTool('test_tool', {})
@@ -703,8 +665,7 @@ describe('mcp-client', () => {
     it('grows past the pool size instead of queueing, and closes the overflow', async () => {
       vi.stubEnv('MCP_GATEWAY_POOL_SIZE', '1')
 
-      const { callTool, isConnected } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { callTool, isConnected } = await import('@hames/harness-patterns/mcp-client.server')
 
       const release = deferred()
       mockCallTool.mockImplementation(async () => {
@@ -736,7 +697,7 @@ describe('mcp-client', () => {
     // so its release closes it.
     it('does not leak a connection rebuilt by a lease that outlived closeMcpClient', async () => {
       const { callTool, closeMcpClient, isConnected } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+        await import('@hames/harness-patterns/mcp-client.server')
 
       const held = deferred()
       let attempts = 0

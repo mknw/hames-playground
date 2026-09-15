@@ -17,7 +17,7 @@ import {
   type TurnState,
 } from '~/lib/turn-stream'
 import type { Message } from '~/components/ark-ui/ChatMessages'
-import type { ContextEvent, UnifiedContext } from '../../../../packages/harness-patterns'
+import type { ContextEvent, UnifiedContext } from '@hames/harness-patterns'
 import type { GraphElement } from '~/lib/harness-client/types'
 import type { WarmingEventData } from '~/lib/sse-client'
 import type { HarnessSettings } from '~/lib/settings'

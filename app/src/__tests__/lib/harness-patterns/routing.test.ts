@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock server-only imports
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 

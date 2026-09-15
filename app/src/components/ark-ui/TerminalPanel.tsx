@@ -14,7 +14,7 @@
  */
 
 import { For, Show, createMemo, createSignal } from 'solid-js'
-import type { ContextEvent } from '../../../../packages/harness-patterns'
+import type { ContextEvent } from '@hames/harness-patterns'
 import { SANDBOX_TOOL_PREFIX } from '~/lib/sandbox/types'
 import { InteractiveTerminal } from './InteractiveTerminal'
 

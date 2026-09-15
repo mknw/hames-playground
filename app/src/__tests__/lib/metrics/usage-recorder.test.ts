@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -30,10 +30,10 @@ import {
 import {
   notifyLlmUsage,
   resetLlmUsageObservers,
-} from '../../../../../packages/harness-patterns/llm-usage-observer.server'
+} from '@hames/harness-patterns/llm-usage-observer.server'
 import { resetVerdaActivity, verdaWarmth } from '../../../lib/inference/verda-activity.server'
 import { resetCallLatency, tierLatency } from '../../../lib/metrics/call-latency.server'
-import type { EventMetrics } from '../../../../../packages/harness-patterns/types'
+import type { EventMetrics } from '@hames/harness-patterns/types'
 // Namespace import: the tier map is read as DATA here, to prove the recorder
 // derives its private-client set from it rather than restating it.
 import * as clients from '../../../lib/harness-baml/clients.server'

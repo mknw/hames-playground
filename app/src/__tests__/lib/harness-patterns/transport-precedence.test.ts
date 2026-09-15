@@ -23,7 +23,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -44,7 +44,7 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
   StreamableHTTPClientTransport: class {},
 }))
 
-type Seam = typeof import('../../../../../packages/harness-patterns/tool-transport.server')
+type Seam = typeof import('@hames/harness-patterns/tool-transport.server')
 type Transport = Seam['activeTransports'] extends () => readonly (infer T)[] ? T : never
 
 /** A transport that records every call it is handed. */
@@ -63,7 +63,7 @@ function spyTransport(id: string, owns: string[]) {
 }
 
 describe('tool dispatch precedence', () => {
-  let callTool: typeof import('../../../../../packages/harness-patterns/mcp-client.server').callTool
+  let callTool: typeof import('@hames/harness-patterns/mcp-client.server').callTool
   let seam: Seam
   const cleanups: (() => void)[] = []
 
@@ -73,8 +73,8 @@ describe('tool dispatch precedence', () => {
     mockClose.mockResolvedValue(undefined)
     mockCallTool.mockResolvedValue({ content: [{ type: 'text', text: '"from:gateway"' }] })
     mockListTools.mockResolvedValue({ tools: [] })
-    ;({ callTool } = await import('../../../../../packages/harness-patterns/mcp-client.server'))
-    seam = await import('../../../../../packages/harness-patterns/tool-transport.server')
+    ;({ callTool } = await import('@hames/harness-patterns/mcp-client.server'))
+    seam = await import('@hames/harness-patterns/tool-transport.server')
   })
 
   afterEach(async () => {
@@ -221,8 +221,7 @@ describe('tool dispatch precedence', () => {
 
   describe('the tool catalog follows the same split', () => {
     it('advertises process transports alongside the gateway', async () => {
-      const { listTools } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { listTools } = await import('@hames/harness-patterns/mcp-client.server')
       mockListTools.mockResolvedValue({
         tools: [{ name: 'gateway_tool', description: 'g', inputSchema: {} }],
       })
@@ -253,8 +252,7 @@ describe('tool dispatch precedence', () => {
       register(broken.transport)
       register(healthy.transport)
 
-      const { listTools } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { listTools } = await import('@hames/harness-patterns/mcp-client.server')
       const names = (await listTools()).map((t) => t.name)
 
       expect(names).toContain('still_here')
@@ -266,8 +264,7 @@ describe('tool dispatch precedence', () => {
     })
 
     it('does NOT advertise scoped transports — they are per-run, the catalog is per-session', async () => {
-      const { listTools } =
-        await import('../../../../../packages/harness-patterns/mcp-client.server')
+      const { listTools } = await import('@hames/harness-patterns/mcp-client.server')
       mockListTools.mockResolvedValue({ tools: [] })
       const scoped = spyTransport('scoped', ['sandbox_bash'])
       scoped.transport.listTools = async () => [

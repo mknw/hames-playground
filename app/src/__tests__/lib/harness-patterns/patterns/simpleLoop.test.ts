@@ -5,10 +5,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockAction, mockFinalAction, mockBAMLClient } from '../../../mocks/baml'
 import { mockCallTool, mockListTools, fixtures } from '../../../mocks/mcp'
-import type { ControllerInput } from '../../../../../../packages/harness-patterns/types'
+import type { ControllerInput } from '@hames/harness-patterns/types'
 
 // Mock server-only imports
-vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -22,7 +22,7 @@ const callToolMock = mockCallTool({
 
 const listToolsMock = mockListTools(['read_neo4j_cypher', 'Return'])
 
-vi.mock('../../../../../../packages/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   callTool: callToolMock,
   listTools: listToolsMock,
 }))
@@ -43,15 +43,13 @@ describe('simpleLoop', () => {
   })
 
   it('should export simpleLoop function', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
     expect(simpleLoop).toBeDefined()
     expect(typeof simpleLoop).toBe('function')
   })
 
   it('should create a ConfiguredPattern with name and config', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
     const { createLoopControllerAdapter } =
       await import('../../../../lib/harness-baml/baml-adapters.server')
 
@@ -70,8 +68,7 @@ describe('simpleLoop', () => {
   // number can be raised on evidence in one place (#269 raised it 5 → 8). The
   // resolution rule and its clamp are pinned in `turn-budget.test.ts`.
   it('should take its default maxTurns from the request settings', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
     const { DEFAULT_SETTINGS } = await import('../../../../lib/settings')
     const { createLoopControllerAdapter } =
       await import('../../../../lib/harness-baml/baml-adapters.server')
@@ -84,8 +81,7 @@ describe('simpleLoop', () => {
   })
 
   it('should handle custom maxTurns config', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
     const { createLoopControllerAdapter } =
       await import('../../../../lib/harness-baml/baml-adapters.server')
 
@@ -100,11 +96,9 @@ describe('simpleLoop', () => {
   })
 
   it('passes config.fewShots through to the controller', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi.fn().mockResolvedValue({
       action: mockFinalAction('Done'),
@@ -152,11 +146,9 @@ describe('simpleLoop', () => {
   })
 
   it('awaits onToolResult and uses returned data in the tool_result event', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const onToolResult = vi.fn().mockResolvedValue({ data: { enriched: true, original: 'kept' } })
 
@@ -210,11 +202,9 @@ describe('simpleLoop', () => {
   })
 
   it('does not abort the loop when onToolResult throws — logs an error and keeps original result', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const onToolResult = vi.fn().mockRejectedValue(new Error('enrichment exploded'))
 
@@ -276,11 +266,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should track controller_action events', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     // Create a mock controller that returns final immediately
     const mockController = vi.fn().mockResolvedValue({
@@ -321,11 +309,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should execute tool calls and track results', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     // Controller that calls a tool then returns final
     const mockController = vi
@@ -375,11 +361,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should track error when tool not in allowed list', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi.fn().mockResolvedValue({
       action: mockAction({ tool_name: 'forbidden_tool', tool_args: '{}' }),
@@ -416,11 +400,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should track error when tool_args JSON is invalid', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi.fn().mockResolvedValue({
       action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: 'not valid json' }),
@@ -457,11 +439,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should track error when tool execution fails', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     // Override callTool to return failure
     callToolMock.mockResolvedValueOnce({
@@ -505,11 +485,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should track error event when tool fails', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     // Override callTool to return failure
     callToolMock.mockResolvedValueOnce({
@@ -554,11 +532,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should track error event when controller crashes', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi.fn().mockRejectedValue(new Error('Controller exception'))
 
@@ -593,11 +569,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should handle controller errors gracefully', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi.fn().mockRejectedValue(new Error('Controller crashed'))
 
@@ -631,11 +605,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should track recoverable error event when maxTurns is reached without Return', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     // callTool always succeeds — no early break via tool failure
     callToolMock.mockResolvedValue({
@@ -690,11 +662,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should NOT track exhaustion error when controller signals Return', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     callToolMock.mockResolvedValue({ success: true, data: { ok: true } })
 
@@ -740,11 +710,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should accumulate results across iterations', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     // Restore callTool to return success
     callToolMock.mockResolvedValue({
@@ -797,11 +765,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should build priorResults from prior turn tool_results', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi.fn().mockResolvedValue({
       action: mockFinalAction('Done'),
@@ -864,11 +830,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should exclude hidden tool_results from priorResults', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi.fn().mockResolvedValue({
       action: mockFinalAction('Done'),
@@ -927,11 +891,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should exclude archived tool_results from priorResults', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi.fn().mockResolvedValue({
       action: mockFinalAction('Done'),
@@ -989,11 +951,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should not build priorResults when rememberPriorTurns is false', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi.fn().mockResolvedValue({
       action: mockFinalAction('Done'),
@@ -1034,11 +994,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should use raw result preview when no summary for priorResults', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi.fn().mockResolvedValue({
       action: mockFinalAction('Done'),
@@ -1082,11 +1040,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should limit priorResults to priorTurnCount turns', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi.fn().mockResolvedValue({
       action: mockFinalAction('Done'),
@@ -1143,11 +1099,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should exclude failed tool_results from priorResults', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi.fn().mockResolvedValue({
       action: mockFinalAction('Done'),
@@ -1196,11 +1150,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should not resolve refs to hidden tool_result events', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     // Controller requests a tool with a ref: to a hidden event
     const mockController = vi
@@ -1254,11 +1206,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should resolve refs to visible tool_result events', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     // Controller requests a tool with a ref: to a visible event
     const mockController = vi
@@ -1312,11 +1262,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should not resolve refs to archived tool_result events', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi
       .fn()
@@ -1369,11 +1317,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should include callId on tool_call and tool_result events', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     callToolMock.mockResolvedValue({
       success: true,
@@ -1431,11 +1377,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should record expansions on the LoopTurn when ref:<id> is resolved', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     // Capture turns passed to controller across two calls so we can read the
     // second invocation's input — that's where turn-0's expansions appear.
@@ -1489,11 +1433,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('should not include expansions on turns that did not resolve any ref', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const turnsByCall: unknown[][] = []
     const mockController = vi.fn(async (input: ControllerInput) => {
@@ -1533,11 +1475,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('expandPreviousResult: resolves a valid ref and pushes a turn with expansions', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const turnsByCall: unknown[][] = []
     const mockController = vi.fn(async (input: ControllerInput) => {
@@ -1600,11 +1540,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('expandPreviousResult: invalid ref_id is tracked as failure but loop continues', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi
       .fn()
@@ -1651,11 +1589,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('expandPreviousResult: hidden tool_results are unresolvable', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi
       .fn()
@@ -1703,11 +1639,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('expandPreviousResult: comma-separated ref list expands all in one turn', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const turnsByCall: unknown[][] = []
     const mockController = vi.fn(async (input: ControllerInput) => {
@@ -1794,11 +1728,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('expandPreviousResult: partial failure surfaces successes and notes errors', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi
       .fn()
@@ -1858,11 +1790,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('expandPreviousResult: JSON form {"ref_ids": ["a","b"]} expands batch', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi
       .fn()
@@ -1921,11 +1851,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('expandPreviousResult: also accepts JSON form {"ref_id": "..."} for resilience', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const mockController = vi
       .fn()
@@ -1989,11 +1917,9 @@ describe('simpleLoop execution', () => {
     // Fix: annotateExpansions always sets `expanded_in_turn: number | null`
     // (never absent). This test guards against regressing to the absent-field
     // form by asserting the explicit-null shape on the controller's input.
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const priorByCall: Array<unknown[]> = []
     const mockController = vi.fn(async (input: ControllerInput) => {
@@ -2045,11 +1971,9 @@ describe('simpleLoop execution', () => {
   })
 
   it('merges scope.data.attachedRefs with priorTurnCount-derived refs (dedup)', async () => {
-    const { simpleLoop } =
-      await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const priorByCall: unknown[][] = []
     const mockController = vi.fn(async (input: ControllerInput) => {
@@ -2136,12 +2060,9 @@ describe('simpleLoop execution', () => {
     })
 
     it('projects the turn log the controller reads, but the tool_result EVENT keeps the full result', async () => {
-      const { simpleLoop } =
-        await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-      const { createScope } =
-        await import('../../../../../../packages/harness-patterns/context.server')
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns')
+      const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+      const { createScope } = await import('@hames/harness-patterns/context.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns')
 
       callToolMock.mockResolvedValueOnce({ success: true, data: searchResult })
       const mockController = vi
@@ -2176,12 +2097,9 @@ describe('simpleLoop execution', () => {
     })
 
     it('a tool without an omit entry passes through untouched', async () => {
-      const { simpleLoop } =
-        await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-      const { createScope } =
-        await import('../../../../../../packages/harness-patterns/context.server')
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns')
+      const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+      const { createScope } = await import('@hames/harness-patterns/context.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns')
 
       callToolMock.mockResolvedValueOnce({ success: true, data: searchResult })
       const mockController = vi
@@ -2205,12 +2123,9 @@ describe('simpleLoop execution', () => {
     })
 
     it('expandPreviousResult projects per ORIGIN tool; the expand event stays raw', async () => {
-      const { simpleLoop } =
-        await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-      const { createScope } =
-        await import('../../../../../../packages/harness-patterns/context.server')
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns')
+      const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+      const { createScope } = await import('@hames/harness-patterns/context.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns')
 
       const mockController = vi
         .fn()
@@ -2291,14 +2206,10 @@ describe('simpleLoop execution', () => {
     })
 
     it('runs a sandbox-owned tool a loop declaring NO tools never listed', async () => {
-      const { simpleLoop } =
-        await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-      const { createScope } =
-        await import('../../../../../../packages/harness-patterns/context.server')
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns')
-      const { withTransport } =
-        await import('../../../../../../packages/harness-patterns/tool-transport.server')
+      const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+      const { createScope } = await import('@hames/harness-patterns/context.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns')
+      const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
 
       callToolMock.mockResolvedValueOnce({ success: true, data: 'ok' })
       const mockController = vi
@@ -2325,14 +2236,10 @@ describe('simpleLoop execution', () => {
     })
 
     it('still refuses a name NO transport owns', async () => {
-      const { simpleLoop } =
-        await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-      const { createScope } =
-        await import('../../../../../../packages/harness-patterns/context.server')
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns')
-      const { withTransport } =
-        await import('../../../../../../packages/harness-patterns/tool-transport.server')
+      const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+      const { createScope } = await import('@hames/harness-patterns/context.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns')
+      const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
 
       const mockController = vi.fn().mockResolvedValue({
         action: mockAction({ tool_name: 'rm_rf', tool_args: '{}' }),
@@ -2358,14 +2265,10 @@ describe('simpleLoop execution', () => {
       // The batch gate is a SECOND copy of the check (`additional_calls` is
       // pre-screened per sub-call), so it needs its own case: the two have
       // diverged before.
-      const { simpleLoop } =
-        await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-      const { createScope } =
-        await import('../../../../../../packages/harness-patterns/context.server')
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns')
-      const { withTransport } =
-        await import('../../../../../../packages/harness-patterns/tool-transport.server')
+      const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+      const { createScope } = await import('@hames/harness-patterns/context.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns')
+      const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
 
       callToolMock.mockResolvedValue({ success: true, data: 'ok' })
       const mockController = vi

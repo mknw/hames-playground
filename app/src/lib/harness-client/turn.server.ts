@@ -37,7 +37,7 @@
  * `action-runner.server.ts` — callers authenticate and pass the result in.
  */
 
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import {
   harness,
   continueSession,
@@ -48,7 +48,7 @@ import {
   type ConfiguredPattern,
   type ContextEvent,
   type HarnessResultScoped,
-} from '../../../../packages/harness-patterns'
+} from '@hames/harness-patterns'
 import {
   getOrBuildPatterns,
   loadSession,

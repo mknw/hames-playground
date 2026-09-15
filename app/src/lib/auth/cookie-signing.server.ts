@@ -18,7 +18,7 @@
  * a handshake value remained usable. Server-side the two now agree.
  */
 import { createHmac, timingSafeEqual, randomBytes } from 'node:crypto'
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { HANDSHAKE_MAX_AGE_SECONDS } from './cookies.server'
 
 assertServerOnImport()

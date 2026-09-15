@@ -13,14 +13,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type {
-  ContextEvent,
-  EventType,
-  UnifiedContext,
-} from '../../../../../../packages/harness-patterns'
-import type { RetrievalHit } from '../../../../../../packages/harness-patterns/patterns/retriever.server'
+import type { ContextEvent, EventType, UnifiedContext } from '@hames/harness-patterns'
+import type { RetrievalHit } from '@hames/harness-patterns/patterns/retriever.server'
 
-vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
@@ -85,14 +81,11 @@ const assistantMsg = (content: string, ts = 2): Ev => ({
 })
 
 async function load() {
-  const { router, routes } =
-    await import('../../../../../../packages/harness-patterns/patterns/router.server')
-  const { compactIntent } =
-    await import('../../../../../../packages/harness-patterns/patterns/compactIntent.server')
-  const { retriever } =
-    await import('../../../../../../packages/harness-patterns/patterns/retriever.server')
-  const { createScope } = await import('../../../../../../packages/harness-patterns/context.server')
-  const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+  const { router, routes } = await import('@hames/harness-patterns/patterns/router.server')
+  const { compactIntent } = await import('@hames/harness-patterns/patterns/compactIntent.server')
+  const { retriever } = await import('@hames/harness-patterns/patterns/retriever.server')
+  const { createScope } = await import('@hames/harness-patterns/context.server')
+  const { createEventView } = await import('@hames/harness-patterns/patterns')
   const { b } = await import('../../../../../baml_client')
   // Lane A6: the rewrite/compactIntent seams are REQUIRED config — wire the
   // real adapters (they hit the mocked `b.*`), what `bamlPatterns()` hands.

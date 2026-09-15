@@ -18,7 +18,7 @@ import type {
   IntentCompactedEventData,
   PlanCreatedEventData,
   ContentSanitizedEventData,
-} from '../../../../packages/harness-patterns'
+} from '@hames/harness-patterns'
 
 export function getEventPreview(type: EventType, data: unknown): string {
   switch (type) {

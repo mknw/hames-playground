@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockFinalAction, mockCriticResult } from '../../mocks/baml'
 
 // Mock server-only imports
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -19,7 +19,7 @@ vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
 // (#278 F1). Every other test leaves it at the default three.
 const mockCatalog = { names: ['read_neo4j_cypher', 'write_neo4j_cypher', 'Return'] }
 const MOCK_CATALOG_DEFAULT = [...mockCatalog.names]
-vi.mock('../../../../../packages/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   listTools: vi.fn(async () =>
     mockCatalog.names.map((name) => ({ name, description: `Mock ${name} tool` })),
   ),
@@ -273,7 +273,7 @@ describe('createPlannerAdapter', () => {
     // control case ("answers normally again once the gateway is back") once the
     // file drove `general`, whose planner reaches the catalog before the loop's
     // outage guard gets a chance to refuse.
-    const health = await import('../../../../../packages/harness-patterns/gateway-health.server')
+    const health = await import('@hames/harness-patterns/gateway-health.server')
     const { createPlannerAdapter, invalidateToolDescriptions } =
       await import('../../../lib/harness-baml/baml-adapters.server')
 
@@ -1012,8 +1012,7 @@ describe('fewShots parameter passing', () => {
 
 describe('dedupByRefId', () => {
   it('drops duplicates, first occurrence wins', async () => {
-    const { dedupByRefId } =
-      await import('../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+    const { dedupByRefId } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
     const out = dedupByRefId([
       { ref_id: 'a', tool: 'x', summary: 'first' },
       { ref_id: 'b', tool: 'y', summary: 'b' },
@@ -1025,8 +1024,7 @@ describe('dedupByRefId', () => {
   })
 
   it('returns empty array when input is empty', async () => {
-    const { dedupByRefId } =
-      await import('../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+    const { dedupByRefId } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
     expect(dedupByRefId([])).toEqual([])
   })
 })
@@ -1034,7 +1032,7 @@ describe('dedupByRefId', () => {
 describe('annotateExpansions', () => {
   it('sets expanded_in_turn to first turn whose expansions contain the ref_id', async () => {
     const { annotateExpansions } =
-      await import('../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+      await import('@hames/harness-patterns/patterns/simpleLoop.server')
     const refs = [
       { ref_id: 'a', tool: 'x', summary: 's' },
       { ref_id: 'b', tool: 'y', summary: 's' },
@@ -1064,7 +1062,7 @@ describe('annotateExpansions', () => {
 
   it('always sets expanded_in_turn (null when no turns have expansions)', async () => {
     const { annotateExpansions } =
-      await import('../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+      await import('@hames/harness-patterns/patterns/simpleLoop.server')
     const refs = [{ ref_id: 'a', tool: 'x', summary: 's' }]
     const out = annotateExpansions(refs, [{ n: 0 }, { n: 1, expansions: [] }])
     expect(out[0].expanded_in_turn).toBeNull()
@@ -1340,8 +1338,7 @@ describe('sandbox tool descriptions in prompt', () => {
   it('prepends sandbox tools to LoopController prompt when scope is active', async () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-baml/baml-adapters.server')
-    const { withTransport } =
-      await import('../../../../../packages/harness-patterns/tool-transport.server')
+    const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
 
     const controller = createLoopControllerAdapter()
 
@@ -1389,8 +1386,7 @@ describe('sandbox tool descriptions in prompt', () => {
     // description beside it would document a machine the call never reaches.
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-baml/baml-adapters.server')
-    const { withTransport } =
-      await import('../../../../../packages/harness-patterns/tool-transport.server')
+    const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
 
     const scope = (id: string, description: string) => ({
       id,
@@ -1419,8 +1415,7 @@ describe('sandbox tool descriptions in prompt', () => {
   it('prepends sandbox tools to ActorController prompt when scope is active', async () => {
     const { createActorControllerAdapter } =
       await import('../../../lib/harness-baml/baml-adapters.server')
-    const { withTransport } =
-      await import('../../../../../packages/harness-patterns/tool-transport.server')
+    const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
 
     const controller = createActorControllerAdapter(['code-mode', 'Return'])
 

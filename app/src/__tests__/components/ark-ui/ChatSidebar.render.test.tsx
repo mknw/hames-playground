@@ -19,7 +19,7 @@ beforeAll(installDomObservers)
 
 // `regenerateConversationTitle` comes from the server-only harness-client
 // barrel, whose transitive `assert.server` throws under jsdom.
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 const regenerateConversationTitle = vi.fn(

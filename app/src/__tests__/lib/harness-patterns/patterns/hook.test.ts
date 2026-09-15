@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock server-only imports
-vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn()
 }))
 
@@ -15,13 +15,13 @@ describe('hook', () => {
   })
 
   it('should export hook function', async () => {
-    const { hook } = await import('../../../../../../packages/harness-patterns/patterns/hook.server')
+    const { hook } = await import('@hames/harness-patterns/patterns/hook.server')
     expect(hook).toBeDefined()
     expect(typeof hook).toBe('function')
   })
 
   it('should create a ConfiguredPattern with trigger name', async () => {
-    const { hook } = await import('../../../../../../packages/harness-patterns/patterns/hook.server')
+    const { hook } = await import('@hames/harness-patterns/patterns/hook.server')
 
     const innerPattern = {
       name: 'inner',
@@ -39,9 +39,9 @@ describe('hook', () => {
   })
 
   it('should execute pattern synchronously when not background', async () => {
-    const { hook } = await import('../../../../../../packages/harness-patterns/patterns/hook.server')
-    const { createContext } = await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { hook } = await import('@hames/harness-patterns/patterns/hook.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     const innerFn = vi.fn(async (scope) => {
       scope.events.push({
@@ -75,9 +75,9 @@ describe('hook', () => {
   })
 
   it('should merge events from inner pattern', async () => {
-    const { hook } = await import('../../../../../../packages/harness-patterns/patterns/hook.server')
-    const { createContext } = await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { hook } = await import('@hames/harness-patterns/patterns/hook.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     const innerFn = vi.fn(async (scope) => {
       scope.events.push({
@@ -109,9 +109,9 @@ describe('hook', () => {
   })
 
   it('should wrap inner pattern events with pattern_enter/exit', async () => {
-    const { hook } = await import('../../../../../../packages/harness-patterns/patterns/hook.server')
-    const { createContext } = await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { hook } = await import('@hames/harness-patterns/patterns/hook.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     const innerFn = vi.fn(async (scope) => {
       scope.events.push({
@@ -148,9 +148,9 @@ describe('hook', () => {
   })
 
   it('should run pattern in background when background: true', async () => {
-    const { hook } = await import('../../../../../../packages/harness-patterns/patterns/hook.server')
-    const { createContext } = await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { hook } = await import('@hames/harness-patterns/patterns/hook.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     let hookExecuted = false
 
@@ -188,9 +188,9 @@ describe('hook', () => {
   })
 
   it('should handle errors in background hook without crashing', async () => {
-    const { hook } = await import('../../../../../../packages/harness-patterns/patterns/hook.server')
-    const { createContext } = await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { hook } = await import('@hames/harness-patterns/patterns/hook.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
@@ -227,9 +227,9 @@ describe('hook', () => {
   })
 
   it('should handle errors in synchronous hook without blocking', async () => {
-    const { hook } = await import('../../../../../../packages/harness-patterns/patterns/hook.server')
-    const { createContext } = await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { hook } = await import('@hames/harness-patterns/patterns/hook.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
@@ -258,7 +258,7 @@ describe('hook', () => {
   })
 
   it('should support different trigger types', async () => {
-    const { hook } = await import('../../../../../../packages/harness-patterns/patterns/hook.server')
+    const { hook } = await import('@hames/harness-patterns/patterns/hook.server')
 
     const innerPattern = {
       name: 'inner',

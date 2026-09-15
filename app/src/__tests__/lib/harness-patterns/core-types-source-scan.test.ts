@@ -49,7 +49,7 @@ import type {
   ToolCallRequest,
   ToolDescription,
   ToolResult,
-} from '../../../../../packages/harness-patterns/types'
+} from '@hames/harness-patterns/types'
 
 // `process.cwd()` is `app/` under vitest (same anchor the other source-scan
 // pins use); `import.meta.url` is not a file URL in this jsdom environment.

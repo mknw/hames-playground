@@ -39,7 +39,7 @@
  * Restarting the app also resets the clock to "cold" while the box may still be
  * warm — same direction, same reasoning.
  */
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 
 assertServerOnImport()
 

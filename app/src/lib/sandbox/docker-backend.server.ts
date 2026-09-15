@@ -19,7 +19,7 @@
 
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import type {
@@ -31,10 +31,7 @@ import type {
   VMHandle,
 } from './types'
 import { V0_IN_VM_SERVERS } from './types'
-import type {
-  ToolCallResult,
-  MCPToolDescription,
-} from '../../../../packages/harness-patterns/types'
+import type { ToolCallResult, MCPToolDescription } from '@hames/harness-patterns/types'
 
 assertServerOnImport()
 

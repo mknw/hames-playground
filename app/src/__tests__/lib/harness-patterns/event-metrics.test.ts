@@ -14,10 +14,10 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
-vi.mock('../../../../../packages/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   callTool: vi.fn(),
   listTools: vi.fn().mockResolvedValue([]),
 }))
@@ -385,7 +385,7 @@ describe('computeEventMetrics', () => {
 
 describe('createEvent lifts metrics onto the event', () => {
   it('event.metrics mirrors llmCall.metrics; absent when the call has none', async () => {
-    const { createEvent } = await import('../../../../../packages/harness-patterns/context.server')
+    const { createEvent } = await import('@hames/harness-patterns/context.server')
     const metrics = {
       inputUncachedTokens: 100,
       inputCacheReadTokens: 5000,

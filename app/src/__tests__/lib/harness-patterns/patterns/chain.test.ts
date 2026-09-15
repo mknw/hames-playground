@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock server-only imports
-vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn()
 }))
 
@@ -15,14 +15,14 @@ describe('runChain (internal executor)', () => {
   })
 
   it('should export runChain function', async () => {
-    const { runChain } = await import('../../../../../../packages/harness-patterns/patterns/chain.server')
+    const { runChain } = await import('@hames/harness-patterns/patterns/chain.server')
     expect(runChain).toBeDefined()
     expect(typeof runChain).toBe('function')
   })
 
   it('should return context unchanged when no patterns provided', async () => {
-    const { runChain } = await import('../../../../../../packages/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('../../../../../../packages/harness-patterns/context.server')
+    const { runChain } = await import('@hames/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
 
     const ctx = createContext('test message')
     const result = await runChain(ctx, [])
@@ -32,8 +32,8 @@ describe('runChain (internal executor)', () => {
   })
 
   it('should execute patterns in sequence', async () => {
-    const { runChain, configurePattern } = await import('../../../../../../packages/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('../../../../../../packages/harness-patterns/context.server')
+    const { runChain, configurePattern } = await import('@hames/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
 
     const executionOrder: string[] = []
 
@@ -57,8 +57,8 @@ describe('runChain (internal executor)', () => {
   })
 
   it('should stop execution when status changes from running', async () => {
-    const { runChain, configurePattern } = await import('../../../../../../packages/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('../../../../../../packages/harness-patterns/context.server')
+    const { runChain, configurePattern } = await import('@hames/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
 
     const executionOrder: string[] = []
 
@@ -85,8 +85,8 @@ describe('runChain (internal executor)', () => {
   })
 
   it('should add pattern_enter and pattern_exit events', async () => {
-    const { runChain, configurePattern } = await import('../../../../../../packages/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('../../../../../../packages/harness-patterns/context.server')
+    const { runChain, configurePattern } = await import('@hames/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
 
     const pattern = configurePattern('test-pattern', async (scope) => scope, { patternId: 'test' })
 
@@ -101,8 +101,8 @@ describe('runChain (internal executor)', () => {
   })
 
   it('should pass data between patterns', async () => {
-    const { runChain, configurePattern } = await import('../../../../../../packages/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('../../../../../../packages/harness-patterns/context.server')
+    const { runChain, configurePattern } = await import('@hames/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
 
     const pattern1 = configurePattern('producer', async (scope) => {
       scope.data = { ...scope.data, value: 42 }
@@ -123,8 +123,8 @@ describe('runChain (internal executor)', () => {
   })
 
   it('should handle errors in patterns', async () => {
-    const { runChain, configurePattern } = await import('../../../../../../packages/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('../../../../../../packages/harness-patterns/context.server')
+    const { runChain, configurePattern } = await import('@hames/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
 
     const errorPattern = configurePattern('error', async () => {
       throw new Error('Pattern failed')
@@ -144,13 +144,13 @@ describe('chain (pattern factory)', () => {
   })
 
   it('should export chain function', async () => {
-    const { chain } = await import('../../../../../../packages/harness-patterns/patterns/chain.server')
+    const { chain } = await import('@hames/harness-patterns/patterns/chain.server')
     expect(chain).toBeDefined()
     expect(typeof chain).toBe('function')
   })
 
   it('should return a ConfiguredPattern', async () => {
-    const { chain, configurePattern } = await import('../../../../../../packages/harness-patterns/patterns/chain.server')
+    const { chain, configurePattern } = await import('@hames/harness-patterns/patterns/chain.server')
 
     const p1 = configurePattern('a', async (scope) => scope, { patternId: 'a' })
     const p2 = configurePattern('b', async (scope) => scope, { patternId: 'b' })
@@ -162,9 +162,9 @@ describe('chain (pattern factory)', () => {
   })
 
   it('should execute sub-patterns in sequence within scope', async () => {
-    const { chain, configurePattern } = await import('../../../../../../packages/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { chain, configurePattern } = await import('@hames/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     const order: string[] = []
 
@@ -193,9 +193,9 @@ describe('chain (pattern factory)', () => {
   })
 
   it('should add pattern_enter and pattern_exit events for each sub-pattern', async () => {
-    const { chain, configurePattern } = await import('../../../../../../packages/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { chain, configurePattern } = await import('@hames/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     const p = configurePattern('sub', async (scope) => scope, { patternId: 'sub' })
     const composed = chain(p)
@@ -219,7 +219,7 @@ describe('configurePattern', () => {
   })
 
   it('should create a ConfiguredPattern with name and config', async () => {
-    const { configurePattern } = await import('../../../../../../packages/harness-patterns/patterns/chain.server')
+    const { configurePattern } = await import('@hames/harness-patterns/patterns/chain.server')
 
     const pattern = configurePattern(
       'test-pattern',
@@ -233,7 +233,7 @@ describe('configurePattern', () => {
   })
 
   it('should generate patternId if not provided', async () => {
-    const { configurePattern } = await import('../../../../../../packages/harness-patterns/patterns/chain.server')
+    const { configurePattern } = await import('@hames/harness-patterns/patterns/chain.server')
 
     const pattern = configurePattern('my-pattern', async (scope) => scope)
 

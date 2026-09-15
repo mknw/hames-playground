@@ -21,7 +21,7 @@
 
 import { randomBytes } from 'node:crypto'
 
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { query } from './client.server'
 import type { QueryRunner } from './migrate-encryption.server'
 import { SETTINGS_BOUNDS } from '../settings'

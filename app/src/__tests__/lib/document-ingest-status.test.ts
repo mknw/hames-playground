@@ -9,18 +9,18 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-vi.mock('../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
-vi.mock('../../../../packages/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   callTool: vi.fn(async () => ({ success: false, data: null, error: 'no gateway' })),
 }))
 
 import { ingestStashDocument, ensureSessionIngested } from '../../lib/document-ingest.server'
 import { storeDocument, setDocumentFlags, getDocument } from '../../lib/document-store.server'
 import type { CallTool } from '../../lib/document-store.server'
-import type { ToolCallResult } from '../../../../packages/harness-patterns/types'
+import type { ToolCallResult } from '@hames/harness-patterns/types'
 import type { EmbeddingConfig, EmbeddingResult } from '../../lib/embeddings.server'
 
 // ----------------------------------------------------------------------------

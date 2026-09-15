@@ -17,14 +17,14 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import type {
   CompactExecutionInput,
   LLMResult,
   LoopTurn,
   SelectorFn,
-} from '../../../../packages/harness-patterns/types'
-import { trimToFit } from '../../../../packages/harness-patterns/token-budget.server'
+} from '@hames/harness-patterns/types'
+import { trimToFit } from '@hames/harness-patterns/token-budget.server'
 import { getContextWindow, resolveClientForRole } from './clients.server'
 import {
   accountBamlCall,

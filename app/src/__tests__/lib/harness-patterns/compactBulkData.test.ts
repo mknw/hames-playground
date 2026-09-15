@@ -8,15 +8,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type {
-  UnifiedContext,
-  ContextEvent,
-  DescribeBatchItem,
-} from '../../../../../packages/harness-patterns/types'
+import type { UnifiedContext, ContextEvent, DescribeBatchItem } from '@hames/harness-patterns/types'
 import { CLIENT_MAX_OUTPUT_TOKENS } from '../../../lib/settings'
 
 // Mock server-only imports
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -75,8 +71,7 @@ describe('compactBulkData', () => {
   })
 
   it('should summarize tool_result events from the current turn', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -134,8 +129,7 @@ describe('compactBulkData', () => {
   })
 
   it('should skip hidden tool_result events', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -161,8 +155,7 @@ describe('compactBulkData', () => {
   })
 
   it('should skip archived tool_result events', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -187,8 +180,7 @@ describe('compactBulkData', () => {
   })
 
   it('should skip events that already have a summary', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -213,8 +205,7 @@ describe('compactBulkData', () => {
   })
 
   it('should skip failed (success: false) tool_result events', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -239,8 +230,7 @@ describe('compactBulkData', () => {
   })
 
   it('should skip tool_result events without an id', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -264,8 +254,7 @@ describe('compactBulkData', () => {
   })
 
   it('should fold multiple tool_results into ONE batched call', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     mockDescribeBatch.mockResolvedValue(
       summaries({ '1': 'Summary for search', '2': 'Summary for fetch' }),
@@ -312,8 +301,7 @@ describe('compactBulkData', () => {
   })
 
   it('should attach batched summaries by id even when the model reorders them', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     // Deliberately reversed relative to the request order
     mockDescribeBatch.mockResolvedValue(summaries({ '2': 'second', '1': 'first' }))
@@ -335,8 +323,7 @@ describe('compactBulkData', () => {
   })
 
   it('should fall back per item for the ids a batch left unanswered', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     // Item 2 is missing from the batch response
     mockDescribeBatch.mockResolvedValue(summaries({ '1': 'batched one', '3': 'batched three' }))
@@ -366,8 +353,7 @@ describe('compactBulkData', () => {
   })
 
   it('should fall back per item when the whole batch comes back empty', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     // describeToolResultsBatchOp swallows its own failures and returns an empty map
     mockDescribeBatch.mockResolvedValue(new Map())
@@ -393,8 +379,7 @@ describe('compactBulkData', () => {
   })
 
   it('should survive the batch op itself rejecting', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     mockDescribeBatch.mockRejectedValue(new Error('Model unavailable'))
 
@@ -420,7 +405,7 @@ describe('compactBulkData', () => {
 
   it('should split more than MAX_BATCH_ITEMS results across several batches', async () => {
     const { compactBulkData, MAX_BATCH_ITEMS } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+      await import('@hames/harness-patterns/compactBulkData.server')
 
     const total = MAX_BATCH_ITEMS + 2
     const events: ContextEvent[] = [
@@ -465,7 +450,7 @@ describe('compactBulkData', () => {
     CLIENT_MAX_OUTPUT_TOKENS.DescribeAnthropic = 2_048
     try {
       const { compactBulkData, maxBatchItems } =
-        await import('../../../../../packages/harness-patterns/compactBulkData.server')
+        await import('@hames/harness-patterns/compactBulkData.server')
       expect(maxBatchItems(mockDescribeBatch)).toBe(5)
 
       const events: ContextEvent[] = [
@@ -492,7 +477,7 @@ describe('compactBulkData', () => {
 
   it('keeps the full MAX_BATCH_ITEMS ceiling on the Anthropic-only default', async () => {
     const { maxBatchItems, MAX_BATCH_ITEMS } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+      await import('@hames/harness-patterns/compactBulkData.server')
     // DescribeAnthropic floors at Haiku's 16 384-token cap — far more than the
     // ceiling needs, so the derivation clamps to it.
     expect(maxBatchItems(mockDescribeBatch)).toBe(MAX_BATCH_ITEMS)
@@ -524,7 +509,7 @@ describe('compactBulkData', () => {
     const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
     const { getContextWindow } = await import('../../../lib/harness-baml/clients.server')
     const { maxBatchItems, MAX_BATCH_ITEMS } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+      await import('@hames/harness-patterns/compactBulkData.server')
     // Lane A6: the geometry reads the INJECTED fn's limits(). The fake
     // resolves like the real adapter — through limitsFor, per call — so the
     // property pinned is unchanged: the budget follows the tier.
@@ -563,8 +548,7 @@ describe('compactBulkData', () => {
   })
 
   it('should use the single-item path for a lone result, never the batch', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },
@@ -582,8 +566,7 @@ describe('compactBulkData', () => {
   })
 
   it('should not batch results that already have a summary', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     const alreadyDone = toolResult(1)
     ;(alreadyDone.data as { summary?: string }).summary = 'Already summarized'
@@ -608,8 +591,7 @@ describe('compactBulkData', () => {
   })
 
   it('should truncate long results before sending to summarizer', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     const longResult = 'x'.repeat(5000)
     const events: ContextEvent[] = [
@@ -639,8 +621,7 @@ describe('compactBulkData', () => {
   })
 
   it('should handle describeToolResultOp returning empty string gracefully', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     mockDescribe.mockResolvedValue('')
 
@@ -669,8 +650,7 @@ describe('compactBulkData', () => {
   })
 
   it('should handle describeToolResultOp rejection gracefully', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     mockDescribe.mockRejectedValue(new Error('Model unavailable'))
 
@@ -701,8 +681,7 @@ describe('compactBulkData', () => {
   })
 
   it('should do nothing when there are no tool_results in current turn', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'just a chat' } },
@@ -723,8 +702,7 @@ describe('compactBulkData', () => {
   })
 
   it('should only summarize current turn results, not prior turn results', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       // Turn 1
@@ -761,8 +739,7 @@ describe('compactBulkData', () => {
   })
 
   it('should find controller_action reasoning for context', async () => {
-    const { compactBulkData } =
-      await import('../../../../../packages/harness-patterns/compactBulkData.server')
+    const { compactBulkData } = await import('@hames/harness-patterns/compactBulkData.server')
 
     const events: ContextEvent[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'query' } },

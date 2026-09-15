@@ -64,7 +64,7 @@
  * `v1.` ones and each read with the key its own prefix names.
  */
 import { hkdfSync } from 'node:crypto'
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { decryptSecret, encryptSecret } from '../auth/secret-crypto.server'
 
 assertServerOnImport()

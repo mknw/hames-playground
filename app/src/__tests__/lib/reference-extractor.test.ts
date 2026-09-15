@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { extractReferences, referencesForDoc } from '../../lib/harness-client/reference-extractor'
-import type { ContextEvent, RetrievalReference } from '../../../../packages/harness-patterns'
+import type { ContextEvent, RetrievalReference } from '@hames/harness-patterns'
 
 function retrieverResult(references: RetrievalReference[]): ContextEvent {
   return {

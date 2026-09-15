@@ -27,7 +27,7 @@
  * memo is cleared on failure so the next call retries.
  */
 import neo4j from 'neo4j-driver'
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { getNeo4jDriver } from '../neo4j/client'
 import {
   CONSTRAINT_NAMES,

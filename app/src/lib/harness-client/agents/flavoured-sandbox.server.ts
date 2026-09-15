@@ -48,12 +48,12 @@ import {
   compactExecution,
   actorCritic,
   type ConfiguredPattern,
-} from '../../../../../packages/harness-patterns'
+} from '@hames/harness-patterns'
 import { createActorControllerAdapter, createCriticAdapter } from '../../harness-baml'
 import { withSandbox } from '../../sandbox/index.server'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
-import type { FewShot } from '../../../../../packages/harness-patterns/types'
+import type { FewShot } from '@hames/harness-patterns/types'
 
 const WORKSPACE_NOTE = `
 Files under /work/in are restored inputs; write deliverables the user should keep

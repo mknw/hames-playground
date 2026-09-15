@@ -13,7 +13,7 @@
  * `user-prefs.server.ts`, which imports this; putting the type or
  * `verdaConfigured` in `tier.server.ts` would have closed that loop).
  */
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { assertPrivateTierConfigured } from '../harness-baml/clients.server'
 
 assertServerOnImport()

@@ -17,23 +17,22 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { UnifiedContext } from '../../../../../packages/harness-patterns/types'
+import type { UnifiedContext } from '@hames/harness-patterns/types'
 
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
 
 const mockChain = vi.fn()
-vi.mock('../../../../../packages/harness-patterns/patterns/chain.server', () => ({
+vi.mock('@hames/harness-patterns/patterns/chain.server', () => ({
   runChain: mockChain,
   chain: vi.fn(),
 }))
 
 const { harness, continueSession, resumeHarness } =
-  await import('../../../../../packages/harness-patterns/harness.server')
-const { createContext, serializeContext } =
-  await import('../../../../../packages/harness-patterns/context.server')
+  await import('@hames/harness-patterns/harness.server')
+const { createContext, serializeContext } = await import('@hames/harness-patterns/context.server')
 
 type Ctx = UnifiedContext<Record<string, unknown>>
 

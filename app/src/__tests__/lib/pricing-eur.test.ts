@@ -42,7 +42,7 @@ import {
   estimateLlmCostEur,
 } from '../../lib/settings'
 
-vi.mock('../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 

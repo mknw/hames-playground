@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
@@ -39,7 +39,7 @@ const getAgent = vi.fn((id: string) => (id === 'known' ? { id, createPatterns } 
 const canonicalAgentId = vi.fn((id: string) => (id === 'renamed-away' ? 'known' : id))
 vi.mock('../../../lib/harness-client/registry.server', () => ({ getAgent, canonicalAgentId }))
 
-const { createContext, serializeContext } = await import('../../../../../packages/harness-patterns')
+const { createContext, serializeContext } = await import('@hames/harness-patterns')
 const {
   getOrBuildPatterns,
   evictPatterns,

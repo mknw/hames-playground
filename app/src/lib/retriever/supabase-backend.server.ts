@@ -20,8 +20,8 @@
  * an error event + empty results, so a misconfigured backend never sinks a run.
  */
 
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
-import type { RetrieverBackend, RetrievalHit } from '../../../../packages/harness-patterns'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import type { RetrieverBackend, RetrievalHit } from '@hames/harness-patterns'
 
 assertServerOnImport()
 

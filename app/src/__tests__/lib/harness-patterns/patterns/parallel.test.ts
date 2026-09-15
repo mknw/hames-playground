@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock server-only imports
-vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -15,15 +15,13 @@ describe('parallel', () => {
   })
 
   it('should export parallel function', async () => {
-    const { parallel } =
-      await import('../../../../../../packages/harness-patterns/patterns/parallel.server')
+    const { parallel } = await import('@hames/harness-patterns/patterns/parallel.server')
     expect(parallel).toBeDefined()
     expect(typeof parallel).toBe('function')
   })
 
   it('should create a ConfiguredPattern', async () => {
-    const { parallel } =
-      await import('../../../../../../packages/harness-patterns/patterns/parallel.server')
+    const { parallel } = await import('@hames/harness-patterns/patterns/parallel.server')
 
     const pattern = parallel([], { patternId: 'test-parallel' })
 
@@ -33,12 +31,9 @@ describe('parallel', () => {
   })
 
   it('should execute patterns concurrently', async () => {
-    const { parallel } =
-      await import('../../../../../../packages/harness-patterns/patterns/parallel.server')
-    const { createContext } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } =
-      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { parallel } = await import('@hames/harness-patterns/patterns/parallel.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     const executionOrder: string[] = []
 
@@ -84,12 +79,9 @@ describe('parallel', () => {
   })
 
   it('should merge events from all patterns', async () => {
-    const { parallel } =
-      await import('../../../../../../packages/harness-patterns/patterns/parallel.server')
-    const { createContext } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } =
-      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { parallel } = await import('@hames/harness-patterns/patterns/parallel.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     const pattern1 = {
       name: 'first',
@@ -134,12 +126,9 @@ describe('parallel', () => {
   })
 
   it('should wrap branch events with pattern_enter/exit', async () => {
-    const { parallel } =
-      await import('../../../../../../packages/harness-patterns/patterns/parallel.server')
-    const { createContext } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } =
-      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { parallel } = await import('@hames/harness-patterns/patterns/parallel.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     const pattern1 = {
       name: 'first',
@@ -193,12 +182,9 @@ describe('parallel', () => {
   })
 
   it('should handle rejected branches gracefully', async () => {
-    const { parallel } =
-      await import('../../../../../../packages/harness-patterns/patterns/parallel.server')
-    const { createContext } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } =
-      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { parallel } = await import('@hames/harness-patterns/patterns/parallel.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     const pattern1 = {
       name: 'success',
@@ -255,12 +241,9 @@ describe('parallel', () => {
     })
 
     async function run(patterns: unknown[]) {
-      const { parallel } =
-        await import('../../../../../../packages/harness-patterns/patterns/parallel.server')
-      const { createContext } =
-        await import('../../../../../../packages/harness-patterns/context.server')
-      const { createEventView } =
-        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+      const { parallel } = await import('@hames/harness-patterns/patterns/parallel.server')
+      const { createContext } = await import('@hames/harness-patterns/context.server')
+      const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
       const ctx = createContext('test')
       const view = createEventView(ctx)
       const result = await parallel(patterns as any).fn(
@@ -285,12 +268,9 @@ describe('parallel', () => {
   })
 
   it('should handle empty patterns array', async () => {
-    const { parallel } =
-      await import('../../../../../../packages/harness-patterns/patterns/parallel.server')
-    const { createContext } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } =
-      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { parallel } = await import('@hames/harness-patterns/patterns/parallel.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext('test')
     const view = createEventView(ctx)
@@ -306,12 +286,9 @@ describe('parallel', () => {
   })
 
   it('should use isolated scopes for each branch', async () => {
-    const { parallel } =
-      await import('../../../../../../packages/harness-patterns/patterns/parallel.server')
-    const { createContext } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } =
-      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { parallel } = await import('@hames/harness-patterns/patterns/parallel.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     let scope1Id: string | undefined
     let scope2Id: string | undefined
@@ -350,12 +327,9 @@ describe('parallel', () => {
   })
 
   it('should handle catch block errors', async () => {
-    const { parallel } =
-      await import('../../../../../../packages/harness-patterns/patterns/parallel.server')
-    const { createContext } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } =
-      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
+    const { parallel } = await import('@hames/harness-patterns/patterns/parallel.server')
+    const { createContext } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext('test')
     const view = createEventView(ctx)

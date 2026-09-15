@@ -21,7 +21,7 @@
  * server**: the model passes structured arguments and this module composes the
  * KQL, so no model-authored operator can reshape the query it didn't write.
  */
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { graphFetch, GraphAuthRequiredError } from '../auth/graph-token.server'
 import { conversionEnabled, isConvertible } from '../doc-convert.server'
 import { guessMimeType, isTextMime } from '../stash/upload-service.server'

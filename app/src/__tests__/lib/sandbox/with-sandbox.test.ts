@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -33,12 +33,12 @@ import {
   getDefaultAttachments,
   __resetSandboxDefaultsForTests,
 } from '../../../lib/sandbox/with-sandbox.server'
-import { activeTransports } from '../../../../../packages/harness-patterns/tool-transport.server'
+import { activeTransports } from '@hames/harness-patterns/tool-transport.server'
 import { WarmPool } from '../../../lib/sandbox/warm-pool.server'
 import { SandboxScheduler } from '../../../lib/sandbox/scheduler.server'
 import { AttachmentTable } from '../../../lib/sandbox/attachment-table.server'
 import { DockerBackend } from '../../../lib/sandbox/docker-backend.server'
-import { harnessUsesSyncWorkspace } from '../../../../../packages/harness-patterns/pattern-capabilities'
+import { harnessUsesSyncWorkspace } from '@hames/harness-patterns/pattern-capabilities'
 import type {
   ComputeBackend,
   HealthStatus,
@@ -47,11 +47,7 @@ import type {
   RuntimeConfig,
   VMHandle,
 } from '../../../lib/sandbox/types'
-import type {
-  ConfiguredPattern,
-  PatternScope,
-  EventView,
-} from '../../../../../packages/harness-patterns/types'
+import type { ConfiguredPattern, PatternScope, EventView } from '@hames/harness-patterns/types'
 
 type Calls = {
   boot: Array<{ rootfs: RootfsId; runtime: RuntimeConfig }>

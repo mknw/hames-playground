@@ -82,7 +82,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Collector } from '@boundaryml/baml'
-import type { Attempt, ToolDescription } from '../../../../../packages/harness-patterns/types'
+import type { Attempt, ToolDescription } from '@hames/harness-patterns/types'
 import {
   createCriticAdapter,
   createInjectionScreen,
@@ -91,7 +91,7 @@ import {
   extractLLMCallData,
 } from '../baml-adapters.server'
 import { assertVerdaConfigured, clientOverrideFor, verdaInferenceEnabled } from '../clients.server'
-import { observeLlmUsage } from '../../../../../packages/harness-patterns/llm-usage-observer.server'
+import { observeLlmUsage } from '@hames/harness-patterns/llm-usage-observer.server'
 import { routeMessageOp } from '../routing.server'
 
 const EXPECTED_CLIENT = 'VerdaQwen'

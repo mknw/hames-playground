@@ -103,35 +103,6 @@ client<llm> AnthropicHaiku45 {
   }
 }
 
-// Example Google AI client (uncomment to use)
-// client<llm> CustomGemini {
-//   provider google-ai
-//   options {
-//     model "gemini-2.5-pro"
-//     api_key env.GOOGLE_API_KEY
-//   }
-// }
-
-// Example AWS Bedrock client (uncomment to use)
-// client<llm> CustomBedrock {
-//   provider aws-bedrock
-//   options {
-//     model "anthropic.claude-sonnet-4-20250514-v1:0"
-//     region "us-east-1"
-//     // AWS credentials are auto-detected from env vars
-//   }
-// }
-
-// Example Vertex AI client (uncomment to use)
-// client<llm> CustomVertex {
-//   provider vertex-ai
-//   options {
-//     model "gemini-2.5-pro"
-//     location "us-central1"
-//     // Uses Google Cloud Application Default Credentials
-//   }
-// }
-
 // https://docs.boundaryml.com/docs/snippets/clients/retry
 retry_policy Constant {
   max_retries 3

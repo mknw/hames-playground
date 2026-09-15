@@ -405,12 +405,12 @@ const GenericDetail = (props: { data: unknown }) => (
 
 export const ToolPairDetail = (props: {
   call: ContextEvent
-  result?: ContextEvent
+  result: ContextEvent
   onClose: () => void
   onJumpToEvent?: (eventId: string) => void
 }) => {
   const callData = () => props.call.data as ToolCallEventData
-  const resultData = () => props.result?.data as ToolResultEventData | undefined
+  const resultData = () => props.result.data as ToolResultEventData
 
   return (
     <div
@@ -495,39 +495,37 @@ export const ToolPairDetail = (props: {
         </div>
 
         {/* Result */}
-        <Show when={resultData()}>
-          <div m="b-3">
-            <div text="xs ui-text-tertiary" m="b-1">
-              Status
-            </div>
-            <div text={`sm ${resultData()!.success ? 'ui-success' : 'red-400'}`} font="medium">
-              {resultData()!.success ? 'Success' : `Error: ${resultData()!.error}`}
-            </div>
+        <div m="b-3">
+          <div text="xs ui-text-tertiary" m="b-1">
+            Status
           </div>
-          <div>
-            {/* Post-guard text — see SanitizedChip. */}
-            <Show when={resultData()!.sanitized}>
-              {(summary) => (
-                <div m="b-1">
-                  <SanitizedChip summary={summary()} onJump={props.onJumpToEvent} />
-                </div>
-              )}
-            </Show>
-            <div text="xs ui-text-tertiary" m="b-1">
-              Result
-            </div>
-            <pre
-              text="xs ui-text-primary"
-              bg="ui-bg-tertiary"
-              p="3"
-              rounded="md"
-              overflow="auto"
-              max-h="300px"
-            >
-              {JSON.stringify(resultData()!.result, null, 2)}
-            </pre>
+          <div text={`sm ${resultData().success ? 'ui-success' : 'red-400'}`} font="medium">
+            {resultData().success ? 'Success' : `Error: ${resultData().error}`}
           </div>
-        </Show>
+        </div>
+        <div>
+          {/* Post-guard text — see SanitizedChip. */}
+          <Show when={resultData().sanitized}>
+            {(summary) => (
+              <div m="b-1">
+                <SanitizedChip summary={summary()} onJump={props.onJumpToEvent} />
+              </div>
+            )}
+          </Show>
+          <div text="xs ui-text-tertiary" m="b-1">
+            Result
+          </div>
+          <pre
+            text="xs ui-text-primary"
+            bg="ui-bg-tertiary"
+            p="3"
+            rounded="md"
+            overflow="auto"
+            max-h="300px"
+          >
+            {JSON.stringify(resultData().result, null, 2)}
+          </pre>
+        </div>
       </div>
     </div>
   )

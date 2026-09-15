@@ -7,6 +7,39 @@ converged. No code changes in this PR — it revises this plan doc, adds a
 skeleton developer guide (`docs/plan/hames-guide.md`), and updates
 `docs/INDEX.md`.
 
+**Landed so far (updated 2026-09-15, Step 1d)** — migration progress against
+§5, so the steps below can be read as history rather than as-to-do:
+
+- **Step 0 DONE** (`ffd93371`) — repo root promoted to a pnpm workspace, root
+  lockfile, CI/Docker paths updated, zero package moves.
+- **Step 1 landed as four PRs, not the single bundle §5 originally prescribed**
+  — split per the #225 gap-audit recommendation (2026-09-14, "recommended
+  sequencing"), which the owner adopted: **1a** the move of
+  `app/src/lib/harness-patterns/` → `packages/harness-patterns/` (#337;
+  content byte-identical, twelve outward imports mechanically re-pointed to
+  `app/` as an interim), **1b** `app/` consumes `@hames/harness-patterns` via
+  `workspace:*` with live-source HMR proven (#338), **1c** the Docker image
+  builds with `packages/` in its context and the image boot exercises the
+  package at runtime (#339), **1d** the `./guard` companion subpath export,
+  the pack + install-tarball CI smoke job (§3.3/§4.3), and this doc's
+  landed-state notes.
+- **The P0 seam work rode separate lanes, not Step 1** — Lanes A4–A6
+  (`ControllerInput`, per-call `limits()`, the six remaining functions
+  injected via `bamlPatterns()`, BAML moved out of core into
+  `app/src/lib/harness-baml/`) and Lane B (`ToolTransport`/`withTransport`,
+  the sandbox cycle inverted) are already on `main`. Core is BAML-free and
+  holds zero role vocabulary; what §1.4 called "the hard part" is largely
+  behind the tree now.
+- **The Step 1a interim re-points are the one deliberate debt**: 11 import
+  statements across 7 package files still reach `app/src/lib` (the
+  `settings-context.server` seam, the harness-baml defaults, and
+  `resolveTurnBudget`) and resolve only via the workspace symlink. Lane C
+  (the `HarnessRuntimeConfig` split) and Step 3 (harness-baml extraction)
+  remove them; until then the pack smoke (§3.3/§4.3) deliberately scopes its
+  runtime probe to the exports that evaluate without them.
+- **Not yet landed**: Step 2 (first publish — blocked on the re-points),
+  Lane C, Lanes D–G, Steps 3–6.
+
 **Name: `@hames/harness-patterns`** — final (owner decision 2026-08-23 chose the bare
 name `hames` — free on npm, no search collisions; owner ruling 2026-09-15 placed it in
 the npm scope `@hames` as the published package `@hames/harness-patterns`, named by the
@@ -85,6 +118,12 @@ kg-agent/                          (repo root — becomes the workspace root)
     ├── Dockerfile                   wiring, sandbox rootfs images, and
     └── docker-compose.yaml          everything not yet extracted)
 ```
+
+**Landed deviation (Step 1a, #337):** the source was NOT re-homed under
+`src/` — the module tree moved to `packages/harness-patterns/` with its files
+at the package root, exactly as the in-place manifest had already laid them
+out, so the manifest's paths needed no follow-up move. The tree above stays
+as the original proposal for the record.
 
 ### 1.2 Dependency direction (target end state)
 
@@ -230,8 +269,8 @@ only the doc's signpost for the "later" framing, not a second copy of either.
 
 ```yaml
 packages:
-  - "app"
-  - "packages/*"
+  - 'app'
+  - 'packages/*'
 ```
 
 ### 2.2 `@hames/harness-patterns`'s `package.json`
@@ -260,9 +299,28 @@ package root because the in-tree source lives at that root — the Step 1 move r
 the source under `src/` per the tree above, and the `exports`/`files` paths follow it
 in the same PR.
 
+**Landed shape (Step 1d):** the `src/` re-home did not happen (see §1.1), so
+the manifest kept these paths, and gained what a tarball needs that the
+in-place manifest could not know:
+
+- an explicit **`./guard` subpath export** → `./injection-guard.ts`, the one
+  companion that lives inside the package and is publish-clean (zero
+  imports — it is the pure detection/neutralization algorithm; see #225
+  Step 1d for the per-companion export decisions on sandbox/stash/retriever,
+  which stay app-side until their §5 Step 4 extraction);
+- a **`dependencies` entry for `@modelcontextprotocol/sdk`** — the package's
+  one runtime dependency (`mcp-client.server.ts`), which until Step 1d
+  resolved only by directory-walk from `packages/` to the workspace root's
+  `node_modules`; a tarball install would fail on the barrel without it —
+  exactly the defect class §3.3's smoke exists to catch;
+- the `./patterns` and `./*` wildcard entries the dev workspace already
+  relied on (`@hames/harness-patterns/assert.server` etc.), now part of the
+  published surface too.
+
 No `@boundaryml/baml` dependency here — see §1.4. No build step in the
-package during dev either: `main`/`exports` point straight at `src/`, the
-same way `app/src/lib/harness-patterns` is consumed today. This matters
+package during dev either: `main`/`exports` point straight at
+`packages/harness-patterns/`'s TypeScript source, the same way
+`app/src/lib/harness-patterns` was consumed before the move. This matters
 because vinxi/Vite resolve TypeScript source directly — adding a
 `tsc`/`tsup` build step here would reintroduce exactly the compile-then-reload
 loop this plan exists to avoid. (A build step is still needed for the
@@ -446,6 +504,15 @@ every app-only PR:
   the only place in CI that exercises "does the published tarball actually
   work end-to-end"** — treat it as load-bearing, not optional, once `@hames/harness-patterns`
   has a `files`/`exports` allowlist to get wrong.
+  **Landed (Step 1d)** as the CI `packages` job running
+  `scripts/pack-smoke.sh`: pack → install into a throwaway scratch project →
+  walk the installed manifest's `exports` map asserting each target exists →
+  import and behaviourally probe the `./guard` subpath and the `./*`
+  wildcard. The job needs no workspace install (packing reads only the
+  manifest; the probe must resolve against the scratch copy, never the
+  workspace symlink). Its runtime eval probe is deliberately scoped to the
+  exports that evaluate today — see the "Landed so far" block for the
+  Step-1a interim re-points that still block the `.` barrel.
 
 ### 4.4 v1 client scope for `harness-baml`
 
@@ -488,7 +555,8 @@ the root-lockfile move (§2.3's flagged consequence) before anything harder
 rides on top of it.
 
 **Step 1 — extract `@hames/harness-patterns`, resolved via `workspace:*`, with the P0 seam work
-done in the same PR** _(the biggest single step)_ Move
+done in the same PR** _(the biggest single step — landed as 0/1a/1b/1c plus
+separate seam lanes instead; see the "Landed so far" block at the top)_ Move
 `app/src/lib/harness-patterns` to `packages/harness-patterns`. In this one PR: invert
 the sandbox cycle (the `ToolTransport` registry, §1.4), replace the
 `baml_client`/`@boundaryml/baml` imports with the injected-function seam and a

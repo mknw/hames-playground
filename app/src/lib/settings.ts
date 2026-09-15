@@ -4,6 +4,11 @@
  * Safe to import from both client and server — contains only types and plain constants.
  */
 
+// Type-only, so still client-safe: erased before any bundle sees it. The type
+// itself is defined in the package since Step 1d (#225) — see the re-export
+// further down.
+import type { CostBasis } from '@hames/harness-patterns'
+
 /**
  * Sandbox compute settings. See docs/plan/sandbox.md → "Settings".
  *
@@ -420,8 +425,13 @@ export interface TokenBuckets {
 
 /** How a figure was arrived at — the UI needs this to know whether the number
  *  is an estimate of a token bill, a FLOOR on a time bill, or an exact €0 for a
- *  call that was served locally and has no bill at all. */
-export type CostBasis = 'tokens' | 'time' | 'local'
+ *  call that was served locally and has no bill at all.
+ *
+ *  Re-exported from the package since Step 1d (#225): the type labels
+ *  `EventMetrics.basis`, whose home is core's `types.ts`. Keeping the
+ *  re-export here means app-side importers of `CostBasis` from `settings`
+ *  are unchanged. */
+export type { CostBasis }
 
 /** One call's cost in EUR, plus the audit trail for whichever basis produced it. */
 export interface CostEstimateEur {

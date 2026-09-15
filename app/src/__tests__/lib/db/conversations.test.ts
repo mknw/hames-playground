@@ -161,16 +161,20 @@ describe('conversations CRUD', () => {
     // conversation on reload). Reachable from the URL — `/?c=<someone else's
     // id>` is enough.
     const attacker = `attacker-${Math.random().toString(36).slice(2, 10)}`
-    await expect(
-      saveConversation({
-        id,
-        userId: attacker,
-        agentId: 'evil-agent',
-        title: 'clobbered',
-        serializedContext: JSON.stringify({ events: [] }),
-        status: 'running',
-      }),
-    ).rejects.toThrow(/could not be saved/)
+    const saving = saveConversation({
+      id,
+      userId: attacker,
+      agentId: 'evil-agent',
+      title: 'clobbered',
+      serializedContext: JSON.stringify({ events: [] }),
+      status: 'running',
+    })
+    await expect(saving).rejects.toThrow(/could not be saved/)
+    // And pins the ABSENCE of the ownership fact, not just the presence of the
+    // new wording: this message is rendered verbatim in the browser
+    // (turn.server.ts:267 -> events.ts:131 -> an error bubble), so "belongs to
+    // another user" belongs in the log and nowhere else.
+    await expect(saving).rejects.not.toThrow(/another user/i)
 
     const row = await loadConversation(id, TEST_USER)
     expect(row).not.toBeNull()

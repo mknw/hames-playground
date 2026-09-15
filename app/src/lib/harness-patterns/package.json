@@ -1,0 +1,22 @@
+{
+  "name": "@hames/harness-patterns",
+  "version": "0.1.0",
+  "description": "Functional, composable framework for agentic tool execution — patterns, event views, the injection guard, and tool transport.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "*.ts",
+    "patterns",
+    "assets",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

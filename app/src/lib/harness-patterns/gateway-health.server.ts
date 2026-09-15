@@ -201,8 +201,9 @@ export function __resetGatewayHealth(): void {
  *   - a **non-empty list that is not the whole surface** is an agent's own
  *     composition (`microsoft-365`'s eight app-side `graph_*` tools) and can
  *     still do its job with the gateway on fire;
- *   - a **sandbox** scope never reaches here: its tools arrive over
- *     `docker exec` and the call sites check `getActiveSandbox()` first.
+ *   - a pattern holding a **run-scoped transport** never reaches here: its tools
+ *     never came from the gateway (today: a sandbox's, over `docker exec`) and
+ *     the call sites check `activeTransports()` first.
  */
 export function toolSurfaceOutage(tools: string[]): { error: string; hint: string } | null {
   const outage = degradation

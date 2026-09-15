@@ -6,9 +6,8 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import { getActiveSandbox } from '../sandbox/scope.server'
 import { getActiveInjectionGuard } from './injection-guard-scope.server'
-import { hasAppTool, runAppTool, appToolDescriptions } from '../app-tools/index.server'
+import { activeTransports, processTransports } from './tool-transport.server'
 import { markGatewayReachable, markGatewayUnreachable } from './gateway-health.server'
 import type { ToolCallResult, MCPToolDescription } from './types'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -308,8 +307,9 @@ async function withReconnect<T>(
  * caller ever sees it.
  *
  * This is the guard's PRIMARY chokepoint, and it is deliberately the outermost
- * layer: it sits above all three transports (sandbox, app-side, gateway), so no
- * dispatch path can bypass it, and above the loop patterns, which build the
+ * layer: it sits above EVERY transport — scoped, process-registered and the
+ * gateway — so no dispatch path can bypass it, including a transport added
+ * later, and above the loop patterns, which build the
  * controller TURN LOG from `result.data` rather than from the event stream — a
  * guard hooked at event-tracking time would neutralize the stored event yet
  * still feed the raw injection to the controller on that same turn.
@@ -350,22 +350,29 @@ export async function callTool(
 }
 
 async function dispatchTool(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
-  // Sandbox dispatch (see docs/plan/sandbox.md → "How tools reach the
-  // controller"). When a `withSandbox` wrapper is active and the tool name
-  // is owned by its in-VM transport, route there instead of the host
-  // gateway. Tools not owned by the sandbox fall through to the gateway path
-  // — which is also what happens outside any sandbox scope.
-  const sandbox = getActiveSandbox()
-  if (sandbox?.ownsTool(name)) {
-    return sandbox.callTool(name, args)
+  // THE CONTAINMENT ORDER. Scoped transports, innermost first — then process
+  // transports, in registration order — then the gateway. The two loops are
+  // the invariant stated in `tool-transport.server.ts`; swapping them is the
+  // mutation `transport-precedence.test.ts` exists to catch.
+  //
+  // A scoped transport is bounded by one `withTransport` call (today: the
+  // in-VM sandbox, see docs/plan/sandbox.md → "How tools reach the
+  // controller"). A process transport is registered for the process's lifetime
+  // (today: the app-side per-user tools, #110, which must run in THIS process
+  // because they carry a per-user credential the shared-identity gateway
+  // cannot express, #107). A name no transport owns falls through to the
+  // gateway, which is also what happens outside any scope.
+  //
+  // The gateway is NOT a transport and stays the terminal fallback here: it
+  // cannot answer `ownsTool` without a round-trip (it would have to say "yes"
+  // to everything, which is what "fallback" already means), and its pool,
+  // reconnect and degradation behaviour below is not transport vocabulary.
+  for (const transport of activeTransports()) {
+    if (transport.ownsTool(name)) return transport.callTool(name, args)
   }
 
-  // App-side dispatch (#110). Tools that must run in THIS process because they
-  // carry a per-user credential resolved server-side — the shared-identity
-  // gateway cannot express per-user identity (#107). Checked after the sandbox
-  // (so an in-VM tool of the same name still wins) and before the gateway.
-  if (hasAppTool(name)) {
-    return runAppTool(name, args)
+  for (const transport of processTransports()) {
+    if (transport.ownsTool(name)) return transport.callTool(name, args)
   }
 
   try {
@@ -452,11 +459,41 @@ function demoteErrorString(text: string): { success: false; data: null; error: s
   return null
 }
 
+/** Advertised surface of every process-registered transport, in registration
+ *  order.
+ *
+ *  Fails OPEN per transport, deliberately and loudly: one transport that cannot
+ *  list its tools must not empty the whole catalog, because the caller's next
+ *  move on an empty list is to answer as if it had no tools. The failure is
+ *  logged with the transport's id rather than swallowed — a layer that quietly
+ *  stops advertising is worse than one that is absent. */
+async function processToolDescriptions(): Promise<MCPToolDescription[]> {
+  const out: MCPToolDescription[] = []
+  for (const transport of processTransports()) {
+    try {
+      out.push(...(await transport.listTools()))
+    } catch (err) {
+      console.error(
+        `[mcp-client] transport ${transport.id} failed to list its tools:`,
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+  return out
+}
+
 export async function listTools(): Promise<MCPToolDescription[]> {
-  // App-side tools (#110) are advertised alongside the gateway's. They run
-  // in-process, so they stay available even when the gateway is unreachable —
-  // hence they are appended on both the success and the failure path.
-  const appTools = appToolDescriptions()
+  // Process-registered tools (#110: the app-side per-user tools) are advertised
+  // alongside the gateway's. They do not run on the gateway, so they stay
+  // available even when it is unreachable — hence they are appended on both
+  // the success and the failure path.
+  //
+  // SCOPED transports are deliberately absent. `Tools()` is called once per
+  // session and its result is cached, so a per-run transport is structurally
+  // invisible to this catalog; the sandbox surface reaches the model through
+  // the adapters' per-call tool list instead (`baml-adapters.server.ts`). That
+  // split is unchanged here.
+  const appTools = await processToolDescriptions()
   try {
     // The tool catalog is not memoized here (callers do their own caching,
     // e.g. the adapters' tool-description cache), so this stays one live

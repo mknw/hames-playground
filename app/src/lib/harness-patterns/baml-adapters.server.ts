@@ -36,7 +36,7 @@ import type {
 import type { InjectionScreen } from './injection-guard'
 import { listTools as mcpListTools } from './mcp-client.server'
 import { gatewayDegradation } from './gateway-health.server'
-import { getActiveSandbox } from '../sandbox/scope.server'
+import { activeTransports } from './tool-transport.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
 import {
@@ -805,19 +805,32 @@ async function filterToolDescriptions(
   return all.filter((t) => nameSet.has(t.name) || (pattern?.test(t.name) ?? false))
 }
 
-/** When a `withSandbox` wrapper is active, return its in-VM tool descriptions
- *  in the adapter's `ToolDescription` shape. Outside any sandbox scope, returns
- *  `[]`. See docs/plan/sandbox.md → "How tools reach the controller". The
- *  transport caches its tool list internally, so this is cheap per call. */
-async function getActiveSandboxToolDescriptions(): Promise<ToolDescription[]> {
-  const sandbox = getActiveSandbox()
-  if (!sandbox) return []
-  const mcp = await sandbox.listTools()
-  return mcp.map((t) => ({
-    name: t.name,
-    description: t.description ?? '',
-    args_schema: t.inputSchema ? JSON.stringify(t.inputSchema) : undefined,
-  }))
+/** The tool surface of every transport scoped to this run (`withTransport`),
+ *  in the adapter's `ToolDescription` shape. Outside any scope, returns `[]`.
+ *  Today's only scoped transport is the in-VM sandbox — see docs/plan/sandbox.md
+ *  → "How tools reach the controller"; transports cache their tool list
+ *  internally, so this is cheap per call.
+ *
+ *  Innermost first, and a name is listed ONCE — by the innermost transport
+ *  that owns it — so what the model is shown matches where `callTool` would
+ *  actually send it. */
+async function activeTransportToolDescriptions(): Promise<ToolDescription[]> {
+  const transports = activeTransports()
+  if (transports.length === 0) return []
+  const out: ToolDescription[] = []
+  const seen = new Set<string>()
+  for (const transport of transports) {
+    for (const t of await transport.listTools()) {
+      if (seen.has(t.name)) continue
+      seen.add(t.name)
+      out.push({
+        name: t.name,
+        description: t.description ?? '',
+        args_schema: t.inputSchema ? JSON.stringify(t.inputSchema) : undefined,
+      })
+    }
+  }
+  return out
 }
 
 // ============================================================================
@@ -859,12 +872,13 @@ export function createLoopControllerAdapter(
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
 
-    // Get tool descriptions for available tools. When a `withSandbox` wrapper
-    // is active, prepend its in-VM tool surface so the actor sees them in its
-    // first-turn prompt without the caller threading them through `toolNames`.
-    const sandboxTools = await getActiveSandboxToolDescriptions()
+    // Get tool descriptions for available tools. When a transport is scoped to
+    // this run (`withTransport` — today the in-VM sandbox), prepend its tool
+    // surface so the model sees it in its first-turn prompt without the caller
+    // threading it through `toolNames`.
+    const scopedTools = await activeTransportToolDescriptions()
     const gatewayTools = await filterToolDescriptions(toolNames)
-    const tools = [...sandboxTools, ...gatewayTools]
+    const tools = [...scopedTools, ...gatewayTools]
 
     // Parse previous results into LoopTurn format
     const turns: LoopTurn[] = parseResultsToTurns(previous_results, n_turn)
@@ -1082,9 +1096,9 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFnWithLLMData 
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
 
-    const sandboxTools = await getActiveSandboxToolDescriptions()
+    const scopedTools = await activeTransportToolDescriptions()
     const gatewayTools = await filterToolDescriptions(toolNames)
-    const tools = [...sandboxTools, ...gatewayTools]
+    const tools = [...scopedTools, ...gatewayTools]
 
     const variables = { user_message, intent, tools, context }
 
@@ -1231,15 +1245,16 @@ export function createActorControllerAdapter(
       : (options.toolNames ?? [])
 
     // Get tool descriptions — optionally refresh + include pattern matches.
-    // When a `withSandbox` wrapper is active, prepend its in-VM tool surface
-    // so the actor sees them in its first-turn prompt without the caller
-    // threading them through `toolNames` / `toolNamesProvider`.
-    const sandboxTools = await getActiveSandboxToolDescriptions()
+    // When a transport is scoped to this run (`withTransport` — today the in-VM
+    // sandbox), prepend its tool surface so the actor sees it in its first-turn
+    // prompt without the caller threading it through `toolNames` /
+    // `toolNamesProvider`.
+    const scopedTools = await activeTransportToolDescriptions()
     const gatewayTools = await filterToolDescriptions(names, {
       dynamicPattern: options.dynamicPattern,
       refresh: options.refreshOnCall,
     })
-    const tools = [...sandboxTools, ...gatewayTools]
+    const tools = [...scopedTools, ...gatewayTools]
 
     // Convert ScriptExecutionEvent to Attempt format. `toolName` records the
     // actor's actual tool_name per push — so a rejected `mcp-exec` attempt

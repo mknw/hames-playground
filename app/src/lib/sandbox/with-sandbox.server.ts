@@ -18,15 +18,15 @@
  */
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { trackEvent } from '../harness-patterns/context.server'
+import { withTransport } from '../harness-patterns/tool-transport.server'
 import { DEFAULT_SETTINGS } from '../settings'
 import { getRequestSettings } from '../settings-context.server'
 import { AttachmentTable } from './attachment-table.server'
 import { DockerBackend } from './docker-backend.server'
-import { runWithSandbox } from './scope.server'
 import { SandboxScheduler } from './scheduler.server'
 import { WarmPool } from './warm-pool.server'
 import { hydrateWorkspace, snapshotOutputs, promoteOutputs } from './work-artifacts.server'
-import type { ComputeBackend, RootfsId, RuntimeConfig } from './types'
+import type { ComputeBackend, McpTransport, RootfsId, RuntimeConfig } from './types'
 import type {
   ConfiguredPattern,
   ErrorEventData,
@@ -36,6 +36,33 @@ import type {
 } from '../harness-patterns/types'
 
 assertServerOnImport()
+
+/**
+ * Run `fn` with this VM's in-VM MCP transport scoped to it.
+ *
+ * This is the sandbox's SCOPED registration on core's tool-transport seam
+ * (`harness-patterns/tool-transport.server.ts`), and it replaced a sandbox-owned
+ * AsyncLocalStorage of its own. Core no longer knows what a sandbox is: what it
+ * knows is that a transport supplied this way is consulted before any
+ * process-registered transport and before the gateway, innermost first. The
+ * `sandbox_*` prefix in `types.ts` is now the only thing tying dispatch to this
+ * package.
+ *
+ * `McpTransport` is `ToolTransport` plus a VM identity and a lifecycle
+ * (`vmId` / `toolNames` / `close`), none of which core has any use for, so the
+ * adaptation is a narrowing rather than a new capability.
+ */
+function runWithSandbox<T>(transport: McpTransport, fn: () => Promise<T>): Promise<T> {
+  return withTransport(
+    {
+      id: `sandbox:${transport.vmId}`,
+      ownsTool: (name) => transport.ownsTool(name),
+      callTool: (name, args) => transport.callTool(name, args),
+      listTools: () => transport.listTools(),
+    },
+    fn,
+  )
+}
 
 export interface WithSandboxConfig {
   /**

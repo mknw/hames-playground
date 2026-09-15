@@ -316,26 +316,62 @@ describe('the loops refuse to answer without tools', () => {
     ).toBe('irrecoverable')
   })
 
+  it('leaves a simpleLoop inside a scoped transport alone too', async () => {
+    // The twin of the actorCritic case below, and it had no test: both loops
+    // carry their own copy of the exemption, so a fix to one has twice gone in
+    // without the other.
+    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    health.markGatewayUnreachable('ECONNREFUSED')
+    const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { withTransport } = await import('../../../lib/harness-patterns/tool-transport.server')
+
+    const inVm = {
+      id: 'sandbox:degrade-loop',
+      ownsTool: () => true,
+      callTool: async () => ({ success: true, data: null }),
+      listTools: async () => [],
+    }
+
+    const controller = vi.fn().mockRejectedValue(new Error('stop here'))
+    const pattern = simpleLoop(controller, [], { patternId: 'sandbox-simple-loop' })
+    const { scope, view } = await harness('sandbox-simple-loop')
+
+    await withTransport(inVm, () => pattern.fn(scope, view))
+
+    // It got as far as the controller, which is all this case is about.
+    expect(controller).toHaveBeenCalled()
+    const refusal = scope.events.find(
+      (e) =>
+        e.type === 'error' &&
+        String((e.data as { error?: string }).error).includes('Tools unavailable'),
+    )
+    expect(refusal).toBeUndefined()
+  })
+
   it('leaves a sandbox loop alone — its tools never came from the gateway', async () => {
     const health = await import('../../../lib/harness-patterns/gateway-health.server')
     health.markGatewayUnreachable('ECONNREFUSED')
     const { actorCritic } =
       await import('../../../lib/harness-patterns/patterns/actorCritic.server')
-    const scopeMod = await import('../../../lib/sandbox/scope.server')
+    const { withTransport } = await import('../../../lib/harness-patterns/tool-transport.server')
 
     // The two sandbox agents pass `[]` and get their tools from the VM over
     // `docker exec`. Refusing them on a gateway outage would break the one kind
-    // of agent that does not need the gateway at all.
-    vi.spyOn(scopeMod, 'getActiveSandbox').mockReturnValue({
+    // of agent that does not need the gateway at all. Entering the real scope
+    // rather than stubbing the reader: the exemption is "this run holds a
+    // transport the gateway never served", which is what the wrapper expresses.
+    const inVm = {
+      id: 'sandbox:degrade',
       ownsTool: () => true,
+      callTool: async () => ({ success: true, data: null }),
       listTools: async () => [],
-    } as never)
+    }
 
     const actor = vi.fn().mockRejectedValue(new Error('stop here'))
     const pattern = actorCritic(actor, vi.fn(), [], { patternId: 'sandbox-loop' })
     const { scope, view } = await harness('sandbox-loop')
 
-    await pattern.fn(scope, view)
+    await withTransport(inVm, () => pattern.fn(scope, view))
 
     // It got as far as the actor, which is all this case is about.
     expect(actor).toHaveBeenCalled()

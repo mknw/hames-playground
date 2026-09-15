@@ -297,14 +297,41 @@ tools.graph // app-side, per-user (see below)
 tools.all // all tool names
 ```
 
-**Three transports.** `callTool()` routes a tool name to whichever transport
-owns it: the **sandbox** (in-VM, when a `withSandbox` scope is active), an
-**app-side** in-process tool, or the **MCP gateway** (the default). App-side
-tools exist for calls that carry a per-user credential resolved server-side —
-the gateway executes every user's calls as one shared principal, so it cannot
-express per-user identity. They are registered via `registerAppTool()` in
-`lib/app-tools/` and advertised by `listTools()` alongside gateway tools, so
-patterns and agents treat them identically. See
+**Three dispatch phases, and the order is the containment invariant.**
+`callTool()` routes a tool name to whichever transport owns it, in this order
+and no other:
+
+1. **Scoped transports** — supplied by `withTransport(t, fn)`, innermost first.
+   Today's one is the in-VM sandbox, which `withSandbox` registers this way.
+2. **Process transports** — supplied by `registerTransport(t)`, in registration
+   order. Today's one is the app-side in-process tools.
+3. **The MCP gateway** — the terminal fallback, and deliberately NOT a
+   transport: it cannot answer `ownsTool` without a round-trip, so as a
+   registrant it would say "yes" to everything.
+
+> Any tool name owned by a transport supplied through `withTransport` is
+> dispatched there, in innermost-first order, before any process-registered
+> transport and before the gateway. No value a registrant can pass — and no
+> registration order — can invert that.
+
+That is carried by the SHAPE of the seam: two functions with two consultation
+phases, and **no `priority` field on either**. A rank would make containment a
+runtime value any registrant could set. Adding one is a containment change, not
+a refactor. `transport-precedence.test.ts` pins the order on colliding names.
+
+Nesting **shadows** — a name two scopes own goes to the inner one — which is the
+opposite of `withInjectionGuard`, which unions. Both are right: two nested
+sandboxes both own `sandbox_bash` and a union has no answer, while a nested
+guard is a second reviewer whose strictness must survive.
+
+App-side tools exist for calls that carry a per-user credential resolved
+server-side — the gateway executes every user's calls as one shared principal,
+so it cannot express per-user identity. They are declared via `registerAppTool()`
+in `lib/app-tools/`, which registers ONE `ToolTransport` for all of them, and are
+advertised by `listTools()` alongside gateway tools so patterns and agents treat
+them identically. Scoped transports are NOT in that catalog — `Tools()` caches
+once per session, so a per-run transport could never be in it consistently; the
+model sees them through the adapters' per-call tool list. See
 [`docs/MICROSOFT_GRAPH.md`](../../../../docs/MICROSOFT_GRAPH.md).
 
 ### `simpleLoop(controller, tools, config?)`
@@ -1813,13 +1840,14 @@ harness-patterns/
 ├── tools.server.ts         # Tools() — groups MCP tools by namespace
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? callback
 ├── routing.server.ts       # BAML router integration (routeMessageOp)
-├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE tool transports — sandbox (in-VM) → app-side in-process → MCP gateway; leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
+├── tool-transport.server.ts # ToolTransport + withTransport() (scoped, innermost-first) / registerTransport() (process, consulted after every scoped one) / activeTransports(); the difference between the two registration functions IS the containment invariant — there is no priority field and no argument that could express one
+├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, etc.
 ├── compactBulkData.server.ts # compactBulkData() — background tool result summarization via the describe-tier client
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
 ├── token-budget.server.ts  # trimToFit(), getContextWindow(), estimateTokens() — rolling context window
 ├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding
-├── injection-guard-scope.server.ts # ALS scope carrying the active guard (mirrors sandbox/scope.server.ts); read by callTool + retriever
+├── injection-guard-scope.server.ts # ALS scope carrying the active guard (same shape as tool-transport.server.ts's, opposite nesting rule — it UNIONS, see SD-5); read by callTool + retriever
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values)
 ├── assert.server.ts        # Server-only guards
 └── patterns/

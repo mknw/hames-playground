@@ -3,10 +3,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { ContextEvent, EventType, UnifiedContext } from '../../../../lib/harness-patterns'
+import type {
+  ContextEvent,
+  EventType,
+  UnifiedContext,
+} from '../../../../../../packages/harness-patterns'
 
 // Mock server-only imports
-vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -56,9 +60,9 @@ const PATTERN_ID = 'compact-intent-test'
 
 async function load() {
   const { compactIntent } =
-    await import('../../../../lib/harness-patterns/patterns/compactIntent.server')
-  const { createScope } = await import('../../../../lib/harness-patterns/context.server')
-  const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+    await import('../../../../../../packages/harness-patterns/patterns/compactIntent.server')
+  const { createScope } = await import('../../../../../../packages/harness-patterns/context.server')
+  const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
   const { b } = await import('../../../../../baml_client')
   // Lane A6: the rewrite seam is REQUIRED config. Wire the real adapter
   // (which hits the mocked `b.CompactIntent`) — what `bamlPatterns().compactIntent`

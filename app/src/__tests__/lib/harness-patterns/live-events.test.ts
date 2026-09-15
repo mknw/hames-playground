@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn()
 }))
 
@@ -20,13 +20,13 @@ describe('live-event-context', () => {
   })
 
   it('emitLive is a no-op when no listener is installed', async () => {
-    const { emitLive } = await import('../../../lib/harness-patterns/live-event-context.server')
+    const { emitLive } = await import('../../../../../packages/harness-patterns/live-event-context.server')
     expect(emitLive({ id: 'ev-1', type: 'tool_call', ts: 0, patternId: 'p', data: {} })).toBe(false)
   })
 
   it('emitLive does not fire until setLivePatternEnabled(true) is called', async () => {
     const { runWithLiveListener, emitLive } = await import(
-      '../../../lib/harness-patterns/live-event-context.server'
+      '../../../../../packages/harness-patterns/live-event-context.server'
     )
     const listener = vi.fn()
     await runWithLiveListener(listener, async () => {
@@ -37,7 +37,7 @@ describe('live-event-context', () => {
 
   it('emitLive fires when both the listener and the pattern toggle are active', async () => {
     const { runWithLiveListener, setLivePatternEnabled, emitLive } = await import(
-      '../../../lib/harness-patterns/live-event-context.server'
+      '../../../../../packages/harness-patterns/live-event-context.server'
     )
     const listener = vi.fn()
     await runWithLiveListener(listener, async () => {
@@ -50,7 +50,7 @@ describe('live-event-context', () => {
 
   it('wasEmittedLive remembers ids that were dispatched', async () => {
     const { runWithLiveListener, setLivePatternEnabled, emitLive, wasEmittedLive } = await import(
-      '../../../lib/harness-patterns/live-event-context.server'
+      '../../../../../packages/harness-patterns/live-event-context.server'
     )
     await runWithLiveListener(vi.fn(), async () => {
       setLivePatternEnabled(true)
@@ -67,10 +67,10 @@ describe('trackEvent + liveEvents', () => {
 
   it('forwards a tracked event to the live listener when enabled', async () => {
     const { runWithLiveListener, setLivePatternEnabled } = await import(
-      '../../../lib/harness-patterns/live-event-context.server'
+      '../../../../../packages/harness-patterns/live-event-context.server'
     )
     const { createScope, trackEvent } = await import(
-      '../../../lib/harness-patterns/context.server'
+      '../../../../../packages/harness-patterns/context.server'
     )
 
     const listener = vi.fn()
@@ -85,10 +85,10 @@ describe('trackEvent + liveEvents', () => {
 
   it('does not forward when liveEvents is off (default behavior)', async () => {
     const { runWithLiveListener, setLivePatternEnabled } = await import(
-      '../../../lib/harness-patterns/live-event-context.server'
+      '../../../../../packages/harness-patterns/live-event-context.server'
     )
     const { createScope, trackEvent } = await import(
-      '../../../lib/harness-patterns/context.server'
+      '../../../../../packages/harness-patterns/context.server'
     )
 
     const listener = vi.fn()
@@ -102,10 +102,10 @@ describe('trackEvent + liveEvents', () => {
 
   it('respects the trackHistory filter — events not tracked are not emitted live', async () => {
     const { runWithLiveListener, setLivePatternEnabled } = await import(
-      '../../../lib/harness-patterns/live-event-context.server'
+      '../../../../../packages/harness-patterns/live-event-context.server'
     )
     const { createScope, trackEvent } = await import(
-      '../../../lib/harness-patterns/context.server'
+      '../../../../../packages/harness-patterns/context.server'
     )
 
     const listener = vi.fn()
@@ -124,11 +124,11 @@ describe('runChain dedup', () => {
 
   it('skips events at commit time that were already emitted live', async () => {
     const { runWithLiveListener } = await import(
-      '../../../lib/harness-patterns/live-event-context.server'
+      '../../../../../packages/harness-patterns/live-event-context.server'
     )
-    const { runChain } = await import('../../../lib/harness-patterns/patterns/chain.server')
+    const { runChain } = await import('../../../../../packages/harness-patterns/patterns/chain.server')
     const { createContext, trackEvent } = await import(
-      '../../../lib/harness-patterns/context.server'
+      '../../../../../packages/harness-patterns/context.server'
     )
 
     const ctx = createContext('hi', {} as Record<string, unknown>)
@@ -136,7 +136,7 @@ describe('runChain dedup', () => {
     // Pattern that tracks one tool_result event
     const livePattern = {
       name: 'live-loop',
-      fn: async (scope: import('../../../lib/harness-patterns/types').PatternScope<Record<string, unknown>>) => {
+      fn: async (scope: import('../../../../../packages/harness-patterns/types').PatternScope<Record<string, unknown>>) => {
         trackEvent(scope, 'tool_result', { tool: 'foo', result: 1, success: true }, true)
         return scope
       },
@@ -162,18 +162,18 @@ describe('runChain dedup', () => {
 
   it('still emits at commit time when liveEvents is off (legacy behavior)', async () => {
     const { runWithLiveListener } = await import(
-      '../../../lib/harness-patterns/live-event-context.server'
+      '../../../../../packages/harness-patterns/live-event-context.server'
     )
-    const { runChain } = await import('../../../lib/harness-patterns/patterns/chain.server')
+    const { runChain } = await import('../../../../../packages/harness-patterns/patterns/chain.server')
     const { createContext, trackEvent } = await import(
-      '../../../lib/harness-patterns/context.server'
+      '../../../../../packages/harness-patterns/context.server'
     )
 
     const ctx = createContext('hi', {} as Record<string, unknown>)
 
     const bufferedPattern = {
       name: 'buffered',
-      fn: async (scope: import('../../../lib/harness-patterns/types').PatternScope<Record<string, unknown>>) => {
+      fn: async (scope: import('../../../../../packages/harness-patterns/types').PatternScope<Record<string, unknown>>) => {
         trackEvent(scope, 'tool_result', { tool: 'bar', result: 2, success: true }, true)
         return scope
       },
@@ -197,16 +197,16 @@ describe('runChain dedup', () => {
 
   it('streams pattern_enter and pattern_exit live when enabled', async () => {
     const { runWithLiveListener } = await import(
-      '../../../lib/harness-patterns/live-event-context.server'
+      '../../../../../packages/harness-patterns/live-event-context.server'
     )
-    const { runChain } = await import('../../../lib/harness-patterns/patterns/chain.server')
-    const { createContext } = await import('../../../lib/harness-patterns/context.server')
+    const { runChain } = await import('../../../../../packages/harness-patterns/patterns/chain.server')
+    const { createContext } = await import('../../../../../packages/harness-patterns/context.server')
 
     const ctx = createContext('hi', {} as Record<string, unknown>)
 
     const livePattern = {
       name: 'lifecycle',
-      fn: async (scope: import('../../../lib/harness-patterns/types').PatternScope<Record<string, unknown>>) => scope,
+      fn: async (scope: import('../../../../../packages/harness-patterns/types').PatternScope<Record<string, unknown>>) => scope,
       config: {
         patternId: 'lifecycle',
         commitStrategy: 'always' as const,
@@ -227,18 +227,18 @@ describe('runChain dedup', () => {
 
   it('routes emits child pattern_enter/exit live when liveEvents is on', async () => {
     const { runWithLiveListener } = await import(
-      '../../../lib/harness-patterns/live-event-context.server'
+      '../../../../../packages/harness-patterns/live-event-context.server'
     )
-    const { runChain } = await import('../../../lib/harness-patterns/patterns/chain.server')
-    const { routes } = await import('../../../lib/harness-patterns/patterns/router.server')
+    const { runChain } = await import('../../../../../packages/harness-patterns/patterns/chain.server')
+    const { routes } = await import('../../../../../packages/harness-patterns/patterns/router.server')
     const { createContext, trackEvent } = await import(
-      '../../../lib/harness-patterns/context.server'
+      '../../../../../packages/harness-patterns/context.server'
     )
 
     // Inner pattern has maxTurns set so its pattern_enter carries a payload
     const inner = {
       name: 'inner-loop',
-      fn: async (scope: import('../../../lib/harness-patterns/types').PatternScope<Record<string, unknown>>) => {
+      fn: async (scope: import('../../../../../packages/harness-patterns/types').PatternScope<Record<string, unknown>>) => {
         trackEvent(scope, 'tool_result', { tool: 'x', result: 1, success: true }, true)
         return scope
       },
@@ -254,7 +254,7 @@ describe('runChain dedup', () => {
 
     const ctx = createContext('hi', { route: 'inner' } as Record<string, unknown>)
 
-    const events: import('../../../lib/harness-patterns/types').ContextEvent[] = []
+    const events: import('../../../../../packages/harness-patterns/types').ContextEvent[] = []
     await runWithLiveListener(
       (e) => events.push(e),
       () => runChain(ctx, [routesPattern])
@@ -275,11 +275,11 @@ describe('runChain dedup', () => {
 
   it('emits in-flight events before the pattern finishes', async () => {
     const { runWithLiveListener } = await import(
-      '../../../lib/harness-patterns/live-event-context.server'
+      '../../../../../packages/harness-patterns/live-event-context.server'
     )
-    const { runChain } = await import('../../../lib/harness-patterns/patterns/chain.server')
+    const { runChain } = await import('../../../../../packages/harness-patterns/patterns/chain.server')
     const { createContext, trackEvent } = await import(
-      '../../../lib/harness-patterns/context.server'
+      '../../../../../packages/harness-patterns/context.server'
     )
 
     const ctx = createContext('hi', {} as Record<string, unknown>)
@@ -291,7 +291,7 @@ describe('runChain dedup', () => {
 
     const slowPattern = {
       name: 'slow',
-      fn: async (scope: import('../../../lib/harness-patterns/types').PatternScope<Record<string, unknown>>) => {
+      fn: async (scope: import('../../../../../packages/harness-patterns/types').PatternScope<Record<string, unknown>>) => {
         // Three "in-flight" status events; the listener should see them
         // as we go, not all at the end.
         trackEvent(scope, 'controller_action', { reasoning: '', status: 'step 1', tool_name: '', tool_args: '', is_final: false }, true)

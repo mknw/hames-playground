@@ -11,7 +11,7 @@
  */
 'use server'
 
-import type { HarnessResultScoped } from '../harness-patterns'
+import type { HarnessResultScoped } from '../../../../packages/harness-patterns'
 import { loadSession, deleteSession, evictPatterns, type SessionData } from './session.server'
 import { runTurnAndPersist } from './turn.server'
 import { getAgent, getAgentMetadata } from './registry.server'
@@ -410,7 +410,7 @@ export async function regenerateConversationTitle(sessionId: string): Promise<st
   const user = await requireUser()
   const loaded = await loadSession(sessionId, user.id)
   if (!loaded) return null
-  const { deserializeContext } = await import('../harness-patterns')
+  const { deserializeContext } = await import('../../../../packages/harness-patterns')
   const { runRegenerateTitle } = await import('./agents/title-generator.server')
   const ctx = deserializeContext(loaded.serializedContext)
   return runRegenerateTitle(ctx, sessionId, user.id)

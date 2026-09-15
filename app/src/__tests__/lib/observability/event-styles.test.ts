@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import type { EventType } from '~/lib/harness-patterns'
+import type { EventType } from '../../../../../packages/harness-patterns'
 import { eventColors, eventIconClasses, getPatternColor } from '~/lib/observability/event-styles'
 
 describe('getPatternColor', () => {

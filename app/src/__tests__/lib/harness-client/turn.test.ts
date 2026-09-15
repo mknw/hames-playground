@@ -15,7 +15,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
@@ -74,7 +74,7 @@ const compactBulkData = vi.fn(async (_ctx: unknown, onPersist: () => Promise<voi
   await onPersist()
 })
 
-vi.mock('../../../lib/harness-patterns', () => ({
+vi.mock('../../../../../packages/harness-patterns', () => ({
   harness,
   continueSession,
   resumeHarness,

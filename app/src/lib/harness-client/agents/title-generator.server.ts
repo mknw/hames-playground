@@ -30,11 +30,15 @@
  * `actions.server.ts`'s gated `regenerateConversationTitle`) resolve the user
  * themselves and pass it in, so nothing needed the directive.
  */
-import { assertServerOnImport } from '../../harness-patterns/assert.server'
-import { harness, compactExecution } from '../../harness-patterns'
+import { assertServerOnImport } from '../../../../../packages/harness-patterns/assert.server'
+import { harness, compactExecution } from '../../../../../packages/harness-patterns'
 import { withUsageAccounting } from '../../harness-baml'
 import { clientOverrideFor } from '../../harness-baml/clients.server'
-import type { HarnessData, UnifiedContext, UserMessageEventData } from '../../harness-patterns'
+import type {
+  HarnessData,
+  UnifiedContext,
+  UserMessageEventData,
+} from '../../../../../packages/harness-patterns'
 import { b } from '../../../../baml_client'
 import { updateConversationTitle } from '../../db/conversations.server'
 

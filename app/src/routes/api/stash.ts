@@ -22,7 +22,11 @@ import {
   loadConversation,
   updateConversationContextIfUnchanged,
 } from '../../lib/db/conversations.server'
-import { deserializeContext, enrichToolResult, serializeContext } from '../../lib/harness-patterns'
+import {
+  deserializeContext,
+  enrichToolResult,
+  serializeContext,
+} from '../../../../packages/harness-patterns'
 import { getAuthenticatedUser } from '../../lib/auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../../lib/auth/dev-bypass'
 

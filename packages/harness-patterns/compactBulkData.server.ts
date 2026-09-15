@@ -26,7 +26,7 @@ import type {
   BulkDescribeFns,
   DescribeBatchItem,
 } from './types'
-import { getRequestSettings } from '../settings-context.server'
+import { getRequestSettings } from '../../app/src/lib/settings-context.server'
 import { estimateTokens } from './token-budget.server'
 
 assertServerOnImport()

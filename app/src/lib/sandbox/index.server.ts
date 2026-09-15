@@ -14,7 +14,7 @@
  * otherwise drag `DockerBackend` into a browser component's graph.
  */
 
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 import { DockerBackend } from './docker-backend.server'
 import type { ComputeBackend } from './types'
 

@@ -18,7 +18,7 @@ import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 
 const TOOLS = ['read_neo4j_cypher', 'get_neo4j_schema', 'search', 'fetch_content', 'Return']
 
-vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -31,7 +31,7 @@ const schemaOk = mockCallTool({ responses: { get_neo4j_schema: { Concept: ['name
 const schemaFails = mockCallTool({ errors: { get_neo4j_schema: 'connection refused' } })
 const currentCallTool = { fn: schemaOk }
 
-vi.mock('../../../../lib/harness-patterns/mcp-client.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/mcp-client.server', () => ({
   callTool: (...args: [string, Record<string, unknown>?]) => currentCallTool.fn(...args),
   listTools: mockListTools(TOOLS),
 }))

@@ -12,7 +12,7 @@
  * is the question that matters, not "does this substring appear".
  */
 import { describe, it, expect } from 'vitest'
-import type { RetrievalReference } from '~/lib/harness-patterns/patterns/retriever.server'
+import type { RetrievalReference } from '../../../../../packages/harness-patterns/patterns/retriever.server'
 import { escapeHtmlAttribute } from '~/lib/sanitize-html'
 
 const { renderAssistantMarkdown } = await import('~/components/ark-ui/ChatMessages')

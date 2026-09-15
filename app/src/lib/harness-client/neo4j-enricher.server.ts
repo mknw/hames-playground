@@ -17,7 +17,7 @@
 "use server";
 
 import { getNeo4jDriver } from '../neo4j/client'
-import type { OnToolResult } from '../harness-patterns/types'
+import type { OnToolResult } from '../../../../packages/harness-patterns/types'
 
 const ENRICHABLE_TOOLS = new Set([
   'read_neo4j_cypher',

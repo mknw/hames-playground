@@ -11,13 +11,13 @@
 
 import { describe, it, expect, vi } from 'vitest'
 
-vi.mock('../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
 // redis-direct imports the gateway callTool for `stashCallTool`'s off-branch;
 // stub it so no real gateway is touched on import.
-vi.mock('../../lib/harness-patterns/mcp-client.server', () => ({
+vi.mock('../../../../packages/harness-patterns/mcp-client.server', () => ({
   callTool: vi.fn(async () => ({ success: false, data: null, error: 'no gateway' })),
 }))
 

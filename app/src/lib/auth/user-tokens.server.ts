@@ -17,7 +17,7 @@
  * Written on every sign-in and re-written after each silent acquisition
  * (Entra rotates refresh tokens, so the fresh cache must replace the old one).
  */
-import { assertServerOnImport } from "../harness-patterns/assert.server";
+import { assertServerOnImport } from "../../../../packages/harness-patterns/assert.server";
 import { query } from "../db/client.server";
 import { encryptSecret, decryptSecret } from "./secret-crypto.server";
 

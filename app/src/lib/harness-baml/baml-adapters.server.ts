@@ -16,7 +16,7 @@
  * - CriticFn(intent, previous_attempts)
  */
 
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 import type {
   ControllerAction,
   CriticResult,
@@ -29,7 +29,7 @@ import type {
   PlannerFn,
   PlanCallResult,
   DescribeBatchItem,
-} from '../harness-patterns/types'
+} from '../../../../packages/harness-patterns/types'
 import type {
   ToolDescription,
   LoopTurn,
@@ -37,11 +37,11 @@ import type {
   PriorResult,
   FewShot,
   PlanResult,
-} from '../harness-patterns/types'
-import type { InjectionScreen } from '../harness-patterns/injection-guard'
-import { listTools as mcpListTools } from '../harness-patterns/mcp-client.server'
-import { gatewayDegradation } from '../harness-patterns/gateway-health.server'
-import { activeTransports } from '../harness-patterns/tool-transport.server'
+} from '../../../../packages/harness-patterns/types'
+import type { InjectionScreen } from '../../../../packages/harness-patterns/injection-guard'
+import { listTools as mcpListTools } from '../../../../packages/harness-patterns/mcp-client.server'
+import { gatewayDegradation } from '../../../../packages/harness-patterns/gateway-health.server'
+import { activeTransports } from '../../../../packages/harness-patterns/tool-transport.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
 import {
@@ -53,18 +53,18 @@ import {
 } from '../settings'
 import { eurPerUsdRate, verdaEurPerHour } from '../cost-rates.server'
 import { clientOverrideFor, limitsFor } from './clients.server'
-import { notifyLlmUsage } from '../harness-patterns/llm-usage-observer.server'
+import { notifyLlmUsage } from '../../../../packages/harness-patterns/llm-usage-observer.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 import type {
   LLMCallRecord,
   ControllerFn,
   ActorFn,
   ControllerCallResult,
-} from '../harness-patterns/types'
+} from '../../../../packages/harness-patterns/types'
 // The throw contract is the seam's, not this module's: the class lives in
 // core (`types.ts`, Lane A3) and is re-exported here because the acceptance
 // tests (raw-llm-visibility, truncation-retry) import it from this path.
-import { LLMCallError } from '../harness-patterns/types'
+import { LLMCallError } from '../../../../packages/harness-patterns/types'
 export { LLMCallError }
 
 assertServerOnImport()
@@ -81,7 +81,7 @@ runBamlClientCheckOnce()
 // `ControllerCallResult` moved to core `types.ts` in Lane A4 — it is the
 // controller/actor seam's return type. Re-exported here for existing import
 // paths (tests import it from this module).
-export type { ControllerCallResult } from '../harness-patterns/types'
+export type { ControllerCallResult } from '../../../../packages/harness-patterns/types'
 
 /** Result from a critic call with optional LLM observability data */
 export interface CriticCallResult {
@@ -92,7 +92,7 @@ export interface CriticCallResult {
 /** `PlanCallResult` moved to core `types.ts` at Lane A6 — it is the planner
  *  seam's return type and `planner()` (core) declares it. Re-exported here for
  *  existing import paths (tests import it from this module). */
-export type { PlanCallResult } from '../harness-patterns/types'
+export type { PlanCallResult } from '../../../../packages/harness-patterns/types'
 
 /** The controller seam (#225 Lane A4): one named {@link ControllerInput} —
  *  declared in core `types.ts` — whose `turns` are a typed `LoopTurn[]`,
@@ -1504,7 +1504,7 @@ export async function describeToolResultOp(
 /** `DescribeBatchItem` moved to core `types.ts` at Lane A6 — it rides the
  *  batch seam's contract, which `compactBulkData` (core) declares.
  *  Re-exported here for existing import paths. */
-export type { DescribeBatchItem } from '../harness-patterns/types'
+export type { DescribeBatchItem } from '../../../../packages/harness-patterns/types'
 
 /**
  * Summarize several tool results in ONE describe-tier call (#83 Part E).

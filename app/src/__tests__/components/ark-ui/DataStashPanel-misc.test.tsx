@@ -13,7 +13,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { createSignal } from 'solid-js'
 import { installDomStubs } from './dom-stubs'
-import type { ContextEvent } from '../../../lib/harness-patterns/types'
+import type { ContextEvent } from '../../../../../packages/harness-patterns/types'
 import type { StashDocumentMeta } from '../../../lib/document-store.server'
 
 beforeAll(() => installDomStubs())

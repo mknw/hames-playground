@@ -11,10 +11,10 @@ import type {
   PatternScope,
   ToolResultEventData,
   ConfiguredPattern,
-} from '../../../../lib/harness-patterns/types'
+} from '../../../../../../packages/harness-patterns/types'
 
 // Mock server-only imports
-vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -76,22 +76,23 @@ describe('withReferences', () => {
   beforeEach(async () => {
     vi.clearAllMocks()
     const { __clearReferenceCache } =
-      await import('../../../../lib/harness-patterns/patterns/with-references.server')
+      await import('../../../../../../packages/harness-patterns/patterns/with-references.server')
     __clearReferenceCache()
   })
 
   it('exports withReferences', async () => {
     const { withReferences } =
-      await import('../../../../lib/harness-patterns/patterns/with-references.server')
+      await import('../../../../../../packages/harness-patterns/patterns/with-references.server')
     expect(typeof withReferences).toBe('function')
   })
 
   it('skipped="empty" when there are no eligible tool_result events', async () => {
     const { withReferences } =
-      await import('../../../../lib/harness-patterns/patterns/with-references.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+      await import('../../../../../../packages/harness-patterns/patterns/with-references.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext<Record<string, unknown>>('do something')
     const view = createEventView(ctx)
@@ -116,10 +117,11 @@ describe('withReferences', () => {
 
   it('skipped="single" attaches the sole candidate without calling selector', async () => {
     const { withReferences } =
-      await import('../../../../lib/harness-patterns/patterns/with-references.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+      await import('../../../../../../packages/harness-patterns/patterns/with-references.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext<Record<string, unknown>>('test')
     ctx.events.push(
@@ -152,10 +154,11 @@ describe('withReferences', () => {
 
   it('calls selector when there are multiple candidates and respects maxRefs', async () => {
     const { withReferences } =
-      await import('../../../../lib/harness-patterns/patterns/with-references.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+      await import('../../../../../../packages/harness-patterns/patterns/with-references.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext<Record<string, unknown>>('explain postgres 18')
     for (let i = 0; i < 4; i++) {
@@ -201,10 +204,11 @@ describe('withReferences', () => {
 
   it('cache hit reuses the prior decision without re-calling selector', async () => {
     const { withReferences } =
-      await import('../../../../lib/harness-patterns/patterns/with-references.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+      await import('../../../../../../packages/harness-patterns/patterns/with-references.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext<Record<string, unknown>>('explain postgres 18')
     ctx.events.push(
@@ -263,10 +267,11 @@ describe('withReferences', () => {
 
   it("scope=self filters candidates to the wrapper's patternId", async () => {
     const { withReferences } =
-      await import('../../../../lib/harness-patterns/patterns/with-references.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+      await import('../../../../../../packages/harness-patterns/patterns/with-references.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext<Record<string, unknown>>('test')
     ctx.events.push(
@@ -328,10 +333,11 @@ describe('withReferences', () => {
 
   it('excludes hidden, archived, and failed tool_results from candidates', async () => {
     const { withReferences } =
-      await import('../../../../lib/harness-patterns/patterns/with-references.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+      await import('../../../../../../packages/harness-patterns/patterns/with-references.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext<Record<string, unknown>>('test')
     ctx.events.push(
@@ -387,10 +393,11 @@ describe('withReferences', () => {
 
   it('uses scope.data.intent when present (router-set), falls back to last user_message', async () => {
     const { withReferences } =
-      await import('../../../../lib/harness-patterns/patterns/with-references.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+      await import('../../../../../../packages/harness-patterns/patterns/with-references.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const ctx = createContext<Record<string, unknown>>('plain user input')
     ctx.events.push(

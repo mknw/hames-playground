@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -27,7 +27,7 @@ import {
   activeTransports,
   processTransports,
   type ToolTransport,
-} from '../../../lib/harness-patterns/tool-transport.server'
+} from '../../../../../packages/harness-patterns/tool-transport.server'
 
 function fakeTransport(id: string, owns: string[] = []): ToolTransport {
   return {
@@ -130,7 +130,7 @@ describe('no registrant can express a priority', () => {
   const SOURCE = readFileSync(
     path.resolve(
       path.dirname(fileURLToPath(import.meta.url)),
-      '../../../lib/harness-patterns/tool-transport.server.ts',
+      '../../../../../packages/harness-patterns/tool-transport.server.ts',
     ),
     'utf8',
   )

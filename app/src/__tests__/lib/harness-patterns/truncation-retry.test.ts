@@ -20,11 +20,11 @@ import { mockFinalAction } from '../../mocks/baml'
 import { mockListTools } from '../../mocks/mcp'
 import type { Collector } from '@boundaryml/baml'
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-vi.mock('../../../lib/harness-patterns/mcp-client.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/mcp-client.server', () => ({
   listTools: mockListTools(['read_neo4j_cypher', 'sandbox_bash', 'Return']),
 }))
 

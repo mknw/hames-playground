@@ -25,7 +25,7 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 import type {
   CompactIntentFn,
   DescribeBatchFn,
@@ -33,7 +33,7 @@ import type {
   LLMResult,
   PlannerFn,
   RetrieveQueryFn,
-} from '../harness-patterns/types'
+} from '../../../../packages/harness-patterns/types'
 import {
   createPlannerAdapter,
   describeToolResultOp,

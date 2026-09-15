@@ -6,10 +6,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockAction, mockFinalAction, mockCriticResult, mockBAMLClient } from '../../../mocks/baml'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 import type { CriticFnWithLLMData } from '../../../../lib/harness-baml/baml-adapters.server'
-import type { ActorFn, ActorInput } from '../../../../lib/harness-patterns/types'
+import type { ActorFn, ActorInput } from '../../../../../../packages/harness-patterns/types'
 
 // Mock server-only imports
-vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -23,7 +23,7 @@ const callToolMock = mockCallTool({
 
 const listToolsMock = mockListTools(['code-mode', 'Return'])
 
-vi.mock('../../../../lib/harness-patterns/mcp-client.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/mcp-client.server', () => ({
   callTool: callToolMock,
   listTools: listToolsMock,
 }))
@@ -46,14 +46,14 @@ describe('actorCritic', () => {
 
   it('should export actorCritic function', async () => {
     const { actorCritic } =
-      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
+      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
     expect(actorCritic).toBeDefined()
     expect(typeof actorCritic).toBe('function')
   })
 
   it('should create a ConfiguredPattern with name and config', async () => {
     const { actorCritic } =
-      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
+      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
     const { createActorControllerAdapter, createCriticAdapter } =
       await import('../../../../lib/harness-baml/baml-adapters.server')
 
@@ -74,7 +74,7 @@ describe('actorCritic', () => {
   // restated as a literal (#269).
   it('should take its default maxRetries from the request settings', async () => {
     const { actorCritic } =
-      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
+      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
     const { DEFAULT_SETTINGS } = await import('../../../../lib/settings')
     const { createActorControllerAdapter, createCriticAdapter } =
       await import('../../../../lib/harness-baml/baml-adapters.server')
@@ -90,7 +90,7 @@ describe('actorCritic', () => {
 
   it('should handle custom maxRetries config', async () => {
     const { actorCritic } =
-      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
+      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
     const { createActorControllerAdapter, createCriticAdapter } =
       await import('../../../../lib/harness-baml/baml-adapters.server')
 
@@ -119,9 +119,10 @@ describe('actorCritic execution', () => {
 
   it('should track controller_action and critic_result events', async () => {
     const { actorCritic } =
-      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
+    const { createScope } =
+      await import('../../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
 
     // Create mock actor and critic
     const mockActor = vi.fn().mockResolvedValue({
@@ -169,9 +170,10 @@ describe('actorCritic execution', () => {
 
   it('should retry when tool is not allowed', async () => {
     const { actorCritic } =
-      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
+    const { createScope } =
+      await import('../../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
 
     const mockActor = vi
       .fn()
@@ -221,9 +223,10 @@ describe('actorCritic execution', () => {
 
   it('should retry when tool_args JSON is invalid', async () => {
     const { actorCritic } =
-      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
+    const { createScope } =
+      await import('../../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
 
     const mockActor = vi
       .fn()
@@ -273,9 +276,10 @@ describe('actorCritic execution', () => {
 
   it('should retry when tool execution fails', async () => {
     const { actorCritic } =
-      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
+    const { createScope } =
+      await import('../../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
 
     // First call fails, second succeeds
     callToolMock
@@ -323,9 +327,10 @@ describe('actorCritic execution', () => {
 
   it('should retry when critic says not sufficient', async () => {
     const { actorCritic } =
-      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
+    const { createScope } =
+      await import('../../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
 
     callToolMock.mockResolvedValue({ success: true, data: { result: 'ok' } })
 
@@ -382,9 +387,10 @@ describe('actorCritic execution', () => {
 
   it('should track error when max retries exceeded', async () => {
     const { actorCritic } =
-      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
+    const { createScope } =
+      await import('../../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
 
     callToolMock.mockResolvedValue({ success: true, data: { result: 'ok' } })
 
@@ -435,9 +441,10 @@ describe('actorCritic execution', () => {
 
   it('should handle actor errors gracefully', async () => {
     const { actorCritic } =
-      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
+    const { createScope } =
+      await import('../../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
 
     const mockActor = vi.fn().mockRejectedValue(new Error('Actor crashed'))
 
@@ -489,9 +496,10 @@ describe('actorCritic criticCadence', () => {
     config: Record<string, unknown>,
   ) {
     const { actorCritic } =
-      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
+    const { createScope } =
+      await import('../../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
 
     const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], {
       patternId: 'cadence',
@@ -673,9 +681,10 @@ describe('actorCritic critic feedback reaches the next attempt', () => {
     config: Record<string, unknown> = {},
   ) {
     const { actorCritic } =
-      await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
+    const { createScope } =
+      await import('../../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
 
     const pattern = actorCritic(actor, critic, ['code-mode'], {
       patternId: 'feedback',

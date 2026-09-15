@@ -49,7 +49,7 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import type { LoopTurn, ToolDescription } from '../../harness-patterns/types'
+import type { LoopTurn, ToolDescription } from '../../../../../packages/harness-patterns/types'
 import { assertVerdaConfigured, clientOverrideFor, verdaInferenceEnabled } from '../clients.server'
 
 const EXPECTED_CLIENT = 'VerdaQwen'

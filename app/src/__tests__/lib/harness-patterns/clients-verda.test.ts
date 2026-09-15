@@ -40,7 +40,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 

@@ -27,7 +27,7 @@
  * than to a false alarm.
  */
 
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 
 assertServerOnImport()
 

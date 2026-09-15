@@ -19,7 +19,7 @@ import type {
   AssistantMessageEventData,
   UserMessageEventData,
   ErrorEventData,
-} from '../harness-patterns'
+} from '../../../../packages/harness-patterns'
 
 export interface ReplayedMessage {
   id: string

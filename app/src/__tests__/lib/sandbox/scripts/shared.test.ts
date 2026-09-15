@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import type { PatternScope } from '../../../../lib/harness-patterns/types'
+import type { PatternScope } from '../../../../../../packages/harness-patterns/types'
 
 const spawn = vi.hoisted(() => vi.fn())
 vi.mock('node:child_process', () => ({ spawn, default: { spawn } }))

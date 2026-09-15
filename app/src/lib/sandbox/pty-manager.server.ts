@@ -25,7 +25,7 @@
  * `claimSession` on stream/ensure, `requireSessionOwner` on input/resize).
  */
 
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 import { DEFAULT_SETTINGS } from '../settings'
 import { getDefaultAttachments } from './with-sandbox.server'
 import { hydrateWorkspace } from './work-artifacts.server'

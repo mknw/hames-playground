@@ -9,7 +9,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
   ServerOnlyError: class ServerOnlyError extends Error {},

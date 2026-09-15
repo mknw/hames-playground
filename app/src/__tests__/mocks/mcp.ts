@@ -5,7 +5,7 @@
  */
 
 import { vi } from 'vitest'
-import type { ToolCallResult, MCPToolDescription } from '../../lib/harness-patterns/types'
+import type { ToolCallResult, MCPToolDescription } from '../../../../packages/harness-patterns/types'
 
 // ============================================================================
 // Mock Tool Results

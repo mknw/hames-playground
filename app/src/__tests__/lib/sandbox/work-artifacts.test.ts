@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createHash } from 'node:crypto'
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -20,7 +20,7 @@ vi.mock('../../../lib/document-store.server', () => ({
 }))
 
 import type { McpTransport } from '../../../lib/sandbox/types'
-import type { ToolCallResult } from '../../../lib/harness-patterns/types'
+import type { ToolCallResult } from '../../../../../packages/harness-patterns/types'
 import { listDocuments, getDocument, storeDocument } from '../../../lib/document-store.server'
 import {
   hydrateWorkspace,

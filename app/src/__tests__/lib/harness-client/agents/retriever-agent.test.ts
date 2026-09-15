@@ -11,14 +11,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 
-vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
 
 const TOOLS = ['read_neo4j_cypher', 'get_neo4j_schema', 'search', 'fetch_content', 'Return']
 
-vi.mock('../../../../lib/harness-patterns/mcp-client.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/mcp-client.server', () => ({
   callTool: mockCallTool({ responses: { get_neo4j_schema: { nodes: ['Concept'] } } }),
   listTools: mockListTools(TOOLS),
 }))
@@ -35,7 +35,7 @@ vi.mock('../../../../../baml_client', () => ({
 const { retrieverAgent } =
   await import('../../../../lib/harness-client/agents/retriever-agent.server')
 const { harnessHasRedisRetriever, retriever, compactExecution } =
-  await import('../../../../lib/harness-patterns')
+  await import('../../../../../../packages/harness-patterns')
 
 interface Pattern {
   name: string
@@ -118,7 +118,8 @@ describe('retrieverAgent pattern chain', () => {
   })
 
   it('reads the live Neo4j schema once when building the chain', async () => {
-    const { callTool } = await import('../../../../lib/harness-patterns/mcp-client.server')
+    const { callTool } =
+      await import('../../../../../../packages/harness-patterns/mcp-client.server')
     await retrieverAgent.createPatterns('sess-r')
     expect(callTool).toHaveBeenCalledWith('get_neo4j_schema', {})
   })

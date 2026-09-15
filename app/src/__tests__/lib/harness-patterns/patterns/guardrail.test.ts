@@ -5,13 +5,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock server-only imports
-vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
 // Mock MCP client
 const mockCallTool = vi.fn()
-vi.mock('../../../../lib/harness-patterns/mcp-client.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/mcp-client.server', () => ({
   callTool: (...args: unknown[]) => mockCallTool(...args),
 }))
 
@@ -22,13 +22,15 @@ describe('guardrail', () => {
   })
 
   it('should export guardrail function', async () => {
-    const { guardrail } = await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+    const { guardrail } =
+      await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
     expect(guardrail).toBeDefined()
     expect(typeof guardrail).toBe('function')
   })
 
   it('should create a ConfiguredPattern wrapping inner pattern', async () => {
-    const { guardrail } = await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+    const { guardrail } =
+      await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
     const innerPattern = {
       name: 'inner',
@@ -46,10 +48,12 @@ describe('guardrail', () => {
   })
 
   it('should execute inner pattern when no rails block', async () => {
-    const { guardrail } = await import('../../../../lib/harness-patterns/patterns/guardrail.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+    const { guardrail } =
+      await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const innerFn = vi.fn(async (scope) => {
       scope.data = { ...scope.data, executed: true }
@@ -77,10 +81,12 @@ describe('guardrail', () => {
   })
 
   it('should wrap inner pattern events with pattern_enter/exit', async () => {
-    const { guardrail } = await import('../../../../lib/harness-patterns/patterns/guardrail.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+    const { guardrail } =
+      await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const innerFn = vi.fn(async (scope) => {
       scope.events.push({
@@ -124,10 +130,12 @@ describe('guardrail', () => {
   })
 
   it('should block when input rail returns not ok', async () => {
-    const { guardrail } = await import('../../../../lib/harness-patterns/patterns/guardrail.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+    const { guardrail } =
+      await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const innerFn = vi.fn(async (scope) => scope)
     const innerPattern = {
@@ -175,10 +183,12 @@ describe('guardrail', () => {
   })
 
   it('should redact input when rail returns redact action', async () => {
-    const { guardrail } = await import('../../../../lib/harness-patterns/patterns/guardrail.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+    const { guardrail } =
+      await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const innerFn = vi.fn(async (scope) => {
       return scope
@@ -213,10 +223,12 @@ describe('guardrail', () => {
   })
 
   it('should check output rails after execution', async () => {
-    const { guardrail } = await import('../../../../lib/harness-patterns/patterns/guardrail.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+    const { guardrail } =
+      await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const innerPattern = {
       name: 'inner',
@@ -250,10 +262,12 @@ describe('guardrail', () => {
   })
 
   it('should track error when output rail rejects with retry', async () => {
-    const { guardrail } = await import('../../../../lib/harness-patterns/patterns/guardrail.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+    const { guardrail } =
+      await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const innerPattern = {
       name: 'inner',
@@ -287,10 +301,12 @@ describe('guardrail', () => {
   })
 
   it('should track error when output rail rejects with warn', async () => {
-    const { guardrail } = await import('../../../../lib/harness-patterns/patterns/guardrail.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+    const { guardrail } =
+      await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const innerPattern = {
       name: 'inner',
@@ -324,10 +340,12 @@ describe('guardrail', () => {
   })
 
   it('should check circuit breaker if configured', async () => {
-    const { guardrail } = await import('../../../../lib/harness-patterns/patterns/guardrail.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+    const { guardrail } =
+      await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const innerPattern = {
       name: 'inner',
@@ -385,10 +403,11 @@ describe('guardrail', () => {
   describe('what a blocked rail leaves behind (F5 #278)', () => {
     async function runWithRail(action: 'block' | 'warn', kind: 'input' | 'output') {
       const { guardrail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
-      const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
+      const { createContext } =
+        await import('../../../../../../packages/harness-patterns/context.server')
       const { createEventView } =
-        await import('../../../../lib/harness-patterns/patterns/event-view.server')
+        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
       const innerPattern = {
         name: 'inner',
@@ -438,10 +457,11 @@ describe('guardrail', () => {
   describe('circuit-breaker fail-open is reported (sf-M1)', () => {
     async function runWithBrokenRedis(): Promise<unknown> {
       const { guardrail, __resetGuardrailBreakerWarnings } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
-      const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
+      const { createContext } =
+        await import('../../../../../../packages/harness-patterns/context.server')
       const { createEventView } =
-        await import('../../../../lib/harness-patterns/patterns/event-view.server')
+        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
       __resetGuardrailBreakerWarnings()
 
       const innerPattern = {
@@ -479,10 +499,11 @@ describe('guardrail', () => {
     it('warns ONCE, not on every turn', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const { guardrail, __resetGuardrailBreakerWarnings } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
-      const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
+      const { createContext } =
+        await import('../../../../../../packages/harness-patterns/context.server')
       const { createEventView } =
-        await import('../../../../lib/harness-patterns/patterns/event-view.server')
+        await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
       __resetGuardrailBreakerWarnings()
       mockCallTool.mockRejectedValue(new Error('redis unreachable'))
 
@@ -512,10 +533,12 @@ describe('guardrail', () => {
   })
 
   it('should handle errors in pattern execution', async () => {
-    const { guardrail } = await import('../../../../lib/harness-patterns/patterns/guardrail.server')
-    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+    const { guardrail } =
+      await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
+    const { createContext } =
+      await import('../../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const innerPattern = {
       name: 'inner',
@@ -547,7 +570,7 @@ describe('common rails', () => {
   describe('piiScanRail', () => {
     it('should detect AWS keys', async () => {
       const { piiScanRail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
       const result = await piiScanRail.check({
         input: 'my key is AKIAIOSFODNN7EXAMPLE',
@@ -563,7 +586,7 @@ describe('common rails', () => {
 
     it('should detect GitHub tokens', async () => {
       const { piiScanRail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
       const result = await piiScanRail.check({
         input: 'token: ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ123456789012',
@@ -578,7 +601,7 @@ describe('common rails', () => {
 
     it('should detect JWTs', async () => {
       const { piiScanRail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
       const result = await piiScanRail.check({
         input: 'auth: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0',
@@ -593,7 +616,7 @@ describe('common rails', () => {
 
     it('should detect private keys', async () => {
       const { piiScanRail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
       const result = await piiScanRail.check({
         input: '-----BEGIN PRIVATE KEY-----',
@@ -608,7 +631,7 @@ describe('common rails', () => {
 
     it('should pass clean input', async () => {
       const { piiScanRail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
       const result = await piiScanRail.check({
         input: 'Hello, this is a normal message',
@@ -623,7 +646,7 @@ describe('common rails', () => {
   describe('pathAllowlistRail', () => {
     it('should block node_modules paths', async () => {
       const { pathAllowlistRail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
       const result = await pathAllowlistRail.check({
         input: '',
@@ -643,7 +666,7 @@ describe('common rails', () => {
 
     it('should block .env files', async () => {
       const { pathAllowlistRail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
       const result = await pathAllowlistRail.check({
         input: '',
@@ -663,7 +686,7 @@ describe('common rails', () => {
 
     it('should block .git paths', async () => {
       const { pathAllowlistRail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
       const result = await pathAllowlistRail.check({
         input: '',
@@ -683,7 +706,7 @@ describe('common rails', () => {
 
     it('should allow normal paths', async () => {
       const { pathAllowlistRail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
       const result = await pathAllowlistRail.check({
         input: '',
@@ -702,7 +725,7 @@ describe('common rails', () => {
 
     it('should pass when no path in args', async () => {
       const { pathAllowlistRail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
       const result = await pathAllowlistRail.check({
         input: '',
@@ -723,7 +746,7 @@ describe('common rails', () => {
   describe('driftDetectorRail', () => {
     it('should flag large file changes', async () => {
       const { driftDetectorRail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
       const result = await driftDetectorRail.check({
         input: '',
@@ -748,7 +771,7 @@ describe('common rails', () => {
 
     it('should pass small changes', async () => {
       const { driftDetectorRail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
       const result = await driftDetectorRail.check({
         input: '',
@@ -771,7 +794,7 @@ describe('common rails', () => {
 
     it('should pass non-edit_file results', async () => {
       const { driftDetectorRail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
       const result = await driftDetectorRail.check({
         input: '',
@@ -794,7 +817,7 @@ describe('common rails', () => {
 
     it('should pass failed edit_file results', async () => {
       const { driftDetectorRail } =
-        await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+        await import('../../../../../../packages/harness-patterns/patterns/guardrail.server')
 
       const result = await driftDetectorRail.check({
         input: '',

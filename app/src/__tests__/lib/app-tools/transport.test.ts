@@ -26,7 +26,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -53,7 +53,7 @@ describe('the app-tool transport', () => {
 
   it('is registered by importing the barrel, and takes graph_me off the gateway', async () => {
     await import('../../../lib/app-tools/index.server')
-    const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+    const { callTool } = await import('../../../../../packages/harness-patterns/mcp-client.server')
 
     // No user is in scope, so the tool refuses — which is `runAppTool`'s own
     // answer (#107: identity is resolved server-side, never from args) and is
@@ -67,15 +67,16 @@ describe('the app-tool transport', () => {
 
   it('advertises its tools through listTools', async () => {
     await import('../../../lib/app-tools/index.server')
-    const { listTools } = await import('../../../lib/harness-patterns/mcp-client.server')
+    const { listTools } = await import('../../../../../packages/harness-patterns/mcp-client.server')
 
     expect((await listTools()).map((t) => t.name)).toContain('graph_me')
   })
 
   it('is registered as a PROCESS transport, so a scoped one of the same name wins', async () => {
     await import('../../../lib/app-tools/index.server')
-    const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
-    const { withTransport } = await import('../../../lib/harness-patterns/tool-transport.server')
+    const { callTool } = await import('../../../../../packages/harness-patterns/mcp-client.server')
+    const { withTransport } =
+      await import('../../../../../packages/harness-patterns/tool-transport.server')
 
     const inVm = vi.fn().mockResolvedValue({ success: true, data: 'in-vm' })
     const result = await withTransport(
@@ -109,7 +110,8 @@ describe('the server-boot hook is what performs that registration', () => {
     // above would still be correct but would stop being load-bearing, and its
     // loss would go unnoticed until the library was published without the app.
     const core = readFileSync(
-      path.join(APP, 'src/lib/harness-patterns/mcp-client.server.ts'),
+      // The library moved to packages/ (#225 Step 1a); the scan root follows it.
+      path.join(APP, '../packages/harness-patterns/mcp-client.server.ts'),
       'utf8',
     )
     expect(core).not.toMatch(/app-tools/)

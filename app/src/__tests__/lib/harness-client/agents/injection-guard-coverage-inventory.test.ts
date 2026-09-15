@@ -42,20 +42,22 @@ toolSets.all = [
   ...toolSets.memory,
 ]
 
-vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-vi.mock('../../../../lib/harness-patterns/mcp-client.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/mcp-client.server', () => ({
   callTool: mockCallTool({ responses: {} }),
   listTools: mockListTools(toolSets.all),
 }))
 
-vi.mock('../../../../lib/harness-patterns/tools.server', async (importOriginal) => {
+vi.mock('../../../../../../packages/harness-patterns/tools.server', async (importOriginal) => {
   // `inferServer` stays REAL — the guard resolves declared namespaces through
   // it, so stubbing it would make the inventory meaningless.
   const actual =
-    await importOriginal<typeof import('../../../../lib/harness-patterns/tools.server')>()
+    await importOriginal<
+      typeof import('../../../../../../packages/harness-patterns/tools.server')
+    >()
   return { ...actual, Tools: vi.fn(async () => toolSets) }
 })
 

@@ -17,7 +17,7 @@
  * Frames whose `data:` payload isn't valid JSON are skipped, not thrown —
  * defensive against partial truncation or stray comment lines (`: keepalive`).
  */
-import type { ContextEvent, UnifiedContext } from './harness-patterns'
+import type { ContextEvent, UnifiedContext } from '../../../packages/harness-patterns'
 
 /**
  * How often the server writes a comment frame while a turn produces nothing.

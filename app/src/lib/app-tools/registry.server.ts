@@ -20,8 +20,8 @@
  * - Errors become `{ success: false, error }` rather than throwing, so one
  *   failing tool degrades a turn instead of killing a run.
  */
-import { assertServerOnImport } from "../harness-patterns/assert.server";
-import type { ToolCallResult, MCPToolDescription } from "../harness-patterns/types";
+import { assertServerOnImport } from "../../../../packages/harness-patterns/assert.server";
+import type { ToolCallResult, MCPToolDescription } from "../../../../packages/harness-patterns/types";
 import {
   getRequestUserId,
   getRequestSessionId,

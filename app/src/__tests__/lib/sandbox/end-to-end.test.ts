@@ -33,7 +33,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { mockAction, mockCriticResult } from '../../mocks/baml'
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -197,9 +197,11 @@ vi.mock('../../../../baml_client/inlinedbaml', () => ({
 // ---- Mock host-gateway listTools ----------------------------------------
 // The adapter's gateway-side `filterToolDescriptions` calls `mcpListTools()`.
 // In a sandbox-only test the gateway returns nothing (no host tools needed).
-vi.mock('../../../lib/harness-patterns/mcp-client.server', async (importOriginal) => {
+vi.mock('../../../../../packages/harness-patterns/mcp-client.server', async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import('../../../lib/harness-patterns/mcp-client.server')>()
+    await importOriginal<
+      typeof import('../../../../../packages/harness-patterns/mcp-client.server')
+    >()
   return {
     ...actual,
     listTools: vi.fn().mockResolvedValue([]),
@@ -220,9 +222,9 @@ beforeEach(() => {
 describe('withSandbox(actorCritic) end-to-end — word count', () => {
   it('writes a script, runs it, and returns the count via the critic-accepted result', async () => {
     const { actorCritic } =
-      await import('../../../lib/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns')
+      await import('../../../../../packages/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../packages/harness-patterns/patterns')
     const { createActorControllerAdapter, createCriticAdapter } =
       await import('../../../lib/harness-baml/baml-adapters.server')
     const { withSandbox } = await import('../../../lib/sandbox/with-sandbox.server')

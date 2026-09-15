@@ -20,8 +20,11 @@
  */
 import './graph.server'
 
-import { registerTransport, type ToolTransport } from '../harness-patterns/tool-transport.server'
-import { registerToolNamespaces } from '../harness-patterns/tools.server'
+import {
+  registerTransport,
+  type ToolTransport,
+} from '../../../../packages/harness-patterns/tool-transport.server'
+import { registerToolNamespaces } from '../../../../packages/harness-patterns/tools.server'
 import { hasAppTool, runAppTool, appToolDescriptions, appToolNamespace } from './registry.server'
 import { mcpNamespace } from './mcp-catalog'
 

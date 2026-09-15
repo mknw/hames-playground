@@ -23,22 +23,24 @@ const toolSets = {
 }
 toolSets.all = [...toolSets.neo4j, ...toolSets.web, ...toolSets.context7]
 
-vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-vi.mock('../../../../lib/harness-patterns/mcp-client.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/mcp-client.server', () => ({
   callTool: mockCallTool({
     responses: { get_neo4j_schema: { nodes: ['Person'], relationships: [] } },
   }),
   listTools: mockListTools(toolSets.all),
 }))
 
-vi.mock('../../../../lib/harness-patterns/tools.server', async (importOriginal) => {
+vi.mock('../../../../../../packages/harness-patterns/tools.server', async (importOriginal) => {
   // `inferServer` is REAL — the guard resolves namespaces through it, so a
   // stubbed version would make these assertions meaningless.
   const actual =
-    await importOriginal<typeof import('../../../../lib/harness-patterns/tools.server')>()
+    await importOriginal<
+      typeof import('../../../../../../packages/harness-patterns/tools.server')
+    >()
   return { ...actual, Tools: vi.fn(async () => toolSets) }
 })
 

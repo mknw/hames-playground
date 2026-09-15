@@ -14,7 +14,7 @@ import type {
   ToolResultEventData,
   RetrievalReference,
   RetrieverResult,
-} from '~/lib/harness-patterns'
+} from '../../../../packages/harness-patterns'
 // Value import: the turn boundary is shared with the Data Stash partition, so
 // both derive "this turn" from one definition (see SA-H7).
 import { findLastUserMessageIndex } from '~/lib/turn-utils'

@@ -4,11 +4,11 @@
  * Routes user messages to appropriate tool namespaces.
  */
 
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 import { Collector } from '@boundaryml/baml'
 import { extractLLMCallData, wrapAsLLMCallError } from './baml-adapters.server'
 import { clientOverrideFor, limitsFor } from './clients.server'
-import type { RouteMessageResult, RouteFn } from '../harness-patterns/types'
+import type { RouteMessageResult, RouteFn } from '../../../../packages/harness-patterns/types'
 
 assertServerOnImport()
 

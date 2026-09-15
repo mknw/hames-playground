@@ -9,7 +9,7 @@
  * never yields it. Tenant-owner provisioning is documented in
  * `docs/deployment/entra-setup.md`.
  */
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 import type { Configuration } from '@azure/msal-node'
 
 assertServerOnImport()

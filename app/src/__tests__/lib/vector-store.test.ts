@@ -7,11 +7,11 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-vi.mock('../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
-vi.mock('../../lib/harness-patterns/mcp-client.server', () => ({
+vi.mock('../../../../packages/harness-patterns/mcp-client.server', () => ({
   callTool: vi.fn(async () => ({ success: false, data: null, error: 'no gateway' })),
 }))
 
@@ -23,7 +23,7 @@ import {
   sanitize,
 } from '../../lib/vector-store.server'
 import type { CallTool } from '../../lib/document-store.server'
-import type { ToolCallResult } from '../../lib/harness-patterns/types'
+import type { ToolCallResult } from '../../../../packages/harness-patterns/types'
 
 function makeFakeRedis() {
   const hashes = new Map<string, Record<string, unknown>>()

@@ -23,6 +23,7 @@ import {
   listConversations,
   loadConversation,
   saveConversation,
+  updateConversationContextIfUnchanged,
   updateConversationTitle,
 } from '../../../lib/db/conversations.server'
 import { createRoutine, getRoutine, updateRoutine } from '../../../lib/db/routines.server'
@@ -114,6 +115,35 @@ describe('conversations', () => {
     expect(rows[0].title).not.toContain('salary')
     // Plaintext by design, so joins and filters keep working.
     expect(rows[0].agent_id).toBe('general')
+  })
+
+  // The guarded writer is a SECOND writer of `conversations.context`, and a
+  // round-trip alone would pass just as happily if it wrote plaintext —
+  // `decryptJsonb` accepts a legacy plaintext value on the way back out.
+  it('stores ciphertext on the version-guarded context write too', async () => {
+    if (!dbAvailable) return
+    const id = `enc-conv-cas-${SUFFIX}`
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'general',
+      title: SECRET_TITLE,
+      serializedContext: context(),
+    })
+    const read = (await loadConversation(id, TEST_USER))!
+    expect(
+      await updateConversationContextIfUnchanged(id, TEST_USER, context('-flagged'), read.version),
+    ).toBe(true)
+
+    const { rows } = await query<{ ctx: string; kind: string }>(
+      `SELECT context::text AS ctx, jsonb_typeof(context) AS kind FROM conversations WHERE id = $1`,
+      [id],
+    )
+    expect(rows[0].kind).toBe('string')
+    expect(rows[0].ctx).not.toContain(SECRET_BODY)
+    expect(JSON.parse((await loadConversation(id, TEST_USER))!.serializedContext)).toEqual(
+      JSON.parse(context('-flagged')),
+    )
   })
 
   it('decrypts titles in the sidebar listing', async () => {
@@ -426,6 +456,103 @@ describe('backfill migration', () => {
         looksEncrypted(row.value),
       )
     }
+  })
+
+  it('does not write a stale snapshot over a column a concurrent writer encrypted', async () => {
+    if (!dbAvailable) return
+    // A rolling restart over a legacy store, which is the only shape that
+    // reaches this. Instance B snapshots the row at t0 (plaintext title + the
+    // conversation so far); instance A finishes the user's next turn at t1,
+    // which encrypts `context` and leaves `title` alone (saveConversation
+    // COALESCEs it); instance B's UPDATE lands at t2 writing BOTH columns from
+    // its t0 snapshot. That UPDATE's guard used to be the row-selection
+    // predicate — OR-joined across every encrypted column — so the
+    // still-plaintext TITLE kept it true and the stale CONTEXT went through:
+    // the turn was gone, rowCount was 1, and it was tallied as a row encrypted.
+    // The guard is AND-joined over exactly the columns being written.
+    const id = `enc-interleave-${SUFFIX}`
+    await query(
+      `INSERT INTO conversations (id, user_id, agent_id, title, context, status)
+       VALUES ($1, $2, 'general', $3, $4::jsonb, 'done')`,
+      [id, OTHER_USER, SECRET_TITLE, context('-turn-3')],
+    )
+
+    // Instance A's turn, landing between instance B's SELECT and its UPDATE.
+    let interleaved = false
+    const raced: QueryRunner = async (text, params) => {
+      const result = await query(text, params)
+      if (!interleaved && text.startsWith('SELECT') && text.includes('FROM conversations')) {
+        interleaved = true
+        await saveConversation({
+          id,
+          userId: OTHER_USER,
+          agentId: 'general',
+          title: null,
+          serializedContext: context('-turn-4'),
+          status: 'done',
+        })
+      }
+      return result as never
+    }
+
+    await encryptExistingRows(raced)
+    expect(interleaved).toBe(true)
+
+    const loaded = await loadConversation(id, OTHER_USER)
+    expect(JSON.parse(loaded!.serializedContext)).toEqual(JSON.parse(context('-turn-4')))
+    // The column that WAS still due is still converted — a row the guard now
+    // refuses is picked up by the next batch, which is the designed behaviour.
+    const { rows } = await query<{ title: string }>(
+      'SELECT title FROM conversations WHERE id = $1',
+      [id],
+    )
+    expect(looksEncrypted(rows[0].title)).toBe(true)
+    expect(loaded!.title).toBe(SECRET_TITLE)
+  })
+
+  it('does not write a stale snapshot over a column a concurrent PRE-encryption writer replaced', async () => {
+    if (!dbAvailable) return
+    // The OTHER half of the same rolling restart, and the half a due-predicate
+    // guard cannot see. Instance A is still running pre-encryption code, so its
+    // finished turn writes `context` as PLAINTEXT: the column stays due, the
+    // "is this column still un-encrypted" guard stays true, and instance B's
+    // t0 snapshot lands on top — the turn is reverted, rowCount is 1, and it is
+    // tallied as a row encrypted. Guarding on the row version (`xmin`) refuses
+    // it whatever the racing writer wrote.
+    const id = `enc-interleave-plain-${SUFFIX}`
+    await query(
+      `INSERT INTO conversations (id, user_id, agent_id, title, context, status)
+       VALUES ($1, $2, 'general', $3, $4::jsonb, 'done')`,
+      [id, OTHER_USER, SECRET_TITLE, context('-turn-3')],
+    )
+
+    // Instance A's turn, landing between instance B's SELECT and its UPDATE.
+    let interleaved = false
+    const raced: QueryRunner = async (text, params) => {
+      const result = await query(text, params)
+      if (!interleaved && text.startsWith('SELECT') && text.includes('FROM conversations')) {
+        interleaved = true
+        await query('UPDATE conversations SET context = $1::jsonb WHERE id = $2', [
+          context('-turn-4'),
+          id,
+        ])
+      }
+      return result as never
+    }
+
+    await encryptExistingRows(raced)
+    expect(interleaved).toBe(true)
+
+    const loaded = await loadConversation(id, OTHER_USER)
+    expect(JSON.parse(loaded!.serializedContext)).toEqual(JSON.parse(context('-turn-4')))
+    // The row a refused write left behind is picked up by the next batch, which
+    // is the designed behaviour — both columns end up converted.
+    const { rows } = await query<{ title: string }>(
+      'SELECT title FROM conversations WHERE id = $1',
+      [id],
+    )
+    expect(looksEncrypted(rows[0].title)).toBe(true)
+    expect(loaded!.title).toBe(SECRET_TITLE)
   })
 
   it('skips tables that do not exist in this database', async () => {

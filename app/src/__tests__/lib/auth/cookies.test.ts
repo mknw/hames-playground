@@ -27,6 +27,22 @@ describe('parseCookies', () => {
     expect(parseCookies('')).toEqual({})
     expect(parseCookies('novalue; =noname')).toEqual({})
   })
+  // A raw `%` is legal per RFC 6265 and is set by ordinary code, by a sibling
+  // subdomain's `Domain=` cookie, or by any third-party script on the origin.
+  // Decoding the whole header eagerly let one such value throw `URIError` out of
+  // every `readCookie`, i.e. out of the session read AND the auth callback — a
+  // permanent sign-in loop no user action clears, caused by a cookie that is
+  // none of ours.
+  it('survives a neighbouring cookie that is not percent-encoded', () => {
+    expect(parseCookies('kg_session=abc; discount=100%')).toEqual({
+      kg_session: 'abc',
+      discount: '100%',
+    })
+  })
+  it('reads our own cookie past a malformed neighbour', () => {
+    const req = new Request('http://x/', { headers: { cookie: 'broken=%E0%A4%A; kg_session=sid' } })
+    expect(readCookie(req, SESSION_COOKIE)).toBe('sid')
+  })
 })
 
 describe('readCookie', () => {

@@ -464,21 +464,16 @@ describe('domain-specific adapters', () => {
   })
 })
 
-describe('parseResultsToTurns', () => {
+describe('legacy positional form: previous_results parsing (Lane A4)', () => {
+  // `parseResultsToTurns` was deleted with the string round-trip: its catch
+  // silently returned `[]` on unparseable/non-array input, so a controller
+  // handed garbage believed it was on turn 0 and quietly repeated its first
+  // tool call. The legacy form — kept only for the adapter-level acceptance
+  // tests — parses STRICTLY and throws. These tests pin the replacement of
+  // the silent failure, not the silent failure itself.
   beforeEach(() => {
     vi.clearAllMocks()
     mockLoopController.mockResolvedValue(mockFinalAction())
-  })
-
-  it('should handle empty previous_results', async () => {
-    const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-patterns/baml-adapters.server')
-
-    const controller = createLoopControllerAdapter(['Return'])
-
-    // Empty string should result in empty turns
-    await controller('user message', 'intent', '', 0)
-    expect(mockLoopController).toHaveBeenCalled()
   })
 
   it('should handle empty array previous_results', async () => {
@@ -507,26 +502,37 @@ describe('parseResultsToTurns', () => {
     expect(calls).toBeDefined()
   })
 
-  it('should handle invalid JSON in previous_results', async () => {
+  it('THROWS on invalid JSON — the silent-[] catch is gone', async () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
     const controller = createLoopControllerAdapter(['Return'])
 
-    // Invalid JSON should not throw, should result in empty turns
-    await controller('user message', 'intent', 'not valid json', 0)
-    expect(mockLoopController).toHaveBeenCalled()
+    // Invalid JSON used to be swallowed into `[]` (turn 0, no history); now
+    // the legacy shim throws loudly.
+    await expect(controller('user message', 'intent', 'not valid json', 0)).rejects.toThrow()
+    expect(mockLoopController).not.toHaveBeenCalled()
   })
 
-  it('should handle non-array JSON in previous_results', async () => {
+  it('THROWS on non-array JSON — the silent-[] catch is gone', async () => {
     const { createLoopControllerAdapter } =
       await import('../../../lib/harness-patterns/baml-adapters.server')
 
     const controller = createLoopControllerAdapter(['Return'])
 
-    // Object instead of array should result in empty turns
-    await controller('user message', 'intent', '{"key": "value"}', 0)
-    expect(mockLoopController).toHaveBeenCalled()
+    // Object instead of array used to be swallowed into `[]`; now it throws.
+    await expect(controller('user message', 'intent', '{"key": "value"}', 0)).rejects.toThrow()
+    expect(mockLoopController).not.toHaveBeenCalled()
+  })
+
+  it('THROWS on an empty previous_results string — the silent-[] catch is gone', async () => {
+    const { createLoopControllerAdapter } =
+      await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const controller = createLoopControllerAdapter(['Return'])
+
+    await expect(controller('user message', 'intent', '', 0)).rejects.toThrow()
+    expect(mockLoopController).not.toHaveBeenCalled()
   })
 })
 

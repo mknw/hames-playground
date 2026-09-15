@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockAction, mockFinalAction, mockBAMLClient } from '../../../mocks/baml'
 import { mockCallTool, mockListTools, fixtures } from '../../../mocks/mcp'
+import type { ControllerInput } from '../../../../lib/harness-patterns/types'
 
 // Mock server-only imports
 vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
@@ -143,9 +144,10 @@ describe('simpleLoop', () => {
 
     await pattern.fn(scope, view)
 
-    // 8th positional arg of controller(...) is fewShots
-    const args = mockController.mock.calls[0]
-    expect(args[7]).toEqual(fewShots)
+    // Lane A4: fewShots rides the object seam — same outcome, one named field
+    // instead of a positional slot.
+    const input = mockController.mock.calls[0][0] as ControllerInput
+    expect(input.fewShots).toEqual(fewShots)
   })
 
   it('awaits onToolResult and uses returned data in the tool_result event', async () => {
@@ -837,8 +839,8 @@ describe('simpleLoop execution', () => {
     await pattern.fn(scope, view)
 
     expect(mockController).toHaveBeenCalled()
-    // priorResults is the 7th argument (index 6)
-    const priorResults = mockController.mock.calls[0][6]
+    // Lane A4: priorResults rides the object seam.
+    const priorResults = (mockController.mock.calls[0][0] as ControllerInput).priorResults!
     expect(priorResults).toBeDefined()
     expect(priorResults).toHaveLength(1)
     expect(priorResults[0].ref_id).toBe('ev-prior1')
@@ -902,7 +904,7 @@ describe('simpleLoop execution', () => {
 
     await pattern.fn(scope, view)
 
-    const priorResults = mockController.mock.calls[0][6]
+    const priorResults = (mockController.mock.calls[0][0] as ControllerInput).priorResults!
     expect(priorResults).toBeDefined()
     expect(priorResults).toHaveLength(1)
     expect(priorResults[0].ref_id).toBe('ev-visible')
@@ -964,7 +966,7 @@ describe('simpleLoop execution', () => {
 
     await pattern.fn(scope, view)
 
-    const priorResults = mockController.mock.calls[0][6]
+    const priorResults = (mockController.mock.calls[0][0] as ControllerInput).priorResults!
     expect(priorResults).toHaveLength(1)
     expect(priorResults[0].ref_id).toBe('ev-ok')
   })
@@ -1009,7 +1011,7 @@ describe('simpleLoop execution', () => {
     await pattern.fn(scope, view)
 
     // priorResults (7th arg) should be undefined
-    const priorResults = mockController.mock.calls[0][6]
+    const priorResults = (mockController.mock.calls[0][0] as ControllerInput).priorResults
     expect(priorResults).toBeUndefined()
   })
 
@@ -1053,7 +1055,7 @@ describe('simpleLoop execution', () => {
 
     await pattern.fn(scope, view)
 
-    const priorResults = mockController.mock.calls[0][6]
+    const priorResults = (mockController.mock.calls[0][0] as ControllerInput).priorResults!
     expect(priorResults).toHaveLength(1)
     // Should be truncated to 200 chars + '...'
     expect(priorResults[0].summary.length).toBeLessThanOrEqual(204) // 200 + '...'
@@ -1113,7 +1115,7 @@ describe('simpleLoop execution', () => {
 
     await pattern.fn(scope, view)
 
-    const priorResults = mockController.mock.calls[0][6]
+    const priorResults = (mockController.mock.calls[0][0] as ControllerInput).priorResults!
     expect(priorResults).toBeDefined()
     // Only ev-turn2 should be included (turn 2 is in window), ev-turn1 is outside
     expect(priorResults).toHaveLength(1)
@@ -1166,7 +1168,7 @@ describe('simpleLoop execution', () => {
 
     await pattern.fn(scope, view)
 
-    const priorResults = mockController.mock.calls[0][6]
+    const priorResults = (mockController.mock.calls[0][0] as ControllerInput).priorResults!
     // Only the successful result should be included
     expect(priorResults).toHaveLength(1)
     expect(priorResults[0].ref_id).toBe('ev-ok')
@@ -1412,24 +1414,14 @@ describe('simpleLoop execution', () => {
     // Capture turns passed to controller across two calls so we can read the
     // second invocation's input — that's where turn-0's expansions appear.
     const turnsByCall: unknown[][] = []
-    const mockController = vi.fn(
-      async (
-        _user_message: string,
-        _intent: string,
-        previous_results: string,
-        _n_turn: number,
-        _schema?: unknown,
-        _collector?: unknown,
-        _priorResults?: unknown,
-      ) => {
-        turnsByCall.push(JSON.parse(previous_results))
-        const action =
-          turnsByCall.length === 1
-            ? mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"data":"ref:ev-source"}' })
-            : mockFinalAction('Done')
-        return { action, llmCall: undefined }
-      },
-    )
+    const mockController = vi.fn(async (input: ControllerInput) => {
+      turnsByCall.push([...input.turns])
+      const action =
+        turnsByCall.length === 1
+          ? mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"data":"ref:ev-source"}' })
+          : mockFinalAction('Done')
+      return { action, llmCall: undefined }
+    })
 
     callToolMock.mockResolvedValue({ success: true, data: { rows: [{ id: 1 }] } })
 
@@ -1477,24 +1469,14 @@ describe('simpleLoop execution', () => {
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
     const turnsByCall: unknown[][] = []
-    const mockController = vi.fn(
-      async (
-        _user_message: string,
-        _intent: string,
-        previous_results: string,
-        _n_turn: number,
-        _schema?: unknown,
-        _collector?: unknown,
-        _priorResults?: unknown,
-      ) => {
-        turnsByCall.push(JSON.parse(previous_results))
-        const action =
-          turnsByCall.length === 1
-            ? mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"q":"plain"}' })
-            : mockFinalAction('Done')
-        return { action, llmCall: undefined }
-      },
-    )
+    const mockController = vi.fn(async (input: ControllerInput) => {
+      turnsByCall.push([...input.turns])
+      const action =
+        turnsByCall.length === 1
+          ? mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"q":"plain"}' })
+          : mockFinalAction('Done')
+      return { action, llmCall: undefined }
+    })
 
     callToolMock.mockResolvedValue({ success: true, data: { rows: [] } })
 
@@ -1530,24 +1512,14 @@ describe('simpleLoop execution', () => {
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
     const turnsByCall: unknown[][] = []
-    const mockController = vi.fn(
-      async (
-        _user_message: string,
-        _intent: string,
-        previous_results: string,
-        _n_turn: number,
-        _schema?: unknown,
-        _collector?: unknown,
-        _priorResults?: unknown,
-      ) => {
-        turnsByCall.push(JSON.parse(previous_results))
-        const action =
-          turnsByCall.length === 1
-            ? mockAction({ tool_name: 'expandPreviousResult', tool_args: 'ref:ev-target' })
-            : mockFinalAction('Done')
-        return { action, llmCall: undefined }
-      },
-    )
+    const mockController = vi.fn(async (input: ControllerInput) => {
+      turnsByCall.push([...input.turns])
+      const action =
+        turnsByCall.length === 1
+          ? mockAction({ tool_name: 'expandPreviousResult', tool_args: 'ref:ev-target' })
+          : mockFinalAction('Done')
+      return { action, llmCall: undefined }
+    })
 
     const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
       patternId: 'test',
@@ -1707,24 +1679,14 @@ describe('simpleLoop execution', () => {
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
     const turnsByCall: unknown[][] = []
-    const mockController = vi.fn(
-      async (
-        _user_message: string,
-        _intent: string,
-        previous_results: string,
-        _n_turn: number,
-        _schema?: unknown,
-        _collector?: unknown,
-        _priorResults?: unknown,
-      ) => {
-        turnsByCall.push(JSON.parse(previous_results))
-        const action =
-          turnsByCall.length === 1
-            ? mockAction({ tool_name: 'expandPreviousResult', tool_args: 'ref:ev-a,ev-b,ev-c' })
-            : mockFinalAction('Done')
-        return { action, llmCall: undefined }
-      },
-    )
+    const mockController = vi.fn(async (input: ControllerInput) => {
+      turnsByCall.push([...input.turns])
+      const action =
+        turnsByCall.length === 1
+          ? mockAction({ tool_name: 'expandPreviousResult', tool_args: 'ref:ev-a,ev-b,ev-c' })
+          : mockFinalAction('Done')
+      return { action, llmCall: undefined }
+    })
 
     const pattern = simpleLoop(mockController, ['Return'], {
       patternId: 'test',
@@ -1999,20 +1961,10 @@ describe('simpleLoop execution', () => {
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
     const priorByCall: Array<unknown[]> = []
-    const mockController = vi.fn(
-      async (
-        _user_message: string,
-        _intent: string,
-        _previous_results: string,
-        _n_turn: number,
-        _schema?: unknown,
-        _collector?: unknown,
-        priorResults?: unknown,
-      ) => {
-        priorByCall.push(priorResults as unknown[])
-        return { action: mockFinalAction('Done'), llmCall: undefined }
-      },
-    )
+    const mockController = vi.fn(async (input: ControllerInput) => {
+      priorByCall.push((input.priorResults ?? []) as unknown[])
+      return { action: mockFinalAction('Done'), llmCall: undefined }
+    })
 
     const pattern = simpleLoop(mockController, ['Return'], {
       patternId: 'neo4j-query',
@@ -2064,20 +2016,10 @@ describe('simpleLoop execution', () => {
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
 
     const priorByCall: unknown[][] = []
-    const mockController = vi.fn(
-      async (
-        _user_message: string,
-        _intent: string,
-        _previous_results: string,
-        _n_turn: number,
-        _schema?: unknown,
-        _collector?: unknown,
-        priorResults?: unknown,
-      ) => {
-        priorByCall.push(priorResults as unknown[])
-        return { action: mockFinalAction('Done'), llmCall: undefined }
-      },
-    )
+    const mockController = vi.fn(async (input: ControllerInput) => {
+      priorByCall.push((input.priorResults ?? []) as unknown[])
+      return { action: mockFinalAction('Done'), llmCall: undefined }
+    })
 
     const pattern = simpleLoop(mockController, ['Return'], {
       patternId: 'test',
@@ -2180,7 +2122,9 @@ describe('simpleLoop execution', () => {
       const result = await pattern.fn(scope, createEventView(baseContext()))
 
       // Turn 2's previous_results (3rd positional arg) is what the LLM reads.
-      const previousResults = mockController.mock.calls[1][2] as string
+      const previousResults = JSON.stringify(
+        (mockController.mock.calls[1][0] as ControllerInput).turns,
+      )
       expect(previousResults).not.toContain(BIG_URL)
       expect(previousResults).toContain('a.docx')
       expect(previousResults).toContain('i1')
@@ -2215,7 +2159,9 @@ describe('simpleLoop execution', () => {
       const scope = createScope('no-omit-loop', { intent: 'q' })
       await pattern.fn(scope, createEventView(baseContext()))
 
-      expect(mockController.mock.calls[1][2] as string).toContain(BIG_URL)
+      expect(JSON.stringify((mockController.mock.calls[1][0] as ControllerInput).turns)).toContain(
+        BIG_URL,
+      )
     })
 
     it('expandPreviousResult projects per ORIGIN tool; the expand event stays raw', async () => {
@@ -2254,7 +2200,9 @@ describe('simpleLoop execution', () => {
       const scope = createScope('omit-expand', { intent: 'q' })
       const result = await pattern.fn(scope, createEventView(ctx))
 
-      const previousResults = mockController.mock.calls[1][2] as string
+      const previousResults = JSON.stringify(
+        (mockController.mock.calls[1][0] as ControllerInput).turns,
+      )
       expect(previousResults).not.toContain(BIG_URL)
       expect(previousResults).toContain('a.docx')
 

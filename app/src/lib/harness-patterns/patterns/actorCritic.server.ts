@@ -31,7 +31,8 @@ import { getRequestSettings } from '../../settings-context.server'
 import { resolveTurnBudget } from '../../settings'
 import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
-import type { ActorControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
+import type { ActorFn } from '../types'
+import type { CriticFnWithLLMData } from '../baml-adapters.server'
 import { LLMCallError } from '../types'
 import { formatPlanContext, type PlannerData } from './planner.server'
 
@@ -55,7 +56,7 @@ export interface ActorCriticData {
  *
  * @param actor - Actor function from `createActorControllerAdapter(toolNames)`
  *   — NOT a raw bound `b.ActorController`, whose positional signature differs
- *   from the `ActorControllerFnWithLLMData` contract (same rule as
+ *   from the `ActorFn` contract (same rule as
  *   simpleLoop's controller)
  * @param critic - Critic function from `createCriticAdapter()`
  * @param tools - Allowed tool names
@@ -74,7 +75,7 @@ export interface ActorCriticData {
  * )
  */
 export function actorCritic<T extends ActorCriticData>(
-  actor: ActorControllerFnWithLLMData,
+  actor: ActorFn,
   critic: CriticFnWithLLMData,
   tools: string[],
   config?: ActorCriticConfig,
@@ -237,17 +238,18 @@ export function actorCritic<T extends ActorCriticData>(
         // nudge the model toward `Return` when the budget is nearly exhausted.
         // No collector is passed (Lane A3): the implementation owns it and
         // returns the call record on the result.
-        const { action: rawAction, llmCall: actorLlmCall } = await actor(
-          userContent,
+        // Object seam (Lane A4): the actor's attempts arrive as typed events;
+        // no collector is passed (Lane A3) — the implementation owns it.
+        const { action: rawAction, llmCall: actorLlmCall } = await actor({
+          userMessage: userContent,
           intent,
-          tools,
+          availableTools: tools,
           previousAttempts,
-          undefined,
-          attempt + 1,
-          maxRetries,
-          multiMode === 'off' ? undefined : multiMode,
+          attemptNumber: attempt + 1,
+          maxAttempts: maxRetries,
+          multiCallMode: multiMode === 'off' ? undefined : multiMode,
           planContext,
-        )
+        })
 
         // Apply the contract's documented defaults ONCE, here, before the
         // action is recorded or read: `is_final` is optional (#159) and absent

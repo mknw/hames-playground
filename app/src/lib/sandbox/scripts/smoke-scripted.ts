@@ -32,10 +32,8 @@ import { withSandbox } from '../with-sandbox.server'
 import { actorCritic } from '../../harness-patterns/patterns/actorCritic.server'
 import { createScope } from '../../harness-patterns/context.server'
 import { createEventView } from '../../harness-patterns/patterns'
-import type {
-  ActorControllerFnWithLLMData,
-  CriticFnWithLLMData,
-} from '../../harness-patterns/baml-adapters.server'
+import type { CriticFnWithLLMData } from '../../harness-patterns/baml-adapters.server'
+import type { ActorFn } from '../../harness-patterns/types'
 import { printEventSummary, checkRootfsImage } from './_shared'
 
 const SENTENCE = 'the quick brown fox jumps over the lazy dog'
@@ -44,13 +42,13 @@ const SCRIPT = `text = "${SENTENCE}"\nprint(len(text.split()))\n`
 // Fresh actor/critic factory — one set of closures per invocation so counts
 // don't bleed between runs.
 function makeScriptedActorCritic(): {
-  actor: ActorControllerFnWithLLMData
+  actor: ActorFn
   critic: CriticFnWithLLMData
   counts: () => { actorCalls: number; criticCalls: number }
 } {
   let actorCalls = 0
   let criticCalls = 0
-  const actor: ActorControllerFnWithLLMData = async () => {
+  const actor: ActorFn = async () => {
     actorCalls += 1
     if (actorCalls === 1) {
       return {

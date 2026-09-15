@@ -401,31 +401,69 @@ export interface PatternConfig {
 }
 
 // ============================================================================
-// Controller & Critic Function Types
+// Controller & Critic Seam Inputs
 // ============================================================================
 
-/**
- * Controller function type for simpleLoop pattern.
- * Matches BAML-generated function signatures.
- * Uses rest params to accommodate different controller signatures (with/without schema).
- */
-export type ControllerFn = (
-  user_message: string,
-  intent: string,
-  previous_results: string,
-  n_turn: number,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ...extra: any[]
-) => Promise<ControllerAction>
+/** The controller seam's one named input (#225 Lane A4) — replaces the old
+ *  eleven-argument positional tail (`user_message, intent, previous_results:
+ *  string, n_turn, ...extra: any[]`). `turns` is the TYPED turn array, which
+ *  is what deletes the JSON.stringify → duck-typed-parse round-trip and its
+ *  silent-`[]` catch: the loop already holds real `LoopTurn` objects, so
+ *  there is no string to re-parse and nothing to mis-parse.
+ *
+ *  The live callable is `ControllerFn` (in `baml-adapters.server.ts` beside
+ *  its implementation — it carries a legacy positional overload for the
+ *  adapter-level tests, deleted with the file at A6). */
+export interface ControllerInput {
+  userMessage: string
+  intent: string
+  /** TYPED. Replaces `previous_results: string`. */
+  turns: readonly LoopTurn[]
+  turn: number
+  /** Was `schema`. Rendered in the prompt's tier-1 cache marker alongside the
+   *  factory's `contextPrefix`. */
+  context?: string
+  priorResults?: readonly PriorResult[]
+  fewShots?: readonly FewShot[]
+  multiCallMode?: 'parallel' | 'sequential'
+  planContext?: string
+  returnStyle?: ReturnStyle
+}
 
-/**
- * Critic function type for actorCritic pattern.
- * Matches BAML-generated function signatures.
- */
-export type CriticFn = (
-  intent: string,
-  previous_attempts: ScriptExecutionEvent[],
-) => Promise<CriticResult>
+/** The actor seam's one named input (#225 Lane A4) — replaces the positional
+ *  tail of the actor seam. `previousAttempts` was already a typed array;
+ *  nothing here is stringified or re-parsed. The live callable is
+ *  {@link ActorFn}. */
+export interface ActorInput {
+  userMessage: string
+  intent: string
+  /** Part of the seam shape per the design note; the implementation resolves
+   *  its own allowlist from the factory options and does not read this — it
+   *  was accepted-and-ignored positionally before A4 too. */
+  availableTools: readonly string[]
+  previousAttempts: readonly ScriptExecutionEvent[]
+  attemptNumber?: number
+  maxAttempts?: number
+  multiCallMode?: 'parallel' | 'sequential'
+  planContext?: string
+}
+
+/** Result of a controller/actor call: the action plus the implementation-
+ *  stamped call record (Lane A3). Lives in core because it IS the seam's
+ *  return type. */
+export interface ControllerCallResult {
+  action: ControllerAction
+  llmCall?: LLMCallRecord
+}
+
+/** The controller seam callable (Lane A4): takes the whole input as ONE named
+ *  object. `simpleLoop` accepts this; the adapter factories return it (with a
+ *  legacy positional form attached for the untouched acceptance tests — see
+ *  `baml-adapters.server.ts`). */
+export type ControllerFn = (input: ControllerInput) => Promise<ControllerCallResult>
+
+/** The actor seam callable (Lane A4). `actorCritic` accepts this. */
+export type ActorFn = (input: ActorInput) => Promise<ControllerCallResult>
 
 // ============================================================================
 // Pattern Configuration

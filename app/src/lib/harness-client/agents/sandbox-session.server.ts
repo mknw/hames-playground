@@ -25,7 +25,7 @@ import {
 import { withSandbox } from '../../sandbox/index.server'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
-import type { FewShot } from '../../../../baml_client/types'
+import type { FewShot } from '../../harness-patterns/types'
 
 const SANDBOX_SESSION_GUIDANCE = `
 You have a PERSISTENT Linux sandbox for this conversation, shared with the

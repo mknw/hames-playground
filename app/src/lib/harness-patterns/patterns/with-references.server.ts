@@ -27,7 +27,7 @@ import type {
   UserMessageEventData,
   AssistantMessageEventData,
 } from '../types'
-import type { PriorResult } from '../../../../baml_client/types'
+import type { PriorResult } from '../types'
 import { LLMCallError } from '../baml-adapters.server'
 
 assertServerOnImport()

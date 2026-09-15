@@ -50,7 +50,7 @@ import type {
   ErrorEventData,
   LLMCallData,
 } from '../types'
-import type { PlanResult } from '../../../../baml_client/types'
+import type { PlanResult } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
 import { getErrorHint } from '../error-hints'
 import { stripThinkBlocks } from '../content-transforms'

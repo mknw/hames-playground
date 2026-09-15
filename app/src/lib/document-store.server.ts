@@ -30,7 +30,7 @@
 import { assertServerOnImport } from './harness-patterns/assert.server'
 import { stashCallTool, directCallTool, gatewayCallTool } from './redis-direct.server'
 import type { ToolCallResult } from './harness-patterns/types'
-import type { PriorResult } from '../../baml_client/types'
+import type { PriorResult } from './harness-patterns/types'
 
 assertServerOnImport()
 

@@ -30,9 +30,8 @@ import type {
   ControllerActionEventData,
 } from './types'
 import { getRequestSettings } from '../settings-context.server'
-import { estimateTokens, getContextWindow } from './token-budget.server'
-import { resolveClientForRole } from './clients.server'
-import { CLIENT_MAX_OUTPUT_TOKENS } from '../settings'
+import { estimateTokens } from './token-budget.server'
+import { limitsFor } from './clients.server'
 
 assertServerOnImport()
 
@@ -64,7 +63,10 @@ const BATCH_OUTPUT_SHARE = 0.5
  * worst-case routing whatever the chain becomes.
  */
 export function maxBatchItems(): number {
-  const cap = CLIENT_MAX_OUTPUT_TOKENS[resolveClientForRole('describe')]
+  // The CHAIN FLOOR (Lane A5): limitsFor resolves the role's current client and
+  // reads its floor from CLIENT_MAX_OUTPUT_TOKENS — the same lookup this used
+  // to do inline, now through the app-side seam so core stops reading the table.
+  const cap = limitsFor('describe').maxOutputTokens
   if (cap === undefined) return MAX_BATCH_ITEMS
   const affordable = Math.floor((cap * BATCH_OUTPUT_SHARE) / SUMMARY_OUTPUT_TOKENS)
   return Math.min(MAX_BATCH_ITEMS, Math.max(1, affordable))
@@ -214,9 +216,7 @@ export async function compactBulkData(
   }
 
   if (targets.length > 0) {
-    const budgetTokens = Math.floor(
-      getContextWindow(resolveClientForRole('describe')) * BATCH_INPUT_WINDOW_SHARE,
-    )
+    const budgetTokens = Math.floor(limitsFor('describe').contextWindow * BATCH_INPUT_WINDOW_SHARE)
     // Batches run concurrently — they're independent calls on a fast model.
     await Promise.allSettled(
       batchTargets(targets, budgetTokens, maxBatchItems()).map(summarizeBatch),

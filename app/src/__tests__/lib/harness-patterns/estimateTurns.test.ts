@@ -6,7 +6,11 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import type { ConfiguredPattern } from '../../../lib/harness-patterns/types'
+import type { ConfiguredPattern, ControllerFn } from '../../../lib/harness-patterns/types'
+
+// Lane A5: ControllerFn is now an object-callable (optional limits()). A bare
+// vi.fn() placeholder doesn't satisfy it, so these never-called stubs cast.
+const stubController = () => vi.fn() as unknown as ControllerFn
 
 // Test-only relaxed cast — the wrappers accept patterns over different data
 // shapes (RouterData, SimpleLoopData, etc.); compatibility isn't what we're
@@ -36,10 +40,10 @@ describe('estimateTurns', () => {
   it('simpleLoop: uses config.maxTurns when present, else settings.maxToolTurns', async () => {
     const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
 
-    const fromSettings = simpleLoop(vi.fn(), [], { patternId: 'a' })
+    const fromSettings = simpleLoop(stubController(), [], { patternId: 'a' })
     expect(fromSettings.estimateTurns?.(settings)).toBe(5)
 
-    const fromConfig = simpleLoop(vi.fn(), [], { patternId: 'b', maxTurns: 8 })
+    const fromConfig = simpleLoop(stubController(), [], { patternId: 'b', maxTurns: 8 })
     expect(fromConfig.estimateTurns?.(settings)).toBe(8)
   })
 
@@ -75,8 +79,8 @@ describe('estimateTurns', () => {
     const { routes } = await import('../../../lib/harness-patterns/patterns/router.server')
     const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
 
-    const small = asAny(simpleLoop(vi.fn(), [], { patternId: 's', maxTurns: 2 }))
-    const big = asAny(simpleLoop(vi.fn(), [], { patternId: 'b', maxTurns: 9 }))
+    const small = asAny(simpleLoop(stubController(), [], { patternId: 's', maxTurns: 2 }))
+    const big = asAny(simpleLoop(stubController(), [], { patternId: 'b', maxTurns: 9 }))
     const dispatched = routes({ small, big })
     expect(dispatched.estimateTurns?.(settings)).toBe(9)
   })
@@ -85,8 +89,8 @@ describe('estimateTurns', () => {
     const { parallel } = await import('../../../lib/harness-patterns/patterns/parallel.server')
     const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
 
-    const a = asAny(simpleLoop(vi.fn(), [], { patternId: 'a', maxTurns: 4 }))
-    const b = asAny(simpleLoop(vi.fn(), [], { patternId: 'b', maxTurns: 6 }))
+    const a = asAny(simpleLoop(stubController(), [], { patternId: 'a', maxTurns: 4 }))
+    const b = asAny(simpleLoop(stubController(), [], { patternId: 'b', maxTurns: 6 }))
     const par = parallel([a, b])
     expect(par.estimateTurns?.(settings)).toBe(6)
   })
@@ -95,7 +99,7 @@ describe('estimateTurns', () => {
     const { hook } = await import('../../../lib/harness-patterns/patterns/hook.server')
     const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
 
-    const inner = asAny(simpleLoop(vi.fn(), [], { patternId: 'inner', maxTurns: 4 }))
+    const inner = asAny(simpleLoop(stubController(), [], { patternId: 'inner', maxTurns: 4 }))
     const bg = hook(inner, { trigger: 'session_close', background: true })
     const sync = hook(inner, { trigger: 'session_close' })
     expect(bg.estimateTurns?.(settings)).toBe(0)
@@ -109,7 +113,7 @@ describe('estimateTurns', () => {
       await import('../../../lib/harness-patterns/patterns/compactExecution.server')
     const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
 
-    const loop = asAny(simpleLoop(vi.fn(), [], { patternId: 'loop', maxTurns: 5 }))
+    const loop = asAny(simpleLoop(stubController(), [], { patternId: 'loop', maxTurns: 5 }))
     // Default agent shape: router(1) + routes-with-5-turn-loop(5) + synth(1) = 7
     const agent = chain(
       asAny(router({ x: '' })),

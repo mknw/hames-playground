@@ -41,9 +41,9 @@ import type {
 import { trackEvent, resolveConfig } from '../context.server'
 import { getErrorHint } from '../error-hints'
 import { stripThinkBlocks } from '../content-transforms'
-import { trimToFit, getContextWindow } from '../token-budget.server'
+import { trimToFit } from '../token-budget.server'
 import { extractLLMCallData, extractFailureLLMCallData } from '../baml-adapters.server'
-import { clientOverrideFor, resolveClientForRole } from '../clients.server'
+import { clientOverrideFor, limitsFor } from '../clients.server'
 
 assertServerOnImport()
 
@@ -130,7 +130,7 @@ export function compactIntent<T extends CompactIntentData>(
 
       // Trim oldest history if it would overflow the describe-tier model
       // (the client this call will actually use, not a hardcoded chain name).
-      const contextWindow = getContextWindow(resolveClientForRole('describe'))
+      const contextWindow = limitsFor('describe').contextWindow
       const history = trimToFit(rawHistory, (h) => JSON.stringify(h), 300, contextWindow)
 
       const { b } = await import('../../../../baml_client')

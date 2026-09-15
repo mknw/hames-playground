@@ -202,7 +202,7 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
 
   it('trims Verda-routed prompts against the 131K server window, not 200K', async () => {
     const { resolveClientForRole } = await load()
-    const { getContextWindow } = await import('../../../lib/harness-patterns/token-budget.server')
+    const { getContextWindow } = await import('../../../lib/harness-patterns/clients.server')
 
     // vLLM ran with `--max-model-len 131072`; a prompt sized for 200K is
     // rejected outright, so this is the difference between "the flag works"

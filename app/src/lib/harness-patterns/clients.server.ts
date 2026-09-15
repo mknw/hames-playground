@@ -106,6 +106,13 @@ import { VERDA_CLIENT_NAME } from '../inference/verda-activity.server'
 // moved out to shed them from every seam diff. Type-only import here — the
 // value surface this module keeps is the assert, the scope and the override.
 import type { InferenceTier } from '../inference/config.server'
+// The model tables (Lane A5): `resolveClientForRole` names the client, and
+// `getContextWindow` / `limitsFor` read the two tables for it. They live HERE,
+// beside the map — this file is the role→client seam the tables key into, and
+// it moves to `harness-baml` at A6 with them. The pattern layer stops reading
+// the tables directly (A5's property).
+import { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS } from '../settings'
+import type { ModelLimits } from './types'
 
 assertServerOnImport()
 
@@ -637,4 +644,46 @@ function verdaClientFor(role: BamlRole): string | undefined {
  */
 export function resolveClientForRole(role: BamlRole): string {
   return verdaClientFor(role) ?? CLIENT_BY_ROLE[role]
+}
+
+/**
+ * Context window (tokens) for a BAML client name. Falls back to 16K if the
+ * client is unknown. MOVED here from `token-budget.server.ts` in Lane A5:
+ * it reads the app-side `MODEL_CONTEXT_WINDOWS` table, so it lives beside
+ * `resolveClientForRole` (which names the client) and moves with this file at
+ * A6 — the pattern layer no longer touches the table.
+ */
+export function getContextWindow(clientName?: string): number {
+  if (clientName && MODEL_CONTEXT_WINDOWS[clientName]) {
+    return MODEL_CONTEXT_WINDOWS[clientName]
+  }
+  return 16_384
+}
+
+/**
+ * The context window and output cap of the model the call for `role` will
+ * ACTUALLY take (#225 Lane A5) — the budgets the five core trim/batch sites
+ * spend against.
+ *
+ * PER CALL, not per construction: a tier decision is an AsyncLocalStorage
+ * scope, so a value captured at pattern-construction time would budget a
+ * verda-tier turn against the wrong model. `resolveClientForRole` reads the
+ * scope that is active at the moment of the call — which is why the patterns
+ * ask the seam (`controller.limits()`) immediately before dispatching, and
+ * why the adapter implementations answer through THIS function rather than
+ * caching a number.
+ *
+ * Floor vs leaf (do not conflate): `maxOutputTokens` is the CHAIN FLOOR —
+ * `CLIENT_MAX_OUTPUT_TOKENS` keys the resolved chain name to its weakest
+ * leaf's cap — and it budgets (`maxBatchItems`, SA-M6). The LEAF cap is a
+ * different lookup by a different key (`llmCall.clientName`) and is what
+ * `hitOutputCap` stamping uses (Lane A3, untouched here). Conflating the two
+ * silently resizes describe batches on the Anthropic tier.
+ */
+export function limitsFor(role: BamlRole): ModelLimits {
+  const client = resolveClientForRole(role)
+  return {
+    contextWindow: getContextWindow(client),
+    maxOutputTokens: CLIENT_MAX_OUTPUT_TOKENS[client],
+  }
 }

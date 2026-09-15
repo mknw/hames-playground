@@ -29,8 +29,8 @@ import { trackEvent, resolveConfig, createEvent, createScope } from '../context.
 import { emitLive } from '../live-event-context.server'
 import { getRequestSettings } from '../../settings-context.server'
 import { stripThinkBlocks } from '../content-transforms'
-import { trimToFit, getContextWindow } from '../token-budget.server'
-import { resolveClientForRole } from '../clients.server'
+import { trimToFit } from '../token-budget.server'
+import { limitsFor } from '../clients.server'
 
 assertServerOnImport()
 
@@ -128,7 +128,7 @@ export function router<T extends RouterData>(
           role: e.type === 'user_message' ? 'user' : 'assistant',
           content: (e.data as UserMessageEventData | AssistantMessageEventData).content,
         }))
-      const contextWindow = getContextWindow(resolveClientForRole('router'))
+      const contextWindow = limitsFor('router').contextWindow
       const history = trimToFit(rawHistory, (h) => JSON.stringify(h), 300, contextWindow)
 
       // Convert routes Record<string,string> to Array<{name,description}>

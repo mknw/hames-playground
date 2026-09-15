@@ -76,6 +76,7 @@ export type {
   LLMCallData,
   LLMCallRecord,
   LLMResult,
+  ModelLimits,
 
   // Approval Types
   ApprovalRequest,
@@ -237,6 +238,11 @@ export {
 // ============================================================================
 
 export { callTool, listTools, closeMcpClient } from './mcp-client.server'
+
+// Lane A5: per-call model budgets. The function lives in clients.server (the
+// role→client map) and moves with it at A6; core pattern files no longer read
+// the model tables directly.
+export { limitsFor } from './clients.server'
 export { assertServer, ServerOnlyError } from './assert.server'
 export { routeMessageOp } from './routing.server'
 export { compactBulkData } from './compactBulkData.server'

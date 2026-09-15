@@ -42,7 +42,7 @@ import {
   type TokenBuckets,
 } from '../settings'
 import { eurPerUsdRate, verdaEurPerHour } from '../cost-rates.server'
-import { clientOverrideFor } from './clients.server'
+import { clientOverrideFor, limitsFor } from './clients.server'
 import { notifyLlmUsage } from './llm-usage-observer.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 import type { LLMCallRecord, ControllerFn, ActorFn, ControllerCallResult } from './types'
@@ -982,7 +982,13 @@ export function createLoopControllerAdapter(
     return { action, llmCall }
   }
 
-  return (async (
+  // Lane A5: the seam answers per-call budgets — the pattern asks
+  // `controller.limits()` immediately before dispatching, and this reads the
+  // role's CURRENT client (a tier decision is an ALS scope, so caching a
+  // number at construction would budget the wrong model). Floor semantics:
+  // maxOutputTokens is the chain floor; the leaf cap stays with hitOutputCap
+  // stamping (A3, untouched).
+  const dispatch = (async (
     first: ControllerInput | string,
     ...rest: unknown[]
   ): Promise<ControllerCallResult> => {
@@ -1027,6 +1033,8 @@ export function createLoopControllerAdapter(
       collector,
     )
   }) as ControllerFn & LegacyControllerFn
+  dispatch.limits = () => limitsFor('controller')
+  return dispatch
 }
 
 /**

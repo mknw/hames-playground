@@ -9,7 +9,11 @@
     ".": "./index.ts",
     "./package.json": "./package.json",
     "./patterns": "./patterns/index.ts",
+    "./guard": "./injection-guard.ts",
     "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "files": [
     "*.ts",

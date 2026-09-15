@@ -77,6 +77,7 @@ export type {
   LLMCallRecord,
   LLMResult,
   ModelLimits,
+  CostBasis,
 
   // Approval Types
   ApprovalRequest,

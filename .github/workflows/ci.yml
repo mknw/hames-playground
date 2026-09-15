@@ -142,6 +142,48 @@ jobs:
       # Catches SSR/vinxi breakage the unit tests cannot see.
       - run: pnpm build
 
+  packages:
+    name: pack · tarball install · exports probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # The pack + install-from-tarball smoke (#225 Step 1d; plan §3.3/§4.3) —
+    # the ONLY step anywhere in CI that exercises "does the published tarball
+    # actually work": the image job boots from the workspace symlink, so only
+    # this catches a file missing from the `files`/`exports` allowlist or a
+    # dependency the package imports but does not declare. Independent of
+    # `check` and `image` on purpose, like those two are of each other.
+    #
+    # Deliberately NO `pnpm install` of the workspace: packing needs only the
+    # manifest, and the probe runs against the tarball installed into a
+    # throwaway scratch project — the repo's node_modules would only offer the
+    # workspace symlink, which is exactly the resolution this smoke exists to
+    # rule out.
+    defaults:
+      run:
+        working-directory: .
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      # Fails the job if an export is missing from the tarball, a declared
+      # export target does not exist, the package imports something its own
+      # manifest does not declare, or the ./guard companion subpath does not
+      # import and behave. Scope note: the probe does not yet EVALUATE the
+      # `.` barrel — it still carries the recorded Step 1a interim re-points
+      # into app/src (settings-context, the harness-baml defaults,
+      # resolveTurnBudget), which a tarball cannot resolve; that widens to a
+      # full-barrel eval when Lane C / Step 3 remove those edges.
+      - run: scripts/pack-smoke.sh
+
   image:
     name: docker image · build · boot
     runs-on: ubuntu-latest

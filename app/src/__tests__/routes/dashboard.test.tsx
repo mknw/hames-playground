@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 import { buildDashboard, type ConversationEvents } from '~/lib/metrics/aggregate'
-import type { ContextEvent } from '~/lib/harness-patterns/types'
+import type { ContextEvent } from '../../../../packages/harness-patterns/types'
 
 const getMetricsDashboard = vi.fn()
 

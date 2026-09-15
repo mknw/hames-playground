@@ -11,8 +11,8 @@ import {
   omitResultFields,
   stripThinkBlocks,
   truncateToolResults,
-} from '../../../lib/harness-patterns/content-transforms'
-import type { ContextEvent } from '../../../lib/harness-patterns/types'
+} from '../../../../../packages/harness-patterns/content-transforms'
+import type { ContextEvent } from '../../../../../packages/harness-patterns/types'
 
 function event(type: ContextEvent['type'], data: unknown): ContextEvent {
   return { id: 'e1', type, timestamp: 1, patternId: 'p', data } as unknown as ContextEvent

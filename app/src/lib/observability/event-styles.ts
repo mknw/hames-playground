@@ -17,7 +17,7 @@
  * @unocss-include
  */
 
-import type { EventType } from '../harness-patterns'
+import type { EventType } from '../../../../packages/harness-patterns'
 import patternColorsJson from '../../../pattern-colors.json'
 
 // ============================================================================

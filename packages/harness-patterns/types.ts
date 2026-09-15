@@ -145,7 +145,7 @@ export interface PlanResult {
   n_steps: number
 }
 
-import type { CostBasis } from '../settings'
+import type { CostBasis } from '../../app/src/lib/settings'
 
 export type { CostBasis }
 

@@ -35,7 +35,7 @@
  * with the vectors is what makes the comparability guard enforceable.
  */
 
-import { assertServerOnImport } from './harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../packages/harness-patterns/assert.server'
 
 assertServerOnImport()
 

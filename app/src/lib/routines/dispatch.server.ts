@@ -27,7 +27,7 @@
  * keeps `action-runner.server.ts` off the RPC surface.
  */
 
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 import { newSessionId } from '../session-id'
 import {
   claimRoutineRunAt,

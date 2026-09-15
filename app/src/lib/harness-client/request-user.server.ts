@@ -18,7 +18,7 @@
  * ambient and server-resolved, and callers handle `null` by refusing.
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 
 assertServerOnImport()
 

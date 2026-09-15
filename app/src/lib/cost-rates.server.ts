@@ -17,7 +17,7 @@
  * dependency behind a spend estimate and make two page loads of the same
  * conversation disagree.
  */
-import { assertServerOnImport } from './harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../packages/harness-patterns/assert.server'
 import { DEFAULT_EUR_PER_USD, DEFAULT_VERDA_EUR_PER_HOUR } from './settings'
 
 assertServerOnImport()

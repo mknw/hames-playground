@@ -28,7 +28,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
 
 // Mock server-only imports
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -47,10 +47,10 @@ const TRY_AGAIN_TURNS = [
 const SYNTHESIZED = 'search the web for SolidJS resources (retry of the previous turn)'
 
 async function runRouterOver(turns: ReadonlyArray<{ type: string; content: string }>) {
-  const { router } = await import('../../../lib/harness-patterns/patterns/router.server')
-  const { createContext } = await import('../../../lib/harness-patterns/context.server')
+  const { router } = await import('../../../../../packages/harness-patterns/patterns/router.server')
+  const { createContext } = await import('../../../../../packages/harness-patterns/context.server')
   const { createEventView } =
-    await import('../../../lib/harness-patterns/patterns/event-view.server')
+    await import('../../../../../packages/harness-patterns/patterns/event-view.server')
 
   // createContext() seeds the opening user_message itself, so the first turn
   // is its input and the rest are appended — same shape as a real session.
@@ -124,10 +124,12 @@ describe('router — cross-turn intent (#53)', () => {
   })
 
   it('hands the synthesized intent to the dispatched pattern, not the bare phrase', async () => {
-    const { routes } = await import('../../../lib/harness-patterns/patterns/router.server')
-    const { createContext } = await import('../../../lib/harness-patterns/context.server')
+    const { routes } =
+      await import('../../../../../packages/harness-patterns/patterns/router.server')
+    const { createContext } =
+      await import('../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../packages/harness-patterns/patterns/event-view.server')
 
     const { scope } = await runRouterOver(TRY_AGAIN_TURNS)
 

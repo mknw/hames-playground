@@ -18,7 +18,7 @@
  * or through bash stdout (parsing). Text moves directly.
  */
 
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 import type { McpTransport } from './types'
 
 assertServerOnImport()

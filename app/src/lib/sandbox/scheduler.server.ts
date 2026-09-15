@@ -22,7 +22,7 @@
  * over-cap session, which is worse for v0's interactive workloads.
  */
 
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 
 assertServerOnImport()
 

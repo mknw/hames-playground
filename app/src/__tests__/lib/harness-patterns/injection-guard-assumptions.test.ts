@@ -45,7 +45,7 @@ import {
   type InjectionRule,
   type SanitizeReport,
   type SpotlightMode,
-} from '../../../lib/harness-patterns/injection-guard'
+} from '../../../../../packages/harness-patterns/injection-guard'
 
 // `createInjectionGuard` is the guard object the ALS readers consult, and its
 // `sanitize()` is where the screen gate lives — the gate is NOT in
@@ -53,13 +53,13 @@ import {
 // exported for exactly this reason (see its docblock), so no `callTool` and no
 // gateway mock is needed here; `injection-guard-chokepoint.test.ts` covers the
 // transport.
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
 async function loadGuard() {
   const { createInjectionGuard } =
-    await import('../../../lib/harness-patterns/patterns/withInjectionGuard.server')
+    await import('../../../../../packages/harness-patterns/patterns/withInjectionGuard.server')
   return createInjectionGuard
 }
 
@@ -693,7 +693,7 @@ describe('spotlight modes: what actually reaches the controller', () => {
     it("an inner guard cannot loosen the outer guard's spotlight", async () => {
       const createInjectionGuard = await loadGuard()
       const { runWithInjectionGuard } =
-        await import('../../../lib/harness-patterns/injection-guard-scope.server')
+        await import('../../../../../packages/harness-patterns/injection-guard-scope.server')
       const outer = createInjectionGuard(
         { namespaces: ['web'], spotlight: 'always' },
         () => {},
@@ -717,7 +717,7 @@ describe('spotlight modes: what actually reaches the controller', () => {
       // or nest a fence inside a fence.
       const createInjectionGuard = await loadGuard()
       const { runWithInjectionGuard } =
-        await import('../../../lib/harness-patterns/injection-guard-scope.server')
+        await import('../../../../../packages/harness-patterns/injection-guard-scope.server')
       const outer = createInjectionGuard(
         { namespaces: ['web'], spotlight: 'always' },
         () => {},
@@ -735,7 +735,7 @@ describe('spotlight modes: what actually reaches the controller', () => {
     it("an inner guard cannot drop the outer guard's screen, and the inner one wins when both have one", async () => {
       const createInjectionGuard = await loadGuard()
       const { runWithInjectionGuard } =
-        await import('../../../lib/harness-patterns/injection-guard-scope.server')
+        await import('../../../../../packages/harness-patterns/injection-guard-scope.server')
       const outerScreen = vi.fn()
       const innerScreen = vi.fn()
       const outer = createInjectionGuard(

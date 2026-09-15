@@ -15,8 +15,8 @@
  * `ensureIngested:false` disables the net — both for tests.
  */
 
-import { assertServerOnImport } from '../harness-patterns/assert.server'
-import type { RetrieverBackend, RetrievalHit } from '../harness-patterns'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import type { RetrieverBackend, RetrievalHit } from '../../../../packages/harness-patterns'
 import { searchDocuments, ensureSessionIngested } from '../document-ingest.server'
 
 assertServerOnImport()

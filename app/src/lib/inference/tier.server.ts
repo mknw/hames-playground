@@ -36,7 +36,7 @@
  * resolves the owner from the session and passes it in — the same contract
  * `turn.server.ts` and `db/user-prefs.server.ts` carry.
  */
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 import {
   getConversationInferenceTier,
   setConversationInferenceTier,

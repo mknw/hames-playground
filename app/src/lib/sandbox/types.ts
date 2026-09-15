@@ -10,7 +10,10 @@
  * implementations live in `*.server.ts` files (server-only).
  */
 
-import type { ToolCallResult, MCPToolDescription } from '../harness-patterns/types'
+import type {
+  ToolCallResult,
+  MCPToolDescription,
+} from '../../../../packages/harness-patterns/types'
 
 // ============================================================================
 // Identity & config

@@ -26,7 +26,7 @@
  * silently. The report counts them as `stale` so the decision is visible.
  */
 import neo4j from 'neo4j-driver'
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 import { getNeo4jDriver } from '../neo4j/client'
 import { graphAppFetch, GraphAppPermissionError } from '../auth/graph-token.server'
 import { ensureOrgGraphSchema } from './schema.server'

@@ -34,7 +34,8 @@ import { readdir, readFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 
 const APP = process.cwd()
-const CORE = resolve(APP, 'src/lib/harness-patterns')
+// The library moved to packages/ (#225 Step 1a); the scan root follows it.
+const CORE = resolve(APP, '../packages/harness-patterns')
 const BAML = resolve(APP, 'src/lib/harness-baml')
 
 async function walk(dir: string): Promise<string[]> {

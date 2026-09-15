@@ -26,7 +26,7 @@ import type {
   AssistantMessageEventData,
 } from '../types'
 import type { PriorResult } from '../types'
-import { defaultSelector } from '../../harness-baml/defaults.server'
+import { defaultSelector } from '../../../app/src/lib/harness-baml/defaults.server'
 import { LLMCallError } from '../types'
 
 assertServerOnImport()

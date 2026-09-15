@@ -22,7 +22,7 @@ import { DIRECT_RESPONSE_ROUTE } from '../types'
 import type { ErrorEventData } from '../types'
 import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig } from '../context.server'
-import { defaultSynthesize } from '../../harness-baml/defaults.server'
+import { defaultSynthesize } from '../../../app/src/lib/harness-baml/defaults.server'
 
 assertServerOnImport()
 

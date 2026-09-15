@@ -20,8 +20,8 @@
  *     the fetch.
  */
 
-import { assertServerOnImport } from '../../harness-patterns/assert.server'
-import { callTool } from '../../harness-patterns'
+import { assertServerOnImport } from '../../../../../packages/harness-patterns/assert.server'
+import { callTool } from '../../../../../packages/harness-patterns'
 
 assertServerOnImport()
 

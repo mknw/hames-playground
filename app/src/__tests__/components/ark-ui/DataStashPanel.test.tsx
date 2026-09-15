@@ -16,7 +16,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { render, fireEvent } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
-import type { ContextEvent } from '~/lib/harness-patterns'
+import type { ContextEvent } from '../../../../../packages/harness-patterns'
 import type { OpenReferenceTarget } from '~/lib/harness-client/reference-extractor'
 import type { StashDocumentMeta } from '~/lib/document-store.server'
 

@@ -15,7 +15,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
-import type { ContextEvent } from '~/lib/harness-patterns'
+import type { ContextEvent } from '../../../../../packages/harness-patterns'
 
 vi.mock('../../../components/ark-ui/InteractiveTerminal', () => ({
   InteractiveTerminal: (props: { sessionId: string; agentId?: string }) => (

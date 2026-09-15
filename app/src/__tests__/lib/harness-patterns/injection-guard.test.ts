@@ -21,7 +21,7 @@ import {
   sanitizeUntrusted,
   spotlight,
   type ScreenVerdict,
-} from '../../../lib/harness-patterns/injection-guard'
+} from '../../../../../packages/harness-patterns/injection-guard'
 
 const ctx = { tool: 'search', namespace: 'web' }
 

@@ -1,5 +1,8 @@
 {
   "name": "hames-playground",
   "private": true,
-  "packageManager": "pnpm@10.28.1"
+  "packageManager": "pnpm@10.28.1",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  }
 }

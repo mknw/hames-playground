@@ -8,7 +8,7 @@
  * back: a single new `baml_client/types` import under `harness-patterns/`
  * re-splits the source of truth and the next regeneration can drift it. This
  * pin fails on any occurrence of that specifier in a non-test file under
- * `app/src/lib/harness-patterns/` — import lines and inline `import()` type
+ * `packages/harness-patterns/` (the library's home since #225 Step 1a) — import lines and inline `import()` type
  * positions alike, comments included, because a static import cannot hide
  * anywhere else.
  *
@@ -49,11 +49,11 @@ import type {
   ToolCallRequest,
   ToolDescription,
   ToolResult,
-} from '../../../lib/harness-patterns/types'
+} from '../../../../../packages/harness-patterns/types'
 
 // `process.cwd()` is `app/` under vitest (same anchor the other source-scan
 // pins use); `import.meta.url` is not a file URL in this jsdom environment.
-const CORE = resolve(process.cwd(), 'src/lib/harness-patterns')
+const CORE = resolve(process.cwd(), '../packages/harness-patterns')
 
 /** The generated module must never be referenced again under core. Lane A6
  *  widened the A1 pin from the types module to EVERYTHING BAML: after the

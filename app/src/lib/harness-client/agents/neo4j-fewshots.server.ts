@@ -16,7 +16,7 @@
  */
 'use server'
 
-import type { FewShot } from '../../harness-patterns'
+import type { FewShot } from '../../../../../packages/harness-patterns'
 
 /** All 5 examples (referenced by tests + reusable across agents). */
 export const NEO4J_FEW_SHOTS: FewShot[] = [

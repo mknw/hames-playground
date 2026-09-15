@@ -26,7 +26,7 @@ import {
   generateId,
 } from './context.server'
 import { runWithLiveListener } from './live-event-context.server'
-import { getRequestSettings } from '../settings-context.server'
+import { getRequestSettings } from '../../app/src/lib/settings-context.server'
 
 assertServerOnImport()
 

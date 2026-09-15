@@ -22,7 +22,7 @@
  * chip recipe R4's padding alone does not.
  */
 import { Show } from 'solid-js'
-import type { SanitizeSummary } from '~/lib/harness-patterns/injection-guard'
+import type { SanitizeSummary } from '../../../../packages/harness-patterns/injection-guard'
 
 /** Rules the guard fired, capped so a long list can't blow out a tooltip. */
 function ruleSummary(rules: string[]): string {

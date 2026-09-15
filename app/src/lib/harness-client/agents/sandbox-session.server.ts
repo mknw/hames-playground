@@ -19,12 +19,12 @@ import {
   compactExecution,
   compactIntent,
   type ConfiguredPattern,
-} from '../../harness-patterns'
+} from '../../../../../packages/harness-patterns'
 import { bamlPatterns, createActorControllerAdapter, createCriticAdapter } from '../../harness-baml'
 import { withSandbox } from '../../sandbox/index.server'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
-import type { FewShot } from '../../harness-patterns/types'
+import type { FewShot } from '../../../../../packages/harness-patterns/types'
 
 const SANDBOX_SESSION_GUIDANCE = `
 You have a PERSISTENT Linux sandbox for this conversation, shared with the

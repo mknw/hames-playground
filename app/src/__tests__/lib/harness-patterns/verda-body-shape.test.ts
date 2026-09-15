@@ -46,7 +46,7 @@ import type { LoopTurn, ToolDescription } from '../../../../baml_client/types'
 
 // This file renders requests in a jsdom environment; `clients.server.ts` is
 // imported for its derived function set only, never to route anything.
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 

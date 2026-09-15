@@ -17,7 +17,7 @@
  * complete ControllerAction, and the legacy prose labels must not come back.
  */
 import { describe, it, expect, beforeAll } from 'vitest'
-import { normalizeControllerAction } from '../../../lib/harness-patterns/controller-action'
+import { normalizeControllerAction } from '../../../../../packages/harness-patterns/controller-action'
 
 // b.request builds the HTTP body without sending; it still resolves the client,
 // which needs the env var to exist.

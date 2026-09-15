@@ -39,7 +39,7 @@
  * on the database being up.
  */
 
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 import { listEnabledRoutines, type RoutineRow } from '../db/routines.server'
 import { reapStuckConversations, STUCK_RUN_TIMEOUT_MINUTES } from '../db/conversations.server'
 import { nextDueAt } from './triggers'

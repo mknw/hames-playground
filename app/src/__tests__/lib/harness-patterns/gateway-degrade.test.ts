@@ -19,7 +19,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
@@ -63,7 +63,7 @@ afterEach(() => {
 
 describe('listTools recovery and health', () => {
   it('rebuilds the pool and tries again before giving up', async () => {
-    const mcp = await import('../../../lib/harness-patterns/mcp-client.server')
+    const mcp = await import('../../../../../packages/harness-patterns/mcp-client.server')
     // Warm all four pooled connections first (concurrent calls, so each takes
     // its own slot). This is the state the rebuild is FOR: a gateway restart
     // drops every keep-alive at once, and `withReconnect` only ever rebuilds
@@ -94,9 +94,9 @@ describe('listTools recovery and health', () => {
       .mockRejectedValueOnce(DOWN)
       .mockResolvedValue({ tools: [{ name: 'read_neo4j_cypher', inputSchema: {} }] })
 
-    const { listTools } = await import('../../../lib/harness-patterns/mcp-client.server')
+    const { listTools } = await import('../../../../../packages/harness-patterns/mcp-client.server')
     const { gatewayDegradation } =
-      await import('../../../lib/harness-patterns/gateway-health.server')
+      await import('../../../../../packages/harness-patterns/gateway-health.server')
 
     const tools = await listTools()
 
@@ -107,9 +107,9 @@ describe('listTools recovery and health', () => {
 
   it('records the outage, with the cause, when it cannot recover', async () => {
     mockListTools.mockRejectedValue(DOWN)
-    const { listTools } = await import('../../../lib/harness-patterns/mcp-client.server')
+    const { listTools } = await import('../../../../../packages/harness-patterns/mcp-client.server')
     const { gatewayDegradation } =
-      await import('../../../lib/harness-patterns/gateway-health.server')
+      await import('../../../../../packages/harness-patterns/gateway-health.server')
 
     const tools = await listTools()
 
@@ -124,9 +124,9 @@ describe('listTools recovery and health', () => {
 
   it('clears the outage on the next successful read', async () => {
     mockListTools.mockRejectedValue(DOWN)
-    const { listTools } = await import('../../../lib/harness-patterns/mcp-client.server')
+    const { listTools } = await import('../../../../../packages/harness-patterns/mcp-client.server')
     const { gatewayDegradation } =
-      await import('../../../lib/harness-patterns/gateway-health.server')
+      await import('../../../../../packages/harness-patterns/gateway-health.server')
 
     await listTools()
     expect(gatewayDegradation()).not.toBeNull()
@@ -141,9 +141,9 @@ describe('listTools recovery and health', () => {
   it('does not treat a failing tool CALL as a dead gateway', async () => {
     mockListTools.mockResolvedValue({ tools: [{ name: 'search', inputSchema: {} }] })
     mockCallTool.mockRejectedValue(DOWN)
-    const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+    const { callTool } = await import('../../../../../packages/harness-patterns/mcp-client.server')
     const { gatewayDegradation } =
-      await import('../../../lib/harness-patterns/gateway-health.server')
+      await import('../../../../../packages/harness-patterns/gateway-health.server')
 
     await callTool('search', { query: 'x' })
 
@@ -156,7 +156,7 @@ describe('listTools recovery and health', () => {
 
 describe('toolSurfaceOutage', () => {
   it('says nothing when the pattern has tools', async () => {
-    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    const health = await import('../../../../../packages/harness-patterns/gateway-health.server')
     health.markGatewayUnreachable('down')
 
     // A degraded gateway plus a non-empty list is a pattern whose tools came
@@ -166,7 +166,7 @@ describe('toolSurfaceOutage', () => {
   })
 
   it('says nothing about an empty list while the gateway is fine', async () => {
-    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    const health = await import('../../../../../packages/harness-patterns/gateway-health.server')
     health.__resetGatewayHealth()
 
     // The two sandbox agents pass `[]` on purpose — their tools arrive over
@@ -175,7 +175,7 @@ describe('toolSurfaceOutage', () => {
   })
 
   it('explains an empty list that the gateway caused', async () => {
-    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    const health = await import('../../../../../packages/harness-patterns/gateway-health.server')
     health.markGatewayUnreachable('ECONNREFUSED 127.0.0.1:8811')
 
     const outage = health.toolSurfaceOutage([])
@@ -194,7 +194,7 @@ describe('toolSurfaceOutage', () => {
     // tools rather than `[]` — and while this guard opened with
     // `tools.length > 0`, the `general` agent (which passes `tools.all` to a
     // planner and a `simpleLoop`) sailed straight past it and answered `done`.
-    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    const health = await import('../../../../../packages/harness-patterns/gateway-health.server')
     health.__resetGatewayHealth()
     health.markGatewayUnreachable('ECONNREFUSED 127.0.0.1:8811')
 
@@ -213,7 +213,7 @@ describe('toolSurfaceOutage', () => {
     // `microsoft-365` builds on purpose out of `tools.graph`. That agent needs
     // no gateway, so refusing it would break a working agent over an outage
     // that costs it nothing. Only provenance separates the two.
-    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    const health = await import('../../../../../packages/harness-patterns/gateway-health.server')
     health.__resetGatewayHealth()
     health.markGatewayUnreachable('ECONNREFUSED 127.0.0.1:8811')
 
@@ -222,7 +222,7 @@ describe('toolSurfaceOutage', () => {
   })
 
   it('forgets the provenance on reset, so one test cannot brand another', async () => {
-    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    const health = await import('../../../../../packages/harness-patterns/gateway-health.server')
     const surface = ['graph_me']
     health.markDegradedToolSurface(surface)
     health.__resetGatewayHealth()
@@ -232,7 +232,7 @@ describe('toolSurfaceOutage', () => {
   })
 
   it('keeps the first failure time, so `since` measures the outage', async () => {
-    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    const health = await import('../../../../../packages/harness-patterns/gateway-health.server')
     health.__resetGatewayHealth()
     health.markGatewayUnreachable('first')
     const since = health.gatewayDegradation()!.since
@@ -246,8 +246,8 @@ describe('toolSurfaceOutage', () => {
 describe('the loops refuse to answer without tools', () => {
   /** The scope + view a pattern needs, with one user message in context. */
   async function harness(patternId: string) {
-    const { createScope } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns')
+    const { createScope } = await import('../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../packages/harness-patterns/patterns')
     const ctx = {
       sessionId: 'test',
       createdAt: Date.now(),
@@ -270,9 +270,10 @@ describe('the loops refuse to answer without tools', () => {
   }
 
   it('simpleLoop records an irrecoverable error and makes no LLM call', async () => {
-    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    const health = await import('../../../../../packages/harness-patterns/gateway-health.server')
     health.markGatewayUnreachable('ECONNREFUSED')
-    const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { simpleLoop } =
+      await import('../../../../../packages/harness-patterns/patterns/simpleLoop.server')
 
     const controller = vi.fn()
     const pattern = simpleLoop(controller, [], { patternId: 'neo4j-query' })
@@ -297,10 +298,10 @@ describe('the loops refuse to answer without tools', () => {
   })
 
   it('actorCritic does the same', async () => {
-    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    const health = await import('../../../../../packages/harness-patterns/gateway-health.server')
     health.markGatewayUnreachable('ECONNREFUSED')
     const { actorCritic } =
-      await import('../../../lib/harness-patterns/patterns/actorCritic.server')
+      await import('../../../../../packages/harness-patterns/patterns/actorCritic.server')
 
     const actor = vi.fn()
     const critic = vi.fn()
@@ -320,10 +321,12 @@ describe('the loops refuse to answer without tools', () => {
     // The twin of the actorCritic case below, and it had no test: both loops
     // carry their own copy of the exemption, so a fix to one has twice gone in
     // without the other.
-    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    const health = await import('../../../../../packages/harness-patterns/gateway-health.server')
     health.markGatewayUnreachable('ECONNREFUSED')
-    const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
-    const { withTransport } = await import('../../../lib/harness-patterns/tool-transport.server')
+    const { simpleLoop } =
+      await import('../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+    const { withTransport } =
+      await import('../../../../../packages/harness-patterns/tool-transport.server')
 
     const inVm = {
       id: 'sandbox:degrade-loop',
@@ -349,11 +352,12 @@ describe('the loops refuse to answer without tools', () => {
   })
 
   it('leaves a sandbox loop alone — its tools never came from the gateway', async () => {
-    const health = await import('../../../lib/harness-patterns/gateway-health.server')
+    const health = await import('../../../../../packages/harness-patterns/gateway-health.server')
     health.markGatewayUnreachable('ECONNREFUSED')
     const { actorCritic } =
-      await import('../../../lib/harness-patterns/patterns/actorCritic.server')
-    const { withTransport } = await import('../../../lib/harness-patterns/tool-transport.server')
+      await import('../../../../../packages/harness-patterns/patterns/actorCritic.server')
+    const { withTransport } =
+      await import('../../../../../packages/harness-patterns/tool-transport.server')
 
     // The two sandbox agents pass `[]` and get their tools from the VM over
     // `docker exec`. Refusing them on a gateway outage would break the one kind

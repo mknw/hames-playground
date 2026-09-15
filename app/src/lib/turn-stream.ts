@@ -34,7 +34,7 @@ import type {
   UnifiedContext,
   ControllerActionEventData,
   ErrorEventData,
-} from '~/lib/harness-patterns'
+} from '../../../packages/harness-patterns'
 import type { HarnessSettings } from '~/lib/settings'
 import type { RunOutcome } from '~/lib/run-registry'
 

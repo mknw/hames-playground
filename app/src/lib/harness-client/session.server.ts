@@ -11,13 +11,17 @@
  * but every function now takes a `userId` and is async.
  */
 
-import { assertServerOnImport } from '../harness-patterns/assert.server'
-import type { ConfiguredPattern, WithApproval, RetrieverData } from '../harness-patterns'
-import type { HarnessData } from '../harness-patterns/harness.server'
-import type { RouterData } from '../harness-patterns/patterns/router.server'
-import type { SimpleLoopData } from '../harness-patterns/patterns'
-import { deserializeContext, serializeContext } from '../harness-patterns'
-import type { UnifiedContext } from '../harness-patterns'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import type {
+  ConfiguredPattern,
+  WithApproval,
+  RetrieverData,
+} from '../../../../packages/harness-patterns'
+import type { HarnessData } from '../../../../packages/harness-patterns/harness.server'
+import type { RouterData } from '../../../../packages/harness-patterns/patterns/router.server'
+import type { SimpleLoopData } from '../../../../packages/harness-patterns/patterns'
+import { deserializeContext, serializeContext } from '../../../../packages/harness-patterns'
+import type { UnifiedContext } from '../../../../packages/harness-patterns'
 import { canonicalAgentId, getAgent } from './registry.server'
 import {
   loadConversation,

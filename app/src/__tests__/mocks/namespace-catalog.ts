@@ -15,7 +15,7 @@
  * idempotent per module instance.
  */
 
-import { registerToolNamespaces } from '../../lib/harness-patterns/tools.server'
+import { registerToolNamespaces } from '../../../../packages/harness-patterns/tools.server'
 import { mcpNamespace } from '../../lib/app-tools/mcp-catalog'
 
 let registered = false

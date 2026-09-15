@@ -15,7 +15,7 @@
 
 import { describe, it, expect, vi } from 'vitest'
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -45,7 +45,7 @@ describe('the MCP namespace catalog', () => {
 
   it('is registered by importing the barrel, and inferServer routes through it', async () => {
     await import('../../../lib/app-tools/index.server')
-    const { inferServer } = await import('../../../lib/harness-patterns/tools.server')
+    const { inferServer } = await import('../../../../../packages/harness-patterns/tools.server')
 
     // 'search' is a single word — the heuristic alone would say 'search'.
     // Only the registered catalog makes it 'web'.
@@ -56,7 +56,7 @@ describe('the MCP namespace catalog', () => {
 
   it('the app tools keep their own grouping, ahead of the catalog', async () => {
     await import('../../../lib/app-tools/index.server')
-    const { inferServer } = await import('../../../lib/harness-patterns/tools.server')
+    const { inferServer } = await import('../../../../../packages/harness-patterns/tools.server')
 
     // `list_graph_messages` would mis-bucket under any name heuristic; the app
     // transport's `namespaceFor` (the retired `appToolNamespace` special case)
@@ -70,7 +70,7 @@ describe('ToolsFrom with the catalog (the moved grouping cases)', () => {
   async function load() {
     await import('../../../lib/app-tools/index.server')
     const { mcpNamespace } = await import('../../../lib/app-tools/mcp-catalog')
-    const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
+    const { ToolsFrom } = await import('../../../../../packages/harness-patterns/tools.server')
     return { mcpNamespace, ToolsFrom }
   }
 

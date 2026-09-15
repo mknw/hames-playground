@@ -11,7 +11,7 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { routeMessageOp } from '../../harness-baml/routing.server'
+import { routeMessageOp } from '../../../app/src/lib/harness-baml/routing.server'
 import { LLMCallError } from '../types'
 import type {
   PatternScope,
@@ -28,7 +28,7 @@ import type {
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import { trackEvent, resolveConfig, createEvent, createScope } from '../context.server'
 import { emitLive } from '../live-event-context.server'
-import { getRequestSettings } from '../../settings-context.server'
+import { getRequestSettings } from '../../../app/src/lib/settings-context.server'
 import { stripThinkBlocks } from '../content-transforms'
 import { trimToFit } from '../token-budget.server'
 

@@ -21,7 +21,9 @@ export default defineConfig({
       // Extension-filtered: a bare `src/**` makes v8 try to instrument the
       // markdown under src/, which fails to parse and spills a rollup stack
       // trace into the very log the gate is meant to make legible.
-      include: ['src/**/*.{ts,tsx,js,jsx}'],
+      // The library moved to packages/ (#225 Step 1a); it stays measured —
+      // the floors below would otherwise silently cover a smaller surface.
+      include: ['src/**/*.{ts,tsx,js,jsx}', '../packages/harness-patterns/**/*.{ts,tsx,js,jsx}'],
       exclude: [
         'baml_client/**',
         '.output/**',
@@ -41,7 +43,8 @@ export default defineConfig({
         // — a container engine, a self-hosted inference endpoint), not
         // unit-testable: recommendation from the sandbox coverage lane,
         // widened from `src/lib/sandbox/scripts/` when the same convention
-        // grew a second home under `src/lib/harness-patterns/scripts/`.
+        // grew a second home under `src/lib/harness-baml/scripts/` (the
+        // library itself moved to packages/ — #225 Step 1a).
         'src/lib/**/scripts/smoke-*.ts',
         // Same reason: run by hand against the live tenant and the live Neo4j.
         // The logic they drive is covered by the hermetic suites under

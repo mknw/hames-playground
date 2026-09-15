@@ -13,10 +13,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { ContextEvent, EventType, UnifiedContext } from '../../../../lib/harness-patterns'
-import type { RetrievalHit } from '../../../../lib/harness-patterns/patterns/retriever.server'
+import type {
+  ContextEvent,
+  EventType,
+  UnifiedContext,
+} from '../../../../../../packages/harness-patterns'
+import type { RetrievalHit } from '../../../../../../packages/harness-patterns/patterns/retriever.server'
 
-vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
@@ -81,12 +85,14 @@ const assistantMsg = (content: string, ts = 2): Ev => ({
 })
 
 async function load() {
-  const { router, routes } = await import('../../../../lib/harness-patterns/patterns/router.server')
+  const { router, routes } =
+    await import('../../../../../../packages/harness-patterns/patterns/router.server')
   const { compactIntent } =
-    await import('../../../../lib/harness-patterns/patterns/compactIntent.server')
-  const { retriever } = await import('../../../../lib/harness-patterns/patterns/retriever.server')
-  const { createScope } = await import('../../../../lib/harness-patterns/context.server')
-  const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+    await import('../../../../../../packages/harness-patterns/patterns/compactIntent.server')
+  const { retriever } =
+    await import('../../../../../../packages/harness-patterns/patterns/retriever.server')
+  const { createScope } = await import('../../../../../../packages/harness-patterns/context.server')
+  const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
   const { b } = await import('../../../../../baml_client')
   // Lane A6: the rewrite/compactIntent seams are REQUIRED config — wire the
   // real adapters (they hit the mocked `b.*`), what `bamlPatterns()` hands.

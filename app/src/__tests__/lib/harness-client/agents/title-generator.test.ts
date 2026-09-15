@@ -12,7 +12,7 @@ import { describe, it, expect, vi } from 'vitest'
 // `agents/title-generator.server.ts` imports `harness-patterns` (which
 // asserts server-only on import) and `db/conversations.server` (which
 // needs a pg pool). Mock both before dynamic-importing the SUT.
-vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 vi.mock('../../../../lib/db/conversations.server', () => ({
@@ -23,8 +23,10 @@ vi.mock('../../../../../baml_client', () => ({
     GenerateConversationTitle: vi.fn(async (msg: string) => `Title For ${msg.slice(0, 8)}`),
   },
 }))
-vi.mock('../../../../lib/harness-patterns', async () => {
-  const actual = await vi.importActual<Record<string, unknown>>('../../../../lib/harness-patterns')
+vi.mock('../../../../../../packages/harness-patterns', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>(
+    '../../../../../../packages/harness-patterns',
+  )
   // Keep the real exports but stub out the `harness()` factory — the agent
   // would otherwise pull in MCP tools, settings-context, etc.
   return {

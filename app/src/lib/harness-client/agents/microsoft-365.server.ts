@@ -22,7 +22,7 @@ import {
   withInjectionGuard,
   Tools,
   type ConfiguredPattern,
-} from '../../harness-patterns'
+} from '../../../../../packages/harness-patterns'
 import { createLoopControllerAdapter } from '../../harness-baml'
 import { mcpNamespace } from '../../app-tools/mcp-catalog'
 import type { SessionData } from '../session.server'

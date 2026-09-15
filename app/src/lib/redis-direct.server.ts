@@ -25,10 +25,10 @@
  */
 
 import { Redis } from 'ioredis'
-import { assertServerOnImport } from './harness-patterns/assert.server'
-import { callTool as gatewayCallTool } from './harness-patterns/mcp-client.server'
+import { assertServerOnImport } from '../../../packages/harness-patterns/assert.server'
+import { callTool as gatewayCallTool } from '../../../packages/harness-patterns/mcp-client.server'
 import type { CallTool } from './document-store.server'
-import type { ToolCallResult } from './harness-patterns/types'
+import type { ToolCallResult } from '../../../packages/harness-patterns/types'
 
 assertServerOnImport()
 

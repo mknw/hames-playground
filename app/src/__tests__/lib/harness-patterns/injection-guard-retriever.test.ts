@@ -16,17 +16,17 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Type-only: erased at compile time, so it does not defeat the vi.mock below.
-import type { RetrieverData } from '../../../lib/harness-patterns/patterns/retriever.server'
+import type { RetrieverData } from '../../../../../packages/harness-patterns/patterns/retriever.server'
 
 /** The retriever's data plus an index signature — the shape `runChain` needs,
  *  and what the real agents get from `SessionData`. */
 type TestData = RetrieverData & { [key: string]: unknown }
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-vi.mock('../../../lib/harness-patterns/mcp-client.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/mcp-client.server', () => ({
   callTool: vi.fn(),
   listTools: vi.fn(async () => []),
 }))
@@ -77,11 +77,13 @@ async function runRetriever(
   hits: Hit[],
   guardConfig?: { namespaces?: string[]; spotlight?: 'on-detection' | 'always' | 'off' },
 ) {
-  const { retriever } = await import('../../../lib/harness-patterns/patterns/retriever.server')
-  const { runChain } = await import('../../../lib/harness-patterns/patterns/chain.server')
-  const { createContext } = await import('../../../lib/harness-patterns/context.server')
+  const { retriever } =
+    await import('../../../../../packages/harness-patterns/patterns/retriever.server')
+  const { runChain } =
+    await import('../../../../../packages/harness-patterns/patterns/chain.server')
+  const { createContext } = await import('../../../../../packages/harness-patterns/context.server')
   const { withInjectionGuard } =
-    await import('../../../lib/harness-patterns/patterns/withInjectionGuard.server')
+    await import('../../../../../packages/harness-patterns/patterns/withInjectionGuard.server')
 
   const backend = stubBackend(hits)
   const pattern = retriever<TestData>({
@@ -134,7 +136,7 @@ describe('retriever hits — guarded', () => {
   it('neutralizes BEFORE any LLM-facing serialization exists', async () => {
     const { ctx } = await runRetriever([hit(POISONED_CHUNK)], { namespaces: ['retriever'] })
     const { createEventView } =
-      await import('../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../packages/harness-patterns/patterns/event-view.server')
     const view = createEventView(ctx, undefined)
 
     // `compactExecution` reads the retriever's tool_result through exactly these.
@@ -150,13 +152,15 @@ describe('retriever hits — guarded', () => {
   it('also sanitizes scope.data.matches (not just the event)', async () => {
     // `scope.data.matches` travels to the next pattern and to the UI, so a
     // read-time view transform would have missed it.
-    const { retriever } = await import('../../../lib/harness-patterns/patterns/retriever.server')
-    const { createScope } = await import('../../../lib/harness-patterns/context.server')
-    const { createContext } = await import('../../../lib/harness-patterns/context.server')
+    const { retriever } =
+      await import('../../../../../packages/harness-patterns/patterns/retriever.server')
+    const { createScope } = await import('../../../../../packages/harness-patterns/context.server')
+    const { createContext } =
+      await import('../../../../../packages/harness-patterns/context.server')
     const { createEventView } =
-      await import('../../../lib/harness-patterns/patterns/event-view.server')
+      await import('../../../../../packages/harness-patterns/patterns/event-view.server')
     const { withInjectionGuard } =
-      await import('../../../lib/harness-patterns/patterns/withInjectionGuard.server')
+      await import('../../../../../packages/harness-patterns/patterns/withInjectionGuard.server')
 
     const ctx = createContext<TestData>('what does the board pack say?')
     const pattern = withInjectionGuard({ namespaces: ['retriever'] })(

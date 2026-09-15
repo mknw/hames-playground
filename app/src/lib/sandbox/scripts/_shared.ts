@@ -6,7 +6,7 @@
  * runs in Node.
  */
 
-import type { ContextEvent, PatternScope } from '../../harness-patterns/types'
+import type { ContextEvent, PatternScope } from '../../../../../packages/harness-patterns/types'
 
 /** Print every tracked event in execution order, summarized to one line each.
  *  Covers the four event shapes the smoke scripts care about — controller

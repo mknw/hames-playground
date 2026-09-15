@@ -11,7 +11,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
@@ -27,7 +27,7 @@ vi.mock('../../../lib/db/conversations.server', () => ({ saveConversation: dbSav
 
 const { seedActionRow, runAgentInBackground } =
   await import('../../../lib/harness-client/action-runner.server')
-const { deserializeContext } = await import('../../../lib/harness-patterns')
+const { deserializeContext } = await import('../../../../../packages/harness-patterns')
 
 const TRIGGER = {
   transcribedCommand: 'Summarise yesterday’s incident',

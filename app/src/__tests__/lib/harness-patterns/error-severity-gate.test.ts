@@ -19,15 +19,18 @@ import { describe, it, expect, vi } from 'vitest'
 import { readFile, readdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
 
-import { runChain, configurePattern } from '../../../lib/harness-patterns/patterns/chain.server'
-import { createContext, trackEvent } from '../../../lib/harness-patterns/context.server'
-import { DEFAULT_ERROR_SEVERITY } from '../../../lib/harness-patterns/types'
-import type { ErrorEventData, PatternConfig } from '../../../lib/harness-patterns/types'
+import {
+  runChain,
+  configurePattern,
+} from '../../../../../packages/harness-patterns/patterns/chain.server'
+import { createContext, trackEvent } from '../../../../../packages/harness-patterns/context.server'
+import { DEFAULT_ERROR_SEVERITY } from '../../../../../packages/harness-patterns/types'
+import type { ErrorEventData, PatternConfig } from '../../../../../packages/harness-patterns/types'
 
 type Data = Record<string, unknown>
 
@@ -199,7 +202,8 @@ describe('a gated turn does not poison the next one', () => {
     // them quietly stops — and the failure mode would be a conversation that is
     // permanently wedged after one irrecoverable error, with every later turn
     // ending before its first pattern.
-    const { continueSession } = await import('../../../lib/harness-patterns/harness.server')
+    const { continueSession } =
+      await import('../../../../../packages/harness-patterns/harness.server')
     const ran: string[] = []
     const ctx = createContext<Data>('q')
 
@@ -210,7 +214,8 @@ describe('a gated turn does not poison the next one', () => {
     expect(ctx.status).toBe('error')
     expect(ran).toEqual([])
 
-    const { serializeContext } = await import('../../../lib/harness-patterns/context.server')
+    const { serializeContext } =
+      await import('../../../../../packages/harness-patterns/context.server')
     const next = await continueSession(
       serializeContext(ctx) as any,
       [marker('synth', ran)] as any,
@@ -306,7 +311,7 @@ describe('the classification map', () => {
   })
 
   it('has an entry for every pattern type in the package', async () => {
-    const dir = resolve(process.cwd(), 'src/lib/harness-patterns/patterns')
+    const dir = resolve(process.cwd(), '../packages/harness-patterns/patterns')
     const declared = new Set<string>()
     for (const entry of await readdir(dir)) {
       if (!entry.endsWith('.ts')) continue

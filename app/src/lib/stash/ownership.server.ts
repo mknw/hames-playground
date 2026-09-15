@@ -31,7 +31,7 @@
  * scoped by the same sessionId as the session's documents.
  */
 
-import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
 import { getConversationOwner } from '../db/conversations.server'
 import { claimSession, getSessionClaimOwner } from '../db/session-claims.server'
 import { DEFAULT_TTL_SECONDS } from '../document-store.server'

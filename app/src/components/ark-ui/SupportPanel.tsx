@@ -13,7 +13,7 @@ import { ObservabilityPanel } from './ObservabilityPanel'
 import { DataStashPanel, type StashAction } from './DataStashPanel'
 import { TerminalPanel } from './TerminalPanel'
 import type { ElementDefinition, StylesheetJsonBlock } from 'cytoscape'
-import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns'
+import type { ContextEvent, UnifiedContext } from '../../../../packages/harness-patterns'
 
 /** Highlight nodes the agent's query actually touched (vs. surrounding context).
  *  The extractor sets `data.touched = true` on these — see `graph-extractor.ts`. */

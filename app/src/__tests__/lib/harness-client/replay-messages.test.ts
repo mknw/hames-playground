@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { replayMessages, errorBubble } from '../../../lib/harness-client/replay'
-import type { ContextEvent, ErrorEventData } from '../../../lib/harness-patterns'
+import type { ContextEvent, ErrorEventData } from '../../../../../packages/harness-patterns'
 
 const userMsg = (content: string, ts: number, id: string): ContextEvent => ({
   id,

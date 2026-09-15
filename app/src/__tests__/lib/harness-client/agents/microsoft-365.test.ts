@@ -12,7 +12,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
   ServerOnlyError: class ServerOnlyError extends Error {},
@@ -62,7 +62,7 @@ const injectionGuard = vi.fn((config: unknown) => <T extends object>(pattern: T)
   guardConfig: config,
 }))
 
-vi.mock('../../../../lib/harness-patterns', () => ({
+vi.mock('../../../../../../packages/harness-patterns', () => ({
   simpleLoop: (c: unknown, t: string[], cfg: unknown) => simpleLoop(c, t, cfg),
   compactExecution: (config: unknown) => ({
     name: 'compactExecution',

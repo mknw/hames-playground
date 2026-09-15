@@ -24,10 +24,10 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockAction, mockCriticResult, mockBAMLClient } from '../../mocks/baml'
-import type { ControllerFn } from '../../../lib/harness-patterns/types'
+import type { ControllerFn } from '../../../../../packages/harness-patterns/types'
 import { mockCallTool, mockListTools } from '../../mocks/mcp'
 
-vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -39,7 +39,7 @@ const callToolMock = mockCallTool({
   },
 })
 
-vi.mock('../../../lib/harness-patterns/mcp-client.server', () => ({
+vi.mock('../../../../../packages/harness-patterns/mcp-client.server', () => ({
   callTool: callToolMock,
   listTools: mockListTools(['read_neo4j_cypher', 'code-mode', 'Return']),
 }))
@@ -131,9 +131,10 @@ describe('resolveTurnBudget', () => {
   })
 
   it('is the rule estimateTurns uses, so the progress bar cannot disagree', async () => {
-    const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { simpleLoop } =
+      await import('../../../../../packages/harness-patterns/patterns/simpleLoop.server')
     const { actorCritic } =
-      await import('../../../lib/harness-patterns/patterns/actorCritic.server')
+      await import('../../../../../packages/harness-patterns/patterns/actorCritic.server')
     const { DEFAULT_SETTINGS, SETTINGS_BOUNDS } = await import('../../../lib/settings')
 
     expect(
@@ -178,9 +179,10 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
   })
 
   it('simpleLoop: marks the event, carries the budget, and spends exactly it', async () => {
-    const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns')
+    const { simpleLoop } =
+      await import('../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../packages/harness-patterns/patterns')
 
     const controller = neverFinishingController()
     const pattern = simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
@@ -217,9 +219,10 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
   })
 
   it('simpleLoop: the hint names the lever that actually bound', async () => {
-    const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns')
+    const { simpleLoop } =
+      await import('../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../packages/harness-patterns/patterns')
 
     const run = async (maxTurns?: number) => {
       const pattern = simpleLoop(
@@ -254,9 +257,9 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
 
   it('actorCritic: stamps the identical marker when its attempts run out', async () => {
     const { actorCritic } =
-      await import('../../../lib/harness-patterns/patterns/actorCritic.server')
-    const { createScope } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns')
+      await import('../../../../../packages/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../packages/harness-patterns/patterns')
 
     const actor = vi.fn().mockResolvedValue({
       action: {
@@ -298,9 +301,10 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
   })
 
   it('the BODY spends the clamped budget, not the declared literal', async () => {
-    const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns')
+    const { simpleLoop } =
+      await import('../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../packages/harness-patterns/patterns')
     const { SETTINGS_BOUNDS } = await import('../../../lib/settings')
     const ceiling = SETTINGS_BOUNDS.maxToolTurns[1]
 
@@ -318,9 +322,10 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
   })
 
   it('a declared 0 still runs a round and RECORDS its exhaustion', async () => {
-    const { simpleLoop } = await import('../../../lib/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } = await import('../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../lib/harness-patterns/patterns')
+    const { simpleLoop } =
+      await import('../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../../packages/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../../packages/harness-patterns/patterns')
 
     const controller = neverFinishingController()
     const result = await simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {

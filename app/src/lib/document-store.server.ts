@@ -27,10 +27,10 @@
  *   - delete:              `key` (note: not `name`)
  */
 
-import { assertServerOnImport } from './harness-patterns/assert.server'
+import { assertServerOnImport } from '../../../packages/harness-patterns/assert.server'
 import { stashCallTool, directCallTool, gatewayCallTool } from './redis-direct.server'
-import type { ToolCallResult } from './harness-patterns/types'
-import type { PriorResult } from './harness-patterns/types'
+import type { ToolCallResult } from '../../../packages/harness-patterns/types'
+import type { PriorResult } from '../../../packages/harness-patterns/types'
 
 assertServerOnImport()
 

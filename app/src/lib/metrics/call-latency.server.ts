@@ -66,7 +66,7 @@
  * everyone, like the counters beside it, and there is nothing in it to attribute
  * to a person (SD-10).
  */
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import type { InferenceTier } from '../inference/config.server'
 
 assertServerOnImport()

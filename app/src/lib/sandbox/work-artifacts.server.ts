@@ -20,7 +20,7 @@
  * stored under).
  */
 
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { listDocuments, getDocument, storeDocument, type CallTool } from '../document-store.server'
 import { guessMimeType, isTextMime } from '../stash/upload-service.server'
 import type { McpTransport } from './types'

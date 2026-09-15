@@ -26,7 +26,7 @@
  * a live gateway or model server.
  */
 
-import { assertServerOnImport } from '../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { stashCallTool } from './redis-direct.server'
 import {
   DEFAULT_TTL_SECONDS,

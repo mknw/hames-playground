@@ -8,7 +8,7 @@
  * exactly one consumer, the right panel's "All" tab, and went with it.
  */
 
-import type { ContextEvent } from '../../../packages/harness-patterns'
+import type { ContextEvent } from '@hames/harness-patterns'
 
 /**
  * Index of the most recent `user_message` in the stream, or -1 when there is

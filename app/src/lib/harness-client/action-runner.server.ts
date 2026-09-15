@@ -21,8 +21,8 @@
  *      shared `runTurnAndPersist` implementation (`turn.server.ts`).
  */
 
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
-import { createContext, serializeContext } from '../../../../packages/harness-patterns'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { createContext, serializeContext } from '@hames/harness-patterns'
 import { type SessionData } from './session.server'
 import { runTurnAndPersist } from './turn.server'
 import {

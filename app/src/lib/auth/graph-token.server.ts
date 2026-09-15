@@ -31,7 +31,7 @@ import {
   InteractionRequiredAuthError,
   type AccountInfo,
 } from '@azure/msal-node'
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { buildEntraConfig, msalConfiguration } from './entra-config.server'
 import { loadUserTokenCache, saveUserTokenCache } from './user-tokens.server'
 

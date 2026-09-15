@@ -12,7 +12,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
@@ -27,7 +27,7 @@ vi.mock('../../../lib/harness-client/turn.server', () => ({ runTurnAndPersist })
 
 // Only reached through `regenerateConversationTitle`'s dynamic import.
 const deserializeContext = vi.fn((s: string) => JSON.parse(s))
-vi.mock('../../../../../packages/harness-patterns', () => ({ deserializeContext }))
+vi.mock('@hames/harness-patterns', () => ({ deserializeContext }))
 
 // ── session.server (pattern cache + persistence) ────────────────────────────
 type Loaded = { serializedContext: string; agentId: string; kind: string; status: string } | null

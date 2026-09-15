@@ -11,14 +11,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { AgentConfig } from '../../../lib/harness-client/registry.server'
 
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
 
 const harnessHasRedisRetriever = vi.fn(() => false)
 const harnessUsesSyncWorkspace = vi.fn(() => false)
-vi.mock('../../../../../packages/harness-patterns', () => ({
+vi.mock('@hames/harness-patterns', () => ({
   harnessHasRedisRetriever,
   harnessUsesSyncWorkspace,
 }))

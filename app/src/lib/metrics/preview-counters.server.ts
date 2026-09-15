@@ -50,7 +50,7 @@
  * that fails is logged and dropped rather than failing anyone's turn (see
  * `usage-recorder.server.ts`), so treat these as "at most what was spent".
  */
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { query } from '../db/client.server'
 import type { InferenceTier } from '../inference/config.server'
 

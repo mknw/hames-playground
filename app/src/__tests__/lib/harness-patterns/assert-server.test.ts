@@ -15,7 +15,7 @@ import {
   assertServer,
   assertServerOnImport,
   ServerOnlyError,
-} from '../../../../../packages/harness-patterns/assert.server'
+} from '@hames/harness-patterns/assert.server'
 
 afterEach(() => {
   delete (globalThis as { window?: unknown }).window

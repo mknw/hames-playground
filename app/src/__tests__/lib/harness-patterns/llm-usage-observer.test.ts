@@ -22,7 +22,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Collector } from '@boundaryml/baml'
 
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -31,7 +31,7 @@ import {
   observeLlmUsage,
   resetLlmUsageObservers,
   type LlmUsageSample,
-} from '../../../../../packages/harness-patterns/llm-usage-observer.server'
+} from '@hames/harness-patterns/llm-usage-observer.server'
 import {
   accountBamlCall,
   withUsageAccounting,

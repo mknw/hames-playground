@@ -9,7 +9,7 @@
  * hit-rate, savings) stay defined on empty input.
  */
 import { describe, it, expect } from 'vitest'
-import type { ContextEvent, EventMetrics } from '../../../../../packages/harness-patterns/types'
+import type { ContextEvent, EventMetrics } from '@hames/harness-patterns/types'
 import {
   getEventMetrics,
   isLlmBearing,

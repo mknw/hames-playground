@@ -26,7 +26,7 @@ vi.mock('../../../lib/db/conversations.server', () => ({
 }))
 
 import { getMetricsDashboard } from '../../../lib/metrics/dashboard.server'
-import type { ContextEvent } from '../../../../../packages/harness-patterns/types'
+import type { ContextEvent } from '@hames/harness-patterns/types'
 
 function llmEvent(costEur: number): ContextEvent {
   return {

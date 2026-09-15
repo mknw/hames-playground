@@ -29,7 +29,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mockAction, mockCriticResult } from '../../../mocks/baml'
 
-vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -304,7 +304,7 @@ describe('flavoured-sandbox — one session workspace across flavours (#243 foll
   it('sees an ingested file on turn 2 after the router switches flavour (data → basic)', async () => {
     const { flavouredSandboxAgent } =
       await import('../../../../lib/harness-client/agents/flavoured-sandbox.server')
-    const { harness, continueSession } = await import('../../../../../../packages/harness-patterns')
+    const { harness, continueSession } = await import('@hames/harness-patterns')
     const patterns = await flavouredSandboxAgent.createPatterns('sess-243')
 
     // Turn 1 — routed to `data`, where the ingested file is hydrated.
@@ -343,7 +343,7 @@ describe('flavoured-sandbox — one session workspace across flavours (#243 foll
 
     const { flavouredSandboxAgent } =
       await import('../../../../lib/harness-client/agents/flavoured-sandbox.server')
-    const { harness } = await import('../../../../../../packages/harness-patterns')
+    const { harness } = await import('@hames/harness-patterns')
     const patterns = await flavouredSandboxAgent.createPatterns('sess-243')
 
     const turn = await harness(...patterns)('list the files in /work/in', 'sess-243')

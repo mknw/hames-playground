@@ -9,15 +9,12 @@
 
 import { describe, it, expect, vi } from 'vitest'
 
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
 
-import {
-  estimateTokens,
-  trimToFit,
-} from '../../../../../packages/harness-patterns/token-budget.server'
+import { estimateTokens, trimToFit } from '@hames/harness-patterns/token-budget.server'
 // getContextWindow moved to clients.server.ts in Lane A5 (it reads the
 // app-side MODEL_CONTEXT_WINDOWS table, so it lives beside the role→client
 // map); the function itself is unchanged — only the import path moved.

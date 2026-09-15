@@ -60,7 +60,7 @@ export const describeBatchScenario: Scenario = {
     const { expectedClientFor } = await import('../client')
     const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../src/lib/settings')
     const { maxBatchItems, MAX_BATCH_ITEMS } =
-      await import('../../../packages/harness-patterns/compactBulkData.server')
+      await import('@hames/harness-patterns/compactBulkData.server')
     const describeClient = expectedClientFor(ctx.routing, 'describe')
     const collector = new Collector('eval-describe-batch')
     const batch = await b.ResultDescribeBatch(ITEMS, ctx.opts('describe', collector))

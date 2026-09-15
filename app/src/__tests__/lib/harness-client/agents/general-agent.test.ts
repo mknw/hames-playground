@@ -12,15 +12,11 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
-import type {
-  ContextEvent,
-  EventType,
-  UnifiedContext,
-} from '../../../../../../packages/harness-patterns'
+import type { ContextEvent, EventType, UnifiedContext } from '@hames/harness-patterns'
 
 const TOOLS = ['read_neo4j_cypher', 'get_neo4j_schema', 'search', 'Return']
 
-vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -33,7 +29,7 @@ const schemaOk = mockCallTool({ responses: { get_neo4j_schema: { Concept: ['name
 const schemaFails = mockCallTool({ errors: { get_neo4j_schema: 'connection refused' } })
 const currentCallTool = { fn: schemaOk }
 
-vi.mock('../../../../../../packages/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   callTool: (...args: [string, Record<string, unknown>?]) => currentCallTool.fn(...args),
   listTools: mockListTools(TOOLS),
 }))
@@ -98,7 +94,7 @@ describe('general agent — compactExecution view scope', () => {
   async function synthView(events: Ev[]) {
     const patterns = await buildPatterns()
     const synth = patterns.find((p) => p.name === 'compactExecution')!
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
     return createEventView(ctxOf(events), synth.config.viewConfig as never, synth.config.patternId)
   }
 

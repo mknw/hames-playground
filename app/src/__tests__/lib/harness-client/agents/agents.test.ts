@@ -65,7 +65,7 @@ mockToolSets.all = [
 ]
 
 // Mock assert.server for all harness files
-vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -82,7 +82,7 @@ const callToolMock = mockCallTool({
 })
 
 // Mock MCP client
-vi.mock('../../../../../../packages/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   callTool: callToolMock,
   listTools: mockListTools(mockToolSets.all),
 }))
@@ -117,7 +117,7 @@ vi.mock('@boundaryml/baml', () => {
 })
 
 // Mock Tools function
-vi.mock('../../../../../../packages/harness-patterns/tools.server', () => ({
+vi.mock('@hames/harness-patterns/tools.server', () => ({
   Tools: vi.fn(async () => mockToolSets),
   ToolsFrom: vi.fn(async () => mockToolSets),
 }))
@@ -299,8 +299,7 @@ describe('Agent Harnesses', () => {
     it('exposes the durable-workspace capability (persistent flavours use syncWorkspace)', async () => {
       const { flavouredSandboxAgent } =
         await import('../../../../lib/harness-client/agents/flavoured-sandbox.server')
-      const { harnessUsesSyncWorkspace } =
-        await import('../../../../../../packages/harness-patterns')
+      const { harnessUsesSyncWorkspace } = await import('@hames/harness-patterns')
       const patterns = await flavouredSandboxAgent.createPatterns('test-session')
       expect(
         harnessUsesSyncWorkspace(patterns as Parameters<typeof harnessUsesSyncWorkspace>[0]),
@@ -424,7 +423,7 @@ describe('compactExecution view scope — the user message must survive', () => 
 
   it('sandbox-session: the synth still sees the question', async () => {
     const loopId = 'sandbox-session-loop'
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
     const synth = await synthOf('sandbox-session')
 
     // Mirrors compactExecution's own read: `view.fromAll().ofType('user_message')`.

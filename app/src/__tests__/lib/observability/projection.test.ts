@@ -7,7 +7,7 @@
  * including the cases the panel's DOM tests can only reach indirectly.
  */
 import { describe, it, expect } from 'vitest'
-import type { ContextEvent, EventType } from '../../../../../packages/harness-patterns'
+import type { ContextEvent, EventType } from '@hames/harness-patterns'
 import { buildTimelineItems, getEventLane, getEventPreview } from '~/lib/observability/projection'
 
 let seq = 0

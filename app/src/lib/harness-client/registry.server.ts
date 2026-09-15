@@ -16,12 +16,9 @@
  * `actions.server.ts`'s gated `getAgentList`, and the API routes import it
  * server-side. Same reasoning as `action-runner.server.ts` / `turn.server.ts`.
  */
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
-import type { ConfiguredPattern } from '../../../../packages/harness-patterns'
-import {
-  harnessHasRedisRetriever,
-  harnessUsesSyncWorkspace,
-} from '../../../../packages/harness-patterns'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import type { ConfiguredPattern } from '@hames/harness-patterns'
+import { harnessHasRedisRetriever, harnessUsesSyncWorkspace } from '@hames/harness-patterns'
 import type { SessionData } from './session.server'
 import type { AgentAccent } from '../agent-palette'
 

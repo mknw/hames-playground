@@ -26,13 +26,13 @@
  */
 
 import { withSandbox } from '../with-sandbox.server'
-import { actorCritic } from '../../../../../packages/harness-patterns/patterns/actorCritic.server'
+import { actorCritic } from '@hames/harness-patterns/patterns/actorCritic.server'
 import {
   createActorControllerAdapter,
   createCriticAdapter,
 } from '../../harness-baml/baml-adapters.server'
-import { createScope } from '../../../../../packages/harness-patterns/context.server'
-import { createEventView } from '../../../../../packages/harness-patterns/patterns'
+import { createScope } from '@hames/harness-patterns/context.server'
+import { createEventView } from '@hames/harness-patterns/patterns'
 import { printEventSummary, checkRootfsImage } from './_shared'
 
 const SENTENCE = 'the quick brown fox jumps over the lazy dog'

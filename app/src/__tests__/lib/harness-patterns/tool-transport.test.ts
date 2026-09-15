@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -27,7 +27,7 @@ import {
   activeTransports,
   processTransports,
   type ToolTransport,
-} from '../../../../../packages/harness-patterns/tool-transport.server'
+} from '@hames/harness-patterns/tool-transport.server'
 
 function fakeTransport(id: string, owns: string[] = []): ToolTransport {
   return {

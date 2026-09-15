@@ -22,7 +22,7 @@
  * `redisearch.so` SIGILL-crashes on vector ops.
  */
 
-import { assertServerOnImport } from '../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { stashCallTool } from './redis-direct.server'
 import { redisWriteError, type CallTool } from './document-store.server'
 import type { EmbeddingSpace } from './embeddings.server'

@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { findLastUserMessageIndex } from '~/lib/turn-utils'
-import type { ContextEvent } from '../../../../packages/harness-patterns'
+import type { ContextEvent } from '@hames/harness-patterns'
 
 const evt = (type: ContextEvent['type']): ContextEvent =>
   ({ type, ts: 1, patternId: 'harness', data: {} }) as unknown as ContextEvent

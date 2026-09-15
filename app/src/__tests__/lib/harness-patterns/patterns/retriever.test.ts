@@ -13,13 +13,13 @@ import type {
   EventType,
   UnifiedContext,
   ToolResultEventData,
-} from '../../../../../../packages/harness-patterns'
+} from '@hames/harness-patterns'
 import type {
   RetrieverBackend,
   RetrievalHit,
-} from '../../../../../../packages/harness-patterns/patterns/retriever.server'
+} from '@hames/harness-patterns/patterns/retriever.server'
 
-vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
   assertServer: vi.fn(),
 }))
@@ -66,10 +66,9 @@ function ctxOf(events: Ev[]): UnifiedContext<Record<string, unknown>> {
 const PATTERN_ID = 'retriever'
 
 async function load() {
-  const { retriever } =
-    await import('../../../../../../packages/harness-patterns/patterns/retriever.server')
-  const { createScope } = await import('../../../../../../packages/harness-patterns/context.server')
-  const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+  const { retriever } = await import('@hames/harness-patterns/patterns/retriever.server')
+  const { createScope } = await import('@hames/harness-patterns/context.server')
+  const { createEventView } = await import('@hames/harness-patterns/patterns')
   const { b } = await import('../../../../../baml_client')
   // Lane A6: the rewrite seam is REQUIRED config — the real adapter (which
   // hits the mocked `b.RetrieveQuery`), what `bamlPatterns().retrieveQuery`

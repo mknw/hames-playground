@@ -6,8 +6,8 @@
  * fallback for events recorded before `metrics` existed (#122).
  */
 import { describe, it, expect } from 'vitest'
-import type { ContextEvent } from '../../../../../packages/harness-patterns'
-import type { EventMetrics } from '../../../../../packages/harness-patterns/types'
+import type { ContextEvent } from '@hames/harness-patterns'
+import type { EventMetrics } from '@hames/harness-patterns/types'
 import { fmtTok, fmtEur, foldTokenTotals } from '~/lib/observability/token-totals'
 import { DEFAULT_EUR_PER_USD } from '~/lib/settings'
 

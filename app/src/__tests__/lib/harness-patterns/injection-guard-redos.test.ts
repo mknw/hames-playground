@@ -80,7 +80,7 @@ import {
   sanitizeText,
   sanitizeUntrusted,
   type InjectionRule,
-} from '../../../../../packages/harness-patterns/injection-guard'
+} from '@hames/harness-patterns/injection-guard'
 
 const ctx = { tool: 'fetch_content', namespace: 'web' }
 

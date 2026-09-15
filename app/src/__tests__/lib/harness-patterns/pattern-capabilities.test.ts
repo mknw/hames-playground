@@ -16,11 +16,8 @@ import {
   harnessHasRedisRetriever,
   isSyncWorkspaceConfig,
   harnessUsesSyncWorkspace,
-} from '../../../../../packages/harness-patterns/pattern-capabilities'
-import type {
-  ConfiguredPattern,
-  PatternConfig,
-} from '../../../../../packages/harness-patterns/types'
+} from '@hames/harness-patterns/pattern-capabilities'
+import type { ConfiguredPattern, PatternConfig } from '@hames/harness-patterns/types'
 
 type AnyPattern = ConfiguredPattern<Record<string, unknown>>
 

@@ -16,9 +16,9 @@
  * All four go through the scheduler first (`scheduler.allocate(sessionId)`)
  * and release the slot in the outer finally regardless of branch.
  */
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
-import { trackEvent } from '../../../../packages/harness-patterns/context.server'
-import { withTransport } from '../../../../packages/harness-patterns/tool-transport.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { trackEvent } from '@hames/harness-patterns/context.server'
+import { withTransport } from '@hames/harness-patterns/tool-transport.server'
 import { DEFAULT_SETTINGS } from '../settings'
 import { getRequestSettings } from '../settings-context.server'
 import { AttachmentTable } from './attachment-table.server'
@@ -33,7 +33,7 @@ import type {
   PatternConfig,
   PatternScope,
   EventView,
-} from '../../../../packages/harness-patterns/types'
+} from '@hames/harness-patterns/types'
 
 assertServerOnImport()
 

@@ -21,7 +21,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
 import { render } from '@solidjs/testing-library'
 import { createSignal, createRoot, type JSX } from 'solid-js'
 import { installDomObservers } from '../../mocks/dom-observers'
-import type { ContextEvent, UnifiedContext } from '../../../../../packages/harness-patterns'
+import type { ContextEvent, UnifiedContext } from '@hames/harness-patterns'
 import singleNodeFixture from '../../lib/harness-client/fixtures/cypher-single-node.json'
 
 beforeAll(() => {
@@ -34,7 +34,7 @@ beforeAll(() => {
 // transitive `assert.server` throws under jsdom — so the whole barrel is
 // replaced, with the two genuinely client-safe extractors kept real.
 // ---------------------------------------------------------------------------
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 

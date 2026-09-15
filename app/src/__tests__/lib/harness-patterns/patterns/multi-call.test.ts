@@ -14,9 +14,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockAction, mockFinalAction } from '../../../mocks/baml'
 import type { ControllerAction } from '../../../../../baml_client/types'
-import type { ControllerInput, ActorInput } from '../../../../../../packages/harness-patterns/types'
+import type { ControllerInput, ActorInput } from '@hames/harness-patterns/types'
 
-vi.mock('../../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -38,7 +38,7 @@ const callToolMock = vi.fn(async (tool: string, _args?: Record<string, unknown>)
   return { success: true, data: { tool, ok: true } }
 })
 
-vi.mock('../../../../../../packages/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   callTool: (tool: string, args?: Record<string, unknown>) => callToolMock(tool, args),
   listTools: vi.fn(async () => []),
 }))
@@ -57,10 +57,9 @@ function batchAction(
 }
 
 async function runPattern(actions: ControllerAction[], config?: Record<string, unknown>) {
-  const { simpleLoop } =
-    await import('../../../../../../packages/harness-patterns/patterns/simpleLoop.server')
-  const { createScope } = await import('../../../../../../packages/harness-patterns/context.server')
-  const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+  const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+  const { createScope } = await import('@hames/harness-patterns/context.server')
+  const { createEventView } = await import('@hames/harness-patterns/patterns')
 
   const controller = vi.fn()
   for (const a of actions) controller.mockResolvedValueOnce({ action: a, llmCall: undefined })
@@ -240,11 +239,9 @@ describe('actorCritic multi-call attempts', () => {
       criticSufficient?: boolean[]
     },
   ) {
-    const { actorCritic } =
-      await import('../../../../../../packages/harness-patterns/patterns/actorCritic.server')
-    const { createScope } =
-      await import('../../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../../packages/harness-patterns/patterns')
+    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
     const { mockCriticResult } = await import('../../../mocks/baml')
 
     const actor = vi.fn()
@@ -367,10 +364,8 @@ describe('actorCritic multi-call attempts', () => {
 
 describe('runBatch executor', () => {
   it('parallel: caps in-flight sub-calls at MAX_PARALLEL_TOOL_CALLS, returns positional order', async () => {
-    const { runBatch } =
-      await import('../../../../../../packages/harness-patterns/parallel-tools.server')
-    const { MAX_PARALLEL_TOOL_CALLS } =
-      await import('../../../../../../packages/harness-patterns/types')
+    const { runBatch } = await import('@hames/harness-patterns/parallel-tools.server')
+    const { MAX_PARALLEL_TOOL_CALLS } = await import('@hames/harness-patterns/types')
 
     let active = 0
     let peak = 0
@@ -393,8 +388,7 @@ describe('runBatch executor', () => {
   })
 
   it('parallel: a thrown sub-call becomes a per-call error, siblings unaffected', async () => {
-    const { runBatch } =
-      await import('../../../../../../packages/harness-patterns/parallel-tools.server')
+    const { runBatch } = await import('@hames/harness-patterns/parallel-tools.server')
     const outcomes = await runBatch(
       [
         { tool: 'ok', run: async () => ({ success: true, result: 1 }) },
@@ -413,8 +407,7 @@ describe('runBatch executor', () => {
   })
 
   it('sequential: stops at the first failure and marks the rest skipped', async () => {
-    const { runBatch } =
-      await import('../../../../../../packages/harness-patterns/parallel-tools.server')
+    const { runBatch } = await import('@hames/harness-patterns/parallel-tools.server')
     const ran: string[] = []
     const mk = (tool: string, success: boolean) => ({
       tool,
@@ -430,8 +423,7 @@ describe('runBatch executor', () => {
   })
 
   it('precheck failures never dispatch and count as failures for serial stop', async () => {
-    const { runBatch } =
-      await import('../../../../../../packages/harness-patterns/parallel-tools.server')
+    const { runBatch } = await import('@hames/harness-patterns/parallel-tools.server')
     const ran: string[] = []
     const outcomes = await runBatch(
       [
@@ -452,8 +444,7 @@ describe('runBatch executor', () => {
   })
 
   it('combineOutcomes: keyed map with __error/__skipped markers and anySucceeded', async () => {
-    const { combineOutcomes } =
-      await import('../../../../../../packages/harness-patterns/parallel-tools.server')
+    const { combineOutcomes } = await import('@hames/harness-patterns/parallel-tools.server')
     const { combined, anySucceeded, errors } = combineOutcomes([
       { index: 1, tool: 'a', success: true, result: 'r1' },
       { index: 2, tool: 'b', success: false, error: 'boom' },

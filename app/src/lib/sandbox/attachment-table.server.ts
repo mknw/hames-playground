@@ -21,7 +21,7 @@
  * promise via an `inFlight` map; only the first call does the work.
  */
 
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import type {
   ComputeBackend,
   HealthStatus,

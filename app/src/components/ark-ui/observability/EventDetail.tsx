@@ -14,7 +14,7 @@ import type {
   ToolCallEventData,
   ToolResultEventData,
   UserMessageEventData,
-} from '../../../../../packages/harness-patterns'
+} from '@hames/harness-patterns'
 import { eventColors, eventIconClasses } from '~/lib/observability/event-styles'
 import { LLMCallTabs } from './LLMCallTabs'
 import { SanitizedChip } from '../SanitizedChip'

@@ -3,7 +3,7 @@ import { For, Show, Switch, Match, createEffect, createSignal, type JSX } from '
 import type { ToolCallInfo } from './types'
 import { ToolCallDisplay } from './ToolCallDisplay'
 import { marked } from 'marked'
-import type { RetrievalReference } from '../../../../packages/harness-patterns'
+import type { RetrievalReference } from '@hames/harness-patterns'
 import type { OpenReferenceTarget } from '~/lib/harness-client/reference-extractor'
 import { escapeHtmlAttribute, sanitizeMarkdownHtml } from '~/lib/sanitize-html'
 

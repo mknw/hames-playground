@@ -22,13 +22,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockAction } from '../../mocks/baml'
 import { mockCallTool, mockListTools, fixtures } from '../../mocks/mcp'
 import type { Collector } from '@boundaryml/baml'
-import type {
-  ContextEvent,
-  ErrorEventData,
-  LLMCallData,
-} from '../../../../../packages/harness-patterns/types'
+import type { ContextEvent, ErrorEventData, LLMCallData } from '@hames/harness-patterns/types'
 
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
@@ -42,7 +38,7 @@ vi.mock('../../../lib/harness-baml/routing.server', async (importOriginal) => {
   return { ...actual, routeMessageOp: (...args: unknown[]) => routeMessageOp(...args) }
 })
 
-vi.mock('../../../../../packages/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   callTool: mockCallTool({ responses: { read_neo4j_cypher: fixtures.neo4j.queryResult } }),
   listTools: mockListTools(['read_neo4j_cypher', 'Return']),
 }))
@@ -101,8 +97,8 @@ const runPattern = async (
   data: Record<string, unknown> = {},
   content = 'convert the PDF',
 ) => {
-  const { createScope } = await import('../../../../../packages/harness-patterns/context.server')
-  const { createEventView } = await import('../../../../../packages/harness-patterns/patterns')
+  const { createScope } = await import('@hames/harness-patterns/context.server')
+  const { createEventView } = await import('@hames/harness-patterns/patterns')
   const scope = createScope('vis-test', data)
   const view = createEventView({
     sessionId: 'test',
@@ -170,8 +166,7 @@ describe('adapters: a failed BAML call carries rawOutput through the throw', () 
 
 describe('simpleLoop: error events carry the response that caused them', () => {
   const loop = async (controller: unknown, tools = ['read_neo4j_cypher']) => {
-    const { simpleLoop } =
-      await import('../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
     return runPattern(
       simpleLoop(controller as never, tools, { patternId: 'vis-test', maxTurns: 2 }) as never,
     )
@@ -217,13 +212,12 @@ describe('simpleLoop: error events carry the response that caused them', () => {
   })
 
   it('a genuine TOOL failure carries no llmCall — the response was fine', async () => {
-    const { simpleLoop } =
-      await import('../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
     const controller = vi
       .fn()
       .mockResolvedValue(succeededWith({ tool_name: 'boom_tool', tool_args: '{}' }))
     vi.mocked(
-      (await import('../../../../../packages/harness-patterns/mcp-client.server')).callTool,
+      (await import('@hames/harness-patterns/mcp-client.server')).callTool,
     ).mockResolvedValue({ success: false, error: 'gateway down', data: null })
 
     const events = await runPattern(
@@ -245,8 +239,7 @@ describe('simpleLoop: error events carry the response that caused them', () => {
 
 describe('actorCritic: error events carry the actor response', () => {
   const run = async (actor: unknown, tools = ['read_neo4j_cypher']) => {
-    const { actorCritic } =
-      await import('../../../../../packages/harness-patterns/patterns/actorCritic.server')
+    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
     const critic = vi
       .fn()
       .mockResolvedValue({ result: { is_sufficient: false, explanation: 'no' } })
@@ -310,8 +303,7 @@ describe('actorCritic: error events carry the actor response', () => {
 
 describe('router: error events carry the response', () => {
   const run = async () => {
-    const { router } =
-      await import('../../../../../packages/harness-patterns/patterns/router.server')
+    const { router } = await import('@hames/harness-patterns/patterns/router.server')
     return runPattern(router({ neo4j: 'Database queries' }) as never)
   }
 
@@ -352,7 +344,7 @@ describe('router: error events carry the response', () => {
 describe('withReferences: a failed selector call carries rawOutput', () => {
   it('reports the raw response on the error event', async () => {
     const { withReferences } =
-      await import('../../../../../packages/harness-patterns/patterns/with-references.server')
+      await import('@hames/harness-patterns/patterns/with-references.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
     mockReferenceSelector.mockRejectedValue(
       new BamlValidationError('prompt', RAW_TEXT, 'missing selected', 'missing selected'),
@@ -363,8 +355,8 @@ describe('withReferences: a failed selector call carries rawOutput', () => {
       fn: async (s: unknown) => s,
       config: { patternId: 'inner' },
     }
-    const { createScope } = await import('../../../../../packages/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../../packages/harness-patterns/patterns')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
     const scope = createScope('vis-test', {})
     // Two candidate tool_results — one is the `skipped: 'single'` fast path.
     const view = createEventView({

@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import { createRoot } from 'solid-js'
 import { createChainProgress } from '../../../components/ark-ui/useChainProgress'
-import type { ContextEvent } from '../../../../../packages/harness-patterns'
+import type { ContextEvent } from '@hames/harness-patterns'
 
 const ev = (
   type: ContextEvent['type'],

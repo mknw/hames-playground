@@ -14,7 +14,7 @@
 import { For, Show, createSignal, createMemo, createEffect, on, onCleanup } from 'solid-js'
 import { isServer } from 'solid-js/web'
 import { Tooltip } from '@ark-ui/solid/tooltip'
-import type { ContextEvent, ToolResultEventData } from '../../../../packages/harness-patterns'
+import type { ContextEvent, ToolResultEventData } from '@hames/harness-patterns'
 import {
   deleteStashDocument,
   getStashDocument,

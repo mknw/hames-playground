@@ -28,7 +28,7 @@
  * the session and pass it in — the same contract `turn.server.ts` and
  * `action-runner.server.ts` carry.
  */
-import { assertServerOnImport } from '../../../../packages/harness-patterns/assert.server'
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { query } from './client.server'
 import { type InferenceTier, verdaConfigured } from '../inference/config.server'
 

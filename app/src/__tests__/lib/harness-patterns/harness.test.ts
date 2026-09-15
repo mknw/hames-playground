@@ -7,13 +7,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock server-only imports
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn()
 }))
 
 // Mock runChain to track calls
 const mockChain = vi.fn()
-vi.mock('../../../../../packages/harness-patterns/patterns/chain.server', () => ({
+vi.mock('@hames/harness-patterns/patterns/chain.server', () => ({
   runChain: mockChain,
   chain: vi.fn()
 }))
@@ -29,13 +29,13 @@ describe('harness', () => {
   })
 
   it('should export harness function', async () => {
-    const { harness } = await import('../../../../../packages/harness-patterns/harness.server')
+    const { harness } = await import('@hames/harness-patterns/harness.server')
     expect(harness).toBeDefined()
     expect(typeof harness).toBe('function')
   })
 
   it('should create a callable agent function', async () => {
-    const { harness } = await import('../../../../../packages/harness-patterns/harness.server')
+    const { harness } = await import('@hames/harness-patterns/harness.server')
 
     const mockPattern = {
       name: 'test',
@@ -48,7 +48,7 @@ describe('harness', () => {
   })
 
   it('should execute patterns via chain', async () => {
-    const { harness } = await import('../../../../../packages/harness-patterns/harness.server')
+    const { harness } = await import('@hames/harness-patterns/harness.server')
 
     const mockPattern = {
       name: 'test',
@@ -63,7 +63,7 @@ describe('harness', () => {
   })
 
   it('should return response from context data', async () => {
-    const { harness } = await import('../../../../../packages/harness-patterns/harness.server')
+    const { harness } = await import('@hames/harness-patterns/harness.server')
 
     mockChain.mockImplementation(async (ctx) => {
       ctx.data.response = 'Hello world!'
@@ -85,7 +85,7 @@ describe('harness', () => {
   })
 
   it('should include duration_ms in result', async () => {
-    const { harness } = await import('../../../../../packages/harness-patterns/harness.server')
+    const { harness } = await import('@hames/harness-patterns/harness.server')
 
     const mockPattern = {
       name: 'test',
@@ -102,7 +102,7 @@ describe('harness', () => {
   })
 
   it('should include serialized context', async () => {
-    const { harness } = await import('../../../../../packages/harness-patterns/harness.server')
+    const { harness } = await import('@hames/harness-patterns/harness.server')
 
     const mockPattern = {
       name: 'test',
@@ -122,7 +122,7 @@ describe('harness', () => {
   })
 
   it('should add assistant_message event when done with response', async () => {
-    const { harness } = await import('../../../../../packages/harness-patterns/harness.server')
+    const { harness } = await import('@hames/harness-patterns/harness.server')
 
     mockChain.mockImplementation(async (ctx) => {
       ctx.data.response = 'Final response'
@@ -145,7 +145,7 @@ describe('harness', () => {
   })
 
   it('should handle errors gracefully', async () => {
-    const { harness } = await import('../../../../../packages/harness-patterns/harness.server')
+    const { harness } = await import('@hames/harness-patterns/harness.server')
 
     mockChain.mockRejectedValue(new Error('Test error'))
 
@@ -164,7 +164,7 @@ describe('harness', () => {
   })
 
   it('should accept sessionId parameter', async () => {
-    const { harness } = await import('../../../../../packages/harness-patterns/harness.server')
+    const { harness } = await import('@hames/harness-patterns/harness.server')
 
     const mockPattern = {
       name: 'test',
@@ -179,7 +179,7 @@ describe('harness', () => {
   })
 
   it('should accept initialData parameter', async () => {
-    const { harness } = await import('../../../../../packages/harness-patterns/harness.server')
+    const { harness } = await import('@hames/harness-patterns/harness.server')
 
     const mockPattern = {
       name: 'test',
@@ -204,14 +204,14 @@ describe('resumeHarness', () => {
   })
 
   it('should export resumeHarness function', async () => {
-    const { resumeHarness } = await import('../../../../../packages/harness-patterns/harness.server')
+    const { resumeHarness } = await import('@hames/harness-patterns/harness.server')
     expect(resumeHarness).toBeDefined()
     expect(typeof resumeHarness).toBe('function')
   })
 
   it('should throw if context is not paused', async () => {
-    const { resumeHarness } = await import('../../../../../packages/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('../../../../../packages/harness-patterns/context.server')
+    const { resumeHarness } = await import('@hames/harness-patterns/harness.server')
+    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
 
     // Create a running context
     const ctx = createContext('test')
@@ -230,8 +230,8 @@ describe('resumeHarness', () => {
   })
 
   it('should resume paused context with approval', async () => {
-    const { resumeHarness } = await import('../../../../../packages/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('../../../../../packages/harness-patterns/context.server')
+    const { resumeHarness } = await import('@hames/harness-patterns/harness.server')
+    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
 
     // Create a paused context
     const ctx = createContext<{ approved?: boolean; response?: string }>('test')
@@ -251,8 +251,8 @@ describe('resumeHarness', () => {
   })
 
   it('should add approval_response event', async () => {
-    const { resumeHarness } = await import('../../../../../packages/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('../../../../../packages/harness-patterns/context.server')
+    const { resumeHarness } = await import('@hames/harness-patterns/harness.server')
+    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
 
     const ctx = createContext<{ approved?: boolean; response?: string }>('test')
     ctx.status = 'paused'
@@ -272,8 +272,8 @@ describe('resumeHarness', () => {
   })
 
   it('should handle errors during resume', async () => {
-    const { resumeHarness } = await import('../../../../../packages/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('../../../../../packages/harness-patterns/context.server')
+    const { resumeHarness } = await import('@hames/harness-patterns/harness.server')
+    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
 
     mockChain.mockRejectedValue(new Error('Resume error'))
 
@@ -304,14 +304,14 @@ describe('continueSession', () => {
   })
 
   it('should export continueSession function', async () => {
-    const { continueSession } = await import('../../../../../packages/harness-patterns/harness.server')
+    const { continueSession } = await import('@hames/harness-patterns/harness.server')
     expect(continueSession).toBeDefined()
     expect(typeof continueSession).toBe('function')
   })
 
   it('should continue session with new input', async () => {
-    const { continueSession } = await import('../../../../../packages/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('../../../../../packages/harness-patterns/context.server')
+    const { continueSession } = await import('@hames/harness-patterns/harness.server')
+    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
 
     const ctx = createContext<{ response?: string }>('first message')
     ctx.status = 'done'
@@ -330,8 +330,8 @@ describe('continueSession', () => {
   })
 
   it('should add user_message event for new input', async () => {
-    const { continueSession } = await import('../../../../../packages/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('../../../../../packages/harness-patterns/context.server')
+    const { continueSession } = await import('@hames/harness-patterns/harness.server')
+    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
 
     const ctx = createContext<{ response?: string }>('first message')
     ctx.status = 'done'
@@ -353,8 +353,8 @@ describe('continueSession', () => {
   })
 
   it('should handle errors during continue', async () => {
-    const { continueSession } = await import('../../../../../packages/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('../../../../../packages/harness-patterns/context.server')
+    const { continueSession } = await import('@hames/harness-patterns/harness.server')
+    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
 
     mockChain.mockRejectedValue(new Error('Continue error'))
 
@@ -375,8 +375,8 @@ describe('continueSession', () => {
   })
 
   it('should reset status to running before executing', async () => {
-    const { continueSession } = await import('../../../../../packages/harness-patterns/harness.server')
-    const { serializeContext, createContext } = await import('../../../../../packages/harness-patterns/context.server')
+    const { continueSession } = await import('@hames/harness-patterns/harness.server')
+    const { serializeContext, createContext } = await import('@hames/harness-patterns/context.server')
 
     // Track the status when chain is called
     let statusWhenChainCalled: string | undefined

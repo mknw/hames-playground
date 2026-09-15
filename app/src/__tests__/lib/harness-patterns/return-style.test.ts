@@ -21,8 +21,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockCallTool, mockListTools, fixtures } from '../../mocks/mcp'
-import type { SimpleLoopData } from '../../../../../packages/harness-patterns/patterns/simpleLoop.server'
-import type { CompactExecutionData } from '../../../../../packages/harness-patterns/types'
+import type { SimpleLoopData } from '@hames/harness-patterns/patterns/simpleLoop.server'
+import type { CompactExecutionData } from '@hames/harness-patterns/types'
 
 /** The session-data shape a real agent uses (see `SessionData`): the union of
  *  what each pattern in the chain reads, plus the index signature `harness()`
@@ -35,11 +35,11 @@ interface TestData extends SimpleLoopData, CompactExecutionData {
 // client, which needs the env var to exist.
 process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'offline-render-test'
 
-vi.mock('../../../../../packages/harness-patterns/assert.server', () => ({
+vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-vi.mock('../../../../../packages/harness-patterns/mcp-client.server', () => ({
+vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   callTool: mockCallTool({
     responses: { read_neo4j_cypher: fixtures.neo4j.queryResult },
   }),
@@ -191,11 +191,10 @@ async function loadHarness() {
     },
   }))
 
-  const { simpleLoop } =
-    await import('../../../../../packages/harness-patterns/patterns/simpleLoop.server')
+  const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
   const { compactExecution } =
-    await import('../../../../../packages/harness-patterns/patterns/compactExecution.server')
-  const { harness } = await import('../../../../../packages/harness-patterns/harness.server')
+    await import('@hames/harness-patterns/patterns/compactExecution.server')
+  const { harness } = await import('@hames/harness-patterns/harness.server')
   const { createLoopControllerAdapter } =
     await import('../../../lib/harness-baml/baml-adapters.server')
   return { simpleLoop, compactExecution, harness, createLoopControllerAdapter }

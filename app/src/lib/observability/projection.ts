@@ -105,7 +105,7 @@ export function getEventLane(type: EventType): 'interface' | 'tools' {
 
 export type TimelineItem =
   | { kind: 'event'; event: ContextEvent }
-  | { kind: 'tool_pair'; call: ContextEvent; result?: ContextEvent }
+  | { kind: 'tool_pair'; call: ContextEvent; result: ContextEvent }
 
 /** Merge consecutive tool_call + tool_result with matching callId into tool_pair items */
 export function buildTimelineItems(events: ContextEvent[]): TimelineItem[] {

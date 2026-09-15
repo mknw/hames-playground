@@ -277,7 +277,7 @@ Docker-based gateway on port 8811.
 
 Tool namespaces in `tools.server.ts`: `neo4j`, `web`, `context7`, `filesystem`, `memory`, `redis`, `database`, `graph` (and `all`). There is no `github` namespace: the GitHub MCP server and its PAT were removed in #226 E3 — no agent used it, and the `gh` CLI covers this repo's own GitHub work.
 
-`KNOWN_TOOL_SERVERS` maps tool names to namespaces when auto-detection would fail.
+The MCP-gateway tool→namespace catalog (`mcpNamespace`, `app-tools/mcp-catalog.ts`, 86 names) maps tool names to namespaces when auto-detection would fail; it registers on core's resolver seam at the boot hook, and `Tools()` takes it as a REQUIRED `namespaces` argument (ruling B-iii).
 
 **Connection pool (#120):** `mcp-client.server.ts` keeps a pool of gateway connections (`MCP_GATEWAY_POOL_SIZE`, default 4) instead of one singleton. Each `callTool`/`listTools` leases a connection for the duration of the call and releases it in a `finally`, so the reconnect-once retry rebuilds only the failing connection and never disturbs other in-flight calls. Above the pool size, calls open a short-lived overflow connection (closed on release) rather than queueing behind a busy slot. This multiplexes the client→gateway hop only — per-server serialization (e.g. redis over serial stdio) is enforced inside the gateway and is unchanged.
 

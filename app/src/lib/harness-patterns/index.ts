@@ -91,7 +91,14 @@ export { DEFAULT_TRACK_HISTORY, DEFAULT_COMMIT_STRATEGY, DEFAULT_ERROR_SEVERITY 
 // Tools
 // ============================================================================
 
-export { Tools, ToolsFrom } from './tools.server'
+export {
+  Tools,
+  ToolsFrom,
+  inferServer,
+  registerToolNamespaces,
+  type ToolsOptions,
+  type NamespaceResolver,
+} from './tools.server'
 
 // ============================================================================
 // Tool transports (the containment seam)

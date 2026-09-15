@@ -79,6 +79,16 @@ export interface InjectionGuardConfig extends InjectionGuardOptions {
    * For a single hostile tool inside an otherwise trusted namespace.
    */
   tools?: string[]
+  /**
+   * The tool-name catalog to validate `namespaces` against at construction —
+   * the `tools.all` the agent just built with `Tools()`, passed by every
+   * production agent (#225 L5, §3's strengthened warning). Without it the
+   * second check has no name universe to walk and only the fixed-point check
+   * runs. The namespace also rides `SanitizeSummary`/`injectionGuard`
+   * projections, which carry counts and ids only (SD-3), so this is a label
+   * input, never a content input.
+   */
+  catalog?: string[]
 }
 
 // ============================================================================
@@ -107,7 +117,7 @@ export function createInjectionGuard(
   const outer = getActiveInjectionGuard()
   const namespaces = new Set(config.namespaces ?? [])
   const tools = new Set(config.tools ?? [])
-  warnOnUnmatchableNamespaces(namespaces)
+  warnOnUnmatchableNamespaces(namespaces, config.catalog)
 
   const isUntrusted = (tool: string): boolean =>
     tools.has(tool) || namespaces.has(inferServer(tool)) || (outer?.isUntrusted(tool) ?? false)
@@ -201,30 +211,57 @@ const warnedNamespaces = new Set<string>()
  * Warn about a declared namespace that can never match anything.
  *
  * `isUntrusted` asks `namespaces.has(inferServer(tool))`, so the only strings
- * that can ever match are the ones `inferServer` actually PRODUCES — i.e. its
- * fixed points. Catalog/server names are not: `inferServer('web_search')` is
- * `'web'`, `inferServer('rust-mcp-filesystem')` is `'rust'`,
- * `inferServer('database-server')` is `'database'`. So
- * `namespaces: ['web_search']` type-checks, reads like protection, and
- * sanitizes exactly nothing — the failure mode a security control must never
- * have (sf-H5).
+ * that can ever match are the ones `inferServer` actually PRODUCES. Two checks,
+ * because there are two ways to be unmatchable:
  *
- * The check is a fixed-point test rather than a live-catalog lookup on purpose:
- * it is synchronous, needs no gateway, and cannot false-positive on a server
- * that merely happens to be disabled right now. It cannot catch a plausible-
- * but-nonexistent namespace (`'wikipedia'`), only one that is unmatchable *by
- * construction* — which is the whole of the reported class.
+ * 1. **Fixed point** — the declared string is not even a fixed point of
+ *    `inferServer`: `inferServer('web_search')` is `'web'`,
+ *    `inferServer('rust-mcp-filesystem')` is `'rust'`,
+ *    `inferServer('database-server')` is `'database'`. So
+ *    `namespaces: ['web_search']` type-checks, reads like protection, and
+ *    sanitizes exactly nothing — the failure mode a security control must
+ *    never have (sf-H5). The check is a fixed-point test rather than a
+ *    live-catalog lookup on purpose: it is synchronous, needs no gateway, and
+ *    cannot false-positive on a server that merely happens to be disabled
+ *    right now.
+ * 2. **Unproduced** (#225 L5, §3) — the string IS a fixed point
+ *    (`inferServer('wikipedia') === 'wikipedia'` — a bare single word is
+ *    always its own fixed point), yet no name in the declared `catalog`
+ *    resolves to it. The first check is structurally blind to this: it
+ *    validates the namespace STRING, never that any tool actually lands there
+ *    — SD-5's "a control that is present but unreachable" in a new position.
+ *    The catalog is in hand at construction, because the guard is built at
+ *    pattern-build time immediately after `Tools()` and the agents pass
+ *    `tools.all` as `catalog`. That converts the blind spot into a console
+ *    warning at construction, which is where SD-5 already puts this class.
+ *
+ * Caveat stated rather than buried: the second check can warn during a
+ * gateway outage, when the catalog the agent built is amputated to the
+ * app-side survivors — a namespace the gateway would have filled warns
+ * spuriously. It is a warning, deduped per process, never a refusal.
  */
-function warnOnUnmatchableNamespaces(namespaces: Set<string>): void {
+function warnOnUnmatchableNamespaces(namespaces: Set<string>, catalog?: string[]): void {
   for (const ns of namespaces) {
+    if (warnedNamespaces.has(ns)) continue
     const canonical = inferServer(ns)
-    if (canonical === ns || warnedNamespaces.has(ns)) continue
-    warnedNamespaces.add(ns)
-    console.warn(
-      `[withInjectionGuard] declared namespace '${ns}' can never match a tool: ` +
-        `inferServer('${ns}') is '${canonical}'. NOTHING is being sanitized for it — ` +
-        `declare '${canonical}' instead, or list the exact tool names under \`tools\`.`,
-    )
+    if (canonical !== ns) {
+      warnedNamespaces.add(ns)
+      console.warn(
+        `[withInjectionGuard] declared namespace '${ns}' can never match a tool: ` +
+          `inferServer('${ns}') is '${canonical}'. NOTHING is being sanitized for it — ` +
+          `declare '${canonical}' instead, or list the exact tool names under \`tools\`.`,
+      )
+      continue
+    }
+    if (catalog && !catalog.some((tool) => inferServer(tool) === ns)) {
+      warnedNamespaces.add(ns)
+      console.warn(
+        `[withInjectionGuard] declared namespace '${ns}' matches no tool in the current ` +
+          `catalog (${catalog.length} names): NOTHING is being sanitized for it. If the ` +
+          `namespace is real, the catalog it was validated against was amputated or the ` +
+          `tool name is missing from it — check the resolver the catalog was built from.`,
+      )
+    }
   }
 }
 

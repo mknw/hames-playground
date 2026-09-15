@@ -215,7 +215,7 @@ describe('createPatterns', () => {
     // untrusted content on a trusted transport, and the agent must declare it.
     const patterns = await microsoft365Agent.createPatterns('test-session')
 
-    expect(injectionGuard).toHaveBeenCalledWith({ namespaces: ['graph'] })
+    expect(injectionGuard).toHaveBeenCalledWith({ namespaces: ['graph'], catalog: graphNamespace })
     // The guard wraps the LOOP (so it is active for every tool call), and the
     // chain shape is otherwise unchanged.
     expect(patterns).toHaveLength(2)

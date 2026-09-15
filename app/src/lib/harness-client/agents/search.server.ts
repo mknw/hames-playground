@@ -22,6 +22,7 @@ import {
   createWebSearchController,
   type ConfiguredPattern,
 } from '../../harness-patterns'
+import { mcpNamespace } from '../../app-tools/mcp-catalog'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
 import { getGraphSchema } from './graph-schema.server'
@@ -29,7 +30,7 @@ import { NEO4J_FEW_SHOTS_DEFAULT } from './neo4j-fewshots.server'
 import { enrichNeo4jResult } from '../neo4j-enricher.server'
 
 async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
-  const tools = await Tools()
+  const tools = await Tools({ namespaces: mcpNamespace })
   const schema = await getGraphSchema('search', sessionId)
 
   const neo4jController = createNeo4jController(tools.neo4j ?? [])
@@ -72,7 +73,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   const routesPattern = routes<SessionData>(
     {
       neo4j: withReferences<SessionData>(neo4jPattern, { scope: 'global', liveEvents: true }),
-      web_search: withInjectionGuard({ namespaces: ['web'] })(
+      web_search: withInjectionGuard({ namespaces: ['web'], catalog: tools.all })(
         withReferences<SessionData>(webPattern, { scope: 'global', liveEvents: true }),
       ),
     },

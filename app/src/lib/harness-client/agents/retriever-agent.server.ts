@@ -46,6 +46,7 @@ import {
   createWebSearchController,
   type ConfiguredPattern,
 } from '../../harness-patterns'
+import { mcpNamespace } from '../../app-tools/mcp-catalog'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
 import { getGraphSchema } from './graph-schema.server'
@@ -54,7 +55,7 @@ import { enrichNeo4jResult } from '../neo4j-enricher.server'
 import { createRedisBackend } from '../../retriever'
 
 async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
-  const tools = await Tools()
+  const tools = await Tools({ namespaces: mcpNamespace })
   const schema = await getGraphSchema('retriever-agent', sessionId)
 
   // ── retriever route: vector search over this session's uploaded docs ──
@@ -106,7 +107,10 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   // never pass through `callTool`, so the retriever pattern sanitizes its own
   // hits at write-time through this same guard (see `sanitizeHits` in
   // retriever.server.ts). `neo4j` stays unguarded — our own graph.
-  const routesPattern = withInjectionGuard({ namespaces: ['web', 'retriever'] })(
+  const routesPattern = withInjectionGuard({
+    namespaces: ['web', 'retriever'],
+    catalog: tools.all,
+  })(
     routes<SessionData>(
       {
         // The retriever does its own context-scoped search, so it isn't wrapped

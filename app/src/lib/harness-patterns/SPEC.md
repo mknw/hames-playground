@@ -291,15 +291,40 @@ const resumed = await resumeHarness(serialized, patterns, true)
 
 ### `Tools()`
 
-Fetch MCP tools and group by server namespace.
+Fetch MCP tools and group by server namespace. The namespace map is REQUIRED
+(owner ruling B-iii): `Tools()` with no map is how `tools.web` disappears
+silently on the day a catalog moves, so the map is an argument, not an option —
+pre-1.0, strict→lenient later is free, lenient→strict is breaking.
 
 ```typescript
-const tools = await Tools()
+const tools = await Tools({ namespaces: mcpNamespace }) // mcpNamespace: the app's catalog
+const tools = ToolsFrom(descriptions, { namespaces: mcpNamespace }) // options optional here
 tools.neo4j // ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema']
 tools.web // ['search', 'fetch', 'fetch_content']
 tools.graph // app-side, per-user (see below)
 tools.all // all tool names
 ```
+
+**Three namespace phases feed `inferServer`**, in this order and no other:
+
+1. **Registered transports' `namespaceFor`** — a process transport may declare
+   its own grouping (today: the app-side tools, whose `graph_*` names would
+   mis-bucket under any name heuristic).
+2. **Registered resolvers** — `registerToolNamespaces(r)`, the deployment's
+   explicit tool→namespace catalog. The app registers one at boot, from
+   `app-tools/mcp-catalog.ts`; core carries no catalog, because which tool
+   names exist is the deployment's fact, not the library's (#225 L5).
+3. **The heuristic** — verb-prefix stripping and separator splitting. It stays
+   in core deliberately: deployment-independent, and what makes `Tools()`
+   useful with no registration at all.
+
+The resolver seam is ONE shared value: `withInjectionGuard`'s `isUntrusted`
+resolves namespaces through the same `inferServer`, so the grouping and the
+trust boundary can never disagree. Its construction-time warning is therefore
+strengthened with a second check — a declared namespace must not merely be a
+fixed point of `inferServer`, it must be PRODUCED for at least one name in the
+catalog the agent built (passed as `catalog: tools.all`); otherwise it reads
+like protection and sanitizes nothing.
 
 **Three dispatch phases, and the order is the containment invariant.**
 `callTool()` routes a tool name to whichever transport owns it, in this order
@@ -1804,7 +1829,7 @@ async function getSchema(): Promise<string> {
 }
 
 async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
-  const tools = await Tools()
+  const tools = await Tools({ namespaces: mcpNamespace })
   const schema = await getSchema()
 
   // Use adapter factories (preferred over b.bind())
@@ -1851,7 +1876,7 @@ harness-patterns/
 ├── index.ts                # Public exports
 ├── types.ts                # Core types (UnifiedContext, PatternScope, RouterConfig, DIRECT_RESPONSE_ROUTE, etc.)
 ├── context.server.ts       # Context factory, createEvent(), generateId()
-├── tools.server.ts         # Tools() — groups MCP tools by namespace
+├── tools.server.ts         # Tools({ namespaces }) — groups MCP tools by namespace; the map is REQUIRED (ruling B-iii); inferServer consults transports' namespaceFor → registered resolvers (registerToolNamespaces) → heuristic; NO catalog in core — the 86-entry map lives in app-tools/mcp-catalog.ts and registers at boot
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? callback
 ├── routing.server.ts       # BAML router integration (routeMessageOp)
 ├── tool-transport.server.ts # ToolTransport + withTransport() (scoped, innermost-first) / registerTransport() (process, consulted after every scoped one) / activeTransports(); the difference between the two registration functions IS the containment invariant — there is no priority field and no argument that could express one

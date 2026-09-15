@@ -30,6 +30,11 @@
 
 import { describe, it, expect, vi } from 'vitest'
 
+// Lane B2 (#225 L5): the catalog left core, so namespace matching against
+// gateway tool names ('search' → 'web') needs the same registration the boot
+// hook performs — real seam, no stub.
+await import('../../mocks/namespace-catalog')
+
 import {
   INJECTION_RULES,
   applyScreenVerdict,

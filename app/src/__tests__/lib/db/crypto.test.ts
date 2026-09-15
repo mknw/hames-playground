@@ -471,6 +471,7 @@ describe('backfill selection', () => {
     const { run, statements } = tableRunner([
       {
         id: 'c1',
+        __version: '1',
         title: 'v1.aaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbb.cc',
         context: null,
         context__type: 'null',

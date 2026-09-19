@@ -28,8 +28,10 @@ import type { SubCall } from '../parallel-tools.server'
 import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { omitResultFields } from '../content-transforms'
-import { getRequestSettings } from '../../../app/src/lib/settings-context.server'
-import { resolveTurnBudget } from '../../../app/src/lib/settings'
+import {
+  resolveTurnBudget,
+  runtimeConfig,
+} from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import { trimToFit } from '../token-budget.server'
@@ -226,11 +228,11 @@ export function simpleLoop<T extends SimpleLoopData>(
       return scope
     }
 
-    const settings = getRequestSettings()
+    const settings = runtimeConfig()
     // One resolution rule for the body, `estimateTurns` below and the
     // exhaustion event: the pattern's declaration wins over the request's
-    // setting, clamped to the bound the stuck-run reaper derives its threshold
-    // from (`lib/settings.ts`, `resolveTurnBudget`).
+    // setting, clamped to the bound the host's stuck-run reaper derives its
+    // threshold from (`runtime-config.ts`, `resolveTurnBudget`).
     const maxTurns = resolveTurnBudget('maxToolTurns', config?.maxTurns, settings.maxToolTurns)
     // Multi-call turns (ControllerAction.additional_calls). 'off' still
     // EXECUTES an un-advertised batch (serially) — it only stops the prompt

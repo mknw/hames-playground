@@ -26,7 +26,7 @@ import {
   generateId,
 } from './context.server'
 import { runWithLiveListener } from './live-event-context.server'
-import { getRequestSettings } from '../../app/src/lib/settings-context.server'
+import { runtimeConfig } from './runtime-config.server'
 
 assertServerOnImport()
 
@@ -43,7 +43,7 @@ function estimateChainTurns<T>(
 }
 
 function turnEstimateSettings(): TurnEstimateSettings {
-  const s = getRequestSettings()
+  const s = runtimeConfig()
   return { maxToolTurns: s.maxToolTurns, maxRetries: s.maxRetries }
 }
 

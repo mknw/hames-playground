@@ -21,17 +21,17 @@ export interface HarnessRuntimeConfig {
   /** simpleLoop round budget for a loop that declares no `maxTurns` of its own.
    *  A pattern that DOES declare one wins — see {@link resolveTurnBudget}, the
    *  only place either value is read. */
-  maxToolTurns: number;
+  maxToolTurns: number
   /** actorCritic max attempts. */
-  maxRetries: number;
+  maxRetries: number
   /** Tool result truncation chars. */
-  maxResultChars: number;
+  maxResultChars: number
   /** Summarizer input limit chars. */
-  maxResultForSummary: number;
+  maxResultForSummary: number
   /** Prior turns for tool result memory. */
-  priorTurnCount: number;
+  priorTurnCount: number
   /** Router history window in turns. */
-  routerTurnWindow: number;
+  routerTurnWindow: number
 }
 
 /**
@@ -52,10 +52,7 @@ export const RUNTIME_CONFIG_BOUNDS = {
   maxResultForSummary: [500, 10_000],
   priorTurnCount: [1, 10],
   routerTurnWindow: [1, 20],
-} as const satisfies Record<
-  keyof HarnessRuntimeConfig,
-  readonly [number, number]
->;
+} as const satisfies Record<keyof HarnessRuntimeConfig, readonly [number, number]>
 
 export const DEFAULT_RUNTIME_CONFIG: HarnessRuntimeConfig = {
   // maxToolTurns raised 5 → 8 (#269, 2026-08-27). 5 was the value no tuned
@@ -72,7 +69,7 @@ export const DEFAULT_RUNTIME_CONFIG: HarnessRuntimeConfig = {
   maxResultForSummary: 3000,
   priorTurnCount: 3,
   routerTurnWindow: 5,
-};
+}
 
 /**
  * Resolve the round budget one loop pattern may spend this turn — the ONE place
@@ -92,13 +89,13 @@ export const DEFAULT_RUNTIME_CONFIG: HarnessRuntimeConfig = {
  *    why this is not optional hygiene.
  */
 export function resolveTurnBudget(
-  key: "maxToolTurns" | "maxRetries",
+  key: 'maxToolTurns' | 'maxRetries',
   declared: number | undefined,
   fromConfig: number,
 ): number {
-  const fallback = DEFAULT_RUNTIME_CONFIG[key];
-  const value = declared ?? fromConfig;
-  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  const [min, max] = RUNTIME_CONFIG_BOUNDS[key];
-  return Math.min(max, Math.max(min, Math.trunc(value)));
+  const fallback = DEFAULT_RUNTIME_CONFIG[key]
+  const value = declared ?? fromConfig
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  const [min, max] = RUNTIME_CONFIG_BOUNDS[key]
+  return Math.min(max, Math.max(min, Math.trunc(value)))
 }

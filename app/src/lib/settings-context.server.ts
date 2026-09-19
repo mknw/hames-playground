@@ -28,14 +28,16 @@ export function runWithSettings<T>(
 /**
  * Get the current request's settings.
  *
- * Inside a `runWithSettings` scope the store holds exactly the
- * `HarnessSettings` that was passed in; outside one (e.g. during background
- * summarization) this falls back to the app's FULL defaults — including
- * `maxConcurrentRuns` and `sandbox`, which the library's defaults do not
- * carry — exactly as this reader did before the scope moved into the library.
+ * Inside a `runWithSettings` scope the store holds the `HarnessSettings` that
+ * was passed in; outside one (e.g. during background summarization) it holds
+ * nothing and this returns the app's FULL defaults. The spread is the
+ * hardening, not style: the library scope is public API (`withRuntimeConfig`),
+ * so a scope opened with a bare `HarnessRuntimeConfig` — six knobs, no
+ * `sandbox`/`maxConcurrentRuns` — must not leave this reader answering with a
+ * partial object that `with-sandbox.server.ts` dereferences unguarded. Scope
+ * values win for the six core knobs; the app's own settings keep their
+ * defaults.
  */
 export function getRequestSettings(): HarnessSettings {
-  // The cast is the scope's own invariant: only `runWithSettings` (below)
-  // writes to it, and it always writes a full HarnessSettings.
-  return (tryRuntimeConfig() as HarnessSettings | undefined) ?? DEFAULT_SETTINGS
+  return { ...DEFAULT_SETTINGS, ...tryRuntimeConfig() }
 }

@@ -4,10 +4,21 @@
  * Safe to import from both client and server — contains only types and plain constants.
  */
 
-// Type-only, so still client-safe: erased before any bundle sees it. The type
-// itself is defined in the package since Step 1d (#225) — see the re-export
-// further down.
+// The package subpath (not the main entry) keeps this file client-safe: only
+// the pure runtime-config module is pulled into the bundle, never the
+// server-only parts of the package.
+import {
+  DEFAULT_RUNTIME_CONFIG,
+  RUNTIME_CONFIG_BOUNDS,
+  resolveTurnBudget,
+  type HarnessRuntimeConfig,
+} from '@hames/harness-patterns/runtime-config'
 import type { CostBasis } from '@hames/harness-patterns'
+
+// Re-exported so the app's settings API is unchanged: the loop-budget resolver
+// now lives in the library beside the config it clamps against.
+export { resolveTurnBudget, RUNTIME_CONFIG_BOUNDS, DEFAULT_RUNTIME_CONFIG }
+export type { HarnessRuntimeConfig }
 
 /**
  * Sandbox compute settings. See docs/plan/sandbox.md → "Settings".
@@ -41,16 +52,12 @@ export interface SandboxSettings {
   defaultEgress: 'mcp-only' | 'pypi' | 'github-trusted' | 'open'
 }
 
-export interface HarnessSettings {
-  /** simpleLoop round budget for a loop that declares no `maxTurns` of its own
-   *  (default: 8). A pattern that DOES declare one wins — see
-   *  {@link resolveTurnBudget}, the only place either value is read. */
-  maxToolTurns: number
-  maxRetries: number // actorCritic max attempts (default: 3)
-  maxResultChars: number // tool result truncation chars (default: 8000)
-  maxResultForSummary: number // summarizer input limit chars (default: 3000)
-  priorTurnCount: number // prior turns for tool result memory (default: 3)
-  routerTurnWindow: number // router history window in turns (default: 5)
+/**
+ * The app's extension of the library's {@link HarnessRuntimeConfig}: the six
+ * core knobs (typed and defaulted in the package — the library ships working
+ * defaults, the app overrides them) plus the two app-only settings.
+ */
+export interface HarnessSettings extends HarnessRuntimeConfig {
   /**
    * How many conversations may stream at once (#105). Client-side policy —
    * the server places no such limit, so this rides along in the settings
@@ -62,23 +69,9 @@ export interface HarnessSettings {
 }
 
 export const DEFAULT_SETTINGS: HarnessSettings = {
-  // Raised 5 → 8 (#269, 2026-08-27). 5 was the value no tuned agent kept: both
-  // agents that hand a model more than one namespace (`general`,
-  // `microsoft-365`) pinned 8 at their own call site, so the fallback only ever
-  // bound the loops nobody had measured yet — including the DEFAULT `search`
-  // agent, which pins `maxTurns` on neither of its loops. SETTINGS_BOUNDS is
-  // unchanged, so this widens nothing a browser could not already ask for.
-  maxToolTurns: 8,
-  maxRetries: 3,
-  // Raised 2000 → 8000 (2026-07-30): at 2000 a 14-hit Graph search showed ~3
-  // hits and the controller re-queried for data it already had (its own
-  // reasoning: "only 3 were shown before truncation"). 8000 ≈ 2k tokens —
-  // trivial against 200k windows and cache-absorbed on the Anthropic chains;
-  // trimToFit still bounds the aggregate turn log on small-window chains.
-  maxResultChars: 8000,
-  maxResultForSummary: 3000,
-  priorTurnCount: 3,
-  routerTurnWindow: 5,
+  // The six core knobs come from the library's DEFAULT_RUNTIME_CONFIG (which
+  // carries the per-value rationale); the app adds only its own two settings.
+  ...DEFAULT_RUNTIME_CONFIG,
   maxConcurrentRuns: 3,
   sandbox: {
     globalCap: 16,
@@ -114,13 +107,11 @@ export const DEFAULT_SETTINGS: HarnessSettings = {
  * that threshold automatically, which is the point — the alternative is two
  * numbers that disagree about how long a turn may legitimately run.
  */
+// The six core bounds are the library's RUNTIME_CONFIG_BOUNDS — resolveTurnBudget
+// clamps against them there, so restating the numbers app-side would let the two
+// copies disagree. The app adds only its own knob.
 export const SETTINGS_BOUNDS = {
-  maxToolTurns: [1, 15],
-  maxRetries: [1, 10],
-  maxResultChars: [500, 10_000],
-  maxResultForSummary: [500, 10_000],
-  priorTurnCount: [1, 10],
-  routerTurnWindow: [1, 20],
+  ...RUNTIME_CONFIG_BOUNDS,
   maxConcurrentRuns: [1, 10],
 } as const satisfies Record<Exclude<keyof HarnessSettings, 'sandbox'>, readonly [number, number]>
 
@@ -180,42 +171,12 @@ export function sanitizeHarnessSettings(input: unknown): HarnessSettings | undef
 }
 
 /**
- * Resolve the round budget one loop pattern may spend this turn — the ONE place
- * `maxTurns` / `maxRetries` are read, so the loop body, the progress bar's
- * denominator (`estimateTurns`) and the exhaustion event cannot disagree about
- * how many rounds the loop had.
- *
- * Two rules, in this order:
- *
- *  - **A pattern's own declaration wins over the request's setting** (`declared
- *    ?? fromSettings`), in both directions. A loop that pins a SMALL budget
- *    means it, and a user's slider does not get to widen it; a loop that pins a
- *    large one keeps it when the slider sits at the default. The cost is that
- *    the slider is inert for a pinned loop, which is why the loops' exhaustion
- *    hint names whichever of the two actually bound (before #269 it always
- *    named the setting — advice that did nothing on the agent that hit the cap).
- *
- *  - **The declaration is clamped to {@link SETTINGS_BOUNDS}**, which a call-site
- *    literal otherwise bypasses entirely. This is load-bearing and not hygiene:
- *    the stuck-run reaper derives the longest turn the app can legitimately run
- *    from `SETTINGS_BOUNDS.maxToolTurns[1]` / `maxRetries[1]`
- *    (`MAX_SEQUENTIAL_LLM_CALLS`, `lib/db/conversations.server.ts`). An agent
- *    pinning `maxTurns: 40` would not raise that threshold — it would make a
- *    legitimate turn outlast it and be reaped mid-flight, which reads to the
- *    user as a run that died for no reason. Clamping here keeps the derivation
- *    true by construction: raising a pattern's budget past the ceiling is a
- *    deliberate edit to the bound (and therefore to the reaper), never a
- *    side effect of one agent's config. The floor matters too — a declared `0`
- *    used to run zero rounds and record NOTHING, since the exhaustion event is
- *    gated on having completed at least one.
+ * `resolveTurnBudget` moved to the package (`runtime-config.ts`) beside the
+ * config it clamps against — re-exported at the top of this file, so the
+ * app's API is unchanged. Its clamp used to read `SETTINGS_BOUNDS` here; the
+ * six core bounds are now sourced from the library's `RUNTIME_CONFIG_BOUNDS`, so
+ * the two can no longer disagree about how long a turn may legitimately run.
  */
-export function resolveTurnBudget(
-  key: 'maxToolTurns' | 'maxRetries',
-  declared: number | undefined,
-  fromSettings: number,
-): number {
-  return clampSetting(key, declared ?? fromSettings)
-}
 
 /** Context window limits per BAML client (tokens) */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {

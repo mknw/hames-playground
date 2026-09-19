@@ -303,3 +303,17 @@ export type {
   RouteFn,
   RouteMessageResult,
 } from './types'
+
+// Runtime config: the library-owned settings scope (defaults + ALS frame).
+// Import the client-safe pieces (type, bounds, defaults, resolveTurnBudget)
+// from '@hames/harness-patterns/runtime-config'; the scope lives in
+// '@hames/harness-patterns/runtime-config.server'.
+export {
+  DEFAULT_RUNTIME_CONFIG,
+  RUNTIME_CONFIG_BOUNDS,
+  resolveTurnBudget,
+  runtimeConfig,
+  tryRuntimeConfig,
+  withRuntimeConfig,
+  type HarnessRuntimeConfig,
+} from './runtime-config.server'

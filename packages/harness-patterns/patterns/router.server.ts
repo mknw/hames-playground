@@ -28,7 +28,7 @@ import type {
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import { trackEvent, resolveConfig, createEvent, createScope } from '../context.server'
 import { emitLive } from '../live-event-context.server'
-import { getRequestSettings } from '../../../app/src/lib/settings-context.server'
+import { runtimeConfig } from '../runtime-config.server'
 import { stripThinkBlocks } from '../content-transforms'
 import { trimToFit } from '../token-budget.server'
 
@@ -86,7 +86,7 @@ export function router<T extends RouterData>(
   // Caller can override entirely by passing their own viewConfig in config.
   const DEFAULT_ROUTER_VIEW: ViewConfig = {
     fromLast: false, // no pattern scope filter → see all events across turns
-    fromLastNTurns: getRequestSettings().routerTurnWindow,
+    fromLastNTurns: runtimeConfig().routerTurnWindow,
     eventTypes: ['user_message', 'assistant_message'],
     contentTransforms: [stripThinkBlocks], // Strip <think> blocks from history — saves tokens, avoids confusing classifier
   }

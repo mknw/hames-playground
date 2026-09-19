@@ -151,6 +151,11 @@ function compileFences(fences: Fence[]): Map<Fence, string[]> {
 }
 
 describe('guide docs pins', () => {
+  // Timeout is explicit and generous: one tsc Program over the package's real
+  // source plus the fences ran ~0.5s on a warm dev machine but 8.5s on the CI
+  // runner (Node 22, cold FS cache) — past vitest's default 5000ms, which is
+  // what failed PR #344's first CI run. The compile is the work; the clock
+  // must not be the gate.
   it('every typescript fence in README.md and GUIDE.md compiles against the package exports', () => {
     const fences = extractFences()
     // Sanity: the guide actually carries fences — a refactor that renames
@@ -167,5 +172,5 @@ describe('guide docs pins', () => {
       }
     }
     expect(failures).toEqual([])
-  })
+  }, 120_000)
 })

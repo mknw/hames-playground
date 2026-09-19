@@ -39,6 +39,12 @@ RUN apt-get update \
 # In-VM MCP servers live under /opt/mcp.
 RUN mkdir -p /opt/mcp /work
 
+# Egress allowlist CONNECT proxy (#116). Same image as the sandboxes — the
+# gateway container only needs Node. Not an MCP server; its stdout is the
+# outbound audit log (docker logs kg-sandbox-egress-<profile>-gw).
+COPY egress-proxy/proxy.mjs /opt/mcp/egress-proxy/proxy.mjs
+RUN chmod +x /opt/mcp/egress-proxy/proxy.mjs
+
 # rust-mcp-filesystem (filesystem MCP).
 COPY --from=fs-mcp /rust-mcp-filesystem /opt/mcp/rust-mcp-filesystem
 RUN chmod +x /opt/mcp/rust-mcp-filesystem
@@ -55,7 +61,29 @@ RUN chmod +x /opt/mcp/mcp-shell/server.mjs
 COPY init.sh /opt/mcp/init.sh
 RUN chmod +x /opt/mcp/init.sh
 
+# uv (static binary, same pin as the data/office flavours) — live installs on
+# the networked egress profiles go through it (#116: "uv live-install").
+COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /bin/
+
+# Writable-at-runtime knobs (#116 hardening):
+#   /work       RAM-backed tmpfs mounted by the backend (mode 1777 — docker
+#               cannot chown a tmpfs to the image user, so it is world-
+#               writable; every in-VM process runs as the same uid anyway).
+#   /work/home  the non-root user's HOME, created by init.sh on the /work
+#               tmpfs — nothing about it needs to survive a container.
+#   /cache      shared wheel cache (docker volume mounted by the backend on
+#               networked boots). Owned by the sandbox user in the image, so
+#               the volume inherits that ownership on first use and needs no
+#               chown at runtime.
+RUN useradd --uid 10001 --user-group --no-create-home \
+        --home-dir /work/home --shell /bin/bash sandbox \
+    && mkdir -p /cache/uv /cache/pip \
+    && chown -R sandbox:sandbox /cache /work
+
 ENV WORK_DIR=/work
+ENV HOME=/work/home
+ENV UV_CACHE_DIR=/cache/uv
+ENV PIP_CACHE_DIR=/cache/pip
 # Don't prepend the script dir / cwd to sys.path (Python 3.11+). Agents write
 # scripts into /work (the cwd) with names they choose — a script named after a
 # stdlib module (inspect.py, types.py, email.py, …) would otherwise shadow that
@@ -64,6 +92,12 @@ ENV WORK_DIR=/work
 # sibling modules must set PYTHONPATH=/work explicitly (covered in guidance).
 ENV PYTHONSAFEPATH=1
 WORKDIR /work
+
+# Everything in-VM — entrypoint, the MCP servers (docker exec), the actor's
+# commands, the interactive shell — runs as this non-root user (#116).
+# Combined with the backend's --cap-drop=ALL, --read-only and
+# no-new-privileges there is no privilege left to drop INTO.
+USER sandbox
 
 # Idle host: prepare /work, then block forever. MCP servers are spawned
 # per-connection via `docker exec` (see connectMcp).

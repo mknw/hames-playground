@@ -6,13 +6,14 @@ project root" the sandbox needs — there is no separate pool-manager daemon.
 
 ## Contents
 
-| Path (in image) | What | Notes |
-|-----------------|------|-------|
-| `/opt/mcp/rust-mcp-filesystem` | Filesystem MCP server | Lifted from the pinned `mcp/rust-mcp-filesystem` image (same digest as `configs/custom-catalog.yaml`); statically linked, runs on debian. |
-| `/opt/mcp/mcp-shell/` | JS shell-exec MCP server (one `bash` tool) | Authored here (`mcp-shell/`); deps installed in-image. Covers Python via `python3 -c …`. |
-| `python3`, `pip`, `venv` | Python runtime | Invoked through `mcp-shell` in v0. |
-| `/work` | Agent working directory | The filesystem MCP is scoped to this; shell `cwd` defaults here. |
-| `/opt/mcp/init.sh` | Entry/launcher | Idle-host entrypoint + `serve <name>` launch path for `docker exec`. |
+| Path (in image)                   | What                                       | Notes                                                                                                                                       |
+| --------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/opt/mcp/rust-mcp-filesystem`    | Filesystem MCP server                      | Lifted from the pinned `mcp/rust-mcp-filesystem` image (same digest as `configs/custom-catalog.yaml`); statically linked, runs on debian.   |
+| `/opt/mcp/mcp-shell/`             | JS shell-exec MCP server (one `bash` tool) | Authored here (`mcp-shell/`); deps installed in-image. Covers Python via `python3 -c …`.                                                    |
+| `python3`, `pip`, `venv`, `uv`    | Python runtime                             | Invoked through `mcp-shell` in v0; `uv` (same pin as the data/office flavours) backs live installs on the networked egress profiles.        |
+| `/work`                           | Agent working directory                    | The filesystem MCP is scoped to this; shell `cwd` defaults here. RAM-backed tmpfs at runtime (mode 1777, size via `SANDBOX_WORK_TMPFS_MB`). |
+| `/opt/mcp/init.sh`                | Entry/launcher                             | Idle-host entrypoint + `serve <name>` launch path for `docker exec`.                                                                        |
+| `/opt/mcp/egress-proxy/proxy.mjs` | Allowlist CONNECT proxy (egress profiles)  | Run by the backend as a gateway container beside `pypi`/`github-trusted` sandboxes; its stdout is the outbound audit log.                   |
 
 ### PYTHONSAFEPATH
 
@@ -25,7 +26,7 @@ explicit `PYTHONPATH=/work` — the agents' guidance says so.
 
 ## Architecture: MCP-in-VM (Docker model)
 
-The container is a **long-lived idle host**. It does *not* run the MCP servers
+The container is a **long-lived idle host**. It does _not_ run the MCP servers
 as foreground services. The harness's `DockerBackend.connectMcp` opens one
 stdio transport per server by running:
 
@@ -45,19 +46,45 @@ docker build -t kg-sandbox:base rootfs/
 ```
 
 The build is a two-stage Dockerfile:
+
 1. lift the `rust-mcp-filesystem` binary from its pinned image, then
 2. assemble `node:22-bookworm-slim` + python3 + the two MCP servers.
+
+The image ends at `USER sandbox` (non-root, uid 10001, `HOME=/work/home`,
+created by init.sh on the runtime /work tmpfs). The flavour Dockerfiles switch
+to `USER root` for their build steps and back to `USER sandbox` at the end.
+Everything in-VM runs as that user; combined with the backend's
+`--cap-drop=ALL` / `--read-only` / `no-new-privileges` there is no privilege
+left to drop into.
+
+### Hardening & egress (runtime, applied by the backend — #116)
+
+The backend boots every sandbox with `--cap-drop=ALL`, `--read-only`, a
+RAM-backed writable `/work` + `/tmp`, `--pids-limit` and
+`--security-opt no-new-privileges`. `/cache` — the uv/pip wheel cache, mounted
+as a named volume on networked boots — is pre-owned by the sandbox user in the
+image, so the volume needs no runtime chown. All env knobs
+(`SANDBOX_PIDS_LIMIT`, `SANDBOX_WORK_TMPFS_MB`, `SANDBOX_SECCOMP_PROFILE`,
+`SANDBOX_APPARMOR_PROFILE`, command-policy and egress lists) are documented in
+`app/.env.example`.
+
+The image also carries `/opt/mcp/egress-proxy/proxy.mjs` — a zero-dependency
+allowlist CONNECT proxy. It is not an MCP server: the backend runs it as a
+gateway container beside the `pypi` / `github-trusted` egress profiles, and
+its stdout (one JSON line per allowed AND denied connection) is the outbound
+audit log: `docker logs kg-sandbox-egress-<profile>-gw`. See
+`docs/sandbox-flavours.md` → "Hardening & egress".
 
 ### Flavours
 
 Beyond `base`, two purpose-split flavours extend it (design:
 [`docs/sandbox-flavours.md`](../docs/sandbox-flavours.md)):
 
-| Tag | Adds | Dockerfile |
-|-----|------|------------|
-| `kg-sandbox:image-processing` | numpy, Pillow, OpenCV via apt (`python3-opencv`; the pip wheel SIGILLs on arm64) + imagemagick | `Dockerfile.image-processing` |
-| `kg-sandbox:data` | via `uv`: pandas, numpy, polars, pyarrow, matplotlib, seaborn + excel backends (openpyxl, fastexcel, xlsxwriter) + python-docx, python-pptx, reportlab, pypdf | `Dockerfile.data` |
-| `kg-sandbox:office` | via `uv`: python-docx (Word), openpyxl + xlsxwriter (Excel), PyMuPDF (PDF) — document *editing* | `Dockerfile.office` |
+| Tag                           | Adds                                                                                                                                                          | Dockerfile                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `kg-sandbox:image-processing` | numpy, Pillow, OpenCV via apt (`python3-opencv`; the pip wheel SIGILLs on arm64) + imagemagick                                                                | `Dockerfile.image-processing` |
+| `kg-sandbox:data`             | via `uv`: pandas, numpy, polars, pyarrow, matplotlib, seaborn + excel backends (openpyxl, fastexcel, xlsxwriter) + python-docx, python-pptx, reportlab, pypdf | `Dockerfile.data`             |
+| `kg-sandbox:office`           | via `uv`: python-docx (Word), openpyxl + xlsxwriter (Excel), PyMuPDF (PDF) — document _editing_                                                               | `Dockerfile.office`           |
 
 Build all three (base first — the flavours are `FROM kg-sandbox:base`):
 
@@ -147,6 +174,6 @@ The harness applies a `sandbox_` prefix when registering these (see plan
 - Publishing to a registry (built locally for dev; image-publish is an ops step).
 - Heavier flavors beyond `image-processing` / `data` (spaCy / sentence-transformers,
   an `office`/LibreOffice flavor) — see [`docs/sandbox-flavours.md`](../docs/sandbox-flavours.md)
-  + [#78](https://github.com/mknw/harness-playground/issues/78) /
-  [#116](https://github.com/mknw/harness-playground/issues/116).
+  - [#78](https://github.com/mknw/harness-playground/issues/78) /
+    [#116](https://github.com/mknw/harness-playground/issues/116).
 - A Rust shell-exec server (swaps in for `mcp-shell` only if cold-start is felt).

@@ -8,7 +8,7 @@
  * place with stable vm.id and preserved RuntimeConfig).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 
 // server-only guard is a no-op in tests
@@ -323,7 +323,7 @@ describe('DockerBackend.connectMcp', () => {
     const backend = await makeBackend()
     const transport = await backend.connectMcp(await backend.boot('base', {}))
 
-    await expect(transport.callTool('sandbox_bash', {})).resolves.toEqual({
+    await expect(transport.callTool('sandbox_read', {})).resolves.toEqual({
       success: true,
       data: 'hello world',
     })
@@ -366,7 +366,7 @@ describe('DockerBackend.connectMcp', () => {
     const backend = await makeBackend()
     const transport = await backend.connectMcp(await backend.boot('base', {}))
 
-    await expect(transport.callTool('sandbox_bash', {})).resolves.toEqual({
+    await expect(transport.callTool('sandbox_read', {})).resolves.toEqual({
       success: false,
       data: null,
       error: 'broken pipe',
@@ -589,5 +589,361 @@ describe('DockerBackend.reapOrphans', () => {
     }
     const backend = await makeBackend()
     await expect(backend.reapOrphans()).resolves.toBe(1)
+  })
+})
+
+// ============================================================================
+// Container hardening (#116) — the argv every sandbox boots with.
+// ============================================================================
+
+/** Env vars these suites may set; snapshot/restored around each test so a
+ *  policy knob leaks into the suites above/below. */
+const HARDENING_ENV_VARS = [
+  'SANDBOX_PIDS_LIMIT',
+  'SANDBOX_WORK_TMPFS_MB',
+  'SANDBOX_SECCOMP_PROFILE',
+  'SANDBOX_APPARMOR_PROFILE',
+  'SANDBOX_BASH_DENY',
+  'SANDBOX_BASH_ALLOW',
+  'SANDBOX_CACHE_VOLUME',
+  'SANDBOX_EGRESS_PROXY_PORT',
+]
+let envSnapshot: Record<string, string | undefined> = {}
+beforeEach(() => {
+  envSnapshot = {}
+  for (const k of HARDENING_ENV_VARS) envSnapshot[k] = process.env[k]
+})
+afterEach(() => {
+  for (const k of HARDENING_ENV_VARS) {
+    if (envSnapshot[k] === undefined) delete process.env[k]
+    else process.env[k] = envSnapshot[k]
+  }
+})
+
+/** Read the argv of the ONE `docker run` that booted a sandbox (name sbx-*). */
+function sandboxRunArgs(): string[] {
+  return spawnCalls.find(
+    (c) =>
+      c.args[0] === 'run' &&
+      c.args.includes('kg-sandbox=1') &&
+      !c.args.join(' ').includes('kg-sandbox-egress='),
+  )!.args
+}
+
+/** The value that follows `flag` in an argv (paired-flag helper). */
+function flagValue(args: string[], flag: string): string | undefined {
+  const i = args.indexOf(flag)
+  return i === -1 ? undefined : args[i + 1]
+}
+
+describe('DockerBackend — container hardening argv (#116)', () => {
+  it('boots every sandbox with no caps, a read-only rootfs, tmpfs scratch and a pid ceiling', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', {})
+    const args = sandboxRunArgs()
+    expect(flagValue(args, '--cap-drop')).toBe('ALL')
+    expect(args).toContain('--read-only')
+    expect(flagValue(args, '--pids-limit')).toBe('256')
+    expect(flagValue(args, '--security-opt')).toBe('no-new-privileges')
+    // writable scratch is tmpfs: /tmp and /work both RAM-backed
+    expect(args.join(' ')).toContain('--tmpfs /tmp:rw,nosuid,size=64m')
+    expect(args.join(' ')).toContain('--tmpfs /work:rw,nosuid,size=512m,mode=1777')
+  })
+
+  it('reads the pid ceiling and /work size from env knobs (no rebuild to retune)', async () => {
+    process.env.SANDBOX_PIDS_LIMIT = '64'
+    process.env.SANDBOX_WORK_TMPFS_MB = '128'
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', {})
+    const args = sandboxRunArgs()
+    expect(flagValue(args, '--pids-limit')).toBe('64')
+    expect(args.join(' ')).toContain('--tmpfs /work:rw,nosuid,size=128m,mode=1777')
+  })
+
+  it('falls back to the default pid ceiling on a non-numeric env value (never disables the cap)', async () => {
+    process.env.SANDBOX_PIDS_LIMIT = 'not-a-number'
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', {})
+    expect(flagValue(sandboxRunArgs(), '--pids-limit')).toBe('256')
+  })
+
+  it('opts into a custom seccomp/AppArmor profile only when the env names one', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', {})
+    expect(sandboxRunArgs().filter((a) => a === '--security-opt')).toHaveLength(1) // only no-new-privileges
+
+    spawnCalls.length = 0
+    process.env.SANDBOX_SECCOMP_PROFILE = '/etc/docker/sandbox-seccomp.json'
+    process.env.SANDBOX_APPARMOR_PROFILE = 'sandbox-profile'
+    await backend.boot('base', {})
+    const opts = sandboxRunArgs().filter((_a, i, arr) => arr[i - 1] === '--security-opt')
+    expect(opts).toEqual(
+      expect.arrayContaining([
+        'no-new-privileges',
+        'seccomp=/etc/docker/sandbox-seccomp.json',
+        'apparmor=sandbox-profile',
+      ]),
+    )
+  })
+})
+
+// ============================================================================
+// bash-guard integration (#116) — the host-side screen on sandbox_bash.
+// ============================================================================
+
+describe('DockerBackend.connectMcp — bash guard on sandbox_bash', () => {
+  async function openTransport() {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    const handle = await backend.boot('base', {})
+    const transport = await backend.connectMcp(handle)
+    return { backend, handle, transport }
+  }
+
+  it('denies an actor command matching the default denylist — and it never reaches the VM', async () => {
+    const { transport } = await openTransport()
+    const res = await transport.callTool('sandbox_bash', { command: 'shutdown now' })
+    expect(res.success).toBe(false)
+    expect(res.error).toMatch(/refused by the host-side command policy/)
+    expect(res.error).toMatch(/powering the box off/)
+    // the in-VM shell server was NOT invoked
+    expect(callToolCalls.some((c) => c.name === 'bash')).toBe(false)
+    await transport.close()
+  })
+
+  it('allows an ordinary command through to the in-VM shell server', async () => {
+    const { transport } = await openTransport()
+    const res = await transport.callTool('sandbox_bash', { command: 'python3 /work/x.py' })
+    expect(res.success).toBe(true)
+    expect(callToolCalls).toContainEqual(expect.objectContaining({ server: 'shell', name: 'bash' }))
+    await transport.close()
+  })
+
+  it('exempts internal (work-sync) calls even under an allowlist policy that would deny them', async () => {
+    // Allowlist mode allows only python3 — the harness's own sync commands
+    // (mkdir / base64 / find / rm) would be denied if screened.
+    process.env.SANDBOX_BASH_ALLOW = 'python3'
+    const { transport } = await openTransport()
+
+    const actor = await transport.callTool('sandbox_bash', { command: 'mkdir -p /work/in' })
+    expect(actor.success).toBe(false)
+    expect(actor.error).toMatch(/not on the allowlist/)
+
+    const internal = await transport.callTool(
+      'sandbox_bash',
+      { command: 'mkdir -p /work/in' },
+      { internal: true },
+    )
+    expect(internal.success).toBe(true)
+    expect(callToolCalls).toContainEqual(expect.objectContaining({ server: 'shell', name: 'bash' }))
+    await transport.close()
+  })
+
+  it('fails the transport open loudly when the deny override is an invalid regex', async () => {
+    process.env.SANDBOX_BASH_DENY = '(unclosed'
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    const handle = await backend.boot('base', {})
+    await expect(backend.connectMcp(handle)).rejects.toThrow(/SANDBOX_BASH_DENY/)
+  })
+})
+
+// ============================================================================
+// Egress enforcement (#116) — profile → network/proxy/cache argv, gateway
+// lifecycle, fail-closed unknowns.
+// ============================================================================
+
+/** spawnPlan for a pypi/github-trusted boot: network inspect fails (first
+ *  boot), gateway `running` state parameterizable. */
+function egressPlan(opts: { gwRunning: boolean; gwRunFails?: boolean }): SpawnPlan {
+  return (_cmd, args) => {
+    if (args[0] === 'network' && args[1] === 'inspect')
+      return { stderr: 'no such network', code: 1 }
+    if (args[0] === 'network') return { stdout: '', code: 0 } // create / connect
+    if (args[0] === 'inspect') return { stdout: opts.gwRunning ? 'true' : 'false', code: 0 }
+    if (args[0] === 'rm') return { stdout: '', code: 0 }
+    if (args[0] === 'run') {
+      if (opts.gwRunFails && args.some((a) => a.endsWith('proxy.mjs'))) {
+        return { stderr: 'image missing', code: 1 }
+      }
+      return { stdout: 'cid', code: 0 }
+    }
+    return { stdout: '', code: 0 }
+  }
+}
+
+describe('DockerBackend — egress profiles (#116)', () => {
+  it('mcp-only (default) stays network-none and mounts no cache volume', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', {})
+    const args = sandboxRunArgs()
+    expect(flagValue(args, '--network')).toBe('none')
+    expect(args).not.toContain('-v')
+  })
+
+  it('open keeps the default bridge, mounts the wheel-cache volume, no proxy env', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', { egress: 'open' })
+    const args = sandboxRunArgs()
+    expect(args).not.toContain('--network')
+    expect(args.join(' ')).not.toContain('_PROXY')
+    expect(flagValue(args, '-v')).toBe('kg-sandbox-cache:/cache')
+  })
+
+  it('FAILS CLOSED to no network on an unknown profile (never falls through to the bridge)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      spawnPlan = () => ({ stdout: 'cid', code: 0 })
+      const backend = await makeBackend()
+      await backend.boot('base', { egress: 'weird-new-profile' as never })
+      const args = sandboxRunArgs()
+      expect(flagValue(args, '--network')).toBe('none')
+      expect(args).not.toContain('-v')
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/unknown egress profile/))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('pypi: creates the internal network + gateway, and puts the sandbox on that network behind the proxy', async () => {
+    spawnPlan = egressPlan({ gwRunning: false })
+    const backend = await makeBackend()
+    await backend.boot('base', { egress: 'pypi' })
+
+    // network created once, --internal
+    const create = spawnCalls.find((c) => c.args[0] === 'network' && c.args[1] === 'create')!
+    expect(create.args).toEqual(['network', 'create', '--internal', 'kg-sandbox-egress-pypi'])
+
+    // gateway booted from the sandbox image running the allowlist proxy…
+    const gwRun = spawnCalls.find(
+      (c) => c.args[0] === 'run' && c.args.some((a) => a.endsWith('proxy.mjs')),
+    )!
+    expect(gwRun.args).toContain('kg-sandbox-egress-pypi-gw')
+    expect(gwRun.args).toContain('--label')
+    expect(gwRun.args).toContain('kg-sandbox=1')
+    // …bypassing the init.sh ENTRYPOINT so the argv actually runs the proxy
+    // (the image's entrypoint would eat "node" as an unknown command), with
+    // the script path as the COMMAND — `node <script>`, not `node node
+    // <script>` (that shape really shipped and died with exit 1; caught by
+    // the live probe, pinned here so it cannot return unnoticed).
+    expect(flagValue(gwRun.args, '--entrypoint')).toBe('node')
+    const imageIdx = gwRun.args.indexOf('kg-sandbox:base')
+    expect(gwRun.args[imageIdx + 1]).toBe('/opt/mcp/egress-proxy/proxy.mjs')
+    // …hardened like a sandbox…
+    expect(flagValue(gwRun.args, '--cap-drop')).toBe('ALL')
+    expect(gwRun.args).toContain('--read-only')
+    // …with the default pypi allowlist and port
+    const hostFlags = gwRun.args.filter((_a, i, arr) => arr[i - 1] === '--host')
+    expect(hostFlags).toEqual(['pypi.org', 'files.pythonhosted.org'])
+    expect(gwRun.args).toContain('3128')
+
+    // …and attached to the internal network (idempotency handled below)
+    const connect = spawnCalls.find((c) => c.args[0] === 'network' && c.args[1] === 'connect')!
+    expect(connect.args).toEqual([
+      'network',
+      'connect',
+      'kg-sandbox-egress-pypi',
+      'kg-sandbox-egress-pypi-gw',
+    ])
+
+    // the sandbox itself: on the internal network, proxied, cache mounted
+    const args = sandboxRunArgs()
+    expect(flagValue(args, '--network')).toBe('kg-sandbox-egress-pypi')
+    expect(args.join(' ')).toContain('HTTPS_PROXY=http://kg-sandbox-egress-pypi-gw:3128')
+    expect(args.join(' ')).toContain('NO_PROXY=localhost,127.0.0.1')
+    expect(flagValue(args, '-v')).toBe('kg-sandbox-cache:/cache')
+  })
+
+  it('pypi: reuses a running gateway (no rm/run) and tolerates already-connected', async () => {
+    spawnPlan = (cmd, args) => {
+      if (args[0] === 'network' && args[1] === 'inspect') return { stdout: 'netid', code: 0 }
+      if (args[0] === 'network' && args[1] === 'connect') {
+        return { stderr: 'endpoint already exists in network', code: 1 }
+      }
+      if (args[0] === 'inspect') return { stdout: 'true', code: 0 }
+      if (args[0] === 'run') return { stdout: 'cid', code: 0 }
+      return { stdout: '', code: 0 }
+    }
+    const backend = await makeBackend()
+    await expect(backend.boot('base', { egress: 'pypi' })).resolves.toBeDefined()
+    expect(
+      spawnCalls.some((c) => c.args[0] === 'rm' && c.args.includes('kg-sandbox-egress-pypi-gw')),
+    ).toBe(false)
+    expect(
+      spawnCalls.some((c) => c.args[0] === 'run' && c.args.some((a) => a.endsWith('proxy.mjs'))),
+    ).toBe(false)
+    expect(spawnCalls.some((c) => c.args[0] === 'network' && c.args[1] === 'create')).toBe(false)
+  })
+
+  it('pypi: a gateway that cannot boot fails the sandbox boot LOUDLY (no network without the proxy)', async () => {
+    spawnPlan = egressPlan({ gwRunning: false, gwRunFails: true })
+    const backend = await makeBackend()
+    await expect(backend.boot('base', { egress: 'pypi' })).rejects.toThrow(
+      /egress gateway boot failed.*refusing to start a networked sandbox/,
+    )
+    // …and no sandbox container was started behind the missing proxy.
+    expect(
+      spawnCalls.some(
+        (c) =>
+          c.args[0] === 'run' &&
+          c.args.includes('kg-sandbox=1') &&
+          !c.args.some((a) => a.endsWith('proxy.mjs')),
+      ),
+    ).toBe(false)
+  })
+
+  it('pypi: a gateway that cannot join the internal network fails the boot too', async () => {
+    spawnPlan = (cmd, args) => {
+      if (args[0] === 'network' && args[1] === 'inspect') return { stdout: 'netid', code: 0 }
+      if (args[0] === 'network' && args[1] === 'connect') {
+        return { stderr: 'cannot find container', code: 1 }
+      }
+      if (args[0] === 'inspect') return { stdout: 'true', code: 0 }
+      if (args[0] === 'run') return { stdout: 'cid', code: 0 }
+      return { stdout: '', code: 0 }
+    }
+    const backend = await makeBackend()
+    await expect(backend.boot('base', { egress: 'pypi' })).rejects.toThrow(/could not join/)
+  })
+
+  it('github-trusted: allowlist comes from the env override when set', async () => {
+    process.env.SANDBOX_EGRESS_GITHUB_ALLOWLIST = 'ghe.corp.example,github.com'
+    spawnPlan = egressPlan({ gwRunning: false })
+    const backend = await makeBackend()
+    await backend.boot('base', { egress: 'github-trusted' })
+    const gwRun = spawnCalls.find(
+      (c) => c.args[0] === 'run' && c.args.some((a) => a.endsWith('proxy.mjs')),
+    )!
+    const hostFlags = gwRun.args.filter((_a, i, arr) => arr[i - 1] === '--host')
+    expect(hostFlags).toEqual(['ghe.corp.example', 'github.com'])
+    expect(flagValue(sandboxRunArgs(), '--network')).toBe('kg-sandbox-egress-github-trusted')
+  })
+
+  it('reset re-applies the full hardening + egress argv on the recycled container', async () => {
+    let runCount = 0
+    spawnPlan = (_cmd, args) => {
+      if (args[0] === 'run') {
+        runCount += 1
+        return { stdout: `container-${runCount}`, code: 0 }
+      }
+      if (args[0] === 'network' && args[1] === 'inspect') return { stdout: 'netid', code: 0 }
+      if (args[0] === 'inspect') return { stdout: 'true', code: 0 }
+      return { stdout: '', code: 0 }
+    }
+    const backend = await makeBackend()
+    const handle = await backend.boot('base', { egress: 'pypi', memoryMB: 256 })
+    spawnCalls.length = 0
+    await backend.reset(handle)
+    const args = sandboxRunArgs()
+    expect(flagValue(args, '--cap-drop')).toBe('ALL')
+    expect(args).toContain('--read-only')
+    expect(flagValue(args, '--network')).toBe('kg-sandbox-egress-pypi')
+    expect(flagValue(args, '--memory')).toBe('256m')
   })
 })

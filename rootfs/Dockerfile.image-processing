@@ -14,6 +14,10 @@
 
 FROM kg-sandbox:base AS image-processing
 
+# base ends at `USER sandbox` (#116) — build steps run as root, drop back at
+# the end so the runtime user is inherited from base.
+USER root
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         python3-opencv \
@@ -21,3 +25,5 @@ RUN apt-get update \
         python3-numpy \
         imagemagick \
     && rm -rf /var/lib/apt/lists/*
+
+USER sandbox

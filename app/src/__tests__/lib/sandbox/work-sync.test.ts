@@ -33,6 +33,10 @@ function bashOk(stdout = ''): ToolCallResult {
 /** In-memory fs (path → content; binary stored as a latin1 byte string). */
 function makeFsTransport() {
   const fs = new Map<string, string>()
+  /** `internal` flags seen on sandbox_bash calls — work-sync's own commands
+   *  must bypass the host-side bash guard (#116) or workspace sync dies the
+   *  day an allowlist policy ships. */
+  const bashCallOpts: Array<{ internal?: boolean } | undefined> = []
 
   const runBash = (cmd: string): ToolCallResult => {
     let m = /^base64 -d (\S+) > (\S+) && rm -f (\S+)$/.exec(cmd)
@@ -70,7 +74,8 @@ function makeFsTransport() {
     listTools: async () => [],
     ownsTool: (n) => n.startsWith('sandbox_'),
     close: async () => {},
-    callTool: async (name, args): Promise<ToolCallResult> => {
+    callTool: async (name, args, opts): Promise<ToolCallResult> => {
+      if (name === 'sandbox_bash') bashCallOpts.push(opts)
       if (name === 'sandbox_write') {
         fs.set(args.path as string, args.content as string)
         return { success: true, data: 'ok' }
@@ -85,7 +90,7 @@ function makeFsTransport() {
       return { success: false, data: null, error: `unknown tool ${name}` }
     },
   }
-  return { transport, fs }
+  return { transport, fs, bashCallOpts }
 }
 
 describe('work-sync: text round-trip', () => {
@@ -107,6 +112,22 @@ describe('work-sync: binary round-trip', () => {
     expect(fs.has('/work/in/img.bin.b64')).toBe(false)
     const back = await readWorkFile(transport, '/work/in/img.bin', 'base64')
     expect(back).toBe(original)
+  })
+})
+
+describe('work-sync: bash guard exemption (#116)', () => {
+  it("marks every sandbox_bash call internal — the harness's own sync commands must bypass the host-side guard", async () => {
+    const { transport, bashCallOpts } = makeFsTransport()
+    await writeWorkFile(transport, '/work/in/notes.md', 'text', 'utf8')
+    await writeWorkFile(
+      transport,
+      '/work/in/img.bin',
+      Buffer.from([1, 2, 3]).toString('base64'),
+      'base64',
+    )
+    await listWorkFiles(transport, '/work/out')
+    expect(bashCallOpts.length).toBeGreaterThan(0)
+    expect(bashCallOpts.every((opts) => opts?.internal === true)).toBe(true)
   })
 })
 

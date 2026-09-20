@@ -1,6 +1,6 @@
 # Sandbox Compute Infrastructure (Plan)
 
-> **Status: core shipped; forward-looking sections remain the plan.** `withSandbox` + DockerBackend shipped in PR #81 (#79); durable `/work` ⇄ DataStash workspaces in PR #95 (#89); lifecycle hardening (startup reaper, health-check on reuse, Shell-hydrate) in PRs #103/#104 (#97); rootfs flavours (`image-processing`/`data`/`office`) + the router-over-flavours recipe in PR #117 (#78). The durable API lives in [`app/src/lib/harness-patterns/SPEC.md`](../../app/src/lib/harness-patterns/SPEC.md); operational debugging in [`../sandbox/README.md`](../sandbox/README.md); flavours in [`../sandbox-flavours.md`](../sandbox-flavours.md). Still plan-only: **Swarm** (parallel strategies), **Firecracker substrate** (#78), **ephemeral one-shot mode**, timer-driven sweep + LRU cap (#82), and the "Deferred / v1+" section.
+> **Status: core shipped; forward-looking sections remain the plan.** `withSandbox` + DockerBackend shipped in PR #81 (#79); durable `/work` ⇄ DataStash workspaces in PR #95 (#89); lifecycle hardening (startup reaper, health-check on reuse, Shell-hydrate) in PRs #103/#104 (#97); rootfs flavours (`image-processing`/`data`/`office`) + the router-over-flavours recipe in PR #117 (#78). The durable API lives in [`app/src/lib/harness-patterns/SPEC.md`](../../app/src/lib/harness-patterns/SPEC.md); operational debugging in [`../sandbox/README.md`](../sandbox/README.md); flavours in [`../sandbox-flavours.md`](../sandbox-flavours.md). Still plan-only: **Swarm** (parallel strategies), **Firecracker substrate** (#78), **ephemeral one-shot mode**, timer-driven sweep + LRU cap (#82), the "Deferred / v1+" section — and **multi-user tenant isolation** ([below](#multi-user-tenant-isolation-348--the-network-twin); design stage — implementation gated on the owner's approval).
 
 Reference design for `withSandbox` — a harness wrapper that attaches a stateful, isolated microVM to a controller pattern, exposing filesystem / shell / Python tools to the actor via MCP servers running *inside* the VM. See [#79](https://github.com/mknw/harness-playground/issues/79) for the implementation story and [#78](https://github.com/mknw/harness-playground/issues/78) for the capability vision (Polars over user-uploaded files, document extraction, NER pipelines, …).
 
@@ -465,6 +465,101 @@ Open problems `backgroundSession` surfaces (all genuinely v2):
 - **Persistence** — if the harness restarts, do background sessions resume?
 
 **Ephemeral one-shot mode** (script in, result out, VM gone — the leaf-primitive shape an earlier draft of this doc proposed) coexists with stateful sandboxes but is deferred, and its justification is weaker than it first looked. The "fan-out over a dataset" case it was meant for is better served by in-process data parallelism (a Polars / pandas map) inside a *single* stateful sandbox; the "try different approaches and pick a winner" case is served by stateful-in-`parallelMap` (see "Swarm"). No compelling use case remains that the stateful wrapper doesn't already cover — so this stays a theoretical alternative (same `ComputeBackend`, different surface; likely a separate `vmCompute` leaf pattern that allocates → executes → destroys per invocation) until one surfaces.
+
+---
+
+## Multi-user tenant isolation (#348 + the network twin)
+
+> **Status: DESIGN — implementation gated on the owner's approval.** Owner-authorized programme (2026-09-20). The sandbox machinery is single-operator today; this section is the multi-user threat model and the chosen mechanism per channel. The channels are folded into one design because they are one problem: **every resource shared across boots is a cross-tenant channel the day a second user lands.**
+
+### Threat model under multi-user
+
+A **tenant** is an authenticated user. In the single-operator alpha the sandbox's contents were, transitively, the operator's own; that assumption is void in multi-user: the actor executes model-chosen code over **tenant-uploaded files and third-party-fetched content** (documents, web pages), so a prompt injection can turn any sandbox into attacker-controlled code. The design therefore treats **every sandbox as potentially malicious** and asks, of each shared resource: what can it read, write, or reach that belongs to someone else?
+
+Assets at stake: other tenants' Data Stash documents and `/work` contents; the live host services — neo4j (7474/7687), postgres (5432), redis (6379), the MCP gateway (8811), all **published on the host** via `docker-compose.yaml` and routed on the compose `app-network`; the **integrity of the wheel cache** (a poisoned dependency is code execution in the next tenant's analysis); and other tenants' compute.
+
+### The five channels, verdicts, and mechanism per channel
+
+#### 1. `/cache` — one shared named volume across every networked boot (#348) → **per-tenant named volume**
+
+`cacheVolumeArgs()` ([`docker-backend.server.ts`](../../app/src/lib/sandbox/docker-backend.server.ts)) mounts `SANDBOX_CACHE_VOLUME` (default `kg-sandbox-cache`) at `/cache` on every networked boot (`pypi`, `github-trusted`, `open`; `mcp-only` skips it). Every container runs as the same non-root uid (`10001`), so the volume is writable by every tenant's sandbox and read by every other tenant's `uv`/`pip` install (`UV_CACHE_DIR`/`PIP_CACHE_DIR` point at `/cache`). The sharp shape is the poisoned wheel cache from #348's review: tenant A writes the cache tenant B's installs read.
+
+**Why not per-boot:** an anonymous volume per container loses the cross-boot warmth that is the volume's entire reason to exist (live installs would re-download the same wheels into every ephemeral container). **Why not "uv verifies index digests, document the trust assumption":** verification narrows the classic poisoned-wheel shape, but the cache is a shared *writable filesystem* whose contents outlive every container — a channel is closed by not sharing it, not by trusting a verifier's coverage of it; and "document the trust assumption" is the posture the single-operator alpha already had.
+
+**Mechanism:** `RuntimeConfig` gains `tenantId`; the volume name derives from the base name (`SANDBOX_CACHE_VOLUME`, default `kg-sandbox-cache`) by ONE rule — `tenantId` `'default'` → the base name **verbatim**; any other `tenantId` → `${base}-${tenantId}`. The first mount still bootstraps from the image's pre-owned `/cache` (docker copies image content into a named volume on first use — the no-chown property survives), so a single-operator deploy keeps its warm cache (see [Migration](#migration-for-existing-single-tenant-deploys)).
+
+#### 2. Egress network — per-PROFILE, shared by every tenant → **per-boot network + per-boot gateway**
+
+`egressNetworkName(profile)` ([`egress-policy.ts`](../../app/src/lib/sandbox/egress-policy.ts)) names ONE internal network per profile, and every tenant's networked sandbox attaches to it. Containers on one docker network are mutually reachable — the embedded DNS resolves every `sbx-*` container name and the gateway's name, and L3 adjacency holds regardless of names. That is sandbox-to-sandbox reachability across tenants: code exec in tenant A's sandbox can port-scan and attack tenant B's live sandbox, and both share one gateway.
+
+**Mechanism:** per-boot internal network `kg-sandbox-egress-<profile>-<vm.id>` plus a per-boot gateway container named for the same vm id — stable across warm-pool `reset` (which re-runs `runContainer` under the same `sbx-*` name, so the reset re-ensures the same network rather than accumulating a new one). The gateway keeps today's shape: default bridge for its own external reach, its per-boot internal network as the sandbox-facing side, listening on `SANDBOX_EGRESS_PROXY_PORT` (3128) — safe to reuse on every gateway because nothing is host-published and the networks are isolated. `ensureEgressGateway` is already idempotent; its in-flight dedupe map re-keys from profile to boot id. **Fail-loud semantics unchanged:** a networked sandbox never boots without its gateway (`SandboxBootError`). **Teardown grows:** `destroy()` removes, in order, the VM's container, then its per-boot gateway, then the labeled network (`docker network rm` refuses while the gateway endpoint remains attached); `reset()` removes none of the three — it re-ensures them. `reapOrphans` gains a labeled-network sweep (`docker network prune --filter label=kg-sandbox=1`) and runs it *after* the container sweep, since prune is a no-op on networks still in use by a leftover gateway. A parked (pooled) networked VM keeps its gateway, exactly as today's per-profile gateway outlived any one sandbox; the count is bounded by `sandbox.globalCap` for live VMs, the pool's per-rootfs caps (`sandbox.warmPool`) and `sandbox.maxAttachments` for parked ones, all evicted after `idleEvictMs`. Per-boot networks also multiply docker's address-pool consumption — the default pools allow only ~30 user-defined networks (`dockerd --default-address-pool`), so a deployment must widen the pool (e.g. `--default-address-pool base=10.0.0.0/8,size=24`) as a documented prerequisite, or the design bounds networked parked VMs so live+parked networks stay under the pool.
+
+**Why per-boot rather than per-tenant:** the per-boot gateway is the dominant cost and is required either way (a shared gateway on a shared network is precisely the mutual reachability being closed); per-boot *additionally* closes **within-tenant** cross-session reachability (a poisoned session of user A attacking user A's other session) with the same one-line mechanism; and the extra cost over per-tenant is one tiny node container per networked boot.
+
+#### 3. Warm pool — global, keyed by rootfs flavor only → **fingerprint-scoped pool**
+
+Verified from source ([`warm-pool.server.ts`](../../app/src/lib/sandbox/warm-pool.server.ts)): the pool is **process-global, keyed by `RootfsId` only** — not per-session, not per-tenant. What does and does not cross sessions:
+
+- **`/work` does NOT cross.** `release` → `backend.reset` → `rm -f` + fresh `runContainer`, so a parked VM is a **fresh container with an empty tmpfs**. No new `/work` scoping is needed — what guarantees it is reset's destroy-and-reboot semantics, which must never soften into a "clear the directory" shortcut.
+- **The VM's runtime DOES cross.** `native.runtime` is preserved across reset, and `acquire` hands back a parked VM regardless of the runtime the caller requested. A caller asking for `mcp-only` can therefore receive a VM booted with `pypi` egress — network attached, `/cache` mounted — and after channels 1–2 land, a VM attached to **another tenant's** cache volume and network. The egress profile is an isolation knob, and the pool leaks it across sessions (and, in multi-user, tenants) today.
+
+**Mechanism:** the pool key becomes a fingerprint `tenantId|rootfs|egress`; `acquire` computes it from the request and hands over a parked VM **only on an exact match** — a mismatch is a pool miss (destroy the parked VM, cold-boot with the requested runtime), never a silent handover of someone else's posture.
+
+#### 4. `open` egress — unproxied, unaudited by design → **removed from selectable profiles; env opt-in for the single operator**
+
+`open` rides the default bridge: unrestricted, unproxied, unaudited (no chokepoint to log at). No agent selects it today — every sandbox agent pins `mcp-only`, `defaultEgress` is `mcp-only`, and sandbox posture is host policy, deliberately not a user preference (the settings surface drops `sandbox` outright).
+
+**Multi-user exposure:** an `open` sandbox has full outbound network, and the live services **publish ports on the host** — neo4j 7474/7687, postgres 5432, redis 6379, the MCP gateway 8811, the doc-convert sidecar 8000 — so one `curl http://<host-ip>:6379` from an open sandbox reaches the Data Stash and the graph. In multi-user, `open` is a host-services compromise profile, not a convenience.
+
+**Verdict: remove, not gate per-user.** A per-user gate would put an authz decision inside the backend for a profile with zero users, and contradict the host-policy ruling that kept sandbox posture out of user hands. The single operator keeps the escape hatch as an env opt-in, `SANDBOX_ENABLE_OPEN_EGRESS=1`; unset, `open` is treated like an unknown profile — warn + **fail closed to `mcp-only`** (the existing closed-failure semantics at the backend). When the flag IS set, the deployment accepts the documented posture: no audit, no allowlist, unrestricted outbound egress — and, where channel 5's loopback binding is not adopted, reachability of every host-published port. A single-operator deployment may; a multi-user deployment must not.
+
+#### 5. Host-published services — reachable from EVERY networked profile via the internal network's gateway IP → **compose loopback binding**
+
+`--internal` networks drop traffic to and from *other networks*, not to the host itself — docker's own reference states that communication with the gateway IP address (and thus appropriately configured host services) is possible from an internal network. Every compose service publishes on all host interfaces ([`docker-compose.yaml`](../../docker-compose.yaml): neo4j 7474/7687, gateway 8811, postgres 5432, redis 6379, doc-convert 8000 — no loopback prefix). So a `pypi`/`github-trusted` sandbox can open a raw socket to its own bridge gateway IP (e.g. `http://172.18.0.1:6379`) — no proxy, no allowlist, no audit — and reach the Data Stash (redis carries no `requirepass` in compose), the graph, postgres and the gateway. This channel is live today, single-operator, and the four mechanisms above do not close it.
+
+**Mechanism:** bind every published port to loopback (`"127.0.0.1:6379:6379"`, and the same for 7474/7687/5432/8811/8000) — a container addressing the bridge gateway IP hits a non-loopback host interface, which loopback-bound ports do not serve. The app-in-docker reaches these services over `app-network` by name, and host-side consumers keep `localhost`, so only the exposure closes. Checked against the deployment runbook ([`docs/deployment/azure-vm.md`](../deployment/azure-vm.md) §4 — no consumer reaches a port via a host IP): the tracked [`docker-compose.prod.yaml`](../../docker-compose.prod.yaml) already does exactly this (`!override` loopback binds on every published port), so the multi-user prerequisite is to adopt that shape wherever the sandbox runs — not to invent a new one. A deployment that must publish on a real interface must instead add `DOCKER-USER` iptables rules dropping traffic from the sandbox bridges to host ports.
+
+### What stays shared, and at what granularity
+
+| Resource                       | Today                          | After                                        | Why                                                                                                            |
+| ------------------------------ | ------------------------------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Images (`kg-sandbox:*`)        | shared                         | shared                                       | Read-only, built by us; nothing tenant-writable                                                              |
+| `/cache` volume                | all tenants                    | **per tenant**                               | Warmth within one trust boundary; the cross-tenant write channel (#348) closes                                |
+| Egress network                 | per profile, all tenants       | **per boot**                                 | Zero sandbox-to-sandbox adjacency, even within a tenant                                                      |
+| Egress gateway + its audit log | per profile                    | **per boot**                                 | One chokepoint per sandbox; its log names exactly that boot                                                   |
+| Warm pool                      | per rootfs, global              | per `tenant \| rootfs \| egress` fingerprint  | Posture never crosses a pool handoff                                                                         |
+| Attachment id                  | per session (server-derived)   | unchanged                                    | Ids are never client-supplied; the Shell/stream routes are already owner-gated (`claimSession`/`requireSessionOwner`) |
+| Scheduler caps                 | per session (`sessionId ?? 'default'`) | unchanged; optional `perTenantCap` follow-up | Every agent path keys the scheduler to the conversation's `sessionId`; the Shell path bypasses the scheduler entirely ([`pty-manager.server.ts`](../../app/src/lib/sandbox/pty-manager.server.ts)) — `perTenantCap` is the follow-up when tenants exist |
+| Host MCP gateway, Data Stash, Neo4j | shared infra               | unchanged                                    | Published ports become loopback-bound (channel 5); the app-in-docker reaches them over `app-network` — "owner-scoped in their own seams" holds only for the app-level seams |
+
+### Tenant identity seam
+
+`RuntimeConfig` gains `tenantId`, resolved **server-side** from the conversation's owner — never accepted from client input; `'default'` when there is no authenticated user (single-operator dev). Network and volume names derive from it at the backend; nothing persists it beyond what `native.runtime` already carries. Every `RuntimeConfig` producer resolves it — the `withSandbox` wrapper AND the Shell path's direct `attachments.acquire` ([`pty-manager.server.ts`](../../app/src/lib/sandbox/pty-manager.server.ts) `start()`), which already runs behind `requireSessionOwner` and so has the owner in hand. `tenantId` is the user's own id (`users.id`, the conversation owner's oid) — NOT `users.tid`, which names the Entra organisation ([`users.server.ts`](../../app/src/lib/auth/users.server.ts)); this section's boundary is per-user, and per-organisation grouping would be a different decision.
+
+### Migration for existing single-tenant deploys
+
+- The default tenant maps to today's names: the cache volume keeps `SANDBOX_CACHE_VOLUME`'s value **verbatim** (no suffix), so the warm cache survives the upgrade.
+- The per-profile gateway containers carry `kg-sandbox=1` and are removed by the expanded container sweep. The two per-profile *networks* are unlabeled today (`docker network create --internal`, no `--label` — [`docker-backend.server.ts`](../../app/src/lib/sandbox/docker-backend.server.ts)) and are not covered by the label-scoped prune — remove them by name (`docker network rm kg-sandbox-egress-pypi kg-sandbox-egress-github-trusted`) or leave them; nothing references them after the change.
+- No DB migration, no settings-schema change, no new required env var. One behavior change: `open` without `SANDBOX_ENABLE_OPEN_EGRESS` fail-closes to `mcp-only` with a named warning — the same class as an unknown profile.
+
+### Env knobs (after)
+
+| Knob                          | Status                                                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `SANDBOX_CACHE_VOLUME`        | meaning widens from "the cache volume" to "the cache volume **base** name" (default tenant keeps it verbatim) |
+| `SANDBOX_EGRESS_PROXY_PORT`   | unchanged — every per-boot gateway listens on it, on isolated networks; nothing host-published                 |
+| `SANDBOX_EGRESS_*_ALLOWLIST`  | unchanged — per-deployment policy, now enforced per boot                                                      |
+| `SANDBOX_ENABLE_OPEN_EGRESS`  | **new**, default unset; when set, the deployment accepts `open`'s documented unaudited posture               |
+| all others (pids/tmpfs/seccomp/apparmor/bash-guard) | unchanged                                                                             |
+
+### Implementation slicing (dispatched only after owner approval)
+
+1. **Lane A — tenant seam + per-tenant cache volume:** `tenantId` in `RuntimeConfig`/`WithSandboxConfig` AND in the Shell path's direct `RuntimeConfig` producer ([`pty-manager.server.ts`](../../app/src/lib/sandbox/pty-manager.server.ts) `start()`), volume-name derivation, default-tenant name compatibility.
+2. **Lane B — per-boot egress network + gateway:** boot-scoped ensure, per-boot teardown, labeled-network reaping, dedupe re-keyed per boot.
+3. **Lane C — warm-pool fingerprint** (after A, whose tenant component it consumes): `tenantId|rootfs|egress` keying; mismatch = pool miss.
+4. **Lane D — `open` env gate:** the flag, warn + fail-closed, `.env.example` documentation.
+
+A and B are independent; C follows A; D is small and independent. Each lane lands as its own implementation PR with an independent review (the reviewer's terms bind verbatim) and CI green on the exact head; the OWNER merges.
 
 ---
 

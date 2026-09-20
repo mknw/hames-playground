@@ -100,13 +100,13 @@ The Data Stash adapts to the agent's harness composition:
 **The pattern** (`harness-patterns/patterns/retriever.server.ts`) is framework-pure: it forms ONE query, fans it out to injected `RetrieverBackend`s concurrently (per-backend error isolation), merges hits closest-first capped at `k`, sets `scope.data.matches`, and emits a `tool_result` the compactExecution consumes. It's a low-latency alternative to a tool-calling `simpleLoop` — one embed + KNN instead of a >30s LLM loop. Typical wiring (see `harness-client/agents/retriever-agent.server.ts`):
 
 ```ts
-router({ retriever, neo4j, web_search }),
+router({ retriever, neo4j, web_search }, { route: baml.router }),
 routes({
   retriever: retriever({ backends: [createRedisBackend(sessionId)], k: 5, generateQuery: true }),
   neo4j: simpleLoop(neo4jController, tools.neo4j),
   web_search: simpleLoop(webController, tools.web),
 }),
-compactExecution({ mode: 'thread' }),
+compactExecution({ mode: 'thread', synthesize: baml.synthesize }),
 ```
 
 **Query formulation.** By default the query is the user's **raw last message** — their own words embed better than a paraphrase (a generic rewrite like _"search the documents for all sections that discuss X"_ dilutes the vector). `generateQuery: true` rewrites it with a cheap `RetrieveQuery` (Haiku) call **only when the turn has history** — to resolve back-references (_"more on that"_, _"those sections"_) into a self-contained query; turn-1 messages are searched verbatim. `turnWindow: N` is a no-LLM alternative that concatenates the last N user turns.

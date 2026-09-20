@@ -1,14 +1,15 @@
 /**
- * defaults — the carried-over BAML-backed implementations (#225 Lane A6)
+ * defaults — the composition-root implementations of the two injected seams
+ * (#225 Lane A6)
  *
- * The two injected seams that PRE-DATE Lane A6 keep their defaults, but the
- * defaults no longer live in the pattern files (that would keep a
- * `baml_client` import under `harness-patterns/`, which the lane's exit
- * criterion forbids). They moved here whole — same bodies, re-pointed
- * imports — and the patterns import them from this module:
- *
- *   - `defaultSynthesize` for `compactExecution`'s optional `synthesize`;
- *   - `defaultSelector` for `withReferences`'s optional `selector`.
+ * `defaultSynthesize` (compactExecution's REQUIRED `synthesize`) and
+ * `defaultSelector` (withReferences' REQUIRED `selector`) are REQUIRED config
+ * — the patterns carry NO default import, because a `baml_client` import
+ * under `packages/harness-patterns/` is what the lane's exit criterion
+ * forbids. Their implementations live here, in the harness-baml companion at
+ * the composition root, and `bamlPatterns()` supplies them (`synthesize` /
+ * `selector` fields — the caller passes `baml.synthesize` / `baml.selector`
+ * in the pattern's config).
  *
  * Both own their collectors (Lane A3), account through the shared extractors,
  * and resolve their client per call. Nothing else about their contracts
@@ -37,7 +38,8 @@ import { clientOverrideFor } from './clients.server'
 assertServerOnImport()
 
 // ============================================================================
-// defaultSynthesize — compactExecution's optional `synthesize` default
+// defaultSynthesize — the composition-root implementation of compactExecution's
+// REQUIRED `synthesize` config (supplied by bamlPatterns().synthesize)
 // ============================================================================
 
 export async function defaultSynthesize(input: CompactExecutionInput): Promise<LLMResult<string>> {
@@ -144,7 +146,8 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
 }
 
 // ============================================================================
-// defaultSelector — withReferences' optional `selector` default
+// defaultSelector — the composition-root implementation of withReferences'
+// REQUIRED `selector` config (supplied by bamlPatterns().selector)
 // ============================================================================
 
 export const defaultSelector: SelectorFn = async (input) => {

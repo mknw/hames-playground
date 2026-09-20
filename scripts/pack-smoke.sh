@@ -25,7 +25,9 @@
 # Step 6 was RED BY DESIGN on main until the seam lanes removed the last
 # imports escaping into app/src/lib (the harness-baml defaults and the
 # CriticFnWithLLMData type — removed by the BAML-companion seam lane,
-# 2026-09-20, which also flipped this CI job to REQUIRED). It is GREEN now,
+# 2026-09-20, which also dropped the CI job's continue-on-error, so a red
+# here now fails the run as a visible regression instead of a manufactured
+# success). It is GREEN now,
 # and a red here is a regression: either an app/src edge came back (the
 # zero-app-imports pin under app/src/__tests__ should also have caught it) or
 # the package imports something its own manifest does not declare. What stayed
@@ -87,8 +89,12 @@ await import('@hames/harness-patterns/types') // type-only module; must at least
 // 6. module EVALUATION of every entry the app imports. Each entry is
 //    imported through the INSTALLED tarball inside the scratch project, so a
 //    failure here is a consumer-visible module load, not a workspace
-//    artifact. GREEN and REQUIRED since the BAML-companion seam lane removed
-//    the app/src edges — a failure now is a regression, not a known blocker.
+//    artifact. GREEN since the BAML-companion seam lane removed the
+//    app/src edges — a failure now is a regression, not a known blocker,
+//    and it reports as one (no continue-on-error). Which checks BLOCK a
+//    merge is decided by the CI-before-merge ruleset, the enforcement
+//    mechanism — this job reports its true conclusion; it is not itself
+//    what blocks.
 const appEntries = [
   // the `.` barrel and the ./patterns barrel
   '.',

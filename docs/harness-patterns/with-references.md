@@ -104,8 +104,9 @@ export interface WithReferencesConfig extends PatternConfig {
   /** Cap on attached refs. Default: 5 */
   maxRefs?: number
 
-  /** Override default LLM-driven selector */
-  selector?: SelectorFn
+  /** REQUIRED — bamlPatterns().selector, or a deterministic policy for
+   *  tests/evals. Core hosts no default. */
+  selector: SelectorFn
 }
 
 export type SelectorFn = (input: {

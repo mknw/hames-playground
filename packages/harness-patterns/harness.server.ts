@@ -168,7 +168,11 @@ export interface HarnessResultScoped<T> extends HarnessResult<T> {
  *     tools.neo4j,
  *     { patternId: 'neo4j' }
  *   ),
- *   compactExecution({ mode: 'response', patternId: 'compact-execution' })
+ *   compactExecution({
+ *     mode: 'response',
+ *     patternId: 'compact-execution',
+ *     synthesize: baml.synthesize,
+ *   })
  * )
  *
  * const result = await agent('Show me all nodes')

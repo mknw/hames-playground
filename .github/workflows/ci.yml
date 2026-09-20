@@ -147,12 +147,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    # REQUIRED (flipped 2026-09-20 by the BAML-companion seam lane): the
-    # module-eval blocker the job used to tolerate is gone — the last
-    # imports escaping into app/src/lib (the harness-baml defaults and the
-    # CriticFnWithLLMData type) were removed from core, and the
+    # No `continue-on-error` (dropped 2026-09-20 by the BAML-companion seam
+    # lane): the module-eval blocker the job used to tolerate is gone — the
+    # last imports escaping into app/src/lib (the harness-baml defaults and
+    # the CriticFnWithLLMData type) were removed from core, and the
     # zero-app-imports pin under app/src/__tests__ keeps them out. The job
-    # gates merges like `check` and `image` do.
+    # now reports its true conclusion: a red fails the workflow run and is a
+    # visible regression. What BLOCKS a merge is decided by the
+    # CI-before-merge ruleset (the enforcement mechanism, not this file) —
+    # `check` is on it today; the pack job is being added to it in the
+    # merge window, which is why this comment does not claim the job gates
+    # merges like `check` and `image` do.
 
     # Runs the pack + install-from-tarball smoke (#225 Step 1d; plan
     # §3.3/§4.3) — the ONLY step anywhere in CI that exercises "does the
@@ -187,8 +192,9 @@ jobs:
       # manifest does not declare, or the ./guard companion subpath does not
       # import and behave. The module-eval probe (barrel + every app-imported
       # subpath) was RED on main until the seam lanes removed the app/src
-      # edges; it is GREEN and REQUIRED now — a red here is a regression, not
-      # a known blocker.
+      # edges; it is GREEN now — a red here is a regression, not
+      # a known blocker (which checks block merges is the CI-before-merge
+      # ruleset's call, not this job's).
       - name: Run the pack smoke
         id: pack_smoke
         run: scripts/pack-smoke.sh

@@ -27,8 +27,10 @@ import { runBatch, combineOutcomes } from '../parallel-tools.server'
 import type { SubCall } from '../parallel-tools.server'
 import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
-import { getRequestSettings } from '../../../app/src/lib/settings-context.server'
-import { resolveTurnBudget } from '../../../app/src/lib/settings'
+import {
+  resolveTurnBudget,
+  runtimeConfig,
+} from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import type { ActorFn } from '../types'
@@ -97,11 +99,12 @@ export function actorCritic<T extends ActorCriticData>(
 
     // Same resolution rule as simpleLoop's round budget: the pattern's own
     // declaration wins over the request's setting, clamped to the bound the
-    // stuck-run reaper derives from (`lib/settings.ts`, `resolveTurnBudget`).
+    // host's stuck-run reaper derives from (`runtime-config.ts`,
+    // `resolveTurnBudget`).
     const maxRetries = resolveTurnBudget(
       'maxRetries',
       config?.maxRetries,
-      getRequestSettings().maxRetries,
+      runtimeConfig().maxRetries,
     )
     // Critic cadence: run the critic every Nth *successful* actor turn (default
     // 1 = every turn, the original behavior). Clamped to >= 1 so a stray 0 /

@@ -26,7 +26,7 @@ import type {
   BulkDescribeFns,
   DescribeBatchItem,
 } from './types'
-import { getRequestSettings } from '../../app/src/lib/settings-context.server'
+import { runtimeConfig } from './runtime-config.server'
 import { estimateTokens } from './token-budget.server'
 
 assertServerOnImport()
@@ -146,7 +146,7 @@ export async function compactBulkData(
   )
   if (toolResults.length === 0) return
 
-  const maxSummaryChars = getRequestSettings().maxResultForSummary
+  const maxSummaryChars = runtimeConfig().maxResultForSummary
 
   // Build one target per result still wanting a summary. Ids are positional
   // labels rather than event ids: short to echo, cheap in both directions, and

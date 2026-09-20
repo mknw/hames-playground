@@ -1,49 +1,44 @@
-# `hames` developer guide (draft)
+# `hames` developer guide (pointing)
 
-**Status:** draft skeleton — section stubs except §6 (filled at Step 1d with
-the dev-mode consumption shape that actually landed). Owner decision
-(2026-08-23,
-[#225](https://github.com/mknw/harness-playground/issues/225) review, item
-L22): this guide is meant to eventually ship **as a skill alongside the
-published package**, for developers doing agentic coding against `hames`
-(the extracted core — see
-[`docs/plan/harness-npm-lib.md`](harness-npm-lib.md)). Each section below is a
-placeholder naming what it must cover and the source material it draws from;
-only §6 is finished prose, and the rest should not be treated as normative
-until filled in.
+**Status:** the guide is being **re-homed into the packages it documents**
+(owner decision on record: "the guide should later go in each respective npm
+module"; planned per-package in the #225 design note, 2026-09-16, §5). The
+core-owned sections now live in
+[`packages/harness-patterns/GUIDE.md`](../../packages/harness-patterns/GUIDE.md)
+— the composition model, writing a pattern, tool transports, the error
+surface, and consuming the package, with every code snippet typecheck-pinned
+by `app/src/__tests__/lib/harness-patterns/guide-docs-pins.test.ts`. This file
+keeps only what has no package home yet: §3 (the LLM seam — waits for the
+`harness-baml` package), §6's repo-local half (this workspace's own commands —
+not package material), and §7 (the app-only list). When the remaining packages
+extract, the rest of this file becomes a pointer and nothing else.
 
-This guide is app-external by design: it documents the library a consumer
-installs, not kg-agent's own usage of it. Where kg-agent does something the
-library itself does not (or should not) provide, that belongs in the last
-section below, not folded into the rest.
+This guide was app-external by design: it documented the library a consumer
+installs, not kg-agent's own usage of it. That intent now lives in the package
+docs themselves.
 
 ---
 
 ## 1. Composition model
 
-Stub. Cover `UnifiedContext` as the one serialisable event stream, per-pattern
-isolated scopes that commit on completion, `EventView` as the read seam, and
-the shared `ConfiguredPattern → ConfiguredPattern` shape every combinator
-(`chain` / `parallel` / `routes` / `guardrail` / `hook` / `withReferences` /
-`withInjectionGuard` / `withSandbox`) has in common. Source: the "what is
-already right" section of the #225 review, and the in-tree
-`harness-patterns/SPEC.md`.
+Re-homed → [`packages/harness-patterns/GUIDE.md`](../../packages/harness-patterns/GUIDE.md) §1
+(scopes commit on completion, `EventView` as the read seam, the combinator
+family, resume/continue). [SPEC.md](../../packages/harness-patterns/SPEC.md)
+remains the full API reference.
 
 ## 2. Writing a pattern
 
-Stub. The "Authoring a pattern" walkthrough #225 (L22, mechanically covered by
-L16) calls for: a leaf pattern, a wrapper via the (not-yet-public) `runChild`
-helper, and the scope/commit/view discipline stated as invariants rather than
-inferred from comments — today five separate pattern files carry a comment
-saying they mirror `with-references.server.ts`'s child-scope wrapping, which
-is the gap this section closes.
+Re-homed → [`packages/harness-patterns/GUIDE.md`](../../packages/harness-patterns/GUIDE.md) §2
+(the leaf walkthrough, the wrapper discipline mirroring
+`with-references.server.ts`, configuration, the index-signature rule).
 
 ## 3. The LLM seam
 
-Stub. How to plug in something that is not BAML: the injected-function shape
-landed by Lane A (each call is `(input) => Promise<LLMResult<T>>` with an
-`LLMCallRecord` carrying usage, timing and the raw output; `ControllerInput`/
-`ActorInput` objects rather than positional tails; per-call `limits()` so an
+Stub — **NOT yet re-homed; waits for the `harness-baml` package.** How to plug
+in something that is not BAML: the injected-function shape landed by Lane A
+(each call is `(input) => Promise<LLMResult<T>>` with an `LLMCallRecord`
+carrying usage, timing and the raw output; `ControllerInput`/`ActorInput`
+objects rather than positional tails; per-call `limits()` so an
 AsyncLocalStorage tier decision budgets against the right model), with
 `simpleLoop`/`actorCritic` taking their controller/critic as the first
 argument and the other six functions injected via config (the app supplies
@@ -56,66 +51,40 @@ custom-endpoint client at their own model.
 
 ## 4. Tool transports
 
-Stub. The `ToolTransport` interface core owns (`ownsTool`/`callTool`/
-`listTools`), `registerTransport`/`withTransport` as the registration and ALS
-mechanism, and how a sandbox provider (`sandbox-docker` today; a Firecracker
-or k8s-talos variant later) or a consumer's own MCP gateway registers against
-it. Source: `harness-npm-lib.md` §1.4.
+Re-homed → [`packages/harness-patterns/GUIDE.md`](../../packages/harness-patterns/GUIDE.md) §3
+(the `ToolTransport` seam, `withTransport`/`registerTransport` and the
+containment invariant, the gateway `Tools()` and its REQUIRED `namespaces`
+map).
 
 ## 5. Error surface
 
-Stub. The typed `HarnessError` hierarchy shipped by core
-(`ToolTransportError` / `LLMCallError` / `PatternConfigError` /
-`ToolNotAllowedError`), what `recoverable` means for each, and how a consumer
-maps them onto their own UI copy instead of getting a raw exception message
-rendered to an end user. Note the raw-LLM-output-on-parse-failure requirement
-here too once the in-flight fix lands.
+Re-homed → [`packages/harness-patterns/GUIDE.md`](../../packages/harness-patterns/GUIDE.md) §4
+— which documents what actually exists on `main`: `error` events with
+per-pattern `errorSeverity`, and `LLMCallError` carrying `rawOutput` on parse
+failure. The broader typed `HarnessError` hierarchy this stub once described
+was **planned, never landed** — the section no longer claims it.
 
-## 6. Consuming the package — what landed (Step 1b/1c/1d)
+## 6. Consuming the package — the repo-local half
 
-This is the one section describing the shape that actually exists on `main`
-today; the others are still stubs.
+The consumer-facing half of this section (the exports map, the pack-smoke
+stand-in for a registry, what an external developer does today) is re-homed →
+[`packages/harness-patterns/GUIDE.md`](../../packages/harness-patterns/GUIDE.md)
+§5. What stays here is the repo's own workflow, which is not package material:
 
-**In this repo (kg-agent development).** `app/package.json` declares
-`"@hames/harness-patterns": "workspace:*"`. pnpm resolves that to a symlink:
-`app/node_modules/@hames/harness-patterns` → `packages/harness-patterns`, so
-from the dev server's point of view editing a file in `packages/` is
-indistinguishable from editing `app/src` — the source ships as TypeScript,
-vinxi/Vite resolves it directly, and HMR picks the edit up with no build step
-and no publish loop (proven in #338, Step 1b). Commands are unchanged:
-`pnpm dev` / `pnpm dev:exposed` still run from `app/`, and `pnpm
-baml-generate` after any `baml_src/` edit is still the one thing a workspace
-does not automate. The docker image consumes the same workspace source —
-`packages/` rides in the build context and `workspace:*` resolves inside the
-image exactly as it does in dev (#339, Step 1c); production never installs
-from a registry (`harness-npm-lib.md` §3).
+`app/package.json` declares `"@hames/harness-patterns": "workspace:*"` (the
+symlink/HMR mechanics and the Docker half are the package guide's, not
+repeated here). Two command facts are repo-local and stay:
 
-**Consumption specifiers.** The exports map is `.` (the barrel), `./patterns`
-(the pattern factories), `./guard` (the injection guard's deterministic
-sanitizer — the one companion subpath), and a `./*` wildcard onto the
-package's TypeScript files (how the app deep-imports, e.g.
-`@hames/harness-patterns/tool-transport.server`). A consumer of the barrel
-gets every pattern, the tool-transport seam and the event types; nothing
-needs a build step on the consumer side beyond a bundler or runner that
-carries TypeScript source (Vite, vinxi, tsx).
-
-**An external developer, today.** The package is **not yet published** —
-Step 2 of [`harness-npm-lib.md`](harness-npm-lib.md) is deliberately blocked
-until the Step-1a interim re-points into `app/src` are removed (Lane C and
-Step 3; enumerated in that doc's "Landed so far" block). What stands in for a
-registry while it is blocked: CI's `packages` job runs
-`scripts/pack-smoke.sh`, which `pnpm pack`s the package, installs the tarball
-into a throwaway project and asserts every export target exists and the
-`./guard` subpath imports and behaves — so the moment publishing unblocks,
-the artifact shape is already proven. When it publishes, an external dev
-installs the ordinary way (`npm install @hames/harness-patterns`) and brings
-their own model adapter for the six config-injected functions — core ships
-no defaults for those, by design.
+- `pnpm dev` / `pnpm dev:exposed` still run from `app/` — nothing about the
+  package changes where commands run.
+- `pnpm baml-generate` after any `baml_src/` edit is still the one thing a
+  workspace does not automate.
 
 ## 7. Things the app does that the library does not ship
 
-Stub. The explicit list of what a consumer must bring themselves, so nobody
-mistakes kg-agent's own wiring for part of the package contract:
+Stub — **NOT yet re-homed; feeds the final pointer when the agents/baml
+packages exist.** The explicit list of what a consumer must bring themselves,
+so nobody mistakes kg-agent's own wiring for part of the package contract:
 
 - `typeof window === 'undefined'` / `.server.ts`-suffix guards — this
   repo's own server/client boundary convention, not a `hames` requirement.

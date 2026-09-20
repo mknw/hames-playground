@@ -30,15 +30,20 @@ skeleton developer guide (`docs/plan/hames-guide.md`), and updates
   the sandbox cycle inverted) are already on `main`. Core is BAML-free and
   holds zero role vocabulary; what §1.4 called "the hard part" is largely
   behind the tree now.
-- **The Step 1a interim re-points are the one deliberate debt**: 11 import
-  statements across 7 package files still reach `app/src/lib` (the
-  `settings-context.server` seam, the harness-baml defaults, and
-  `resolveTurnBudget`) and resolve only via the workspace symlink. Lane C
-  (the `HarnessRuntimeConfig` split) and Step 3 (harness-baml extraction)
-  remove them; until then the pack smoke (§3.3/§4.3) deliberately scopes its
-  runtime probe to the exports that evaluate without them.
+- **The Step 1a interim re-points are the one deliberate debt**: 4 import
+  statements across 4 package files still reach `app/src/lib` (the harness-baml
+  defaults and companions — `router.server.ts` `routeMessageOp`,
+  `actorCritic.server.ts` `CriticFnWithLLMData`, `compactExecution.server.ts`
+  `defaultSynthesize`, `with-references.server.ts` `defaultSelector`) and
+  resolve only via the workspace symlink. The settings seam is GONE: Lane C
+  half-landed 2026-09-20 (PR #342) — core owns `HarnessRuntimeConfig`, its
+  defaults, its ALS scope and `resolveTurnBudget`, and all seven
+  settings-context/settings re-points are removed; what remains for Lane C is
+  exactly the four BAML-companion imports above. Step 3 (harness-baml
+  extraction) removes those; until then the pack smoke (§3.3/§4.3) deliberately
+  scopes its runtime probe to the exports that evaluate without them.
 - **Not yet landed**: Step 2 (first publish — blocked on the re-points),
-  Lane C, Lanes D–G, Steps 3–6.
+  the Lane C BAML-companion half, Lanes D–G, Steps 3–6.
 
 **Name: `@hames/harness-patterns`** — final (owner decision 2026-08-23 chose the bare
 name `hames` — free on npm, no search collisions; owner ruling 2026-09-15 placed it in

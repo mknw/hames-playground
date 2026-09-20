@@ -982,6 +982,13 @@ describe('DockerBackend — egress profiles (#116)', () => {
 // ============================================================================
 
 describe('DockerBackend — per-tenant cache volume (Lane A)', () => {
+  // 'open' is not selectable (#357 channel 4): these Lane A pins boot under
+  // the env escape hatch so the profile itself, not the gate, is what's under
+  // test. The gate's own fail-closed/opened pins live in the egress block.
+  beforeEach(() => {
+    process.env.SANDBOX_ENABLE_OPEN_EGRESS = '1'
+  })
+
   it("tenant 'default' keeps the base name VERBATIM (single-operator upgrade keeps the warm cache)", async () => {
     process.env.SANDBOX_CACHE_VOLUME = 'custom-cache-base'
     spawnPlan = () => ({ stdout: 'cid', code: 0 })

@@ -421,7 +421,7 @@ export class DockerBackend implements ComputeBackend {
     const egress = runtime.egress ?? 'mcp-only'
     if (egress === 'open') {
       if (isOpenEgressEnabled(process.env)) {
-        args.push(...cacheVolumeArgs())
+        args.push(...cacheVolumeArgs(runtime))
       } else {
         console.warn(
           `[sandbox] egress profile 'open' for ${id} requires ${OPEN_EGRESS_ENV}=1: ` +

@@ -13,9 +13,9 @@
  * It composes an explicit subset of `tools.graph` rather than the whole
  * namespace: see {@link MICROSOFT_365_TOOLS} for which tools, and why.
  */
-'use server'
-
-// @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
+// @unocss-include — the icon class literal lives in the app's registry overlay
+// (see the host's harness-client/registry.server.ts), not here: `icon`/`accent`
+// are UI fields and stay app-side (the #225 composition-root decision).
 import {
   simpleLoop,
   compactExecution,
@@ -24,9 +24,14 @@ import {
   type ConfiguredPattern,
 } from '@hames/harness-patterns'
 import { bamlPatterns, createLoopControllerAdapter } from '@hames/harness-baml'
-import { mcpNamespace } from '../../app-tools/mcp-catalog'
-import type { SessionData } from '../session.server'
-import type { AgentConfig } from '../registry.server'
+import type { AgentData, AgentDefinition, AgentDeps } from '../types'
+
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+
+// The 'use server' directive this file carried before the move was the only
+// thing keeping its exports off the client; this is the real guard, and the
+// reason stripping the directive removes nothing load-bearing.
+assertServerOnImport()
 
 /**
  * The graph tools this agent composes, in the order it should reach for them.
@@ -57,15 +62,18 @@ export const MICROSOFT_365_TOOLS = [
   'graph_files_shared',
 ] as const
 
-async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
-  const tools = await Tools({ namespaces: mcpNamespace })
+async function createPatterns(
+  _sessionId: string,
+  deps: AgentDeps,
+): Promise<ConfiguredPattern<AgentData>[]> {
+  const tools = await Tools({ namespaces: deps.toolNamespaces })
   const available = new Set(tools.graph ?? [])
   // Filtering the allowlist (rather than the namespace) keeps a tool that isn't
   // registered — a typo, a module not imported — out of the loop's tool list
   // instead of into it.
   const graphTools = MICROSOFT_365_TOOLS.filter((t) => available.has(t))
 
-  const graphPattern = simpleLoop<SessionData>(createLoopControllerAdapter(), graphTools, {
+  const graphPattern = simpleLoop<AgentData>(createLoopControllerAdapter(), graphTools, {
     patternId: 'microsoft-365',
     liveEvents: true,
     rememberPriorTurns: false,
@@ -96,7 +104,7 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
     },
   })
 
-  const responseSynth = compactExecution<SessionData>({
+  const responseSynth = compactExecution<AgentData>({
     mode: 'thread',
     patternId: 'response-synth',
     liveEvents: true,
@@ -116,7 +124,7 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
   return [guarded, responseSynth]
 }
 
-export const microsoft365Agent: AgentConfig = {
+export const microsoft365Agent: AgentDefinition = {
   id: 'microsoft-365',
   name: 'Microsoft 365',
   description: 'Answers from your own Microsoft 365 account (delegated, per-user via Entra)',
@@ -124,8 +132,6 @@ export const microsoft365Agent: AgentConfig = {
     "I read your own Microsoft 365 as you — today's calendar, recent mail and " +
     'its attachments, and your OneDrive/SharePoint files. Ask what your day looks ' +
     'like, or where a file got to.',
-  icon: 'i-material-symbols-window-sharp',
-  accent: 'blue',
   // Not an MCP gateway server: these tools run in-process so the per-user
   // token stays server-side (#107). Listed for UI display only.
   servers: ['graph (app-side, per-user)'],

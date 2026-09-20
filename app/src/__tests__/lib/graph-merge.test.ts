@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { mergeGraphElements } from '../../lib/graph-merge'
-import type { GraphElement } from '../../lib/harness-client/types'
+import type { GraphElement } from '@hames/agents'
 
 const node = (id: string, extra: Record<string, unknown> = {}): GraphElement => ({
   data: { id, label: id, ...extra },
@@ -15,7 +15,7 @@ const node = (id: string, extra: Record<string, unknown> = {}): GraphElement => 
 describe('mergeGraphElements', () => {
   it('appends fresh elements when there is no overlap', () => {
     const out = mergeGraphElements([node('A')], [node('B'), node('C')])
-    expect(out.map(e => e.data?.id)).toEqual(['A', 'B', 'C'])
+    expect(out.map((e) => e.data?.id)).toEqual(['A', 'B', 'C'])
   })
 
   it('skips fresh elements whose id already exists (no overwrite of fields)', () => {
@@ -28,27 +28,21 @@ describe('mergeGraphElements', () => {
   })
 
   it('clears touched from existing elements when the fresh batch sets touched anywhere', () => {
-    const prev = [
-      node('A', { touched: true }),
-      node('B', { touched: true }),
-    ]
+    const prev = [node('A', { touched: true }), node('B', { touched: true })]
     const out = mergeGraphElements(prev, [node('C', { touched: true })])
     expect(out).toHaveLength(3)
-    const a = out.find(e => e.data?.id === 'A')!
-    const b = out.find(e => e.data?.id === 'B')!
-    const c = out.find(e => e.data?.id === 'C')!
+    const a = out.find((e) => e.data?.id === 'A')!
+    const b = out.find((e) => e.data?.id === 'B')!
+    const c = out.find((e) => e.data?.id === 'C')!
     expect((a.data as Record<string, unknown>).touched).toBeUndefined()
     expect((b.data as Record<string, unknown>).touched).toBeUndefined()
     expect((c.data as Record<string, unknown>).touched).toBe(true)
   })
 
   it('promotes an existing element to touched when the new batch tags its id', () => {
-    const out = mergeGraphElements(
-      [node('A'), node('B')],
-      [node('A', { touched: true })],
-    )
-    const a = out.find(e => e.data?.id === 'A')!
-    const b = out.find(e => e.data?.id === 'B')!
+    const out = mergeGraphElements([node('A'), node('B')], [node('A', { touched: true })])
+    const a = out.find((e) => e.data?.id === 'A')!
+    const b = out.find((e) => e.data?.id === 'B')!
     expect((a.data as Record<string, unknown>).touched).toBe(true)
     expect((b.data as Record<string, unknown>).touched).toBeUndefined()
   })
@@ -56,7 +50,7 @@ describe('mergeGraphElements', () => {
   it('does not mutate touched on existing elements when the fresh batch has no touched flags', () => {
     const prev = [node('A', { touched: true })]
     const out = mergeGraphElements(prev, [node('B')])
-    const a = out.find(e => e.data?.id === 'A')!
+    const a = out.find((e) => e.data?.id === 'A')!
     expect((a.data as Record<string, unknown>).touched).toBe(true)
   })
 
@@ -64,28 +58,22 @@ describe('mergeGraphElements', () => {
     // Query 1: "Find concepts containing database" → KVDB touched, Redis is neighborhood.
     const afterQuery1 = mergeGraphElements(
       [],
-      [
-        node('Key-Value Database', { touched: true }),
-        node('Redis'),
-      ],
+      [node('Key-Value Database', { touched: true }), node('Redis')],
     )
     expect(touchedIds(afterQuery1)).toEqual(['Key-Value Database'])
 
     // Query 2: "Show me everything about Redis" → Redis touched, KVDB is neighborhood.
-    const afterQuery2 = mergeGraphElements(
-      afterQuery1,
-      [
-        node('Redis', { touched: true }),
-        node('Key-Value Database'),
-      ],
-    )
+    const afterQuery2 = mergeGraphElements(afterQuery1, [
+      node('Redis', { touched: true }),
+      node('Key-Value Database'),
+    ])
     expect(touchedIds(afterQuery2)).toEqual(['Redis'])
   })
 })
 
 function touchedIds(elements: readonly GraphElement[]): string[] {
   return elements
-    .filter(e => (e.data as Record<string, unknown> | undefined)?.touched === true)
-    .map(e => e.data?.id as string)
+    .filter((e) => (e.data as Record<string, unknown> | undefined)?.touched === true)
+    .map((e) => e.data?.id as string)
     .sort()
 }

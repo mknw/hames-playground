@@ -14,9 +14,15 @@
  *  4. write · create-and-connect      (MATCH parent, MERGE child, MERGE rel)
  *  5. write · bulk UNWIND upsert      (parameterized batch with ON CREATE / ON MATCH)
  */
-'use server'
 
 import type { FewShot } from '@hames/harness-patterns'
+
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+
+// The 'use server' directive this file carried before the move was the only
+// thing keeping its exports off the client; this is the real guard, and the
+// reason stripping the directive removes nothing load-bearing.
+assertServerOnImport()
 
 /** All 5 examples (referenced by tests + reusable across agents). */
 export const NEO4J_FEW_SHOTS: FewShot[] = [

@@ -1,14 +1,15 @@
 /**
- * turn-utils — the turn boundary in the accumulated event stream.
+ * findLastUserMessageIndex — the turn boundary in the accumulated event
+ * stream.
  *
- * `findLastUserMessageIndex` is the module's only export, and this file covers
- * it. It became a shared one for SA-H7: the Data Stash partition and the
- * citation extractor both derive "this turn" from it, and they must not
- * disagree. (The per-turn graph derivation this header used to point at went
- * with the "All" tab in the alpha sweep — `turn-utils.ts` records what left.)
+ * The helper lives in core now (`packages/harness-patterns/content-transforms`,
+ * beside the other event lenses — #225 @hames/agents PR-2): the citation
+ * extractor moved into `@hames/agents` and reads it from there, and the app's
+ * Data Stash partition reads the same core export, so they cannot disagree
+ * (SA-H7). This file covers the helper wherever it is imported from.
  */
 import { describe, it, expect } from 'vitest'
-import { findLastUserMessageIndex } from '~/lib/turn-utils'
+import { findLastUserMessageIndex } from '@hames/harness-patterns/content-transforms'
 import type { ContextEvent } from '@hames/harness-patterns'
 
 const evt = (type: ContextEvent['type']): ContextEvent =>

@@ -27,6 +27,27 @@
  * and `actorCritic` — is the real code.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import type { AgentDeps } from '@hames/agents'
+
+/**
+ * The REAL `withSandbox` — this test drives the real sandbox path (fake
+ * backend + fake document store, everything else real), so the deps bag
+ * carries the real wrapper behind the same adapter the composition root uses
+ * (`agentDeps()` in app session.server.ts). The `as` mirrors that adapter's
+ * one narrowing: the package contract types `rootfs` as a plain string.
+ *
+ * Imported DYNAMICALLY inside the tests, not statically: the file's
+ * `vi.resetModules()` in `afterEach` re-instances the sandbox module, and the
+ * `__resetSandboxDefaultsForTests` call targets the fresh instance — a static
+ * import would keep wrapping the stale one across tests.
+ */
+async function realSandboxDeps(): Promise<AgentDeps> {
+  const sandbox = await import('../../../../lib/sandbox/index.server')
+  return {
+    toolNamespaces: () => undefined,
+    withSandbox: (attach) => sandbox.withSandbox(attach as never),
+  }
+}
 import { mockAction, mockCriticResult } from '../../../mocks/baml'
 
 vi.mock('@hames/harness-patterns/assert.server', () => ({
@@ -302,10 +323,9 @@ describe('flavoured-sandbox — one session workspace across flavours (#243 foll
   })
 
   it('sees an ingested file on turn 2 after the router switches flavour (data → basic)', async () => {
-    const { flavouredSandboxAgent } =
-      await import('../../../../lib/harness-client/agents/flavoured-sandbox.server')
+    const { flavouredSandboxAgent } = await import('@hames/agents/agents/flavoured-sandbox.server')
     const { harness, continueSession } = await import('@hames/harness-patterns')
-    const patterns = await flavouredSandboxAgent.createPatterns('sess-243')
+    const patterns = await flavouredSandboxAgent.createPatterns('sess-243', await realSandboxDeps())
 
     // Turn 1 — routed to `data`, where the ingested file is hydrated.
     const turn1 = await harness(...patterns)(
@@ -341,10 +361,9 @@ describe('flavoured-sandbox — one session workspace across flavours (#243 foll
     docs.store = []
     routerRoutes.queue = ['basic']
 
-    const { flavouredSandboxAgent } =
-      await import('../../../../lib/harness-client/agents/flavoured-sandbox.server')
+    const { flavouredSandboxAgent } = await import('@hames/agents/agents/flavoured-sandbox.server')
     const { harness } = await import('@hames/harness-patterns')
-    const patterns = await flavouredSandboxAgent.createPatterns('sess-243')
+    const patterns = await flavouredSandboxAgent.createPatterns('sess-243', await realSandboxDeps())
 
     const turn = await harness(...patterns)('list the files in /work/in', 'sess-243')
     const listing = listResults(turn.context.events, 'flavour-basic-loop')

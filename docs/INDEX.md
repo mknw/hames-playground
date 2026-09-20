@@ -84,7 +84,7 @@ Authoritative source-level docs (closer to the code):
 - [`packages/harness-patterns/SPEC.md`](../packages/harness-patterns/SPEC.md) — full framework API and design spec
 - [`packages/harness-patterns/README.md`](../packages/harness-patterns/README.md) — the `hames` library front page
 - [`packages/harness-patterns/GUIDE.md`](../packages/harness-patterns/GUIDE.md) — the developer guide: composition model, writing a pattern, tool transports, the error surface, consuming the package (every snippet typecheck-pinned by `guide-docs-pins.test.ts`)
-- [`app/src/lib/harness-client/agents/README.md`](../app/src/lib/harness-client/agents/README.md) — example implementations
+- [`packages/agents/README.md`](../packages/agents/README.md) — the ready-made agents package: the nine moved definitions, the `AgentDefinition`/`AgentData`/`AgentDeps` surface, the agent catalog with guard coverage, and what the app's composition root overlays (every API-call snippet compile-checked by `agents-readme-docs-pins.test.ts`)
 
 ### UI Frontend
 

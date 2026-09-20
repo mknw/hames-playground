@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { testAgentDeps } from './test-deps'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 
 vi.mock('@hames/harness-patterns/assert.server', () => ({
@@ -32,8 +33,7 @@ vi.mock('@hames/harness-baml/baml_client', () => ({
   },
 }))
 
-const { retrieverAgent } =
-  await import('../../../../lib/harness-client/agents/retriever-agent.server')
+const { retrieverAgent } = await import('@hames/agents/agents/retriever-agent.server')
 const { harnessHasRedisRetriever, retriever, compactExecution } =
   await import('@hames/harness-patterns')
 
@@ -50,14 +50,14 @@ beforeEach(() => {
 describe('retrieverAgent config', () => {
   it('declares the metadata the picker and the registry need', () => {
     expect(retrieverAgent.id).toBe('retriever')
-    expect(retrieverAgent.icon).toMatch(/^i-material-symbols-/)
+    // `icon` moved to the app's registry overlay (#225 PR-2); asserted there.
     expect(retrieverAgent.servers).toEqual(expect.arrayContaining(['neo4j-cypher', 'web_search']))
   })
 })
 
 describe('retrieverAgent pattern chain', () => {
   it('is router → routes → compactExecution, with unique pattern ids', async () => {
-    const patterns = (await retrieverAgent.createPatterns('sess-r')) as Pattern[]
+    const patterns = (await retrieverAgent.createPatterns('sess-r', testAgentDeps)) as Pattern[]
 
     // `routes` is wrapped in `withInjectionGuard` — a config-transparent
     // wrapper, so the chain is still three steps and the routes' own
@@ -73,7 +73,7 @@ describe('retrieverAgent pattern chain', () => {
   })
 
   it('offers the retriever alongside the neo4j and web routes', async () => {
-    const patterns = (await retrieverAgent.createPatterns('sess-r')) as Pattern[]
+    const patterns = (await retrieverAgent.createPatterns('sess-r', testAgentDeps)) as Pattern[]
     const guarded = patterns.find((p) => p.name.startsWith('withInjectionGuard'))!
     const routes = guarded.children![0]
 
@@ -90,7 +90,7 @@ describe('retrieverAgent pattern chain', () => {
     // documents and NEVER pass through callTool, so the retriever pattern has to
     // be named in the guard config for its write-time sanitize to engage.
     // `neo4j` is our own graph and stays trusted.
-    const patterns = (await retrieverAgent.createPatterns('sess-r')) as Pattern[]
+    const patterns = (await retrieverAgent.createPatterns('sess-r', testAgentDeps)) as Pattern[]
     const guarded = patterns.find((p) => p.name.startsWith('withInjectionGuard'))!
 
     // Config transparency: the wrapper kept the routes' resolved config.
@@ -98,7 +98,7 @@ describe('retrieverAgent pattern chain', () => {
   })
 
   it('advertises a redis-backed retriever, which is what gates upload auto-ingest', async () => {
-    const patterns = await retrieverAgent.createPatterns('sess-r')
+    const patterns = await retrieverAgent.createPatterns('sess-r', testAgentDeps)
     expect(harnessHasRedisRetriever(patterns)).toBe(true)
   })
 
@@ -124,7 +124,7 @@ describe('retrieverAgent pattern chain', () => {
 
   it('reads the live Neo4j schema once when building the chain', async () => {
     const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
-    await retrieverAgent.createPatterns('sess-r')
+    await retrieverAgent.createPatterns('sess-r', testAgentDeps)
     expect(callTool).toHaveBeenCalledWith('get_neo4j_schema', {})
   })
 })

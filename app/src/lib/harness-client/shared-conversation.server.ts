@@ -51,7 +51,7 @@
 'use server'
 
 import { loadSharedConversation as loadSharedRow } from '../db/conversations.server'
-import { replayMessages } from './replay'
+import { replayMessages } from '@hames/agents/replay'
 
 /** One turn of a shared transcript. A deliberate subset of `ReplayedMessage`:
  *  no `hint`, no `patternId`, no `turnInfo` — those ride on the error bubbles

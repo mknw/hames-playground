@@ -37,8 +37,8 @@ const replay = vi.hoisted(() => ({
   impl: null as null | ((serialized: string) => unknown[]),
 }))
 
-vi.mock('../../../lib/harness-client/replay', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../lib/harness-client/replay')>()
+vi.mock('@hames/agents/replay', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@hames/agents/replay')>()
   return {
     ...actual,
     replayMessages: (serialized: string) =>

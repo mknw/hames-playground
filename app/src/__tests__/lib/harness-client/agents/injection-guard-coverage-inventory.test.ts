@@ -21,6 +21,11 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
+// The definitions moved into @hames/agents (#225 PR-2); the inventory walks
+// them from the package. `testAgentDeps` supplies the injected app-side bag
+// the factories now take — the fake sandbox wrapper mirrors the real one's
+// introspection shape, so the pinned inventory rows are unchanged.
+import { testAgentDeps } from './test-deps'
 
 // ============================================================================
 // Harness
@@ -113,9 +118,9 @@ function inventory(patterns: Pattern[]): string[] {
   return rows
 }
 
-const AGENTS_DIR = join(process.cwd(), 'src/lib/harness-client/agents')
+const AGENTS_DIR = join(process.cwd(), '../packages/agents/agents')
 
-/** Every agent module and the `AgentConfig` it exports. */
+/** Every agent module and the `AgentDefinition` it exports. */
 const AGENT_MODULES = [
   { file: 'search.server.ts', exportName: 'searchAgent' },
   { file: 'general.server.ts', exportName: 'generalAgent' },
@@ -128,22 +133,20 @@ const AGENT_MODULES = [
 /** Static import map — `import()` of a template literal cannot be analysed by
  *  Vite, so the modules are named explicitly. */
 const LOADERS: Record<string, () => Promise<Record<string, unknown>>> = {
-  'search.server.ts': () => import('../../../../lib/harness-client/agents/search.server'),
-  'general.server.ts': () => import('../../../../lib/harness-client/agents/general.server'),
-  'sandbox-session.server.ts': () =>
-    import('../../../../lib/harness-client/agents/sandbox-session.server'),
-  'flavoured-sandbox.server.ts': () =>
-    import('../../../../lib/harness-client/agents/flavoured-sandbox.server'),
-  'retriever-agent.server.ts': () =>
-    import('../../../../lib/harness-client/agents/retriever-agent.server'),
-  'microsoft-365.server.ts': () =>
-    import('../../../../lib/harness-client/agents/microsoft-365.server'),
+  'search.server.ts': () => import('@hames/agents/agents/search.server'),
+  'general.server.ts': () => import('@hames/agents/agents/general.server'),
+  'sandbox-session.server.ts': () => import('@hames/agents/agents/sandbox-session.server'),
+  'flavoured-sandbox.server.ts': () => import('@hames/agents/agents/flavoured-sandbox.server'),
+  'retriever-agent.server.ts': () => import('@hames/agents/agents/retriever-agent.server'),
+  'microsoft-365.server.ts': () => import('@hames/agents/agents/microsoft-365.server'),
 }
 
 async function patternsOf(file: string, exportName: string): Promise<Pattern[]> {
   const mod = await LOADERS[file]()
-  const agent = mod[exportName] as { createPatterns: (s: string) => Promise<Pattern[]> }
-  return agent.createPatterns('inventory-session')
+  const agent = mod[exportName] as {
+    createPatterns: (s: string, deps: unknown) => Promise<Pattern[]>
+  }
+  return agent.createPatterns('inventory-session', testAgentDeps)
 }
 
 /**
@@ -181,7 +184,7 @@ describe('the inventory is complete', () => {
     // and the fix is to add a row saying guarded or not, and why.
     const declared = readdirSync(AGENTS_DIR)
       .filter((f) => f.endsWith('.server.ts'))
-      .filter((f) => /:\s*AgentConfig\s*=/.test(readFileSync(join(AGENTS_DIR, f), 'utf8')))
+      .filter((f) => /:\s*AgentDefinition\s*=/.test(readFileSync(join(AGENTS_DIR, f), 'utf8')))
       .sort()
     expect(declared).toEqual(AGENT_MODULES.map((m) => m.file).sort())
   })
@@ -193,7 +196,7 @@ describe('the inventory is complete', () => {
       join(process.cwd(), 'src/lib/harness-client/registry.server.ts'),
       'utf8',
     )
-    const registered = [...registry.matchAll(/registerAgent\((\w+)\)/g)].map((m) => m[1]).sort()
+    const registered = [...registry.matchAll(/overlay\((\w+),/g)].map((m) => m[1]).sort()
     expect(registered).toEqual(
       [
         'searchAgent',

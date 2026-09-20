@@ -20,7 +20,7 @@
  *
  * Library boundary: imports only from `@hames/harness-patterns`,
  * `@hames/harness-baml` and its pre-generated client. No imports from
- * `~/components` or other consumers —
+ * the host's components or other consumers —
  * keeps the agent extractable as a standalone npm package example.
  *
  * Deliberately NOT a `"use server"` module: every export of one becomes a
@@ -34,10 +34,9 @@
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { harness, compactExecution } from '@hames/harness-patterns'
 import { withUsageAccounting } from '@hames/harness-baml'
-import { clientOverrideFor } from '@hames/harness-baml/clients.server'
 import type { HarnessData, UnifiedContext, UserMessageEventData } from '@hames/harness-patterns'
 import { b } from '@hames/harness-baml/baml_client'
-import { updateConversationTitle } from '../../db/conversations.server'
+import type { AgentDeps } from '../types'
 
 // The directive is gone, so nothing else keeps this module off the client. The
 // import-time assertion does.
@@ -87,29 +86,44 @@ export function sanitizeTitle(raw: string): string | null {
  * The whole agent is one pattern. `mode: 'message'` makes the compactExecution
  * a thin shell around our custom `synthesize` fn — no default BAML call,
  * no event tracking beyond `assistant_message`.
+ *
+ * A FACTORY, not a const: the two things the synthesize closure needs are
+ * app-side policy (the tier override for the describe role) and app-side
+ * persistence (`persistTitle`), both carried on `AgentDeps` — so the agent
+ * composes once per call with the bag its caller holds. A bare consumer gets
+ * a title agent that runs on the client the BAML function declares and does
+ * not persist; the app's registry supplies both through its `agentDeps()`.
  */
-export const titleAgent = harness<TitleAgentData>(
-  compactExecution<TitleAgentData>({
-    patternId: 'title-gen',
-    mode: 'message',
-    synthesize: async ({ userMessage }) => {
-      // Collector for ACCOUNTING only (nothing here reads it): a title is a
-      // describe-tier call, and a role that is not counted drops out of the
-      // preview header's on-prem denominator rather than merely losing detail.
-      // The override is the other half: a title is generated FROM the user's
-      // first message, so on a verda-tier turn it belongs on the box with the
-      // rest of the describe role (`VERDA_CLIENT_BY_ROLE`).
-      const raw = await withUsageAccounting('GenerateConversationTitle', (opts) =>
-        b.GenerateConversationTitle(userMessage, { ...opts, ...clientOverrideFor('describe') }),
-      )
-      // Lane A3: `SynthesisFn` returns the LLMResult envelope — the override
-      // can now carry a call record the way the default always did. This one
-      // accounts through `withUsageAccounting` instead (the record's channel),
-      // so `call` stays undefined here.
-      return { value: sanitizeTitle(raw) ?? '' }
-    },
-  }),
-)
+export function createTitleAgent(deps: AgentDeps) {
+  return harness<TitleAgentData>(
+    compactExecution<TitleAgentData>({
+      patternId: 'title-gen',
+      mode: 'message',
+      synthesize: async ({ userMessage }) => {
+        // Collector for ACCOUNTING only (nothing here reads it): a title is a
+        // describe-tier call, and a role that is not counted drops out of the
+        // preview header's on-prem denominator rather than merely losing detail.
+        // The override is the other half: a title is generated FROM the user's
+        // first message, so on a verda-tier turn it belongs on the box with the
+        // rest of the describe role. The override is injected app policy
+        // (`AgentDeps.clientOverride`) — the package never imports the host's
+        // client map; without it the call runs on the client the BAML function
+        // declares.
+        const raw = await withUsageAccounting('GenerateConversationTitle', (opts) =>
+          b.GenerateConversationTitle(userMessage, {
+            ...opts,
+            ...(deps.clientOverride?.('describe') ?? {}),
+          }),
+        )
+        // Lane A3: `SynthesisFn` returns the LLMResult envelope — the override
+        // can now carry a call record the way the default always did. This one
+        // accounts through `withUsageAccounting` instead (the record's channel),
+        // so `call` stays undefined here.
+        return { value: sanitizeTitle(raw) ?? '' }
+      },
+    }),
+  )
+}
 
 // ============================================================================
 // Production entry points
@@ -142,11 +156,12 @@ export async function runFirstTurnTitleGen(
   ctx: UnifiedContext<unknown>,
   sessionId: string,
   userId: string,
+  deps: AgentDeps,
 ): Promise<string | null> {
   if (!isFirstTurn(ctx)) return null
   const firstUserMessage = userMessages(ctx)[0]
   if (!firstUserMessage) return null
-  return runTitleAgent(firstUserMessage, sessionId, userId)
+  return runTitleAgent(firstUserMessage, sessionId, userId, deps)
 }
 
 /**
@@ -162,11 +177,12 @@ export async function runRegenerateTitle(
   ctx: UnifiedContext<unknown>,
   sessionId: string,
   userId: string,
+  deps: AgentDeps,
 ): Promise<string | null> {
   const messages = userMessages(ctx)
   const seed = messages[messages.length - 1] ?? messages[0]
   if (!seed) return null
-  return runTitleAgent(seed, sessionId, userId)
+  return runTitleAgent(seed, sessionId, userId, deps)
 }
 
 /** Shared helper — runs the agent, persists on success, swallows failures. */
@@ -174,14 +190,21 @@ async function runTitleAgent(
   userMessage: string,
   sessionId: string,
   userId: string,
+  deps: AgentDeps,
 ): Promise<string | null> {
   try {
     // The agent generates its own throwaway sessionId for the harness
     // context; we pass a deterministic one for traceability in logs.
-    const result = await titleAgent(userMessage, `title-gen-${sessionId}`)
+    const result = await createTitleAgent(deps)(userMessage, `title-gen-${sessionId}`)
     const title = sanitizeTitle(result.response)
     if (!title) return null
-    await updateConversationTitle(sessionId, userId, title)
+    if (!deps.persistTitle) {
+      // Named, not silent: without a persistence channel the title exists only
+      // as this call's return value. The app always supplies one.
+      console.warn('[title-gen] no persistTitle supplied via AgentDeps — title not persisted')
+    } else {
+      await deps.persistTitle(sessionId, userId, title)
+    }
     return title
   } catch (err) {
     // Silent fallthrough — heuristic title remains in the DB row.

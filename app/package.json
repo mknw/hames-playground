@@ -30,6 +30,7 @@
     "@ark-ui/solid": "^5.36.1",
     "@azure/msal-node": "^5.4.2",
     "@boundaryml/baml": "0.224.0",
+    "@hames/agents": "workspace:*",
     "@hames/harness-baml": "workspace:*",
     "@hames/harness-patterns": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",

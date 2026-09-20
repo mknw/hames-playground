@@ -11,6 +11,7 @@
  * not observable from a `ConfiguredPattern` afterwards.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { testAgentDeps } from './test-deps'
 
 vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -82,10 +83,7 @@ vi.mock('@hames/harness-baml', () => ({
   bamlPatterns: () => ({ synthesize: async () => ({ value: '' }) }),
 }))
 
-import {
-  microsoft365Agent,
-  MICROSOFT_365_TOOLS,
-} from '../../../../lib/harness-client/agents/microsoft-365.server'
+import { microsoft365Agent, MICROSOFT_365_TOOLS } from '@hames/agents/agents/microsoft-365.server'
 import { appToolNamespace, hasAppTool } from '../../../../lib/app-tools/index.server'
 
 /** The last `simpleLoop(controller, tools, config)` call the agent made. */
@@ -148,7 +146,7 @@ describe('tool allowlist', () => {
 
 describe('createPatterns', () => {
   it('hands the loop the allowlist, not the whole graph namespace', async () => {
-    const patterns = await microsoft365Agent.createPatterns('test-session')
+    const patterns = await microsoft365Agent.createPatterns('test-session', testAgentDeps)
 
     expect(composedTools()).toEqual([...MICROSOFT_365_TOOLS])
     expect(composedTools()).not.toContain('graph_file_ingest')
@@ -156,7 +154,7 @@ describe('createPatterns', () => {
   })
 
   it('gives the controller NO tool list of its own (L14: one declaration, on the seam)', async () => {
-    await microsoft365Agent.createPatterns('test-session')
+    await microsoft365Agent.createPatterns('test-session', testAgentDeps)
     // Under L14 the factory takes no tool list at all — the loop's allowlist
     // IS what the controller advertises, via `ControllerInput.tools`. A call
     // with a list argument would be the second channel returning; the pin
@@ -169,18 +167,18 @@ describe('createPatterns', () => {
 
   it("drops an allowlisted tool that isn't available (gateway down, module unloaded)", async () => {
     graphNamespace = ['graph_me', 'graph_files_search']
-    await microsoft365Agent.createPatterns('test-session')
+    await microsoft365Agent.createPatterns('test-session', testAgentDeps)
     expect(composedTools()).toEqual(['graph_me', 'graph_files_search'])
   })
 
   it('survives an empty or absent graph namespace', async () => {
     graphNamespace = []
-    await microsoft365Agent.createPatterns('test-session')
+    await microsoft365Agent.createPatterns('test-session', testAgentDeps)
     expect(composedTools()).toEqual([])
   })
 
   it("projects webUrl out of the controller's view for every file tool", async () => {
-    await microsoft365Agent.createPatterns('test-session')
+    await microsoft365Agent.createPatterns('test-session', testAgentDeps)
     const cfg = lastLoopCall()[2] as { resultOmit: Record<string, string[]> }
     // Every file tool the agent composes must drop webUrl (Loop hits carry a
     // ~519-char URL only the compactExecution needs) — and drop ONLY webUrl, so the
@@ -197,7 +195,7 @@ describe('createPatterns', () => {
   })
 
   it('keeps the loop config the agent depends on', async () => {
-    await microsoft365Agent.createPatterns('test-session')
+    await microsoft365Agent.createPatterns('test-session', testAgentDeps)
     expect(lastLoopCall()[2]).toMatchObject({
       patternId: 'microsoft-365',
       liveEvents: true,
@@ -215,7 +213,7 @@ describe('createPatterns', () => {
   // restate the default's value.
   it('declares no round budget of its own, so the setting reaches it', async () => {
     const { DEFAULT_SETTINGS } = await import('../../../../lib/settings')
-    await microsoft365Agent.createPatterns('test-session')
+    await microsoft365Agent.createPatterns('test-session', testAgentDeps)
 
     const cfg = lastLoopCall()[2] as { maxTurns?: number }
     expect(cfg.maxTurns).toBeUndefined()
@@ -227,7 +225,7 @@ describe('createPatterns', () => {
     // WROTE it: mail comes from outside the tenant and SharePoint files are
     // routinely authored or shared by other people. So the loop's results are
     // untrusted content on a trusted transport, and the agent must declare it.
-    const patterns = await microsoft365Agent.createPatterns('test-session')
+    const patterns = await microsoft365Agent.createPatterns('test-session', testAgentDeps)
 
     expect(injectionGuard).toHaveBeenCalledWith({ namespaces: ['graph'], catalog: graphNamespace })
     // The guard wraps the LOOP (so it is active for every tool call), and the
@@ -238,7 +236,7 @@ describe('createPatterns', () => {
   })
 
   it('leaves the loop config untouched when guarded (transparent wrapper)', async () => {
-    const patterns = await microsoft365Agent.createPatterns('test-session')
+    const patterns = await microsoft365Agent.createPatterns('test-session', testAgentDeps)
     // Same config object the agent handed simpleLoop — the wrapper must not
     // reshape it, or resultOmit / maxTurns / liveEvents would silently change.
     expect((patterns[0] as { config: unknown }).config).toBe(lastLoopCall()[2])

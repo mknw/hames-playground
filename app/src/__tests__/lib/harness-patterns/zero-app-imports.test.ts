@@ -12,9 +12,11 @@
  * the same commit that adds it.
  *
  * Like `core-types-source-scan.test.ts`, this scans the RAW TEXT of every
- * non-test file under `packages/harness-patterns/` — import lines and inline
- * `import()` positions alike, comments included, because a static import
- * cannot hide anywhere else. Three escape shapes are checked:
+ * non-test file under `packages/harness-patterns/` AND `packages/agents/`
+ * (extended at the @hames/agents extraction, #225 PR-2 — same pin shape, one
+ * scan over both published packages) — import lines and inline `import()`
+ * positions alike, comments included, because a static import cannot hide
+ * anywhere else. Three escape shapes are checked:
  *
  *   - a relative specifier climbing out of the package into `app/`
  *     (`../../app/…` — the shape all four removed edges had);
@@ -28,7 +30,10 @@ import { join, relative, resolve } from 'node:path'
 
 // `process.cwd()` is `app/` under vitest (same anchor the other source-scan
 // pins use); `import.meta.url` is not a file URL in this jsdom environment.
-const CORE = resolve(process.cwd(), '../packages/harness-patterns')
+const PACKAGE_ROOTS = [
+  resolve(process.cwd(), '../packages/harness-patterns'),
+  resolve(process.cwd(), '../packages/agents'),
+]
 
 /** A relative climb out of the package (`../app`, `../../app`, …), whatever
  *  the depth or the trailing path. */
@@ -51,23 +56,25 @@ async function walk(dir: string): Promise<string[]> {
   return files
 }
 
-describe('zero app imports under harness-patterns/ (BAML-companion seam lane pin)', () => {
-  it('no non-test file under the package imports app code', async () => {
-    const files = await walk(CORE)
-    expect(files.length).toBeGreaterThan(0)
-
+describe('zero app imports under the published packages (BAML-companion seam lane pin)', () => {
+  it('no non-test file under either package imports app code', async () => {
     const offenders: string[] = []
-    for (const file of files) {
-      const text = await readFile(file, 'utf8')
-      const rel = relative(CORE, file)
-      if (RELATIVE_ESCAPE.test(text)) {
-        offenders.push(`${rel} (relative escape into app/)`)
-        continue
-      }
-      for (const specifier of APP_SPECIFIERS) {
-        if (text.includes(specifier)) {
-          offenders.push(`${rel} (${specifier})`)
-          break
+    for (const root of PACKAGE_ROOTS) {
+      const files = await walk(root)
+      expect(files.length).toBeGreaterThan(0)
+
+      for (const file of files) {
+        const text = await readFile(file, 'utf8')
+        const rel = relative(root, file)
+        if (RELATIVE_ESCAPE.test(text)) {
+          offenders.push(`${root.split('/').pop()}/${rel} (relative escape into app/)`)
+          continue
+        }
+        for (const specifier of APP_SPECIFIERS) {
+          if (text.includes(specifier)) {
+            offenders.push(`${root.split('/').pop()}/${rel} (${specifier})`)
+            break
+          }
         }
       }
     }

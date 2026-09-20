@@ -88,9 +88,14 @@ import type {
 import type { DescribeTarget, ReferenceCandidate } from '@hames/harness-baml/baml_client/types'
 // The corpus is TWO trees since PR-1b (app: heavy + screen; package: describe
 // set + title). The every-function audit below renders BOTH trees' functions,
-// so the request namespace is the (disjoint) union of the two — intersected at
+// so the request namespace is the union of the two — intersected at
 // the NAMESPACE level, not the top-level client, whose private `runtime`
-// would collapse the intersection to never.
+// would collapse the intersection to never. The app side imports the app's
+// OWN generated client (CI's baml-generate step covers the import), and the
+// dispatch prefers the app tree for the functions it declares — the PR-1b
+// review fix: both sides used to import the package specifier, which
+// collapsed the dispatch package-side and left app-side-only prompt edits
+// unrendered.
 
 /** Fakes: rendering a request needs the options to resolve, not to connect. */
 const ENV = {
@@ -104,7 +109,7 @@ const ENV = {
 const OPENAI = { client: 'VerdaQwen', env: ENV }
 const ANTHROPIC = { client: 'AnthropicSonnet5', env: ENV }
 
-type AppRequest = (typeof import('@hames/harness-baml/baml_client').b)['request']
+type AppRequest = (typeof import('../../../../baml_client').b)['request']
 type PkgRequest = (typeof import('@hames/harness-baml/baml_client').b)['request']
 // Omit drops the shared PRIVATE `runtime` key from one side (a two-class
 // intersection with a private member on both collapses to never); the union
@@ -115,7 +120,7 @@ let b: { request: MergedRequest }
 
 beforeAll(async () => {
   const [appClient, pkgClient] = await Promise.all([
-    import('@hames/harness-baml/baml_client'),
+    import('../../../../baml_client'),
     import('@hames/harness-baml/baml_client'),
   ])
   const appReq = appClient.b.request as unknown as Record<PropertyKey, unknown>
@@ -125,7 +130,7 @@ beforeAll(async () => {
   b = {
     request: new Proxy({} as MergedRequest, {
       get: (_t, prop: string) => {
-        const target = prop in pkgReq ? pkgReq : appReq
+        const target = prop in appReq ? appReq : pkgReq
         const value = target[prop]
         return typeof value === 'function' ? value.bind(target) : value
       },

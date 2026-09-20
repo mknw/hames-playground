@@ -23,7 +23,13 @@ export default defineConfig({
       // trace into the very log the gate is meant to make legible.
       // The library moved to packages/ (#225 Step 1a); it stays measured —
       // the floors below would otherwise silently cover a smaller surface.
-      include: ['src/**/*.{ts,tsx,js,jsx}', '../packages/harness-patterns/**/*.{ts,tsx,js,jsx}'],
+      // Same for the agents package (#225 PR-2): the moved definitions and
+      // extractors stay measured from their new home.
+      include: [
+        'src/**/*.{ts,tsx,js,jsx}',
+        '../packages/harness-patterns/**/*.{ts,tsx,js,jsx}',
+        '../packages/agents/**/*.{ts,tsx,js,jsx}',
+      ],
       exclude: [
         'baml_client/**',
         '.output/**',

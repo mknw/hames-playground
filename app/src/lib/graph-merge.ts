@@ -10,13 +10,13 @@
  *     user asks a follow-up about a different concept.
  */
 
-import type { GraphElement } from './harness-client/types'
+import type { GraphElement } from '@hames/agents'
 
 export function mergeGraphElements(
   prev: readonly GraphElement[],
   fresh: readonly GraphElement[],
 ): GraphElement[] {
-  const batchHasTouched = fresh.some(e => isTouched(e))
+  const batchHasTouched = fresh.some((e) => isTouched(e))
   const base = batchHasTouched ? prev.map(stripTouched) : [...prev]
   const indexById = new Map<unknown, number>()
   base.forEach((el, idx) => {

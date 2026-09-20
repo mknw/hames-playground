@@ -247,7 +247,12 @@ export { assertServer, ServerOnlyError } from './assert.server'
 // Lane A6: `routeMessageOp` moved to `harness-baml` whole.
 export { compactBulkData } from './compactBulkData.server'
 export { getErrorHint } from './error-hints'
-export { stripThinkBlocks, truncateToolResults, omitResultFields } from './content-transforms'
+export {
+  stripThinkBlocks,
+  truncateToolResults,
+  omitResultFields,
+  findLastUserMessageIndex,
+} from './content-transforms'
 
 // Injection guard — the deterministic sanitizer + its ALS scope. The pattern
 // primitive (`withInjectionGuard`) is exported with the other patterns above.

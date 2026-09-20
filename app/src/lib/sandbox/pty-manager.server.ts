@@ -62,6 +62,14 @@ export interface PtyEnsureOptions {
    * files (#97 Gap 3). Resolved by the route via `agentUsesSyncWorkspace`.
    */
   syncWorkspace?: boolean
+  /**
+   * Tenant identity for the boot's runtime (per-tenant `/cache` volume).
+   * Carried from the PTY stream route, which has already verified the
+   * connecting user owns the session (`claimSession`) and holds their id —
+   * the Shell path's owner-in-hand the design resolves the seam from.
+   * Omitted (and 'default') = the single-operator tenant. See `RuntimeConfig`.
+   */
+  tenantId?: string
 }
 
 export class PtyManager {
@@ -90,6 +98,13 @@ export class PtyManager {
       memoryMB: DEFAULT_SETTINGS.sandbox.defaultMemoryMB,
       timeoutSec: DEFAULT_SETTINGS.sandbox.defaultTimeoutSec,
       egress: DEFAULT_SETTINGS.sandbox.defaultEgress,
+      // Tenant seam (docs/plan/sandbox.md → channel 1): the Shell path boots
+      // through a DIRECT attachments.acquire, so without this the PTY would be
+      // the one boot path a per-tenant cache volume cannot reach. Resolved
+      // upstream by the route from the verified session owner; 'default' (the
+      // verbatim-name tenant) when absent. `native.runtime` carries it across
+      // reset, like the other caps.
+      tenantId: opts.tenantId ?? 'default',
     }
     const attachments = getDefaultAttachments()
     const attachment = await attachments.acquire(sessionId, 'base', runtime)

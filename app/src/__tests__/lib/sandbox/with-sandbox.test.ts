@@ -227,7 +227,20 @@ describe('withSandbox', () => {
       memoryMB: 512, // defaultMemoryMB
       timeoutSec: 60, // defaultTimeoutSec
       egress: 'mcp-only', // defaultEgress
+      tenantId: 'default', // no authenticated user → the single-operator tenant
     })
+  })
+
+  it("forwards the caller's tenantId into the boot runtime (per-tenant cache volume, Lane A)", async () => {
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+
+    await withSandbox({ backend, tenantId: 'user-42', egress: 'open' })(inner).fn(
+      fakeScope({}),
+      fakeView,
+    )
+
+    expect(backend.calls.boot[0].runtime).toMatchObject({ tenantId: 'user-42' })
   })
 
   it('prefixes the inner pattern name and preserves config / estimateTurns', () => {

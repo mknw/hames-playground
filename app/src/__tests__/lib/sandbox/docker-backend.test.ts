@@ -947,3 +947,61 @@ describe('DockerBackend — egress profiles (#116)', () => {
     expect(flagValue(args, '--memory')).toBe('256m')
   })
 })
+
+// ============================================================================
+// Per-tenant cache volume (docs/plan/sandbox.md → channel 1, Lane A).
+// The /cache mount is a shared WRITABLE volume across boots; under multi-user
+// that is a poisoned-wheel channel between tenants. ONE naming rule: the
+// default tenant (and an absent one) keeps the base name VERBATIM — a
+// single-operator deploy keeps its warm cache — and any other tenantId gets
+// `${base}-${tenantId}`, so two tenants never share the writable volume.
+// ============================================================================
+
+describe('DockerBackend — per-tenant cache volume (Lane A)', () => {
+  it("tenant 'default' keeps the base name VERBATIM (single-operator upgrade keeps the warm cache)", async () => {
+    process.env.SANDBOX_CACHE_VOLUME = 'custom-cache-base'
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', { egress: 'open', tenantId: 'default' })
+    // Verbatim, NOT suffixed — the migration rule the design pins.
+    expect(flagValue(sandboxRunArgs(), '-v')).toBe('custom-cache-base:/cache')
+  })
+
+  it('a non-default tenant maps to a DISTINCT, suffixed volume name', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', { egress: 'open', tenantId: 'user-42' })
+    const tenantVolume = flagValue(sandboxRunArgs(), '-v')
+    expect(tenantVolume).toBe('kg-sandbox-cache-user-42:/cache')
+    // Distinct from the default tenant's volume — the whole point.
+    expect(tenantVolume).not.toBe('kg-sandbox-cache:/cache')
+  })
+
+  it('two different non-default tenants never share a volume', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', { egress: 'open', tenantId: 'user-42' })
+    const a = flagValue(sandboxRunArgs(), '-v')
+    spawnCalls.length = 0
+    await backend.boot('base', { egress: 'open', tenantId: 'user-7' })
+    const b = flagValue(sandboxRunArgs(), '-v')
+    expect(a).toBe('kg-sandbox-cache-user-42:/cache')
+    expect(b).toBe('kg-sandbox-cache-user-7:/cache')
+    expect(a).not.toBe(b)
+  })
+
+  it('SANDBOX_CACHE_VOLUME is the BASE name for a non-default tenant too', async () => {
+    process.env.SANDBOX_CACHE_VOLUME = 'team-cache'
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', { egress: 'pypi', tenantId: 'user-42' })
+    expect(flagValue(sandboxRunArgs(), '-v')).toBe('team-cache-user-42:/cache')
+  })
+
+  it('mcp-only still mounts no cache volume, for any tenant (no network, no install)', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', { tenantId: 'user-42' })
+    expect(sandboxRunArgs()).not.toContain('-v')
+  })
+})

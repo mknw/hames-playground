@@ -83,6 +83,13 @@ export interface WithSandboxConfig {
   resources?: Pick<RuntimeConfig, 'cpus' | 'memoryMB' | 'timeoutSec'>
   /** Egress profile. Defaults to `settings.sandbox.defaultEgress`. */
   egress?: RuntimeConfig['egress']
+  /**
+   * Tenant identity for per-tenant resource naming (the `/cache` volume).
+   * Resolved server-side by the caller from the conversation's owner — never
+   * accepted from client input; `'default'` (or absent) is the single-operator
+   * tenant and keeps today's volume name verbatim. See `RuntimeConfig`.
+   */
+  tenantId?: string
   /** Session id for `SandboxScheduler` per-session-cap accounting. */
   sessionId?: string
   /** Backend override. Defaults to a process-shared `DockerBackend`. */
@@ -269,6 +276,9 @@ export function withSandbox(config?: WithSandboxConfig) {
         memoryMB: config?.resources?.memoryMB ?? settings.sandbox.defaultMemoryMB,
         timeoutSec: config?.resources?.timeoutSec ?? settings.sandbox.defaultTimeoutSec,
         egress: config?.egress ?? settings.sandbox.defaultEgress,
+        // Tenant seam: 'default' when the caller has no authenticated user —
+        // the backend treats it (and absent) as the verbatim-name tenant.
+        tenantId: config?.tenantId ?? 'default',
       }
 
       const slot = await scheduler.allocate(sessionId)

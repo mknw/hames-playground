@@ -11,12 +11,14 @@
  *   compactIntent(baml.compactIntent, { … })
  *   retriever({ rewrite: baml.retrieveQuery, backends, … })
  *   compactBulkData(ctx, onPersist, baml)          // reads describe/batch
+ *   router(routes, { route: baml.router })          // REQUIRED seam
+ *   compactExecution({ mode, synthesize: baml.synthesize })
+ *   withReferences(pattern, { selector: baml.selector, … })
  *
- * `Router` is the one seam that stays an OPTIONAL override: its default
- * (`routeMessageOp`) moved here whole, and raw-llm-visibility.test.ts pins the
- * router pattern end-to-end through it (the design note's exit criterion
- * forbids editing that test semantically — the same shape it prescribes for
- * `ReferenceSelector`).
+ * The BAML-companion seam lane removed the last core→app default imports, so
+ * EVERY injected implementation — including the router's `routeMessageOp`,
+ * `defaultSynthesize` and `defaultSelector` — is wired from here at the
+ * composition root. Core declares only the types.
  *
  * Every adapter here owns its collector (Lane A3 envelope), returns
  * `LLMResult`, throws `LLMCallError` on a failure after reaching the model,
@@ -33,7 +35,10 @@ import type {
   LLMResult,
   PlannerFn,
   RetrieveQueryFn,
+  SelectorFn,
+  SynthesisFn,
 } from '@hames/harness-patterns/types'
+import { defaultSelector, defaultSynthesize } from './defaults.server'
 import {
   createPlannerAdapter,
   describeToolResultOp,
@@ -120,19 +125,25 @@ export function createRetrieveQueryAdapter(): RetrieveQueryFn {
 // The factory
 // ============================================================================
 
-/** The six injected implementations, plus the router default, in one object.
- *  Sync: every adapter binds no turn state, and `limits()` resolves per call. */
+/** The injected implementations, in one object. Sync: every adapter binds no
+ *  turn state, and `limits()` resolves per call. */
 export interface BamlPatterns {
   /** `(toolNames) => PlannerFn` — the planner's seam needs the tool catalog
    *  the executor will have; pass the SAME list you hand `planner()`. */
   planner: (toolNames: string[]) => PlannerFn
-  /** The router default. Pass it explicitly as `router(routes, { route })` to
-   *  override; `router()` already falls back to it. */
+  /** The routing implementation. REQUIRED config on `router()` — pass it as
+   *  `router(routes, { route: baml.router })`; core hosts no default. */
   router: typeof routeMessageOp
   compactIntent: CompactIntentFn
   retrieveQuery: RetrieveQueryFn
   describe: typeof describeToolResultOp
   describeBatch: DescribeBatchFn
+  /** The BAML-backed synthesis implementation for `compactExecution`
+   *  (REQUIRED `synthesize` config). */
+  synthesize: SynthesisFn
+  /** The BAML-backed selector for `withReferences` (REQUIRED `selector`
+   *  config; tests and evals may substitute a deterministic policy). */
+  selector: SelectorFn
 }
 
 export function bamlPatterns(): BamlPatterns {
@@ -143,5 +154,7 @@ export function bamlPatterns(): BamlPatterns {
     retrieveQuery: createRetrieveQueryAdapter(),
     describe: describeToolResultOp,
     describeBatch: describeToolResultsBatchOp,
+    synthesize: defaultSynthesize,
+    selector: defaultSelector,
   }
 }

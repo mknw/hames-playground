@@ -92,6 +92,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     mode: 'thread',
     patternId: 'response-synth',
     liveEvents: true,
+    synthesize: baml.synthesize,
     viewConfig: {
       fromPatterns: ['harness', 'execute'],
       fromLastNTurns: 1,

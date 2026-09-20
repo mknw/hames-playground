@@ -112,7 +112,12 @@ describe('retrieverAgent pattern chain', () => {
           throw new Error('never called')
         },
       }),
-      compactExecution({ mode: 'thread', patternId: 'response-synth' }),
+      compactExecution({
+        mode: 'thread',
+        patternId: 'response-synth',
+        // REQUIRED config now (BAML-companion seam lane); never called here.
+        synthesize: async () => ({ value: '' }),
+      }),
     ]
     expect(harnessHasRedisRetriever(patterns)).toBe(false)
   })

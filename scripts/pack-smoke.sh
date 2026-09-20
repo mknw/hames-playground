@@ -22,16 +22,16 @@
 #      `./patterns`, and each `./*` subpath the app reaches for
 #      (`rg "@hames/harness-patterns/" app/src`).
 #
-# Step 6 is RED BY DESIGN on today's main: packages/harness-patterns still
-# carries 11 relative imports escaping into app/src/lib (settings-context.server,
-# settings, harness-baml/*) that resolve via directory-walk from packages/ in
-# dev but do not exist inside a tarball, so a consumer's installed copy cannot
-# load the barrel. The red is the RECORDED PROOF of that blocker — CI tolerates
-# it (continue-on-error + ::warning::) until the seam lanes remove the edges;
-# removing them is Lane C (the HarnessRuntimeConfig split) and Step 3
-# (harness-baml extraction). What must STAY green through any change here:
-# steps 3-5 — the discriminating check that a red in step 6 is the real
-# blocker (transitively reaching app/src) and not a probe or packaging bug.
+# Step 6 was RED BY DESIGN on main until the seam lanes removed the last
+# imports escaping into app/src/lib (the harness-baml defaults and the
+# CriticFnWithLLMData type — removed by the BAML-companion seam lane,
+# 2026-09-20, which also flipped this CI job to REQUIRED). It is GREEN now,
+# and a red here is a regression: either an app/src edge came back (the
+# zero-app-imports pin under app/src/__tests__ should also have caught it) or
+# the package imports something its own manifest does not declare. What stayed
+# green through the whole interim: steps 3-5 — the discriminating check that
+# a red in step 6 was the real blocker (transitively reaching app/src) and not
+# a probe or packaging bug.
 
 set -euo pipefail
 
@@ -84,12 +84,11 @@ const direct = await import('@hames/harness-patterns/injection-guard')
 assert.equal(direct.sanitizeUntrusted, guard.sanitizeUntrusted, './guard and ./injection-guard disagree')
 await import('@hames/harness-patterns/types') // type-only module; must at least resolve
 
-// 6. module EVALUATION of every entry the app imports (see the header: RED BY
-//    DESIGN on today's main — the recorded blocker). Each entry is imported
-//    through the INSTALLED tarball inside the scratch project, so a failure
-//    here is a consumer-visible module load, not a workspace artifact. The
-//    ./guard assertions above passing while these fail is what proves the red
-//    is the app/src escape and not a broken probe or a packaging regression.
+// 6. module EVALUATION of every entry the app imports. Each entry is
+//    imported through the INSTALLED tarball inside the scratch project, so a
+//    failure here is a consumer-visible module load, not a workspace
+//    artifact. GREEN and REQUIRED since the BAML-companion seam lane removed
+//    the app/src edges — a failure now is a regression, not a known blocker.
 const appEntries = [
   // the `.` barrel and the ./patterns barrel
   '.',
@@ -130,8 +129,8 @@ for (const entry of appEntries) {
 if (evalFailures.length > 0) {
   console.error(
     `\npack smoke: ${evalFailures.length}/${appEntries.length} entries failed module evaluation` +
-      ' — recorded blocker: @hames/harness-patterns imports app/src/lib, which a tarball consumer cannot resolve.' +
-      ' Red stays until the seam lanes remove those edges.',
+      ' — a regression: the package imports something a tarball consumer cannot resolve' +
+      ' (an app/src edge returning, or an undeclared dependency).',
   )
   // Rethrow the FIRST failure raw: the original stack (ERR_MODULE_NOT_FOUND
   // naming the app/src path) is the evidence the PR body records.

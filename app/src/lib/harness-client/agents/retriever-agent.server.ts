@@ -56,6 +56,7 @@ import { createRedisBackend } from '../../retriever'
 async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools({ namespaces: mcpNamespace })
   const schema = await getGraphSchema('retriever-agent', sessionId)
+  const baml = bamlPatterns()
 
   // ── retriever route: vector search over this session's uploaded docs ──
   // Raw user message by default; rewritten to a search query only when the turn
@@ -68,7 +69,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     generateQuery: true,
     // Lane A6: the query rewrite is REQUIRED injected config now — the
     // describe-tier implementation comes from `harness-baml`.
-    rewrite: bamlPatterns().retrieveQuery,
+    rewrite: baml.retrieveQuery,
     liveEvents: true,
   })
 
@@ -99,7 +100,10 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
       neo4j: 'Database queries and graph operations',
       web_search: 'Web lookups and information retrieval',
     },
-    { liveEvents: true },
+    // The routing implementation is REQUIRED config, wired from `harness-baml`
+    // at the composition root (BAML-companion seam lane) — core hosts no
+    // default import.
+    { liveEvents: true, route: baml.router },
   )
 
   // Two untrusted routes, guarded together. `web` is the obvious one; `retriever`
@@ -119,8 +123,16 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
         // in `withReferences` (which injects prior tool_results) — unlike the
         // neo4j / web loops, which benefit from cross-turn reference curation.
         retriever: retrieverPattern,
-        neo4j: withReferences<SessionData>(neo4jPattern, { scope: 'global', liveEvents: true }),
-        web_search: withReferences<SessionData>(webPattern, { scope: 'global', liveEvents: true }),
+        neo4j: withReferences<SessionData>(neo4jPattern, {
+          scope: 'global',
+          liveEvents: true,
+          selector: baml.selector,
+        }),
+        web_search: withReferences<SessionData>(webPattern, {
+          scope: 'global',
+          liveEvents: true,
+          selector: baml.selector,
+        }),
       },
       { liveEvents: true },
     ),
@@ -130,6 +142,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     mode: 'thread',
     patternId: 'response-synth',
     liveEvents: true,
+    synthesize: baml.synthesize,
   })
 
   return [routerPattern, routesPattern, responseSynth]

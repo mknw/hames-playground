@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { defaultSelector } from '../../../../lib/harness-baml/defaults.server'
 import type {
   ContextEvent,
   PatternScope,
@@ -95,7 +96,10 @@ describe('withReferences', () => {
     const ctx = createContext<Record<string, unknown>>('do something')
     const view = createEventView(ctx)
     const inner = makeInnerPattern()
-    const wrapped = withReferences(inner.pattern, { trackHistory: 'reference_attached' })
+    const wrapped = withReferences(inner.pattern, {
+      trackHistory: 'reference_attached',
+      selector: defaultSelector,
+    })
 
     const scope: PatternScope<Record<string, unknown>> = {
       id: 'wrap-1',
@@ -131,7 +135,10 @@ describe('withReferences', () => {
     )
     const view = createEventView(ctx)
     const inner = makeInnerPattern()
-    const wrapped = withReferences(inner.pattern, { trackHistory: 'reference_attached' })
+    const wrapped = withReferences(inner.pattern, {
+      trackHistory: 'reference_attached',
+      selector: defaultSelector,
+    })
 
     const scope: PatternScope<Record<string, unknown>> = {
       id: 'wrap-1',
@@ -172,6 +179,7 @@ describe('withReferences', () => {
     const wrapped = withReferences(inner.pattern, {
       maxRefs: 2,
       trackHistory: 'reference_attached',
+      selector: defaultSelector,
     })
 
     mockReferenceSelector.mockResolvedValue({
@@ -223,7 +231,10 @@ describe('withReferences', () => {
     )
     const view = createEventView(ctx)
     const inner = makeInnerPattern()
-    const wrapped = withReferences(inner.pattern, { trackHistory: 'reference_attached' })
+    const wrapped = withReferences(inner.pattern, {
+      trackHistory: 'reference_attached',
+      selector: defaultSelector,
+    })
 
     mockReferenceSelector.mockResolvedValue({
       reasoning: 'pick a',
@@ -296,6 +307,7 @@ describe('withReferences', () => {
     const wrapped = withReferences(inner.pattern, {
       scope: 'self',
       trackHistory: 'reference_attached',
+      selector: defaultSelector,
     })
 
     mockReferenceSelector.mockResolvedValue({
@@ -363,7 +375,10 @@ describe('withReferences', () => {
     )
     const view = createEventView(ctx)
     const inner = makeInnerPattern()
-    const wrapped = withReferences(inner.pattern, { trackHistory: 'reference_attached' })
+    const wrapped = withReferences(inner.pattern, {
+      trackHistory: 'reference_attached',
+      selector: defaultSelector,
+    })
 
     const scope: PatternScope<Record<string, unknown>> = {
       id: 'wrap',
@@ -394,7 +409,10 @@ describe('withReferences', () => {
     )
     const view = createEventView(ctx)
     const inner = makeInnerPattern()
-    const wrapped = withReferences(inner.pattern, { trackHistory: 'reference_attached' })
+    const wrapped = withReferences(inner.pattern, {
+      trackHistory: 'reference_attached',
+      selector: defaultSelector,
+    })
 
     mockReferenceSelector.mockResolvedValue({ reasoning: '', selected: [] })
 

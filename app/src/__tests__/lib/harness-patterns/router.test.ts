@@ -9,11 +9,10 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-// Mock routing
+// The routing implementation is REQUIRED config now (BAML-companion seam
+// lane): every construction below passes this stub explicitly, where the
+// mock of `routing.server` used to intercept the pattern's deleted import.
 const mockRouteMessageOp = vi.fn()
-vi.mock('../../../lib/harness-baml/routing.server', () => ({
-  routeMessageOp: (...args: unknown[]) => mockRouteMessageOp(...args),
-}))
 
 describe('router', () => {
   beforeEach(() => {
@@ -40,7 +39,7 @@ describe('router', () => {
       web: 'Web search',
     }
 
-    const pattern = router(routeDescriptions)
+    const pattern = router(routeDescriptions, { route: mockRouteMessageOp })
 
     expect(pattern.name).toBe('router')
     expect(pattern.fn).toBeDefined()
@@ -67,7 +66,10 @@ describe('router', () => {
     })
     const view = createEventView(ctx)
 
-    const pattern = router({ neo4j: 'Database queries', web: 'Web search' })
+    const pattern = router(
+      { neo4j: 'Database queries', web: 'Web search' },
+      { route: mockRouteMessageOp },
+    )
     const result = await pattern.fn(
       { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
       view,
@@ -100,7 +102,7 @@ describe('router', () => {
     })
     const view = createEventView(ctx)
 
-    const pattern = router({ neo4j: 'Database queries' })
+    const pattern = router({ neo4j: 'Database queries' }, { route: mockRouteMessageOp })
     const result = await pattern.fn(
       { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
       view,
@@ -131,7 +133,7 @@ describe('router', () => {
     })
     const view = createEventView(ctx)
 
-    const pattern = router({ neo4j: 'Database queries' })
+    const pattern = router({ neo4j: 'Database queries' }, { route: mockRouteMessageOp })
     const result = await pattern.fn(
       { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
       view,
@@ -158,7 +160,7 @@ describe('router', () => {
     })
     const view = createEventView(ctx)
 
-    const pattern = router({ neo4j: 'Database queries' })
+    const pattern = router({ neo4j: 'Database queries' }, { route: mockRouteMessageOp })
     const result = await pattern.fn(
       { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
       view,
@@ -190,7 +192,7 @@ describe('router', () => {
     })
     const view = createEventView(ctx)
 
-    const pattern = router({ neo4j: 'Database queries' })
+    const pattern = router({ neo4j: 'Database queries' }, { route: mockRouteMessageOp })
     const result = await pattern.fn(
       { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
       view,

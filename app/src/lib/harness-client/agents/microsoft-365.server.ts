@@ -23,7 +23,7 @@ import {
   Tools,
   type ConfiguredPattern,
 } from '@hames/harness-patterns'
-import { createLoopControllerAdapter } from '../../harness-baml'
+import { bamlPatterns, createLoopControllerAdapter } from '../../harness-baml'
 import { mcpNamespace } from '../../app-tools/mcp-catalog'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
@@ -100,6 +100,7 @@ async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<Ses
     mode: 'thread',
     patternId: 'response-synth',
     liveEvents: true,
+    synthesize: bamlPatterns().synthesize,
   })
 
   // Untrusted content, despite the trusted transport. The per-user Graph token

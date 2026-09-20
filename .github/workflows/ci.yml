@@ -147,16 +147,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    # RED BY DESIGN (the recorded blocker): the module-eval probe in the smoke
-    # imports every entry the app uses, and the installed tarball still cannot
-    # load the barrel — packages/harness-patterns carries 11 relative imports
-    # escaping into app/src/lib (settings-context.server, settings,
-    # harness-baml/*) that only resolve via directory-walk from packages/ in
-    # dev. continue-on-error keeps the run green while the red stays as proof;
-    # a failing step emits a ::warning:: naming the blocker. Flipping this job
-    # to required (and dropping continue-on-error) belongs to the follow-up
-    # lane once the seam lanes remove those edges.
-    continue-on-error: true
+    # REQUIRED (flipped 2026-09-20 by the BAML-companion seam lane): the
+    # module-eval blocker the job used to tolerate is gone — the last
+    # imports escaping into app/src/lib (the harness-baml defaults and the
+    # CriticFnWithLLMData type) were removed from core, and the
+    # zero-app-imports pin under app/src/__tests__ keeps them out. The job
+    # gates merges like `check` and `image` do.
 
     # Runs the pack + install-from-tarball smoke (#225 Step 1d; plan
     # §3.3/§4.3) — the ONLY step anywhere in CI that exercises "does the
@@ -164,9 +160,7 @@ jobs:
     # symlink, so only this catches a file missing from the `files`/`exports`
     # allowlist or a dependency the package imports but does not declare.
     # Independent of `check` and `image` on purpose, like those two are of
-    # each other. The job-level continue-on-error above tolerates ONLY the
-    # recorded module-eval blocker; the script still fails loudly on exports/
-    # guard regressions.
+    # each other.
     #
     # Deliberately NO `pnpm install` of the workspace: packing needs only the
     # manifest, and the probe runs against the tarball installed into a
@@ -192,22 +186,12 @@ jobs:
       # export target does not exist, the package imports something its own
       # manifest does not declare, or the ./guard companion subpath does not
       # import and behave. The module-eval probe (barrel + every app-imported
-      # subpath) is RED on today's main by design — the recorded blocker
-      # documented in the job comment and scripts/pack-smoke.sh; its red is
-      # surfaced as a ::warning:: below and tolerated by continue-on-error
-      # until the seam lanes remove the app/src edges.
+      # subpath) was RED on main until the seam lanes removed the app/src
+      # edges; it is GREEN and REQUIRED now — a red here is a regression, not
+      # a known blocker.
       - name: Run the pack smoke
         id: pack_smoke
         run: scripts/pack-smoke.sh
-
-      - name: Record the known module-eval blocker
-        if: always()
-        run: |
-          if [ "${{ steps.pack_smoke.outcome }}" = "failure" ]; then
-            echo "::warning::pack-smoke module-eval probe is RED by design — the recorded blocker: @hames/harness-patterns carries 11 relative imports into app/src/lib (settings-context.server, settings, harness-baml/*) that a tarball consumer cannot resolve. This red is kept as proof until the seam lanes remove those edges; the job is continue-on-error until then, and flipping it to required is the follow-up lane."
-          else
-            echo "::warning::pack-smoke module-eval probe PASSED — the app/src edges appear removed or the probe stopped evaluating the entries; verify which, then flip this job to required and drop continue-on-error (follow-up lane)."
-          fi
 
   image:
     name: docker image · build · boot

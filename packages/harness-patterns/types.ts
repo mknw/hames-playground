@@ -472,6 +472,26 @@ export interface ControllerCallResult {
   llmCall?: LLMCallRecord
 }
 
+/** Result of a critic call with optional LLM observability data. Lives in
+ *  core because it IS the critic seam's return type (same rule as
+ *  {@link ControllerCallResult}); the harness-baml adapter re-exports it for
+ *  existing import paths. */
+export interface CriticCallResult {
+  result: CriticResult
+  llmCall?: LLMCallRecord
+}
+
+/** The critic seam `actorCritic` consumes. Moved into core from
+ *  `harness-baml/baml-adapters.server` (BAML-companion seam lane): a type-only
+ *  import from app code is still an import, and core never imports a
+ *  companion (#225 L3). The adapter's optional collector parameter is an
+ *  implementation detail the pattern never passes, so the seam is the two
+ *  arguments the loop actually hands over. */
+export type CriticFnWithLLMData = (
+  intent: string,
+  previous_attempts: ScriptExecutionEvent[],
+) => Promise<CriticCallResult>
+
 /** The model budgets a call must respect — the context window and output cap
  *  of the model the call will ACTUALLY take (#225 Lane A5).
  *
@@ -618,13 +638,10 @@ export interface RouteMessageResult {
   llmCall?: LLMCallRecord
 }
 
-/** The router seam. `routeMessageOp` (harness-baml) is the adapter
- *  implementation and satisfies this shape; unlike the five seams above it is
- *  an OPTIONAL override with that default — raw-llm-visibility.test.ts pins
- *  the router pattern end-to-end through the default, and the exit criterion
- *  forbids editing it semantically (the same shape the design note prescribes
- *  for `ReferenceSelector`: implementation moves to harness-baml, pattern
- *  keeps it as the default). */
+/** The router seam. The implementation (`routeMessageOp`, harness-baml)
+ *  satisfies this shape and is REQUIRED config: core hosts no default, so the
+ *  composition root supplies it — `router(routes, { route: baml.router })` in
+ *  the app (see `BamlPatterns.router`). Core declares only the type. */
 export type RouteFn = {
   (
     message: string,
@@ -770,8 +787,10 @@ export interface WithReferencesConfig extends PatternConfig {
   source?: string | string[]
   /** Cap on attached refs after selection. Default: 5 */
   maxRefs?: number
-  /** Override the default LLM-driven selector */
-  selector?: SelectorFn
+  /** REQUIRED: the selector implementation. Core hosts no default — the
+   *  composition root supplies the BAML-backed one (`bamlPatterns().selector`)
+   *  or its own deterministic policy. */
+  selector: SelectorFn
 }
 
 // ============================================================================
@@ -947,8 +966,10 @@ export type SynthesisFn = (input: CompactExecutionInput) => Promise<LLMResult<st
 /** Configuration for compactExecution pattern */
 export interface CompactExecutionConfig extends PatternConfig {
   mode: CompactExecutionMode
-  /** Custom synthesis function (defaults to BAML CreateToolResponse) */
-  synthesize?: SynthesisFn
+  /** REQUIRED: the synthesis implementation. Core hosts no default — the
+   *  composition root supplies the BAML-backed one
+   *  (`bamlPatterns().synthesize`). */
+  synthesize: SynthesisFn
   /** Skip synthesis if response already exists */
   skipIfHasResponse?: boolean
 }
@@ -1291,10 +1312,10 @@ export const DIRECT_RESPONSE_ROUTE = 'user'
 export interface RouterConfig extends PatternConfig {
   /** Route name set when responding directly without a tool (default: 'user') */
   directResponseRoute?: string
-  /** Override the routing implementation (Lane A6 seam). Default:
-   *  `routeMessageOp` from `harness-baml` — the implementation moved there
-   *  whole; the pattern keeps it as the default (see {@link RouteFn}). */
-  route?: RouteFn
+  /** REQUIRED: the routing implementation (Lane A6 seam). Core hosts no
+   *  default — the composition root supplies `routeMessageOp`
+   *  (`bamlPatterns().router`; see {@link RouteFn}). */
+  route: RouteFn
 }
 
 /** Configuration for routes dispatch pattern */

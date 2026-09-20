@@ -187,7 +187,13 @@ stay deferred below. What shipped:
   beside the sandboxes — a process that ignores the proxy env vars has no
   route out at all, so the allowlist is enforced, not advisory. Every allowed
   AND denied connection is audited (one JSON line each:
-  `docker logs kg-sandbox-egress-<profile>-gw`). `uv` is baked into the base
+  `docker logs kg-sandbox-egress-<profile>-<sandbox-id>-gw`). The internal
+  network and its gateway are PER BOOT (multi-user isolation,
+  `docs/plan/sandbox.md` → channel 2) — no two sandboxes share a network.
+  Audit retention follows the boot: the gateway is removed when the sandbox
+  is destroyed, so the trail is readable only until then (the per-profile
+  long-lived window is gone).
+  `uv` is baked into the base
   image and `/cache` is a mounted named volume (env-tunable name), so live
   installs don't re-download wheels per container. An unknown profile at
   runtime fails CLOSED to no network.

@@ -39,7 +39,10 @@ export interface RuntimeConfig {
    *     the backend runs beside it — a process that ignores the proxy env vars
    *     has no route out at all, so the allowlist is enforced, not advisory.
    *     Every allowed AND denied connection is audited by the proxy
-   *     (`docker logs kg-sandbox-egress-<profile>-gw`).
+   *     (`docker logs kg-sandbox-egress-<profile>-<sandbox-id>-gw`; the
+   *     network and gateway are PER BOOT — see egress-policy.ts — so the
+   *     audit trail survives only until the sandbox is destroyed: the
+   *     gateway is `--rm`'d with the boot).
    *   - `open`       NOT selectable by callers (#357 channel 4): a requested
    *     `open` fails CLOSED to `--network none` like an unknown profile. The
    *     single-operator escape hatch `SANDBOX_ENABLE_OPEN_EGRESS=1` re-admits

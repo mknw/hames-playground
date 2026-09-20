@@ -807,7 +807,9 @@ describe('withSandbox orphan-reap reporting (#97 Gap 1)', () => {
     await vi.waitFor(() => expect(warn).toHaveBeenCalled())
 
     expect(reap).toHaveBeenCalledTimes(1)
-    expect(warn.mock.calls[0][0]).toContain('reaped 3 orphaned container(s)')
+    expect(warn.mock.calls[0][0]).toContain(
+      'reaped 3 orphaned sandbox resource(s) (containers + per-boot egress networks)',
+    )
   })
 
   it('stays quiet when there was nothing to reap', async () => {

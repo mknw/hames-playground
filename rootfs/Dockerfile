@@ -41,7 +41,10 @@ RUN mkdir -p /opt/mcp /work
 
 # Egress allowlist CONNECT proxy (#116). Same image as the sandboxes — the
 # gateway container only needs Node. Not an MCP server; its stdout is the
-# outbound audit log (docker logs kg-sandbox-egress-<profile>-gw).
+# outbound audit log. PER BOOT (channel 2): the backend names each boot's
+# gateway kg-sandbox-egress-<profile>-<sandbox-id>-gw, so the audit trail
+# (`docker logs <gw>`) survives only until that sandbox is destroyed — the
+# per-profile long-lived window is gone.
 COPY egress-proxy/proxy.mjs /opt/mcp/egress-proxy/proxy.mjs
 RUN chmod +x /opt/mcp/egress-proxy/proxy.mjs
 

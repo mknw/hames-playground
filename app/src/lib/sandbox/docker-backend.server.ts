@@ -38,7 +38,9 @@ import {
   egressGatewayName,
   egressNetworkName,
   isEgressProfile,
+  isOpenEgressEnabled,
   isProxiedProfile,
+  OPEN_EGRESS_ENV,
   proxyEnvArgs,
 } from './egress-policy'
 
@@ -396,11 +398,26 @@ export class DockerBackend implements ComputeBackend {
     // Egress enforcement (#116). mcp-only ⇒ no network at all (in-VM MCP is
     // reached over the docker-exec stdio pipe, which does NOT require
     // container networking). pypi / github-trusted ⇒ internal-only network
-    // + allowlist CONNECT proxy (see egress-policy.ts). open ⇒ the default
-    // bridge, unrestricted by design. An UNKNOWN profile fails CLOSED to no
-    // network — an unrecognized name must never mean "unrestricted".
+    // + allowlist CONNECT proxy (see egress-policy.ts). `open` is NOT a
+    // selectable profile (#357 channel 4): requested 'open' fails CLOSED to
+    // no network — like an unknown name — unless the deployment has opted in
+    // with SANDBOX_ENABLE_OPEN_EGRESS=1 (read per boot, same layer as the
+    // other SANDBOX_* knobs), in which case it keeps its documented posture:
+    // default bridge, unrestricted by design, unproxied, unaudited. An
+    // UNKNOWN profile fails CLOSED to no network — an unrecognized name must
+    // never mean "unrestricted".
     const egress = runtime.egress ?? 'mcp-only'
-    if (!isEgressProfile(egress)) {
+    if (egress === 'open') {
+      if (isOpenEgressEnabled(process.env)) {
+        args.push(...cacheVolumeArgs())
+      } else {
+        console.warn(
+          `[sandbox] egress profile 'open' for ${id} requires ${OPEN_EGRESS_ENV}=1: ` +
+            'failing closed to no network (mcp-only)',
+        )
+        args.push('--network', 'none')
+      }
+    } else if (!isEgressProfile(egress)) {
       console.warn(
         `[sandbox] unknown egress profile ${JSON.stringify(egress)} for ${id}: ` +
           'failing closed to no network (mcp-only)',

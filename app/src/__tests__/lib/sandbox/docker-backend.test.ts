@@ -1005,3 +1005,78 @@ describe('DockerBackend — per-tenant cache volume (Lane A)', () => {
     expect(sandboxRunArgs()).not.toContain('-v')
   })
 })
+
+// ============================================================================
+// Lane C (warm-pool fingerprint + re-scoping) — volume-name invariants.
+// cacheVolumeName interpolates tenantId into a docker volume name, whose
+// charset is `[a-zA-Z0-9][a-zA-Z0-9_.-]*` — a hostile tenantId must not be
+// able to produce an invalid name, and two distinct tenantIds must never
+// sanitize onto ONE name (a collision would put two tenants on one writable
+// volume — the channel per-tenant volumes exist to close).
+// ============================================================================
+
+describe('DockerBackend — tenantId sanitization in the cache volume name (Lane C)', () => {
+  it('MUTATION PIN: a hostile tenantId cannot produce an invalid docker volume name', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    // Slashes, colon, dollar, space — every character docker's volume-name
+    // grammar forbids, plus shell-adjacent metacharacters.
+    await backend.boot('base', { egress: 'open', tenantId: 'a/b:c$d e&f' })
+    const mount = flagValue(sandboxRunArgs(), '-v')!
+    // The full mount spec is a valid name + /cache — no raw hostile character
+    // survived into it (the name grammar forbids `/`, `:`, `$`, ` `, `&`).
+    expect(mount).toMatch(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*:\/cache$/)
+  })
+
+  it('two DISTINCT hostile tenantIds never sanitize onto one name (a collision would re-share the volume)', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', { egress: 'open', tenantId: 'a/b' })
+    const a = flagValue(sandboxRunArgs(), '-v')
+    spawnCalls.length = 0
+    await backend.boot('base', { egress: 'open', tenantId: 'a b' })
+    const b = flagValue(sandboxRunArgs(), '-v')
+    // Both sanitize to the same cleaned stem ('a_b') — the digest is what
+    // keeps the names (and the volumes) distinct.
+    expect(a).not.toBe(b)
+  })
+
+  it('a CLEAN tenantId (a real Entra oid) passes through byte-for-byte — Lane A names unchanged', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', {
+      egress: 'open',
+      tenantId: '00000000-0000-0000-0000-000000000000',
+    })
+    expect(flagValue(sandboxRunArgs(), '-v')).toBe(
+      'kg-sandbox-cache-00000000-0000-0000-0000-000000000000:/cache',
+    )
+  })
+
+  it('MUTATION PIN: reset() preserves the ORIGINAL tenant cache volume (Lane A cold-boot scoping survives recycle)', async () => {
+    let runCount = 0
+    spawnPlan = (_cmd, args) => {
+      if (args[0] === 'run') {
+        runCount += 1
+        return { stdout: `container-${runCount}`, code: 0 }
+      }
+      if (args[0] === 'network' && args[1] === 'inspect') return { stdout: 'netid', code: 0 }
+      if (args[0] === 'inspect') return { stdout: 'true', code: 0 }
+      return { stdout: '', code: 0 }
+    }
+    const backend = await makeBackend()
+    const handle = await backend.boot('base', { egress: 'pypi', tenantId: 'user-42' })
+    expect(flagValue(sandboxRunArgs(), '-v')).toBe('kg-sandbox-cache-user-42:/cache')
+
+    spawnCalls.length = 0
+    await backend.reset(handle)
+    const args = sandboxRunArgs()
+    // The recycled container mounts tenant user-42's volume — NOT the base
+    // name, NOT another tenant's. native.runtime is what reset re-applies.
+    expect(flagValue(args, '-v')).toBe('kg-sandbox-cache-user-42:/cache')
+    // /work does NOT cross sessions: reset is destroy-and-reboot, so the
+    // recycled container carries a FRESH empty /work tmpfs (never a "clear
+    // the directory" shortcut — docs/plan/sandbox.md → channel 3).
+    expect(args.join(' ')).toContain('--tmpfs /work:rw,nosuid,size=512m,mode=1777')
+  })
+})

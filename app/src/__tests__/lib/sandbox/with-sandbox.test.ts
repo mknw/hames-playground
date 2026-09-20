@@ -64,7 +64,10 @@ function fakeBackend(opts?: { connectMcpFails?: boolean }): ComputeBackend & { c
     backend: 'docker',
     rootfs: 'base',
     bootedAt: Date.now(),
-    native: { containerId: 'cid-test' },
+    // Like the real DockerBackend, the fake records the booted runtime into
+    // native.runtime — the warm pool parks a released VM under the posture
+    // its own record vouches for (Lane C).
+    native: { containerId: 'cid-test', runtime: {} },
   }
   const transport: McpTransport = {
     vmId: handle.id,

@@ -3,7 +3,8 @@
  *
  * Hermetic — the backend is a vi.fn() fake; no Docker or MCP SDK involved.
  * Covers acquire (hit / miss), release (park / cap-full / reset-fail),
- * evictIdle, shutdown, and prewarm.
+ * evictIdle, shutdown, prewarm, and the fingerprint-scoped handoff rule
+ * (tenantId|rootfs|egress — Lane C, docs/plan/sandbox.md → channel 3).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -13,26 +14,36 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
 }))
 
 import { WarmPool } from '../../../lib/sandbox/warm-pool.server'
-import type { ComputeBackend, RootfsId, RuntimeConfig, VMHandle, HealthStatus, McpTransport } from '../../../lib/sandbox/types'
+import type {
+  ComputeBackend,
+  RootfsId,
+  RuntimeConfig,
+  VMHandle,
+  HealthStatus,
+  McpTransport,
+} from '../../../lib/sandbox/types'
 
 // ---- backend fake --------------------------------------------------------
 
 let bootCount = 0
-function makeHandle(rootfs: RootfsId = 'base', bootedAt = Date.now()): VMHandle {
+/** Like the real DockerBackend, the fake records the runtime it booted with
+ *  into native.runtime — the fingerprint release parks under comes from the
+ *  VM's own record, not from the caller. */
+function makeHandle(rootfs: RootfsId = 'base', runtime: RuntimeConfig = {}): VMHandle {
   bootCount += 1
   return {
     id: `sbx-${bootCount.toString().padStart(4, '0')}`,
     backend: 'docker',
     rootfs,
-    bootedAt,
-    native: { containerId: `c-${bootCount}`, runtime: {} },
+    bootedAt: Date.now(),
+    native: { containerId: `c-${bootCount}`, runtime },
   }
 }
 
 function makeBackend(overrides: Partial<ComputeBackend> = {}): ComputeBackend {
   const backend: ComputeBackend = {
     kind: 'docker',
-    boot: vi.fn(async (rootfs: RootfsId, _runtime: RuntimeConfig) => makeHandle(rootfs)),
+    boot: vi.fn(async (rootfs: RootfsId, runtime: RuntimeConfig) => makeHandle(rootfs, runtime)),
     destroy: vi.fn(async (_vm: VMHandle) => undefined),
     reset: vi.fn(async (vm: VMHandle) => {
       // Mimic real reset: bootedAt advances.
@@ -267,5 +278,153 @@ describe('WarmPool.size', () => {
     expect(pool.size('other')).toBe(1)
     expect(pool.size()).toBe(2)
     expect(pool.size('missing')).toBe(0)
+  })
+})
+
+// ============================================================================
+// Fingerprint-scoped handoff (Lane C — docs/plan/sandbox.md → channel 3).
+// A pool hit MUST match tenantId|rootfs|egress exactly; a mismatch is a
+// pool MISS (cold-boot with the requested runtime), never a silent handover
+// of another tenant's posture. `native.runtime` survives reset, so without
+// this scoping an mcp-only caller could receive a pypi VM — network
+// attached, mounted on another tenant's /cache volume.
+// ============================================================================
+
+describe('WarmPool — fingerprint-scoped handoff (Lane C)', () => {
+  const T_A = { egress: 'pypi' as const, tenantId: 'tenant-a' }
+  const T_B = { egress: 'pypi' as const, tenantId: 'tenant-b' }
+
+  it('MUTATION PIN: two acquires differing only in tenantId do NOT share a pooled VM', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+
+    const first = await pool.acquire('base', T_A)
+    await pool.release(first) // parks under tenant-a's fingerprint
+
+    // Same rootfs, same egress — ONLY the tenant differs. A hit here would
+    // hand tenant-b a VM mounted on tenant-a's /cache volume.
+    vi.mocked(backend.boot).mockClear()
+    const second = await pool.acquire('base', T_B)
+
+    expect(backend.boot).toHaveBeenCalledTimes(1) // cold-booted, not pooled
+    expect(second).not.toBe(first)
+    expect(second.id).not.toBe(first.id)
+  })
+
+  it('the mismatched VM stays parked for its OWN fingerprint (a miss, not a destroy)', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+
+    const first = await pool.acquire('base', T_A)
+    await pool.release(first)
+
+    await pool.acquire('base', T_B) // miss for tenant-b → cold-boot
+    expect(pool.size('base')).toBe(1) // tenant-a's VM still parked
+
+    // The parked VM is an exact-match hit for ITS OWN fingerprint again.
+    vi.mocked(backend.boot).mockClear()
+    const again = await pool.acquire('base', T_A)
+    expect(backend.boot).not.toHaveBeenCalled()
+    expect(again).toBe(first)
+  })
+
+  it('a mismatch in egress alone is also a pool miss (egress is an isolation knob)', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+
+    const first = await pool.acquire('base', { egress: 'pypi', tenantId: 'tenant-a' })
+    await pool.release(first)
+
+    vi.mocked(backend.boot).mockClear()
+    const second = await pool.acquire('base', { egress: 'open', tenantId: 'tenant-a' })
+    expect(backend.boot).toHaveBeenCalledTimes(1)
+    expect(second).not.toBe(first)
+  })
+
+  it('an exact match (same tenantId, rootfs, egress) IS a pool hit', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+
+    const first = await pool.acquire('base', T_A)
+    await pool.release(first)
+
+    vi.mocked(backend.boot).mockClear()
+    const second = await pool.acquire('base', T_A)
+    expect(backend.boot).not.toHaveBeenCalled()
+    expect(second).toBe(first)
+  })
+
+  it('the default tenant and an absent tenantId are the SAME fingerprint', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+
+    const first = await pool.acquire('base', {})
+    await pool.release(first)
+
+    vi.mocked(backend.boot).mockClear()
+    const second = await pool.acquire('base', { tenantId: 'default', egress: 'mcp-only' })
+    expect(backend.boot).not.toHaveBeenCalled()
+    expect(second).toBe(first)
+  })
+
+  it('resource caps (cpus/memoryMB) do NOT segment the pool — posture is tenantId|rootfs|egress only', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+
+    const first = await pool.acquire('base', { ...T_A, cpus: 1 })
+    await pool.release(first)
+
+    vi.mocked(backend.boot).mockClear()
+    const second = await pool.acquire('base', { ...T_A, cpus: 4, memoryMB: 1024 })
+    expect(backend.boot).not.toHaveBeenCalled()
+    expect(second).toBe(first)
+  })
+
+  it('prewarm parks under the requested runtime — its own tenants hit, others miss', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+
+    await pool.prewarm('base', 1, T_A)
+
+    vi.mocked(backend.boot).mockClear()
+    await pool.acquire('base', T_A)
+    expect(backend.boot).not.toHaveBeenCalled()
+
+    await pool.acquire('base', T_B) // not tenant-a's posture → cold-boot
+    expect(backend.boot).toHaveBeenCalledTimes(1)
+  })
+
+  it('a VM whose handle records NO runtime is un-vouchable: released = destroyed, never parked', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+
+    const vm = await pool.acquire('base', T_A)
+    delete (vm.native as { runtime?: unknown }).runtime
+
+    await pool.release(vm)
+    expect(backend.destroy).toHaveBeenCalledWith(vm)
+    expect(pool.size('base')).toBe(0)
+  })
+
+  it('reset keeps the VM on its original posture: released-and-reacquired VM still runs its recorded runtime', async () => {
+    // The real reset re-boots with native.runtime (the original tenant's
+    // posture — Lane A's cold-boot scoping); the fake mimics that by leaving
+    // native.runtime untouched. Pin that the recycled VM is handed back ONLY
+    // to the fingerprint it actually runs.
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+
+    const vm = await pool.acquire('base', T_B)
+    await pool.release(vm) // reset ran; posture unchanged (native.runtime)
+
+    // tenant-a asks while tenant-b's VM is parked: miss, no cross-tenant handover
+    const other = await pool.acquire('base', T_A)
+    expect(other).not.toBe(vm)
+
+    // tenant-b re-acquires: exact match, same VM, same recorded runtime
+    vi.mocked(backend.boot).mockClear()
+    const again = await pool.acquire('base', T_B)
+    expect(again).toBe(vm)
+    expect((again.native as { runtime: RuntimeConfig }).runtime).toEqual(T_B)
   })
 })

@@ -48,7 +48,7 @@ write engine for `pd.ExcelWriter` / `pl.DataFrame.write_excel`.
 
 - `RootfsId` is an open string; widened here to `'base' | 'image-processing' | 'data' | (string & {})` ([`types.ts`](../app/src/lib/sandbox/types.ts)).
 - `imageForRootfs` maps `base` → `SANDBOX_IMAGE` and falls through to `kg-sandbox:${rootfs}` — no backend change to add a flavour ([`docker-backend.server.ts`](../app/src/lib/sandbox/docker-backend.server.ts)).
-- `WarmPool` is keyed by rootfs flavour ([`warm-pool.server.ts`](../app/src/lib/sandbox/warm-pool.server.ts)); caps added for the new flavours in `DEFAULT_SETTINGS.sandbox.warmPool`.
+- `WarmPool` is keyed by rootfs flavour, segmented by the posture fingerprint `tenantId|rootfs|egress` ([`warm-pool.server.ts`](../app/src/lib/sandbox/warm-pool.server.ts) — a pool handoff must match all three; a mismatch is a cold-boot); caps added for the new flavours in `DEFAULT_SETTINGS.sandbox.warmPool`.
 
 ## The composable recipe — router over flavoured sandboxes
 

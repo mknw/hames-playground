@@ -104,10 +104,41 @@ function hardeningArgs(): string[] {
  *  The volume name derives from the base name (SANDBOX_CACHE_VOLUME) by ONE
  *  rule: tenant 'default' (or absent — the producers resolve it) → the base
  *  name VERBATIM, so a single-operator deploy keeps its warm cache across the
- *  upgrade; any other tenantId → `${base}-${tenantId}`. */
+ *  upgrade; any other tenantId → `${base}-${tenantId}`, passed through
+ *  `sanitizeTenantId` first — a docker volume name must match
+ *  `[a-zA-Z0-9][a-zA-Z0-9_.-]*`, and the derivation must hold even for a
+ *  tenantId that violates that charset (defense in depth: the id is
+ *  server-resolved today, but the name builder owns the invariant). */
+
+/**
+ * Volume-name-safe rendering of a tenantId.
+ *
+ * Docker volume names are `[a-zA-Z0-9][a-zA-Z0-9_.-]*`. tenantId is
+ * server-resolved (an Entra oid) — never client input — but this function
+ * still owns the invariant: any character outside the charset becomes `_`,
+ * and when that rewrite is LOSSY the raw id is folded in as a short digest,
+ * so two distinct ids can never sanitize onto one name (a collision would
+ * put two tenants on one writable volume — the exact channel per-tenant
+ * volumes exist to close). A clean id (every real oid, e.g.
+ * `00000000-0000-0000-0000-000000000000`) passes through byte-for-byte, so
+ * Lane A's derived names are unchanged for real tenants.
+ */
+function sanitizeTenantId(tenantId: string): string {
+  const cleaned = tenantId.replace(/[^a-zA-Z0-9_.-]/g, '_')
+  if (cleaned === tenantId) return cleaned
+  // FNV-1a — a stability digest, not cryptography: its only job is that two
+  // DIFFERENT raw ids rarely render as the same volume name.
+  let h = 0x811c9dc5
+  for (let i = 0; i < tenantId.length; i++) {
+    h ^= tenantId.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return `${cleaned}-${h.toString(16).padStart(8, '0')}`
+}
+
 function cacheVolumeName(tenantId: string | undefined): string {
   const base = process.env.SANDBOX_CACHE_VOLUME?.trim() || 'kg-sandbox-cache'
-  return !tenantId || tenantId === 'default' ? base : `${base}-${tenantId}`
+  return !tenantId || tenantId === 'default' ? base : `${base}-${sanitizeTenantId(tenantId)}`
 }
 
 function cacheVolumeArgs(runtime: RuntimeConfig): string[] {

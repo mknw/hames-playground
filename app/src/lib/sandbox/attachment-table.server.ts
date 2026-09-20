@@ -31,6 +31,7 @@ import type {
   VMHandle,
 } from './types'
 import type { WarmPool } from './warm-pool.server'
+import { runtimeFingerprint } from './warm-pool.server'
 
 assertServerOnImport()
 
@@ -38,6 +39,16 @@ export interface Attachment {
   readonly id: string
   readonly vm: VMHandle
   readonly transport: McpTransport
+  /**
+   * Posture fingerprint this attachment's VM runs — `tenantId|rootfs|egress`
+   * (`runtimeFingerprint`). Reuse under the same id is scoped by it: an
+   * acquire whose fingerprint differs recycles the attachment and boots
+   * fresh, exactly like the warm pool's handoff rule (docs/plan/sandbox.md →
+   * channel 3) — a same-session hit must never silently hand over a VM
+   * running another tenant's cache volume, another egress profile, or
+   * another rootfs.
+   */
+  readonly fingerprint: string
   refCount: number
   lastUsedAt: number
   /**
@@ -66,7 +77,7 @@ export interface AttachmentTableConfig {
 
 export class AttachmentTable {
   private readonly table = new Map<string, Attachment>()
-  private readonly inFlight = new Map<string, Promise<Attachment>>()
+  private readonly inFlight = new Map<string, { p: Promise<Attachment>; fingerprint: string }>()
   private sweepTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(
@@ -84,32 +95,54 @@ export class AttachmentTable {
     // Fire-and-forget sweep so this call isn't latency-bound by cleanup.
     void this.sweepIdle().catch(() => {})
 
+    const fingerprint = runtimeFingerprint(rootfs, runtime)
     const existing = this.table.get(id)
     if (existing) {
-      // Liveness check before reuse (#97 Gap 2). A container can die out from
-      // under us between turns — host crash, external `docker rm`, OOM-kill.
-      // Reusing its dead transport would fail every tool call and wedge the
-      // session until idle-evict. On a non-healthy verdict, tear the stale
-      // entry down and fall through to a fresh boot; the fresh container's
-      // /work/in is empty, so the `withSandbox` syncWorkspace path re-hydrates
-      // it transparently on that turn's entry (#89, #206 §6.1). Costs ~1
-      // `docker inspect` per reuse.
-      const health = await this.backend
-        .health(existing.vm)
-        .catch((): HealthStatus => ({ state: 'gone' }))
-      if (health.state === 'healthy') {
-        existing.refCount += 1
-        existing.lastUsedAt = Date.now()
-        return existing
+      if (existing.fingerprint !== fingerprint) {
+        // Fingerprint mismatch — the same advisory the warm pool closes: a
+        // same-session id must never reuse a VM whose posture (tenant /
+        // egress / rootfs) differs from the request. Recycle the live VM
+        // rather than destroying it — `pool.release` parks it under its OWN
+        // fingerprint, so the posture that did boot it can still hand it
+        // over later. The fresh boot that follows re-hydrates /work via
+        // `isFirstBoot` (#206 §6.1), so the session's files survive the swap.
+        this.table.delete(id)
+        await existing.transport.close().catch(() => {})
+        await this.pool.release(existing.vm).catch(() => {})
+      } else {
+        // Liveness check before reuse (#97 Gap 2). A container can die out from
+        // under us between turns — host crash, external `docker rm`, OOM-kill.
+        // Reusing its dead transport would fail every tool call and wedge the
+        // session until idle-evict. On a non-healthy verdict, tear the stale
+        // entry down and fall through to a fresh boot; the fresh container's
+        // /work/in is empty, so the `withSandbox` syncWorkspace path re-hydrates
+        // it transparently on that turn's entry (#89, #206 §6.1). Costs ~1
+        // `docker inspect` per reuse.
+        const health = await this.backend
+          .health(existing.vm)
+          .catch((): HealthStatus => ({ state: 'gone' }))
+        if (health.state === 'healthy') {
+          existing.refCount += 1
+          existing.lastUsedAt = Date.now()
+          return existing
+        }
+        await this.evictStale(existing)
       }
-      await this.evictStale(existing)
     }
     const pending = this.inFlight.get(id)
     if (pending) {
-      const att = await pending
-      att.refCount += 1
-      att.lastUsedAt = Date.now()
-      return att
+      if (pending.fingerprint === fingerprint) {
+        const att = await pending.p
+        att.refCount += 1
+        att.lastUsedAt = Date.now()
+        return att
+      }
+      // A DIFFERENT posture is mid-boot for this id: joining it would hand
+      // this caller a VM of the wrong posture. Let it settle (its finally
+      // clears the entry) and re-run the lookup — the settled attachment is
+      // then handled by the fingerprint-mismatch branch above.
+      await pending.p.catch(() => {})
+      return this.acquire(id, rootfs, runtime)
     }
     const p = (async (): Promise<Attachment> => {
       // Make room under the at-rest cap BEFORE booting, so peak VM count stays
@@ -127,6 +160,7 @@ export class AttachmentTable {
         id,
         vm,
         transport,
+        fingerprint,
         refCount: 1,
         lastUsedAt: Date.now(),
         isFirstBoot: true,
@@ -134,7 +168,7 @@ export class AttachmentTable {
       this.table.set(id, att)
       return att
     })()
-    this.inFlight.set(id, p)
+    this.inFlight.set(id, { p, fingerprint })
     try {
       return await p
     } finally {

@@ -6,12 +6,14 @@
  * the pool has capacity; otherwise (cap reached or reset failed) destroys
  * it. See docs/plan/sandbox.md → "Warm pool".
  *
- * Pool is keyed by rootfs flavor only — v0 sandboxes use settings-driven
- * defaults, so all parked VMs share a runtime fingerprint. If a future
- * caller passes non-default runtime to `acquire`, they'll get either a
- * parked VM with the pool's original runtime (pool hit) or a cold-boot
- * with their runtime (pool miss). Segmenting by runtime fingerprint can
- * land if/when per-call overrides become common.
+ * Pool handoffs are fingerprint-scoped (docs/plan/sandbox.md → channel 3):
+ * a parked VM is handed over only to an `acquire` whose posture fingerprint
+ * — `tenantId|rootfs|egress` — matches the VM's recorded posture exactly. A
+ * mismatch is a pool MISS for that caller (cold-boot with the requested
+ * runtime); the mismatched parked VM stays parked for its own fingerprint's
+ * next acquire. Without this, an `mcp-only` caller could receive a VM booted
+ * with `pypi` egress — network attached, and (per tenant) mounted on another
+ * tenant's `/cache` volume — because `native.runtime` survives `reset`.
  *
  * This is a library, not a service: the harness creates one instance and
  * shares it; tests instantiate per-test. No background timers — the host
@@ -37,7 +39,30 @@ export interface WarmPoolConfig {
 
 interface ParkedVm {
   vm: VMHandle
+  /** Posture the VM (still) runs — see `vmFingerprint`. Handover requires an
+   *  exact match against the acquire's fingerprint. */
+  fingerprint: string
   parkedAt: number
+}
+
+/**
+ * Posture fingerprint (docs/plan/sandbox.md → channel 3): the exact rule a
+ * pool handoff must satisfy — `tenantId|rootfs|egress`. A pool hit MUST match
+ * all three; anything else is a miss.
+ */
+export function runtimeFingerprint(rootfs: RootfsId, runtime: RuntimeConfig): string {
+  return `${runtime.tenantId ?? 'default'}|${rootfs}|${runtime.egress ?? 'mcp-only'}`
+}
+
+/**
+ * The fingerprint a VM actually RUNS, read from the runtime record the
+ * booting backend left in `native.runtime` (DockerNative — the same record
+ * `reset` re-applies, so it is true across recycle). Absent → the pool
+ * cannot vouch for the posture and must not park the VM (see `release`).
+ */
+function vmFingerprint(vm: VMHandle): string | undefined {
+  const runtime = (vm.native as { runtime?: RuntimeConfig }).runtime
+  return runtime ? runtimeFingerprint(vm.rootfs, runtime) : undefined
 }
 
 export class WarmPool {
@@ -48,11 +73,22 @@ export class WarmPool {
     private readonly config: WarmPoolConfig,
   ) {}
 
-  /** Hit the pool if a VM of the right flavor is parked; cold-boot otherwise. */
+  /**
+   * Hit the pool ONLY on an exact fingerprint match (tenantId|rootfs|egress);
+   * cold-boot otherwise. A parked VM of a different posture is NOT handed
+   * over and NOT destroyed — it stays parked for its own fingerprint's next
+   * acquire (a miss for this caller is still an exact-match hit for that one).
+   */
   async acquire(rootfs: RootfsId, runtime: RuntimeConfig): Promise<VMHandle> {
+    const fingerprint = runtimeFingerprint(rootfs, runtime)
     const parked = this.pool.get(rootfs)
-    if (parked && parked.length > 0) {
-      return parked.shift()!.vm
+    if (parked) {
+      const idx = parked.findIndex((p) => p.fingerprint === fingerprint)
+      if (idx !== -1) {
+        const [match] = parked.splice(idx, 1)
+        if (parked.length === 0) this.pool.delete(rootfs)
+        return match.vm
+      }
     }
     return this.backend.boot(rootfs, runtime)
   }
@@ -70,13 +106,22 @@ export class WarmPool {
       await this.backend.destroy(vm).catch(() => {})
       return
     }
+    // Park under the posture the VM actually runs (its own native.runtime
+    // record — the same record reset re-applied), never under what a caller
+    // might claim. A handle with no runtime record is un-vouchable: destroy
+    // rather than park, so an unknown posture can never be handed over.
+    const fingerprint = vmFingerprint(vm)
+    if (!fingerprint) {
+      await this.backend.destroy(vm).catch(() => {})
+      return
+    }
     const cap = this.config.caps[vm.rootfs] ?? 0
     const parked = this.pool.get(vm.rootfs) ?? []
     if (parked.length >= cap) {
       await this.backend.destroy(vm).catch(() => {})
       return
     }
-    parked.push({ vm, parkedAt: Date.now() })
+    parked.push({ vm, fingerprint, parkedAt: Date.now() })
     this.pool.set(vm.rootfs, parked)
   }
 
@@ -107,6 +152,7 @@ export class WarmPool {
     const current = this.pool.get(rootfs)?.length ?? 0
     const target = Math.min(count, cap - current)
     if (target <= 0) return
+    const fingerprint = runtimeFingerprint(rootfs, runtime)
     const results = await Promise.allSettled(
       Array.from({ length: target }, () => this.backend.boot(rootfs, runtime)),
     )
@@ -114,7 +160,10 @@ export class WarmPool {
     const parked = this.pool.get(rootfs) ?? []
     for (const r of results) {
       if (r.status === 'fulfilled') {
-        parked.push({ vm: r.value, parkedAt: now })
+        // The backend records the boot runtime in native.runtime, so the VM's
+        // own fingerprint IS this one; park under the requested runtime's
+        // fingerprint directly (identical, no native re-read needed).
+        parked.push({ vm: r.value, fingerprint, parkedAt: now })
       }
     }
     this.pool.set(rootfs, parked)

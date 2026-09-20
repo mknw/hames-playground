@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockAction, mockFinalAction, mockCriticResult, mockBAMLClient } from '../../../mocks/baml'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
-import type { CriticFnWithLLMData } from '../../../../lib/harness-baml/baml-adapters.server'
+import type { CriticFnWithLLMData } from '@hames/harness-baml/baml-adapters.server'
 import type { ActorFn, ActorInput } from '@hames/harness-patterns/types'
 
 // Mock server-only imports
@@ -29,7 +29,7 @@ vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
 }))
 
 // Mock BAML client
-vi.mock('../../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: mockBAMLClient({
     actorActions: [
       mockAction({ tool_name: 'code-mode', tool_args: '{"script":"console.log(1)"}' }),
@@ -53,7 +53,7 @@ describe('actorCritic', () => {
   it('should create a ConfiguredPattern with name and config', async () => {
     const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
     const { createActorControllerAdapter, createCriticAdapter } =
-      await import('../../../../lib/harness-baml/baml-adapters.server')
+      await import('@hames/harness-baml/baml-adapters.server')
 
     const actor = createActorControllerAdapter(['code-mode', 'Return'])
     const critic = createCriticAdapter()
@@ -74,7 +74,7 @@ describe('actorCritic', () => {
     const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
     const { DEFAULT_SETTINGS } = await import('../../../../lib/settings')
     const { createActorControllerAdapter, createCriticAdapter } =
-      await import('../../../../lib/harness-baml/baml-adapters.server')
+      await import('@hames/harness-baml/baml-adapters.server')
 
     const actor = createActorControllerAdapter(['Return'])
     const critic = createCriticAdapter()
@@ -88,7 +88,7 @@ describe('actorCritic', () => {
   it('should handle custom maxRetries config', async () => {
     const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
     const { createActorControllerAdapter, createCriticAdapter } =
-      await import('../../../../lib/harness-baml/baml-adapters.server')
+      await import('@hames/harness-baml/baml-adapters.server')
 
     const actor = createActorControllerAdapter(['Return'])
     const critic = createCriticAdapter()

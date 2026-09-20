@@ -35,7 +35,7 @@ const mockDescribeBatch = Object.assign(
     }),
   },
 )
-vi.mock('../../../lib/harness-baml/baml-adapters.server', () => ({
+vi.mock('@hames/harness-baml/baml-adapters.server', () => ({
   describeToolResultOp: (...args: unknown[]) => mockDescribe(...args),
   describeToolResultsBatchOp: (items: DescribeBatchItem[]) => mockDescribeBatch(items),
 }))
@@ -509,9 +509,9 @@ describe('compactBulkData', () => {
     // Asserted through the real scope rather than by stubbing the map, because
     // "the budget follows the tier" is the claim and the scope is what carries
     // a tier.
-    const clients = await import('../../../lib/harness-baml/clients.server')
+    const clients = await import('@hames/harness-baml/clients.server')
     const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
-    const { getContextWindow } = await import('../../../lib/harness-baml/clients.server')
+    const { getContextWindow } = await import('@hames/harness-baml/clients.server')
     const { maxBatchItems, MAX_BATCH_ITEMS } =
       await import('@hames/harness-patterns/compactBulkData.server')
     // Lane A6: the geometry reads the INJECTED fn's limits(). The fake

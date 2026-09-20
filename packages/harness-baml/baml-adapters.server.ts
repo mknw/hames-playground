@@ -37,21 +37,21 @@ import type {
   PriorResult,
   FewShot,
   PlanResult,
+  CostBasis,
 } from '@hames/harness-patterns/types'
 import type { InjectionScreen } from '@hames/harness-patterns/injection-guard'
 import { listTools as mcpListTools } from '@hames/harness-patterns/mcp-client.server'
 import { gatewayDegradation } from '@hames/harness-patterns/gateway-health.server'
 import { activeTransports } from '@hames/harness-patterns/tool-transport.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
-import { getBamlFiles } from '../../../baml_client/inlinedbaml'
+import { getBamlFiles } from './baml_client/inlinedbaml'
 import {
-  CLIENT_MAX_OUTPUT_TOKENS,
-  TIME_PRICED_CLIENT,
-  estimateLlmCostEur,
-  type CostBasis,
-  type TokenBuckets,
-} from '../settings'
-import { activeCostRates, clientOverrideFor, limitsFor } from './clients.server'
+  activeCostPricing,
+  activeCostRates,
+  clientOverrideFor,
+  limitsFor,
+  maxOutputTokensFor,
+} from './clients.server'
 import { notifyLlmUsage } from '@hames/harness-patterns/llm-usage-observer.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 import type {
@@ -345,6 +345,13 @@ function usageFromResponse(call: CollectorCall | undefined):
 /** What a call that reported no usage at all is priced against when its client
  *  is billed by the second. Not a claim that it moved no tokens — a claim that
  *  its tokens are free either way, so the missing count changes no figure. */
+interface TokenBuckets {
+  inputUncachedTokens: number
+  inputCacheReadTokens: number
+  inputCacheWriteTokens: number
+  outputTokens: number
+}
+
 const NO_TOKEN_USAGE: TokenBuckets = {
   inputUncachedTokens: 0,
   inputCacheReadTokens: 0,
@@ -416,6 +423,7 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
   // composition root — rather than a direct import of the host's
   // `lib/cost-rates.server.ts`, which an installed package cannot resolve.
   const { eurPerUsd: eurPerUsdRate, verdaEurPerHour: verdaEurPerHour } = activeCostRates()
+  const { estimate: estimateLlmCostEur, timePricedClient: TIME_PRICED_CLIENT } = activeCostPricing()
   const eurPerUsd = eurPerUsdRate()
   const eurPerHour = verdaEurPerHour()
   let attempts = 0
@@ -602,7 +610,7 @@ export function extractFailureLLMCallData(
  * Providers report `outputTokens` == the cap exactly on a cap stop (Anthropic's
  * `max_tokens` stop_reason; the OpenAI-compatible `length` finish_reason on any
  * openai-generic leaf), so `>= cap` is a precise signal, not a heuristic.
- * Unknown clients (no entry in CLIENT_MAX_OUTPUT_TOKENS) → false, never a
+ * Unknown clients (no entry in the host-fed output-cap table) → false, never a
  * false positive — which is why that map must stay complete (SA-C2): a missing
  * leaf entry silently disables this detection for that client.
  *
@@ -623,7 +631,7 @@ export function llmCallHitOutputCap(
   llmCall: Pick<LLMCallData, 'clientName' | 'usage'> | undefined,
 ): boolean {
   if (!llmCall?.clientName || !llmCall.usage?.outputTokens) return false
-  const cap = CLIENT_MAX_OUTPUT_TOKENS[llmCall.clientName]
+  const cap = maxOutputTokensFor(llmCall.clientName)
   return cap !== undefined && llmCall.usage.outputTokens >= cap
 }
 
@@ -631,9 +639,12 @@ export function llmCallHitOutputCap(
 function collectorHitOutputCap(collector: Collector | undefined): boolean {
   const last = collector?.last
   if (!last?.usage?.outputTokens) return false
-  const calls = (last.calls ?? []) as Array<{ selected?: boolean; clientName?: string }>
+  const calls = (last.calls ?? []) as Array<{
+    selected?: boolean
+    clientName?: string
+  }>
   const call = calls.find((c) => c.selected) ?? calls[calls.length - 1]
-  const cap = call?.clientName ? CLIENT_MAX_OUTPUT_TOKENS[call.clientName] : undefined
+  const cap = maxOutputTokensFor(call?.clientName)
   return cap !== undefined && (last.usage.outputTokens ?? 0) >= cap
 }
 
@@ -883,7 +894,7 @@ export function createLoopControllerAdapter(
     input: ControllerInput,
     passedCollector?: Collector,
   ): Promise<ControllerCallResult> => {
-    const { b } = await import('../../../baml_client')
+    const { b } = await import('./baml_client')
     const startTime = Date.now()
 
     // Lane A3: the implementation owns the collector when the caller does not
@@ -1108,7 +1119,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
     intent: string,
     context?: string,
   ): Promise<PlanCallResult> => {
-    const { b } = await import('../../../baml_client')
+    const { b } = await import('./baml_client')
     const startTime = Date.now()
 
     // The implementation owns its collector (Lane A3) — the seam type carries
@@ -1245,7 +1256,7 @@ export function createActorControllerAdapter(
     input: ActorInput,
     passedCollector?: Collector,
   ): Promise<ControllerCallResult> => {
-    const { b } = await import('../../../baml_client')
+    const { b } = await import('./baml_client')
     const startTime = Date.now()
 
     // Lane A3: the implementation owns the collector when the caller does not
@@ -1432,7 +1443,7 @@ export function createCriticAdapter(): CriticAdapterFn {
     previous_attempts: ScriptExecutionEvent[],
     passedCollector?: Collector,
   ): Promise<CriticCallResult> => {
-    const { b } = await import('../../../baml_client')
+    const { b } = await import('./baml_client')
     const startTime = Date.now()
 
     // Lane A3: the implementation owns the collector when the caller does not
@@ -1501,7 +1512,7 @@ export async function describeToolResultOp(
   result: string,
 ): Promise<string> {
   try {
-    const { b } = await import('../../../baml_client')
+    const { b } = await import('./baml_client')
     return await withUsageAccounting('ResultDescribe', (opts) =>
       b.ResultDescribe(tool, toolArgs, reasoning, result, {
         ...opts,
@@ -1537,7 +1548,7 @@ export async function describeToolResultsBatchOp(
   if (items.length === 0) return byId
   const wanted = new Set(items.map((i) => i.id))
   try {
-    const { b } = await import('../../../baml_client')
+    const { b } = await import('./baml_client')
     const targets = items.map((i) => ({
       id: i.id,
       tool: i.tool,
@@ -1547,7 +1558,10 @@ export async function describeToolResultsBatchOp(
     }))
     // Collector for accounting only — see `describeToolResultOp`.
     const batch = await withUsageAccounting('ResultDescribeBatch', (opts) =>
-      b.ResultDescribeBatch(targets, { ...opts, ...clientOverrideFor('describe') }),
+      b.ResultDescribeBatch(targets, {
+        ...opts,
+        ...clientOverrideFor('describe'),
+      }),
     )
     for (const entry of batch?.summaries ?? []) {
       const summary = entry?.summary?.trim()
@@ -1625,7 +1639,7 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     // evaded it while still reading as a fence to the screening model.
     const body = head.replace(/(?:BEGIN|END)\s{1,4}UNTRUSTED\s{1,4}CONTENT[^\n]{0,40}/gi, '[fence]')
 
-    const { b } = await import('../../../baml_client')
+    const { b } = await import('./baml_client')
     const source = `${namespace}/${tool}`
     // THE ONE SPREAD THAT ROUTES A SECURITY CONTROL, and the only call site of
     // `clientOverrideFor('screen')` in the repo. Until 2026-08-26 this call
@@ -1649,7 +1663,10 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     // `__options__.client` into a `ClientRegistry` primary, which is the same
     // seam every other routed call uses.
     const verdict = await withUsageAccounting('ScreenUntrustedContent', (opts) =>
-      b.ScreenUntrustedContent(source, body, { ...opts, ...clientOverrideFor('screen') }),
+      b.ScreenUntrustedContent(source, body, {
+        ...opts,
+        ...clientOverrideFor('screen'),
+      }),
     )
 
     return {

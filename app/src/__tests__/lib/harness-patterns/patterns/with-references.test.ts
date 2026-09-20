@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { defaultSelector } from '../../../../lib/harness-baml/defaults.server'
+import { defaultSelector } from '@hames/harness-baml/defaults.server'
 import type {
   ContextEvent,
   PatternScope,
@@ -21,7 +21,7 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
 
 // Mock the BAML client — selector returns whatever the test sets up
 const mockReferenceSelector = vi.fn()
-vi.mock('../../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: {
     ReferenceSelector: (...args: unknown[]) => mockReferenceSelector(...args),
   },

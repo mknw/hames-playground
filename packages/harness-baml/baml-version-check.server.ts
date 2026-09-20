@@ -109,14 +109,18 @@ export function checkBamlClient(input: BamlClientCheckInput): BamlClientWarning[
   return warnings
 }
 
-/** Read the .baml sources sitting in baml_src/ right now. */
-function readDiskSources(): Record<string, string> | null {
+/** Read the .baml sources sitting in `dir` right now. Defaults to THIS
+ *  package's own baml_src — resolved relative to the module, not to
+ *  `process.cwd()`: after the extraction (PR-1b) the package tree is NOT the
+ *  process's cwd (the app runs from `app/`), and a committed client must be
+ *  checked against its own tree wherever the process happens to start. */
+export function readBamlSources(dir?: string): Record<string, string> | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const fs = require('node:fs') as typeof import('node:fs')
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const path = require('node:path') as typeof import('node:path')
-    const bamlSrc = path.resolve(process.cwd(), 'baml_src')
+    const bamlSrc = dir ?? new URL('../baml_src/', import.meta.url).pathname
     if (!fs.existsSync(bamlSrc)) return null
     const sources: Record<string, string> = {}
     for (const entry of fs.readdirSync(bamlSrc)) {
@@ -141,16 +145,23 @@ function readInstalledVersion(): string | null {
     // because package.json need not be in the package's `exports` map.
     const pkgPath = path.resolve(process.cwd(), 'node_modules/@boundaryml/baml/package.json')
     if (!fs.existsSync(pkgPath)) return null
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { version?: string }
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as {
+      version?: string
+    }
     return pkg.version ?? null
   } catch {
     return null
   }
 }
 
-/** Gather the real inputs and run the comparison. Never throws. */
+/** Gather the real inputs and run the comparison for THIS PACKAGE's tree:
+ *  its own `baml_src/` against its own pre-generated `baml_client/` (both
+ *  package-relative). The APP tree's check lives app-side
+ *  (`lib/baml-client-check.server.ts`), which calls the pure
+ *  {@link checkBamlClient} with the app's own inputs — one comparison, two
+ *  callers. Never throws. */
 export async function collectBamlClientWarnings(): Promise<BamlClientWarning[]> {
-  const diskSources = readDiskSources()
+  const diskSources = readBamlSources()
   const pinnedVersion = diskSources?.['generators.baml']
     ? parseGeneratorVersion(diskSources['generators.baml'])
     : null
@@ -158,7 +169,7 @@ export async function collectBamlClientWarnings(): Promise<BamlClientWarning[]> 
   let generatedSources: Record<string, string> | null = null
   let clientVersion: string | null = null
   try {
-    const inlined = (await import('../../../baml_client/inlinedbaml')) as {
+    const inlined = (await import('./baml_client/inlinedbaml')) as {
       getBamlFiles?: () => Record<string, string>
     }
     generatedSources = inlined.getBamlFiles?.() ?? null
@@ -166,7 +177,7 @@ export async function collectBamlClientWarnings(): Promise<BamlClientWarning[]> 
     // baml_client not generated at all — nothing to compare against.
   }
   try {
-    const client = (await import('../../../baml_client')) as { version?: string }
+    const client = (await import('./baml_client')) as { version?: string }
     clientVersion = client.version ?? null
   } catch {
     // Same as above; the version-mismatch arm simply sees one fewer input.

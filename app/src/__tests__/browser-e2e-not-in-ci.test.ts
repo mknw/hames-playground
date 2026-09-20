@@ -262,7 +262,11 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
     expect(ENTRY_CLOSURE).toContain(ENTRY)
     expect(ENTRY_CLOSURE).toContain('src/lib/inference/dev-fake-inference.server.ts')
     expect(ENTRY_CLOSURE).toContain('src/lib/metrics/usage-recorder.server.ts')
-    expect(ENTRY_CLOSURE).toContain('src/lib/harness-baml/clients.server.ts')
+    // The harness-baml landmark was removed by the extraction (PR-1b):
+    // clients.server.ts now lives in @hames/harness-baml and resolveLocal()
+    // stops at package specifiers by policy — a package's own graph is nitro's
+    // problem. The Collector-acquiring modules moved with it; the closure
+    // still walks every app-side module on the path TO the package edges.
     // The app-tool transport registration (#225 L3) is the newest edge and the
     // largest: the boot hook imports the barrel, and the barrel's own side
     // effect drags the Graph auth stack, doc-convert and the stash behind it.

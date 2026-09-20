@@ -65,6 +65,11 @@ COPY package.json .npmrc app/
 # registry fetch could not even succeed, 0.1.0 is unpublished, but the canary
 # below makes the property readable instead of merely incidental).
 COPY --from=root packages/harness-patterns /ws/packages/harness-patterns
+# PR-1b (#225): the app depends on the second workspace member the same way —
+# copied by name, before the frozen install, so `workspace:*` resolves to
+# workspace source inside the image too. Its pre-generated baml_client ships
+# in the copy; nothing regenerates at build time.
+COPY --from=root packages/harness-baml /ws/packages/harness-baml
 WORKDIR /ws/app
 RUN pnpm install --frozen-lockfile
 
@@ -77,6 +82,8 @@ RUN pnpm install --frozen-lockfile
 RUN test -L /ws/app/node_modules/@hames/harness-patterns \
  && test -f /ws/packages/harness-patterns/index.ts \
  && test -f /ws/packages/harness-patterns/package.json \
+ && test -L /ws/app/node_modules/@hames/harness-baml \
+ && test -f /ws/packages/harness-baml/baml_client/index.ts \
  && cd /ws/app \
  && node -e "const r = require.resolve('@hames/harness-patterns'); if (!r.startsWith('/ws/packages/')) { console.error('resolved OUTSIDE the workspace source (registry fetch?): ' + r); process.exit(1); } console.log('workspace link OK: ' + r)"
 

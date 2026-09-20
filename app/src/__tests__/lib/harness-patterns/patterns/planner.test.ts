@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockListTools } from '../../../mocks/mcp'
 import { mockFinalAction } from '../../../mocks/baml'
 import type { ContextEvent, EventType, UnifiedContext } from '@hames/harness-patterns'
-import type { CriticFnWithLLMData } from '../../../../lib/harness-baml/baml-adapters.server'
+import type { CriticFnWithLLMData } from '@hames/harness-baml/baml-adapters.server'
 import type {
   ControllerFn,
   ActorFn,
@@ -29,7 +29,7 @@ vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
 
 const mockPlanner = vi.fn()
 
-vi.mock('../../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: {
     Planner: (...args: unknown[]) => mockPlanner(...args),
   },
@@ -91,7 +91,7 @@ async function load() {
  *  builds with `bamlPatterns().planner(tools)`. */
 async function loadWithFn() {
   const loaded = await load()
-  const { createPlannerAdapter } = await import('../../../../lib/harness-baml/baml-adapters.server')
+  const { createPlannerAdapter } = await import('@hames/harness-baml/baml-adapters.server')
   const planFn = createPlannerAdapter(TOOLS)
   return { ...loaded, planFn }
 }

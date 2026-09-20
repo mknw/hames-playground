@@ -38,7 +38,7 @@ vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
 }))
 
 const mockScreen = vi.fn()
-vi.mock('../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: { ScreenUntrustedContent: (...args: unknown[]) => mockScreen(...args) },
 }))
 
@@ -46,7 +46,7 @@ vi.mock('../../../../baml_client', () => ({
 const FENCE = '---BEGIN UNTRUSTED CONTENT UNDER REVIEW---'
 
 async function load() {
-  const { createInjectionScreen } = await import('../../../lib/harness-baml/baml-adapters.server')
+  const { createInjectionScreen } = await import('@hames/harness-baml/baml-adapters.server')
   return createInjectionScreen
 }
 
@@ -274,7 +274,7 @@ describe('createInjectionScreen — client routing', () => {
     // only so the scope opens; it is the model this screen must NOT be sent to,
     // which is what the second assertion below says.
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
-    const { runWithInferenceTier } = await import('../../../lib/harness-baml/clients.server')
+    const { runWithInferenceTier } = await import('@hames/harness-baml/clients.server')
     const screen = await (await load())()
     await runWithInferenceTier('verda', () => screen(CLEAN))
     const opts = mockScreen.mock.calls[0][2] as Record<string, unknown> | undefined
@@ -288,7 +288,7 @@ describe('createInjectionScreen — client routing', () => {
   })
 
   it("resolveClientForRole('screen') is DescribeAnthropic, and tracks the .baml declaration (SA-M5)", async () => {
-    const { resolveClientForRole } = await import('../../../lib/harness-baml/clients.server')
+    const { resolveClientForRole } = await import('@hames/harness-baml/clients.server')
     // The dangerous change is the screen ending up on a cheap model, so pin the
     // value. Do NOT pin it by asserting `screen` and `describe` resolve alike:
     // that fires on the BENIGN change — re-pointing summarization, which is

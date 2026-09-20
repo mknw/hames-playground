@@ -23,7 +23,7 @@ vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   listTools: mockListTools(TOOLS),
 }))
 
-vi.mock('../../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: {
     Router: vi.fn(),
     LoopController: vi.fn(),

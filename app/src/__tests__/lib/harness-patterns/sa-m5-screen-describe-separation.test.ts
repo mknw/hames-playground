@@ -36,7 +36,11 @@ import { join, relative, resolve } from 'node:path'
 const APP = process.cwd()
 // The library moved to packages/ (#225 Step 1a); the scan root follows it.
 const CORE = resolve(APP, '../packages/harness-patterns')
-const BAML = resolve(APP, 'src/lib/harness-baml')
+// The BAML companion moved to packages/ (#225 PR-1b); the scan root follows it.
+// Generated code (baml_client) and the prompt corpus (baml_src) are excluded:
+// the generated client names both roles as function identifiers, and the pin
+// judges the package's DECLARED TYPES, not BAML's generated surface.
+const BAML = resolve(APP, '../packages/harness-baml')
 
 async function walk(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true })
@@ -44,7 +48,13 @@ async function walk(dir: string): Promise<string[]> {
   for (const entry of entries) {
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
-      if (entry.name === '__tests__' || entry.name === 'node_modules') continue
+      if (
+        entry.name === '__tests__' ||
+        entry.name === 'node_modules' ||
+        entry.name === 'baml_client' ||
+        entry.name === 'baml_src'
+      )
+        continue
       files.push(...(await walk(full)))
     } else if (/\.tsx?$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name)) {
       files.push(full)

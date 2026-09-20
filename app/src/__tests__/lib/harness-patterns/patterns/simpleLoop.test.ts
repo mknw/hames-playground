@@ -28,7 +28,7 @@ vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
 }))
 
 // Mock BAML client
-vi.mock('../../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: mockBAMLClient({
     loopActions: [
       mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"MATCH (n) RETURN n"}' }),
@@ -50,8 +50,7 @@ describe('simpleLoop', () => {
 
   it('should create a ConfiguredPattern with name and config', async () => {
     const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
-    const { createLoopControllerAdapter } =
-      await import('../../../../lib/harness-baml/baml-adapters.server')
+    const { createLoopControllerAdapter } = await import('@hames/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
     const pattern = simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
@@ -70,8 +69,7 @@ describe('simpleLoop', () => {
   it('should take its default maxTurns from the request settings', async () => {
     const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
     const { DEFAULT_SETTINGS } = await import('../../../../lib/settings')
-    const { createLoopControllerAdapter } =
-      await import('../../../../lib/harness-baml/baml-adapters.server')
+    const { createLoopControllerAdapter } = await import('@hames/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
     const pattern = simpleLoop(controller, ['Return'])
@@ -82,8 +80,7 @@ describe('simpleLoop', () => {
 
   it('should handle custom maxTurns config', async () => {
     const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
-    const { createLoopControllerAdapter } =
-      await import('../../../../lib/harness-baml/baml-adapters.server')
+    const { createLoopControllerAdapter } = await import('@hames/harness-baml/baml-adapters.server')
 
     const controller = createLoopControllerAdapter()
     const pattern = simpleLoop(controller, ['Return'], {

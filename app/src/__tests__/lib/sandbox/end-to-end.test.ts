@@ -177,7 +177,7 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
 const mockActorController = vi.fn()
 const mockCritic = vi.fn()
 
-vi.mock('../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: {
     ActorController: mockActorController,
     Critic: mockCritic,
@@ -190,7 +190,7 @@ vi.mock('../../../../baml_client', () => ({
   },
 }))
 
-vi.mock('../../../../baml_client/inlinedbaml', () => ({
+vi.mock('@hames/harness-baml/baml_client/inlinedbaml', () => ({
   getBamlFiles: () => ({}),
 }))
 
@@ -222,7 +222,7 @@ describe('withSandbox(actorCritic) end-to-end — word count', () => {
     const { createScope } = await import('@hames/harness-patterns/context.server')
     const { createEventView } = await import('@hames/harness-patterns/patterns')
     const { createActorControllerAdapter, createCriticAdapter } =
-      await import('../../../lib/harness-baml/baml-adapters.server')
+      await import('@hames/harness-baml/baml-adapters.server')
     const { withSandbox } = await import('../../../lib/sandbox/with-sandbox.server')
 
     const script =

@@ -27,7 +27,7 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-import type { BamlRole } from '../../../lib/harness-baml/clients.server'
+import type { BamlRole } from '@hames/harness-baml/clients.server'
 
 const ENV_KEYS = [
   'USE_VERDA_INFERENCE',
@@ -89,7 +89,7 @@ async function load() {
   // rates) and its defaultTier reads USE_VERDA_INFERENCE — the wiring every
   // production path takes.
   await import('../../../lib/inference/config.server')
-  return await import('../../../lib/harness-baml/clients.server')
+  return await import('@hames/harness-baml/clients.server')
 }
 
 /** `verdaConfigured` moved to its own leaf (#225 Lane A2); this module is its
@@ -183,7 +183,7 @@ describe('runWithInferenceTier — both positions reach the right override', () 
 
   it('trims a scoped Verda run against the 131K server window', async () => {
     const { runWithInferenceTier, resolveClientForRole } = await load()
-    const { getContextWindow } = await import('../../../lib/harness-baml/clients.server')
+    const { getContextWindow } = await import('@hames/harness-baml/clients.server')
 
     await runWithInferenceTier('verda', async () => {
       expect(getContextWindow(resolveClientForRole('controller'))).toBe(131_072)

@@ -1,0 +1,34 @@
+{
+  "name": "@hames/harness-baml",
+  "version": "0.1.0",
+  "description": "The BAML companion for @hames/harness-patterns — the role→client resolution seam, the adapter factories, and a pre-generated baml_client shipped beside its baml_src so a consumer never runs baml-generate.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./package.json": "./package.json",
+    "./clients.server": "./clients.server.ts",
+    "./baml-adapters.server": "./baml-adapters.server.ts",
+    "./baml_client": "./baml_client/index.ts",
+    "./baml_client/*": "./baml_client/*.ts",
+    "./*": "./*.ts"
+  },
+  "scripts": {
+    "baml-generate": "baml-cli generate"
+  },
+  "dependencies": {
+    "@boundaryml/baml": "0.224.0",
+    "@hames/harness-patterns": "workspace:*"
+  },
+  "files": [
+    "*.ts",
+    "baml_src",
+    "baml_client",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

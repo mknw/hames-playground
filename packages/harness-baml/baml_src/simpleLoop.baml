@@ -1,0 +1,350 @@
+// simpleLoop.baml - Default prompt for the simpleLoop pattern
+// Task-agnostic: intent, tools, and turn history are injected at runtime.
+// Decomposed into named template_strings (one per section) — edit the section,
+// not the monolith. ToolCatalog is shared across controllers
+// (prompt-sections.baml).
+//
+// Parameters:
+//   turns               — tool calls/results from the CURRENT task (this invocation)
+//   turns_previous_runs — compact references to results from PREVIOUS tasks/sessions
+//                         (separate so the LLM can distinguish past context from current work)
+//   multi_call_mode     — "parallel" | "sequential" | null; agent-static (from
+//                         pattern config). Gates the LoopMultiCalls tier-1
+//                         section advertising ControllerAction.additional_calls
+//   return_style        — "answer" | "summary" | null; agent-static (from
+//                         pattern config). Picks the terminal-action guidance:
+//                         null defaults to "summary" (#149)
+//
+// Prompt-caching layout (#122) — two stable tiers, then a chronological
+// conversation:
+//
+//   system                      agent role text (static)
+//   user  [CACHE tier-1]        CONTEXT · AVAILABLE TOOLS · MULTI-CALL · EXAMPLES
+//                               agent-static: survives ACROSS runs/user-turns,
+//                               so consecutive tasks of the same agent reuse it
+//   user  [CACHE tier-2]        INTENT · INSTRUCTIONS · PREVIOUS RESULTS
+//                               (expansion affordance + frozen summaries —
+//                               run-static: fixed for one task run)
+//   (assistant → user)*         one pair per turn, chronological. Append-only.
+//                               Rolling CACHE markers on the last two result
+//                               blocks: each iteration READS the prefix cached
+//                               by the previous one and WRITES the extension.
+//   user                        "Turn N. Decide." + output format (never cached)
+//
+// Breakpoint budget: 2 tiers + 2 rolling = 4 = Anthropic's maximum. Every
+// marker is BOTH a read point and a write point (there is no store-vs-retrieve
+// distinction), so the tier markers stay unconditional: their prefixes must be
+// re-declared on every call to be re-readable, and to be rewritten after the
+// 5-minute TTL lapses mid-run.
+// cache_control only reaches providers that allowlist it via
+// allowed_role_metadata (the Anthropic clients in clients.baml) — all other
+// providers silently drop it, so the mixed chains see an unchanged prompt.
+//
+// STABILITY RULES:
+//  - Nothing in tier-1 may depend on the run (the expandPreviousResult
+//    affordance lives in tier-2 — its presence varies per run with the refs).
+//  - Nothing in tier-1/tier-2 may depend on loop state (turn number, results,
+//    expansions). See LoopPriorResults / LoopTurnLog for the details.
+
+// --- Section: few-shot examples (cached tier-1; empty when unset) -----------
+// Rendered as the SAME JSON object the turn log (below) and `ctx.output_format`
+// ask for — field names, encoding and envelope all one vocabulary.
+//
+// It was a labelled `key: value` list until the sandbox-session failure captured
+// in `.harness-logs/baml-validation.json`: the actor wrote a complete, correct
+// action as brace-less lines — `reasoning:` / `tool_name:` / `tool_args:`, plus a
+// YAML-ish `additional_calls:` bullet list it invented, since the labelled form
+// demonstrated no such field — at 372 output tokens against a 32768 cap. BAML's
+// jsonish parser cannot recover a brace-less block; it found the embedded
+// `tool_args` objects instead and tried each as a ControllerAction ("Failed to
+// find any ControllerAction ... in 3 items", each `missing=3`), and the throw
+// aborted the actorCritic loop with three attempts still in budget. Copying an
+// example's punctuation is the model doing what an example is for.
+//
+// The old form's justification — "carries no status/is_final, so an object would
+// demonstrate an ACTION MISSING REQUIRED FIELDS" — expired when both fields
+// became OPTIONAL (#144 `status`, #159 `is_final`). `is_final: false` is rendered
+// explicitly because it is the documented default and the field models drop most
+// (see types.baml); `status` is legitimately absent, exactly as the terminal
+// Return turn's is.
+//
+// `tojson` on the VALUES, not just matching labels: `tool_args` is a string whose
+// CONTENT is JSON, so every quote inside it must be escaped. Rendered bare, a
+// few-shot showed `tool_args: {"query":"MATCH ..."}` while the assistant turn log
+// showed `"tool_args": "{\"query\": \"MATCH ...\"}"` — two demonstrations of one
+// field in two incompatible encodings. Observed live: an action that opened in the
+// escaped form and closed in the bare one (`"{\"query\": \"MATCH ... LIMIT 20"}"`
+// — three escapes, then a naked quote), which terminated the string early and
+// failed BAML with status/is_final "missing" at 495 output tokens against a 32768
+// cap. The escaping is unavoidable while tool_args is typed `string` (BAML has no
+// JSON type, and the tool set is only known at runtime); what IS avoidable is
+// disagreeing about it.
+template_string LoopFewShots(few_shots: FewShot[]?) #"
+  {% if few_shots and few_shots|length > 0 %}
+
+  ---
+  EXAMPLES (illustrative — adapt to the actual request, do not copy verbatim):
+  {% for ex in few_shots %}
+  - User: {{ ex.user }}
+    {"reasoning": {{ ex.reasoning | tojson }}, "tool_name": {{ ex.tool | tojson }}, "tool_args": {{ ex.args | tojson }}, "is_final": false}
+  {% endfor %}
+  {% endif %}
+"#
+
+// --- Section: multi-call affordance (cached tier-1; empty when mode unset) ---
+// Advertises ControllerAction.additional_calls per execution mode. The mode is
+// agent-static (pattern config, resolved once per adapter call chain), so this
+// section is tier-1-safe: it cannot vary within a run. When the mode is null
+// ('off' — no affordance) the section renders empty and the prompt is
+// byte-identical to the pre-feature layout.
+// The Return/expandPreviousResult exclusion lives here (not only in the field
+// description) because both are loop-control actions the executor handles as
+// singular turns — a batch containing them gets per-call errors at runtime.
+//
+// Each branch ends in ONE demonstrated action, and the demonstration is the
+// point of the branch as much as the prose is. In the capture behind #248
+// (`.harness-logs/baml-validation.json`, `sandbox-session-loop` attempt 3) the
+// model wanted exactly the batch this section advertises — write a script, then
+// run it — and, with the field described in prose but shown nowhere, INVENTED a
+// YAML `additional_calls:` bullet list to express it, taking the surrounding
+// brace-less few-shot form with it. The response was complete and correct at 372
+// output tokens against a 32768 cap, so neither retry trigger matched and the
+// throw ended the loop with attempts still in budget. A demonstration belongs
+// here rather than in `LoopFewShots` (which renders per-agent examples that know
+// nothing of the mode) or in an agent's few-shot config (which would put the
+// batch shape in front of agents whose mode is 'off'): this section is already
+// gated on `multi_call_mode`, so a demonstration inside it is mode-correct by
+// construction. It byte-matches the envelope everything else in the prompt
+// demands — one JSON object, `tool_args` a STRING whose content is JSON with
+// inner quotes escaped, `additional_calls` entries of tool_name/tool_args only —
+// because disagreeing demonstrations are this repo's most-paid-for defect class
+// (#144 twice, #159, #248); see the comment on LoopFewShots.
+template_string LoopMultiCalls(multi_call_mode: string?) #"
+  {% if multi_call_mode == "parallel" %}
+
+  MULTIPLE CALLS PER TURN:
+  You may execute several tool calls in one turn: the first in
+  tool_name/tool_args, the rest in additional_calls. All calls in a turn run
+  CONCURRENTLY, so they must be INDEPENDENT — no call may rely on another
+  call's result or side effects. Prefer batching independent lookups over
+  spending a turn on each. At most 4 calls per turn; keep each tool_args
+  small. A failed call reports its error alongside the other results.
+  Never use additional_calls on a "Return" or "expandPreviousResult" turn.
+  Two independent lookups batched into one turn — copy this SHAPE, not its
+  content (tool_args stays a JSON string with its inner quotes escaped):
+  {"reasoning": "The schema and the concept list do not depend on each other, so one turn covers both.", "tool_name": "get_neo4j_schema", "tool_args": "{}", "additional_calls": [{"tool_name": "read_neo4j_cypher", "tool_args": "{\"query\": \"MATCH (c:Concept) RETURN c.name LIMIT 20\"}"}], "status": "Reading the schema and listing concepts", "is_final": false}
+  {% elif multi_call_mode == "sequential" %}
+
+  MULTIPLE CALLS PER TURN:
+  You may execute several tool calls in one turn: the first in
+  tool_name/tool_args, the rest in additional_calls. Calls in a turn run
+  strictly IN ORDER: a later call sees the side effects (files written,
+  state changed) of earlier calls, but you will NOT see any call's output
+  until the whole turn completes — never derive a later call's arguments
+  from an earlier call's output. If a call fails, the rest of the batch is
+  skipped. At most 4 calls per turn; keep each tool_args small.
+  Never use additional_calls on a "Return" or "expandPreviousResult" turn.
+  A script written and then run in one turn — copy this SHAPE, not its content
+  (tool_args stays a JSON string with its inner quotes escaped):
+  {"reasoning": "Escaping a long script through the shell is fragile, so write it to a file and run that file in the same turn.", "tool_name": "sandbox_write", "tool_args": "{\"path\": \"/work/inspect.py\", \"content\": \"import openpyxl\\nprint('ok')\"}", "additional_calls": [{"tool_name": "sandbox_bash", "tool_args": "{\"command\": \"python3 /work/inspect.py\"}"}], "status": "Writing the script, then running it", "is_final": false}
+  {% endif %}
+"#
+
+// --- Section: terminal-action guidance (static; system role) -----------------
+// WHO WRITES THE USER-FACING ANSWER (#149). Measured on a real 5-turn run: the
+// terminal Return turn composed a 3,757-char answer into tool_args — 2,134
+// output tokens, ~22s, the most expensive turn of the run — and NOTHING read
+// it. The prose does not travel to `Synthesize` either: compactExecution now
+// DROPS the terminal Return iteration outright (SA-H4), because it has no
+// `tool_result` of its own and used to render as a fabricated success,
+// `Tool: Return / Result: null`. A second guard behind that: compact-execution
+// .baml renders `tool_result.tool` / `.result` ONLY and never `tool_call.args`
+// — preserve it if that template ever grows a call-args section (#149 §2). The
+// compactExecution derives the whole answer from the full-fidelity tool
+// results.
+//
+// So "summary" (the default) asks the loop for the cheapest text that still
+// terminates it, and leaves composition to the single better-informed author:
+// the compactExecution sees results at full fidelity (no `maxResultChars` clip,
+// no `resultOmit` projection — microsoft-365 hides `webUrl` from the controller
+// precisely because the compactExecution renders the links), across patterns,
+// with `view.hasErrors()` for honest error reporting.
+//
+// "answer" restores the pre-#149 wording verbatim, for a loop whose Return
+// prose IS the deliverable. It is prompt-only: the loop still writes no
+// `data.response`, so a downstream compactExecution remains the author — the
+// passthrough half is #149 Option B, deliberately not built.
+//
+// Agent-static (pattern config, resolved once per adapter call chain), so this
+// section is cache-safe in the system block and in tier 1: it cannot vary
+// within a run.
+template_string LoopReturnStyle(return_style: string?) #"
+  {% if return_style == "answer" %}
+
+  To finish, set tool_name to "Return", put the complete answer in tool_args as
+  plain prose (not JSON), and set is_final to true. That turn makes no tool
+  call, so there is no progress to report and `status` may be omitted.
+  {% else %}
+
+  To finish, set tool_name to "Return" and set is_final to true, and put a
+  BRIEF completion summary in tool_args as plain prose (not JSON) — one or two
+  sentences on what you found or did, NOT the user-facing answer: a later step
+  composes that from the full tool results, so re-stating them here is wasted
+  work. That turn makes no tool call, so there is no progress to report and
+  `status` may be omitted.
+  {% endif %}
+"#
+
+// --- Section: prior-run results (cached tier-2) ------------------------------
+// Frozen summaries + the expandPreviousResult affordance. STABILITY RULE:
+// renders plain summaries only — never per-turn annotations, which would
+// mutate the cached prefix mid-loop (expanded content arrives in the turn
+// history instead, append-only).
+template_string LoopPriorResults(turns_previous_runs: PriorResult[]?) #"
+  {% if turns_previous_runs and turns_previous_runs|length > 0 %}
+
+  ---
+  RESULTS FROM PREVIOUS TASKS:
+  The data below was retrieved in earlier tasks. To bring one into your
+  working context, call the extra tool `expandPreviousResult`:
+      tool_args: "ref:<ref_id>"           (single)
+               | "ref:<id_1>,<id_2>,..."  (multiple — expanded together)
+  Expanded content appears in your turn history below — reuse it, do not
+  re-expand a ref you already expanded.
+
+  {% for r in turns_previous_runs %}
+  - [ref:{{ r.ref_id }}] {{ r.tool }}: {{ r.summary }}
+  {% endfor %}
+  {% endif %}
+"#
+
+// --- Section: turn log — chronological assistant/user pairs ------------------
+// Append-only history with ROLLING cache markers on the last two result
+// blocks: each iteration READS the prefix cached by the previous one and
+// WRITES the extension. Expanded ref content renders inside the turn that
+// expanded it — as late as possible, so everything before stays a valid
+// cache prefix.
+// Each assistant entry is rendered as a COMPLETE ControllerAction object — the
+// same shape `ctx.output_format` asks for. This is load-bearing, not cosmetic:
+// an assistant turn is one of the model's OWN prior messages, and continuing the
+// form of its previous messages is a stronger prior than a trailing instruction.
+// Rendering history as prose (`Reasoning:` / `Call:` / `Args:`) put N
+// demonstrations of one vocabulary against one request for another, and the
+// demonstrations win — observed live as a complete, correct action emitted in
+// prose, failing BAML parsing with all five required fields "missing" (output
+// 412 tokens against a 32768 cap, so not truncation). The demonstration count
+// grows with turn depth, so deep loops were the most exposed. Rendered this way
+// the same copying instinct produces a valid action.
+//
+// `is_final` is a literal `false`: the loop breaks on a final action BEFORE
+// pushing a turn (`simpleLoop.server.ts` — `if (action.is_final || tool_name ===
+// 'Return') break`), so every turn that reaches this log is non-final by
+// construction. `tojson` does the quoting, so tool_args (itself JSON, full of
+// quotes) can't break out of its string.
+template_string LoopTurnLog(turns: LoopTurn[]) #"
+  {% for turn in turns %}
+  {{ _.role("assistant") }}
+  {"reasoning": {{ turn.reasoning | default("") | tojson }}, "tool_name": {{ (turn.tool_call.tool if turn.tool_call else "") | tojson }}, "tool_args": {{ (turn.tool_call.args if turn.tool_call else "") | tojson }}{% if turn.additional_calls %}, "additional_calls": [{% for c in turn.additional_calls %}{"tool_name": {{ c.tool_name | tojson }}, "tool_args": {{ c.tool_args | tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}, "status": {{ turn.status | default("") | tojson }}, "is_final": false}
+  {% if loop.index0 >= turns|length - 2 %}
+  {{ _.role("user", cache_control={"type": "ephemeral"}) }}
+  {% else %}
+  {{ _.role("user") }}
+  {% endif %}
+  Turn {{ turn.n }} result:
+  {% if turn.tool_result %}
+  {% if turn.tool_result.success %}
+  Result: {{ turn.tool_result.result }}
+  {% else %}
+  ERROR: {{ turn.tool_result.error }}
+
+  If the error appears transient (timeout, connection), consider retrying with same or modified arguments.
+  If the error indicates invalid arguments, fix them and retry.
+  If the tool cannot help with this task, try an alternative approach or use Return to explain what went wrong.
+  {% endif %}
+  {% endif %}
+  {% if turn.expansions and turn.expansions|length > 0 %}
+  Expanded refs (now in your context — do not re-expand):
+  {% for e in turn.expansions %}
+  - [ref:{{ e.ref_id }}] → {{ e.content }}
+  {% endfor %}
+  {% endif %}
+  {% endfor %}
+"#
+
+function LoopController(
+  user_message: string,
+  intent: string,
+  tools: ToolDescription[],
+  turns: LoopTurn[],
+  context: string?,
+  turns_previous_runs: PriorResult[]?,
+  few_shots: FewShot[]?,
+  multi_call_mode: string?,
+  // Plan from an upstream `planner`, issue #27. A SEPARATE parameter, never
+  // folded into `context`: `context` is agent-static — graph schema, enabled
+  // servers — and renders inside the tier-1 cache marker, while the plan is
+  // written per QUESTION. Prepending it to `context` made the tier-1 prefix
+  // vary per run, turning every cache read on the tool catalog into a cache
+  // write, issue #122. It renders in tier 2 instead, beside the intent it
+  // belongs with.
+  plan_context: string?,
+  // Terminal-action style, #149 — see LoopReturnStyle. Trailing + optional:
+  // the generated client takes its arguments POSITIONALLY, so a new parameter
+  // goes at the END (inserting one mid-signature silently shifts every later
+  // argument and drops the trailing options object).
+  return_style: string?
+) -> ControllerAction {
+  client ControllerAnthropic
+  prompt #"
+    {# The terminal action is described HERE because the turn log can never show
+       one: the loop breaks before pushing a final action, so `is_final` renders
+       as a literal false and every demonstration the model gets is a non-final
+       turn paired with a tool call. That left the one shape that ENDS the loop
+       undemonstrated. Static text (per style), so it costs nothing per turn and
+       stays inside the cached prefix. #}
+    {{ _.role("system") }}
+    You are an AI agent that accomplishes tasks by calling tools.
+    Select one tool per turn. Use "Return" when you have enough information.
+    {{ LoopReturnStyle(return_style) }}
+
+    {# ────────── CACHED TIER 1 · agent-static: context · tools · examples ────────── #}
+    {{ _.role("user", cache_control={"type": "ephemeral"}) }}
+    {% if context %}
+    CONTEXT:
+    {{ context }}
+
+    ---
+    {% endif %}
+    AVAILABLE TOOLS:
+    {{ ToolCatalog(tools) }}
+    - Return: Signal task completion (tool_args = {% if return_style == "answer" %}final answer{% else %}brief completion summary{% endif %})
+    {{ LoopMultiCalls(multi_call_mode) }}
+    {{ LoopFewShots(few_shots) }}
+
+    {# ────────── CACHED TIER 2 · run-static: plan · intent · instructions · prior results ────────── #}
+    {{ _.role("user", cache_control={"type": "ephemeral"}) }}
+    {% if plan_context %}
+    {{ plan_context }}
+
+    ---
+    {% endif %}
+    INTENT: {{ intent }}
+
+    ---
+    INSTRUCTIONS: {{ user_message }}
+    {{ LoopPriorResults(turns_previous_runs) }}
+
+    {# ────────── TURN HISTORY · append-only, rolling markers on last two results ────────── #}
+    {{ LoopTurnLog(turns) }}
+
+    {# ────────── VOLATILE TAIL · changes every turn, never cached ────────── #}
+    {{ _.role("user") }}
+    {# 0-indexed to match the turn log and the `n` the next turn is recorded
+       under: with one completed turn the log ends at "Turn 0 result" and this
+       asks for turn 1. The previous `+ 1` skipped a number, inviting the model
+       to infer a turn it had never seen. #}
+    Turn {{ turns|length }}. Decide the next action.
+
+    {{ ctx.output_format }}
+  "#
+}

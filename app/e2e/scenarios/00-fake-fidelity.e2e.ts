@@ -41,8 +41,20 @@ beforeAll(async () => {
   // Boots only for its env side effects — `VerdaQwen` refuses to resolve
   // without a `/v1` endpoint, and `bootApp` is the one place that is set.
   await bootApp()
-  const { b } = await import('../../baml_client')
-  declared = generatedFunctionNames(b.request)
+  // PR-1b: the corpus is two generated singletons. Each render must go through
+  // the namespace that OWNS the function (methods read `this`), so `rq()`
+  // dispatches per name; the declared set is the UNION of both namespaces.
+  const [{ b: appB }, { b: pkgB }] = await Promise.all([
+    import('../../baml_client'),
+    import('@hames/harness-baml/baml_client'),
+  ])
+  const rq =
+    (fn: string) =>
+    (...args: unknown[]) =>
+      (fn in pkgB.request
+        ? (pkgB.request as unknown as Record<string, (...a: unknown[]) => unknown>)[fn]
+        : (appB.request as unknown as Record<string, (...a: unknown[]) => unknown>)[fn])(...args)
+  declared = [...generatedFunctionNames(appB.request), ...generatedFunctionNames(pkgB.request)]
   const via = { client: 'VerdaQwen' }
   const tools = [{ name: 'search', description: 'Search', args_schema: '{}' }]
   const attempt = {
@@ -51,29 +63,29 @@ beforeAll(async () => {
     result: 'rows',
   }
   renderers = {
-    Router: () => b.request.Router('m', [{ name: 'neo4j', description: 'd' }], [], via),
+    Router: () => rq('Router')('m', [{ name: 'neo4j', description: 'd' }], [], via),
     // Ten positional parameters, then the options bag. Counting matters more
     // than it looks: an extra `null` pushes `via` past the options slot, the
     // render silently falls back to the DECLARED Anthropic chain, and the
     // assertion below on `model` is what catches it.
     LoopController: () =>
-      b.request.LoopController('m', 'i', tools, [], null, null, null, null, null, null, via),
+      rq('LoopController')('m', 'i', tools, [], null, null, null, null, null, null, via),
     ActorController: () =>
-      b.request.ActorController('m', 'i', tools, [], null, null, null, null, null, via),
-    Critic: () => b.request.Critic('i', [attempt], via),
-    Synthesize: () => b.request.Synthesize('m', 'i', [], false, null, via),
-    ResultDescribe: () => b.request.ResultDescribe('search', '{}', 'r', 'rows', via),
+      rq('ActorController')('m', 'i', tools, [], null, null, null, null, null, via),
+    Critic: () => rq('Critic')('i', [attempt], via),
+    Synthesize: () => rq('Synthesize')('m', 'i', [], false, null, via),
+    ResultDescribe: () => rq('ResultDescribe')('search', '{}', 'r', 'rows', via),
     ResultDescribeBatch: () =>
-      b.request.ResultDescribeBatch(
+      rq('ResultDescribeBatch')(
         [{ id: '1', tool: 'search', tool_args: '{}', reasoning: 'r', result: 'rows' }],
         via,
       ),
-    CompactIntent: () => b.request.CompactIntent([], 'latest', via),
-    Planner: () => b.request.Planner('m', 'i', tools, null, via),
-    ScreenUntrustedContent: () => b.request.ScreenUntrustedContent('web', 'content', via),
-    RetrieveQuery: () => b.request.RetrieveQuery([], 'latest', via),
-    ReferenceSelector: () => b.request.ReferenceSelector('i', [], [], via),
-    GenerateConversationTitle: () => b.request.GenerateConversationTitle('m', via),
+    CompactIntent: () => rq('CompactIntent')([], 'latest', via),
+    Planner: () => rq('Planner')('m', 'i', tools, null, via),
+    ScreenUntrustedContent: () => rq('ScreenUntrustedContent')('web', 'content', via),
+    RetrieveQuery: () => rq('RetrieveQuery')([], 'latest', via),
+    ReferenceSelector: () => rq('ReferenceSelector')('i', [], [], via),
+    GenerateConversationTitle: () => rq('GenerateConversationTitle')('m', via),
   } as Record<string, Renderer>
 })
 

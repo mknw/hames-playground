@@ -75,35 +75,26 @@ client<llm> SynthesizerAnthropic {
 }
 
 // The cheap tier — and THE canonical list of what rides it. Every other
-// mention (local-client.baml, clients.server.ts, CLAUDE.md, models/README.md)
-// points here instead of repeating a subset that goes stale; three of them
-// already had three different incomplete subsets.
+// mention (local-client.baml, the client-resolution seam, CLAUDE.md,
+// models/README.md) points here instead of repeating a subset that goes
+// stale; three of them already had three different incomplete subsets.
 //
-// SEVEN functions declare `client DescribeAnthropic`. Six are the `describe`
-// role, all summarization-shaped:
-//
-//   ResultDescribe             describe.baml         per-tool-result summary
-//   ResultDescribeBatch        describe-batch.baml   compactBulkData's batches
-//   GenerateConversationTitle  title.baml            run titles
-//   CompactIntent              compact-intent.baml   cross-turn intent compaction
-//   RetrieveQuery              retrieve-query.baml   the retriever's query rewrite
-//   ReferenceSelector          with-references.baml  the citation picker
-//
-// The seventh is the `screen` role, and it is NOT summarization:
+// Since the @hames/harness-baml extraction (#225 PR-1b), the SIX `describe`
+// role functions live in the PACKAGE's baml_src
+// (packages/harness-baml/baml_src) — ResultDescribe, ResultDescribeBatch,
+// GenerateConversationTitle, CompactIntent, RetrieveQuery, ReferenceSelector —
+// which declares its own copy of this chain beside them. The only function
+// still declaring `client DescribeAnthropic` in THIS tree is:
 //
 //   ScreenUntrustedContent     injection-screen.baml withInjectionGuard's opt-in
 //                                                    LLM layer
 //
-// The two roles are held apart in clients.server.ts (SA-M5) but share this
-// chain HERE — the separation lives in the TypeScript mirror, not in BAML. So
-// re-pointing THIS BLOCK moves the injection screen onto whatever summarization
-// lands on: the one edit to avoid. Still true after 2026-08-26, when the private
-// tier moved the screen deliberately (its own line in VERDA_CLIENT_BY_ROLE, its
-// own eval scenario): a deliberate move is not the accident this warns about,
-// and this block is what the Anthropic tier still runs. To move the describe
-// tier, rewrite its SIX `client DescribeAnthropic` lines individually, or
-// declare a separate chain (e.g. `DescribeLocal`) and point those six at it.
-// The owned-inference flip is documented on LocalQwenSmall in local-client.baml.
+// The describe/screen role separation (SA-M5) still lives in the TypeScript
+// mirror — `VERDA_CLIENT_BY_ROLE` and the seam — not in BAML. The drift risk
+// this block warned about is now SPLIT IN TWO: re-pointing the app's block
+// moves only the screen; re-pointing the package's block moves only the six
+// describe functions. The two copies of the chain are kept aligned by the
+// client-output-caps pin, which scans both baml_src trees against one table.
 client<llm> DescribeAnthropic {
   provider fallback
   options {

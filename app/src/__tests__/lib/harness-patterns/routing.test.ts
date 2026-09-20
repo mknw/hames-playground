@@ -12,7 +12,7 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
 // Mock BAML Router
 const mockRouter = vi.fn()
 
-vi.mock('../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: {
     Router: mockRouter,
   },
@@ -30,13 +30,13 @@ describe('routeMessageOp', () => {
   })
 
   it('should export routeMessageOp function', async () => {
-    const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+    const { routeMessageOp } = await import('@hames/harness-baml/routing.server')
     expect(routeMessageOp).toBeDefined()
     expect(typeof routeMessageOp).toBe('function')
   })
 
   it('should call Router with message and history', async () => {
-    const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+    const { routeMessageOp } = await import('@hames/harness-baml/routing.server')
 
     await routeMessageOp('test message', [])
 
@@ -46,7 +46,7 @@ describe('routeMessageOp', () => {
   })
 
   it('should return parsed routing result', async () => {
-    const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+    const { routeMessageOp } = await import('@hames/harness-baml/routing.server')
 
     const result = await routeMessageOp('query the database', [])
 
@@ -63,7 +63,7 @@ describe('routeMessageOp', () => {
       response: '',
     })
 
-    const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+    const { routeMessageOp } = await import('@hames/harness-baml/routing.server')
     const result = await routeMessageOp('query db', [])
 
     expect(result.tool_name).toBe('neo4j')
@@ -77,7 +77,7 @@ describe('routeMessageOp', () => {
       response: '',
     })
 
-    const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+    const { routeMessageOp } = await import('@hames/harness-baml/routing.server')
     const result = await routeMessageOp('search the web', [])
 
     expect(result.tool_name).toBe('web_search')
@@ -91,7 +91,7 @@ describe('routeMessageOp', () => {
       response: 'Hello!',
     })
 
-    const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+    const { routeMessageOp } = await import('@hames/harness-baml/routing.server')
     const result = await routeMessageOp('hello', [])
 
     expect(result.tool_call_needed).toBe(false)
@@ -100,7 +100,7 @@ describe('routeMessageOp', () => {
   })
 
   it('should pass conversation history', async () => {
-    const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+    const { routeMessageOp } = await import('@hames/harness-baml/routing.server')
 
     const history = [
       { role: 'user', content: 'previous message' },
@@ -114,7 +114,7 @@ describe('routeMessageOp', () => {
   })
 
   it('should use default routes when not specified', async () => {
-    const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+    const { routeMessageOp } = await import('@hames/harness-baml/routing.server')
 
     await routeMessageOp('test', [])
 
@@ -125,7 +125,7 @@ describe('routeMessageOp', () => {
   })
 
   it('should accept custom routes', async () => {
-    const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+    const { routeMessageOp } = await import('@hames/harness-baml/routing.server')
 
     const customRoutes = [
       { name: 'custom1', description: 'Custom route 1' },

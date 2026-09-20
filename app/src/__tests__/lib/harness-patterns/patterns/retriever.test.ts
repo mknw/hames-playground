@@ -25,7 +25,7 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
 }))
 
 // Mock the BAML client (the retriever dynamically imports it for RetrieveQuery).
-vi.mock('../../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: { RetrieveQuery: vi.fn(async () => 'rewritten search query') },
 }))
 
@@ -69,12 +69,11 @@ async function load() {
   const { retriever } = await import('@hames/harness-patterns/patterns/retriever.server')
   const { createScope } = await import('@hames/harness-patterns/context.server')
   const { createEventView } = await import('@hames/harness-patterns/patterns')
-  const { b } = await import('../../../../../baml_client')
+  const { b } = await import('@hames/harness-baml/baml_client')
   // Lane A6: the rewrite seam is REQUIRED config — the real adapter (which
   // hits the mocked `b.RetrieveQuery`), what `bamlPatterns().retrieveQuery`
   // hands an agent.
-  const { createRetrieveQueryAdapter } =
-    await import('../../../../lib/harness-baml/baml-patterns.server')
+  const { createRetrieveQueryAdapter } = await import('@hames/harness-baml/baml-patterns.server')
   const rewrite = createRetrieveQueryAdapter()
   return { retriever, rewrite, createScope, createEventView, b }
 }

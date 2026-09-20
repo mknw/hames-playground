@@ -13,7 +13,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockAction, mockFinalAction } from '../../../mocks/baml'
-import type { ControllerAction } from '../../../../../baml_client/types'
+import type { ControllerAction } from '@hames/harness-baml/baml_client/types'
 import type { ControllerInput, ActorInput } from '@hames/harness-patterns/types'
 
 vi.mock('@hames/harness-patterns/assert.server', () => ({

@@ -18,8 +18,9 @@
  *   That's exactly the shape of "give the LLM the user's first message,
  *   get a title string." No loops, no tools, no router.
  *
- * Library boundary: imports only from `~/lib/harness-patterns` and
- * `~/baml_client`. No imports from `~/components` or other consumers —
+ * Library boundary: imports only from `@hames/harness-patterns`,
+ * `@hames/harness-baml` and its pre-generated client. No imports from
+ * `~/components` or other consumers —
  * keeps the agent extractable as a standalone npm package example.
  *
  * Deliberately NOT a `"use server"` module: every export of one becomes a
@@ -32,10 +33,10 @@
  */
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { harness, compactExecution } from '@hames/harness-patterns'
-import { withUsageAccounting } from '../../harness-baml'
-import { clientOverrideFor } from '../../harness-baml/clients.server'
+import { withUsageAccounting } from '@hames/harness-baml'
+import { clientOverrideFor } from '@hames/harness-baml/clients.server'
 import type { HarnessData, UnifiedContext, UserMessageEventData } from '@hames/harness-patterns'
-import { b } from '../../../../baml_client'
+import { b } from '@hames/harness-baml/baml_client'
 import { updateConversationTitle } from '../../db/conversations.server'
 
 // The directive is gone, so nothing else keeps this module off the client. The

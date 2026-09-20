@@ -44,7 +44,7 @@ assertServerOnImport()
 
 export async function defaultSynthesize(input: CompactExecutionInput): Promise<LLMResult<string>> {
   // Dynamic import to avoid circular dependencies
-  const { b } = await import('../../../baml_client')
+  const { b } = await import('./baml_client')
   const startTime = Date.now()
   // Lane A3: the implementation owns the collector — it used to be created by
   // the pattern and handed down, which is the handle the envelope deletes.
@@ -151,7 +151,7 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
 // ============================================================================
 
 export const defaultSelector: SelectorFn = async (input) => {
-  const { b } = await import('../../../baml_client')
+  const { b } = await import('./baml_client')
   const now = Date.now()
   const collector = new Collector('reference-selector')
   const candidates = input.candidates.map((c) => ({
@@ -191,7 +191,10 @@ export const defaultSelector: SelectorFn = async (input) => {
   // went uncounted, which biases the header's on-prem share upward.
   accountBamlCall(collector, 'ReferenceSelector')
   return {
-    selected: result.selected.map((s) => ({ ref_id: s.ref_id, reason: s.reason })),
+    selected: result.selected.map((s) => ({
+      ref_id: s.ref_id,
+      reason: s.reason,
+    })),
     reasoning: result.reasoning,
   }
 }

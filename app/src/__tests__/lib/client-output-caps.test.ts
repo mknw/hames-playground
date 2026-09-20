@@ -20,8 +20,15 @@ import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { CLIENT_MAX_OUTPUT_TOKENS } from '../../lib/settings'
 
-// vitest runs from app/ (every pnpm command does — CLAUDE.md).
-const BAML_SRC = path.resolve(process.cwd(), 'baml_src')
+// vitest runs from app/ (every pnpm command does — CLAUDE.md). Since PR-1b
+// the BAML corpus is TWO trees — the app's (heavy roles + screen) and the
+// package's (the describe set + title, plus the full client set) — and ONE
+// table mirrors BOTH: the clients a tree declares must be capped whichever
+// tree they live in.
+const BAML_SRC_DIRS = [
+  path.resolve(process.cwd(), 'baml_src'),
+  path.resolve(process.cwd(), '../packages/harness-baml/baml_src'),
+]
 
 interface ParsedClient {
   name: string
@@ -35,8 +42,13 @@ interface ParsedClient {
  *  commented-out example clients don't register. */
 function parseClients(): ParsedClient[] {
   const clients: ParsedClient[] = []
-  for (const file of readdirSync(BAML_SRC).filter((f) => f.endsWith('.baml'))) {
-    const source = readFileSync(path.join(BAML_SRC, file), 'utf8')
+  const files = BAML_SRC_DIRS.flatMap((dir) =>
+    readdirSync(dir)
+      .filter((f) => f.endsWith('.baml'))
+      .map((f) => path.join(dir, f)),
+  )
+  for (const file of files) {
+    const source = readFileSync(file, 'utf8')
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('//'))
       .join('\n')

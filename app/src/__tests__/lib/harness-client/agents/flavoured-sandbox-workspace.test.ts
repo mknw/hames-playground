@@ -242,7 +242,7 @@ const listWorkIn = mockAction({
   is_final: true,
 })
 
-vi.mock('../../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: {
     Router: vi.fn(async () => ({
       intent: 'inspect the workspace',

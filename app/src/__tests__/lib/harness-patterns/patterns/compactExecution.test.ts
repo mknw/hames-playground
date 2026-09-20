@@ -7,7 +7,7 @@ import '../../../../lib/inference/config.server'
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { defaultSynthesize } from '../../../../lib/harness-baml/defaults.server'
+import { defaultSynthesize } from '@hames/harness-baml/defaults.server'
 
 // Mock server-only imports
 vi.mock('@hames/harness-patterns/assert.server', () => ({
@@ -15,7 +15,7 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
 }))
 
 // Mock BAML client
-vi.mock('../../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: {
     Synthesize: vi.fn(async () => 'Synthesized response from BAML'),
   },
@@ -685,7 +685,7 @@ describe('compactExecution — context-window trimming regression', () => {
       await import('@hames/harness-patterns/patterns/compactExecution.server')
     const { createScope } = await import('@hames/harness-patterns/context.server')
     const { createEventView } = await import('@hames/harness-patterns/patterns')
-    const { b } = await import('../../../../../baml_client')
+    const { b } = await import('@hames/harness-baml/baml_client')
 
     // Two large cypher results (>49KB each → would each blow the old 12K-token
     // budget) plus the loop's Return, all under the loop's patternId.
@@ -797,8 +797,8 @@ describe('compactExecution — context-window trimming regression', () => {
   })
 
   it('resolves the trim window from the real client, and every role name is in the map', async () => {
-    const { getContextWindow } = await import('../../../../lib/harness-baml/clients.server')
-    const { resolveClientForRole } = await import('../../../../lib/harness-baml/clients.server')
+    const { getContextWindow } = await import('@hames/harness-baml/clients.server')
+    const { resolveClientForRole } = await import('@hames/harness-baml/clients.server')
 
     // The key that was missing (→ 16K default → over-trim).
     expect(getContextWindow('SynthesizerAnthropic')).toBe(200_000)
@@ -981,7 +981,7 @@ describe('compactExecution synth input fidelity', () => {
 
   it('drops the terminal Return turn instead of passing it off as a success', async () => {
     const { compactExecution, createScope, createEventView } = await harness()
-    const { b } = await import('../../../../../baml_client')
+    const { b } = await import('@hames/harness-baml/baml_client')
 
     const events: Ev[] = [
       { type: 'user_message', ts: 1, patternId: 'harness', data: { content: 'q' } },

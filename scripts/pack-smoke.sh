@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Pack + install-from-tarball smoke for @hames/harness-patterns
-# (#225 Step 1d; docs/plan/harness-npm-lib.md §3.3/§4.3).
+# Pack + install-from-tarball smoke for the workspace packages:
+#   - @hames/harness-patterns (#225 Step 1d; docs/plan/harness-npm-lib.md §3.3/§4.3)
+#   - @hames/harness-baml    (#225 PR-1b — REQUIRED by the PR-1b amendment:
+#     both packages must pass the tarball smoke before PR-2). Its scratch
+#     install carries a pnpm override pointing @hames/harness-patterns at the
+#     patterns tarball, because the tarball's rewritten `workspace:*`
+#     dependency (→ "0.1.0") is unpublished and a registry fetch must not be
+#     the thing under test.
 #
 # This is the ONLY mechanism anywhere in CI that exercises "does the published
 # tarball actually work" — the docker image boots from the workspace symlink,
@@ -41,16 +47,28 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-echo "== pnpm pack =="
+echo "== pnpm pack (harness-patterns) =="
 (cd "$root/packages/harness-patterns" && pnpm pack --pack-destination "$tmp")
-tarball="$(ls "$tmp"/hames-harness-patterns-*.tgz)"
-echo "tarball: $tarball"
+patterns_tarball="$(ls "$tmp"/hames-harness-patterns-*.tgz)"
+echo "tarball: $patterns_tarball"
+
+echo "== pnpm pack (harness-baml) =="
+# `pnpm pack` resolves `workspace:*` against the INSTALLED workspace graph, and
+# the patterns dependency is what a tarball consumer resolves anyway — but CI's
+# pack job deliberately runs no full workspace install (the probe must resolve
+# against the tarball, never the workspace symlink). This filtered install
+# materialises just enough of the graph for pack to rewrite the protocol; the
+# probe below still runs inside the scratch project.
+(cd "$root" && pnpm install --frozen-lockfile --filter @hames/harness-baml)
+(cd "$root/packages/harness-baml" && pnpm pack --pack-destination "$tmp")
+baml_tarball="$(ls "$tmp"/hames-harness-baml-*.tgz)"
+echo "tarball: $baml_tarball"
 
 echo "== install into scratch project =="
 mkdir -p "$tmp/scratch"
 cd "$tmp/scratch"
 printf '{"name":"pack-smoke-scratch","private":true,"type":"module"}\n' > package.json
-pnpm add "$tarball"
+pnpm add "$patterns_tarball"
 
 # The probe lives INSIDE the scratch project on purpose: imports in a file
 # under the repo would resolve the repo's node_modules — the workspace
@@ -148,3 +166,64 @@ PROBE
 
 echo "== run probe =="
 pnpm dlx tsx probe.mts
+
+# ===========================================================================
+# @hames/harness-baml — same four checks, on the second package's tarball.
+# The scratch install overrides @hames/harness-patterns with the patterns
+# tarball (see header): the dependency itself is what the tarball DEPENDS on,
+# and its registry fetch would be an unrelated failure.
+# ===========================================================================
+
+echo "== install harness-baml into scratch project =="
+mkdir -p "$tmp/scratch-baml"
+cd "$tmp/scratch-baml"
+printf '{"name":"pack-smoke-scratch-baml","private":true,"type":"module",\n "pnpm":{"overrides":{"@hames/harness-patterns":"file:%s"}}}\n' \
+  "$patterns_tarball" > package.json
+pnpm add "$baml_tarball"
+
+cat > probe.mts <<'PROBE'
+import { strict as assert } from 'node:assert'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+const pkgDir = fileURLToPath(new URL('./node_modules/@hames/harness-baml/', import.meta.url))
+const manifest = JSON.parse((await import('node:fs')).readFileSync(pkgDir + 'package.json', 'utf8'))
+
+// 1. every explicit export target exists in the tarball (the wildcards are
+//    exercised by the direct imports below)
+for (const [key, target] of Object.entries<string>(manifest.exports)) {
+  if (key === './package.json' || key.includes('*')) continue
+  const file = pkgDir + target.replace(/^\.\//, '')
+  assert.ok(existsSync(file), `export ${key} -> ${target} is missing from the tarball`)
+}
+
+// 2. the pre-generated client shipped: the whole point of PR-1b's "consumer
+//    never runs baml-generate" — and it declares BOTH trees' functions
+//    (the app's heavy roles AND the moved describe set + title).
+const pkg = await import('@hames/harness-baml/baml_client')
+for (const fn of ['LoopController', 'ActorController', 'Critic', 'Planner', 'Router',
+  'Synthesize', 'ScreenUntrustedContent', 'ResultDescribe', 'ResultDescribeBatch',
+  'GenerateConversationTitle', 'CompactIntent', 'RetrieveQuery', 'ReferenceSelector']) {
+  assert.equal(typeof (pkg.b.request as Record<string, unknown>)[fn], 'function', `b.request.${fn} missing`)
+}
+
+// 3. the resolution seam evaluates and defaults to no override (the host's
+//    composition root is app configuration; a bare consumer gets the safe
+//    package-side defaults)
+const clients = await import('@hames/harness-baml/clients.server')
+assert.equal(typeof clients.clientOverrideFor, 'function')
+assert.equal(clients.clientOverrideFor('controller'), undefined, 'unregistered default tier must be anthropic')
+
+// 4. the adapters + barrel evaluate (this transitively loads @boundaryml/baml
+//    and the declared @hames/harness-patterns dependency via the override)
+const adapters = await import('@hames/harness-baml/baml-adapters.server')
+assert.equal(typeof adapters.createLoopControllerAdapter, 'function')
+const barrel = await import('@hames/harness-baml')
+assert.equal(typeof barrel.bamlPatterns, 'function')
+
+console.log('harness-baml pack smoke OK: exports resolve, pre-generated client imports, all entries evaluate')
+PROBE
+
+echo "== run harness-baml probe =="
+pnpm dlx tsx probe.mts
+

@@ -16,6 +16,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+// The composition root registers the seam (model tables incl. the output
+// caps `llmCallHitOutputCap` reads through `maxOutputTokensFor`).
+import '../../../lib/inference/config.server'
 import { mockFinalAction } from '../../mocks/baml'
 import { mockListTools } from '../../mocks/mcp'
 import type { Collector } from '@boundaryml/baml'
@@ -31,7 +34,7 @@ vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
 const mockLoopController = vi.fn()
 const mockActorController = vi.fn()
 
-vi.mock('../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: {
     LoopController: mockLoopController,
     ActorController: mockActorController,
@@ -71,7 +74,7 @@ beforeEach(() => {
 
 describe('llmCallHitOutputCap', () => {
   it('detects a call that hit its configured cap', async () => {
-    const { llmCallHitOutputCap } = await import('../../../lib/harness-baml/baml-adapters.server')
+    const { llmCallHitOutputCap } = await import('@hames/harness-baml/baml-adapters.server')
     expect(
       llmCallHitOutputCap({
         clientName: 'AnthropicSonnet5',
@@ -81,7 +84,7 @@ describe('llmCallHitOutputCap', () => {
   })
 
   it('detects the cap on EVERY capped leaf, at the boundary (SA-C2)', async () => {
-    const { llmCallHitOutputCap } = await import('../../../lib/harness-baml/baml-adapters.server')
+    const { llmCallHitOutputCap } = await import('@hames/harness-baml/baml-adapters.server')
     // The collector reports the selected LEAF's clientName, never the chain's,
     // so each leaf needs its own CLIENT_MAX_OUTPUT_TOKENS entry. Seven
     // Groq/OpenRouter leaves were missing theirs and every production
@@ -112,7 +115,7 @@ describe('llmCallHitOutputCap', () => {
   })
 
   it('is false below the cap, for unknown clients, and without usage', async () => {
-    const { llmCallHitOutputCap } = await import('../../../lib/harness-baml/baml-adapters.server')
+    const { llmCallHitOutputCap } = await import('@hames/harness-baml/baml-adapters.server')
     expect(
       llmCallHitOutputCap({
         clientName: 'AnthropicSonnet5',
@@ -138,7 +141,7 @@ describe('llmCallHitOutputCap', () => {
 describe('ActorController truncation retry (Anthropic-only path)', () => {
   it('retries ONCE with truncation guidance appended to context when the output hit the cap', async () => {
     const { createActorControllerAdapter, TRUNCATION_RETRY_GUIDANCE } =
-      await import('../../../lib/harness-baml/baml-adapters.server')
+      await import('@hames/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockActorController
@@ -178,14 +181,14 @@ describe('ActorController truncation retry (Anthropic-only path)', () => {
 
   it('does NOT retry when the parse failure was not a cap-hit (rethrows as LLMCallError)', async () => {
     const { createActorControllerAdapter } =
-      await import('../../../lib/harness-baml/baml-adapters.server')
+      await import('@hames/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockActorController.mockRejectedValueOnce(
       new BamlValidationError('prompt', 'raw', 'bad output', 'bad output'),
     )
 
-    const { LLMCallError } = await import('../../../lib/harness-baml/baml-adapters.server')
+    const { LLMCallError } = await import('@hames/harness-baml/baml-adapters.server')
     const actor = createActorControllerAdapter({ toolNames: ['sandbox_bash'] })
     await expect(
       actor('do the thing', 'intent', [], [], fakeCollector(512, 'AnthropicSonnet5'), 1, 6),
@@ -195,7 +198,7 @@ describe('ActorController truncation retry (Anthropic-only path)', () => {
 
   it('throws LLMCallError when the truncation retry also fails (exactly one retry)', async () => {
     const { createActorControllerAdapter } =
-      await import('../../../lib/harness-baml/baml-adapters.server')
+      await import('@hames/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockActorController
@@ -204,7 +207,7 @@ describe('ActorController truncation retry (Anthropic-only path)', () => {
         new BamlValidationError('prompt', 'raw', 'truncated again', 'truncated again'),
       )
 
-    const { LLMCallError } = await import('../../../lib/harness-baml/baml-adapters.server')
+    const { LLMCallError } = await import('@hames/harness-baml/baml-adapters.server')
     const actor = createActorControllerAdapter({ toolNames: ['sandbox_bash'] })
     await expect(
       actor('do the thing', 'intent', [], [], fakeCollector(16_384, 'AnthropicHaiku45'), 1, 6),
@@ -216,7 +219,7 @@ describe('ActorController truncation retry (Anthropic-only path)', () => {
 describe('LoopController truncation retry (Anthropic-only path)', () => {
   it('retries ONCE with truncation guidance appended to context', async () => {
     const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } =
-      await import('../../../lib/harness-baml/baml-adapters.server')
+      await import('@hames/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController
@@ -243,15 +246,14 @@ describe('LoopController truncation retry (Anthropic-only path)', () => {
   })
 
   it('without a cap-hit, a parse failure rethrows — no retry, no escalation', async () => {
-    const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-baml/baml-adapters.server')
+    const { createLoopControllerAdapter } = await import('@hames/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController.mockRejectedValueOnce(
       new BamlValidationError('prompt', 'raw', 'bad output', 'bad output'),
     )
 
-    const { LLMCallError } = await import('../../../lib/harness-baml/baml-adapters.server')
+    const { LLMCallError } = await import('@hames/harness-baml/baml-adapters.server')
     const controller = createLoopControllerAdapter()
     await expect(
       controller(
@@ -270,7 +272,7 @@ describe('LoopController truncation retry (Anthropic-only path)', () => {
 describe('the retry stays on the declared chain', () => {
   it('appends guidance to the SAME call — it never swaps the client', async () => {
     const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } =
-      await import('../../../lib/harness-baml/baml-adapters.server')
+      await import('@hames/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController
@@ -309,8 +311,7 @@ describe('the retry stays on the declared chain', () => {
  */
 describe('empty-completion retry', () => {
   it('LoopController retries ONCE with the context UNCHANGED', async () => {
-    const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-baml/baml-adapters.server')
+    const { createLoopControllerAdapter } = await import('@hames/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController
@@ -332,7 +333,7 @@ describe('empty-completion retry', () => {
 
   it('ActorController retries ONCE with the context UNCHANGED', async () => {
     const { createActorControllerAdapter } =
-      await import('../../../lib/harness-baml/baml-adapters.server')
+      await import('@hames/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockActorController
@@ -352,8 +353,7 @@ describe('empty-completion retry', () => {
   })
 
   it('whitespace-only output counts as empty', async () => {
-    const { createLoopControllerAdapter } =
-      await import('../../../lib/harness-baml/baml-adapters.server')
+    const { createLoopControllerAdapter } = await import('@hames/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController
@@ -367,7 +367,7 @@ describe('empty-completion retry', () => {
 
   it('a cap-hit still wins: truncation guidance, not a bare retry', async () => {
     const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } =
-      await import('../../../lib/harness-baml/baml-adapters.server')
+      await import('@hames/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController
@@ -383,7 +383,7 @@ describe('empty-completion retry', () => {
 
   it('exactly one retry: a second empty response throws LLMCallError', async () => {
     const { createLoopControllerAdapter, LLMCallError } =
-      await import('../../../lib/harness-baml/baml-adapters.server')
+      await import('@hames/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController
@@ -399,7 +399,7 @@ describe('empty-completion retry', () => {
 
   it('a non-empty response that simply failed to parse is NOT retried', async () => {
     const { createLoopControllerAdapter, LLMCallError } =
-      await import('../../../lib/harness-baml/baml-adapters.server')
+      await import('@hames/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
     mockLoopController.mockRejectedValueOnce(

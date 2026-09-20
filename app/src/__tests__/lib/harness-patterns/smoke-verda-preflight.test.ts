@@ -30,7 +30,7 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServer: vi.fn(),
 }))
 
-const { servedModelIds } = await import('../../../lib/harness-baml/scripts/smoke-verda')
+const { servedModelIds } = await import('../../../lib/inference/scripts/smoke-verda')
 
 let server: Server | undefined
 const sockets = new Set<import('node:net').Socket>()

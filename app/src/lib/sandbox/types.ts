@@ -43,8 +43,12 @@ export interface RuntimeConfig {
    *     network and gateway are PER BOOT — see egress-policy.ts — so the
    *     audit trail survives only until the sandbox is destroyed: the
    *     gateway is `--rm`'d with the boot).
-   *   - `open`       unrestricted outbound on the default bridge. No proxy,
-   *     no audit — "open" is the honest name for what it is.
+   *   - `open`       NOT selectable by callers (#357 channel 4): a requested
+   *     `open` fails CLOSED to `--network none` like an unknown profile. The
+   *     single-operator escape hatch `SANDBOX_ENABLE_OPEN_EGRESS=1` re-admits
+   *     it, and only then it keeps its documented posture: unrestricted
+   *     outbound on the default bridge, no proxy, no audit — "open" is the
+   *     honest name for what it is.
    *
    * An unknown profile at runtime fails CLOSED to no network (the strictest
    * choice), with a warning — an unrecognized name must never silently mean

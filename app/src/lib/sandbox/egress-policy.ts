@@ -26,8 +26,13 @@
  * (tenant or not) went networked.
  *
  * `open` is deliberately unproxied — no enforcement and no audit, because
- * there is no chokepoint to log at. An unknown profile fails CLOSED to
- * `mcp-only` at the backend, never falls through to the bridge.
+ * there is no chokepoint to log at. It is NOT a selectable profile (#357
+ * channel 4): `EGRESS_PROFILES` and `isEgressProfile` admit only the three
+ * above, so a caller that requests `open` fails CLOSED to `mcp-only` at the
+ * backend, never falls through to the bridge — same as an unknown name. The
+ * single-operator escape hatch is `SANDBOX_ENABLE_OPEN_EGRESS=1`, read at the
+ * backend per boot via `isOpenEgressEnabled`; only then does `open` keep its
+ * documented posture (default bridge, unproxied, unaudited).
  *
  * Pure and I/O-free — safe to import anywhere. Host allowlists are env-
  * overridable so a deployment can tighten them without a rebuild.
@@ -37,10 +42,33 @@ import type { RuntimeConfig } from './types'
 
 export type EgressProfile = NonNullable<RuntimeConfig['egress']>
 
-export const EGRESS_PROFILES = ['mcp-only', 'pypi', 'github-trusted', 'open'] as const
+/**
+ * The SELECTABLE profiles — what a caller may request. `open` is deliberately
+ * absent (#357 channel 4): it stays in the `EgressProfile` type for the
+ * single-operator escape hatch (`isOpenEgressEnabled`), but no caller can
+ * select it, and a requested `open` fails closed at the backend like an
+ * unknown profile.
+ */
+export const EGRESS_PROFILES = ['mcp-only', 'pypi', 'github-trusted'] as const
 
 export function isEgressProfile(value: unknown): value is EgressProfile {
   return typeof value === 'string' && (EGRESS_PROFILES as readonly string[]).includes(value)
+}
+
+/** The single-operator escape hatch that re-admits `open` (#357 channel 4). */
+export const OPEN_EGRESS_ENV = 'SANDBOX_ENABLE_OPEN_EGRESS'
+
+/**
+ * Whether this deployment has opted into `open`'s documented posture (default
+ * bridge, unproxied, unaudited). Env is a parameter, not `process.env`, so
+ * this stays pure and I/O-free like the rest of the module; the backend reads
+ * `process.env` per boot, the same layer as the other SANDBOX_* knobs.
+ * Only the exact value `1` (trimmed) enables it — anything else, including
+ * `true`/`yes`, is OFF: a knob that admits unrestricted egress fails closed
+ * on a misspelling.
+ */
+export function isOpenEgressEnabled(env: Record<string, string | undefined>): boolean {
+  return env[OPEN_EGRESS_ENV]?.trim() === '1'
 }
 
 /** Default host allowlists. `githubusercontent.com` covers the

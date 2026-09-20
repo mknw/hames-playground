@@ -9,6 +9,12 @@
 
 FROM kg-sandbox:base AS office
 
+# base ends at `USER sandbox` (#116) — build steps run as root, drop back at
+# the end so the runtime user is inherited from base.
+USER root
+
 COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /bin/
 RUN uv pip install --system --break-system-packages --no-cache \
         python-docx openpyxl xlsxwriter pymupdf
+
+USER sandbox

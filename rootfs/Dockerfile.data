@@ -7,6 +7,10 @@
 
 FROM kg-sandbox:base AS data
 
+# base ends at `USER sandbox` (#116) — build steps run as root, drop back at
+# the end so the runtime user is inherited from base.
+USER root
+
 # uv (static binary) — installs into the system python so `python3` sees it in
 # any shell.
 COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /bin/
@@ -16,3 +20,5 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /bin/
 RUN uv pip install --system --break-system-packages --no-cache \
         pandas numpy polars pyarrow matplotlib seaborn \
         openpyxl fastexcel xlsxwriter python-docx python-pptx reportlab pypdf
+
+USER sandbox

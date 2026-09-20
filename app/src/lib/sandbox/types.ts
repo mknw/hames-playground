@@ -30,9 +30,22 @@ export interface RuntimeConfig {
   /** Per-tool-call wall-clock cap in seconds. */
   timeoutSec?: number
   /**
-   * Egress profile. Enforced at the kernel/container level, never exposed as
-   * a tool surface. v0 DockerBackend honors `'mcp-only'` (network disabled)
-   * vs. anything else (network enabled) — finer profiles are later work.
+   * Egress profile. Enforced at the container level by the backend, never
+   * exposed as a tool surface (#116):
+   *
+   *   - `mcp-only`   no network at all (`--network none`). The default.
+   *   - `pypi` / `github-trusted`  the sandbox sits on an *internal-only*
+   *     docker network whose only egress path is the allowlist CONNECT proxy
+   *     the backend runs beside it — a process that ignores the proxy env vars
+   *     has no route out at all, so the allowlist is enforced, not advisory.
+   *     Every allowed AND denied connection is audited by the proxy
+   *     (`docker logs kg-sandbox-egress-<profile>-gw`).
+   *   - `open`       unrestricted outbound on the default bridge. No proxy,
+   *     no audit — "open" is the honest name for what it is.
+   *
+   * An unknown profile at runtime fails CLOSED to no network (the strictest
+   * choice), with a warning — an unrecognized name must never silently mean
+   * "unrestricted".
    */
   egress?: 'mcp-only' | 'pypi' | 'github-trusted' | 'open'
 }
@@ -92,8 +105,21 @@ export interface McpTransport {
   toolNames(): Promise<string[]>
   /** Full descriptions, names already prefixed, for the actor's prompt. */
   listTools(): Promise<MCPToolDescription[]>
-  /** Call a `sandbox_`-prefixed tool; routes to the owning in-VM server. */
-  callTool(name: string, args: Record<string, unknown>): Promise<ToolCallResult>
+  /** Call a `sandbox_`-prefixed tool; routes to the owning in-VM server.
+   *
+   *  `opts.internal` marks the caller as the harness itself (work-sync,
+   *  work-artifacts) rather than the actor. Internal calls bypass the host-side
+   *  `bash-guard` screen on `sandbox_bash` — the harness's own sync commands
+   *  (`mkdir` / `base64` / `find … sha256sum` / `rm`) are the transport's own
+   *  plumbing, not agent-authored commands, and in allowlist mode they would
+   *  otherwise be denied and break workspace sync (#116). Actor-facing callers
+   *  (core's tool-transport seam) pass only two arguments and are always
+   *  screened. */
+  callTool(
+    name: string,
+    args: Record<string, unknown>,
+    opts?: { internal?: boolean },
+  ): Promise<ToolCallResult>
   /** True if `name` is a tool this sandbox owns. */
   ownsTool(name: string): boolean
   /** Tear down all in-VM MCP client connections (does not destroy the VM). */

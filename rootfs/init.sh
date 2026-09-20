@@ -44,7 +44,10 @@ case "$cmd" in
     esac
     ;;
   "")
-    # Entrypoint mode: idle host. Block forever; servers come up via docker exec.
+    # Entrypoint mode: idle host. Prepare the non-root user's HOME on the
+    # /work tmpfs (the backend mounts /work RAM-backed; the image itself is
+    # read-only, #116), then block forever; servers come up via docker exec.
+    mkdir -p "$WORK_DIR/home"
     echo "[sandbox] init ready; /work prepared; idling (servers spawn on exec)" >&2
     exec tail -f /dev/null
     ;;

@@ -32,11 +32,75 @@ import type {
 } from './types'
 import { V0_IN_VM_SERVERS } from './types'
 import type { ToolCallResult, MCPToolDescription } from '@hames/harness-patterns/types'
+import { bashGuardPolicyFromEnv, screenBashCommand, type BashGuardPolicy } from './bash-guard'
+import {
+  egressAllowlist,
+  egressGatewayName,
+  egressNetworkName,
+  isEgressProfile,
+  isProxiedProfile,
+  proxyEnvArgs,
+} from './egress-policy'
 
 assertServerOnImport()
 
 const DOCKER_BIN = process.env.DOCKER_BIN || 'docker'
 const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || 'kg-sandbox:base'
+
+// ============================================================================
+// Container hardening knobs (#116) — env-tunable, read per boot so a change
+// needs no rebuild. Defaults are the posture every sandbox starts with: no
+// capabilities, read-only rootfs, RAM-backed writable /work + /tmp, a pid
+// ceiling, and no-new-privileges. seccomp/AppArmor stay env opt-in because a
+// profile is host-specific (Docker's built-in default seccomp filter always
+// applies on Linux regardless).
+// ============================================================================
+
+function readIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name]
+  const n = raw ? Number(raw) : NaN
+  // A non-numeric or non-positive value falls back rather than silently
+  // disabling the cap (a guard that cannot decide fails closed, not off).
+  return Number.isInteger(n) && n > 0 ? n : fallback
+}
+
+/** Hardening flags applied to EVERY sandbox (and gateway) container. */
+function hardeningArgs(): string[] {
+  const args = [
+    '--cap-drop',
+    'ALL',
+    '--read-only',
+    '--security-opt',
+    'no-new-privileges',
+    '--pids-limit',
+    String(readIntEnv('SANDBOX_PIDS_LIMIT', 256)),
+    // Writable scratch is RAM-backed tmpfs, sized so a runaway write dies at
+    // the mount, not at the host. /work is mode 1777: docker cannot chown a
+    // tmpfs to the image user, and the in-VM processes all run as the same
+    // non-root uid anyway (see rootfs/Dockerfile → USER).
+    '--tmpfs',
+    '/tmp:rw,nosuid,size=64m',
+    '--tmpfs',
+    `/work:rw,nosuid,size=${readIntEnv('SANDBOX_WORK_TMPFS_MB', 512)}m,mode=1777`,
+  ]
+  const seccomp = process.env.SANDBOX_SECCOMP_PROFILE?.trim()
+  if (seccomp) args.push('--security-opt', `seccomp=${seccomp}`)
+  const apparmor = process.env.SANDBOX_APPARMOR_PROFILE?.trim()
+  if (apparmor) args.push('--security-opt', `apparmor=${apparmor}`)
+  return args
+}
+
+/** Named volume mounted at /cache for every networked boot: the uv/pip wheel
+ *  cache (UV_CACHE_DIR / PIP_CACHE_DIR in the image) so live installs don't
+ *  re-download the same wheels into every ephemeral container. The volume is
+ *  initialized from the image's /cache (owned by the non-root user), so it is
+ *  writable by the sandbox without a chown. mcp-only boots skip it — no
+ *  network means no live install; a warm cache there would be a convenience,
+ *  not a control. */
+function cacheVolumeArgs(): string[] {
+  const volume = process.env.SANDBOX_CACHE_VOLUME?.trim() || 'kg-sandbox-cache'
+  return ['-v', `${volume}:/cache`]
+}
 
 // ============================================================================
 // Small docker CLI helper
@@ -98,10 +162,15 @@ class DockerMcpTransport implements McpTransport {
   private readonly descriptions: MCPToolDescription[] = []
   private readonly clients: Client[] = []
   private closed = false
+  /** Host-side command policy for `sandbox_bash` (#116). Built once per
+   *  transport open; an invalid env override throws here, so the turn fails
+   *  with a named misconfiguration instead of running unscreened. */
+  private readonly bashGuard: BashGuardPolicy
 
   private constructor(vmId: string, cid: string) {
     this.vmId = vmId
     this.cid = cid
+    this.bashGuard = bashGuardPolicyFromEnv(process.env)
   }
 
   /** Connect to every v0 in-VM server over `docker exec -i` stdio. */
@@ -152,10 +221,35 @@ class DockerMcpTransport implements McpTransport {
     return this.route.has(name)
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    opts?: { internal?: boolean },
+  ): Promise<ToolCallResult> {
     const target = this.route.get(name)
     if (!target) {
       return { success: false, data: null, error: `Sandbox tool not found: ${name}` }
+    }
+    // Host-side command screen (#116): every actor-authored `sandbox_bash`
+    // command passes the advisory allow/denylist BEFORE it reaches the VM.
+    // Internal callers (work-sync / work-artifacts) pass `opts.internal` and
+    // are exempt — their mkdir/base64/find/rm plumbing is the harness's own,
+    // not agent input, and an allowlist-mode policy would otherwise break
+    // workspace sync. Deny is fail-closed and reported back to the actor as
+    // a structured tool error so the turn can adapt (see bash-guard.ts for
+    // what this layer does and does not promise).
+    if (name === 'sandbox_bash' && !opts?.internal) {
+      const verdict = screenBashCommand(args.command, this.bashGuard)
+      if (!verdict.allowed) {
+        console.warn(`[sandbox] bash guard denied a command in ${this.vmId}: ${verdict.reason}`)
+        return {
+          success: false,
+          data: null,
+          error:
+            `sandbox_bash was refused by the host-side command policy: ${verdict.reason}. ` +
+            'The command was NOT executed. (Advisory guard — adjust the command or the policy.)',
+        }
+      }
     }
     try {
       const result = await target.client.callTool({ name: target.nativeName, arguments: args })
@@ -192,6 +286,12 @@ class DockerMcpTransport implements McpTransport {
 
 export class DockerBackend implements ComputeBackend {
   readonly kind = 'docker' as const
+
+  /** In-flight egress-gateway boots, per profile — two sandboxes with the same
+   *  profile booting concurrently must not race each other into `docker run`
+   *  with the same container name. Mirrors the wake-poll dedupe shape: the
+   *  promise wraps the whole ensure, the next boot joins it. */
+  private readonly gatewayBoots = new Map<string, Promise<void>>()
 
   async boot(rootfs: RootfsId, runtime: RuntimeConfig): Promise<VMHandle> {
     const id = `sbx-${randomUUID().slice(0, 8)}`
@@ -288,12 +388,38 @@ export class DockerBackend implements ComputeBackend {
     if (runtime.cpus) args.push('--cpus', String(runtime.cpus))
     if (runtime.memoryMB) args.push('--memory', `${runtime.memoryMB}m`)
 
-    // Egress. v0: mcp-only ⇒ no network at all (in-VM MCP is reached over the
-    // docker-exec stdio pipe, which does NOT require container networking).
-    // Anything else leaves the default bridge network in place. Finer egress
-    // profiles (pypi / github-trusted) are later work.
-    if ((runtime.egress ?? 'mcp-only') === 'mcp-only') {
+    // Kernel/container hardening (#116): every sandbox starts with no
+    // capabilities, a read-only rootfs, RAM-backed writable /work + /tmp, a
+    // pid ceiling and no-new-privileges. See hardeningArgs() for the knobs.
+    args.push(...hardeningArgs())
+
+    // Egress enforcement (#116). mcp-only ⇒ no network at all (in-VM MCP is
+    // reached over the docker-exec stdio pipe, which does NOT require
+    // container networking). pypi / github-trusted ⇒ internal-only network
+    // + allowlist CONNECT proxy (see egress-policy.ts). open ⇒ the default
+    // bridge, unrestricted by design. An UNKNOWN profile fails CLOSED to no
+    // network — an unrecognized name must never mean "unrestricted".
+    const egress = runtime.egress ?? 'mcp-only'
+    if (!isEgressProfile(egress)) {
+      console.warn(
+        `[sandbox] unknown egress profile ${JSON.stringify(egress)} for ${id}: ` +
+          'failing closed to no network (mcp-only)',
+      )
       args.push('--network', 'none')
+    } else if (egress === 'mcp-only') {
+      args.push('--network', 'none')
+    } else {
+      if (isProxiedProfile(egress)) {
+        await this.ensureEgressGateway(egress)
+        args.push(
+          '--network',
+          egressNetworkName(egress),
+          ...proxyEnvArgs(egress, readIntEnv('SANDBOX_EGRESS_PROXY_PORT', 3128)),
+        )
+      }
+      // `open` keeps the default bridge — no proxy, no audit, by design.
+      // Any networked profile gets the shared wheel-cache volume.
+      args.push(...cacheVolumeArgs())
     }
 
     // Label so orphaned sandboxes are findable/reapable.
@@ -305,6 +431,101 @@ export class DockerBackend implements ComputeBackend {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new SandboxBootError(`boot failed for ${id} (${image}): ${msg}`)
+    }
+  }
+
+  /**
+   * Ensure the per-profile egress gateway exists and is reachable from its
+   * internal network: an allowlist CONNECT proxy (rootfs/egress-proxy)
+   * running beside the sandboxes (see egress-policy.ts for why this is
+   * enforcement, not decoration). Idempotent — the steady-state boot pays two
+   * `docker inspect` calls; a missing network/gateway is created on demand.
+   * Failure is LOUD: a sandbox that would otherwise have network without its
+   * proxy is a worse outcome than a failed boot, so errors here surface as
+   * SandboxBootError and the turn fails (#116 egress bullet).
+   *
+   * Gateway containers are labelled `kg-sandbox=1`, so a crashed harness's
+   * leftover is reaped by `reapOrphans` at the next process start and lazily
+   * rebuilt here. They are NOT destroyed by `destroy()` — they outlive any
+   * one sandbox and hold no per-session state.
+   */
+  private async ensureEgressGateway(profile: 'pypi' | 'github-trusted'): Promise<void> {
+    const inflight = this.gatewayBoots.get(profile)
+    if (inflight) return inflight
+    const boot = this.doEnsureEgressGateway(profile).finally(() => {
+      this.gatewayBoots.delete(profile)
+    })
+    this.gatewayBoots.set(profile, boot)
+    return boot
+  }
+
+  private async doEnsureEgressGateway(profile: 'pypi' | 'github-trusted'): Promise<void> {
+    const net = egressNetworkName(profile)
+    const gw = egressGatewayName(profile)
+    try {
+      await docker(['network', 'inspect', net])
+    } catch {
+      // --internal: no external route for attached containers — the proxy is
+      // the ONLY way out, which is what makes the allowlist enforced.
+      await docker(['network', 'create', '--internal', net])
+    }
+    const running = await docker(['inspect', '-f', '{{.State.Running}}', gw]).catch(() => 'false')
+    if (running !== 'true') {
+      await docker(['rm', '-f', gw]).catch(() => {
+        /* not there yet — the run below creates it */
+      })
+      const allowlist = egressAllowlist(profile, process.env)
+      const port = readIntEnv('SANDBOX_EGRESS_PROXY_PORT', 3128)
+      const gwArgs = [
+        'run',
+        '-d',
+        '--rm',
+        '--name',
+        gw,
+        '--label',
+        'kg-sandbox=1',
+        '--label',
+        `kg-sandbox-egress=${profile}`,
+        ...hardeningArgs(),
+        // The image's ENTRYPOINT is init.sh — without this the proxy argv
+        // would be handed to init.sh as arguments ("unknown command 'node'"),
+        // the container dies instantly and the boot races its own --rm cleanup.
+        // The entrypoint is `node` itself, so the argv after the image is the
+        // SCRIPT PATH directly — not `node <script>`, which would make the
+        // container run `node node <script>` and exit 1 (caught live, not by
+        // the argv tests — they can't prove the argv is a valid invocation).
+        '--entrypoint',
+        'node',
+        SANDBOX_IMAGE,
+        '/opt/mcp/egress-proxy/proxy.mjs',
+        '--port',
+        String(port),
+        ...allowlist.flatMap((host) => ['--host', host]),
+      ]
+      try {
+        await docker(gwArgs)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        throw new SandboxBootError(
+          `egress gateway boot failed for ${profile} (${gw}): ${msg} — refusing to start a ` +
+            `networked sandbox without its allowlist proxy`,
+        )
+      }
+    }
+    // Attach the gateway to the internal network. It already runs on the
+    // default bridge (its own external reach); this is the sandbox-facing
+    // side. "Already connected" is the idempotent steady state; any other
+    // failure is a real boot failure.
+    try {
+      await docker(['network', 'connect', net, gw])
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (!/already/i.test(msg)) {
+        throw new SandboxBootError(
+          `egress gateway ${gw} could not join ${net}: ${msg} — refusing to start a ` +
+            `networked sandbox without its allowlist proxy`,
+        )
+      }
     }
   }
 }

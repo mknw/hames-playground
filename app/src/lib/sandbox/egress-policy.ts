@@ -13,9 +13,9 @@
  * clients (uv, pip, curl, git) honour those vars and are filtered by host;
  * anything that ignores them has no route out at all. Fail-closed by
  * construction — the allowlist is the network topology, not a request
- * header. Residual leak: DNS *resolution* still works on an internal
- * network (name lookups are answered; connections are not routed), which
- * reveals that a hostname exists, nothing more.
+ * header. Residual leak: DNS *resolution* may still resolve depending on
+ * the host's docker DNS behaviour; connections are not routed — at most
+ * this reveals that a hostname exists.
  *
  * `open` is deliberately unproxied — no enforcement and no audit, because
  * there is no chokepoint to log at. An unknown profile fails CLOSED to

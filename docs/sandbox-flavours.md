@@ -194,8 +194,9 @@ stay deferred below. What shipped:
   runtime fails CLOSED to no network.
 
 Known edges, stated rather than implied: `open` has no audit trail (no
-chokepoint to log at); DNS _resolution_ still works on an internal network
-(reveals that a hostname exists — connections are not routed); the proxy
+chokepoint to log at); DNS _resolution_ may still resolve depending on the
+host's docker DNS behaviour (at most this reveals that a hostname exists —
+connections are not routed); the proxy
 tunnels HTTPS CONNECT only (plain-HTTP proxying is denied 405); and the
 interactive terminal (`PtyManager`, `docker exec -it bash`) is a human-driven
 path outside the `sandbox_bash` tool surface, so the command guard does not

@@ -109,12 +109,24 @@ describe('createProxyServer — CONNECT tunneling', () => {
     const upstreamPort = await listen(upstream)
     const { port, audit } = await startProxy(['127.0.0.1'])
 
-    const { statusLine, socket } = await connect(port, `127.0.0.1:${upstreamPort}`)
-    expect(statusLine).toBe('HTTP/1.1 200 Connection Established')
-    const first = await new Promise<string>((resolve) =>
-      socket.once('data', (d: Buffer) => resolve(d.toString())),
-    )
-    expect(first).toBe('HELLO-FROM-UPSTREAM')
+    const socket = net.connect(port, '127.0.0.1', () => {
+      socket.write(
+        `CONNECT 127.0.0.1:${upstreamPort} HTTP/1.1\r\nHost: 127.0.0.1:${upstreamPort}\r\n\r\n`,
+      )
+    })
+    // The 200 response and the upstream's first bytes can coalesce into ONE read
+    // (observed on ubuntu CI): accumulate until the payload arrives, then assert
+    // both frames from the same buffer.
+    const first = await new Promise<string>((resolve, reject) => {
+      let buf = ''
+      socket.on('data', (d: Buffer) => {
+        buf += d.toString()
+        if (buf.includes('HELLO-FROM-UPSTREAM')) resolve(buf)
+      })
+      socket.once('error', reject)
+    })
+    expect(first).toContain('HTTP/1.1 200 Connection Established')
+    expect(first).toContain('HELLO-FROM-UPSTREAM')
     socket.destroy()
 
     // The allowed connection is in the audit trail.

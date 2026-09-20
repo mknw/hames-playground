@@ -49,7 +49,7 @@ async function streamPty(
     const syncWorkspace = agentId
       ? await agentUsesSyncWorkspace(agentId, sessionId).catch(() => false)
       : false
-    await ptyManager.ensure(sessionId, { syncWorkspace })
+    await ptyManager.ensure(sessionId, { syncWorkspace, tenantId: userId })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return new Response(`failed to start sandbox terminal: ${msg}`, { status: 500 })

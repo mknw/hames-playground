@@ -48,6 +48,17 @@ export interface RuntimeConfig {
    * "unrestricted".
    */
   egress?: 'mcp-only' | 'pypi' | 'github-trusted' | 'open'
+  /**
+   * Tenant identity (multi-user isolation, docs/plan/sandbox.md → "Tenant
+   * identity seam"). Resolved SERVER-SIDE from the conversation's owner —
+   * never accepted from client input; `'default'` when there is no
+   * authenticated user (single-operator dev). It is the user's own id
+   * (`users.id`), NOT `users.tid`, which names the Entra organisation. The
+   * backend derives resource names from it — today the per-tenant `/cache`
+   * volume — so a non-default tenant never shares a writable volume with
+   * another tenant. Nothing persists it beyond `native.runtime`.
+   */
+  tenantId?: string
 }
 
 // ============================================================================

@@ -19,13 +19,16 @@
 
 import { getNeo4jDriver } from './client'
 import { getAuthenticatedUser } from '../auth/server'
-import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
+import { isBypassEnabled } from '../auth/dev-bypass'
 
-// Auth helper (mirrors actions.server.ts:58)
-async function requireUserId(): Promise<string> {
-  if (isBypassEnabled()) return BYPASS_USER.id
-  const u = await getAuthenticatedUser()
-  return u.id
+// Auth gate (mirrors actions.server.ts:58). GATE-ONLY by construction (#225
+// PR-C1): it returns `Promise<void>`, so it cannot hand out an identity — the
+// id it used to return was discarded by every caller, and a gate that returns
+// the identity it checked invites a future caller to use it as authorization.
+// The shape is pinned by `auth-gate-shape.test.ts`.
+async function requireAuthenticated(): Promise<void> {
+  if (isBypassEnabled()) return
+  await getAuthenticatedUser()
 }
 
 // Labels, relationship types and property keys cannot be Cypher parameters,
@@ -79,7 +82,7 @@ export async function createGraphNode(
   name: string,
   description?: string,
 ): Promise<string> {
-  await requireUserId()
+  await requireAuthenticated()
   const safeLabel = assertSafeIdentifier('label', label)
   if (description) {
     const result = await run(
@@ -103,7 +106,7 @@ export async function linkGraphNodes(
   targetId: string,
   relType: string,
 ): Promise<void> {
-  await requireUserId()
+  await requireAuthenticated()
   const safeType = assertSafeIdentifier('relationship type', relType)
   const result = await run(
     `MATCH (a), (b) WHERE elementId(a) = $sourceId AND elementId(b) = $targetId MERGE (a)-[:\`${safeType}\`]->(b) RETURN count(*) AS linked`,
@@ -120,7 +123,7 @@ export async function setGraphNodeProperty(
   key: string,
   value: string,
 ): Promise<void> {
-  await requireUserId()
+  await requireAuthenticated()
   const safeKey = assertSafeIdentifier('property key', key)
   const result = await run(
     `MATCH (n) WHERE elementId(n) = $nodeId SET n.\`${safeKey}\` = $value RETURN count(n) AS matched`,

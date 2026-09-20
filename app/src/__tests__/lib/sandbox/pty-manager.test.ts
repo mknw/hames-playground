@@ -173,6 +173,31 @@ describe('PtyManager.ensure — hydrate on first boot (#97 Gap 3)', () => {
     expect(mocks.acquireMock).toHaveBeenCalledTimes(1)
   })
 
+  it('scopes the boot runtime to the route-supplied tenant (per-tenant cache volume, Lane A)', async () => {
+    // The Shell path boots through a DIRECT attachments.acquire, so the tenant
+    // must reach acquire's runtime here — otherwise the PTY is the one boot
+    // path a per-tenant /cache volume cannot reach.
+    const mgr = new PtyManager()
+    await mgr.ensure('s1', { tenantId: 'user-42' })
+
+    expect(mocks.acquireMock).toHaveBeenCalledWith(
+      's1',
+      'base',
+      expect.objectContaining({ tenantId: 'user-42' }),
+    )
+  })
+
+  it("defaults the tenant to 'default' when the route supplies none (single-operator keeps the warm cache)", async () => {
+    const mgr = new PtyManager()
+    await mgr.ensure('s1')
+
+    expect(mocks.acquireMock).toHaveBeenCalledWith(
+      's1',
+      'base',
+      expect.objectContaining({ tenantId: 'default' }),
+    )
+  })
+
   it('reports no shell for an unknown session', () => {
     expect(new PtyManager().has('nope')).toBe(false)
   })

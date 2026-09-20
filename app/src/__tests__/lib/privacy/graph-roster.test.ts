@@ -35,34 +35,34 @@ const names = (payload: unknown): (string | null)[] => extractRoster(payload).ma
 describe('extractRoster — raw Graph resources', () => {
   it('finds every party on a message, from all five recipient-ish fields', () => {
     expect(addresses(graphMessage).sort()).toEqual([
-      'jan.vandamme@dtsc.be',
+      'jan.vandamme@contoso.com',
       'jose.muller@partner.example',
-      'michael.accetto@dtsc.be',
-      'sofie.vermeulen@dtsc.be',
+      'michael.verstraete@contoso.com',
+      'sofie.vermeulen@contoso.com',
     ])
   })
 
   it('records which labelled field each identity came from', () => {
     const roster = extractRoster(graphMessage)
-    const jan = roster.find((e) => e.address === 'jan.vandamme@dtsc.be')
+    const jan = roster.find((e) => e.address === 'jan.vandamme@contoso.com')
     expect(jan?.roles).toEqual(expect.arrayContaining(['from', 'sender', 'replyTo']))
-    const sofie = roster.find((e) => e.address === 'sofie.vermeulen@dtsc.be')
+    const sofie = roster.find((e) => e.address === 'sofie.vermeulen@contoso.com')
     expect(sofie?.roles).toEqual(['toRecipients'])
   })
 
   it('dedupes one person across fields case-insensitively', () => {
     // `from` says jan.vandamme@…, `sender` says Jan.VanDamme@… — one person.
     const roster = extractRoster(graphMessage)
-    expect(roster.filter((e) => e.address?.toLowerCase() === 'jan.vandamme@dtsc.be')).toHaveLength(
-      1,
-    )
+    expect(
+      roster.filter((e) => e.address?.toLowerCase() === 'jan.vandamme@contoso.com'),
+    ).toHaveLength(1)
   })
 
   it('reads organizer and attendees off an event', () => {
     expect(addresses(graphEvent).sort()).toEqual([
-      'jan.vandamme@dtsc.be',
-      'michael.accetto@dtsc.be',
-      'sofie.vermeulen@dtsc.be',
+      'jan.vandamme@contoso.com',
+      'michael.verstraete@contoso.com',
+      'sofie.vermeulen@contoso.com',
     ])
   })
 
@@ -72,7 +72,7 @@ describe('extractRoster — raw Graph resources', () => {
     // fact for nothing.
     const roster = extractRoster(graphEvent)
     expect(roster.map((e) => e.name)).not.toContain('Vergaderzaal Brussel')
-    expect(addresses(graphEvent)).not.toContain('zaal.brussel@dtsc.be')
+    expect(addresses(graphEvent)).not.toContain('zaal.brussel@contoso.com')
   })
 
   it('does NOT invent a person from a bare displayName (location, site, room)', () => {
@@ -84,24 +84,24 @@ describe('extractRoster — raw Graph resources', () => {
   it('reads createdBy / lastModifiedBy / shared.sharedBy off a driveItem', () => {
     const roster = extractRoster(graphDriveItem)
     expect(addresses(graphDriveItem).sort()).toEqual([
-      'jan.vandamme@dtsc.be',
-      'sofie.vermeulen@dtsc.be',
+      'jan.vandamme@contoso.com',
+      'sofie.vermeulen@contoso.com',
     ])
-    const jan = roster.find((e) => e.address === 'jan.vandamme@dtsc.be')
+    const jan = roster.find((e) => e.address === 'jan.vandamme@contoso.com')
     expect(jan?.roles).toEqual(expect.arrayContaining(['createdBy', 'sharedBy']))
   })
 
   it('keeps a person resource whose address hides in scoredEmailAddresses', () => {
     const [jan] = extractRoster(graphPerson)
     expect(jan.name).toBe('Jan Van Damme')
-    expect(jan.address).toBe('jan.vandamme@dtsc.be')
+    expect(jan.address).toBe('jan.vandamme@contoso.com')
     // givenName / surname arrive as extra spellings of the same identity.
     expect(jan.nameVariants).toEqual(['Jan Van Damme', 'Jan', 'Van Damme'])
   })
 
   it('finds chatMessage identities under from.user and mentions[].mentioned.user', () => {
     const roster = extractRoster(graphChatMessage)
-    expect(roster.map((e) => e.name).sort()).toEqual(['Michael Accetto', 'Sofie Vermeulen'])
+    expect(roster.map((e) => e.name).sort()).toEqual(['Michael Verstraete', 'Sofie Vermeulen'])
     // No address anywhere on a chatMessage identity — name-only is still an
     // identity.
     expect(roster.every((e) => e.address === null)).toBe(true)
@@ -109,10 +109,10 @@ describe('extractRoster — raw Graph resources', () => {
 
   it('keeps an email-only identity that carries no name', () => {
     const roster = extractRoster({
-      from: { emailAddress: { address: 'noreply@dtsc.be' } },
+      from: { emailAddress: { address: 'noreply@contoso.com' } },
     })
     expect(roster).toEqual([
-      { name: null, address: 'noreply@dtsc.be', nameVariants: [], roles: ['from'] },
+      { name: null, address: 'noreply@contoso.com', nameVariants: [], roles: ['from'] },
     ])
   })
 })
@@ -121,7 +121,7 @@ describe('extractRoster — the app’s compact projections', () => {
   it('reads the flattened `from` string of shapeMessages, name or address', () => {
     const roster = extractRoster(compactMailResult)
     expect(roster.map((e) => e.name ?? e.address)).toEqual([
-      'sofie.vermeulen@dtsc.be',
+      'sofie.vermeulen@contoso.com',
       'Jan Van Damme',
     ])
     expect(roster.map((e) => e.roles)).toEqual([['from'], ['from']])
@@ -141,9 +141,9 @@ describe('extractRoster — the app’s compact projections', () => {
 
   it('reads the flat graph_me projection, keeping givenName and surname', () => {
     const [me] = extractRoster(compactMeResult)
-    expect(me.name).toBe('Michael Accetto')
-    expect(me.address).toBe('michael.accetto@dtsc.be')
-    expect(me.nameVariants).toEqual(['Michael Accetto', 'Michael', 'Accetto'])
+    expect(me.name).toBe('Michael Verstraete')
+    expect(me.address).toBe('michael.verstraete@contoso.com')
+    expect(me.nameVariants).toEqual(['Michael Verstraete', 'Michael', 'Verstraete'])
   })
 
   it('finds identities at any depth, not just in known top-level keys', () => {
@@ -154,7 +154,7 @@ describe('extractRoster — the app’s compact projections', () => {
       threads: [
         {
           participants: [
-            { emailAddress: { name: 'Sofie Vermeulen', address: 'sofie.vermeulen@dtsc.be' } },
+            { emailAddress: { name: 'Sofie Vermeulen', address: 'sofie.vermeulen@contoso.com' } },
           ],
           latest: { author: 'Jan Van Damme' },
         },
@@ -170,7 +170,7 @@ describe('extractRoster — the app’s compact projections', () => {
 describe('extractRoster — merging and edge cases', () => {
   it('merges a name-only mention into the addressed identity it matches', () => {
     const payload = {
-      from: { emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@dtsc.be' } },
+      from: { emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@contoso.com' } },
       organizer: 'Jan Van Damme',
     }
     const roster = extractRoster(payload)
@@ -180,8 +180,10 @@ describe('extractRoster — merging and edge cases', () => {
 
   it('keeps a second spelling of the same address as a name variant', () => {
     const payload = {
-      from: { emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@dtsc.be' } },
-      toRecipients: [{ emailAddress: { name: 'J. Van Damme', address: 'JAN.VANDAMME@dtsc.be' } }],
+      from: { emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@contoso.com' } },
+      toRecipients: [
+        { emailAddress: { name: 'J. Van Damme', address: 'JAN.VANDAMME@contoso.com' } },
+      ],
     }
     const [jan] = extractRoster(payload)
     expect(jan.nameVariants).toEqual(['Jan Van Damme', 'J. Van Damme'])
@@ -200,7 +202,7 @@ describe('extractRoster — merging and edge cases', () => {
     // THE KNOWN LIMITATION, stated at its source. `bodyPreview` names three
     // people; only the one Graph labelled in `from` is found.
     const roster = extractRoster({
-      from: { emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@dtsc.be' } },
+      from: { emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@contoso.com' } },
       bodyPreview: 'Ik sprak gisteren met Karel Peeters en met Fatima Benali over de offerte.',
     })
     expect(roster.map((e) => e.name)).toEqual(['Jan Van Damme'])

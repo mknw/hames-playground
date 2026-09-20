@@ -380,17 +380,17 @@ describe('an action that omits is_final', () => {
   // Verbatim from the failing call (issue #159).
   const OMITTED_IS_FINAL = JSON.stringify({
     reasoning:
-      'I need to find what Denis Budin shared with the signed-in user. The graph_files_shared tool with shared_by filter is exactly for this.',
+      'I need to find what Denis Verlinden shared with the signed-in user. The graph_files_shared tool with shared_by filter is exactly for this.',
     tool_name: 'graph_files_shared',
-    tool_args: '{"shared_by": "Denis Budin"}',
-    status: 'Checking what Denis Budin has shared with you...',
+    tool_args: '{"shared_by": "Denis Verlinden"}',
+    status: 'Checking what Denis Verlinden has shared with you...',
   })
 
   it('LoopController parses it instead of discarding the turn', () => {
     const action = b.parse.LoopController(OMITTED_IS_FINAL)
     expect(action.tool_name).toBe('graph_files_shared')
-    expect(JSON.parse(action.tool_args)).toEqual({ shared_by: 'Denis Budin' })
-    expect(action.status).toBe('Checking what Denis Budin has shared with you...')
+    expect(JSON.parse(action.tool_args)).toEqual({ shared_by: 'Denis Verlinden' })
+    expect(action.status).toBe('Checking what Denis Verlinden has shared with you...')
     // Absent in the response — the pattern, not the parser, supplies the default.
     expect(action.is_final ?? null).toBeNull()
   })
@@ -399,7 +399,7 @@ describe('an action that omits is_final', () => {
     const action = normalizeControllerAction(b.parse.LoopController(OMITTED_IS_FINAL))
     expect(action.is_final).toBe(false)
     expect(action.tool_name).toBe('graph_files_shared')
-    expect(action.status).toBe('Checking what Denis Budin has shared with you...')
+    expect(action.status).toBe('Checking what Denis Verlinden has shared with you...')
   })
 
   it('the normalised turn executes rather than terminating the loop', () => {

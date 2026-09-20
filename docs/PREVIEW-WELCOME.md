@@ -12,10 +12,10 @@ message. It is short, and it is the part that should change how you use this.
 ## Signing in
 
 Go to the address you were sent and click **Sign in with Microsoft**. Use your
-normal `@dtsc.be` work account — there is no separate password.
+normal `@contoso.com` work account — there is no separate password.
 
-Access is restricted twice over: the sign-in only accepts accounts in the DTSC
-tenant, and on top of that only addresses on an explicit list get a session.
+Access is restricted twice over: the sign-in only accepts accounts in the
+company tenant, and on top of that only addresses on an explicit list get a session.
 If you land on a page saying access is denied, you are signed in to Microsoft
 correctly but your address is not on the list yet — say so and it can be added.
 
@@ -125,11 +125,11 @@ include, none of them mandatory:
 
 Anything you would rather not make public — the actual text of a conversation,
 a screenshot you are unsure about, anything involving a client or a colleague —
-send directly to Michael instead. That is the normal route, not the exception.
+send directly to the owner instead. That is the normal route, not the exception.
 
 **If something looks like a security or privacy problem** — you can see someone
 else's conversation, the assistant returns data you should not have access to,
-an address outside `@dtsc.be` gets in — do not open a public issue. Say so
+an address outside `@contoso.com` gets in — do not open a public issue. Say so
 directly and immediately.
 
 ## What to expect

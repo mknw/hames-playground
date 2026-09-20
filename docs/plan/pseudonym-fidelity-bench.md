@@ -229,10 +229,10 @@ input, and the ids still come through intact:
 **5 — Dutch, placeholder inside a URL path.** The model reproduced a
 SharePoint personal-site slug it could not possibly have parsed as a name:
 
-> - **Link:** https://dtsc-my.sharepoint.com/personal/PERSON_3_SLUG/Documents/Offertes/Offerte%20Van%20⟨FAMILY⟩%202026.docx
+> - **Link:** https://contoso-my.sharepoint.com/personal/PERSON_3_SLUG/Documents/Offertes/Offerte%20Van%20⟨FAMILY⟩%202026.docx
 
 That last excerpt also carries an **incidental finding about `apply`, not about
-the model**: the `_SLUG` form (`jan_vandamme_dtsc_be`) is substituted, but the
+the model**: the `_SLUG` form (`jan_vandamme_contoso_com`) is substituted, but the
 **percent-encoded** copy of the same surname in the URL _path_
 (`Offerte%20Van%20…%202026.docx`) is not — `%20` breaks the literal, so the
 needle never matches. The un-encoded `name` field of the same driveItem _is_
@@ -289,7 +289,7 @@ Stated plainly, because the result is clean enough to be over-read.
    tool argument_ from a placeholder — the reversal problem open question 1
    raises for the prompt seam — is a different and harder test that this bench
    does not attempt.
-3. **Fictional fixtures.** 11 payloads, invented names on `dtsc.be` /
+3. **Fictional fixtures.** 11 payloads, invented names on `contoso.com` /
    `partner.example`. Real mailboxes have more people per payload, more name
    collisions, and quoted reply chains; a larger roster means larger `n`, and
    `PERSON_11` vs `PERSON_1` is a confusion class that never arose here because

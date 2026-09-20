@@ -48,13 +48,13 @@ import { type GraphMailAttachmentsResult } from '../../../lib/app-tools/graph.se
 function message(
   subject: string,
   to: Array<{ name: string; address: string }>,
-  fromName = 'Michael Accetto',
+  fromName = 'Michael Verstraete',
   attachments: Array<{ name: string; size?: number }> = [{ name: `${subject}.pdf`, size: 100 }],
 ) {
   return {
     subject,
     toRecipients: to.map((t) => ({ emailAddress: t })),
-    from: { emailAddress: { name: fromName, address: 'michael.accetto@dtsc.be' } },
+    from: { emailAddress: { name: fromName, address: 'michael.verstraete@contoso.com' } },
     sentDateTime: '2026-07-09T09:00:00Z',
     receivedDateTime: '2026-07-09T09:00:01Z',
     webLink: 'https://outlook.office365.com/owa/?ItemID=abc',
@@ -66,8 +66,8 @@ function message(
   }
 }
 
-const THIBAULT = { name: 'Thibault Draye', address: 'thibault.draye@dtsc.be' }
-const MARCO = { name: 'Marco Di Gennaro', address: 'marco@dtsc.be' }
+const THIBAULT = { name: 'Thibault Desmet', address: 'thibault.desmet@contoso.com' }
+const MARCO = { name: 'Marco Di Rienzo', address: 'marco@contoso.com' }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -121,12 +121,12 @@ describe('graph_mail_attachments', () => {
 
   it('direction=received reads the inbox and reports the sender as `with`', async () => {
     graphFetch.mockResolvedValue({
-      value: [message('Invoice', [{ name: 'Me', address: 'me@dtsc.be' }], 'Thibault Draye')],
+      value: [message('Invoice', [{ name: 'Me', address: 'me@contoso.com' }], 'Thibault Desmet')],
     })
     const res = await runAppTool('graph_mail_attachments', { direction: 'received' })
     expect(lastPath()).toContain('/me/mailFolders/inbox/messages')
     const data = res.data as GraphMailAttachmentsResult
-    expect(data.messages[0].with).toEqual(['Thibault Draye'])
+    expect(data.messages[0].with).toEqual(['Thibault Desmet'])
   })
 
   it('person filters sent mail by recipient — first name, any position in the To line', async () => {
@@ -169,7 +169,7 @@ describe('graph_mail_attachments', () => {
 
   it('drops messages whose attachments turn out empty (inline-image false positives)', async () => {
     graphFetch.mockResolvedValue({
-      value: [message('Signature only', [THIBAULT], 'Michael Accetto', [])],
+      value: [message('Signature only', [THIBAULT], 'Michael Verstraete', [])],
     })
     const res = await runAppTool('graph_mail_attachments', {})
     expect((res.data as GraphMailAttachmentsResult).messages).toEqual([])

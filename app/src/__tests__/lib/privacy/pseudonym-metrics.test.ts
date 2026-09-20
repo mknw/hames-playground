@@ -31,8 +31,8 @@ const person = (
 /** Two named people with addresses, plus one known only by address — the third
  *  is what makes the bare-`PERSON_3` case in `mintedPlaceholders` real. */
 const table: PseudonymTable = buildTable([
-  person('Jan Van Damme', 'jan.vandamme@dtsc.be', ['from']),
-  person('Sofie Vermeulen', 'sofie.vermeulen@dtsc.be', ['toRecipients']),
+  person('Jan Van Damme', 'jan.vandamme@contoso.com', ['from']),
+  person('Sofie Vermeulen', 'sofie.vermeulen@contoso.com', ['toRecipients']),
   person(null, 'noreply@partner.example', ['ccRecipients']),
 ])
 

@@ -51,23 +51,23 @@ describe('buildTable', () => {
     expect(me.placeholder).toBe('PERSON_1')
     expect(me.forms).toEqual(
       expect.arrayContaining([
-        { value: 'Michael Accetto', placeholder: 'PERSON_1', kind: 'name', part: false },
+        { value: 'Michael Verstraete', placeholder: 'PERSON_1', kind: 'name', part: false },
         { value: 'Michael', placeholder: 'PERSON_1_NAME2', kind: 'name-variant', part: false },
-        { value: 'Accetto', placeholder: 'PERSON_1_NAME3', kind: 'name-variant', part: false },
+        { value: 'Verstraete', placeholder: 'PERSON_1_NAME3', kind: 'name-variant', part: false },
         {
-          value: 'michael.accetto@dtsc.be',
+          value: 'michael.verstraete@contoso.com',
           placeholder: 'PERSON_1_EMAIL',
           kind: 'email',
           part: false,
         },
         {
-          value: 'michael_accetto_dtsc_be',
+          value: 'michael_verstraete_contoso_com',
           placeholder: 'PERSON_1_SLUG',
           kind: 'email-slug',
           part: false,
         },
         {
-          value: 'michael.accetto',
+          value: 'michael.verstraete',
           placeholder: 'PERSON_1_LOCAL',
           kind: 'email-local',
           part: false,
@@ -93,8 +93,8 @@ describe('buildTable', () => {
 
   it('gives a shared first name to the first claimant rather than splitting it', () => {
     const table = tableFor({
-      from: { emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@dtsc.be' } },
-      toRecipients: [{ emailAddress: { name: 'Jan Peeters', address: 'jan.peeters@dtsc.be' } }],
+      from: { emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@contoso.com' } },
+      toRecipients: [{ emailAddress: { name: 'Jan Peeters', address: 'jan.peeters@contoso.com' } }],
     })
     const owners = table.entries.filter((e) => e.forms.some((f) => f.value === 'Jan'))
     expect(owners).toHaveLength(1)
@@ -112,7 +112,7 @@ describe('buildTable', () => {
 describe('apply — structured fields', () => {
   it('replaces the labelled identity fields of a raw message', () => {
     const { clean, table } = scrub(graphMessage)
-    const jan = table.entries.find((e) => e.address === 'jan.vandamme@dtsc.be')!
+    const jan = table.entries.find((e) => e.address === 'jan.vandamme@contoso.com')!
     expect(clean.from.emailAddress).toEqual({
       name: jan.placeholder,
       address: `${jan.placeholder}_EMAIL`,
@@ -200,7 +200,7 @@ describe('apply — free text', () => {
 
   it('catches a person who is a labelled sender AND a bare first name in the body', () => {
     const { clean } = scrub({
-      from: { emailAddress: { name: 'Sofie Vermeulen', address: 'sofie.vermeulen@dtsc.be' } },
+      from: { emailAddress: { name: 'Sofie Vermeulen', address: 'sofie.vermeulen@contoso.com' } },
       subject: 'Vraagje van Sofie',
       bodyPreview: 'Sofie belt je morgen over de offerte. Groeten, Sofie Vermeulen',
     })
@@ -233,12 +233,14 @@ describe('apply — free text', () => {
 
 describe('apply — matching hazards', () => {
   const janTable = tableFor({
-    from: { emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@dtsc.be' } },
+    from: { emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@contoso.com' } },
   })
 
   it('does not chew a longer word that starts with a name', () => {
     const table = tableFor({
-      from: { emailAddress: { name: 'Michael Accetto', address: 'michael.accetto@dtsc.be' } },
+      from: {
+        emailAddress: { name: 'Michael Verstraete', address: 'michael.verstraete@contoso.com' },
+      },
     })
     expect(apply({ t: 'Michaelson belde, niet Michael.' }, table).t).toBe(
       'Michaelson belde, niet PERSON_1_GIVEN.',
@@ -260,7 +262,7 @@ describe('apply — matching hazards', () => {
   it('prefers the longest identity when several match at one position', () => {
     expect(apply({ t: 'Jan Van Damme en Jan' }, janTable).t).toBe('PERSON_1 en PERSON_1_GIVEN')
     // The address contains both the first name and the surname; it wins whole.
-    expect(apply({ t: 'mail: jan.vandamme@dtsc.be' }, janTable).t).toBe('mail: PERSON_1_EMAIL')
+    expect(apply({ t: 'mail: jan.vandamme@contoso.com' }, janTable).t).toBe('mail: PERSON_1_EMAIL')
   })
 
   it('does not take the head off a compound given name', () => {
@@ -270,9 +272,9 @@ describe('apply — matching hazards', () => {
 
   it('matches case-insensitively, and restores the roster’s spelling', () => {
     const { clean, table } = scrub(graphMessage)
-    // `sender` carries "Jan.VanDamme@dtsc.be"; `from` carried it lowercase.
+    // `sender` carries "Jan.VanDamme@contoso.com"; `from` carried it lowercase.
     expect(clean.sender.emailAddress.address).toBe('PERSON_1_EMAIL')
-    expect(reverse(clean.sender.emailAddress.address, table)).toBe('jan.vandamme@dtsc.be')
+    expect(reverse(clean.sender.emailAddress.address, table)).toBe('jan.vandamme@contoso.com')
   })
 
   it('is idempotent: applying twice changes nothing the second time', () => {
@@ -338,19 +340,19 @@ describe('reverse', () => {
   it('does not confuse PERSON_1 with PERSON_1_EMAIL or PERSON_10', () => {
     const roster = Array.from({ length: 10 }, (_, i) => ({
       name: `Person ${i + 1}`,
-      address: `p${i + 1}@dtsc.be`,
+      address: `p${i + 1}@contoso.com`,
       nameVariants: [`Person ${i + 1}`],
       roles: ['toRecipients'],
     }))
     const table = buildTable(roster)
     expect(reverse('PERSON_1, PERSON_1_EMAIL and PERSON_10', table)).toBe(
-      'Person 1, p1@dtsc.be and Person 10',
+      'Person 1, p1@contoso.com and Person 10',
     )
   })
 
   it('resolves the bare placeholder of a person known only by address', () => {
-    const table = tableFor({ from: { emailAddress: { address: 'noreply@dtsc.be' } } })
-    expect(reverse('PERSON_1 sent it', table)).toBe('noreply@dtsc.be sent it')
+    const table = tableFor({ from: { emailAddress: { address: 'noreply@contoso.com' } } })
+    expect(reverse('PERSON_1 sent it', table)).toBe('noreply@contoso.com sent it')
   })
 
   it('passes through text with no placeholders, and an empty table', () => {
@@ -374,7 +376,7 @@ describe('the known limitation — free-text-only names survive', () => {
     // asserted rather than caveated so that a future change that "fixes" it has
     // to say so out loud. See docs/plan/graph-pseudonymisation.md.
     const { clean } = scrub({
-      from: { emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@dtsc.be' } },
+      from: { emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@contoso.com' } },
       subject: 'Overleg',
       bodyPreview:
         'Jan Van Damme meldt dat Karel Peeters en Fatima Benali morgen langskomen; ' +
@@ -399,7 +401,7 @@ describe('the known limitation — free-text-only names survive', () => {
     const table = tableFor(compactMeResult)
     expect(apply(null, table)).toBeNull()
     expect(apply(42, table)).toBe(42)
-    expect(apply(['Michael Accetto', 7, null], table)).toEqual(['PERSON_1', 7, null])
+    expect(apply(['Michael Verstraete', 7, null], table)).toEqual(['PERSON_1', 7, null])
     expect(apply('', table)).toBe('')
   })
 })

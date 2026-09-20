@@ -1478,7 +1478,7 @@ registerAppTool({
     properties: {
       shared_by: {
         type: 'string',
-        description: 'Only items shared by this person, e.g. "Thibault" or "Thibault Draye".',
+        description: 'Only items shared by this person, e.g. "Jan" or "Jan Van Damme".',
       },
       via: {
         type: 'string',

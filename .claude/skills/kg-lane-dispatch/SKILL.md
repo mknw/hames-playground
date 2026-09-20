@@ -255,26 +255,35 @@ a broad `terminal close` when release returns `release_pending` or
 ## Writing any agent-bound text safely
 
 Every text-carrying Orca flag — `--spec`, `--body`, `--payload` — is written to a file
-with a **quoted** heredoc first, then interpolated once:
+with a **quoted** heredoc first, then interpolated once. The enumeration is illustrative,
+not exhaustive: any flag carrying text takes the same path (`--task-title`, `--subject`,
+`--question`, `--objective` are the same class).
 
 ```bash
-cat > msg.txt <<'XEOF'
+cat > /tmp/msg.txt <<'XEOF'
 ...text, backticks and all...
 XEOF
-orca orchestration task-create --task-title "..." --spec "$(cat msg.txt)"
-orca orchestration send --to <handle> --subject "..." --body "$(cat msg.txt)"
+cat > /tmp/title.txt <<'XEOF'
+...title or subject...
+XEOF
+orca orchestration task-create --task-title "$(cat /tmp/title.txt)" --spec "$(cat /tmp/msg.txt)"
+orca orchestration send --to <handle> --subject "$(cat /tmp/title.txt)" --body "$(cat /tmp/msg.txt)"
 ```
 
 Unconditionally, with no length or content test — applying one is the failure mode. Text
 quoting code contains backticks, and inside double quotes the shell executes them as
 command substitution, silently deleting those terms from what reaches the agent. The
 quoted `<<'XEOF'` delimiter suppresses every expansion inside the heredoc, and
-command-substitution output is not re-scanned, so `"$(cat ...)"` is safe for any content.
+command-substitution output is not re-scanned, so `"$(cat ...)"` delivers the file
+verbatim — any content that does not contain the delimiter as its own line (pick a
+delimiter the payload cannot collide with); `$()` strips the file's trailing newline.
 
 **The receipt lies.** The send returns `ok: true` — the transport succeeded, it simply
-carried text nobody wrote. The only trace is `command not found` on **stderr**, which the
-usual `2>&1 | grep '"ok"'` receipt check filters out of view. So a non-empty stderr on a
-send means the message was mangled: resend from a file with an explicit ERRATUM line
+carried text nobody wrote. One trace is `command not found` on **stderr**, which the
+usual `2>&1 | grep '"ok"'` receipt check filters out of view — but it is one shape, not
+the worst: a fragment that happens to be a valid command substitutes silently, with no
+stderr at all. So a non-empty stderr on a send proves the message was mangled; an empty
+one proves nothing. Either way, resend from a file with an explicit ERRATUM line
 telling the recipient to ignore the earlier copy, rather than assuming they will spot the
 gap in a message that still reads as fluent prose.
 

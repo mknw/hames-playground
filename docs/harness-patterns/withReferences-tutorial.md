@@ -27,10 +27,10 @@ Pick the **Search Agent** in the agent picker, click **+ New Chat**.
 The right panel's **Observability** tab will fill with events as the agent runs. The agent is composed of:
 
 ```
-router → routes({
-  neo4j:      withReferences(neo4jPattern),
-  web_search: withReferences(webPattern),
-}) → compactExecution
+router({ route: baml.router }) → routes({
+  neo4j:      withReferences(neo4jPattern, { selector: baml.selector }),
+  web_search: withReferences(webPattern,   { selector: baml.selector }),
+}) → compactExecution({ synthesize: baml.synthesize })
 ```
 
 See [`app/src/lib/harness-client/agents/search.server.ts`](../../app/src/lib/harness-client/agents/search.server.ts) for the source.
@@ -144,6 +144,7 @@ The `reference_attached` event (which records the selector's decision: candidate
 ```ts
 withReferences(neo4jPattern, {
   scope: 'global',
+  selector: baml.selector,
   trackHistory: 'reference_attached'   // or ['reference_attached', 'tool_call', ...]
 })
 ```

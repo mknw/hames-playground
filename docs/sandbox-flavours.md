@@ -85,10 +85,10 @@ const data = withSandbox({
 })(loop);
 
 return [
-  router({ basic: "…", image_processing: "…", data: "…" }),
+  router({ basic: '…', image_processing: '…', data: '…' }, { route: baml.router }),
   routes({ basic, image_processing: image, data }),
-  compactExecution({ mode: "thread" }),
-];
+  compactExecution({ mode: 'thread', synthesize: baml.synthesize }),
+]
 ```
 
 > **Why the `basic` route is not the ephemeral one any more (#243 follow-up).**

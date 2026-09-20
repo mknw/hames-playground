@@ -929,18 +929,22 @@ const distillHook = hook(distillChain, {
 - `background: true` — schedules the inner pattern via `queueMicrotask` and returns immediately
 - `background: false` (default) — runs synchronously; inner events are wrapped with `pattern_enter` / `pattern_exit`
 
-### `withReferences(pattern, config?)`
+### `withReferences(pattern, config)`
 
 Wrap a pattern so that on entry, an LLM-driven selector picks relevant prior
 `tool_result` events from the visible event stream and attaches them to the
 inner pattern's `priorResults` channel via `scope.data.attachedRefs`. The
 adapter merges these into BAML's `turns_previous_runs` argument — **zero
-controller-prompt changes**.
+controller-prompt changes**. `config` is REQUIRED: the `selector`
+implementation is REQUIRED config (Lane A6 seam) — core hosts no default, so
+the composition root supplies `bamlPatterns().selector` (or its own
+deterministic policy for tests and evals).
 
 ```typescript
 withReferences(simpleLoop(createLoopControllerAdapter(tools.neo4j), tools.neo4j, { schema }), {
   scope: 'global',
   maxRefs: 5,
+  selector: baml.selector,
 })
 ```
 
@@ -951,7 +955,7 @@ withReferences(simpleLoop(createLoopControllerAdapter(tools.neo4j), tools.neo4j,
 | `scope`    | `'self' \| 'global'` | `'global'`                         | `'self'` = only the wrapper's own `patternId`.        |
 | `source`   | `string \| string[]` | —                                  | Explicit `patternId` allow-list. Overrides `scope`.   |
 | `maxRefs`  | `number`             | `5`                                | Cap on attached refs after selection.                 |
-| `selector` | `SelectorFn`         | LLM-driven (`b.ReferenceSelector`) | Override for tests, evals, or deterministic policies. |
+| `selector` | `SelectorFn`         | REQUIRED                           | The BAML-backed one (`bamlPatterns().selector`), or a deterministic policy for tests, evals, or deterministic policies. |
 
 **Skip optimizations** — the selector is bypassed when:
 
@@ -971,27 +975,30 @@ Either path records an `expansions[]` entry on the `LoopTurn`; the compact ref e
 ```typescript
 // Search agent migration (excerpt from agents/search.server.ts)
 const routesPattern = routes<SessionData>({
-  neo4j: withReferences(neo4jPattern, { scope: 'global' }),
-  web_search: withReferences(webPattern, { scope: 'global' }),
+  neo4j: withReferences(neo4jPattern, { scope: 'global', selector: baml.selector }),
+  web_search: withReferences(webPattern, { scope: 'global', selector: baml.selector }),
 })
 ```
 
 ### `compactExecution(config)`
 
 Synthesizes final response from previous pattern's output using BAML `CreateToolResponse`.
+`synthesize` is REQUIRED config (Lane A6 seam): core hosts no default, so the
+composition root supplies `bamlPatterns().synthesize` — or its own
+implementation, which must return `{ value }`.
 
 ```typescript
-compactExecution({ mode: 'thread', patternId: 'response-synth' })
+compactExecution({ mode: 'thread', patternId: 'response-synth', synthesize: baml.synthesize })
 
 // Three modes
-compactExecution({ mode: 'message' }) // Receives only response string
-compactExecution({ mode: 'response' }) // Receives { data, response } object
-compactExecution({ mode: 'thread' }) // Receives full loop history
+compactExecution({ mode: 'message', synthesize: baml.synthesize }) // Receives only response string
+compactExecution({ mode: 'response', synthesize: baml.synthesize }) // Receives { data, response } object
+compactExecution({ mode: 'thread', synthesize: baml.synthesize }) // Receives full loop history
 
 // Custom synthesis function
 compactExecution({
   mode: 'response',
-  synthesize: async (input) => `Found: ${input.response}`,
+  synthesize: async (input) => ({ value: `Found: ${input.response}` }),
 })
 ```
 
@@ -1008,7 +1015,7 @@ so there is **no controller-prompt change**.
 chain(
   compactIntent({ viewConfig: { fromLastNTurns: 5 } }),
   withSandbox({ id: sessionId })(actorCritic(actor, critic, [], { … })),
-  compactExecution({ mode: 'thread' }),
+  compactExecution({ mode: 'thread', synthesize: baml.synthesize }),
 )
 
 type CompactIntentConfig = PatternConfig
@@ -1049,7 +1056,7 @@ from `harness-baml` — the same tool list the pattern gets.
 chain(
   planner(baml.planner(tools.all), tools.all),
   simpleLoop(controller, tools.all),
-  compactExecution({ mode: 'thread' }),
+  compactExecution({ mode: 'thread', synthesize: baml.synthesize }),
 )
 
 interface PlannerConfig extends PatternConfig {
@@ -1196,9 +1203,12 @@ opens at the right place.
 > See [`docs/DATA_STASH.md → Harness-aware ingest`](../../../../docs/DATA_STASH.md)
 > for the upload-side gate and the `redis` / `supabase` backends.
 
-### `router(routeDescriptions, config?)`
+### `router(routeDescriptions, config)`
 
 Classifies intent via BAML and sets `scope.data.route`. The first half of the router/routes pair.
+`config` is REQUIRED: the `route` implementation is REQUIRED config (Lane A6
+seam) — core hosts no default, so the composition root supplies
+`bamlPatterns().router`.
 
 - **Tool needed** → `data.route = <toolName>`, `data.intent`, `data.routerResponse`; tracks optional `assistant_message`
 - **Conversational** → `data.route = 'user'` (the `DIRECT_RESPONSE_ROUTE` sentinel), `data.response = responseText`; tracks `assistant_message` directly; downstream `compactExecution()` skips BAML
@@ -1213,17 +1223,23 @@ conversation — to the dispatched pattern's controller. The router-less
 equivalent is [`compactIntent()`](#compactintentconfig).
 
 ```typescript
-router({
-  neo4j: 'Database queries and graph operations',
-  web_search: 'Web lookups and information retrieval',
-})
+router(
+  {
+    neo4j: 'Database queries and graph operations',
+    web_search: 'Web lookups and information retrieval',
+  },
+  { route: baml.router },
+)
 
 // Custom direct-response sentinel:
-router({ neo4j: '...' }, { directResponseRoute: 'conversational' })
+router({ neo4j: '...' }, { route: baml.router, directResponseRoute: 'conversational' })
 ```
 
 ```typescript
 interface RouterConfig extends PatternConfig {
+  /** REQUIRED: the routing implementation (Lane A6 seam) — the composition
+   *  root supplies `bamlPatterns().router` (routeMessageOp). */
+  route: RouteFn
   directResponseRoute?: string // Default: 'user'
 }
 ```
@@ -1541,6 +1557,7 @@ compactExecution({
 router(
   { neo4j: 'Database queries' },
   {
+    route: baml.router,
     viewConfig: {
       fromLast: false,
       fromLastNTurns: 3,
@@ -1749,7 +1766,8 @@ BAML Return → PlanResult:
 #### router() + routes()
 
 ```
-router() calls routeMessageOp() → BAML-backed intent classifier
+router() calls the REQUIRED `route` seam → BAML-backed intent classifier
+(the composition root passes `bamlPatterns().router` — routeMessageOp)
 
 BAML Inputs:
   message : string         ← most recent user_message content
@@ -1893,11 +1911,11 @@ harness-patterns/                        # CORE — zero baml_client / @boundary
 
 harness-baml/                            # The BAML companion module (Lane A6) — EVERYTHING that touches baml_client lives here
 ├── index.ts                # Public exports (bamlPatterns, adapter factories, routeMessageOp, client/role maps)
-├── baml-patterns.server.ts # bamlPatterns() — the one factory for the six REQUIRED injected fns + the compactIntent/RetrieveQuery adapters
-├── defaults.server.ts      # defaultSynthesize (compactExecution) + defaultSelector (withReferences) — the carried-over optional defaults
+├── baml-patterns.server.ts # bamlPatterns() — the one factory for the eight REQUIRED injected fns (planner, router, compactIntent, retrieveQuery, describe, describeBatch, synthesize, selector) + adapters
+├── defaults.server.ts      # defaultSynthesize (→ bamlPatterns().synthesize) + defaultSelector (→ bamlPatterns().selector) — the composition-root implementations, not pattern defaults
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter (tool list rides ControllerInput.tools — L14), createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, createInjectionScreen
 ├── clients.server.ts       # The role → client maps (CLIENT_BY_ROLE / VERDA_CLIENT_BY_ROLE), clientOverrideFor, limitsFor, the tier ALS — moved byte-for-byte from core (Lane A6/A-i)
-├── routing.server.ts       # routeMessageOp — the router seam's default implementation (with limits())
+├── routing.server.ts       # routeMessageOp — the router seam's composition-root implementation (`bamlPatterns().router`) (with limits())
 ├── baml-version-check.server.ts # Boot-time staleness warning for baml_client (#154)
 └── scripts/                # smoke-verda.ts + smoke-verda-load.ts — the live Verda endpoint checks
 └── patterns/

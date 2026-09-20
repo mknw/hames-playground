@@ -33,8 +33,7 @@ import {
 } from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
-import type { ActorFn } from '../types'
-import type { CriticFnWithLLMData } from '../../../app/src/lib/harness-baml/baml-adapters.server'
+import type { ActorFn, CriticFnWithLLMData } from '../types'
 import { LLMCallError } from '../types'
 import { formatPlanContext, type PlannerData } from './planner.server'
 

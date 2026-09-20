@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { defaultSynthesize } from '../../../../lib/harness-baml/defaults.server'
 
 // Mock server-only imports
 vi.mock('@hames/harness-patterns/assert.server', () => ({
@@ -48,6 +49,7 @@ describe('compactExecution', () => {
     const pattern = compactExecution({
       mode: 'message',
       patternId: 'test-compactExecution',
+      synthesize: defaultSynthesize,
     })
 
     expect(pattern.name).toBe('compactExecution')
@@ -60,7 +62,7 @@ describe('compactExecution', () => {
       const { compactExecution } =
         await import('@hames/harness-patterns/patterns/compactExecution.server')
 
-      const pattern = compactExecution({ mode: 'message' })
+      const pattern = compactExecution({ mode: 'message', synthesize: defaultSynthesize })
       expect(pattern.name).toBe('compactExecution')
     })
 
@@ -68,7 +70,7 @@ describe('compactExecution', () => {
       const { compactExecution } =
         await import('@hames/harness-patterns/patterns/compactExecution.server')
 
-      const pattern = compactExecution({ mode: 'response' })
+      const pattern = compactExecution({ mode: 'response', synthesize: defaultSynthesize })
       expect(pattern.name).toBe('compactExecution')
     })
 
@@ -76,7 +78,7 @@ describe('compactExecution', () => {
       const { compactExecution } =
         await import('@hames/harness-patterns/patterns/compactExecution.server')
 
-      const pattern = compactExecution({ mode: 'thread' })
+      const pattern = compactExecution({ mode: 'thread', synthesize: defaultSynthesize })
       expect(pattern.name).toBe('compactExecution')
     })
   })
@@ -202,10 +204,12 @@ describe('compactExecution execution', () => {
     const { createScope } = await import('@hames/harness-patterns/context.server')
     const { createEventView } = await import('@hames/harness-patterns/patterns')
 
-    // No custom synthesize function — should use defaultSynthesize → b.Synthesize mock
+    // The default synthesis path: defaultSynthesize arrives as explicit
+    // REQUIRED config (the pattern no longer imports it).
     const pattern = compactExecution({
       mode: 'message',
       trackHistory: true,
+      synthesize: defaultSynthesize,
     })
 
     const scope = createScope('test', {})
@@ -766,8 +770,12 @@ describe('compactExecution — context-window trimming regression', () => {
       input: 'Sort nodes by centrality',
     }
 
-    // Default synthesis (no custom fn) → defaultSynthesize → b.Synthesize + trimToFit.
-    const pattern = compactExecution({ mode: 'thread', patternId: 'response-synth' })
+    // Default synthesis (defaultSynthesize as explicit config) → b.Synthesize + trimToFit.
+    const pattern = compactExecution({
+      mode: 'thread',
+      patternId: 'response-synth',
+      synthesize: defaultSynthesize,
+    })
     const scope = createScope('test', {})
     const view = createEventView(mockContext)
 
@@ -994,7 +1002,11 @@ describe('compactExecution synth input fidelity', () => {
       { type: 'pattern_exit', ts: 7, patternId: 'loop', data: { status: 'completed' } },
     ]
 
-    const pattern = compactExecution({ mode: 'thread', patternId: 'synth' })
+    const pattern = compactExecution({
+      mode: 'thread',
+      patternId: 'synth',
+      synthesize: defaultSynthesize,
+    })
     await pattern.fn(createScope('test', {}), createEventView(ctxOf(events)))
 
     const turns = vi.mocked(b.Synthesize).mock.calls[0][2] as Array<{

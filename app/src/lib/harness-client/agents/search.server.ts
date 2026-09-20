@@ -20,7 +20,7 @@ import {
   Tools,
   type ConfiguredPattern,
 } from '@hames/harness-patterns'
-import { createLoopControllerAdapter } from '../../harness-baml'
+import { bamlPatterns, createLoopControllerAdapter } from '../../harness-baml'
 import { mcpNamespace } from '../../app-tools/mcp-catalog'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
@@ -31,6 +31,7 @@ import { enrichNeo4jResult } from '../neo4j-enricher.server'
 async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools({ namespaces: mcpNamespace })
   const schema = await getGraphSchema('search', sessionId)
+  const baml = bamlPatterns()
 
   const webTools = tools.web ?? []
 
@@ -56,7 +57,10 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
       neo4j: 'Database queries and graph operations',
       web_search: 'Web lookups and information retrieval',
     },
-    { liveEvents: true },
+    // The routing implementation is REQUIRED config, wired from `harness-baml`
+    // at the composition root (BAML-companion seam lane) — core hosts no
+    // default import.
+    { liveEvents: true, route: baml.router },
   )
 
   // Each route is wrapped in `withReferences` so the inner pattern receives
@@ -71,9 +75,17 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   // trusted. Behaviour is unchanged unless a detection fires.
   const routesPattern = routes<SessionData>(
     {
-      neo4j: withReferences<SessionData>(neo4jPattern, { scope: 'global', liveEvents: true }),
+      neo4j: withReferences<SessionData>(neo4jPattern, {
+        scope: 'global',
+        liveEvents: true,
+        selector: baml.selector,
+      }),
       web_search: withInjectionGuard({ namespaces: ['web'], catalog: tools.all })(
-        withReferences<SessionData>(webPattern, { scope: 'global', liveEvents: true }),
+        withReferences<SessionData>(webPattern, {
+          scope: 'global',
+          liveEvents: true,
+          selector: baml.selector,
+        }),
       ),
     },
     { liveEvents: true },
@@ -83,6 +95,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     mode: 'thread',
     patternId: 'response-synth',
     liveEvents: true,
+    synthesize: baml.synthesize,
   })
 
   return [routerPattern, routesPattern, responseSynth]

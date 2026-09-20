@@ -128,6 +128,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     mode: 'thread',
     patternId: 'sandbox-session-synth',
     liveEvents: true,
+    synthesize: bamlPatterns().synthesize,
     viewConfig: {
       fromPatterns: ['harness', 'sandbox-session-loop'],
       eventTypes: ['user_message', 'controller_action', 'tool_call', 'tool_result', 'error'],

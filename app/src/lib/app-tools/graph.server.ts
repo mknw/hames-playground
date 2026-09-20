@@ -5,6 +5,21 @@
  * resolves that user's delegated token server-side. Entra enforces the scope,
  * so we don't write a scoping guard and the model never sees a credential.
  *
+ * ## Registration is an explicit factory call (design S1/S4, #225 PR-3)
+ * This module no longer self-registers at import and no longer imports the
+ * app's token or conversion modules: the composition root
+ * (`app-tools/index.server.ts`) calls `registerGraphConnectorTools(deps)` with
+ * the app's own `graphFetch` and the content-classifier supplier. Every `deps`
+ * field is REQUIRED — a missing supplier throws at the factory call, never a
+ * silent default or an env fallback (PR-2 doctrine). This is the peel (PR-C1):
+ * behavior is byte-identical to the import-time registration it replaces; the
+ * move into `@hames/connectors` (PR-C2) re-uses the same seam unchanged.
+ *
+ * `GraphAuthRequiredError` is deliberately still imported from the app's
+ * `auth/graph-token.server.ts` rather than injected: per the design it moves
+ * INTO the package verbatim in PR-C2, so `instanceof` keeps working across the
+ * seam without the app needing to know the class moved.
+ *
  * First slice was deliberately `User.Read`-only — the scope already has tenant
  * admin consent, so the whole per-user token path was provable end-to-end with
  * no new tenant configuration. Further tools slot in here once their scopes are
@@ -22,12 +37,63 @@
  * KQL, so no model-authored operator can reshape the query it didn't write.
  */
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import { graphFetch, GraphAuthRequiredError } from '../auth/graph-token.server'
-import { conversionEnabled, isConvertible } from '../doc-convert.server'
-import { guessMimeType, isTextMime } from '../stash/upload-service.server'
-import { registerAppTool } from './registry.server'
+import { GraphAuthRequiredError } from '../auth/graph-token.server'
+import type { AppToolDefinition } from './registry.server'
 
 assertServerOnImport()
+
+// ============================================================================
+// The injected seam (design S1/S4, #225 PR-3)
+// ============================================================================
+
+/** What the injected `graphFetch` accepts and resolves — declared here so this
+ *  module types the seam without importing the app's token module (S1: the
+ *  package never sees a token). Same shape as `auth/graph-token.server.ts`'s
+ *  own `graphFetch`. */
+export interface GraphFetchInit {
+  method?: string
+  scopes?: readonly string[]
+  body?: unknown
+  /** Extra request headers, e.g. `Prefer: outlook.timezone="Europe/Brussels"`. */
+  headers?: Record<string, string>
+  /** `'json'` (default) parses JSON; `'base64'` returns raw bytes base64-encoded. */
+  responseType?: 'json' | 'base64'
+}
+
+/** Call Microsoft Graph as `userId` — the app's `auth/graph-token.server.ts`
+ *  IS the injected implementation (S1: one seam, the package never sees a
+ *  token). */
+export type GraphFetchFn = (userId: string, path: string, init?: GraphFetchInit) => Promise<unknown>
+
+/**
+ * The content classifier `graph_file_ingest` needs (S4) — ONE required
+ * supplier, injected rather than imported because `doc-convert.server.ts` is
+ * the app's conversion pipeline and `guessMimeType`/`isTextMime` CANNOT move
+ * into the package: stash (`stash/upload-service.server.ts`) imports them
+ * app-side this cycle, and moving them would create a stash→connectors
+ * back-edge. A later "cleanup" must not reintroduce that edge.
+ */
+export interface GraphContentClassifier {
+  /** Is document conversion enabled on this deployment (`STASH_CONVERT_DOCS`)? */
+  conversionEnabled(): boolean
+  /** Can this MIME type be converted to text? */
+  isConvertible(mimeType: string): boolean
+  /** Best-effort MIME type for a filename. */
+  guessMimeType(filename: string): string
+  /** Is this MIME type storable as UTF-8 text? */
+  isTextMime(mimeType: string): boolean
+}
+
+/** Everything the Graph tools close over — supplied by the composition root. */
+export interface GraphConnectorDeps {
+  /** Where tools register: the app registry's `registerAppTool`. */
+  registerAppTool: (def: AppToolDefinition) => void
+  /** Delegated-token Graph fetch (S1). REQUIRED — throws if missing. */
+  graphFetch: GraphFetchFn
+  /** Content classification for the file-ingest path (S4). REQUIRED — throws
+   *  if missing, including any missing member. */
+  content: GraphContentClassifier
+}
 
 /** Fields we surface from `/me`. Explicit so we never dump the whole payload
  *  (which can include tenant metadata) into the model's context. */
@@ -123,44 +189,6 @@ export function shapeEvents(raw: unknown): CalendarEvent[] {
   })
 }
 
-registerAppTool({
-  name: 'graph_calendar_today',
-  namespace: 'graph',
-  description:
-    "List the signed-in user's own calendar events for today (or another day via " +
-    'day_offset: 0=today, 1=tomorrow, -1=yesterday). Returns subject, start/end, ' +
-    'location and organizer. Expands recurring meetings. Acts as the current user.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      day_offset: {
-        type: 'integer',
-        description: 'Days from today. 0=today (default), 1=tomorrow, -1=yesterday.',
-      },
-    },
-    additionalProperties: false,
-  },
-  execute: async (args, { userId }) => {
-    const offset = Number.isFinite(Number(args.day_offset)) ? Number(args.day_offset) : 0
-    const tz = graphTimeZone()
-    const { start, end } = localDayBounds(new Date(), offset)
-
-    // calendarView (not /events) so recurring series are expanded into
-    // occurrences within the window.
-    const raw = await graphFetch(
-      userId,
-      `/me/calendarView?startDateTime=${start}&endDateTime=${end}` +
-        `&$select=subject,start,end,isAllDay,location,organizer,onlineMeetingUrl` +
-        `&$orderby=start/dateTime&$top=50`,
-      {
-        scopes: ['Calendars.ReadWrite'],
-        headers: { Prefer: `outlook.timezone="${tz}"` },
-      },
-    )
-    return { timeZone: tz, day: start.slice(0, 10), events: shapeEvents(raw) }
-  },
-})
-
 // ============================================================================
 // Mail
 // ============================================================================
@@ -195,62 +223,6 @@ export function shapeMessages(raw: unknown): MailMessage[] {
     }
   })
 }
-
-registerAppTool({
-  name: 'graph_mail_recent',
-  namespace: 'graph',
-  description:
-    "List recent messages from the signed-in user's inbox, newest first. Set " +
-    'unread_only=true for just unread mail. Returns sender, subject, received ' +
-    'time and a short preview — not full bodies. Acts as the current user.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      unread_only: {
-        type: 'boolean',
-        description: 'Only unread messages (default false).',
-      },
-      limit: {
-        type: 'integer',
-        description: 'How many messages to return, 1-25 (default 10).',
-      },
-    },
-    additionalProperties: false,
-  },
-  execute: async (args, { userId }) => {
-    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
-    const unreadOnly = args.unread_only === true
-
-    // Inbox specifically (not all folders), so Sent/Archive don't pollute
-    // "recent mail". $filter + $orderby together is supported on messages.
-    const raw = await graphFetch(
-      userId,
-      `/me/mailFolders/inbox/messages?$top=${limit}` +
-        `&$select=subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview,webLink` +
-        `&$orderby=receivedDateTime desc` +
-        (unreadOnly ? `&$filter=isRead eq false` : ''),
-      { scopes: ['Mail.Read'] },
-    )
-    return { unreadOnly, messages: shapeMessages(raw) }
-  },
-})
-
-registerAppTool({
-  name: 'graph_me',
-  namespace: 'graph',
-  description:
-    "Get the signed-in user's own Microsoft 365 profile (name, work email/UPN, " +
-    'job title, office, language). Acts as the current user — no user or token ' +
-    'argument is accepted or needed.',
-  // No parameters at all: the identity is the request's authenticated user.
-  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-  execute: async (_args, { userId }) => {
-    const raw = await graphFetch(userId, `/me?$select=${ME_FIELDS.join(',')}`, {
-      scopes: ['User.Read'],
-    })
-    return shapeMe(raw)
-  },
-})
 
 // ============================================================================
 // Files → Data Stash
@@ -339,145 +311,6 @@ function translateIngestDenial(err: unknown, itemId: string): unknown {
   }
   return err
 }
-
-registerAppTool({
-  name: 'graph_file_ingest',
-  namespace: 'graph',
-  description:
-    "Copy one of the signed-in person's own Microsoft 365 files (OneDrive or " +
-    "SharePoint) into this conversation's Data Stash, so later turns can search " +
-    'it, read it or hand it to the sandbox. Identify the file by item_id, ' +
-    'optionally with drive_id for a shared/SharePoint drive. Text files become ' +
-    'searchable automatically; other formats are stored as-is. Returns the stash ' +
-    'document id and metadata — never the file contents. Acts as the current ' +
-    'signed-in person.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      item_id: {
-        type: 'string',
-        description: 'Microsoft Graph driveItem id of the file to copy.',
-      },
-      drive_id: {
-        type: 'string',
-        description: "Drive holding the item. Omit for the signed-in person's own OneDrive.",
-      },
-      filename: {
-        type: 'string',
-        description: 'Override the stored filename. Defaults to the name in Microsoft 365.',
-      },
-    },
-    required: ['item_id'],
-    additionalProperties: false,
-  },
-  execute: async (args, { userId, sessionId }): Promise<GraphFileIngestResult> => {
-    // Fail closed: the Data Stash is keyed by conversation, so without one in
-    // scope there is no correct place to put the file — and guessing would mean
-    // writing one person's file into another conversation's stash.
-    if (!sessionId) {
-      throw new Error(
-        "graph_file_ingest stores the file in the current conversation's Data Stash, " +
-          'and no conversation is in scope for this call. Run it from a chat turn or ' +
-          'a triggered action run.',
-      )
-    }
-    const itemId = typeof args.item_id === 'string' ? args.item_id.trim() : ''
-    if (!itemId) {
-      throw new Error('item_id is required — the Microsoft Graph driveItem id of the file.')
-    }
-    const driveId = typeof args.drive_id === 'string' ? args.drive_id.trim() || null : null
-    const base = driveItemPath(itemId, driveId)
-
-    // Metadata first — and separately from the download — because it carries the
-    // size, which is how an oversized file is refused BEFORE its bytes are in
-    // this process's heap. It also gives the real filename and MIME type.
-    const meta = shapeDriveItem(
-      await graphFetch(userId, `${base}?$select=${DRIVE_ITEM_SELECT}`, {
-        scopes: FILE_SCOPES,
-      }).catch((err) => {
-        throw translateIngestDenial(err, itemId)
-      }),
-    )
-    if (!meta.isFile) {
-      throw new Error(
-        `Microsoft 365 item ${itemId} has no file content — it is probably a folder. ` +
-          'Pass the id of a file.',
-      )
-    }
-
-    // The Data Stash layer is imported lazily: it pulls in ioredis and the whole
-    // chunk/embed/vector stack, and `mcp-client.server.ts` imports this registry
-    // eagerly for *every* harness run — including deployments with no stash.
-    const { storeDocument, MAX_CONTENT_BYTES } = await import('../document-store.server')
-    // A missing size (Graph reports one for every file in practice) is not
-    // treated as oversized; `storeDocument` re-checks the limit on the decoded
-    // bytes, so an unreported giant still can't be stored.
-    if (meta.size != null && meta.size > MAX_CONTENT_BYTES) {
-      throw new Error(
-        `"${meta.name ?? itemId}" is ${meta.size} bytes, above the Data Stash limit of ` +
-          `${MAX_CONTENT_BYTES} bytes, so it was not downloaded. Use a smaller file or ` +
-          'an extract of this one.',
-      )
-    }
-
-    const override = typeof args.filename === 'string' ? args.filename.trim() : ''
-    const filename = override || meta.name || `driveitem-${itemId}`
-    const mimeType = meta.mimeType ?? guessMimeType(filename)
-
-    // Always download bytes, then decide how to STORE them — mirroring the
-    // upload route's intake: text formats go in as UTF-8 (the chunker reads
-    // `content` directly), anything else keeps its exact bytes as base64 so the
-    // `/work` round-trip and `?download` still serve the real file.
-    const encoded = await graphFetch(userId, `${base}/content`, {
-      scopes: FILE_SCOPES,
-      responseType: 'base64',
-    }).catch((err) => {
-      throw translateIngestDenial(err, itemId)
-    })
-    if (typeof encoded !== 'string') {
-      throw new Error(`Microsoft 365 returned no content for "${filename}".`)
-    }
-    const isText = isTextMime(mimeType)
-    const content = isText ? Buffer.from(encoded, 'base64').toString('utf8') : encoded
-
-    // Same gate as the upload route: a binary is only worth ingesting when we can
-    // turn it into text; otherwise `ingestStashDocument` would only mark it
-    // failed. Unlike that route we do NOT also require the agent to compose a
-    // redis retriever — calling this tool is an explicit request to make the file
-    // usable, and a retriever added later reads an already-indexed corpus.
-    const ingesting = isText || (conversionEnabled() && isConvertible(mimeType))
-
-    const doc = await storeDocument({
-      sessionId,
-      filename,
-      mimeType,
-      content,
-      ...(isText ? {} : { encoding: 'base64' as const }),
-      // Persist 'pending' in the FIRST write (as the upload route does) so a
-      // status poll can never read a doc with no ingest status and flicker.
-      ...(ingesting ? { ingestStatus: 'pending' as const } : {}),
-    })
-
-    if (ingesting) {
-      // Fire-and-forget, mirroring `POST /api/stash/upload`: embedding is slow
-      // and the tool result must come back inside the turn. Failures are
-      // recorded in the document's `ingestStatus`, which is why the rejection is
-      // swallowed here rather than surfaced.
-      void import('../document-ingest.server')
-        .then(({ ingestStashDocument }) => ingestStashDocument(sessionId, doc.id))
-        .catch(() => {})
-    }
-
-    return {
-      documentId: doc.id,
-      filename,
-      mimeType,
-      size: doc.size,
-      ingesting,
-      webUrl: meta.webUrl,
-    }
-  },
-})
 
 // ============================================================================
 // Files — search and browse
@@ -920,123 +753,6 @@ export interface GraphFileSearchResult {
   hint?: string
 }
 
-registerAppTool({
-  name: 'graph_files_search',
-  namespace: 'graph',
-  description:
-    'Search the files the signed-in person can open — their own OneDrive and ' +
-    'every SharePoint site they have access to. Pass plain words in `query`: the ' +
-    'app builds the search expression, so search syntax is neither needed nor ' +
-    'honoured. Narrow with `site` (a SharePoint site URL), `file_type` (an ' +
-    "extension like docx or pdf), `author` (a person's name), or " +
-    '`modified_after` / `modified_before` (dates). Set sort="newest" for ' +
-    "most-recently-modified first. Returns each file's name, folder, site, " +
-    'modified date, size and a snippet of the matched text, plus the drive_id + ' +
-    'item_id pair that identifies a file to the tools that act on one. Acts as ' +
-    'the current signed-in person.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      query: {
-        type: 'string',
-        description:
-          'Words to look for, e.g. "q3 budget forecast". Plain terms only — ' +
-          'operators and field:value syntax are stripped, not interpreted.',
-      },
-      site: {
-        type: 'string',
-        description:
-          'Restrict to one SharePoint site, given as its URL ' +
-          '(https://contoso.sharepoint.com/sites/Finance).',
-      },
-      file_type: {
-        type: 'string',
-        description: 'Restrict to one file extension, e.g. docx, xlsx, pdf.',
-      },
-      author: {
-        type: 'string',
-        description: 'Restrict to files authored by this person, e.g. "Jane Smith".',
-      },
-      modified_after: {
-        type: 'string',
-        description: 'Only files modified on/after this date, e.g. 2026-07-01.',
-      },
-      modified_before: {
-        type: 'string',
-        description: 'Only files modified on/before this date, e.g. 2026-07-31.',
-      },
-      sort: {
-        type: 'string',
-        enum: ['relevance', 'newest'],
-        description:
-          'Result order: best match first (relevance, default) or ' +
-          'most-recently-modified first (newest).',
-      },
-      limit: {
-        type: 'integer',
-        description: 'How many files to return, 1-25 (default 10).',
-      },
-    },
-    required: ['query'],
-    additionalProperties: false,
-  },
-  execute: async (args, { userId }): Promise<GraphFileSearchResult> => {
-    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
-    const query = composeFileQuery({
-      query: typeof args.query === 'string' ? args.query : '',
-      site: filterString(args, 'site') || null,
-      fileType: filterString(args, 'file_type') || null,
-      author: filterString(args, 'author') || null,
-      modifiedAfter: typeof args.modified_after === 'string' ? args.modified_after : null,
-      modifiedBefore: typeof args.modified_before === 'string' ? args.modified_before : null,
-    })
-    if (!query) {
-      throw new Error(
-        'query is required — the words to look for, e.g. "q3 budget". ' +
-          'Nothing searchable was left after the arguments were parsed.',
-      )
-    }
-
-    const raw = await graphFetch(userId, '/search/query', {
-      method: 'POST',
-      scopes: FILE_SEARCH_SCOPES,
-      body: {
-        requests: [
-          {
-            // driveItem covers OneDrive *and* SharePoint document libraries in
-            // one request. `listItem` and `site` are combinable with it here,
-            // but they'd fold list rows and site pages into a *file* search.
-            entityTypes: ['driveItem'],
-            query: { queryString: query },
-            from: 0,
-            size: limit,
-            // Deliberately no `fields`: unlike `$select` it *replaces* the
-            // returned resource properties, and a hit stripped of
-            // `parentReference` loses `drive_id` — the handoff this tool exists
-            // to produce. `shapeSearchHits` is the allowlist instead, so no raw
-            // Graph payload reaches the model either way.
-            //
-            // `isDescending` is the STRING "true" — the shape verified live
-            // against this tenant. Microsoft's docs type it Boolean; do not
-            // "correct" it untested.
-            ...(args.sort === 'newest'
-              ? { sortProperties: [{ name: 'lastModifiedDateTime', isDescending: 'true' }] }
-              : {}),
-          },
-        ],
-      },
-    })
-
-    const { total, results } = shapeSearchHits(raw)
-    const hint =
-      total != null && total > results.length
-        ? `Showing ${results.length} of ${total} matches. Prefer narrowing ` +
-          `(modified_after, file_type, site, author, sort="newest") over raising limit.`
-        : undefined
-    return { query, total, results, ...(hint ? { hint } : {}) }
-  },
-})
-
 export interface GraphFileListResult {
   /** Which place was listed, echoed back because the arguments select it
    *  implicitly. */
@@ -1059,60 +775,6 @@ export interface GraphFileListResult {
  * is its own tool instead — `graph_files_recent`, on the non-deprecated Office
  * Graph insights surface (`/me/insights/used`).
  */
-registerAppTool({
-  name: 'graph_files_list',
-  namespace: 'graph',
-  description:
-    "Browse the signed-in person's files instead of searching them. With no " +
-    'arguments, lists the top level of their own OneDrive; pass folder_item_id ' +
-    "(plus drive_id for a SharePoint or shared drive) to list that folder's " +
-    'contents. Entries carry the same drive_id + item_id pair as a search result, ' +
-    'and folders report isFolder + child_count so you can walk down into them. ' +
-    'Use graph_files_search to find a file by its words instead. Acts as the ' +
-    'current signed-in person.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      folder_item_id: {
-        type: 'string',
-        description:
-          'driveItem id of the folder to list. Omit for the top level of the ' +
-          "person's own OneDrive.",
-      },
-      drive_id: {
-        type: 'string',
-        description: "Drive holding that folder. Omit for the person's own OneDrive.",
-      },
-      limit: {
-        type: 'integer',
-        description: 'How many entries to return, 1-50 (default 20).',
-      },
-    },
-    additionalProperties: false,
-  },
-  execute: async (args, { userId }): Promise<GraphFileListResult> => {
-    const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 50)
-    const folderId = typeof args.folder_item_id === 'string' ? args.folder_item_id.trim() : ''
-    const driveId = typeof args.drive_id === 'string' ? args.drive_id.trim() || null : null
-
-    const location: GraphFileListResult['location'] = folderId ? 'folder' : 'onedrive-root'
-
-    const base = folderId
-      ? // Same encoded path builder as the ingest tool, so a crafted id can't
-        // escape its segment and address an unrelated resource.
-        `${driveItemPath(folderId, driveId)}/children`
-      : '/me/drive/root/children'
-
-    // No `$orderby`: children come back name-ordered already, and it is not
-    // supported on every drive type — a 400 here would break browsing outright.
-    const raw = await graphFetch(
-      userId,
-      `${base}?$select=${DRIVE_ITEM_LIST_SELECT}&$top=${limit}`,
-      { scopes: FILE_SCOPES },
-    )
-    return { location, items: shapeFileEntries(raw) }
-  },
-})
 
 // ----------------------------------------------------------------------------
 // Recent files (Office Graph insights)
@@ -1162,59 +824,6 @@ export function shapeUsedInsight(raw: unknown): GraphRecentFile | null {
     webUrl: str(ref.webUrl),
   }
 }
-
-registerAppTool({
-  name: 'graph_files_recent',
-  namespace: 'graph',
-  description:
-    'List the files the signed-in person recently used — opened or edited — ' +
-    "newest first, from Microsoft 365's insights. No query needed; this is the " +
-    'right tool for "my recent files" or "what did I work on lately". Each ' +
-    'item carries the drive_id + item_id pair the other file tools accept. Use ' +
-    'graph_files_search (optionally with sort="newest") to find files by ' +
-    'words or by other people. Acts as the current signed-in person.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      limit: {
-        type: 'integer',
-        description: 'How many files to return, 1-25 (default 10).',
-      },
-    },
-    additionalProperties: false,
-  },
-  execute: async (args, { userId }): Promise<GraphRecentFilesResult> => {
-    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
-    let raw: unknown
-    try {
-      // `$top` applies BEFORE our driveItem filter and insights mixes in
-      // non-file rows (sites, …), so the request is inflated and the shaped
-      // list sliced back down to `limit`.
-      raw = await graphFetch(userId, `/me/insights/used?$top=${Math.min(limit * 2, 50)}`, {
-        scopes: ['Sites.Read.All'],
-      })
-    } catch (err) {
-      // A 403 here is almost always itemInsights disabled by tenant policy —
-      // not a sign-in problem, so a re-auth prompt would be wrong AND the
-      // agent can still answer via search. Degrade to a successful, steerable
-      // result. 401/acquisition failures keep the sign-in path.
-      if (err instanceof GraphAuthRequiredError && err.status === 403) {
-        return {
-          items: [],
-          note:
-            'Item insights are disabled by tenant policy (or this account lacks ' +
-            'consent for them) — use graph_files_search with sort="newest" instead.',
-        }
-      }
-      throw err
-    }
-    const rows = ((raw as { value?: unknown[] })?.value ?? [])
-      .map(shapeUsedInsight)
-      .filter((r): r is GraphRecentFile => r !== null)
-      .slice(0, limit)
-    return { items: rows }
-  },
-})
 
 // ----------------------------------------------------------------------------
 // Shared with me (Office Graph insights)
@@ -1454,133 +1063,6 @@ export function shapeSharedInsight(raw: unknown): GraphSharedFile | null {
   }
 }
 
-registerAppTool({
-  name: 'graph_files_shared',
-  namespace: 'graph',
-  description:
-    'List what was recently shared WITH the signed-in person — OneDrive/' +
-    'SharePoint links, files pasted into a Teams chat, and email attachments — ' +
-    'newest first, with who shared it, when and through which channel (via). ' +
-    "Filter to one sharer with shared_by (a person's name) and/or one channel " +
-    'with via. This ' +
-    'answers "what was shared with me" and "what did X share with me". ' +
-    'shared_by names whoever performed the share, which is usually someone else ' +
-    'but is sometimes the signed-in person — a few of their own outbound shares ' +
-    'do surface. It is NOT a reliable record of what they shared with others, so ' +
-    'do not answer that question from it alone. ' +
-    'Files carry the drive_id + item_id pair the other ' +
-    'file tools accept; email attachments do not (they live in the mailbox) and ' +
-    'link to the message rather than to the file. Several attachments from one ' +
-    'email share an email_group number, so cite that message once. ' +
-    'Acts as the current signed-in person.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      shared_by: {
-        type: 'string',
-        description: 'Only items shared by this person, e.g. "Jan" or "Jan Van Damme".',
-      },
-      via: {
-        type: 'string',
-        enum: ['email', 'teams', 'link'],
-        description:
-          'Only items that arrived this way: "email" (attached to a message), ' +
-          '"teams" (pasted into a Teams chat), "link" (a OneDrive or SharePoint ' +
-          'link). Omit to list every channel.',
-      },
-      limit: {
-        type: 'integer',
-        description: 'How many items to return, 1-25 (default 10).',
-      },
-    },
-    additionalProperties: false,
-  },
-  execute: async (args, { userId }): Promise<GraphSharedFilesResult> => {
-    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
-    const sharedBy = filterString(args, 'shared_by')
-    const via = parseVia(args.via)
-    // Same inflation rationale as graph_files_recent ($top precedes our row
-    // filter), amplified when a filter will discard most rows — a via filter
-    // over a narrow window would report "no Teams files" when they were merely
-    // outside the slice.
-    const top = sharedBy || via ? 50 : Math.min(limit * 2, 50)
-    let raw: unknown
-    try {
-      raw = await graphFetch(userId, `/me/insights/shared?$top=${top}`, {
-        scopes: ['Sites.Read.All'],
-      })
-    } catch (err) {
-      if (err instanceof GraphAuthRequiredError && err.status === 403) {
-        return {
-          items: [],
-          note:
-            'Item insights are disabled by tenant policy (or this account lacks ' +
-            'consent for them) — use graph_files_search with sort="newest" instead.',
-        }
-      }
-      throw err
-    }
-    const needle = sharedBy.toLowerCase()
-    const seen = new Set<string>()
-    const rows = ((raw as { value?: unknown[] })?.value ?? [])
-      .map(shapeSharedInsight)
-      .filter((r): r is GraphSharedFile => r !== null)
-      .filter((r) => !needle || (r.shared_by ?? '').toLowerCase().includes(needle))
-      .filter((r) => !via || r.via === via)
-      // The insights order is empirically newest-first, but nothing contracts it
-      // — no $orderby is sent, and adding one to this surface is unverified (an
-      // unsupported-query-option 400 would take out the whole tool rather than
-      // one field). Sorting the shaped rows makes the "newest first" this tool
-      // advertises true by construction instead of by luck.
-      .sort((a, b) => sharedAt(b) - sharedAt(a))
-      // The same message AND the same filename is one attachment arriving
-      // twice; the newest copy survives because the sort already ran. Done
-      // before the slice so a duplicate never costs a slot.
-      .filter((r) => {
-        const key = `${r.webUrl ?? ''}\0${r.name ?? ''}`
-        if (seen.has(key)) return false
-        seen.add(key)
-        return true
-      })
-      .slice(0, limit)
-
-    // Several attachments from ONE email arrive as several rows carrying the
-    // identical rewritten message URL, so that URL *is* the message key — no
-    // opaque 150-char mailbox id has to enter the shaped row or the prompt.
-    // Only a group of two or more earns an ordinal; a lone attachment needs no
-    // cross-reference. Deliberately NOT collapsed into one row: those really
-    // are different files, and their names are the useful part.
-    const byMessage = new Map<string, GraphSharedFile[]>()
-    for (const r of rows) {
-      if (r.via !== 'email' || !r.webUrl) continue
-      const group = byMessage.get(r.webUrl)
-      if (group) group.push(r)
-      else byMessage.set(r.webUrl, [r])
-    }
-    let ordinal = 0
-    for (const group of byMessage.values()) {
-      if (group.length < 2) continue
-      ordinal += 1
-      for (const r of group) r.email_group = ordinal
-    }
-
-    if (rows.length === 0 && (sharedBy || via)) {
-      const filters = [
-        ...(sharedBy ? [`by "${sharedBy}"`] : []),
-        ...(via ? [`via ${via}`] : []),
-      ].join(' and ')
-      return {
-        items: [],
-        note:
-          `Nothing in the recent sharing activity was shared ${filters}. ` +
-          'The window covers recent items only — try graph_files_search with ' +
-          'author for older files.',
-      }
-    }
-    return { items: rows }
-  },
-})
-
 // ----------------------------------------------------------------------------
 // Mail with attachments (sent or received)
 // ----------------------------------------------------------------------------
@@ -1648,100 +1130,725 @@ export function shapeAttachmentMessage(
   }
 }
 
-registerAppTool({
-  name: 'graph_mail_attachments',
-  namespace: 'graph',
-  description:
-    "List the signed-in person's emails that carry file attachments — what was " +
-    'SENT (default) or RECEIVED, newest first, with the attachment names. ' +
-    'Filter to one person and/or a start date. Useful for "what files did I ' +
-    'send X" — but note it only sees files that travelled through email: ' +
-    'OneDrive/SharePoint shares made from the Share dialog do not appear in ' +
-    'sent mail. Returns attachment names and sizes, not their contents. Acts ' +
-    'as the current signed-in person.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      person: {
-        type: 'string',
-        description:
-          'Only exchanges with this person (name or email), e.g. "Thibault". ' +
-          'Matches recipients for sent mail, the sender for received mail.',
-      },
-      direction: {
-        type: 'string',
-        enum: ['sent', 'received'],
-        description: 'Look in sent mail (default) or received mail.',
-      },
-      since: {
-        type: 'string',
-        description: 'Only messages on/after this date, e.g. 2026-07-01.',
-      },
-      limit: {
-        type: 'integer',
-        description: 'How many messages to return, 1-25 (default 10).',
-      },
-    },
-    additionalProperties: false,
-  },
-  execute: async (args, { userId }): Promise<GraphMailAttachmentsResult> => {
-    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
-    const direction = args.direction === 'received' ? ('received' as const) : ('sent' as const)
-    const person = filterString(args, 'person')
+// ============================================================================
+// Registration — an explicit factory call, not an import side effect
+// ============================================================================
 
-    // Same reject-don't-drop rule as the search date args: a silently ignored
-    // `since` is a silently wrong answer.
-    let sinceClause = ''
-    if (typeof args.since === 'string' && args.since.trim()) {
-      const d = new Date(args.since.trim())
-      if (Number.isNaN(d.getTime())) {
-        throw new Error(`since must be a date like 2026-07-01 (got "${args.since}").`)
-      }
-      sinceClause = ` and receivedDateTime ge ${d.toISOString().slice(0, 10)}T00:00:00Z`
-    }
-
-    const folder = direction === 'sent' ? 'sentitems' : 'inbox'
-    // The person filter runs app-side (recipient matching in OData is awkward
-    // and unindexed), so the request is inflated and sliced after filtering.
-    const top = person ? 50 : Math.min(limit * 2, 50)
-    // No $orderby: combined with $filter Graph requires the sort property to
-    // lead the filter, and the default order is already newest-first.
-    // Attachments are expanded WITHOUT contentBytes — names and sizes only.
-    const raw = await graphFetch(
-      userId,
-      `/me/mailFolders/${folder}/messages` +
-        `?$filter=hasAttachments eq true${sinceClause}` +
-        `&$select=subject,toRecipients,from,sentDateTime,receivedDateTime,webLink` +
-        `&$expand=attachments($select=name,size,contentType)` +
-        `&$top=${top}`,
-      { scopes: ['Mail.Read'] },
+/** Required-supplier check (PR-2 doctrine: missing suppliers throw, never
+ *  degrade — no silent default, no env fallback). */
+function requireGraphSupplier<T>(bag: unknown, field: string): T {
+  const value = (bag as Record<string, unknown> | null | undefined)?.[field]
+  if (value == null) {
+    throw new Error(
+      `registerGraphConnectorTools: missing required supplier "${field}" — the Graph ` +
+        'tools refuse to compose without it. No silent default, no env fallback.',
     )
+  }
+  return value as T
+}
 
-    const messages = ((raw as { value?: unknown[] })?.value ?? [])
-      .map((m) => ({ raw: m, shaped: shapeAttachmentMessage(m, direction) }))
-      .filter(({ raw: m }) => {
-        if (!person) return true
-        const msg = (m ?? {}) as Record<string, unknown>
-        if (direction === 'received') {
-          const from = ((msg.from ?? {}) as Record<string, unknown>).emailAddress as
-            Record<string, unknown> | undefined
-          return personMatches(person, from?.name, from?.address)
-        }
-        const recips = (Array.isArray(msg.toRecipients) ? msg.toRecipients : []) as Array<
-          Record<string, unknown>
-        >
-        return recips.some((r) => {
-          const ea = (r.emailAddress ?? {}) as Record<string, unknown>
-          return personMatches(person, ea.name, ea.address)
-        })
+/**
+ * Register every Microsoft Graph tool against the supplied registry.
+ *
+ * Called once by the composition root (`app-tools/index.server.ts`) with the
+ * app's own `graphFetch` and content classifier; importing this module alone
+ * registers nothing and imports no app code beyond the error class above.
+ * Tool bodies are unchanged from the import-time registration this replaces
+ * (PR-C1 peel, #225 PR-3): same definitions, same executors, same order.
+ */
+export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
+  const registerAppTool = requireGraphSupplier<(def: AppToolDefinition) => void>(
+    deps,
+    'registerAppTool',
+  )
+  const graphFetch = requireGraphSupplier<GraphFetchFn>(deps, 'graphFetch')
+  const content = requireGraphSupplier<GraphContentClassifier>(deps, 'content')
+  requireGraphSupplier(content, 'conversionEnabled')
+  requireGraphSupplier(content, 'isConvertible')
+  requireGraphSupplier(content, 'guessMimeType')
+  requireGraphSupplier(content, 'isTextMime')
+  const { conversionEnabled, isConvertible, guessMimeType, isTextMime } = content
+
+  registerAppTool({
+    name: 'graph_calendar_today',
+    namespace: 'graph',
+    description:
+      "List the signed-in user's own calendar events for today (or another day via " +
+      'day_offset: 0=today, 1=tomorrow, -1=yesterday). Returns subject, start/end, ' +
+      'location and organizer. Expands recurring meetings. Acts as the current user.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        day_offset: {
+          type: 'integer',
+          description: 'Days from today. 0=today (default), 1=tomorrow, -1=yesterday.',
+        },
+      },
+      additionalProperties: false,
+    },
+    execute: async (args, { userId }) => {
+      const offset = Number.isFinite(Number(args.day_offset)) ? Number(args.day_offset) : 0
+      const tz = graphTimeZone()
+      const { start, end } = localDayBounds(new Date(), offset)
+
+      // calendarView (not /events) so recurring series are expanded into
+      // occurrences within the window.
+      const raw = await graphFetch(
+        userId,
+        `/me/calendarView?startDateTime=${start}&endDateTime=${end}` +
+          `&$select=subject,start,end,isAllDay,location,organizer,onlineMeetingUrl` +
+          `&$orderby=start/dateTime&$top=50`,
+        {
+          scopes: ['Calendars.ReadWrite'],
+          headers: { Prefer: `outlook.timezone="${tz}"` },
+        },
+      )
+      return { timeZone: tz, day: start.slice(0, 10), events: shapeEvents(raw) }
+    },
+  })
+
+  registerAppTool({
+    name: 'graph_mail_recent',
+    namespace: 'graph',
+    description:
+      "List recent messages from the signed-in user's inbox, newest first. Set " +
+      'unread_only=true for just unread mail. Returns sender, subject, received ' +
+      'time and a short preview — not full bodies. Acts as the current user.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        unread_only: {
+          type: 'boolean',
+          description: 'Only unread messages (default false).',
+        },
+        limit: {
+          type: 'integer',
+          description: 'How many messages to return, 1-25 (default 10).',
+        },
+      },
+      additionalProperties: false,
+    },
+    execute: async (args, { userId }) => {
+      const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
+      const unreadOnly = args.unread_only === true
+
+      // Inbox specifically (not all folders), so Sent/Archive don't pollute
+      // "recent mail". $filter + $orderby together is supported on messages.
+      const raw = await graphFetch(
+        userId,
+        `/me/mailFolders/inbox/messages?$top=${limit}` +
+          `&$select=subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview,webLink` +
+          `&$orderby=receivedDateTime desc` +
+          (unreadOnly ? `&$filter=isRead eq false` : ''),
+        { scopes: ['Mail.Read'] },
+      )
+      return { unreadOnly, messages: shapeMessages(raw) }
+    },
+  })
+
+  registerAppTool({
+    name: 'graph_me',
+    namespace: 'graph',
+    description:
+      "Get the signed-in user's own Microsoft 365 profile (name, work email/UPN, " +
+      'job title, office, language). Acts as the current user — no user or token ' +
+      'argument is accepted or needed.',
+    // No parameters at all: the identity is the request's authenticated user.
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    execute: async (_args, { userId }) => {
+      const raw = await graphFetch(userId, `/me?$select=${ME_FIELDS.join(',')}`, {
+        scopes: ['User.Read'],
       })
-      .map(({ shaped }) => shaped)
-      // Real attachments only: inline images and signature logos also set
-      // hasAttachments, but arrive with isInline — Graph still lists them, so
-      // an empty attachments array can slip through for filtered $selects.
-      .filter((m) => m.attachments.length > 0)
-      .slice(0, limit)
+      return shapeMe(raw)
+    },
+  })
 
-    return { direction, messages }
-  },
-})
+  registerAppTool({
+    name: 'graph_file_ingest',
+    namespace: 'graph',
+    description:
+      "Copy one of the signed-in person's own Microsoft 365 files (OneDrive or " +
+      "SharePoint) into this conversation's Data Stash, so later turns can search " +
+      'it, read it or hand it to the sandbox. Identify the file by item_id, ' +
+      'optionally with drive_id for a shared/SharePoint drive. Text files become ' +
+      'searchable automatically; other formats are stored as-is. Returns the stash ' +
+      'document id and metadata — never the file contents. Acts as the current ' +
+      'signed-in person.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        item_id: {
+          type: 'string',
+          description: 'Microsoft Graph driveItem id of the file to copy.',
+        },
+        drive_id: {
+          type: 'string',
+          description: "Drive holding the item. Omit for the signed-in person's own OneDrive.",
+        },
+        filename: {
+          type: 'string',
+          description: 'Override the stored filename. Defaults to the name in Microsoft 365.',
+        },
+      },
+      required: ['item_id'],
+      additionalProperties: false,
+    },
+    execute: async (args, { userId, sessionId }): Promise<GraphFileIngestResult> => {
+      // Fail closed: the Data Stash is keyed by conversation, so without one in
+      // scope there is no correct place to put the file — and guessing would mean
+      // writing one person's file into another conversation's stash.
+      if (!sessionId) {
+        throw new Error(
+          "graph_file_ingest stores the file in the current conversation's Data Stash, " +
+            'and no conversation is in scope for this call. Run it from a chat turn or ' +
+            'a triggered action run.',
+        )
+      }
+      const itemId = typeof args.item_id === 'string' ? args.item_id.trim() : ''
+      if (!itemId) {
+        throw new Error('item_id is required — the Microsoft Graph driveItem id of the file.')
+      }
+      const driveId = typeof args.drive_id === 'string' ? args.drive_id.trim() || null : null
+      const base = driveItemPath(itemId, driveId)
+
+      // Metadata first — and separately from the download — because it carries the
+      // size, which is how an oversized file is refused BEFORE its bytes are in
+      // this process's heap. It also gives the real filename and MIME type.
+      const meta = shapeDriveItem(
+        await graphFetch(userId, `${base}?$select=${DRIVE_ITEM_SELECT}`, {
+          scopes: FILE_SCOPES,
+        }).catch((err) => {
+          throw translateIngestDenial(err, itemId)
+        }),
+      )
+      if (!meta.isFile) {
+        throw new Error(
+          `Microsoft 365 item ${itemId} has no file content — it is probably a folder. ` +
+            'Pass the id of a file.',
+        )
+      }
+
+      // The Data Stash layer is imported lazily: it pulls in ioredis and the whole
+      // chunk/embed/vector stack, and `mcp-client.server.ts` imports this registry
+      // eagerly for *every* harness run — including deployments with no stash.
+      const { storeDocument, MAX_CONTENT_BYTES } = await import('../document-store.server')
+      // A missing size (Graph reports one for every file in practice) is not
+      // treated as oversized; `storeDocument` re-checks the limit on the decoded
+      // bytes, so an unreported giant still can't be stored.
+      if (meta.size != null && meta.size > MAX_CONTENT_BYTES) {
+        throw new Error(
+          `"${meta.name ?? itemId}" is ${meta.size} bytes, above the Data Stash limit of ` +
+            `${MAX_CONTENT_BYTES} bytes, so it was not downloaded. Use a smaller file or ` +
+            'an extract of this one.',
+        )
+      }
+
+      const override = typeof args.filename === 'string' ? args.filename.trim() : ''
+      const filename = override || meta.name || `driveitem-${itemId}`
+      const mimeType = meta.mimeType ?? guessMimeType(filename)
+
+      // Always download bytes, then decide how to STORE them — mirroring the
+      // upload route's intake: text formats go in as UTF-8 (the chunker reads
+      // `content` directly), anything else keeps its exact bytes as base64 so the
+      // `/work` round-trip and `?download` still serve the real file.
+      const encoded = await graphFetch(userId, `${base}/content`, {
+        scopes: FILE_SCOPES,
+        responseType: 'base64',
+      }).catch((err) => {
+        throw translateIngestDenial(err, itemId)
+      })
+      if (typeof encoded !== 'string') {
+        throw new Error(`Microsoft 365 returned no content for "${filename}".`)
+      }
+      const isText = isTextMime(mimeType)
+      const content = isText ? Buffer.from(encoded, 'base64').toString('utf8') : encoded
+
+      // Same gate as the upload route: a binary is only worth ingesting when we can
+      // turn it into text; otherwise `ingestStashDocument` would only mark it
+      // failed. Unlike that route we do NOT also require the agent to compose a
+      // redis retriever — calling this tool is an explicit request to make the file
+      // usable, and a retriever added later reads an already-indexed corpus.
+      const ingesting = isText || (conversionEnabled() && isConvertible(mimeType))
+
+      const doc = await storeDocument({
+        sessionId,
+        filename,
+        mimeType,
+        content,
+        ...(isText ? {} : { encoding: 'base64' as const }),
+        // Persist 'pending' in the FIRST write (as the upload route does) so a
+        // status poll can never read a doc with no ingest status and flicker.
+        ...(ingesting ? { ingestStatus: 'pending' as const } : {}),
+      })
+
+      if (ingesting) {
+        // Fire-and-forget, mirroring `POST /api/stash/upload`: embedding is slow
+        // and the tool result must come back inside the turn. Failures are
+        // recorded in the document's `ingestStatus`, which is why the rejection is
+        // swallowed here rather than surfaced.
+        void import('../document-ingest.server')
+          .then(({ ingestStashDocument }) => ingestStashDocument(sessionId, doc.id))
+          .catch(() => {})
+      }
+
+      return {
+        documentId: doc.id,
+        filename,
+        mimeType,
+        size: doc.size,
+        ingesting,
+        webUrl: meta.webUrl,
+      }
+    },
+  })
+
+  registerAppTool({
+    name: 'graph_files_search',
+    namespace: 'graph',
+    description:
+      'Search the files the signed-in person can open — their own OneDrive and ' +
+      'every SharePoint site they have access to. Pass plain words in `query`: the ' +
+      'app builds the search expression, so search syntax is neither needed nor ' +
+      'honoured. Narrow with `site` (a SharePoint site URL), `file_type` (an ' +
+      "extension like docx or pdf), `author` (a person's name), or " +
+      '`modified_after` / `modified_before` (dates). Set sort="newest" for ' +
+      "most-recently-modified first. Returns each file's name, folder, site, " +
+      'modified date, size and a snippet of the matched text, plus the drive_id + ' +
+      'item_id pair that identifies a file to the tools that act on one. Acts as ' +
+      'the current signed-in person.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description:
+            'Words to look for, e.g. "q3 budget forecast". Plain terms only — ' +
+            'operators and field:value syntax are stripped, not interpreted.',
+        },
+        site: {
+          type: 'string',
+          description:
+            'Restrict to one SharePoint site, given as its URL ' +
+            '(https://contoso.sharepoint.com/sites/Finance).',
+        },
+        file_type: {
+          type: 'string',
+          description: 'Restrict to one file extension, e.g. docx, xlsx, pdf.',
+        },
+        author: {
+          type: 'string',
+          description: 'Restrict to files authored by this person, e.g. "Jane Smith".',
+        },
+        modified_after: {
+          type: 'string',
+          description: 'Only files modified on/after this date, e.g. 2026-07-01.',
+        },
+        modified_before: {
+          type: 'string',
+          description: 'Only files modified on/before this date, e.g. 2026-07-31.',
+        },
+        sort: {
+          type: 'string',
+          enum: ['relevance', 'newest'],
+          description:
+            'Result order: best match first (relevance, default) or ' +
+            'most-recently-modified first (newest).',
+        },
+        limit: {
+          type: 'integer',
+          description: 'How many files to return, 1-25 (default 10).',
+        },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+    execute: async (args, { userId }): Promise<GraphFileSearchResult> => {
+      const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
+      const query = composeFileQuery({
+        query: typeof args.query === 'string' ? args.query : '',
+        site: filterString(args, 'site') || null,
+        fileType: filterString(args, 'file_type') || null,
+        author: filterString(args, 'author') || null,
+        modifiedAfter: typeof args.modified_after === 'string' ? args.modified_after : null,
+        modifiedBefore: typeof args.modified_before === 'string' ? args.modified_before : null,
+      })
+      if (!query) {
+        throw new Error(
+          'query is required — the words to look for, e.g. "q3 budget". ' +
+            'Nothing searchable was left after the arguments were parsed.',
+        )
+      }
+
+      const raw = await graphFetch(userId, '/search/query', {
+        method: 'POST',
+        scopes: FILE_SEARCH_SCOPES,
+        body: {
+          requests: [
+            {
+              // driveItem covers OneDrive *and* SharePoint document libraries in
+              // one request. `listItem` and `site` are combinable with it here,
+              // but they'd fold list rows and site pages into a *file* search.
+              entityTypes: ['driveItem'],
+              query: { queryString: query },
+              from: 0,
+              size: limit,
+              // Deliberately no `fields`: unlike `$select` it *replaces* the
+              // returned resource properties, and a hit stripped of
+              // `parentReference` loses `drive_id` — the handoff this tool exists
+              // to produce. `shapeSearchHits` is the allowlist instead, so no raw
+              // Graph payload reaches the model either way.
+              //
+              // `isDescending` is the STRING "true" — the shape verified live
+              // against this tenant. Microsoft's docs type it Boolean; do not
+              // "correct" it untested.
+              ...(args.sort === 'newest'
+                ? { sortProperties: [{ name: 'lastModifiedDateTime', isDescending: 'true' }] }
+                : {}),
+            },
+          ],
+        },
+      })
+
+      const { total, results } = shapeSearchHits(raw)
+      const hint =
+        total != null && total > results.length
+          ? `Showing ${results.length} of ${total} matches. Prefer narrowing ` +
+            `(modified_after, file_type, site, author, sort="newest") over raising limit.`
+          : undefined
+      return { query, total, results, ...(hint ? { hint } : {}) }
+    },
+  })
+
+  registerAppTool({
+    name: 'graph_files_list',
+    namespace: 'graph',
+    description:
+      "Browse the signed-in person's files instead of searching them. With no " +
+      'arguments, lists the top level of their own OneDrive; pass folder_item_id ' +
+      "(plus drive_id for a SharePoint or shared drive) to list that folder's " +
+      'contents. Entries carry the same drive_id + item_id pair as a search result, ' +
+      'and folders report isFolder + child_count so you can walk down into them. ' +
+      'Use graph_files_search to find a file by its words instead. Acts as the ' +
+      'current signed-in person.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder_item_id: {
+          type: 'string',
+          description:
+            'driveItem id of the folder to list. Omit for the top level of the ' +
+            "person's own OneDrive.",
+        },
+        drive_id: {
+          type: 'string',
+          description: "Drive holding that folder. Omit for the person's own OneDrive.",
+        },
+        limit: {
+          type: 'integer',
+          description: 'How many entries to return, 1-50 (default 20).',
+        },
+      },
+      additionalProperties: false,
+    },
+    execute: async (args, { userId }): Promise<GraphFileListResult> => {
+      const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 50)
+      const folderId = typeof args.folder_item_id === 'string' ? args.folder_item_id.trim() : ''
+      const driveId = typeof args.drive_id === 'string' ? args.drive_id.trim() || null : null
+
+      const location: GraphFileListResult['location'] = folderId ? 'folder' : 'onedrive-root'
+
+      const base = folderId
+        ? // Same encoded path builder as the ingest tool, so a crafted id can't
+          // escape its segment and address an unrelated resource.
+          `${driveItemPath(folderId, driveId)}/children`
+        : '/me/drive/root/children'
+
+      // No `$orderby`: children come back name-ordered already, and it is not
+      // supported on every drive type — a 400 here would break browsing outright.
+      const raw = await graphFetch(
+        userId,
+        `${base}?$select=${DRIVE_ITEM_LIST_SELECT}&$top=${limit}`,
+        { scopes: FILE_SCOPES },
+      )
+      return { location, items: shapeFileEntries(raw) }
+    },
+  })
+
+  registerAppTool({
+    name: 'graph_files_recent',
+    namespace: 'graph',
+    description:
+      'List the files the signed-in person recently used — opened or edited — ' +
+      "newest first, from Microsoft 365's insights. No query needed; this is the " +
+      'right tool for "my recent files" or "what did I work on lately". Each ' +
+      'item carries the drive_id + item_id pair the other file tools accept. Use ' +
+      'graph_files_search (optionally with sort="newest") to find files by ' +
+      'words or by other people. Acts as the current signed-in person.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'integer',
+          description: 'How many files to return, 1-25 (default 10).',
+        },
+      },
+      additionalProperties: false,
+    },
+    execute: async (args, { userId }): Promise<GraphRecentFilesResult> => {
+      const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
+      let raw: unknown
+      try {
+        // `$top` applies BEFORE our driveItem filter and insights mixes in
+        // non-file rows (sites, …), so the request is inflated and the shaped
+        // list sliced back down to `limit`.
+        raw = await graphFetch(userId, `/me/insights/used?$top=${Math.min(limit * 2, 50)}`, {
+          scopes: ['Sites.Read.All'],
+        })
+      } catch (err) {
+        // A 403 here is almost always itemInsights disabled by tenant policy —
+        // not a sign-in problem, so a re-auth prompt would be wrong AND the
+        // agent can still answer via search. Degrade to a successful, steerable
+        // result. 401/acquisition failures keep the sign-in path.
+        if (err instanceof GraphAuthRequiredError && err.status === 403) {
+          return {
+            items: [],
+            note:
+              'Item insights are disabled by tenant policy (or this account lacks ' +
+              'consent for them) — use graph_files_search with sort="newest" instead.',
+          }
+        }
+        throw err
+      }
+      const rows = ((raw as { value?: unknown[] })?.value ?? [])
+        .map(shapeUsedInsight)
+        .filter((r): r is GraphRecentFile => r !== null)
+        .slice(0, limit)
+      return { items: rows }
+    },
+  })
+
+  registerAppTool({
+    name: 'graph_files_shared',
+    namespace: 'graph',
+    description:
+      'List what was recently shared WITH the signed-in person — OneDrive/' +
+      'SharePoint links, files pasted into a Teams chat, and email attachments — ' +
+      'newest first, with who shared it, when and through which channel (via). ' +
+      "Filter to one sharer with shared_by (a person's name) and/or one channel " +
+      'with via. This ' +
+      'answers "what was shared with me" and "what did X share with me". ' +
+      'shared_by names whoever performed the share, which is usually someone else ' +
+      'but is sometimes the signed-in person — a few of their own outbound shares ' +
+      'do surface. It is NOT a reliable record of what they shared with others, so ' +
+      'do not answer that question from it alone. ' +
+      'Files carry the drive_id + item_id pair the other ' +
+      'file tools accept; email attachments do not (they live in the mailbox) and ' +
+      'link to the message rather than to the file. Several attachments from one ' +
+      'email share an email_group number, so cite that message once. ' +
+      'Acts as the current signed-in person.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        shared_by: {
+          type: 'string',
+          description: 'Only items shared by this person, e.g. "Jan" or "Jan Van Damme".',
+        },
+        via: {
+          type: 'string',
+          enum: ['email', 'teams', 'link'],
+          description:
+            'Only items that arrived this way: "email" (attached to a message), ' +
+            '"teams" (pasted into a Teams chat), "link" (a OneDrive or SharePoint ' +
+            'link). Omit to list every channel.',
+        },
+        limit: {
+          type: 'integer',
+          description: 'How many items to return, 1-25 (default 10).',
+        },
+      },
+      additionalProperties: false,
+    },
+    execute: async (args, { userId }): Promise<GraphSharedFilesResult> => {
+      const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
+      const sharedBy = filterString(args, 'shared_by')
+      const via = parseVia(args.via)
+      // Same inflation rationale as graph_files_recent ($top precedes our row
+      // filter), amplified when a filter will discard most rows — a via filter
+      // over a narrow window would report "no Teams files" when they were merely
+      // outside the slice.
+      const top = sharedBy || via ? 50 : Math.min(limit * 2, 50)
+      let raw: unknown
+      try {
+        raw = await graphFetch(userId, `/me/insights/shared?$top=${top}`, {
+          scopes: ['Sites.Read.All'],
+        })
+      } catch (err) {
+        if (err instanceof GraphAuthRequiredError && err.status === 403) {
+          return {
+            items: [],
+            note:
+              'Item insights are disabled by tenant policy (or this account lacks ' +
+              'consent for them) — use graph_files_search with sort="newest" instead.',
+          }
+        }
+        throw err
+      }
+      const needle = sharedBy.toLowerCase()
+      const seen = new Set<string>()
+      const rows = ((raw as { value?: unknown[] })?.value ?? [])
+        .map(shapeSharedInsight)
+        .filter((r): r is GraphSharedFile => r !== null)
+        .filter((r) => !needle || (r.shared_by ?? '').toLowerCase().includes(needle))
+        .filter((r) => !via || r.via === via)
+        // The insights order is empirically newest-first, but nothing contracts it
+        // — no $orderby is sent, and adding one to this surface is unverified (an
+        // unsupported-query-option 400 would take out the whole tool rather than
+        // one field). Sorting the shaped rows makes the "newest first" this tool
+        // advertises true by construction instead of by luck.
+        .sort((a, b) => sharedAt(b) - sharedAt(a))
+        // The same message AND the same filename is one attachment arriving
+        // twice; the newest copy survives because the sort already ran. Done
+        // before the slice so a duplicate never costs a slot.
+        .filter((r) => {
+          const key = `${r.webUrl ?? ''}\0${r.name ?? ''}`
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        })
+        .slice(0, limit)
+
+      // Several attachments from ONE email arrive as several rows carrying the
+      // identical rewritten message URL, so that URL *is* the message key — no
+      // opaque 150-char mailbox id has to enter the shaped row or the prompt.
+      // Only a group of two or more earns an ordinal; a lone attachment needs no
+      // cross-reference. Deliberately NOT collapsed into one row: those really
+      // are different files, and their names are the useful part.
+      const byMessage = new Map<string, GraphSharedFile[]>()
+      for (const r of rows) {
+        if (r.via !== 'email' || !r.webUrl) continue
+        const group = byMessage.get(r.webUrl)
+        if (group) group.push(r)
+        else byMessage.set(r.webUrl, [r])
+      }
+      let ordinal = 0
+      for (const group of byMessage.values()) {
+        if (group.length < 2) continue
+        ordinal += 1
+        for (const r of group) r.email_group = ordinal
+      }
+
+      if (rows.length === 0 && (sharedBy || via)) {
+        const filters = [
+          ...(sharedBy ? [`by "${sharedBy}"`] : []),
+          ...(via ? [`via ${via}`] : []),
+        ].join(' and ')
+        return {
+          items: [],
+          note:
+            `Nothing in the recent sharing activity was shared ${filters}. ` +
+            'The window covers recent items only — try graph_files_search with ' +
+            'author for older files.',
+        }
+      }
+      return { items: rows }
+    },
+  })
+
+  registerAppTool({
+    name: 'graph_mail_attachments',
+    namespace: 'graph',
+    description:
+      "List the signed-in person's emails that carry file attachments — what was " +
+      'SENT (default) or RECEIVED, newest first, with the attachment names. ' +
+      'Filter to one person and/or a start date. Useful for "what files did I ' +
+      'send X" — but note it only sees files that travelled through email: ' +
+      'OneDrive/SharePoint shares made from the Share dialog do not appear in ' +
+      'sent mail. Returns attachment names and sizes, not their contents. Acts ' +
+      'as the current signed-in person.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        person: {
+          type: 'string',
+          description:
+            'Only exchanges with this person (name or email), e.g. "Thibault". ' +
+            'Matches recipients for sent mail, the sender for received mail.',
+        },
+        direction: {
+          type: 'string',
+          enum: ['sent', 'received'],
+          description: 'Look in sent mail (default) or received mail.',
+        },
+        since: {
+          type: 'string',
+          description: 'Only messages on/after this date, e.g. 2026-07-01.',
+        },
+        limit: {
+          type: 'integer',
+          description: 'How many messages to return, 1-25 (default 10).',
+        },
+      },
+      additionalProperties: false,
+    },
+    execute: async (args, { userId }): Promise<GraphMailAttachmentsResult> => {
+      const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 25)
+      const direction = args.direction === 'received' ? ('received' as const) : ('sent' as const)
+      const person = filterString(args, 'person')
+
+      // Same reject-don't-drop rule as the search date args: a silently ignored
+      // `since` is a silently wrong answer.
+      let sinceClause = ''
+      if (typeof args.since === 'string' && args.since.trim()) {
+        const d = new Date(args.since.trim())
+        if (Number.isNaN(d.getTime())) {
+          throw new Error(`since must be a date like 2026-07-01 (got "${args.since}").`)
+        }
+        sinceClause = ` and receivedDateTime ge ${d.toISOString().slice(0, 10)}T00:00:00Z`
+      }
+
+      const folder = direction === 'sent' ? 'sentitems' : 'inbox'
+      // The person filter runs app-side (recipient matching in OData is awkward
+      // and unindexed), so the request is inflated and sliced after filtering.
+      const top = person ? 50 : Math.min(limit * 2, 50)
+      // No $orderby: combined with $filter Graph requires the sort property to
+      // lead the filter, and the default order is already newest-first.
+      // Attachments are expanded WITHOUT contentBytes — names and sizes only.
+      const raw = await graphFetch(
+        userId,
+        `/me/mailFolders/${folder}/messages` +
+          `?$filter=hasAttachments eq true${sinceClause}` +
+          `&$select=subject,toRecipients,from,sentDateTime,receivedDateTime,webLink` +
+          `&$expand=attachments($select=name,size,contentType)` +
+          `&$top=${top}`,
+        { scopes: ['Mail.Read'] },
+      )
+
+      const messages = ((raw as { value?: unknown[] })?.value ?? [])
+        .map((m) => ({ raw: m, shaped: shapeAttachmentMessage(m, direction) }))
+        .filter(({ raw: m }) => {
+          if (!person) return true
+          const msg = (m ?? {}) as Record<string, unknown>
+          if (direction === 'received') {
+            const from = ((msg.from ?? {}) as Record<string, unknown>).emailAddress as
+              Record<string, unknown> | undefined
+            return personMatches(person, from?.name, from?.address)
+          }
+          const recips = (Array.isArray(msg.toRecipients) ? msg.toRecipients : []) as Array<
+            Record<string, unknown>
+          >
+          return recips.some((r) => {
+            const ea = (r.emailAddress ?? {}) as Record<string, unknown>
+            return personMatches(person, ea.name, ea.address)
+          })
+        })
+        .map(({ shaped }) => shaped)
+        // Real attachments only: inline images and signature logos also set
+        // hasAttachments, but arrive with isInline — Graph still lists them, so
+        // an empty attachments array can slip through for filtered $selects.
+        .filter((m) => m.attachments.length > 0)
+        .slice(0, limit)
+
+      return { direction, messages }
+    },
+  })
+}

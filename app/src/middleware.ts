@@ -22,6 +22,8 @@ import {
   devFakeInferenceUrl,
   installDevFakeInference,
 } from './lib/inference/dev-fake-inference.server'
+import { getEndpoints } from './lib/config/endpoints'
+import { configureNeo4j } from './lib/neo4j/client'
 // Side effect only: registers the app-side tools AND the process transport that
 // makes `callTool` dispatch to them. `harness-patterns` deliberately does not
 // import `app-tools` any more — core owns the seam and the ORDER, the app owns
@@ -30,6 +32,18 @@ import {
 // closure, so the subtree it drags in is held to the no-BAML-at-module-scope
 // rule stated below.
 import './lib/app-tools/index.server'
+
+// Neo4j config seam (design S5, #225 PR-3): the driver's connection is handed
+// over explicitly at app boot — `getEndpoints().neo4j.bolt` plus the same env
+// credentials the fallback reads — so the client module (and the package it
+// becomes in PR-C2) never has to reach for app config itself. Unset, the
+// client keeps its env fallback for the standalone org-graph scripts; PR-C2
+// removes the fallback inside the package.
+configureNeo4j({
+  url: getEndpoints().neo4j.bolt,
+  user: process.env.NEO4J_USER || 'neo4j',
+  password: process.env.NEO4J_PASSWORD || 'password',
+})
 
 // Both are idempotent and HMR-safe (the armed timer / install flag are parked
 // on globalThis symbols), so a dev-server module reload doesn't stack a second

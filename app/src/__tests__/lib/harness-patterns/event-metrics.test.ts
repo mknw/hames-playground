@@ -1,3 +1,7 @@
+// The composition root registers the harness client seam (tier policy, model
+// tables, cost rates); these tests exercise scopes/rates/windows, so they run
+// the same wiring a production turn takes.
+import '../../../lib/inference/config.server'
 /**
  * Event-level token/cost accounting (#122).
  *

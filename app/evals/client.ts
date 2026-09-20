@@ -70,6 +70,11 @@ import {
   VERDA_CLIENT_BY_ROLE,
   type BamlRole,
 } from '../src/lib/harness-baml/clients.server'
+// The composition root registers the harness client seam (tier policy, model
+// tables, cost rates). Without it the default tier is the seam's safe
+// package-side 'anthropic', so a run started with USE_VERDA_INFERENCE=1 would
+// silently grade the Anthropic chains instead of the deployment it names.
+import '../src/lib/inference/config.server'
 
 /** The roles this suite has scenarios for — every `BamlRole` since the planner
  *  scenario landed — plus `actor`, which shares the `controller` role but a

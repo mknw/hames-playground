@@ -115,7 +115,18 @@ function enable(): void {
 
 async function load() {
   vi.resetModules()
+  // The composition root registers the seam (model tables, tier policy, cost
+  // rates) AND runs the module-load check, so importing it first is the wiring
+  // every production path takes — including its `rejects` on a flag-on
+  // misconfigured endpoint, which these tests rely on.
+  await import('../../../lib/inference/config.server')
   return await import('../../../lib/harness-baml/clients.server')
+}
+
+/** The app-policy half (env flag, asserts) — MOVED off `clients.server.ts`
+ *  in PR-1a; same fresh module registry as `load()`. */
+async function loadPolicy() {
+  return await import('../../../lib/inference/config.server')
 }
 
 beforeEach(() => {
@@ -132,7 +143,8 @@ afterEach(() => {
 
 describe('USE_VERDA_INFERENCE unset — the default posture is untouched', () => {
   it('every role resolves to its Anthropic chain and no call gets a client override', async () => {
-    const { resolveClientForRole, clientOverrideFor, verdaInferenceEnabled } = await load()
+    const { resolveClientForRole, clientOverrideFor } = await load()
+    const { verdaInferenceEnabled } = await loadPolicy()
 
     expect(verdaInferenceEnabled()).toBe(false)
     for (const [role, move] of roles({ ...ROUTED, ...UNROUTED })) {
@@ -152,7 +164,8 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
   beforeEach(enable)
 
   it('routes every role to its private-tier client', async () => {
-    const { resolveClientForRole, clientOverrideFor, verdaInferenceEnabled } = await load()
+    const { resolveClientForRole, clientOverrideFor } = await load()
+    const { verdaInferenceEnabled } = await loadPolicy()
 
     expect(verdaInferenceEnabled()).toBe(true)
     for (const [role, move] of roles(ROUTED)) {
@@ -230,7 +243,8 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
 describe('the flag is `1`, not truthiness', () => {
   it.each(['0', 'false', 'true', 'yes', ''])('%o does not enable it', async (value) => {
     process.env.USE_VERDA_INFERENCE = value
-    const { verdaInferenceEnabled, clientOverrideFor } = await load()
+    const { clientOverrideFor } = await load()
+    const { verdaInferenceEnabled } = await loadPolicy()
 
     expect(verdaInferenceEnabled()).toBe(false)
     expect(clientOverrideFor('controller')).toBeUndefined()
@@ -267,7 +281,7 @@ describe('misconfiguration fails closed', () => {
 
   it('assertVerdaConfigured is callable directly, for script preflights', async () => {
     enable()
-    const { assertVerdaConfigured } = await load()
+    const { assertVerdaConfigured } = await loadPolicy()
     expect(() => assertVerdaConfigured()).not.toThrow()
     delete process.env.VERDA_INFERENCE_ENDPOINT
     expect(() => assertVerdaConfigured()).toThrow(/VERDA_INFERENCE_ENDPOINT is not set/)

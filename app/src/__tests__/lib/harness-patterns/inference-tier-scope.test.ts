@@ -85,6 +85,10 @@ const PRIVATE_CLIENT: Record<string, string> = {
 
 async function load() {
   vi.resetModules()
+  // The composition root registers the seam (tier policy, model tables, cost
+  // rates) and its defaultTier reads USE_VERDA_INFERENCE — the wiring every
+  // production path takes.
+  await import('../../../lib/inference/config.server')
   return await import('../../../lib/harness-baml/clients.server')
 }
 

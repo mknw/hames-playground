@@ -51,8 +51,7 @@ import {
   type CostBasis,
   type TokenBuckets,
 } from '../settings'
-import { eurPerUsdRate, verdaEurPerHour } from '../cost-rates.server'
-import { clientOverrideFor, limitsFor } from './clients.server'
+import { activeCostRates, clientOverrideFor, limitsFor } from './clients.server'
 import { notifyLlmUsage } from '@hames/harness-patterns/llm-usage-observer.server'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 import type {
@@ -412,7 +411,11 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
     outputTokens: 0,
   }
   // Resolved once per step rather than per attempt: an operator changing a rate
-  // mid-step would otherwise price two attempts of one call differently.
+  // mid-step would otherwise price two attempts of one call differently. The
+  // rates come through the host seam (PR-1a) — `configureCostRates` at the
+  // composition root — rather than a direct import of the host's
+  // `lib/cost-rates.server.ts`, which an installed package cannot resolve.
+  const { eurPerUsd: eurPerUsdRate, verdaEurPerHour: verdaEurPerHour } = activeCostRates()
   const eurPerUsd = eurPerUsdRate()
   const eurPerHour = verdaEurPerHour()
   let attempts = 0

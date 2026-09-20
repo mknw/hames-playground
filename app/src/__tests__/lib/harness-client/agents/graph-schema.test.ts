@@ -14,6 +14,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { testAgentDeps } from './test-deps'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 
 const TOOLS = ['read_neo4j_cypher', 'get_neo4j_schema', 'search', 'fetch_content', 'Return']
@@ -26,6 +27,11 @@ const mockDoNotCachePatterns = vi.fn()
 vi.mock('../../../../lib/harness-client/session.server', () => ({
   doNotCachePatterns: (...args: unknown[]) => mockDoNotCachePatterns(...args),
 }))
+
+// The refusal hook rides `AgentDeps` now — the pattern cache is app-side state
+// the package receives, not imports. The degradation tests pass a bag whose
+// hook is the mock above; the healthy-path tests pass the plain fixture.
+const degradedDeps = { ...testAgentDeps, doNotCachePatterns: mockDoNotCachePatterns }
 
 const schemaOk = mockCallTool({ responses: { get_neo4j_schema: { Concept: ['name'] } } })
 const schemaFails = mockCallTool({ errors: { get_neo4j_schema: 'connection refused' } })
@@ -43,12 +49,14 @@ beforeEach(() => {
 
 describe('getGraphSchema', () => {
   async function load() {
-    return import('../../../../lib/harness-client/agents/graph-schema.server')
+    return import('@hames/agents/agents/graph-schema.server')
   }
 
   it('returns the schema as JSON when the tool succeeds', async () => {
     const { getGraphSchema } = await load()
-    expect(await getGraphSchema('t', 's1')).toBe(JSON.stringify({ Concept: ['name'] }))
+    expect(await getGraphSchema('t', 's1', testAgentDeps)).toBe(
+      JSON.stringify({ Concept: ['name'] }),
+    )
     expect(mockDoNotCachePatterns).not.toHaveBeenCalled()
   })
 
@@ -58,7 +66,7 @@ describe('getGraphSchema', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     // Empty string, not a throw: the agent runs blind rather than not at all.
-    expect(await getGraphSchema('my-agent', 'sess-9')).toBe('')
+    expect(await getGraphSchema('my-agent', 'sess-9', degradedDeps)).toBe('')
 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('[my-agent]'))
     expect(warn.mock.calls[0][0]).toContain('connection refused')
@@ -72,16 +80,16 @@ describe('getGraphSchema', () => {
 // `createPatterns`, because the bug was not in a helper — it was in what the
 // agent did with the result.
 describe.each([
-  ['search', () => import('../../../../lib/harness-client/agents/search.server')],
-  ['retriever-agent', () => import('../../../../lib/harness-client/agents/retriever-agent.server')],
+  ['search', () => import('@hames/agents/agents/search.server')],
+  ['retriever-agent', () => import('@hames/agents/agents/retriever-agent.server')],
 ])('%s agent — schema failure', (label, importAgent) => {
   async function build(sessionId: string): Promise<{ name: string }[]> {
     const mod = (await importAgent()) as Record<
       string,
-      { createPatterns: (s: string) => Promise<unknown> }
+      { createPatterns: (s: string, deps: unknown) => Promise<unknown> }
     >
     const agent = Object.values(mod).find((v) => typeof v?.createPatterns === 'function')!
-    return (await agent.createPatterns(sessionId)) as { name: string }[]
+    return (await agent.createPatterns(sessionId, degradedDeps)) as { name: string }[]
   }
 
   it('still builds a usable chain', async () => {

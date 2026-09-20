@@ -7,13 +7,11 @@ Server-side module that bridges the UI with the `harness-patterns` framework. Ha
 ```
 harness-client/
 ├── actions.server.ts          # processMessage(), processMessageStreaming(), approveAction(), rejectAction(), listConversations(), loadConversation()
-├── session.server.ts          # In-process pattern cache + Postgres-backed serialized context (per-user, scoped via userId)
-├── registry.server.ts         # Registers all agents, exports getAgentMetadata()
-├── graph-extractor.ts         # ContextEvent → GraphElement[] extraction (MCP + driver formats; recognises enriched payloads)
+├── session.server.ts          # In-process pattern cache + Postgres-backed serialized context (per-user, scoped via userId); owns the AgentDeps bag (agentDeps())
+├── registry.server.ts         # The composition-root overlay: registers the @hames/agents definitions with this app's icon/accent, exports getAgentMetadata()
 ├── neo4j-enricher.server.ts   # `onToolResult` recipe — fetches 1-hop neighborhood for touched nodes
-├── types.ts                   # GraphElement (extends Cytoscape ElementDefinition)
-├── index.ts                   # Public exports
-└── agents/                    # 10 pre-built agent configurations (see agents/README.md)
+├── index.ts                   # Public exports (re-exports the client-safe @hames/agents helpers)
+└── (moved to packages/agents, #225 PR-2: the 9 agent definitions, graph-extractor, reference-extractor, replay, types)
 ```
 
 Persistence layer is in `../db/`:

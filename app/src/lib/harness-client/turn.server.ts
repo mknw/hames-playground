@@ -53,6 +53,7 @@ import {
   getOrBuildPatterns,
   loadSession,
   saveSession,
+  agentDeps,
   type LoadedSession,
   type SessionData,
 } from './session.server'
@@ -67,7 +68,7 @@ import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold
 import { ensureVerdaAwake } from '../inference/wake.server'
 import { recordTurn } from '../metrics/usage-recorder.server'
 import type { HarnessSettings } from '../settings'
-import { runFirstTurnTitleGen } from './agents/title-generator.server'
+import { runFirstTurnTitleGen } from '@hames/agents/agents/title-generator.server'
 import {
   saveConversation as dbSaveConversation,
   setConversationStatus as dbSetConversationStatus,
@@ -424,7 +425,7 @@ async function generateTitle(
   result: HarnessResultScoped<SessionData>,
 ): Promise<void> {
   await Promise.race([
-    runFirstTurnTitleGen(result.context, req.sessionId, req.userId).then((title) => {
+    runFirstTurnTitleGen(result.context, req.sessionId, req.userId, agentDeps()).then((title) => {
       if (title) req.onTitle?.(title)
     }),
     new Promise<void>((resolve) => setTimeout(resolve, TITLE_GEN_TIMEOUT_MS)),

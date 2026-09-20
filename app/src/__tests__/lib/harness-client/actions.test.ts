@@ -39,6 +39,8 @@ vi.mock('../../../lib/harness-client/session.server', () => ({
   loadSession,
   deleteSession,
   evictPatterns,
+  // The composition root's deps bag — the title generator takes it now.
+  agentDeps: () => ({}),
 }))
 
 // ── registry ────────────────────────────────────────────────────────────────
@@ -120,7 +122,7 @@ vi.mock('../../../lib/auth/server', () => ({ getAuthenticatedUser }))
 
 // ── title generator (dynamically imported by the action) ────────────────────
 const runRegenerateTitle = vi.fn(async () => 'A better title')
-vi.mock('../../../lib/harness-client/agents/title-generator.server', () => ({
+vi.mock('@hames/agents/agents/title-generator.server', () => ({
   runRegenerateTitle,
 }))
 
@@ -340,10 +342,12 @@ describe('regenerateConversationTitle', () => {
     })
 
     await expect(actions.regenerateConversationTitle('sess-13')).resolves.toBe('A better title')
+    // The fourth argument is the composition root's AgentDeps bag.
     expect(runRegenerateTitle).toHaveBeenCalledWith(
       { sessionId: 'sess-13' },
       'sess-13',
       'bypass-user',
+      expect.anything(),
     )
   })
 

@@ -16,8 +16,8 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
 import type { ContextEvent } from '@hames/harness-patterns'
-import type { GraphElement } from '~/lib/harness-client/types'
-import type { OpenReferenceTarget } from '~/lib/harness-client/reference-extractor'
+import type { GraphElement } from '@hames/agents'
+import type { OpenReferenceTarget } from '@hames/agents'
 
 vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),

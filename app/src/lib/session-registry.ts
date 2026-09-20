@@ -33,7 +33,7 @@
  */
 import { createSignal, type Signal } from 'solid-js'
 import type { Message } from '~/components/ark-ui/ChatMessages'
-import type { GraphElement } from '~/lib/harness-client/types'
+import type { GraphElement } from '@hames/agents'
 import type { ContextEvent, UnifiedContext } from '@hames/harness-patterns'
 import {
   createChainProgress,

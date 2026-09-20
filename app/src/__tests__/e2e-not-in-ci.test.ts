@@ -91,7 +91,7 @@ describe('the e2e suite is not reachable from CI', () => {
     // src/** plus exactly ONE sanctioned escape: the library moved to
     // packages/ (#225 Step 1a) and stays measured — anything else outside
     // src/ (e2e/, evals/) is still a red.
-    const ALLOWED_ESCAPES = ['../packages/harness-patterns/**']
+    const ALLOWED_ESCAPES = ['../packages/harness-patterns/**', '../packages/agents/**']
     for (const pattern of patterns) {
       if (ALLOWED_ESCAPES.some((e) => pattern.startsWith(e))) continue
       expect(pattern, `coverage.include pattern ${pattern} escapes src/`).toMatch(/^src\//)

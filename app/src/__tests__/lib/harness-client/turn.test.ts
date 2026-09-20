@@ -168,6 +168,8 @@ vi.mock('../../../lib/harness-client/session.server', () => ({
   loadSession,
   saveSession,
   getOrBuildPatterns,
+  // The composition root's deps bag — the title generator takes it now.
+  agentDeps: () => ({}),
 }))
 
 // ── db/conversations ────────────────────────────────────────────────────────
@@ -183,7 +185,7 @@ vi.mock('../../../lib/db/conversations.server', () => ({
 
 // ── title agent ─────────────────────────────────────────────────────────────
 const runFirstTurnTitleGen = vi.fn<() => Promise<string | null>>(async () => null)
-vi.mock('../../../lib/harness-client/agents/title-generator.server', () => ({
+vi.mock('@hames/agents/agents/title-generator.server', () => ({
   runFirstTurnTitleGen: (...a: unknown[]) => runFirstTurnTitleGen(...(a as [])),
 }))
 

@@ -39,9 +39,9 @@
  * container (PtyManager keys on sessionId, rootfs 'base'), NOT these flavoured
  * ones — flavour-aware Shell is deferred (#116). See docs/sandbox-flavours.md.
  */
-'use server'
-
-// @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
+// @unocss-include — the icon class literal lives in the app's registry overlay
+// (see the host's harness-client/registry.server.ts), not here: `icon`/`accent`
+// are UI fields and stay app-side (the #225 composition-root decision).
 import {
   router,
   routes,
@@ -54,10 +54,15 @@ import {
   createActorControllerAdapter,
   createCriticAdapter,
 } from '@hames/harness-baml'
-import { withSandbox } from '../../sandbox/index.server'
-import type { SessionData } from '../session.server'
-import type { AgentConfig } from '../registry.server'
+import type { AgentData, AgentDefinition, AgentDeps } from '../types'
 import type { FewShot } from '@hames/harness-patterns/types'
+
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+
+// The 'use server' directive this file carried before the move was the only
+// thing keeping its exports off the client; this is the real guard, and the
+// reason stripping the directive removes nothing load-bearing.
+assertServerOnImport()
 
 const WORKSPACE_NOTE = `
 Files under /work/in are restored inputs; write deliverables the user should keep
@@ -131,14 +136,15 @@ const FLAVOURED_SANDBOX_FEW_SHOTS: FewShot[] = [
 ]
 
 /** A sandbox tool-loop; the actor sees the in-VM `sandbox_*` tools via the ALS
- *  scope `withSandbox` sets up, so the tools argument is left empty. */
-function sandboxLoop(patternId: string, guidance: string) {
+ *  scope the injected `withSandbox` sets up, so the tools argument is left
+ *  empty. */
+function sandboxLoop(deps: AgentDeps, patternId: string, guidance: string) {
   const actor = createActorControllerAdapter({
     contextPrefix: guidance,
     fewShots: FLAVOURED_SANDBOX_FEW_SHOTS,
   })
   const critic = createCriticAdapter()
-  return actorCritic<SessionData>(actor, critic, [], {
+  return actorCritic<AgentData>(actor, critic, [], {
     patternId,
     liveEvents: true,
     maxRetries: 6,
@@ -154,46 +160,58 @@ function sandboxLoop(patternId: string, guidance: string) {
   })
 }
 
-async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
+async function createPatterns(
+  sessionId: string,
+  deps: AgentDeps,
+): Promise<ConfiguredPattern<AgentData>[]> {
+  // The sandbox wrapper is injected app-side wiring (SD-19: the containment
+  // posture stays app-side and is supplied, not carried). A missing one is not
+  // a degraded composition — it is a misconfigured one — so it fails loudly
+  // instead of silently running every route on the host process.
+  if (!deps.withSandbox) {
+    throw new Error(
+      'flavoured-sandbox requires deps.withSandbox — the composition root must supply it (AgentDeps)',
+    )
+  }
   // Every route below is persistent + flavour-scoped id → its own container,
   // while `sessionId` (the Data Stash key) stays the conversation id, so /work
   // hydrate/promote is shared across flavours. `basic` is NOT the exception it
   // used to be: as an anonymous-pool sandbox it had no `id`, so `syncWorkspace`
   // was a no-op and /work/in never existed there — the multi-turn failure #243
   // left standing (see the module docstring).
-  const basic = withSandbox({
+  const basic = deps.withSandbox({
     id: `${sessionId}:base`,
     sessionId,
     rootfs: 'base',
     egress: 'mcp-only',
     syncWorkspace: true,
-  })(sandboxLoop('flavour-basic-loop', BASIC_GUIDANCE))
+  })(sandboxLoop(deps, 'flavour-basic-loop', BASIC_GUIDANCE))
 
-  const image = withSandbox({
+  const image = deps.withSandbox({
     id: `${sessionId}:image-processing`,
     sessionId,
     rootfs: 'image-processing',
     egress: 'mcp-only',
     syncWorkspace: true,
-  })(sandboxLoop('flavour-image-loop', IMAGE_GUIDANCE))
+  })(sandboxLoop(deps, 'flavour-image-loop', IMAGE_GUIDANCE))
 
-  const data = withSandbox({
+  const data = deps.withSandbox({
     id: `${sessionId}:data`,
     sessionId,
     rootfs: 'data',
     egress: 'mcp-only',
     syncWorkspace: true,
-  })(sandboxLoop('flavour-data-loop', DATA_GUIDANCE))
+  })(sandboxLoop(deps, 'flavour-data-loop', DATA_GUIDANCE))
 
-  const office = withSandbox({
+  const office = deps.withSandbox({
     id: `${sessionId}:office`,
     sessionId,
     rootfs: 'office',
     egress: 'mcp-only',
     syncWorkspace: true,
-  })(sandboxLoop('flavour-office-loop', OFFICE_GUIDANCE))
+  })(sandboxLoop(deps, 'flavour-office-loop', OFFICE_GUIDANCE))
 
-  const routerPattern = router<SessionData>(
+  const routerPattern = router<AgentData>(
     {
       basic:
         'Plain shell / general Linux work — listing or inspecting the workspace, file ' +
@@ -210,7 +228,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     { liveEvents: true, route: bamlPatterns().router },
   )
 
-  const routesPattern = routes<SessionData>(
+  const routesPattern = routes<AgentData>(
     {
       basic,
       image_processing: image,
@@ -220,7 +238,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     { liveEvents: true },
   )
 
-  const synth = compactExecution<SessionData>({
+  const synth = compactExecution<AgentData>({
     mode: 'thread',
     patternId: 'flavoured-sandbox-synth',
     liveEvents: true,
@@ -230,7 +248,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   return [routerPattern, routesPattern, synth]
 }
 
-export const flavouredSandboxAgent: AgentConfig = {
+export const flavouredSandboxAgent: AgentDefinition = {
   id: 'flavoured-sandbox',
   name: 'Sandbox · Flavoured (router)',
   description:
@@ -239,8 +257,6 @@ export const flavouredSandboxAgent: AgentConfig = {
     'Same idea as the session sandbox, but I pick the box per message: a plain ' +
     'shell, or one already set up for images, for data and charts, or for Word, ' +
     'Excel and PDF files. Upload what needs working on and say what you want done.',
-  icon: 'i-material-symbols-stack-star-outline',
-  accent: 'orange',
   servers: [],
   createPatterns,
 }

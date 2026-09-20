@@ -11,7 +11,7 @@ import {
   extractGraphFromResult,
   isNeo4jGraphResult,
   isMemoryGraphResult,
-} from '../../../lib/harness-client/graph-extractor'
+} from '@hames/agents'
 
 function ev(tool: string, result: unknown, patternId = 'neo4j-query', success = true) {
   return { type: 'tool_result' as const, ts: 1, patternId, data: { tool, result, success } }

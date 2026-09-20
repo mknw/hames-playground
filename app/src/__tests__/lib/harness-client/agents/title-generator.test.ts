@@ -8,6 +8,7 @@
  * by validating the pieces that decide whether they're called.
  */
 import { describe, it, expect, vi } from 'vitest'
+import { testAgentDeps } from './test-deps'
 
 // `agents/title-generator.server.ts` imports `harness-patterns` (which
 // asserts server-only on import) and `db/conversations.server` (which
@@ -40,8 +41,9 @@ vi.mock('@hames/harness-patterns', async () => {
   }
 })
 
-const sut = await import('../../../../lib/harness-client/agents/title-generator.server')
 const { updateConversationTitle } = await import('../../../../lib/db/conversations.server')
+const persistDeps = { ...testAgentDeps, persistTitle: updateConversationTitle }
+const sut = await import('@hames/agents/agents/title-generator.server')
 
 describe('sanitizeTitle', () => {
   it('returns the input verbatim when already clean', () => {
@@ -90,7 +92,7 @@ describe('runFirstTurnTitleGen', () => {
       input: '',
       data: {},
     }
-    const result = await sut.runFirstTurnTitleGen(ctx, 's1', 'u1')
+    const result = await sut.runFirstTurnTitleGen(ctx, 's1', 'u1', persistDeps)
     expect(result).toBeNull()
     expect(updateConversationTitle).not.toHaveBeenCalled()
   })
@@ -119,7 +121,7 @@ describe('runFirstTurnTitleGen', () => {
       input: 'second',
       data: {},
     }
-    const result = await sut.runFirstTurnTitleGen(ctx, 's1', 'u1')
+    const result = await sut.runFirstTurnTitleGen(ctx, 's1', 'u1', persistDeps)
     expect(result).toBeNull()
   })
 
@@ -141,7 +143,7 @@ describe('runFirstTurnTitleGen', () => {
       input: 'first message',
       data: {},
     }
-    const result = await sut.runFirstTurnTitleGen(ctx, 'sess-1', 'user-1')
+    const result = await sut.runFirstTurnTitleGen(ctx, 'sess-1', 'user-1', persistDeps)
     // The mocked harness returns 'Mocked Agent Response' which sanitizes to itself.
     expect(result).toBe('Mocked Agent Response')
     expect(updateConversationTitle).toHaveBeenCalledWith(
@@ -163,7 +165,7 @@ describe('runRegenerateTitle', () => {
       input: '',
       data: {},
     }
-    const result = await sut.runRegenerateTitle(ctx, 's1', 'u1')
+    const result = await sut.runRegenerateTitle(ctx, 's1', 'u1', persistDeps)
     expect(result).toBeNull()
     expect(updateConversationTitle).not.toHaveBeenCalled()
   })
@@ -200,7 +202,7 @@ describe('runRegenerateTitle', () => {
       input: 'newest',
       data: {},
     }
-    const result = await sut.runRegenerateTitle(ctx, 'sess-x', 'user-x')
+    const result = await sut.runRegenerateTitle(ctx, 'sess-x', 'user-x', persistDeps)
     expect(result).toBe('Mocked Agent Response')
     expect(updateConversationTitle).toHaveBeenCalledWith(
       'sess-x',

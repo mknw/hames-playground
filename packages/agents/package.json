@@ -1,0 +1,30 @@
+{
+  "name": "@hames/agents",
+  "version": "0.1.0",
+  "description": "Ready-made harness compositions — nine agents built on @hames/harness-patterns, plus the client-safe extraction/replay helpers.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./package.json": "./package.json",
+    "./agents": "./agents/index.ts",
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@hames/harness-baml": "workspace:*",
+    "@hames/harness-patterns": "workspace:*"
+  },
+  "devDependencies": {
+    "cytoscape": "^3.33.2"
+  },
+  "files": [
+    "*.ts",
+    "agents",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

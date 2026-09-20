@@ -12,18 +12,22 @@
  */
 
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import type { ConfiguredPattern, WithApproval, RetrieverData } from '@hames/harness-patterns'
-import type { HarnessData } from '@hames/harness-patterns/harness.server'
-import type { RouterData } from '@hames/harness-patterns/patterns/router.server'
-import type { SimpleLoopData } from '@hames/harness-patterns/patterns'
+import type { ConfiguredPattern } from '@hames/harness-patterns'
 import { deserializeContext, serializeContext } from '@hames/harness-patterns'
 import type { UnifiedContext } from '@hames/harness-patterns'
+import type { AgentData, AgentDeps } from '@hames/agents'
+import { mcpNamespace } from '../app-tools/mcp-catalog'
+import { enrichNeo4jResult } from './neo4j-enricher.server'
+import { createRedisBackend } from '../retriever'
+import { withSandbox, type WithSandboxConfig } from '../sandbox/index.server'
+import { clientOverrideFor, type BamlRole } from '@hames/harness-baml/clients.server'
 import { canonicalAgentId, getAgent } from './registry.server'
 import {
   loadConversation,
   saveConversation,
   deleteConversation,
   deriveTitle,
+  updateConversationTitle,
   type ConversationKind,
   type ConversationStatus,
 } from '../db/conversations.server'
@@ -34,10 +38,48 @@ assertServerOnImport()
 // Types
 // ============================================================================
 
-export interface SessionData
-  extends HarnessData, RouterData, SimpleLoopData, RetrieverData, WithApproval {
-  response?: string
-  [key: string]: unknown
+/**
+ * The app's session data shape is the package's `AgentData`, aliased — every
+ * app-side pattern still speaks the same composite the moved definitions
+ * build (#225 @hames/agents PR-2). The composite itself lives in the package
+ * (`@hames/agents` `types.ts`), beside the `AgentDefinition`/`AgentDeps`
+ * surface the composition root supplies.
+ */
+export type SessionData = AgentData
+
+/**
+ * The ONE `AgentDeps` bag this composition root supplies — every registered
+ * agent's factory closes over it, and the title generator's entry points take
+ * it as a parameter. Built here rather than in `registry.server.ts` because
+ * the bag's cache-refusal hook (`doNotCachePatterns`) is THIS module's state:
+ * a registry-side bag would need the registry to import this module back (the
+ * cycle the moved `graph-schema` used to break with a dynamic import).
+ *
+ * Every entry is app-side policy the package must not carry: the deployment's
+ * tool catalog, the Neo4j enricher, the Data Stash backend, the sandbox
+ * wrapper (SD-19 — the containment posture is supplied, not carried), the
+ * tier override, title persistence, and the cache refusal.
+ */
+export function agentDeps(): AgentDeps {
+  return {
+    toolNamespaces: mcpNamespace,
+    enrichNeo4jResult,
+    createRedisBackend,
+    // The package's contract names the five fields its factories pass as
+    // plain strings; the app narrows `rootfs`/`egress` onto its own unions
+    // here — the one adapter seam between the two type surfaces.
+    withSandbox: (attach) =>
+      withSandbox({
+        id: attach.id,
+        sessionId: attach.sessionId,
+        rootfs: attach.rootfs as WithSandboxConfig['rootfs'],
+        egress: attach.egress as WithSandboxConfig['egress'],
+        syncWorkspace: attach.syncWorkspace,
+      }),
+    clientOverride: (role) => clientOverrideFor(role as BamlRole),
+    persistTitle: updateConversationTitle,
+    doNotCachePatterns,
+  }
 }
 
 interface PatternCacheEntry {

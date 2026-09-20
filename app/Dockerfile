@@ -70,6 +70,11 @@ COPY --from=root packages/harness-patterns /ws/packages/harness-patterns
 # workspace source inside the image too. Its pre-generated baml_client ships
 # in the copy; nothing regenerates at build time.
 COPY --from=root packages/harness-baml /ws/packages/harness-baml
+# PR-2 (#225): the third workspace member — the ready-made agent definitions —
+# copied by name, before the frozen install, for the same `workspace:*`
+# resolution as the other two. Nothing here is generated; the package ships
+# source.
+COPY --from=root packages/agents /ws/packages/agents
 WORKDIR /ws/app
 RUN pnpm install --frozen-lockfile
 
@@ -84,6 +89,8 @@ RUN test -L /ws/app/node_modules/@hames/harness-patterns \
  && test -f /ws/packages/harness-patterns/package.json \
  && test -L /ws/app/node_modules/@hames/harness-baml \
  && test -f /ws/packages/harness-baml/baml_client/index.ts \
+ && test -L /ws/app/node_modules/@hames/agents \
+ && test -f /ws/packages/agents/agents/index.ts \
  && cd /ws/app \
  && node -e "const r = require.resolve('@hames/harness-patterns'); if (!r.startsWith('/ws/packages/')) { console.error('resolved OUTSIDE the workspace source (registry fetch?): ' + r); process.exit(1); } console.log('workspace link OK: ' + r)"
 

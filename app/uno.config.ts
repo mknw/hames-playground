@@ -24,8 +24,11 @@ export default defineConfig({
   //     filesystem-globbed files still pass through the pipeline filter,
   //     which rejects `.ts` paths unless that marker appears in the code.
   // Globs are relative to app/; entries are watched in dev.
+  // The agents moved to @hames/agents (#225 PR-2) — the icon literals moved
+  // WITH them, into the overlay in `registry.server.ts` (one literal per
+  // registration), so this glob names that file now.
   content: {
-    filesystem: ['src/lib/harness-client/agents/*.server.ts'],
+    filesystem: ['src/lib/harness-client/registry.server.ts'],
   },
   presets: [
     presetIcons({

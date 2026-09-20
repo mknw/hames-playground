@@ -68,8 +68,8 @@ const setConversationTier = vi.fn(async (_id: string, tier: string) => ({
   verdaAvailable: true,
 }))
 vi.mock('~/lib/harness-client', async () => {
-  const graph = await import('~/lib/harness-client/graph-extractor')
-  const refs = await import('~/lib/harness-client/reference-extractor')
+  const graph = await import('@hames/agents')
+  const refs = await import('@hames/agents')
   return {
     ...graph,
     ...refs,

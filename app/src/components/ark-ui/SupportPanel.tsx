@@ -35,9 +35,9 @@ const TOUCHED_NODE_STYLES: StylesheetJsonBlock[] = [
 // ============================================================================
 
 // Re-export GraphElement from shared types
-export type { GraphElement } from '~/lib/harness-client/types'
-import type { GraphElement } from '~/lib/harness-client/types'
-import { isEdgeElement, isNodeElement } from '~/lib/harness-client/graph-extractor'
+export type { GraphElement } from '@hames/agents'
+import type { GraphElement } from '@hames/agents'
+import { isEdgeElement, isNodeElement } from '@hames/agents'
 
 export interface SupportPanelProps {
   graphElements: GraphElement[]

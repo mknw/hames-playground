@@ -158,7 +158,7 @@ jobs:
     # `check` is on it today; whether the pack job joins the ruleset's
     # required_status_checks is a pending owner decision, not a scheduled
     # change — which is why this comment does not claim the job gates merges
-    # like `check` and `image` do.
+    # like `check` does.
 
     # Runs the pack + install-from-tarball smoke (#225 Step 1d; plan
     # §3.3/§4.3) — the ONLY step anywhere in CI that exercises "does the

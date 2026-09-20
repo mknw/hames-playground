@@ -1047,12 +1047,18 @@ describe('DockerBackend — per-tenant cache volume (Lane A)', () => {
 // ============================================================================
 
 describe('DockerBackend — tenantId sanitization in the cache volume name (Lane C)', () => {
+  // These pins boot the PROXIED path (pypi), not 'open': the proxied branch
+  // is where per-tenant volumes mount in NORMAL use, so the sanitization
+  // guard must watch that door. The gated-open call path gets its own pin
+  // below — the volume mounts on exactly two paths and both are watched.
+  const proxiedPlan = egressPlan({ gwRunning: false })
+
   it('MUTATION PIN: a hostile tenantId cannot produce an invalid docker volume name', async () => {
-    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    spawnPlan = proxiedPlan
     const backend = await makeBackend()
     // Slashes, colon, dollar, space — every character docker's volume-name
     // grammar forbids, plus shell-adjacent metacharacters.
-    await backend.boot('base', { egress: 'open', tenantId: 'a/b:c$d e&f' })
+    await backend.boot('base', { egress: 'pypi', tenantId: 'a/b:c$d e&f' })
     const mount = flagValue(sandboxRunArgs(), '-v')!
     // The full mount spec is a valid name + /cache — no raw hostile character
     // survived into it (the name grammar forbids `/`, `:`, `$`, ` `, `&`).
@@ -1060,12 +1066,12 @@ describe('DockerBackend — tenantId sanitization in the cache volume name (Lane
   })
 
   it('two DISTINCT hostile tenantIds never sanitize onto one name (a collision would re-share the volume)', async () => {
-    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    spawnPlan = proxiedPlan
     const backend = await makeBackend()
-    await backend.boot('base', { egress: 'open', tenantId: 'a/b' })
+    await backend.boot('base', { egress: 'pypi', tenantId: 'a/b' })
     const a = flagValue(sandboxRunArgs(), '-v')
     spawnCalls.length = 0
-    await backend.boot('base', { egress: 'open', tenantId: 'a b' })
+    await backend.boot('base', { egress: 'pypi', tenantId: 'a b' })
     const b = flagValue(sandboxRunArgs(), '-v')
     // Both sanitize to the same cleaned stem ('a_b') — the digest is what
     // keeps the names (and the volumes) distinct.
@@ -1073,15 +1079,27 @@ describe('DockerBackend — tenantId sanitization in the cache volume name (Lane
   })
 
   it('a CLEAN tenantId (a real Entra oid) passes through byte-for-byte — Lane A names unchanged', async () => {
-    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    spawnPlan = proxiedPlan
     const backend = await makeBackend()
     await backend.boot('base', {
-      egress: 'open',
+      egress: 'pypi',
       tenantId: '00000000-0000-0000-0000-000000000000',
     })
     expect(flagValue(sandboxRunArgs(), '-v')).toBe(
       'kg-sandbox-cache-00000000-0000-0000-0000-000000000000:/cache',
     )
+  })
+
+  it('the gated-open call path (SANDBOX_ENABLE_OPEN_EGRESS=1) sanitizes the tenantId too', async () => {
+    // One pin per volume-mounting call path: :453 is the proxied branch above;
+    // this is the env-gated open branch. A hostile id there gets the SAME
+    // charset discipline — the guard does not depend on which door mounted.
+    process.env.SANDBOX_ENABLE_OPEN_EGRESS = '1'
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    await backend.boot('base', { egress: 'open', tenantId: 'a/b:c$d e&f' })
+    const mount = flagValue(sandboxRunArgs(), '-v')!
+    expect(mount).toMatch(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*:\/cache$/)
   })
 
   it('MUTATION PIN: reset() preserves the ORIGINAL tenant cache volume (Lane A cold-boot scoping survives recycle)', async () => {

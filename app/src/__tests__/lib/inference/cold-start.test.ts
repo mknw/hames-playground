@@ -1,3 +1,7 @@
+// The composition root registers the harness client seam (tier policy, model
+// tables, cost rates); these tests exercise scopes/rates/windows, so they run
+// the same wiring a production turn takes.
+import '../../../lib/inference/config.server'
 /**
  * Cold-start notice — when it fires, when it stays silent, and what it is
  * allowed to remember.

@@ -50,7 +50,12 @@
 
 import { Collector } from '@boundaryml/baml'
 import type { LoopTurn, ToolDescription } from '@hames/harness-patterns/types'
-import { assertVerdaConfigured, clientOverrideFor, verdaInferenceEnabled } from '../clients.server'
+// The composition root registers the seam (model tables, tier policy, cost
+// rates) — importing it for its side effect keeps the smoke run on the same
+// wiring a turn takes.
+import '../../inference/config.server'
+import { assertVerdaConfigured, verdaInferenceEnabled } from '../../inference/config.server'
+import { clientOverrideFor } from '../clients.server'
 
 const EXPECTED_CLIENT = 'VerdaQwen'
 

@@ -87,34 +87,148 @@
  * this is the flip it was written for.
  *
  * Which makes the tier's configuration a CONJUNCTION, and the failure loud:
- * {@link assertPrivateTierConfigured} demands both endpoints. A private tier
+ * `assertPrivateTierConfigured` (in `lib/inference/config.server.ts`) demands
+ * both endpoints. A private tier
  * with no small endpoint does not descale describe back onto the 27B — that
  * would be a routing change nobody asked for, made silently, on the role handed
  * tool results verbatim (SD-10). It refuses the tier instead.
+ *
+ * ## The host seam (PR-1a of the #225 extraction)
+ *
+ * This module is package-shaped: it ships in v1 and must not import host-app
+ * code — an installed tarball cannot resolve it (the same exit criterion
+ * #342/#346 gave `harness-patterns`). So everything APP-side it used to reach
+ * for directly — the model tables, the `USE_VERDA_INFERENCE` env default, the
+ * endpoint asserts, the cold-start wake hook, the EUR rates — is FED IN instead:
+ * the host calls the three `configure*` accessors below at its composition root
+ * (`lib/inference/config.server.ts`), and this module reads them through
+ * module-level accessors with safe package-side defaults. Mirroring #342's
+ * shape: the host opens a scope or passes config; the module never imports back
+ * into host policy. The scope the tier rides is `runWithInferenceTier` below —
+ * the host opens it through THIS module's own export, so the store and its
+ * readers are the same module instance by construction, pinned by
+ * `clients-seam.test.ts` (red under the dual-instance mutation).
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-// App-side, and in the same direction the patterns already import
-// `settings-context.server` / `tool-transport.server`: a process-local clock
-// with no database behind it, which is the boundary the library extraction
-// actually cares about (see `llm-usage-observer.server.ts`).
-import { noteVerdaCallStarting } from '../inference/cold-start.server'
-import { VERDA_CLIENT_NAME } from '../inference/verda-activity.server'
-// The tier union lives in `lib/inference/config.server.ts` (#225 Lane A2):
-// eight app modules imported nothing else from this file, so the vocabulary
-// moved out to shed them from every seam diff. Type-only import here — the
-// value surface this module keeps is the assert, the scope and the override.
-import type { InferenceTier } from '../inference/config.server'
-// The model tables (Lane A5): `resolveClientForRole` names the client, and
-// `getContextWindow` / `limitsFor` read the two tables for it. They live HERE,
-// beside the map — this file is the role→client seam the tables key into, and
-// it moves to `harness-baml` at A6 with them. The pattern layer stops reading
-// the tables directly (A5's property).
-import { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS } from '../settings'
 import type { ModelLimits } from '@hames/harness-patterns/types'
 
 assertServerOnImport()
+
+/**
+ * Which inference tier a run is on.
+ *
+ * MOVED here from `lib/inference/config.server.ts` (PR-1a): the tier scope
+ * below is this module's seam, so its vocabulary is package-side — the union
+ * cannot stay host-side without a host import, which is the one direction the
+ * extraction forbids. `config.server.ts` re-exports it, so every existing
+ * importer keeps its import path.
+ *
+ * `'verda'` is the self-hosted deployment (`VERDA_CLIENT_BY_ROLE` below);
+ * `'anthropic'` is "no override at all", i.e. every function runs the chain it
+ * declares. Named rather than boolean because it reaches the browser — a
+ * header control shows the user which one their chats are on, and a label is
+ * what a preview user can act on.
+ */
+export type InferenceTier = 'verda' | 'anthropic'
+
+// ============================================================================
+// THE HOST SEAM — where the app's configuration is FED IN (PR-1a)
+//
+// Three `configure*` accessors, called ONCE at the host's composition root
+// (`lib/inference/config.server.ts`). Each store starts from a safe
+// package-side default so an unregistered consumer degrades loudly or
+// harmlessly rather than mis-routing:
+//
+// - model tables: unknown clients already fell through (`getContextWindow`
+//   → 16 384, `limitsFor` → undefined cap), so empty tables degrade the same
+//   way an unknown client name always did;
+// - tier policy: the default tier is 'anthropic' (no confidential traffic
+//   without registration) and a 'verda' scope with no reachability assert is
+//   REFUSED, not opened — fail closed, like every gate on this tier;
+// - wake hook: absent means no notice, a degraded UX but never a wrong route;
+// - cost rates: the two literal fallbacks below, pinned equal to the app's
+//   `DEFAULT_EUR_PER_USD` / `DEFAULT_VERDA_EUR_PER_HOUR` by
+//   `clients-seam.test.ts` so the copies cannot drift silently.
+// ============================================================================
+
+/** The two model tables the host feeds in — the VALUES of `settings.ts`'s
+ *  `CLIENT_MAX_OUTPUT_TOKENS` and `MODEL_CONTEXT_WINDOWS`. The tables themselves
+ *  stay host-side beside `baml_src/` (SA-C2: every leaf declaring `max_tokens`
+ *  in `baml_src/` must be mirrored there, enforced by `client-output-caps.test.ts`);
+ *  only the READING moved here (Lane A5's property — the pattern layer asks
+ *  this seam, never the table). */
+export interface ModelTables {
+  maxOutputTokens: Readonly<Record<string, number | undefined>>
+  contextWindows: Readonly<Record<string, number>>
+}
+
+let modelTables: ModelTables = { maxOutputTokens: {}, contextWindows: {} }
+
+/** Feed the host's model tables in. Called once at the composition root. */
+export function configureModelTables(tables: ModelTables): void {
+  modelTables = tables
+}
+
+/** The app-policy half of the tier seam: what a run takes outside any scope,
+ *  whether a 'verda' scope is reachable, and what to announce when a
+ *  private-tier client is about to take a call. */
+export interface InferenceTierPolicy {
+  /** The tier outside any `runWithInferenceTier` scope (a script, a background
+   *  job). The host reads `USE_VERDA_INFERENCE` here; the package-side default
+   *  is 'anthropic' — the safe direction, never confidential traffic. */
+  defaultTier: () => InferenceTier
+  /** Fail-closed reachability check, run before a 'verda' scope opens (the
+   *  host's `assertPrivateTierConfigured`).
+   *  Unregistered → the scope is REFUSED, not opened. */
+  assertTierReachable?: (tier: InferenceTier) => void
+  /** A private-tier client (`VERDA_CLIENT_BY_ROLE`'s values) is about to take
+   *  a call. The host decides what that means — the wake/cold-start notice
+   *  filters on its own scale-to-zero client name here, keeping the "which
+   *  client scales to zero" knowledge host-side. */
+  onPrivateCallStart?: (client: string) => void
+}
+
+let tierPolicy: InferenceTierPolicy = { defaultTier: () => 'anthropic' }
+
+/** Feed the host's tier policy in. Called once at the composition root. */
+export function configureInferencePolicy(policy: InferenceTierPolicy): void {
+  tierPolicy = policy
+}
+
+/** EUR rates the host bills under, read per call by `computeEventMetrics`
+ *  (baml-adapters.server.ts) so an operator changing a rate mid-process is
+ *  seen by the next step. */
+export interface CostRates {
+  eurPerUsd: () => number
+  verdaEurPerHour: () => number
+}
+
+// Package-side fallbacks, deliberately LITERALS: settings.ts is client-safe
+// and cannot be imported here (the extraction's one direction rule). Kept
+// equal to the app's DEFAULT_EUR_PER_USD / DEFAULT_VERDA_EUR_PER_HOUR by
+// clients-seam.test.ts — the same deliberate-copy-with-a-pin pattern as
+// TIME_PRICED_CLIENT in settings.ts.
+const SEAM_DEFAULT_EUR_PER_USD = 0.86
+const SEAM_DEFAULT_VERDA_EUR_PER_HOUR = 1.819
+
+let costRates: CostRates = {
+  eurPerUsd: () => SEAM_DEFAULT_EUR_PER_USD,
+  verdaEurPerHour: () => SEAM_DEFAULT_VERDA_EUR_PER_HOUR,
+}
+
+/** Feed the host's EUR rates in. Called once at the composition root. */
+export function configureCostRates(rates: CostRates): void {
+  costRates = rates
+}
+
+/** Internal accessors — `computeEventMetrics` reads these per step, not the
+ *  configure functions, so an operator changing a rate mid-step prices two
+ *  attempts of one call the same way. */
+export function activeCostRates(): CostRates {
+  return costRates
+}
 
 export type BamlRole =
   | 'controller' // ActorController + LoopController
@@ -309,7 +423,7 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   //     edit this map already requires.
   //
   // If `SMALL_LLM_BASE_URL` is unset the tier is REFUSED, not descaled — see
-  // `assertPrivateTierConfigured`.
+  // `assertPrivateTierConfigured` in lib/inference/config.server.ts.
   describe: 'LocalQwenSmall', // the six summarization functions
   // The composite consequence of THIS line, in the style the `planner:` entry
   // above sets: the screen now inherits the scale-to-zero LATENCY profile as
@@ -410,14 +524,6 @@ export const TIER_SWITCHED_FUNCTIONS: ReadonlySet<string> = new Set(
   ),
 )
 
-/** `USE_VERDA_INFERENCE=1` — the DEPLOYMENT default: the tier every run takes
- *  when no per-run scope says otherwise. Read per call rather than cached at
- *  module load so a test (and a script that sets it before importing a
- *  pattern) sees it. */
-export function verdaInferenceEnabled(): boolean {
-  return process.env.USE_VERDA_INFERENCE === '1'
-}
-
 const tierStore = new AsyncLocalStorage<InferenceTier>()
 
 /**
@@ -429,11 +535,13 @@ const tierStore = new AsyncLocalStorage<InferenceTier>()
  * turn runner opens one scope and every adapter deep inside the call graph
  * picks it up through `clientOverrideFor()` without a single signature change.
  *
- * FAIL CLOSED on `'verda'`: a scope that names the self-hosted tier while the
- * endpoint is unset throws HERE, before any prompt is built. The alternative —
- * shrug and let BAML fall through to the declared Anthropic chain — is the one
- * failure this whole route exists to prevent, and it is no less dangerous for
- * having come from a user's preference row rather than from an env var.
+ * FAIL CLOSED on `'verda'`: a scope that names the self-hosted tier is checked
+ * through the host-registered `assertTierReachable` before anything runs, and
+ * a scope opened with NO policy registered is REFUSED outright — the
+ * fail-closed default, matching every other gate on this tier. The alternative
+ * — shrug and let BAML fall through to the declared Anthropic chain — is the
+ * one failure this whole route exists to prevent, and it is no less dangerous
+ * for having come from a user's preference row rather than from an env var.
  */
 export function runWithInferenceTier<T>(tier: InferenceTier, fn: () => Promise<T>): Promise<T> {
   if (tier === 'verda') {
@@ -441,8 +549,18 @@ export function runWithInferenceTier<T>(tier: InferenceTier, fn: () => Promise<T
     // "hand me a callback, get a promise", and a caller that only wrote
     // `.catch()` would otherwise take the throw on the stack instead. `fn` is
     // deliberately never invoked — the check is before any prompt is built.
+    const assertReachable = tierPolicy.assertTierReachable
+    if (!assertReachable) {
+      return Promise.reject(
+        new Error(
+          "The 'verda' inference tier was requested but no inference policy is registered. " +
+            'The host registers one at its composition root (lib/inference/config.server.ts, ' +
+            'via configureInferencePolicy); refusing rather than guessing is the fail-closed default.',
+        ),
+      )
+    }
     try {
-      assertPrivateTierConfigured()
+      assertReachable(tier)
     } catch (err) {
       return Promise.reject(err instanceof Error ? err : new Error(String(err)))
     }
@@ -456,125 +574,8 @@ export function runWithInferenceTier<T>(tier: InferenceTier, fn: () => Promise<T
  * anything off the turn path).
  */
 export function activeInferenceTier(): InferenceTier {
-  return tierStore.getStore() ?? (verdaInferenceEnabled() ? 'verda' : 'anthropic')
+  return tierStore.getStore() ?? tierPolicy.defaultTier()
 }
-
-/**
- * Throws unless the Verda endpoint is configured well enough to reach.
- *
- * FAIL CLOSED, and deliberately: the alternative — warn, then let BAML fall
- * through to the declared Anthropic client — would silently route
- * confidential-compute traffic to the provider the flag exists to avoid, and
- * nothing downstream would look wrong. Throwing is the loud version of the
- * same information.
- *
- * WHEN it throws is narrower than "startup": nothing on the server-boot path
- * imports this module. `src/middleware.ts` arms only the routine scheduler,
- * and every importer of this file (`baml-adapters.server.ts`, the patterns,
- * `compactBulkData`) is reached from a server function or a routine's dynamic
- * `import()`. So a flag-on deployment with a typo'd endpoint BOOTS GREEN and
- * throws on the first call that touches the harness — not on `start`.
- *
- * `base_url` is handed to `openai-generic` verbatim (BAML options take an
- * `env.X` reference, not an expression, so nothing can append a path for us),
- * which is why the env var must already BE the OpenAI-compatible base — the
- * deployment root plus `/v1`. Without the suffix the first request 404s
- * mid-conversation on `<root>/chat/completions`.
- */
-export function assertVerdaConfigured(): void {
-  const endpoint = process.env.VERDA_INFERENCE_ENDPOINT
-  const missing = [
-    ['VERDA_INFERENCE_ENDPOINT', endpoint],
-    ['VERDA_INFERENCE_API_KEY', process.env.VERDA_INFERENCE_API_KEY],
-  ]
-    .filter(([, value]) => !value)
-    .map(([name]) => name)
-  if (missing.length > 0) {
-    throw new Error(
-      `USE_VERDA_INFERENCE=1 but ${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not set. ` +
-        'Set them (see app/.env.example) or unset USE_VERDA_INFERENCE — this build refuses to ' +
-        'quietly send the flagged roles to Anthropic instead.',
-    )
-  }
-  if (!/\/v1\/?$/.test(endpoint as string)) {
-    throw new Error(
-      'VERDA_INFERENCE_ENDPOINT must be the OpenAI-compatible base URL, i.e. end in `/v1` ' +
-        '(the deployment root plus the version path). BAML passes it to openai-generic verbatim, ' +
-        'so a root URL makes every call 404 on `<root>/chat/completions`.',
-    )
-  }
-}
-
-/**
- * Throws unless the 4B summarizer the private tier's `describe` role runs on is
- * reachable — `SMALL_LLM_BASE_URL`, the #256 env-vars-only contract.
- *
- * FAIL CLOSED, and this one is a NAMED OWNER DECISION (2026-08-26) rather than
- * an inherited posture: describe must never silently descale back onto the 27B.
- * A fallback would look harmless — the calls would succeed, on infrastructure
- * the company still controls, so the confidential-compute property would hold —
- * and that is exactly what makes it the wrong default. It would be a routing
- * change nobody asked for, invisible in every log, moving the highest-frequency
- * role in the repo onto the model the tier's whole latency budget was rearranged
- * to keep it off, and doing it on the role that is handed tool results verbatim
- * (SD-10). "It still works" is not the property being protected.
- *
- * `SMALL_LLM_API_KEY` is deliberately NOT required. llama-server authenticates
- * nothing, so a local `make llm-small` has no key to set; `openai-generic` sends
- * the header regardless and a remote endpoint that checks one fails loudly on
- * its own with a 401. Demanding it here would refuse the tier for the common
- * local case.
- *
- * The URL is checked for the `/v1` suffix for `assertVerdaConfigured`'s reason:
- * BAML hands `base_url` to `openai-generic` verbatim, so a root URL 404s every
- * call on `<root>/chat/completions` — mid-conversation, which is the failure
- * this whole family of checks exists to move forward in time.
- */
-export function assertSmallModelConfigured(): void {
-  const base = process.env.SMALL_LLM_BASE_URL
-  if (!base) {
-    throw new Error(
-      'The private inference tier routes the `describe` role to LocalQwenSmall, but ' +
-        'SMALL_LLM_BASE_URL is not set. Set it (see app/.env.example — `make llm-small` serves ' +
-        'http://localhost:8095/v1) or use the anthropic tier. This build refuses to quietly ' +
-        'descale summarization back onto the 27B: that would re-route the role handed tool ' +
-        'results verbatim, invisibly, and nobody asked for it.',
-    )
-  }
-  if (!/\/v1\/?$/.test(base)) {
-    throw new Error(
-      'SMALL_LLM_BASE_URL must be the OpenAI-compatible base URL, i.e. end in `/v1`. BAML passes ' +
-        'it to openai-generic verbatim, so a root URL makes every describe call 404 on ' +
-        '`<root>/chat/completions`.',
-    )
-  }
-}
-
-/**
- * Throws unless EVERY endpoint the private tier needs is configured.
- *
- * The tier is two models (see `VERDA_CLIENT_BY_ROLE`), so its configuration is
- * a conjunction and this is the only function that says so. Every gate on the
- * tier — module load below, `runWithInferenceTier('verda')`, and
- * `verdaConfigured()`'s "may a user pick this?" — goes through here, so adding a
- * third model to the tier is one edit rather than three.
- *
- * The two halves stay separately callable on purpose: `scripts/smoke-verda.ts`
- * exercises only the 27B roles and must not be refused for a summarizer it never
- * calls.
- */
-export function assertPrivateTierConfigured(): void {
-  assertVerdaConfigured()
-  assertSmallModelConfigured()
-}
-
-// Checked once, at module load, and only when the flag is on: a misconfigured
-// endpoint should fail loudly and closed rather than surface as a 404 mid-
-// conversation. Module load is the FIRST use of the harness, not process
-// start (see the note on `assertVerdaConfigured` above), so this refuses the
-// first agent call — it does not refuse the boot. Costs nothing on the
-// default path.
-if (verdaInferenceEnabled()) assertPrivateTierConfigured()
 
 /**
  * `{ client: 'VerdaQwen' }` for a Verda-routed role while the active tier is
@@ -598,27 +599,21 @@ if (verdaInferenceEnabled()) assertPrivateTierConfigured()
 export function clientOverrideFor(role: BamlRole): { client: string } | undefined {
   const client = verdaClientFor(role)
   if (!client) return undefined
-  // A bag naming the SCALE-TO-ZERO BOX is a call about to wait on a container
-  // start, which is the moment the cold-start notice exists to catch. #274 wrote
-  // this hook when the `router` still answered on Anthropic, so the first bag of
-  // a turn belonged to the controller; the 2026-08-26 widening put the router on
-  // the tier and the notice moved one call earlier. That was free because the
-  // hook is on the SEAM rather than on a role or a position in the chain.
-  //
-  // What is NOT free is the client test below, and it arrived with the describe
-  // flip. The private tier is two models now, and `LocalQwenSmall` does not
-  // scale to zero — it is a llama-server somebody is running. A bag naming it is
-  // a call that will answer in milliseconds, and announcing "starting GPU, ~146
-  // seconds" in front of it would be a countdown for a wait nobody is paying,
-  // fired from the highest-frequency role on the tier. So the hook keys on the
-  // client, not on "the tier moved this role".
+  // A bag naming a private-tier client is a call about to take the override —
+  // #274 wrote this hook when the `router` still answered on Anthropic, so the
+  // first bag of a turn belonged to the controller; the 2026-08-26 widening put
+  // the router on the tier and the notice moved one call earlier. That was free
+  // because the hook is on the SEAM rather than on a role or a position in the
+  // chain. The module announces WHICH client is about to be called; what that
+  // MEANS (which one scales to zero and owes the user a countdown) is host
+  // policy, so the filter lives in the host's registered `onPrivateCallStart`
+  // (lib/inference/config.server.ts), not here.
   //
   // `resolveClientForRole` below deliberately does NOT come through here — it is
   // asked the same question for prompt budgeting, potentially more than once and
   // without a call following, and a notice fired from a budgeting lookup would
-  // announce a wait nobody is paying either. No-op unless a turn armed a watch
-  // (`runWithColdStartWatch`).
-  if (client === VERDA_CLIENT_NAME) noteVerdaCallStarting()
+  // announce a wait nobody is paying either.
+  tierPolicy.onPrivateCallStart?.(client)
   return { client }
 }
 
@@ -649,13 +644,14 @@ export function resolveClientForRole(role: BamlRole): string {
 /**
  * Context window (tokens) for a BAML client name. Falls back to 16K if the
  * client is unknown. MOVED here from `token-budget.server.ts` in Lane A5:
- * it reads the app-side `MODEL_CONTEXT_WINDOWS` table, so it lives beside
- * `resolveClientForRole` (which names the client) and moves with this file at
- * A6 — the pattern layer no longer touches the table.
+ * it reads the host-fed `contextWindows` table (see `configureModelTables` —
+ * the VALUES live host-side beside `baml_src/` per SA-C2), beside
+ * `resolveClientForRole` (which names the client) — the pattern layer no
+ * longer touches the table.
  */
 export function getContextWindow(clientName?: string): number {
-  if (clientName && MODEL_CONTEXT_WINDOWS[clientName]) {
-    return MODEL_CONTEXT_WINDOWS[clientName]
+  if (clientName && modelTables.contextWindows[clientName]) {
+    return modelTables.contextWindows[clientName]
   }
   return 16_384
 }
@@ -684,6 +680,6 @@ export function limitsFor(role: BamlRole): ModelLimits {
   const client = resolveClientForRole(role)
   return {
     contextWindow: getContextWindow(client),
-    maxOutputTokens: CLIENT_MAX_OUTPUT_TOKENS[client],
+    maxOutputTokens: modelTables.maxOutputTokens[client],
   }
 }

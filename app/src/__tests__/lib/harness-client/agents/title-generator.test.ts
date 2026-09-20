@@ -18,7 +18,7 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
 vi.mock('../../../../lib/db/conversations.server', () => ({
   updateConversationTitle: vi.fn(async () => undefined),
 }))
-vi.mock('../../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: {
     GenerateConversationTitle: vi.fn(async (msg: string) => `Title For ${msg.slice(0, 8)}`),
   },

@@ -11,7 +11,7 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
 }))
 
 // Mock BAML client
-vi.mock('../../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: {
     CompactIntent: vi.fn(
       async () => 'Locate the Fibonacci script you created earlier under /work.',
@@ -58,12 +58,11 @@ async function load() {
   const { compactIntent } = await import('@hames/harness-patterns/patterns/compactIntent.server')
   const { createScope } = await import('@hames/harness-patterns/context.server')
   const { createEventView } = await import('@hames/harness-patterns/patterns')
-  const { b } = await import('../../../../../baml_client')
+  const { b } = await import('@hames/harness-baml/baml_client')
   // Lane A6: the rewrite seam is REQUIRED config. Wire the real adapter
   // (which hits the mocked `b.CompactIntent`) — what `bamlPatterns().compactIntent`
   // hands an agent.
-  const { createCompactIntentAdapter } =
-    await import('../../../../lib/harness-baml/baml-patterns.server')
+  const { createCompactIntentAdapter } = await import('@hames/harness-baml/baml-patterns.server')
   const compactIntentFn = createCompactIntentAdapter()
   return { compactIntent, compactIntentFn, createScope, createEventView, b }
 }

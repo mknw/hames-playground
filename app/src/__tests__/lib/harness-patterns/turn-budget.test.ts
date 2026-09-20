@@ -44,7 +44,7 @@ vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   listTools: mockListTools(['read_neo4j_cypher', 'code-mode', 'Return']),
 }))
 
-vi.mock('../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: mockBAMLClient({
     loopActions: [mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{}' })],
     actorActions: [mockAction({ tool_name: 'code-mode', tool_args: '{}' })],

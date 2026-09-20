@@ -21,7 +21,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockCallTool, mockListTools, fixtures } from '../../mocks/mcp'
-import { defaultSynthesize } from '../../../lib/harness-baml/defaults.server'
+import { defaultSynthesize } from '@hames/harness-baml/defaults.server'
 import type { SimpleLoopData } from '@hames/harness-patterns/patterns/simpleLoop.server'
 import type { CompactExecutionData } from '@hames/harness-patterns/types'
 
@@ -83,7 +83,7 @@ describe('LoopController prompt — terminal-action guidance (#149)', () => {
    *  the important case: a bare `b.LoopController.bind(b)` controller, or any
    *  caller predating #149, passes nothing and must still get the default. */
   async function render(returnStyle?: string): Promise<Body> {
-    const { b } = await import('../../../../baml_client')
+    const { b } = await import('@hames/harness-baml/baml_client')
     const req = await b.request.LoopController(
       'list the people',
       'list the people',
@@ -149,8 +149,9 @@ const RETURN_PROSE = 'LOOP-PROSE-SENTINEL: three people, all in Brussels.'
 /** Load the real patterns with `b` stubbed: each controller/synth call renders
  *  the real HTTP body (never sent), records it, and returns a scripted value. */
 async function loadHarness() {
-  const actual =
-    await vi.importActual<typeof import('../../../../baml_client')>('../../../../baml_client')
+  const actual = await vi.importActual<typeof import('@hames/harness-baml/baml_client')>(
+    '@hames/harness-baml/baml_client',
+  )
 
   const loopScript = [
     {
@@ -170,7 +171,7 @@ async function loadHarness() {
   ]
   let loopCall = 0
 
-  vi.doMock('../../../../baml_client', () => ({
+  vi.doMock('@hames/harness-baml/baml_client', () => ({
     b: {
       request: actual.b.request,
       LoopController: async (...args: unknown[]) => {
@@ -196,8 +197,7 @@ async function loadHarness() {
   const { compactExecution } =
     await import('@hames/harness-patterns/patterns/compactExecution.server')
   const { harness } = await import('@hames/harness-patterns/harness.server')
-  const { createLoopControllerAdapter } =
-    await import('../../../lib/harness-baml/baml-adapters.server')
+  const { createLoopControllerAdapter } = await import('@hames/harness-baml/baml-adapters.server')
   return { simpleLoop, compactExecution, harness, createLoopControllerAdapter }
 }
 

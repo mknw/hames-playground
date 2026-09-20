@@ -29,7 +29,7 @@ vi.mock('@boundaryml/baml', () => ({
   },
   BamlValidationError: class extends Error {},
 }))
-vi.mock('../../../baml_client', () => ({ b: {} }))
+vi.mock('@hames/harness-baml/baml_client', () => ({ b: {} }))
 
 // Construction-only assertions: the REQUIRED injected implementations
 // (`route`, `synthesize` — BAML-companion seam lane) are stubs; the pattern

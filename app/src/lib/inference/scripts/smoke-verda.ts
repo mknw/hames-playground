@@ -15,7 +15,7 @@
  * Run from `app/`:
  *
  *   USE_VERDA_INFERENCE=1 pnpm dlx tsx --env-file=.env \
- *     src/lib/harness-baml/scripts/smoke-verda.ts
+ *     src/lib/inference/scripts/smoke-verda.ts
  *
  * `--env-file=.env` supplies `VERDA_INFERENCE_ENDPOINT` (which must END IN
  * `/v1` — see `assertVerdaConfigured`) and `VERDA_INFERENCE_API_KEY`. The flag
@@ -89,15 +89,15 @@ import {
   describeToolResultOp,
   describeToolResultsBatchOp,
   extractLLMCallData,
-} from '../baml-adapters.server'
+} from '@hames/harness-baml/baml-adapters.server'
 // The composition root registers the seam (model tables, tier policy, cost
 // rates) — importing it for its side effect keeps the smoke run on the same
 // wiring a turn takes.
-import '../../inference/config.server'
-import { assertVerdaConfigured, verdaInferenceEnabled } from '../../inference/config.server'
-import { clientOverrideFor } from '../clients.server'
+import '../config.server'
+import { assertVerdaConfigured, verdaInferenceEnabled } from '../config.server'
+import { clientOverrideFor } from '@hames/harness-baml/clients.server'
 import { observeLlmUsage } from '@hames/harness-patterns/llm-usage-observer.server'
-import { routeMessageOp } from '../routing.server'
+import { routeMessageOp } from '@hames/harness-baml/routing.server'
 
 const EXPECTED_CLIENT = 'VerdaQwen'
 
@@ -212,7 +212,7 @@ async function preflight(): Promise<void> {
       'USE_VERDA_INFERENCE is not set to 1, so this run would route to Anthropic and prove ' +
         'nothing. Re-run as:\n' +
         '  USE_VERDA_INFERENCE=1 pnpm dlx tsx --env-file=.env ' +
-        'src/lib/harness-baml/scripts/smoke-verda.ts',
+        'src/lib/inference/scripts/smoke-verda.ts',
     )
   }
   // Same check the module performs at load; called explicitly so the failure

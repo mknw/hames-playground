@@ -26,7 +26,7 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
 // mock of `routing.server` used to intercept the pattern's deleted import.
 const mockRouteMessageOp = vi.fn()
 
-vi.mock('../../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: {
     CompactIntent: vi.fn(async () => 'a freshly compacted brief'),
     RetrieveQuery: vi.fn(async () => 'rewritten search query'),
@@ -86,11 +86,11 @@ async function load() {
   const { retriever } = await import('@hames/harness-patterns/patterns/retriever.server')
   const { createScope } = await import('@hames/harness-patterns/context.server')
   const { createEventView } = await import('@hames/harness-patterns/patterns')
-  const { b } = await import('../../../../../baml_client')
+  const { b } = await import('@hames/harness-baml/baml_client')
   // Lane A6: the rewrite/compactIntent seams are REQUIRED config — wire the
   // real adapters (they hit the mocked `b.*`), what `bamlPatterns()` hands.
   const { createCompactIntentAdapter, createRetrieveQueryAdapter } =
-    await import('../../../../lib/harness-baml/baml-patterns.server')
+    await import('@hames/harness-baml/baml-patterns.server')
   return {
     router,
     routes,

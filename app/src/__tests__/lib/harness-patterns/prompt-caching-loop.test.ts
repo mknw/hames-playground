@@ -107,8 +107,9 @@ function tailAfterLastMarker(body: Body): WireBlock[] {
 }
 
 async function loadHarness() {
-  const actual =
-    await vi.importActual<typeof import('../../../../baml_client')>('../../../../baml_client')
+  const actual = await vi.importActual<typeof import('@hames/harness-baml/baml_client')>(
+    '@hames/harness-baml/baml_client',
+  )
 
   // Intercept the two controller calls: render the real HTTP body (never
   // sent), record it, and hand the loop a scripted action so it keeps going.
@@ -161,7 +162,7 @@ async function loadHarness() {
     },
   ]
 
-  vi.doMock('../../../../baml_client', () => ({
+  vi.doMock('@hames/harness-baml/baml_client', () => ({
     b: {
       request: actual.b.request,
       LoopController: async (...args: unknown[]) => {
@@ -194,7 +195,7 @@ async function loadHarness() {
   const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
   const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
   const { createLoopControllerAdapter, createActorControllerAdapter, createCriticAdapter } =
-    await import('../../../lib/harness-baml/baml-adapters.server')
+    await import('@hames/harness-baml/baml-adapters.server')
   const { createScope } = await import('@hames/harness-patterns/context.server')
   const { createEventView } = await import('@hames/harness-patterns/patterns')
   return {

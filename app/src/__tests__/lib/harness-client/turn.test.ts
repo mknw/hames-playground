@@ -106,9 +106,9 @@ vi.mock('../../../lib/settings-context.server', async () => {
 // The per-user switch acts here and nowhere else, so the turn runner is where
 // "the user's preference actually steers the run" is provable.
 const tierScopes: string[] = []
-vi.mock('../../../lib/harness-baml/clients.server', async () => {
-  const actual = await vi.importActual<typeof import('../../../lib/harness-baml/clients.server')>(
-    '../../../lib/harness-baml/clients.server',
+vi.mock('@hames/harness-baml/clients.server', async () => {
+  const actual = await vi.importActual<typeof import('@hames/harness-baml/clients.server')>(
+    '@hames/harness-baml/clients.server',
   )
   return {
     ...actual,
@@ -809,7 +809,7 @@ describe('what the header learns from a turn', () => {
     // what every adapter does and what fires the notice. The private turn is
     // parked in its wake while the Anthropic one runs, so the two scopes are
     // genuinely open at once.
-    const { clientOverrideFor } = await import('../../../lib/harness-baml/clients.server')
+    const { clientOverrideFor } = await import('@hames/harness-baml/clients.server')
     const privateWarming = vi.fn()
     const anthropicWarming = vi.fn()
     const overrides: Record<string, { client: string } | undefined> = {}

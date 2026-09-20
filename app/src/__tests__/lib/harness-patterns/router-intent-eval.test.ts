@@ -82,7 +82,7 @@ describe.runIf(RUN_EVALS)('router intent synthesis (live)', () => {
   it.each(CASES)(
     'expands $name into a self-contained intent',
     async (c) => {
-      const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+      const { routeMessageOp } = await import('@hames/harness-baml/routing.server')
 
       const result = await routeMessageOp(c.message, c.history, ROUTES)
 
@@ -95,7 +95,7 @@ describe.runIf(RUN_EVALS)('router intent synthesis (live)', () => {
   )
 
   it('leaves an already self-contained message alone', async () => {
-    const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+    const { routeMessageOp } = await import('@hames/harness-baml/routing.server')
 
     const result = await routeMessageOp('how many nodes are in the graph?', [], ROUTES)
 
@@ -142,7 +142,7 @@ describe.runIf(RUN_EVALS)('router route choice (live)', () => {
   it.each(ROUTE_CASES)(
     'classifies $name',
     async (c) => {
-      const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+      const { routeMessageOp } = await import('@hames/harness-baml/routing.server')
 
       const result = await routeMessageOp(c.message, [], ROUTES)
 

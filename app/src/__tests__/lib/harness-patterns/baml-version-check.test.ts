@@ -12,7 +12,7 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-const load = () => import('../../../lib/harness-baml/baml-version-check.server')
+const load = () => import('@hames/harness-baml/baml-version-check.server')
 
 describe('parseGeneratorVersion', () => {
   it('reads the version pin out of a generator block', async () => {

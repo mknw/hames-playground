@@ -46,14 +46,18 @@ type Msg = { role: string; content: Block[] | string }
 type Body = { system?: unknown; messages: Msg[] }
 type RoledBlock = Block & { role: string }
 
-let b: typeof import('../../../../baml_client').b
+let b: typeof import('@hames/harness-baml/baml_client').b
 
 beforeAll(async () => {
-  b = (await import('../../../../baml_client')).b
+  b = (await import('@hames/harness-baml/baml_client')).b
 })
 
 const TOOLS = [
-  { name: 'read_neo4j_cypher', description: 'Run a read-only Cypher query', args_schema: '{"query":"string"}' },
+  {
+    name: 'read_neo4j_cypher',
+    description: 'Run a read-only Cypher query',
+    args_schema: '{"query":"string"}',
+  },
   { name: 'get_neo4j_schema', description: 'Fetch the graph schema' },
 ]
 const REFS = [
@@ -80,8 +84,13 @@ const TURN_3 = {
 
 async function renderLoop(turns: unknown[]): Promise<Body> {
   const req = await b.request.LoopController(
-    'find nodes about X', 'find nodes about X',
-    TOOLS, turns as never, 'GRAPH SCHEMA:\n(Person)-[:KNOWS]->(Person)', REFS, undefined,
+    'find nodes about X',
+    'find nodes about X',
+    TOOLS,
+    turns as never,
+    'GRAPH SCHEMA:\n(Person)-[:KNOWS]->(Person)',
+    REFS,
+    undefined,
   )
   return req.body.json() as Body
 }
@@ -89,7 +98,8 @@ async function renderLoop(turns: unknown[]): Promise<Body> {
 /** All content blocks flattened, each tagged with its message's role. */
 function blocks(body: Body): RoledBlock[] {
   return body.messages.flatMap((m) =>
-    Array.isArray(m.content) ? m.content.map((blk) => ({ ...blk, role: m.role })) : [])
+    Array.isArray(m.content) ? m.content.map((blk) => ({ ...blk, role: m.role })) : [],
+  )
 }
 
 function breakpoints(body: Body): RoledBlock[] {
@@ -111,8 +121,8 @@ describe('LoopController prompt-caching layout', () => {
     expect(tier1.text).not.toContain('INSTRUCTIONS')
     expect(tier1.text).not.toContain('ref:ev_1')
     // tier-2: run-static (intent, instructions, refs + expansion affordance)
-    expect(tier2.cache_control?.type).toBe("ephemeral")
-    expect(tier2.text).toContain("INTENT:")
+    expect(tier2.cache_control?.type).toBe('ephemeral')
+    expect(tier2.text).toContain('INTENT:')
     expect(tier2.text).toContain('INSTRUCTIONS')
     expect(tier2.text).toContain('expandPreviousResult')
     expect(tier2.text).toContain('[ref:ev_1] search: Found 3 nodes about X')
@@ -148,10 +158,10 @@ describe('LoopController prompt-caching layout', () => {
     const body = await renderLoop([TURN_1, TURN_2, TURN_3])
     const bps = breakpoints(body)
     expect(bps).toHaveLength(4)
-    expect(bps[0].text).toContain('AVAILABLE TOOLS')          // tier-1
-    expect(bps[1].text).toContain("INTENT:")               // tier-2
-    expect(bps[2].text).toContain('Turn 2 result:')           // rolling (second-to-last)
-    expect(bps[3].text).toContain('Turn 3 result:')           // rolling (last)
+    expect(bps[0].text).toContain('AVAILABLE TOOLS') // tier-1
+    expect(bps[1].text).toContain('INTENT:') // tier-2
+    expect(bps[2].text).toContain('Turn 2 result:') // rolling (second-to-last)
+    expect(bps[3].text).toContain('Turn 3 result:') // rolling (last)
     // turn 1's result is no longer checkpointed; the tail block never is
     const all = blocks(body)
     expect(all.find((blk) => blk.text?.includes('Turn 1 result:'))?.cache_control).toBeUndefined()
@@ -171,7 +181,8 @@ describe('LoopController prompt-caching layout', () => {
     expect(t2of1.text).toBe(t2of0.text)
     expect(t2of3.text).toBe(t2of0.text)
     // turn-1 action/result blocks identical between renders (append-only history)
-    const pick = (body: Body, needle: string) => blocks(body).find((blk) => blk.text?.includes(needle))?.text
+    const pick = (body: Body, needle: string) =>
+      blocks(body).find((blk) => blk.text?.includes(needle))?.text
     expect(pick(b3, 'Turn 1 action:')).toBe(pick(b1, 'Turn 1 action:'))
     expect(pick(b3, 'Turn 1 result:')).toBe(pick(b1, 'Turn 1 result:'))
     // system prompt identical
@@ -185,7 +196,14 @@ describe('LoopController prompt-caching layout', () => {
       { ref_id: 'ev_2', tool: 'fetch', summary: 'Page content about Y', expanded_in_turn: null },
     ]
     const req = await b.request.LoopController(
-      'q', 'q', TOOLS, [TURN_1, TURN_2] as never, undefined, annotated, undefined)
+      'q',
+      'q',
+      TOOLS,
+      [TURN_1, TURN_2] as never,
+      undefined,
+      annotated,
+      undefined,
+    )
     const body = req.body.json() as Body
     const full = JSON.stringify(body.messages)
     expect(full).not.toContain('expanded in turn 2')
@@ -202,20 +220,43 @@ describe('ActorController prompt-caching layout (production scheme)', () => {
   const ATTEMPTS = [
     {
       n: 1,
-      action: { reasoning: 'try a script', tool_name: 'code-mode', tool_args: '{"script":"return 1"}', status: 'success', is_final: false },
-      result: 'got 1', error: null, feedback: 'not sufficient, need 2',
+      action: {
+        reasoning: 'try a script',
+        tool_name: 'code-mode',
+        tool_args: '{"script":"return 1"}',
+        status: 'success',
+        is_final: false,
+      },
+      result: 'got 1',
+      error: null,
+      feedback: 'not sufficient, need 2',
     },
     {
       n: 2,
-      action: { reasoning: '', tool_name: 'code-mode', tool_args: '{"script":"return 2"}', status: 'error', is_final: false },
-      result: '', error: 'boom', feedback: null,
+      action: {
+        reasoning: '',
+        tool_name: 'code-mode',
+        tool_args: '{"script":"return 2"}',
+        status: 'error',
+        is_final: false,
+      },
+      result: '',
+      error: 'boom',
+      feedback: null,
     },
   ]
 
   async function renderActor(attempts: unknown[]): Promise<Body> {
     const req = await b.request.ActorController(
-      'do the thing', 'do the thing', TOOLS, attempts as never,
-      'ENABLED SERVERS: neo4j', undefined, attempts.length + 1, 3)
+      'do the thing',
+      'do the thing',
+      TOOLS,
+      attempts as never,
+      'ENABLED SERVERS: neo4j',
+      undefined,
+      attempts.length + 1,
+      3,
+    )
     return req.body.json() as Body
   }
 
@@ -233,7 +274,9 @@ describe('ActorController prompt-caching layout (production scheme)', () => {
     expect(systemBlocks(third).some((blk) => blk.cache_control)).toBe(false)
     expect(breakpoints(third)).toHaveLength(1)
     expect(breakpoints(third)[0].text).toContain('Attempt 2 result:')
-    expect(blocks(third).find((blk) => blk.text?.includes('USER REQUEST'))?.cache_control).toBeUndefined()
+    expect(
+      blocks(third).find((blk) => blk.text?.includes('USER REQUEST'))?.cache_control,
+    ).toBeUndefined()
   })
 
   it('assistant/user attempt pairs; feedback rides its attempt result', async () => {
@@ -268,7 +311,8 @@ describe('ActorController prompt-caching layout (production scheme)', () => {
     // the request block's marker legitimately differs between call 1 and 2+)
     expect(blocks(b1)[0].text).toBe(blocks(b0)[0].text)
     expect(blocks(b2)[0].text).toBe(blocks(b0)[0].text)
-    const pick = (body: Body, needle: string) => blocks(body).find((blk) => blk.text?.includes(needle))?.text
+    const pick = (body: Body, needle: string) =>
+      blocks(body).find((blk) => blk.text?.includes(needle))?.text
     expect(pick(b2, 'USER REQUEST')).toBe(pick(b0, 'USER REQUEST'))
     expect(pick(b2, 'Attempt 1 action:')).toBe(pick(b1, 'Attempt 1 action:'))
     expect(pick(b2, 'Attempt 1 result:')).toBe(pick(b1, 'Attempt 1 result:'))
@@ -293,8 +337,16 @@ describe('tool catalog renders blank-line-separated entries (processed string)',
   ]
 
   it('LoopController: entries separated; Return entry not glued to the last tool', async () => {
-    const req = await (b.request.LoopController as never as Render)('q', 'q', MIXED_TOOLS, [], 'CTX', undefined, undefined)
-    const text = (blocks(req.body.json() as Body)[0].text ?? '')
+    const req = await (b.request.LoopController as never as Render)(
+      'q',
+      'q',
+      MIXED_TOOLS,
+      [],
+      'CTX',
+      undefined,
+      undefined,
+    )
+    const text = blocks(req.body.json() as Body)[0].text ?? ''
     expect(text).toContain('- tool_1: first tool\n  Args: {"q":"string"}\n\n- tool_2: second tool')
     expect(text).toContain('- tool_2: second tool\n\n- tool_3: third tool')
     expect(text).toContain('Args: {"x":"int"}\n\n- Return:')
@@ -302,9 +354,18 @@ describe('tool catalog renders blank-line-separated entries (processed string)',
   })
 
   it('ActorController: entries separated; critic paragraph not glued to the last tool', async () => {
-    const req = await (b.request.ActorController as never as Render)('q', 'q', MIXED_TOOLS, [], 'CTX', undefined, 1, 3)
+    const req = await (b.request.ActorController as never as Render)(
+      'q',
+      'q',
+      MIXED_TOOLS,
+      [],
+      'CTX',
+      undefined,
+      1,
+      3,
+    )
     const body = req.body.json() as Body
-    const text = ((body.system as Block[] | undefined)?.[0]?.text ?? '')
+    const text = (body.system as Block[] | undefined)?.[0]?.text ?? ''
     expect(text).toContain('- tool_1: first tool\n  Args: {"q":"string"}\n\n- tool_2: second tool')
     expect(text).toContain('Args: {"x":"int"}\n\nA critic decides')
     expect(text).not.toMatch(/\S- tool_\d/)
@@ -333,14 +394,21 @@ describe('multi-call affordance + batch turn rendering', () => {
     tool_result: {
       tool: 'read_neo4j_cypher',
       success: true,
-      result: '{"1":{"tool":"read_neo4j_cypher","result":"rows"},"2":{"tool":"get_neo4j_schema","result":"(Person)"},"3":{"tool":"read_neo4j_cypher","__error":"timeout"}}',
+      result:
+        '{"1":{"tool":"read_neo4j_cypher","result":"rows"},"2":{"tool":"get_neo4j_schema","result":"(Person)"},"3":{"tool":"read_neo4j_cypher","__error":"timeout"}}',
     },
   }
 
   async function renderLoopMode(turns: unknown[], mode?: string): Promise<Body> {
     const req = await b.request.LoopController(
-      'find nodes about X', 'find nodes about X',
-      TOOLS, turns as never, 'GRAPH SCHEMA:\n(Person)-[:KNOWS]->(Person)', REFS, undefined, mode,
+      'find nodes about X',
+      'find nodes about X',
+      TOOLS,
+      turns as never,
+      'GRAPH SCHEMA:\n(Person)-[:KNOWS]->(Person)',
+      REFS,
+      undefined,
+      mode,
     )
     return req.body.json() as Body
   }
@@ -364,9 +432,9 @@ describe('multi-call affordance + batch turn rendering', () => {
   it('affordance adds no markers and stays byte-stable across iterations', async () => {
     const b0 = await renderLoopMode([], 'parallel')
     const b3 = await renderLoopMode([TURN_1, TURN_2, TURN_3], 'parallel')
-    expect(blocks(b0)).toHaveLength(3)          // tier-1, tier-2, tail — unchanged
-    expect(breakpoints(b0)).toHaveLength(2)     // two tier markers on iteration 1
-    expect(breakpoints(b3)).toHaveLength(4)     // + two rolling markers later
+    expect(blocks(b0)).toHaveLength(3) // tier-1, tier-2, tail — unchanged
+    expect(breakpoints(b0)).toHaveLength(2) // two tier markers on iteration 1
+    expect(breakpoints(b3)).toHaveLength(4) // + two rolling markers later
     expect(blocks(b3)[0].text).toBe(blocks(b0)[0].text) // tier-1 byte-stable
   })
 
@@ -380,8 +448,14 @@ describe('multi-call affordance + batch turn rendering', () => {
     ])
     // Key order mirrors ControllerAction's field order — the shape the model
     // is asked to emit (exact-replay invariant).
-    expect(Object.keys(parsed)).toEqual(
-      ['reasoning', 'tool_name', 'tool_args', 'additional_calls', 'status', 'is_final'])
+    expect(Object.keys(parsed)).toEqual([
+      'reasoning',
+      'tool_name',
+      'tool_args',
+      'additional_calls',
+      'status',
+      'is_final',
+    ])
     // the combined keyed result renders in the turn's result block as-is
     const r1 = blocks(body).find((blk) => blk.text?.includes('Turn 1 result:'))
     expect(r1?.text).toContain('"__error":"timeout"')
@@ -406,39 +480,60 @@ describe('multi-call affordance + batch turn rendering', () => {
         status: 'success',
         is_final: false,
       },
-      result: '{"1":{"tool":"sandbox_write","result":"ok"},"2":{"tool":"sandbox_bash","result":"1"}}',
+      result:
+        '{"1":{"tool":"sandbox_write","result":"ok"},"2":{"tool":"sandbox_bash","result":"1"}}',
       error: null,
       feedback: null,
     }
     const req = await (b.request.ActorController as never as Render)(
-      'q', 'q', TOOLS, [BATCH_ATTEMPT], 'CTX', undefined, 2, 3, 'sequential')
+      'q',
+      'q',
+      TOOLS,
+      [BATCH_ATTEMPT],
+      'CTX',
+      undefined,
+      2,
+      3,
+      'sequential',
+    )
     const body = req.body.json() as Body
-    const sys = ((body.system as Block[] | undefined) ?? [])
+    const sys = (body.system as Block[] | undefined) ?? []
     expect(sys[0]?.text).toContain('MULTIPLE CALLS PER TURN')
     expect(sys[0]?.text).toContain('IN ORDER')
     expect(sys.some((blk) => blk.cache_control)).toBe(false) // still no system marker
-    expect(breakpoints(body)).toHaveLength(1)                // rolling marker only
+    expect(breakpoints(body)).toHaveLength(1) // rolling marker only
     const a1 = blocks(body).find((blk) => blk.role === 'assistant')
     const parsed = JSON.parse(a1?.text ?? '{}')
-    expect(parsed.additional_calls).toEqual([{ tool_name: 'sandbox_bash', tool_args: '{"cmd":"python a.py"}' }])
-    expect(Object.keys(parsed)).toEqual(
-      ['reasoning', 'tool_name', 'tool_args', 'additional_calls', 'status', 'is_final'])
+    expect(parsed.additional_calls).toEqual([
+      { tool_name: 'sandbox_bash', tool_args: '{"cmd":"python a.py"}' },
+    ])
+    expect(Object.keys(parsed)).toEqual([
+      'reasoning',
+      'tool_name',
+      'tool_args',
+      'additional_calls',
+      'status',
+      'is_final',
+    ])
   })
 
   it('Critic renders batch attempts with per-call lines', async () => {
-    const attempts = [{
-      n: 1,
-      action: {
-        reasoning: 'batching',
-        tool_name: 'read_neo4j_cypher',
-        tool_args: '{"query":"MATCH (n) RETURN n"}',
-        additional_calls: [{ tool_name: 'get_neo4j_schema', tool_args: '{}' }],
-        status: 'running',
-        is_final: false,
+    const attempts = [
+      {
+        n: 1,
+        action: {
+          reasoning: 'batching',
+          tool_name: 'read_neo4j_cypher',
+          tool_args: '{"query":"MATCH (n) RETURN n"}',
+          additional_calls: [{ tool_name: 'get_neo4j_schema', tool_args: '{}' }],
+          status: 'running',
+          is_final: false,
+        },
+        result: '{"1":{"result":"rows"},"2":{"result":"(Person)"}}',
+        error: null,
+        feedback: null,
       },
-      result: '{"1":{"result":"rows"},"2":{"result":"(Person)"}}',
-      error: null, feedback: null,
-    }]
+    ]
     const req = await (b.request.Critic as never as Render)('intent', attempts)
     const body = req.body.json() as Body
     const full = JSON.stringify(body)

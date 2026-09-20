@@ -230,7 +230,7 @@ describe.runIf(RUN_EVALS)('describe compaction — batched vs per-item (live)', 
     'answers every item in one call and sends fewer input tokens than N calls — $name',
     async ({ name, fixtures: FIXTURES }) => {
       ensureApiKey()
-      const { b } = await import('../../../baml_client')
+      const { b } = await import('@hames/harness-baml/baml_client')
       const { Collector } = await import('@boundaryml/baml')
 
       // Arm A — the old shape: one call per result, all in flight at once.

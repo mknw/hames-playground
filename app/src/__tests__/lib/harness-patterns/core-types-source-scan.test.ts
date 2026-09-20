@@ -35,7 +35,7 @@ import type {
   ToolCallRequest as GeneratedToolCallRequest,
   ToolDescription as GeneratedToolDescription,
   ToolResult as GeneratedToolResult,
-} from '../../../../baml_client/types'
+} from '@hames/harness-baml/baml_client/types'
 import type {
   Attempt,
   ControllerAction,

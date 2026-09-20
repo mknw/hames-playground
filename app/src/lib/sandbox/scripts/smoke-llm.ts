@@ -30,10 +30,15 @@ import { actorCritic } from '@hames/harness-patterns/patterns/actorCritic.server
 import {
   createActorControllerAdapter,
   createCriticAdapter,
-} from '../../harness-baml/baml-adapters.server'
+} from '@hames/harness-baml/baml-adapters.server'
 import { createScope } from '@hames/harness-patterns/context.server'
 import { createEventView } from '@hames/harness-patterns/patterns'
 import { printEventSummary, checkRootfsImage } from './_shared'
+// The composition root registers the seam (tier policy, model tables, cost
+// pricing) — without it the adapters' default tier is the seam's safe
+// 'anthropic', so a USE_VERDA_INFERENCE=1 run would silently grade the
+// Anthropic chains and fail nothing (reviewer finding, PR-1a review → PR-1b).
+import '../inference/config.server'
 
 const SENTENCE = 'the quick brown fox jumps over the lazy dog'
 

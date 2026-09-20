@@ -45,7 +45,7 @@ const mockCritic = vi.fn()
 const mockRouter = vi.fn()
 const mockReferenceSelector = vi.fn()
 
-vi.mock('../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: {
     LoopController: mockLoopController,
     ActorController: mockActorController,
@@ -119,7 +119,7 @@ beforeEach(() => {
 describe('adapters: a failed BAML call carries rawOutput through the throw', () => {
   it('LoopController wraps a BamlValidationError as LLMCallError with rawOutput', async () => {
     const { createLoopControllerAdapter, LLMCallError } =
-      await import('../../../lib/harness-baml/baml-adapters.server')
+      await import('@hames/harness-baml/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
     mockLoopController.mockRejectedValue(
       new BamlValidationError('prompt', RAW_TEXT, 'missing reasoning', 'missing reasoning'),
@@ -133,8 +133,8 @@ describe('adapters: a failed BAML call carries rawOutput through the throw', () 
   })
 
   it('routeMessageOp wraps a failed Router the same way — it used to throw bare', async () => {
-    const { LLMCallError } = await import('../../../lib/harness-baml/baml-adapters.server')
-    const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+    const { LLMCallError } = await import('@hames/harness-baml/baml-adapters.server')
+    const { routeMessageOp } = await import('@hames/harness-baml/routing.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
     const { Collector: RealCollector } = await import('@boundaryml/baml')
     mockRouter.mockRejectedValue(
@@ -165,7 +165,7 @@ describe('simpleLoop: error events carry the response that caused them', () => {
   }
 
   it('a failed controller call → kind llm_call + rawOutput', async () => {
-    const { LLMCallError } = await import('../../../lib/harness-baml/baml-adapters.server')
+    const { LLMCallError } = await import('@hames/harness-baml/baml-adapters.server')
     const controller = vi.fn().mockRejectedValue(
       new LLMCallError('BamlValidationError: missing reasoning', {
         functionName: 'LoopController',
@@ -244,7 +244,7 @@ describe('actorCritic: error events carry the actor response', () => {
   }
 
   it('a failed actor call → rawOutput on the error event', async () => {
-    const { LLMCallError } = await import('../../../lib/harness-baml/baml-adapters.server')
+    const { LLMCallError } = await import('@hames/harness-baml/baml-adapters.server')
     const actor = vi.fn().mockRejectedValue(
       new LLMCallError('BamlValidationError: missing tool_name', {
         functionName: 'ActorController',
@@ -296,7 +296,7 @@ describe('actorCritic: error events carry the actor response', () => {
 describe('router: error events carry the response', () => {
   const run = async (route?: unknown) => {
     const { router } = await import('@hames/harness-patterns/patterns/router.server')
-    const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+    const { routeMessageOp } = await import('@hames/harness-baml/routing.server')
     return runPattern(
       router({ neo4j: 'Database queries' }, { route: (route ?? routeMessageOp) as never }) as never,
     )
@@ -383,7 +383,7 @@ describe('withReferences: a failed selector call carries rawOutput', () => {
 
     // The default LLM selector arrives as explicit REQUIRED config (the pattern
     // no longer imports it); it still runs through the mocked b.ReferenceSelector.
-    const { defaultSelector } = await import('../../../lib/harness-baml/defaults.server')
+    const { defaultSelector } = await import('@hames/harness-baml/defaults.server')
     const pattern = withReferences(inner as never, {
       patternId: 'vis-test',
       selector: defaultSelector,

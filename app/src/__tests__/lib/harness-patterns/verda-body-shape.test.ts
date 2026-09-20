@@ -42,7 +42,7 @@
  * `scripts/smoke-verda.ts`.
  */
 import { describe, it, expect, beforeAll, vi } from 'vitest'
-import type { LoopTurn, ToolDescription } from '../../../../baml_client/types'
+import type { LoopTurn, ToolDescription } from '@hames/harness-baml/baml_client/types'
 
 // This file renders requests in a jsdom environment; `clients.server.ts` is
 // imported for its derived function set only, never to route anything.
@@ -69,12 +69,38 @@ type Body = {
   messages?: unknown[]
 }
 
-let b: typeof import('../../../../baml_client').b
+// The corpus is TWO trees since PR-1b: the heavy roles + screen generate into
+// the app's client, the describe set + title into the package's pre-generated
+// one. The CALLS table spans both, so `b` is the (disjoint) merge — every
+// function renders against the tree that declares it.
+type AppRequest = (typeof import('@hames/harness-baml/baml_client').b)['request']
+type PkgRequest = (typeof import('@hames/harness-baml/baml_client').b)['request']
+// Omit drops the shared PRIVATE `runtime` key from one side (a two-class
+// intersection with a private member on both collapses to never); the union
+// keeps every function's real signature, so positional-argument mistakes
+// stay type errors.
+type MergedRequest = Omit<AppRequest, keyof PkgRequest> & PkgRequest
+let b: { request: MergedRequest }
 
 beforeAll(async () => {
-  b = (await import('../../../../baml_client')).b
+  const [appClient, pkgClient] = await Promise.all([
+    import('@hames/harness-baml/baml_client'),
+    import('@hames/harness-baml/baml_client'),
+  ])
+  const appReq = appClient.b.request as unknown as Record<PropertyKey, unknown>
+  const pkgReq = pkgClient.b.request as unknown as Record<PropertyKey, unknown>
+  // Methods live on the prototypes, so a plain spread would produce an empty
+  // object — the proxy dispatches by name and binds `this` to the owner.
+  b = {
+    request: new Proxy({} as MergedRequest, {
+      get: (_t, prop: string) => {
+        const target = prop in pkgReq ? pkgReq : appReq
+        const value = target[prop]
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    }),
+  }
 })
-
 const TOOLS: ToolDescription[] = [
   { name: 'search', description: 'Search', args_schema: '{"query":"string"}' },
 ]
@@ -153,7 +179,7 @@ describe('private-tier request bodies', () => {
     // production map, by reading the `model` field off each rendered body — the
     // one field that names the client BAML actually resolved.
     const { VERDA_CLIENT_BY_ROLE, SWITCHED_FUNCTIONS_BY_ROLE } =
-      await import('../../../lib/harness-baml/clients.server')
+      await import('@hames/harness-baml/clients.server')
     const MODEL_OF: Record<string, string> = {
       VerdaQwen: 'Qwen/Qwen3.8-27B-FP8',
       LocalQwenSmall: 'qwen3.5-4b-instruct',
@@ -188,7 +214,7 @@ describe('private-tier request bodies', () => {
     // inversion of what this line pinned until 2026-08-26 (SD-4: the screen
     // moved on an explicit owner decision, so it is checked like every other
     // routed function rather than excluded).
-    const { TIER_SWITCHED_FUNCTIONS } = await import('../../../lib/harness-baml/clients.server')
+    const { TIER_SWITCHED_FUNCTIONS } = await import('@hames/harness-baml/clients.server')
     expect(CALLS.map(([name]) => name).sort()).toEqual([...TIER_SWITCHED_FUNCTIONS].sort())
     expect(CALLS.map(([name]) => name)).toContain('ScreenUntrustedContent')
   })

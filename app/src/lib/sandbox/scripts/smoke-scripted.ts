@@ -32,7 +32,7 @@ import { withSandbox } from '../with-sandbox.server'
 import { actorCritic } from '@hames/harness-patterns/patterns/actorCritic.server'
 import { createScope } from '@hames/harness-patterns/context.server'
 import { createEventView } from '@hames/harness-patterns/patterns'
-import type { CriticFnWithLLMData } from '../../harness-baml/baml-adapters.server'
+import type { CriticFnWithLLMData } from '@hames/harness-baml/baml-adapters.server'
 import type { ActorFn } from '@hames/harness-patterns/types'
 import { printEventSummary, checkRootfsImage } from './_shared'
 

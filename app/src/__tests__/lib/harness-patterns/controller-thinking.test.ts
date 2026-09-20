@@ -17,10 +17,10 @@ process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'offline-render
 
 type Body = { thinking?: { type?: string }; model?: string }
 
-let b: typeof import('../../../../baml_client').b
+let b: typeof import('@hames/harness-baml/baml_client').b
 
 beforeAll(async () => {
-  b = (await import('../../../../baml_client')).b
+  b = (await import('@hames/harness-baml/baml_client')).b
 })
 
 const TOOLS = [{ name: 'search', description: 'Search', args_schema: '{"query":"string"}' }]
@@ -39,9 +39,14 @@ describe('controller thinking configuration', () => {
   it("the no-think variants keep their twins' caps and pricing", async () => {
     // A missing caps entry makes llmCallHitOutputCap() blind, silently disabling
     // the truncation retry; a missing pricing entry reports cost as unknown.
-    const { CLIENT_MAX_OUTPUT_TOKENS, CLIENT_PRICING, MODEL_CONTEXT_WINDOWS } = await import('../../../lib/settings')
-    expect(CLIENT_MAX_OUTPUT_TOKENS.AnthropicSonnet5NoThink).toBe(CLIENT_MAX_OUTPUT_TOKENS.AnthropicSonnet5)
-    expect(CLIENT_MAX_OUTPUT_TOKENS.AnthropicSonnet46NoThink).toBe(CLIENT_MAX_OUTPUT_TOKENS.AnthropicSonnet46)
+    const { CLIENT_MAX_OUTPUT_TOKENS, CLIENT_PRICING, MODEL_CONTEXT_WINDOWS } =
+      await import('../../../lib/settings')
+    expect(CLIENT_MAX_OUTPUT_TOKENS.AnthropicSonnet5NoThink).toBe(
+      CLIENT_MAX_OUTPUT_TOKENS.AnthropicSonnet5,
+    )
+    expect(CLIENT_MAX_OUTPUT_TOKENS.AnthropicSonnet46NoThink).toBe(
+      CLIENT_MAX_OUTPUT_TOKENS.AnthropicSonnet46,
+    )
     expect(CLIENT_PRICING.AnthropicSonnet5NoThink).toEqual(CLIENT_PRICING.AnthropicSonnet5)
     expect(CLIENT_PRICING.AnthropicSonnet46NoThink).toEqual(CLIENT_PRICING.AnthropicSonnet46)
     expect(MODEL_CONTEXT_WINDOWS.ActorAnthropic).toBe(MODEL_CONTEXT_WINDOWS.ControllerAnthropic)
@@ -49,7 +54,9 @@ describe('controller thinking configuration', () => {
 
   it('thinking does not disturb the cache markers (#122)', async () => {
     const req = await b.request.LoopController('x', 'x', TOOLS, [], 'CTX', null, null)
-    const body = req.body.json() as { messages: Array<{ content: Array<{ cache_control?: unknown }> }> }
+    const body = req.body.json() as {
+      messages: Array<{ content: Array<{ cache_control?: unknown }> }>
+    }
     const marked = body.messages.flatMap((m) => m.content).filter((c) => c.cache_control)
     expect(marked.length).toBeGreaterThan(0)
   })

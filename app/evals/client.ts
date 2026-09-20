@@ -69,7 +69,7 @@ import {
   resolveClientForRole,
   VERDA_CLIENT_BY_ROLE,
   type BamlRole,
-} from '../src/lib/harness-baml/clients.server'
+} from '@hames/harness-baml/clients.server'
 // The composition root registers the harness client seam (tier policy, model
 // tables, cost rates). Without it the default tier is the seam's safe
 // package-side 'anthropic', so a run started with USE_VERDA_INFERENCE=1 would

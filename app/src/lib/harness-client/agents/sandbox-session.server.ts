@@ -20,7 +20,11 @@ import {
   compactIntent,
   type ConfiguredPattern,
 } from '@hames/harness-patterns'
-import { bamlPatterns, createActorControllerAdapter, createCriticAdapter } from '../../harness-baml'
+import {
+  bamlPatterns,
+  createActorControllerAdapter,
+  createCriticAdapter,
+} from '@hames/harness-baml'
 import { withSandbox } from '../../sandbox/index.server'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'

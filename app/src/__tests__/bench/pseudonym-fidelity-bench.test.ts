@@ -61,7 +61,7 @@ import {
   totalFidelity,
   type FidelityReport,
 } from '../../lib/privacy/pseudonym-metrics'
-import type { LoopTurn } from '../../../baml_client/types'
+import type { LoopTurn } from '@hames/harness-baml/baml_client/types'
 import {
   graphMessage,
   graphHtmlMessage,
@@ -436,7 +436,7 @@ describe('placeholder-fidelity live bench', () => {
     'measures placeholder survival across NL/FR/EN × guidance off/on',
     async () => {
       const key = apiKey()
-      const { b } = await import('../../../baml_client')
+      const { b } = await import('@hames/harness-baml/baml_client')
       const prepared = TRANSCRIPTS.map(prepare)
 
       // Every transcript must actually carry placeholders, or a cell would score

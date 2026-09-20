@@ -77,14 +77,20 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import type {
   Attempt,
-  DescribeTarget,
   LoopTurn,
   Message,
   PriorResult,
-  ReferenceCandidate,
   RouteOption,
   ToolDescription,
-} from '../../../../baml_client/types'
+} from '@hames/harness-baml/baml_client/types'
+// Leaf-file classes (describe-batch / with-references) moved to the package
+// tree — their generated types live there now.
+import type { DescribeTarget, ReferenceCandidate } from '@hames/harness-baml/baml_client/types'
+// The corpus is TWO trees since PR-1b (app: heavy + screen; package: describe
+// set + title). The every-function audit below renders BOTH trees' functions,
+// so the request namespace is the (disjoint) union of the two — intersected at
+// the NAMESPACE level, not the top-level client, whose private `runtime`
+// would collapse the intersection to never.
 
 /** Fakes: rendering a request needs the options to resolve, not to connect. */
 const ENV = {
@@ -98,12 +104,34 @@ const ENV = {
 const OPENAI = { client: 'VerdaQwen', env: ENV }
 const ANTHROPIC = { client: 'AnthropicSonnet5', env: ENV }
 
-let b: typeof import('../../../../baml_client').b
+type AppRequest = (typeof import('@hames/harness-baml/baml_client').b)['request']
+type PkgRequest = (typeof import('@hames/harness-baml/baml_client').b)['request']
+// Omit drops the shared PRIVATE `runtime` key from one side (a two-class
+// intersection with a private member on both collapses to never); the union
+// keeps every function's real signature, so positional-argument mistakes
+// stay type errors.
+type MergedRequest = Omit<AppRequest, keyof PkgRequest> & PkgRequest
+let b: { request: MergedRequest }
 
 beforeAll(async () => {
-  b = (await import('../../../../baml_client')).b
+  const [appClient, pkgClient] = await Promise.all([
+    import('@hames/harness-baml/baml_client'),
+    import('@hames/harness-baml/baml_client'),
+  ])
+  const appReq = appClient.b.request as unknown as Record<PropertyKey, unknown>
+  const pkgReq = pkgClient.b.request as unknown as Record<PropertyKey, unknown>
+  // Methods live on the prototypes, so a plain spread would produce an empty
+  // object — the proxy dispatches by name and binds `this` to the owner.
+  b = {
+    request: new Proxy({} as MergedRequest, {
+      get: (_t, prop: string) => {
+        const target = prop in pkgReq ? pkgReq : appReq
+        const value = target[prop]
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    }),
+  }
 })
-
 // ---------------------------------------------------------------------------
 // Worst-case arguments: every optional populated and every history non-empty,
 // because the defect was invisible on the empty ones. `verda-body-shape.test.ts`

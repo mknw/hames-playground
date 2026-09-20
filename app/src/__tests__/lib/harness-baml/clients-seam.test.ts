@@ -35,7 +35,7 @@ vi.mock('../../../lib/inference/cold-start.server', () => ({
   noteVerdaCallStarting: (...args: unknown[]) => noteVerdaCallStarting(...args),
 }))
 
-const CLIENTS = '../../../lib/harness-baml/clients.server'
+const CLIENTS = '@hames/harness-baml/clients.server'
 const CONFIG = '../../../lib/inference/config.server'
 const SETTINGS = '../../../lib/settings'
 
@@ -160,7 +160,7 @@ describe('the configuration the host registers is the configuration the resoluti
     process.env.EUR_PER_USD = '1.25'
     process.env.VERDA_EUR_PER_HOUR = '2.5'
     await loadWired()
-    const bamlAdapters = await import('../../../lib/harness-baml/baml-adapters.server')
+    const bamlAdapters = await import('@hames/harness-baml/baml-adapters.server')
     // computeEventMetrics reads the rates through the seam per step; reading
     // the same store here proves which one is live.
     const { activeCostRates } = await import(CLIENTS)

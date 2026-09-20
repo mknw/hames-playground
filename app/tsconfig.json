@@ -20,5 +20,13 @@
     "baseUrl": "./"
   },
   "exclude": ["./node_modules", ".output", ".vinxi"],
-  "include": ["src", "evals", "e2e", "e2e-browser", "scripts", "../packages/harness-patterns"]
+  "include": [
+    "src",
+    "evals",
+    "e2e",
+    "e2e-browser",
+    "scripts",
+    "../packages/harness-patterns",
+    "../packages/harness-baml"
+  ]
 }

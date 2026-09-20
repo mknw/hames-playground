@@ -13,7 +13,7 @@
  * Run from `app/` (the endpoint bills while awake — run it once, in one burst):
  *
  *   USE_VERDA_INFERENCE=1 pnpm dlx tsx --env-file=.env \
- *     src/lib/harness-baml/scripts/smoke-verda-load.ts
+ *     src/lib/inference/scripts/smoke-verda-load.ts
  *
  * WHAT IT MEASURES, and why each phase is shaped the way it is:
  *
@@ -53,9 +53,9 @@ import type { LoopTurn, ToolDescription } from '@hames/harness-patterns/types'
 // The composition root registers the seam (model tables, tier policy, cost
 // rates) — importing it for its side effect keeps the smoke run on the same
 // wiring a turn takes.
-import '../../inference/config.server'
-import { assertVerdaConfigured, verdaInferenceEnabled } from '../../inference/config.server'
-import { clientOverrideFor } from '../clients.server'
+import '../config.server'
+import { assertVerdaConfigured, verdaInferenceEnabled } from '../config.server'
+import { clientOverrideFor } from '@hames/harness-baml/clients.server'
 
 const EXPECTED_CLIENT = 'VerdaQwen'
 

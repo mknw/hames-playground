@@ -60,14 +60,23 @@ type Usage = {
   cache_read_input_tokens?: number
 }
 type Block = { type: string; text?: string; cache_control?: unknown }
-type Body = { system?: Block[]; messages: Array<{ role: string; content: Block[] }>; max_tokens?: number }
+type Body = {
+  system?: Block[]
+  messages: Array<{ role: string; content: Block[] }>
+  max_tokens?: number
+}
 
 function apiKey(): string {
   if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY
   // vitest cwd is app/ — fall back to app/.env
-  const line = readFileSync('.env', 'utf8').split('\n').find((l) => l.startsWith('ANTHROPIC_API_KEY='))
+  const line = readFileSync('.env', 'utf8')
+    .split('\n')
+    .find((l) => l.startsWith('ANTHROPIC_API_KEY='))
   if (!line) throw new Error('ANTHROPIC_API_KEY not in env or app/.env')
-  return line.slice('ANTHROPIC_API_KEY='.length).trim().replace(/^["']|["']$/g, '')
+  return line
+    .slice('ANTHROPIC_API_KEY='.length)
+    .trim()
+    .replace(/^["']|["']$/g, '')
 }
 
 // ---------------------------------------------------------------------------
@@ -82,19 +91,23 @@ const LOREM =
 /** Tool catalog with a per-variant isolation salt in tool 0's description —
  *  tools render at the top of the system block, so this de-shares the entire
  *  prefix between variants. */
-const toolsFor = (isoSalt: string) => Array.from({ length: 8 }, (_, i) => ({
-  name: `bench_tool_${i}`,
-  description: `${i === 0 ? `[iso:${isoSalt}] ` : ''}Benchmark tool #${i}. ${LOREM.repeat(6)}`,
-  args_schema: JSON.stringify({
-    type: 'object',
-    properties: {
-      query: { type: 'string', description: `Primary query argument for bench_tool_${i}. ${LOREM}` },
-      limit: { type: 'number', description: 'Max results to return' },
-      cursor: { type: 'string', description: 'Opaque pagination cursor from a previous call' },
-    },
-    required: ['query'],
-  }),
-}))
+const toolsFor = (isoSalt: string) =>
+  Array.from({ length: 8 }, (_, i) => ({
+    name: `bench_tool_${i}`,
+    description: `${i === 0 ? `[iso:${isoSalt}] ` : ''}Benchmark tool #${i}. ${LOREM.repeat(6)}`,
+    args_schema: JSON.stringify({
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: `Primary query argument for bench_tool_${i}. ${LOREM}`,
+        },
+        limit: { type: 'number', description: 'Max results to return' },
+        cursor: { type: 'string', description: 'Opaque pagination cursor from a previous call' },
+      },
+      required: ['query'],
+    }),
+  }))
 
 const CONTEXT = `ENABLED SERVERS: neo4j, redis, filesystem\n${LOREM.repeat(10)}`
 
@@ -134,13 +147,16 @@ const estTokens = (chars: number) => Math.round(chars / 3.6)
 function markedPrefixSizes(body: Body): Array<{ label: string; tokens: number }> {
   const ordered: Array<{ text: string; marked: boolean }> = [
     ...(body.system ?? []).map((blk) => ({ text: blk.text ?? '', marked: !!blk.cache_control })),
-    ...body.messages.flatMap((m) => m.content.map((blk) => ({ text: blk.text ?? '', marked: !!blk.cache_control }))),
+    ...body.messages.flatMap((m) =>
+      m.content.map((blk) => ({ text: blk.text ?? '', marked: !!blk.cache_control })),
+    ),
   ]
   const out: Array<{ label: string; tokens: number }> = []
   let chars = 0
   for (const blk of ordered) {
     chars += blk.text.length
-    if (blk.marked) out.push({ label: blk.text.slice(0, 28).replace(/\n/g, ' '), tokens: estTokens(chars) })
+    if (blk.marked)
+      out.push({ label: blk.text.slice(0, 28).replace(/\n/g, ' '), tokens: estTokens(chars) })
   }
   return out
 }
@@ -154,7 +170,10 @@ function price(u: Usage, cached: boolean): number {
   return (inCost + u.output_tokens * OUT_PER_MTOK) / 1_000_000
 }
 
-async function callApi(req: { url: string; headers: object; body: { json(): unknown } }, key: string): Promise<{ usage: Usage; ms: number }> {
+async function callApi(
+  req: { url: string; headers: object; body: { json(): unknown } },
+  key: string,
+): Promise<{ usage: Usage; ms: number }> {
   const body = req.body.json() as Body
   body.max_tokens = 512 // clamp for bench speed/cost; irrelevant to caching
   const t0 = Date.now()
@@ -178,12 +197,16 @@ async function callApi(req: { url: string; headers: object; body: { json(): unkn
 
 function attributeHit(u: Usage, prefixes: Array<{ label: string; tokens: number }>): string {
   const read = u.cache_read_input_tokens ?? 0
-  if (read === 0) return (u.cache_creation_input_tokens ?? 0) > 0 ? 'miss (wrote)' : 'no cache activity'
+  if (read === 0)
+    return (u.cache_creation_input_tokens ?? 0) > 0 ? 'miss (wrote)' : 'no cache activity'
   let best = 'unknown'
   let bestDelta = Infinity
   for (const p of prefixes) {
     const d = Math.abs(p.tokens - read)
-    if (d < bestDelta) { bestDelta = d; best = `≈"${p.label}…" (est ${p.tokens}t)` }
+    if (d < bestDelta) {
+      bestDelta = d
+      best = `≈"${p.label}…" (est ${p.tokens}t)`
+    }
   }
   // reads can also land between markers via automatic prefix checking
   return `read ${read}t ${best}`
@@ -193,68 +216,89 @@ function renderTable(rows: CallRow[]): string {
   const header =
     '| turn | in_total | uncached | cache_read | cache_write | out | ms | $cached | $nocache | hit |\n' +
     '|---|---|---|---|---|---|---|---|---|---|'
-  const lines = rows.map((r) =>
-    `| ${r.turn} | ${r.in_total} | ${r.in_uncached} | ${r.cache_read} | ${r.cache_write} | ${r.out} | ${r.ms} | $${r.price_cached.toFixed(6)} | $${r.price_nocache.toFixed(6)} | ${r.hit} |`)
+  const lines = rows.map(
+    (r) =>
+      `| ${r.turn} | ${r.in_total} | ${r.in_uncached} | ${r.cache_read} | ${r.cache_write} | ${r.out} | ${r.ms} | $${r.price_cached.toFixed(6)} | $${r.price_nocache.toFixed(6)} | ${r.hit} |`,
+  )
   return [header, ...lines].join('\n')
 }
 
 describe('prompt-cache live bench: V1 vs V2', () => {
-  bench('runs both variants and writes the report', async () => {
-    const key = apiKey()
-    const { b } = await import('../../../baml_client')
-    const salt = `bench-${Date.now()}`
-    const userMessage = `[${salt}] Compute the per-label node counts for the Bench subgraph and report the three largest labels with their counts.`
+  bench(
+    'runs both variants and writes the report',
+    async () => {
+      const key = apiKey()
+      const { b } = await import('@hames/harness-baml/baml_client')
+      const salt = `bench-${Date.now()}`
+      const userMessage = `[${salt}] Compute the per-label node counts for the Bench subgraph and report the three largest labels with their counts.`
 
-    const variants = [
-      { tag: 'actor', name: 'ActorController (production)', fn: b.request.ActorController.bind(b.request) },
-    ] as const
+      const variants = [
+        {
+          tag: 'actor',
+          name: 'ActorController (production)',
+          fn: b.request.ActorController.bind(b.request),
+        },
+      ] as const
 
-    const sections: string[] = [
-      `# Prompt-cache bench — ${new Date().toISOString()}`,
-      `Salt: \`${salt}\` · model per ControllerAnthropic chain · pricing $${IN_PER_MTOK}/$${OUT_PER_MTOK} per MTok (intro)`,
-    ]
+      const sections: string[] = [
+        `# Prompt-cache bench — ${new Date().toISOString()}`,
+        `Salt: \`${salt}\` · model per ControllerAnthropic chain · pricing $${IN_PER_MTOK}/$${OUT_PER_MTOK} per MTok (intro)`,
+      ]
 
-    for (const variant of variants) {
-      const rows: CallRow[] = []
-      const tools = toolsFor(`${variant.tag}-${salt}`)
-      for (let len = 0; len <= 3; len++) {
-        const req = await variant.fn(
-          userMessage, userMessage, tools, ATTEMPTS.slice(0, len) as never,
-          CONTEXT, undefined, len + 1, 4)
-        const prefixes = markedPrefixSizes(req.body.json() as Body)
-        const { usage, ms } = await callApi(req as never, key)
-        rows.push({
-          turn: len + 1,
-          in_total: usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
-          in_uncached: usage.input_tokens,
-          cache_read: usage.cache_read_input_tokens ?? 0,
-          cache_write: usage.cache_creation_input_tokens ?? 0,
-          out: usage.output_tokens,
-          ms,
-          price_cached: price(usage, true),
-          price_nocache: price(usage, false),
-          hit: attributeHit(usage, prefixes),
-        })
+      for (const variant of variants) {
+        const rows: CallRow[] = []
+        const tools = toolsFor(`${variant.tag}-${salt}`)
+        for (let len = 0; len <= 3; len++) {
+          const req = await variant.fn(
+            userMessage,
+            userMessage,
+            tools,
+            ATTEMPTS.slice(0, len) as never,
+            CONTEXT,
+            undefined,
+            len + 1,
+            4,
+          )
+          const prefixes = markedPrefixSizes(req.body.json() as Body)
+          const { usage, ms } = await callApi(req as never, key)
+          rows.push({
+            turn: len + 1,
+            in_total:
+              usage.input_tokens +
+              (usage.cache_read_input_tokens ?? 0) +
+              (usage.cache_creation_input_tokens ?? 0),
+            in_uncached: usage.input_tokens,
+            cache_read: usage.cache_read_input_tokens ?? 0,
+            cache_write: usage.cache_creation_input_tokens ?? 0,
+            out: usage.output_tokens,
+            ms,
+            price_cached: price(usage, true),
+            price_nocache: price(usage, false),
+            hit: attributeHit(usage, prefixes),
+          })
+        }
+        const totCached = rows.reduce((s, r) => s + r.price_cached, 0)
+        const totNo = rows.reduce((s, r) => s + r.price_nocache, 0)
+        const totIn = rows.reduce((s, r) => s + r.in_total, 0)
+        const totRead = rows.reduce((s, r) => s + r.cache_read, 0)
+        sections.push(
+          `\n## ${variant.name}\n` +
+            renderTable(rows) +
+            `\n\n**Totals:** input ${totIn}t (${((totRead / totIn) * 100).toFixed(1)}% served from cache) · ` +
+            `$${totCached.toFixed(6)} with caching vs $${totNo.toFixed(6)} without → ` +
+            `**${(((totNo - totCached) / totNo) * 100).toFixed(1)}% saved**`,
+        )
       }
-      const totCached = rows.reduce((s, r) => s + r.price_cached, 0)
-      const totNo = rows.reduce((s, r) => s + r.price_nocache, 0)
-      const totIn = rows.reduce((s, r) => s + r.in_total, 0)
-      const totRead = rows.reduce((s, r) => s + r.cache_read, 0)
-      sections.push(
-        `\n## ${variant.name}\n` +
-        renderTable(rows) +
-        `\n\n**Totals:** input ${totIn}t (${((totRead / totIn) * 100).toFixed(1)}% served from cache) · ` +
-        `$${totCached.toFixed(6)} with caching vs $${totNo.toFixed(6)} without → ` +
-        `**${(((totNo - totCached) / totNo) * 100).toFixed(1)}% saved**`)
-    }
 
-    const report = sections.join('\n')
-    mkdirSync('.harness-logs', { recursive: true })
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    writeFileSync(`.harness-logs/cache-bench-${stamp}.md`, report)
-    writeFileSync('.harness-logs/cache-bench-latest.md', report)
-    process.stdout.write('\n' + report + '\n\nReport → app/.harness-logs/cache-bench-latest.md\n')
+      const report = sections.join('\n')
+      mkdirSync('.harness-logs', { recursive: true })
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      writeFileSync(`.harness-logs/cache-bench-${stamp}.md`, report)
+      writeFileSync('.harness-logs/cache-bench-latest.md', report)
+      process.stdout.write('\n' + report + '\n\nReport → app/.harness-logs/cache-bench-latest.md\n')
 
-    expect(report).toContain('Totals:')
-  }, 180_000)
+      expect(report).toContain('Totals:')
+    },
+    180_000,
+  )
 })

@@ -112,7 +112,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import type { ModelLimits } from '@hames/harness-patterns/types'
+import type { ModelLimits, CostBasis } from '@hames/harness-patterns/types'
 
 assertServerOnImport()
 
@@ -228,6 +228,59 @@ export function configureCostRates(rates: CostRates): void {
  *  attempts of one call the same way. */
 export function activeCostRates(): CostRates {
   return costRates
+}
+
+/** The cost ESTIMATOR the host registers — settings.ts's `estimateLlmCostEur`,
+ *  whose CLIENT_PRICING table is app pricing config (SA-C2 family) and stays
+ *  host-side beside the client-safe UI that renders it. Structural type: the
+ *  host's function is assignable without sharing a nominal type. */
+export interface CostEstimate {
+  costEur: number
+  noCacheEur: number
+  basis: CostBasis
+  rates?: { inPerMTok: number; outPerMTok: number }
+  timeRate?: { eurPerHour: number; durationMs: number }
+}
+
+export type CostEstimator = (
+  tokens: {
+    inputUncachedTokens: number
+    inputCacheReadTokens: number
+    inputCacheWriteTokens: number
+    outputTokens: number
+  },
+  clientName?: string,
+  opts?: { durationMs?: number; eurPerUsd?: number; eurPerHour?: number },
+) => CostEstimate | undefined
+
+export interface CostPricing {
+  estimate: CostEstimator
+  /** The client billed by the second (settings.ts's `TIME_PRICED_CLIENT`).
+   *  `computeEventMetrics` prices a usage-less attempt on this client against
+   *  wall-clock rather than dropping it. Unregistered → no such client, so a
+   *  usage-less attempt is dropped — registration is what restores the floor. */
+  timePricedClient?: string
+}
+
+let costPricing: CostPricing = {
+  estimate: () => undefined,
+  timePricedClient: undefined,
+}
+
+/** Feed the host's cost estimator in. Called once at the composition root. */
+export function configureCostPricing(pricing: CostPricing): void {
+  costPricing = pricing
+}
+
+export function activeCostPricing(): CostPricing {
+  return costPricing
+}
+
+/** The LEAF output cap for a client name, from the host-fed table — the
+ *  lookup `hitOutputCap` stamping uses (Lane A3). `undefined` for an unknown
+ *  client, exactly as the table's own absence behaved. */
+export function maxOutputTokensFor(clientName?: string): number | undefined {
+  return clientName ? modelTables.maxOutputTokens[clientName] : undefined
 }
 
 export type BamlRole =

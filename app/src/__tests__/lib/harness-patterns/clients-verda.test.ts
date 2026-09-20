@@ -4,7 +4,7 @@
  *
  * CI has no access to that endpoint, so everything here is hermetic: it pins
  * the *routing decision*, not the model. The live proof is manual —
- * `src/lib/harness-baml/scripts/smoke-verda.ts`.
+ * `src/lib/inference/scripts/smoke-verda.ts`.
  *
  * What is pinned, and why each one is the failure that matters:
  *   - flag unset ⇒ NOTHING changes. Every role still resolves to its Anthropic
@@ -44,7 +44,7 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-import type { BamlRole } from '../../../lib/harness-baml/clients.server'
+import type { BamlRole } from '@hames/harness-baml/clients.server'
 
 const ENV_KEYS = [
   'USE_VERDA_INFERENCE',
@@ -120,7 +120,7 @@ async function load() {
   // every production path takes — including its `rejects` on a flag-on
   // misconfigured endpoint, which these tests rely on.
   await import('../../../lib/inference/config.server')
-  return await import('../../../lib/harness-baml/clients.server')
+  return await import('@hames/harness-baml/clients.server')
 }
 
 /** The app-policy half (env flag, asserts) — MOVED off `clients.server.ts`
@@ -215,7 +215,7 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
 
   it('trims Verda-routed prompts against the 131K server window, not 200K', async () => {
     const { resolveClientForRole } = await load()
-    const { getContextWindow } = await import('../../../lib/harness-baml/clients.server')
+    const { getContextWindow } = await import('@hames/harness-baml/clients.server')
 
     // vLLM ran with `--max-model-len 131072`; a prompt sized for 200K is
     // rejected outright, so this is the difference between "the flag works"
@@ -428,18 +428,28 @@ describe('the switched-function set follows the routed roles', () => {
     // `screen` shares the chain in BAML (the separation lives only in
     // `CLIENT_BY_ROLE`), so `injection-screen.baml` is excluded BY FILE — the
     // exclusion is the assertion, not an accounting convenience.
-    const bamlDir = path.resolve(process.cwd(), 'baml_src')
+    // Since PR-1b the six describe functions live in the PACKAGE's baml_src
+    // (packages/harness-baml/baml_src); the app's tree holds only the screen.
+    // The scan follows the functions, and the screen's exclusion (BY FILE —
+    // the exclusion is the assertion, not an accounting convenience) applies
+    // to the app-side directory that still owns it.
+    const scanRoots = [
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src'),
+      path.resolve(process.cwd(), 'baml_src'),
+    ]
     const declaringDescribe: string[] = []
-    for (const entry of readdirSync(bamlDir)) {
-      if (!entry.endsWith('.baml') || entry === 'injection-screen.baml') continue
-      const src = readFileSync(path.join(bamlDir, entry), 'utf8')
-        .split('\n')
-        .filter((line) => !line.trimStart().startsWith('//'))
-        .join('\n')
-      // `function Name(...) -> T { client DescribeAnthropic` — the client line
-      // is what routes the call, so the function is found through it.
-      for (const m of src.matchAll(/function\s+(\w+)\s*\([\s\S]*?\bclient\s+(\w+)/g)) {
-        if (m[2] === 'DescribeAnthropic') declaringDescribe.push(m[1])
+    for (const bamlDir of scanRoots) {
+      for (const entry of readdirSync(bamlDir)) {
+        if (!entry.endsWith('.baml') || entry === 'injection-screen.baml') continue
+        const src = readFileSync(path.join(bamlDir, entry), 'utf8')
+          .split('\n')
+          .filter((line) => !line.trimStart().startsWith('//'))
+          .join('\n')
+        // `function Name(...) -> T { client DescribeAnthropic` — the client line
+        // is what routes the call, so the function is found through it.
+        for (const m of src.matchAll(/function\s+(\w+)\s*\([\s\S]*?\bclient\s+(\w+)/g)) {
+          if (m[2] === 'DescribeAnthropic') declaringDescribe.push(m[1])
+        }
       }
     }
     const { SWITCHED_FUNCTIONS_BY_ROLE } = await load()
@@ -465,12 +475,31 @@ describe('every routed role has a wired call site', () => {
     for (const entry of readdirSync(dir)) {
       const full = path.join(dir, entry)
       if (statSync(full).isDirectory()) {
-        if (entry !== '__tests__') sources(full, out)
+        // node_modules/baml_client/baml_src: the package tree (@hames/
+        // harness-baml, PR-1b) contributes its hand-written .ts only — the
+        // generated client names every routed function and would make every
+        // per-file check vacuously pass.
+        if (
+          entry !== '__tests__' &&
+          entry !== 'node_modules' &&
+          entry !== 'baml_client' &&
+          entry !== 'baml_src'
+        )
+          sources(full, out)
       } else if (entry.endsWith('.ts') || entry.endsWith('.tsx')) {
         out.push(full)
       }
     }
     return out
+  }
+
+  /** The call-site roots: the app's lib/ plus the extracted package's
+   *  hand-written modules (PR-1b). */
+  function callSiteRoots(): string[] {
+    return [
+      path.resolve(process.cwd(), 'src/lib'),
+      path.resolve(process.cwd(), '../packages/harness-baml'),
+    ]
   }
 
   /**
@@ -525,7 +554,8 @@ describe('every routed role has a wired call site', () => {
 
   /** Every .ts under src/lib, comments stripped, as one string. */
   function corpus(): string {
-    return sources(path.resolve(process.cwd(), 'src/lib'))
+    return callSiteRoots()
+      .flatMap((dir) => sources(dir))
       .filter((f) => !f.endsWith('clients.server.ts'))
       .map((f) => stripComments(readFileSync(f, 'utf8')))
       .join('\n')
@@ -572,7 +602,7 @@ describe('every routed role has a wired call site', () => {
 
     const missing: string[] = []
     let callingFiles = 0
-    for (const file of sources(path.resolve(process.cwd(), 'src/lib'))) {
+    for (const file of callSiteRoots().flatMap((dir) => sources(dir))) {
       if (file.endsWith('clients.server.ts')) continue
       const code = stripComments(readFileSync(file, 'utf8'))
       for (const [role, fns] of Object.entries(SWITCHED_FUNCTIONS_BY_ROLE)) {

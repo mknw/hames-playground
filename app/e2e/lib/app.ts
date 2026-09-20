@@ -205,11 +205,18 @@ async function boot(): Promise<AppHandles> {
   delete process.env.USE_VERDA_INFERENCE
 
   // ---- Routing -----------------------------------------------------------
-  const { b } = await import('../../baml_client')
+  // PR-1b: the corpus is two generated singletons — heavy + screen in the
+  // app's client, the describe set + title in the package's pre-generated one.
+  // The fake registry is installed on BOTH, and the preflight call goes
+  // through the client that owns the function it names.
+  const [{ b: appB }, { b: pkgB }] = await Promise.all([
+    import('../../baml_client'),
+    import('@hames/harness-baml/baml_client'),
+  ])
   if (IS_HERMETIC) {
-    installHermeticRouting(b, fakeLlm.baseUrl)
+    installHermeticRouting([appB, pkgB], fakeLlm.baseUrl)
     await assertHermeticRouting(
-      () => b.GenerateConversationTitle('e2e preflight'),
+      () => pkgB.GenerateConversationTitle('e2e preflight'),
       () => fakeLlm.calls.length,
     )
     fakeLlm.reset()

@@ -53,7 +53,7 @@ import { noteVerdaCallCompleted, VERDA_CLIENT_NAME } from '../inference/verda-ac
 import { settleColdStart } from '../inference/cold-start.server'
 import { addUsage, type UsageDelta } from './preview-counters.server'
 import { noteCallLatency } from './call-latency.server'
-import { TIER_SWITCHED_FUNCTIONS, VERDA_CLIENT_BY_ROLE } from '../harness-baml/clients.server'
+import { TIER_SWITCHED_FUNCTIONS, VERDA_CLIENT_BY_ROLE } from '@hames/harness-baml/clients.server'
 import type { InferenceTier } from '../inference/config.server'
 
 assertServerOnImport()

@@ -34,20 +34,14 @@ Re-homed → [`packages/harness-patterns/GUIDE.md`](../../packages/harness-patte
 
 ## 3. The LLM seam
 
-Stub — **NOT yet re-homed; waits for the `harness-baml` package.** How to plug
-in something that is not BAML: the injected-function shape landed by Lane A
-(each call is `(input) => Promise<LLMResult<T>>` with an `LLMCallRecord`
-carrying usage, timing and the raw output; `ControllerInput`/`ActorInput`
-objects rather than positional tails; per-call `limits()` so an
-AsyncLocalStorage tier decision budgets against the right model), with
-`simpleLoop`/`actorCritic` taking their controller/critic as the first
-argument and the other six functions injected via config (the app supplies
-them in one line through `bamlPatterns()` from its `harness-baml/` module —
-that module is scheduled to become the `harness-baml` package at Step 3 of
-[`harness-npm-lib.md`](harness-npm-lib.md), and ships no defaults inside
-core). Cover the v1 client scope the app runs (Anthropic + the self-hosted
-custom endpoint — see `harness-npm-lib.md` §4.4) and how a consumer points a
-custom-endpoint client at their own model.
+Re-homed → [`packages/harness-baml/README.md`](../../packages/harness-baml/README.md)
+(the injected-function shape, `bamlPatterns()`, the adapter factories, the v1
+client scope — Anthropic + custom-endpoint per `harness-npm-lib.md` §4.4 — and
+how a consumer points a custom-endpoint client at their own model; every code
+sample typecheck-pinned by
+`app/src/__tests__/lib/harness-baml/baml-readme-docs-pins.test.ts`). The verda
+tier material is app configuration, not package surface — the one-line pointer
+lives in that README.
 
 ## 4. Tool transports
 

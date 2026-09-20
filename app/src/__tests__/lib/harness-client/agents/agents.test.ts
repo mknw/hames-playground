@@ -88,7 +88,7 @@ vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
 }))
 
 // Mock BAML client
-vi.mock('../../../../../baml_client', () => ({
+vi.mock('@hames/harness-baml/baml_client', () => ({
   b: {
     LoopController: vi.fn(async () => mockFinalAction()),
     ActorController: vi.fn(async () => mockFinalAction()),

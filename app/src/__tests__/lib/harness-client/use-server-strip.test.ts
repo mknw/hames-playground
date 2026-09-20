@@ -13,15 +13,25 @@
  *
  * Two pieces of evidence live here, both required by the move's spec:
  *   1. THE STRIP — no directive survives anywhere in the package source.
- *   2. THE CLOSURE — no client component imports anything from the seven
- *      agent-definition modules (or the package's `./agents` barrel at all):
+ *   2. THE DIRECT-IMPORT DETECTOR — no client-reachable module imports the
+ *      seven agent-definition modules (or the package's `./agents` barrel):
  *      client code reaches agents only through the app's gated server actions
  *      (`getAgentList` etc.), never by importing a definition.
  *
- * The strip's risk was a broken app, not a new hole — `pnpm build` (app-path
- * e2e) verifies the app still boots after it. A REGRESSION here would be the
- * directive reappearing (a new export becoming an RPC by accident) or a
- * client import sneaking in (a definition module entering the client graph).
+ * HONESTY NOTE (review finding 3): the detector is a ONE-HOP, hand-listed
+ * text scan — it catches a direct import in the paths it lists (mutation:
+ * an import in `ChatMessages.tsx` → RED), but a used import in an
+ * unlisted-but-client-safe module (e.g. `settings.ts`, reachable from
+ * `SettingsPanel.tsx`) or a root-barrel re-export is invisible to it. The
+ * CLOSURE is `pnpm build` + CI: a definition module in the client graph pulls
+ * `@boundaryml/baml`'s native binary and the build fails. The detector is
+ * the READABLE guard — it names the violation, where the build fails on an
+ * opaque binary-parse error — and this test does not claim more than that.
+ *
+ * The strip's risk was a broken app, not a new hole — `pnpm build` verifies
+ * the app still boots after it. A REGRESSION here would be the directive
+ * reappearing (a new export becoming an RPC by accident) or a client import
+ * sneaking in (a definition module entering the client graph).
  */
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -30,7 +40,8 @@ import { join, resolve } from 'node:path'
 // `process.cwd()` is `app/` under vitest (same anchor the other source-scan
 // pins use); `import.meta.url` is not a file URL in this jsdom environment.
 const APP_ROOT = resolve(process.cwd())
-const AGENTS_DIR = resolve(APP_ROOT, '../packages/agents/agents')
+const AGENTS_PKG = resolve(APP_ROOT, '../packages/agents')
+const AGENTS_DIR = resolve(AGENTS_PKG, 'agents')
 
 /** The seven files that carried the directive before the move (the two
  *  exceptions — title-generator and graph-schema — deliberately never did;
@@ -49,12 +60,19 @@ const STRIPPED = [
 const DIRECTIVE = /^\s*['"]use server['"];?\s*(?:;)?\s*$/m
 
 describe('the strip is complete', () => {
-  it('no directive remains in any package file', () => {
+  it('no directive remains anywhere in the package (root and definitions)', () => {
+    // Whole package, not just agents/: the name of the test says "anywhere",
+    // so the walk does too (review finding 3's smaller overclaim).
     const offenders: string[] = []
+    for (const f of readdirSync(AGENTS_PKG)) {
+      if (!f.endsWith('.ts')) continue
+      const text = readFileSync(join(AGENTS_PKG, f), 'utf8')
+      if (DIRECTIVE.test(text)) offenders.push(f)
+    }
     for (const f of readdirSync(AGENTS_DIR)) {
       if (!f.endsWith('.ts')) continue
       const text = readFileSync(join(AGENTS_DIR, f), 'utf8')
-      if (DIRECTIVE.test(text)) offenders.push(f)
+      if (DIRECTIVE.test(text)) offenders.push(`agents/${f}`)
     }
     expect(offenders).toEqual([])
   })
@@ -66,18 +84,21 @@ describe('the strip is complete', () => {
 
   it('the strip is not a load-bearing regression: every moved module still guards itself', () => {
     // The directives were vestigial; the runtime guard that actually keeps a
-    // module off the client is `assertServerOnImport`. Every .server.ts in the
-    // package calls it at module load (title-generator's header documents the
-    // reasoning) — so the strip removed nothing that was doing work.
+    // module off the client is `assertServerOnImport`. All NINE .server.ts in
+    // the package call it at module load: the seven stripped files gained it
+    // (0 → 1 — the directive was their only guard), and `graph-schema` /
+    // `title-generator` already had it on main (1 → 1). Line-anchored, so a
+    // commented-out call does not pass the pin.
+    const GUARD_CALL = /(?:^|\n)\s*assertServerOnImport\(\)/
     for (const f of readdirSync(AGENTS_DIR)) {
       if (!f.endsWith('.server.ts')) continue
       const text = readFileSync(join(AGENTS_DIR, f), 'utf8')
-      expect(text, f).toMatch(/assertServerOnImport\(\)/)
+      expect(text, f).toMatch(GUARD_CALL)
     }
   })
 })
 
-describe('no client component imports a definition module', () => {
+describe('no client-reachable module imports a definition module (direct-import detector — the closure is `pnpm build`)', () => {
   /** Client-reachable trees: components, routes, and the client-safe lib
    *  modules (turn-stream, sse-client, api-client, graph-merge, …). The
    *  composition root's .server.ts modules MAY import the definitions — that

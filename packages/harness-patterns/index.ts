@@ -87,17 +87,13 @@ export type {
   MCPToolDescription,
   ToolCallResult,
   ToolSet,
-} from "./types";
+} from './types'
 
-export {
-  DEFAULT_TRACK_HISTORY,
-  DEFAULT_COMMIT_STRATEGY,
-  DEFAULT_ERROR_SEVERITY,
-} from "./types";
+export { DEFAULT_TRACK_HISTORY, DEFAULT_COMMIT_STRATEGY, DEFAULT_ERROR_SEVERITY } from './types'
 
 // The LLM call envelope's error class is a runtime value (instanceof checks in
 // the patterns) — exported from the barrel for the first time in Lane A3.
-export { LLMCallError } from "./types";
+export { LLMCallError } from './types'
 
 // ============================================================================
 // Tools
@@ -110,7 +106,7 @@ export {
   registerToolNamespaces,
   type ToolsOptions,
   type NamespaceResolver,
-} from "./tools.server";
+} from './tools.server'
 
 // ============================================================================
 // Tool transports (the containment seam)
@@ -126,20 +122,14 @@ export {
   registerTransport,
   activeTransports,
   type ToolTransport,
-} from "./tool-transport.server";
+} from './tool-transport.server'
 
 // ============================================================================
 // Router
 // ============================================================================
 
-export {
-  router,
-  routes,
-  type Routes,
-  type RoutePatterns,
-  type RouterData,
-} from "./patterns";
-export { DIRECT_RESPONSE_ROUTE } from "./types";
+export { router, routes, type Routes, type RoutePatterns, type RouterData } from './patterns'
+export { DIRECT_RESPONSE_ROUTE } from './types'
 
 // ============================================================================
 // Pattern capabilities (static introspection)
@@ -151,7 +141,7 @@ export {
   harnessHasRedisRetriever,
   isSyncWorkspaceConfig,
   harnessUsesSyncWorkspace,
-} from "./pattern-capabilities";
+} from './pattern-capabilities'
 
 // ============================================================================
 // Harness
@@ -163,7 +153,7 @@ export {
   continueSession,
   type HarnessData,
   type HarnessResultScoped,
-} from "./harness.server";
+} from './harness.server'
 
 // ============================================================================
 // Patterns
@@ -214,10 +204,10 @@ export {
   type CircuitBreakerConfig,
   type HookConfig,
   type HookTrigger,
-} from "./patterns";
+} from './patterns'
 
 // EventView
-export { EventViewImpl, createEventView } from "./patterns";
+export { EventViewImpl, createEventView } from './patterns'
 
 // ============================================================================
 // Context Helpers
@@ -242,27 +232,27 @@ export {
   getDefaultTrackHistory,
   getDefaultCommitStrategy,
   enrichToolResult,
-} from "./context.server";
+} from './context.server'
 
 // ============================================================================
 // Infrastructure (Server-only)
 // ============================================================================
 
-export { callTool, listTools, closeMcpClient } from "./mcp-client.server";
+export { callTool, listTools, closeMcpClient } from './mcp-client.server'
 
 // Lane A6: `limitsFor` moved to `harness-baml` with the role→client map it
 // reads — core pattern files no longer read the model tables, directly or via
 // this barrel. Import it from `harness-baml`.
-export { assertServer, ServerOnlyError } from "./assert.server";
+export { assertServer, ServerOnlyError } from './assert.server'
 // Lane A6: `routeMessageOp` moved to `harness-baml` whole.
-export { compactBulkData } from "./compactBulkData.server";
-export { getErrorHint } from "./error-hints";
+export { compactBulkData } from './compactBulkData.server'
+export { getErrorHint } from './error-hints'
 export {
   stripThinkBlocks,
   truncateToolResults,
   omitResultFields,
   findLastUserMessageIndex,
-} from "./content-transforms";
+} from './content-transforms'
 
 // Injection guard — the deterministic sanitizer + its ALS scope. The pattern
 // primitive (`withInjectionGuard`) is exported with the other patterns above.
@@ -285,13 +275,13 @@ export {
   type SanitizeSummary,
   type ScreenVerdict,
   type SpotlightMode,
-} from "./injection-guard";
+} from './injection-guard'
 export {
   getActiveInjectionGuard,
   runWithInjectionGuard,
   type ActiveInjectionGuard,
-} from "./injection-guard-scope.server";
-export { normalizeControllerAction } from "./controller-action";
+} from './injection-guard-scope.server'
+export { normalizeControllerAction } from './controller-action'
 
 // Lane A6: the BAML adapter factories and their helpers moved to
 // `harness-baml` — core's barrel carries none of them. Import them from the
@@ -317,7 +307,7 @@ export type {
   BulkDescribeFns,
   RouteFn,
   RouteMessageResult,
-} from "./types";
+} from './types'
 
 // Runtime config: the library-owned settings scope (defaults + ALS frame).
 // Import the client-safe pieces (type, bounds, defaults, resolveTurnBudget)
@@ -331,4 +321,4 @@ export {
   tryRuntimeConfig,
   withRuntimeConfig,
   type HarnessRuntimeConfig,
-} from "./runtime-config.server";
+} from './runtime-config.server'

@@ -152,7 +152,11 @@ function reapOrphansOnce(backend: ComputeBackend): void {
     .reapOrphans()
     .then((n) => {
       if (n > 0) {
-        console.warn(`[sandbox] reaped ${n} orphaned container(s) from a prior process`)
+        // The count covers containers AND pruned per-boot networks (the
+        // labeled sweep reaps both) — hence "resources", not "containers".
+        console.warn(
+          `[sandbox] reaped ${n} orphaned sandbox resource(s) (containers + per-boot egress networks) from a prior process`,
+        )
       }
     })
     .catch((err) => {

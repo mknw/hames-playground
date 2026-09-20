@@ -279,9 +279,9 @@ export {
 export { normalizeControllerAction } from './controller-action'
 
 // Lane A6: the BAML adapter factories and their helpers moved to
-// `harness-baml` — core's barrel carries none of them. Import from
-// `~/lib/harness-baml` (createLoopControllerAdapter, createInjectionScreen,
-// withUsageAccounting, routeMessageOp, bamlPatterns, …).
+// `harness-baml` — core's barrel carries none of them. Import them from the
+// app's harness-baml module (createLoopControllerAdapter,
+// createInjectionScreen, withUsageAccounting, routeMessageOp, bamlPatterns, …).
 
 // The object seams (Lane A4) and the Lane A6 seam callables — declared in
 // core, implemented by the adapter factories in `harness-baml` (which attach

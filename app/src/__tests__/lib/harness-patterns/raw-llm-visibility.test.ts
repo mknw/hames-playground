@@ -28,15 +28,11 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-/** `routeMessageOp` delegates to the REAL implementation by default, so the
- *  router tests below exercise the whole adapter → pattern chain. One test
- *  overrides it, because a `vi.fn()` BAML mock cannot populate a real
- *  Collector and the invented-route path reads the SUCCESSFUL call's llmCall. */
-const routeMessageOp = vi.fn()
-vi.mock('../../../lib/harness-baml/routing.server', async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>
-  return { ...actual, routeMessageOp: (...args: unknown[]) => routeMessageOp(...args) }
-})
+// The routing implementation is REQUIRED config now (BAML-companion seam
+// lane): the router tests below pass it explicitly — the real `routeMessageOp`
+// for the end-to-end case, a stub where a test relied on the old mock's
+// return value — where a mock of `routing.server` used to intercept the
+// pattern's deleted import.
 
 vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   callTool: mockCallTool({ responses: { read_neo4j_cypher: fixtures.neo4j.queryResult } }),
@@ -112,12 +108,8 @@ const runPattern = async (
   return result.events
 }
 
-beforeEach(async () => {
+beforeEach(() => {
   vi.clearAllMocks()
-  const actual = await vi.importActual<typeof import('../../../lib/harness-baml/routing.server')>(
-    '../../../lib/harness-baml/routing.server',
-  )
-  routeMessageOp.mockImplementation(actual.routeMessageOp)
 })
 
 // ============================================================================
@@ -302,9 +294,12 @@ describe('actorCritic: error events carry the actor response', () => {
 // ============================================================================
 
 describe('router: error events carry the response', () => {
-  const run = async () => {
+  const run = async (route?: unknown) => {
     const { router } = await import('@hames/harness-patterns/patterns/router.server')
-    return runPattern(router({ neo4j: 'Database queries' }) as never)
+    const { routeMessageOp } = await import('../../../lib/harness-baml/routing.server')
+    return runPattern(
+      router({ neo4j: 'Database queries' }, { route: (route ?? routeMessageOp) as never }) as never,
+    )
   }
 
   it('a failed Router call → rawOutput, end to end through routeMessageOp', async () => {
@@ -321,16 +316,18 @@ describe('router: error events carry the response', () => {
   it('an invented route name → the response that invented it', async () => {
     // `routeMessageOp` nulls `tool_name` when the model names a route that is
     // not in `routeDescriptions` (the live "Router mismatch" failure), and
-    // hands the successful call's llmCall back alongside it.
-    routeMessageOp.mockResolvedValue({
-      intent: 'convert it',
-      tool_call_needed: true,
-      tool_name: null,
-      response_text: '',
-      llmCall: { functionName: 'Router', variables: {}, rawOutput: RAW_TEXT } as LLMCallData,
-    })
-
-    const err = errorEvent(await run())
+    // hands the successful call's llmCall back alongside it. The route fn is
+    // REQUIRED config now, so the result arrives as an explicit stub — the
+    // same object the old mock override returned.
+    const err = errorEvent(
+      await run(async () => ({
+        intent: 'convert it',
+        tool_call_needed: true,
+        tool_name: null,
+        response_text: '',
+        llmCall: { functionName: 'Router', variables: {}, rawOutput: RAW_TEXT } as LLMCallData,
+      })),
+    )
     expect(err.data.error).toContain('no tool_name')
     expect(err.data.kind).toBe('llm_call')
     expect(err.llmCall?.rawOutput).toBe(RAW_TEXT)
@@ -384,7 +381,13 @@ describe('withReferences: a failed selector call carries rawOutput', () => {
       input: 'q',
     })
 
-    const pattern = withReferences(inner as never, { patternId: 'vis-test' })
+    // The default LLM selector arrives as explicit REQUIRED config (the pattern
+    // no longer imports it); it still runs through the mocked b.ReferenceSelector.
+    const { defaultSelector } = await import('../../../lib/harness-baml/defaults.server')
+    const pattern = withReferences(inner as never, {
+      patternId: 'vis-test',
+      selector: defaultSelector,
+    })
     const result = await pattern.fn(scope as never, view as never)
 
     const err = errorEvent(result.events)

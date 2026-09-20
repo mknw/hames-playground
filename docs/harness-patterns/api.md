@@ -200,14 +200,14 @@ Wrap a pattern so that on entry, an LLM-driven selector picks relevant prior `to
 ```typescript
 function withReferences<T>(
   pattern: ConfiguredPattern<T>,
-  config?: WithReferencesConfig
+  config: WithReferencesConfig
 ): ConfiguredPattern<T>
 
 interface WithReferencesConfig extends PatternConfig {
   scope?: 'self' | 'global'    // Default: 'global'
   source?: string | string[]   // Explicit patternId allow-list; overrides scope
   maxRefs?: number             // Default: 5 (cap after selection)
-  selector?: SelectorFn        // Override default LLM selector (b.ReferenceSelector)
+  selector: SelectorFn         // REQUIRED — bamlPatterns().selector, or a deterministic policy
 }
 
 type SelectorFn = (input: {
@@ -236,7 +236,7 @@ function compactExecution<T>(config: CompactExecutionConfig): ConfiguredPattern<
 
 interface CompactExecutionConfig extends PatternConfig {
   mode: 'message' | 'response' | 'thread'
-  synthesize?: SynthesisFn
+  synthesize: SynthesisFn      // REQUIRED — bamlPatterns().synthesize
   skipIfHasResponse?: boolean
 }
 ```

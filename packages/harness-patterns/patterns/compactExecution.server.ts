@@ -22,7 +22,6 @@ import { DIRECT_RESPONSE_ROUTE } from '../types'
 import type { ErrorEventData } from '../types'
 import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig } from '../context.server'
-import { defaultSynthesize } from '../../../app/src/lib/harness-baml/defaults.server'
 
 assertServerOnImport()
 
@@ -144,7 +143,7 @@ function buildSynthesisInputFromView(
         }
 
         // Drop the turns that would reach `Synthesize` as a FABRICATED
-        // success: the conversion in `defaultSynthesize` stamps
+        // success: the conversion in the BAML-backed synthesize stamps
         // `success: true` on every turn it emits, so
         //   - the terminal `Return` turn — simpleLoop deliberately emits no
         //     `tool_result` for it (baml_src/simpleLoop.baml, #149) — and
@@ -185,23 +184,25 @@ function buildSynthesisInputFromView(
  *
  * Takes output from previous pattern and synthesizes a final response.
  *
- * @param config - compactExecution configuration
+ * @param config - compactExecution configuration. `synthesize` is REQUIRED:
+ *   the composition root supplies the BAML-backed implementation
+ *   (`bamlPatterns().synthesize` in the app) — core hosts no default.
  * @returns ConfiguredPattern ready for chain
  *
  * @example
  * // Message mode - just the response string
- * const s1 = compactExecution({ mode: 'message' })
+ * const s1 = compactExecution({ mode: 'message', synthesize })
  *
  * // Response mode - object with data and response
- * const s2 = compactExecution({ mode: 'response' })
+ * const s2 = compactExecution({ mode: 'response', synthesize })
  *
  * // Thread mode - full iteration history
- * const s3 = compactExecution({ mode: 'thread' })
+ * const s3 = compactExecution({ mode: 'thread', synthesize })
  *
  * // Custom synthesis function
  * const s4 = compactExecution({
  *   mode: 'response',
- *   synthesize: async (input) => `Processed: ${input.response}`
+ *   synthesize: async (input) => ({ value: `Processed: ${input.response}` })
  * })
  */
 export function compactExecution<T extends CompactExecutionData>(
@@ -238,13 +239,13 @@ export function compactExecution<T extends CompactExecutionData>(
       }
 
       // Both paths return the LLMResult envelope now: a custom `synthesize`
-      // override can carry a call record like the default does (the override
-      // used to return a bare string and emit NO llmCall at all — the
-      // no-tracking hole this closes), and the default creates its own
-      // collector internally instead of being handed one.
-      const { value: synthesizedResponse, call: llmCall } = await (synthesize ?? defaultSynthesize)(
-        input,
-      )
+      // implementation can carry a call record like the BAML-backed one does
+      // (the override used to return a bare string and emit NO llmCall at
+      // all — the no-tracking hole this closes), and the BAML-backed
+      // implementation creates its own collector internally instead of being
+      // handed one. The implementation is REQUIRED config, supplied at the
+      // composition root — core hosts no default import.
+      const { value: synthesizedResponse, call: llmCall } = await synthesize(input)
 
       // Track assistant message event with LLM call data. `final: true`
       // distinguishes the compactExecution's user-facing response from router

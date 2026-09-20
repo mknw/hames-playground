@@ -83,11 +83,12 @@ runBamlClientCheckOnce()
 // paths (tests import it from this module).
 export type { ControllerCallResult } from '@hames/harness-patterns/types'
 
-/** Result from a critic call with optional LLM observability data */
-export interface CriticCallResult {
-  result: CriticResult
-  llmCall?: LLMCallRecord
-}
+/** Result from a critic call with optional LLM observability data — moved to
+ *  core `types.ts` with the critic seam (same rule as
+ *  `ControllerCallResult`). Re-exported for existing import paths; the local
+ *  uses import it from core below. */
+export type { CriticCallResult } from '@hames/harness-patterns/types'
+import type { CriticCallResult } from '@hames/harness-patterns/types'
 
 /** `PlanCallResult` moved to core `types.ts` at Lane A6 — it is the planner
  *  seam's return type and `planner()` (core) declares it. Re-exported here for
@@ -125,8 +126,16 @@ export type LegacyControllerFn = (
   returnStyle?: ReturnStyle,
 ) => Promise<ControllerCallResult>
 
-/** Critic function that returns result + observability data */
-export type CriticFnWithLLMData = (
+/** The critic seam moved to core `types.ts` (BAML-companion seam lane):
+ *  `CriticFnWithLLMData` is what `actorCritic` (core) declares, and a
+ *  type-only import from app code is still an import (#225 L3). Re-exported
+ *  for existing import paths. */
+export type { CriticFnWithLLMData } from '@hames/harness-patterns/types'
+
+/** The adapter's own, wider shape: same seam plus the optional collector the
+ *  implementation accepts when a caller (a test) brings one. Assignable to
+ *  the core seam, which never passes the third argument. */
+export type CriticAdapterFn = (
   intent: string,
   previous_attempts: ScriptExecutionEvent[],
   collector?: Collector,
@@ -1414,7 +1423,7 @@ export function createActorControllerAdapter(
  *
  * @returns CriticFnWithLLMData compatible with actorCritic pattern
  */
-export function createCriticAdapter(): CriticFnWithLLMData {
+export function createCriticAdapter(): CriticAdapterFn {
   return async (
     intent: string,
     previous_attempts: ScriptExecutionEvent[],

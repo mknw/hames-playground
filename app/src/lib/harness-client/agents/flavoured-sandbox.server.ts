@@ -49,7 +49,7 @@ import {
   actorCritic,
   type ConfiguredPattern,
 } from '@hames/harness-patterns'
-import { createActorControllerAdapter, createCriticAdapter } from '../../harness-baml'
+import { bamlPatterns, createActorControllerAdapter, createCriticAdapter } from '../../harness-baml'
 import { withSandbox } from '../../sandbox/index.server'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
@@ -200,7 +200,10 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
       office:
         'Document EDITING — modify/create Word (docx), Excel (xlsx) or PDF files themselves (not analyze their data)',
     },
-    { liveEvents: true },
+    // The routing implementation is REQUIRED config, wired from `harness-baml`
+    // at the composition root (BAML-companion seam lane) — core hosts no
+    // default import.
+    { liveEvents: true, route: bamlPatterns().router },
   )
 
   const routesPattern = routes<SessionData>(
@@ -217,6 +220,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     mode: 'thread',
     patternId: 'flavoured-sandbox-synth',
     liveEvents: true,
+    synthesize: bamlPatterns().synthesize,
   })
 
   return [routerPattern, routesPattern, synth]

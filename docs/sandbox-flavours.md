@@ -69,9 +69,9 @@ const data  = withSandbox({ id: `${sessionId}:data`, sessionId,
                             rootfs: 'data', egress: 'mcp-only', syncWorkspace: true })(loop)
 
 return [
-  router({ basic: '…', image_processing: '…', data: '…' }),
+  router({ basic: '…', image_processing: '…', data: '…' }, { route: baml.router }),
   routes({ basic, image_processing: image, data }),
-  compactExecution({ mode: 'thread' }),
+  compactExecution({ mode: 'thread', synthesize: baml.synthesize }),
 ]
 ```
 

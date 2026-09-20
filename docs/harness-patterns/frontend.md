@@ -323,19 +323,22 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
       neo4j: 'Database queries and graph operations',
       web_search: 'Web lookups and information retrieval'
     },
-    {
-      neo4j: neo4jPattern,
-      web_search: webPattern
-    }
+    { route: baml.router }
   )
+
+  const routesPattern = routes({
+    neo4j: neo4jPattern,
+    web_search: webPattern
+  })
 
   // compactExecution generates human-readable response
   const responseSynth = compactExecution({
     mode: 'thread',
-    patternId: 'response-synth'
+    patternId: 'response-synth',
+    synthesize: baml.synthesize
   })
 
-  return [routerPattern, responseSynth]
+  return [routerPattern, routesPattern, responseSynth]
 }
 ```
 

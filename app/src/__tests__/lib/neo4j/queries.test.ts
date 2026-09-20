@@ -1,41 +1,35 @@
 /**
- * Tests for the non-agentic Neo4j server functions.
+ * Tests for the RETAINED `'use server'` Neo4j wrappers (#225 PR-C2).
  *
- * The driver module is mocked, so these exercise the contract the UI relies on:
- * every function resolves to a `{ success }` envelope instead of throwing, and
- * the session is always closed.
+ * The op bodies moved into `@hames/connectors`; this module is the thin gated
+ * wrapper at the path its clients already import. These tests therefore pin
+ * the WRAPPER's contract — every export refuses an unauthenticated caller
+ * before the package op is touched, and delegates to it when the gate passes
+ * — while the ops' own behaviour is pinned co-located in the package.
  *
- * Since #230 they also pin the two security properties of this module: every
- * `'use server'` export refuses an unauthenticated caller before the driver is
- * touched, and every session is a READ-mode one, so the driver — not a keyword
- * blacklist — is what makes the caller-supplied query read-only.
+ * Since #230 the two security properties of the RPC surface are: every
+ * `'use server'` export refuses an unauthenticated caller before any resource
+ * is opened, and the wrapper itself opens NO sessions (SD-14: read-only is
+ * enforced package-side by the driver's READ access mode, so there is
+ * nothing session-shaped here at all — pinned below on the source).
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import neo4j from 'neo4j-driver'
-// The serializer SolidStart runs over a `'use server'` return value.
-import { serializeAsync, deserialize } from 'seroval'
 
-const run = vi.fn()
-const close = vi.fn().mockResolvedValue(undefined)
-// `runManualCypher` goes through a managed read transaction; every other read
-// is an auto-commit `session.run`. Both land on the same `run` mock.
-const executeRead = vi.fn((work: (tx: { run: typeof run }) => unknown) => work({ run }))
-const session = vi.fn((_config?: { defaultAccessMode?: string }) => ({
-  run,
-  close,
-  executeRead,
+// The package OPS, mocked: the wrapper's job is only gate + delegate, so the
+// op mock is both the witness of delegation and the proof the gate ran first.
+const ops = vi.hoisted(() => ({
+  getSchema: vi.fn(async () => ({ success: true, schema: 'op:getSchema' })),
+  getSchemaForAgent: vi.fn(async () => ({ success: true, schema: 'op:agent' })),
+  getSimplifiedSchema: vi.fn(async () => ({ success: true, schema: 'op:simple' })),
+  getNodeProperties: vi.fn(async () => ({ success: true, properties: {}, labels: [] })),
+  runManualCypher: vi.fn(async () => ({ success: true, raw: [] })),
+  resetNeo4jConnection: vi.fn(async () => ({ success: true })),
+  testNeo4jConnection: vi.fn(async () => ({ success: true })),
 }))
-const resetDriver = vi.fn().mockResolvedValue(undefined)
-const verifyConnection = vi.fn().mockResolvedValue(true)
-
-vi.mock('../../../lib/neo4j/client', () => ({
-  getNeo4jDriver: () => ({ session }),
-  resetDriver: () => resetDriver(),
-  verifyConnection: () => verifyConnection(),
-}))
+vi.mock('@hames/connectors/neo4j/queries', () => ops)
 
 const getAuthenticatedUser = vi.fn(async () => ({ id: 'user-a', email: 'a@example.com' }))
 vi.mock('../../../lib/auth/server', () => ({
@@ -61,31 +55,13 @@ import {
   testNeo4jConnection,
 } from '../../../lib/neo4j/queries'
 
-/** A stand-in for a driver Record: `get` by key or by positional index. */
-const record = (fields: Record<string, unknown>) => {
-  const values = Object.values(fields)
-  return {
-    get: (key: string | number) => (typeof key === 'number' ? values[key] : fields[key]),
-    toObject: () => fields,
-  }
-}
-
-const results = (records: unknown[]) => ({ records })
-
-const queriesSource = () =>
+const wrapperSource = () =>
   readFileSync(path.resolve(process.cwd(), 'src/lib/neo4j/queries.ts'), 'utf8')
 
 beforeEach(() => {
-  vi.spyOn(console, 'log').mockImplementation(() => {})
-  vi.spyOn(console, 'error').mockImplementation(() => {})
-  run.mockReset()
-  close.mockClear()
-  session.mockClear()
-  executeRead.mockClear()
-  resetDriver.mockClear().mockResolvedValue(undefined)
-  verifyConnection.mockClear().mockResolvedValue(true)
-  getAuthenticatedUser.mockClear().mockResolvedValue({ id: 'user-a', email: 'a@example.com' })
-  isBypassEnabled.mockClear().mockReturnValue(false)
+  vi.clearAllMocks()
+  getAuthenticatedUser.mockResolvedValue({ id: 'user-a', email: 'a@example.com' })
+  isBypassEnabled.mockReturnValue(false)
 })
 
 // The RPC surface of this module, as the browser sees it: name → a call with
@@ -102,29 +78,33 @@ const RPCS: Array<[string, () => Promise<{ success: boolean; error?: string }>]>
 ]
 
 describe('auth gate (#230)', () => {
-  it.each(RPCS)('%s refuses an unauthenticated caller before touching Neo4j', async (_n, call) => {
-    getAuthenticatedUser.mockRejectedValue(
-      new Error('Authentication required: No user found in session.'),
-    )
+  it.each(RPCS)(
+    '%s refuses an unauthenticated caller before touching the ops',
+    async (_n, call) => {
+      getAuthenticatedUser.mockRejectedValue(
+        new Error('Authentication required: No user found in session.'),
+      )
 
-    const res = await call()
+      const res = await call()
 
-    // Envelope, not a throw — the UI shows `error` verbatim.
-    expect(res).toEqual({
-      success: false,
-      error: 'Authentication required: No user found in session.',
-    })
-    expect(session).not.toHaveBeenCalled()
-    expect(run).not.toHaveBeenCalled()
-    expect(resetDriver).not.toHaveBeenCalled()
-    expect(verifyConnection).not.toHaveBeenCalled()
-  })
+      // Envelope, not a throw — the UI shows `error` verbatim.
+      expect(res).toEqual({
+        success: false,
+        error: 'Authentication required: No user found in session.',
+      })
+      for (const op of Object.values(ops)) {
+        expect(op).not.toHaveBeenCalled()
+      }
+    },
+  )
 
   it.each(RPCS)('%s refuses a caller outside the email allow-list', async (_n, call) => {
     getAuthenticatedUser.mockRejectedValue(new Error('Email not allowed: intruder@evil.test'))
 
     expect(await call()).toEqual({ success: false, error: 'Email not allowed: intruder@evil.test' })
-    expect(session).not.toHaveBeenCalled()
+    for (const op of Object.values(ops)) {
+      expect(op).not.toHaveBeenCalled()
+    }
   })
 
   it('stringifies a non-Error auth rejection rather than leaking `undefined`', async () => {
@@ -134,406 +114,67 @@ describe('auth gate (#230)', () => {
       success: false,
       error: 'session store unreachable',
     })
-    expect(session).not.toHaveBeenCalled()
+    expect(ops.runManualCypher).not.toHaveBeenCalled()
   })
 
-  it('consults the authenticated user on every call, and runs when it resolves', async () => {
-    run.mockResolvedValue(results([]))
+  it('consults the authenticated user on every call, and delegates when it resolves', async () => {
     await getSchema()
     expect(getAuthenticatedUser).toHaveBeenCalledTimes(1)
-    expect(session).toHaveBeenCalledTimes(1)
+    expect(ops.getSchema).toHaveBeenCalledTimes(1)
+    expect(ops.getSchema).toHaveBeenCalledWith()
+  })
+
+  it('delegates each RPC with its caller arguments, returning the op result verbatim', async () => {
+    await getNodeProperties('4:abc:1')
+    expect(ops.getNodeProperties).toHaveBeenCalledWith('4:abc:1')
+
+    await runManualCypher('MATCH (n) RETURN n')
+    expect(ops.runManualCypher).toHaveBeenCalledWith('MATCH (n) RETURN n')
+
+    await expect(getSchemaForAgent()).resolves.toEqual({ success: true, schema: 'op:agent' })
   })
 
   it('honours the DEV-gated dev bypass without consulting the session', async () => {
     isBypassEnabled.mockReturnValue(true)
     getAuthenticatedUser.mockRejectedValue(new Error('Authentication required'))
-    run.mockResolvedValue(results([]))
 
     expect((await getSchema()).success).toBe(true)
     expect(getAuthenticatedUser).not.toHaveBeenCalled()
-  })
-})
-
-describe('read-only at the driver (#230)', () => {
-  it('opens every session in READ access mode', async () => {
-    run.mockResolvedValue(results([]))
-
-    await getSchema()
-    await getSchemaForAgent()
-    await getSimplifiedSchema()
-    await getNodeProperties('4:abc:1')
-    await runManualCypher('MATCH (n) RETURN n')
-
-    expect(session).toHaveBeenCalledTimes(5)
-    for (const call of session.mock.calls) {
-      expect(call[0]).toEqual({ defaultAccessMode: 'READ' })
-    }
-  })
-
-  it('runs the caller-supplied query inside a managed read transaction', async () => {
-    run.mockResolvedValue(results([]))
-    await runManualCypher('MATCH (n) RETURN n')
-
-    expect(executeRead).toHaveBeenCalledTimes(1)
-    expect(run).toHaveBeenCalledWith('MATCH (n) RETURN n')
-  })
-
-  it('surfaces the driver refusing a write that got past the keyword pre-check', async () => {
-    // A write smuggled past WRITE_CLAUSE — no boundary-delimited keyword in
-    // sight. The READ transaction is what stops it, and the server says so.
-    run.mockRejectedValue(
-      new Error('Neo.ClientError.Statement.AccessMode: Writing in read access mode not allowed'),
-    )
-
-    const res = await runManualCypher('CALL apoc.cypher.doIt("CR" + "EATE (n)", {})')
-
-    expect(res.success).toBe(false)
-    expect(res.error).toContain('read-only')
-    expect(res.error).toContain('Writing in read access mode not allowed')
-    expect(close).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('getSchema', () => {
-  it('serialises the visualization records on success', async () => {
-    run.mockResolvedValue(results([{ nodes: ['Person'] }]))
-    const res = await getSchema()
-    expect(res.success).toBe(true)
-    expect(JSON.parse(res.schema!)).toEqual([{ nodes: ['Person'] }])
-    expect(run).toHaveBeenCalledWith('CALL db.schema.visualization()')
-  })
-
-  it('returns the failure as data, and still closes the session', async () => {
-    run.mockRejectedValue(new Error('boom'))
-    const res = await getSchema()
-    expect(res).toEqual({ success: false, error: 'boom' })
-    expect(close).toHaveBeenCalledTimes(1)
-  })
-
-  it('stringifies non-Error throws', async () => {
-    run.mockRejectedValue('plain string failure')
-    expect((await getSchema()).error).toBe('plain string failure')
-  })
-})
-
-describe('getSchemaForAgent', () => {
-  /** Routes each of the two queries the function issues to its own result. */
-  const byQuery = (labels: unknown[], rels: unknown[]) =>
-    run.mockImplementation((cypher: string) =>
-      Promise.resolve(results(cypher.includes('db.labels()') ? labels : rels)),
-    )
-
-  it('renders labels with their properties and relationship patterns', async () => {
-    byQuery(
-      [record({ label: 'Person', props: ['name', 'age'] })],
-      [record({ startLabel: 'Person', relType: 'WORKS_AT', endLabel: 'Company' })],
-    )
-    const res = await getSchemaForAgent()
-    expect(res.success).toBe(true)
-    expect(res.schema).toBe(
-      'Node Labels:\n' +
-        '- Person (properties: name, age)\n' +
-        '\nRelationships:\n' +
-        '- (Person)-[WORKS_AT]->(Company)\n',
-    )
-  })
-
-  it('omits the APOC import label and tolerates a label with no properties', async () => {
-    byQuery(
-      [
-        record({ label: 'UNIQUE IMPORT LABEL', props: ['id'] }),
-        record({ label: 'Person', props: null }),
-      ],
-      [],
-    )
-    const schema = (await getSchemaForAgent()).schema!
-    expect(schema).not.toContain('UNIQUE IMPORT LABEL')
-    expect(schema).toContain('- Person (properties: )')
-  })
-
-  it('drops relationship rows that are missing an endpoint', async () => {
-    byQuery(
-      [],
-      [
-        record({ startLabel: 'Person', relType: 'KNOWS', endLabel: null }),
-        record({ startLabel: 'Person', relType: 'KNOWS', endLabel: 'Person' }),
-      ],
-    )
-    const schema = (await getSchemaForAgent()).schema!
-    expect(schema.match(/^- \(/gm)).toHaveLength(1)
-  })
-
-  it('falls back to the simplified schema when the rich queries fail', async () => {
-    let call = 0
-    run.mockImplementation((cypher: string) => {
-      call += 1
-      if (call === 1) return Promise.reject(new Error('procedure unavailable'))
-      // The fallback issues db.labels / db.relationshipTypes / db.propertyKeys.
-      if (cypher.includes('db.labels')) return Promise.resolve(results([record({ v: 'Person' })]))
-      if (cypher.includes('db.relationshipTypes'))
-        return Promise.resolve(results([record({ v: 'KNOWS' })]))
-      return Promise.resolve(results([record({ v: 'name' })]))
-    })
-
-    const res = await getSchemaForAgent()
-    expect(res.success).toBe(true)
-    expect(JSON.parse(res.schema!)).toEqual({
-      nodeLabels: ['Person'],
-      relationshipTypes: ['KNOWS'],
-      propertyKeys: ['name'],
-    })
-  })
-})
-
-describe('getSimplifiedSchema', () => {
-  it('collects labels, relationship types and property keys', async () => {
-    run.mockImplementation((cypher: string) => {
-      if (cypher.includes('db.labels')) return Promise.resolve(results([record({ v: 'Person' })]))
-      if (cypher.includes('db.relationshipTypes'))
-        return Promise.resolve(results([record({ v: 'KNOWS' })]))
-      return Promise.resolve(results([record({ v: 'name' })]))
-    })
-    const res = await getSimplifiedSchema()
-    expect(JSON.parse(res.schema!).nodeLabels).toEqual(['Person'])
-  })
-
-  it('surfaces query failures as an error envelope', async () => {
-    run.mockRejectedValue(new Error('db down'))
-    expect(await getSimplifiedSchema()).toEqual({ success: false, error: 'db down' })
-  })
-})
-
-describe('getNodeProperties', () => {
-  it('returns the properties and labels of the matched node', async () => {
-    run.mockResolvedValue(results([record({ props: { name: 'Alice' }, labels: ['Person'] })]))
-    const res = await getNodeProperties('4:abc:1')
-    expect(res).toEqual({
-      success: true,
-      properties: { name: 'Alice' },
-      labels: ['Person'],
-    })
-    expect(run).toHaveBeenCalledWith(expect.stringContaining('elementId(n) = $elementId'), {
-      elementId: '4:abc:1',
-    })
-  })
-
-  it('reports a miss rather than an empty node', async () => {
-    run.mockResolvedValue(results([]))
-    expect(await getNodeProperties('4:abc:9')).toEqual({
-      success: false,
-      error: 'Node not found',
-    })
-  })
-
-  it('returns the driver error as data', async () => {
-    run.mockRejectedValue(new Error('session expired'))
-    expect(await getNodeProperties('x')).toEqual({ success: false, error: 'session expired' })
-  })
-})
-
-describe('runManualCypher', () => {
-  const aliceNode = {
-    identity: 1,
-    labels: ['Person'],
-    properties: { name: 'Alice' },
-  }
-
-  it('runs a read query and returns both Cytoscape elements and raw rows', async () => {
-    run.mockResolvedValue(results([record({ n: aliceNode })]))
-    const res = await runManualCypher('MATCH (n:Person) RETURN n')
-    expect(res.success).toBe(true)
-    expect(res.graphUpdate).toEqual([
-      expect.objectContaining({ data: expect.objectContaining({ id: '1', label: 'Alice' }) }),
-    ])
-    expect(res.raw).toEqual([{ n: aliceNode }])
-  })
-
-  it.each(['CREATE', 'MERGE', 'SET', 'DELETE', 'REMOVE', 'DETACH'])(
-    'refuses the %s write keyword without opening a session',
-    async (keyword) => {
-      const res = await runManualCypher(`${keyword} (n:Person)`)
-      expect(res.success).toBe(false)
-      expect(res.error).toContain(keyword)
-      expect(session).not.toHaveBeenCalled()
-    },
-  )
-
-  it('is case-insensitive about write keywords', async () => {
-    expect((await runManualCypher('create (n)')).success).toBe(false)
-  })
-
-  // Replaces the BUG(#190) pin that used to live here: the guard was a plain
-  // substring match, so any identifier merely *containing* a write keyword was
-  // refused with a message naming a clause the query never used. It matches on
-  // word boundaries now (and it is no longer the actual write barrier — the
-  // READ-mode transaction is), so these are reads and they run.
-  it.each([
-    'MATCH (n) RETURN n.createdAt',
-    'MATCH (n) WHERE n.deleted IS NULL RETURN n',
-    'MATCH (n:Dataset) RETURN n',
-    'MATCH (n) RETURN n.mergedBy',
-  ])('runs the read query %s, whose identifiers contain write keywords', async (query) => {
-    run.mockResolvedValue(results([]))
-
-    const res = await runManualCypher(query)
-
-    expect(res.success).toBe(true)
-    expect(run).toHaveBeenCalledWith(query)
-  })
-
-  it('returns the query error as data and closes the session', async () => {
-    run.mockRejectedValue(new Error('SyntaxError: bad cypher'))
-    const res = await runManualCypher('MATCH (n RETURN n')
-    expect(res).toEqual({ success: false, error: 'SyntaxError: bad cypher' })
-    expect(close).toHaveBeenCalledTimes(1)
-  })
-
-  // #237 follow-up: `MATCH (n) RETURN n LIMIT 5` used to fail in the browser
-  // with `Malformed server function stream header` while a query returning
-  // scalars worked. The envelope carried driver class instances (`Node`,
-  // `Integer`), which seroval — the serializer SolidStart runs over a
-  // `'use server'` result — refuses *after* the headers are on the wire, so the
-  // client sees a truncated stream instead of an error. Both halves of the
-  // envelope are projected now (`lib/neo4j/plain.ts`).
-  it('returns an envelope the RPC serializer accepts for a node-returning query', async () => {
-    const alice = new neo4j.types.Node(
-      neo4j.int(1),
-      ['Person'],
-      { name: 'Alice', age: neo4j.int(30) },
-      '4:db:1',
-    )
-    const bob = new neo4j.types.Node(neo4j.int(2), ['Person'], { name: 'Bob' }, '4:db:2')
-    const knows = new neo4j.types.Relationship(
-      neo4j.int(9),
-      neo4j.int(1),
-      neo4j.int(2),
-      'KNOWS',
-      {},
-      '5:db:9',
-      '4:db:1',
-      '4:db:2',
-    )
-    run.mockResolvedValue(results([record({ n: alice, m: bob, r: knows })]))
-
-    const res = await runManualCypher('MATCH (n)-[r]->(m) RETURN n, r, m')
-
-    expect(res.success).toBe(true)
-    // The raw rows, and the Cytoscape elements built from them, both survive.
-    expect(deserialize(await serializeAsync(res))).toEqual(res)
-    expect(res.raw).toEqual([
-      {
-        n: {
-          elementId: '4:db:1',
-          identity: 1,
-          labels: ['Person'],
-          properties: { name: 'Alice', age: 30 },
-        },
-        m: { elementId: '4:db:2', identity: 2, labels: ['Person'], properties: { name: 'Bob' } },
-        r: {
-          elementId: '5:db:9',
-          identity: 9,
-          type: 'KNOWS',
-          start: 1,
-          end: 2,
-          startNodeElementId: '4:db:1',
-          endNodeElementId: '4:db:2',
-          properties: {},
-        },
-      },
-    ])
-    // `data.neo4jId` used to be an `Integer` instance — the same defect one
-    // layer down, inside `graphUpdate`.
-    expect(res.graphUpdate).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ data: expect.objectContaining({ id: '4:db:1', neo4jId: 1 }) }),
-      ]),
-    )
-  })
-
-  it('projects an int node property in the properties panel too', async () => {
-    run.mockResolvedValue(
-      results([record({ props: { hits: neo4j.int(12) }, labels: ['Dataset'] })]),
-    )
-
-    const res = await getNodeProperties('4:db:1')
-
-    expect(res.properties).toEqual({ hits: 12 })
-    expect(deserialize(await serializeAsync(res))).toEqual(res)
+    expect(ops.getSchema).toHaveBeenCalledTimes(1)
   })
 })
 
 // Regression pin for #228: `executeWriteCypher(cypher)` was a `'use server'`
 // export here — browser-reachable, unauthenticated, and it ran whatever string
 // it was handed. It is gone; graph writes go through the intent-shaped,
-// authenticated ops in `graph-edit.server.ts` (pinned by graph-edit.test.ts).
-// Re-adding any raw-Cypher write RPC to this module fails these.
+// authenticated ops behind `graph-edit.server.ts` (pinned package-side).
+// Re-adding any raw-Cypher write RPC to this module fails this.
 describe('no arbitrary-Cypher write RPC (#228)', () => {
-  it('is not exported from the module or the barrel', async () => {
-    const barrel = await import('../../../lib/neo4j')
+  it('is not exported from the module', async () => {
     expect(Object.keys(queries)).not.toContain('executeWriteCypher')
-    expect(Object.keys(barrel)).not.toContain('executeWriteCypher')
-  })
-
-  it('runManualCypher is the only export that hands caller-supplied text to the driver', () => {
-    const source = queriesSource()
-    // Every other query in this file is a literal the module owns; only the
-    // manual-query path takes its text from the caller, and it reaches the
-    // driver through a managed READ transaction.
-    expect(source.match(/\.run\(cypher\b/g)).toHaveLength(1)
-    const afterManual = source.slice(source.indexOf('export async function runManualCypher'))
-    expect(afterManual).toContain('session.executeRead((tx) => tx.run(cypher))')
   })
 })
 
 // Class pins for #230, held on the source rather than on one symbol: adding an
-// export that skips the auth gate, or one that opens a write-capable session,
-// fails here even if it never appears in a behavioural test.
-describe('every RPC in this module is gated and read-only (#230)', () => {
-  it('has exactly one driver.session() call site, and it pins READ access mode', () => {
-    const source = queriesSource()
-    expect(source.match(/\.session\(/g)).toHaveLength(1)
-    expect(source).toContain('defaultAccessMode: neo4j.session.READ')
-    expect(source).toContain('function readSession()')
-  })
-
+// export that skips the auth gate, or one that opens a session of its own,
+// fails here even if it never appears in a behavioural test. (The read-only
+// SESSION pin lives package-side with the ops that open the sessions; this is
+// its app-side complement — the wrappers open none at all, so nothing client-
+// reachable can bypass the package's READ-mode discipline by going around it.)
+describe('every RPC in this module is gated and opens no session (#230 / SD-14)', () => {
   it('gates every exported server function on denyUnauthenticated()', () => {
-    const source = queriesSource()
+    const source = wrapperSource()
     const exported = source.match(/^export async function /gm) ?? []
     const gated = source.match(/^ {2}const denied = await denyUnauthenticated\(\)$/gm) ?? []
 
     expect(exported.length).toBeGreaterThan(0)
     expect(gated).toHaveLength(exported.length)
   })
-})
 
-describe('connection management', () => {
-  it('resets the driver singleton', async () => {
-    expect(await resetNeo4jConnection()).toEqual({ success: true })
-    expect(resetDriver).toHaveBeenCalledTimes(1)
-  })
-
-  it('reports a reset failure instead of throwing', async () => {
-    resetDriver.mockRejectedValue(new Error('close failed'))
-    expect(await resetNeo4jConnection()).toEqual({ success: false, error: 'close failed' })
-  })
-
-  it('reports a healthy connection', async () => {
-    expect(await testNeo4jConnection()).toEqual({ success: true, error: undefined })
-  })
-
-  it('explains an unhealthy connection', async () => {
-    verifyConnection.mockResolvedValue(false)
-    expect(await testNeo4jConnection()).toEqual({
-      success: false,
-      error: 'Connection verification failed',
-    })
-  })
-
-  it('reports a thrown verification error', async () => {
-    verifyConnection.mockRejectedValue(new Error('no route to host'))
-    expect(await testNeo4jConnection()).toEqual({
-      success: false,
-      error: 'no route to host',
-    })
+  it('opens no sessions and imports no driver — the package ops own both', () => {
+    const source = wrapperSource()
+    expect(source).not.toMatch(/\.session\(/)
+    expect(source).not.toMatch(/neo4j-driver/)
+    expect(source).not.toMatch(/getNeo4jDriver/)
   })
 })

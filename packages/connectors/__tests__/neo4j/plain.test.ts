@@ -16,7 +16,7 @@
 import { describe, it, expect } from 'vitest'
 import neo4j from 'neo4j-driver'
 import { serializeAsync, deserialize } from 'seroval'
-import { toPlainNeo4jValue, CIRCULAR_PLACEHOLDER } from '../../../lib/neo4j/plain'
+import { toPlainNeo4jValue, CIRCULAR_PLACEHOLDER } from '../../neo4j/plain'
 
 const node = (id: number, labels: string[], properties: Record<string, unknown>) =>
   new neo4j.types.Node(neo4j.int(id), labels, properties, `4:db:${id}`)

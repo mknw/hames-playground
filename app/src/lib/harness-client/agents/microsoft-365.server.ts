@@ -3,7 +3,8 @@
  *
  * Answers questions about the signed-in user's own Microsoft 365 data by
  * calling Graph **as that user**: the app-side `graph` tools resolve a
- * delegated per-user token server-side (see `lib/app-tools/graph.server.ts`),
+ * delegated per-user token server-side (the Graph connector tools in
+ * `@hames/connectors`, composed app-side),
  * so Entra enforces the scope and no credential ever reaches the model.
  *
  * Profile, today's calendar and recent inbox mail — enough for a "what does my
@@ -24,7 +25,7 @@ import {
   type ConfiguredPattern,
 } from '@hames/harness-patterns'
 import { bamlPatterns, createLoopControllerAdapter } from '@hames/harness-baml'
-import { mcpNamespace } from '../../app-tools/mcp-catalog'
+import { mcpNamespace } from '@hames/connectors/mcp-catalog'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
 

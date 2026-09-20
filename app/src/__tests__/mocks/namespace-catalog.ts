@@ -16,7 +16,7 @@
  */
 
 import { registerToolNamespaces } from '@hames/harness-patterns/tools.server'
-import { mcpNamespace } from '../../lib/app-tools/mcp-catalog'
+import { mcpNamespace } from '@hames/connectors/mcp-catalog'
 
 let registered = false
 

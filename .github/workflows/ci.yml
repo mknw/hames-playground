@@ -139,6 +139,15 @@ jobs:
             ' coverage/coverage-summary.json
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # The connectors package's OWN co-located suite (#225 PR-C2): the tests
+      # that moved with the modules out of the app's tree run from their
+      # workspace member. The app suite above covers everything that stayed
+      # app-side; this covers what moved (and its own guards — the use-server
+      # strip pin, the supplier-throw tests, the package-side read-only scan).
+      - name: Package tests (@hames/connectors)
+        working-directory: packages/connectors
+        run: pnpm test
+
       # Catches SSR/vinxi breakage the unit tests cannot see.
       - run: pnpm build
 

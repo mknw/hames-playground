@@ -28,7 +28,7 @@ const sessionRun = vi.fn(async (..._args: unknown[]) => ({
 const sessionClose = vi.fn(async () => undefined)
 const driverSession = vi.fn((_opts?: unknown) => ({ run: sessionRun, close: sessionClose }))
 
-vi.mock('../../../lib/neo4j/client', () => ({
+vi.mock('@hames/connectors/neo4j/client', () => ({
   getNeo4jDriver: () => ({ session: driverSession }),
 }))
 

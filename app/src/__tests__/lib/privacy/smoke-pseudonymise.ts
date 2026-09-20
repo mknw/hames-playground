@@ -56,7 +56,8 @@ import {
   loadDirectoryRoster,
   type DirectoryRosterRow,
 } from '../../../lib/org-graph/roster-source.server'
-import { resetDriver } from '../../../lib/neo4j/client'
+import { configureNeo4j, resetDriver } from '@hames/connectors/neo4j/client'
+import { getEndpoints } from '../../../lib/config/endpoints'
 
 /** Build a Graph-shaped `tool_result` payload out of three real people:
  *  two declared in labelled fields, one named only in the body prose. */
@@ -94,6 +95,14 @@ function assert(condition: boolean, message: string): void {
 }
 
 async function main(): Promise<void> {
+  // The package's driver client is explicit-config-only (#225 PR-C2): this
+  // hand-run script has no app boot, so it constructs its connection from the
+  // environment itself — what the app-side env fallback used to resolve.
+  configureNeo4j({
+    url: getEndpoints().neo4j.bolt,
+    user: process.env.NEO4J_USER || 'neo4j',
+    password: process.env.NEO4J_PASSWORD || 'password',
+  })
   const roster = await loadDirectoryRoster()
   console.log(`🔒 pseudonymisation smoke — directory roster: ${roster.length} members`)
   if (roster.length < 3) {

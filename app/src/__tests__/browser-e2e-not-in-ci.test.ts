@@ -272,8 +272,12 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
     // effect drags the Graph auth stack, doc-convert and the stash behind it.
     // If that subtree ever acquires a module-scope `Collector` the assertion
     // below is what catches it, so the edge is named here to keep it walked.
+    // The graph.server.ts landmark moved into @hames/connectors (PR-C2) and
+    // the walk stops at package specifiers by policy — same story as the
+    // harness-baml landmark above; the Graph auth stack the barrel drags in
+    // is the deepest app-side module on that path now.
     expect(ENTRY_CLOSURE).toContain('src/lib/app-tools/index.server.ts')
-    expect(ENTRY_CLOSURE).toContain('src/lib/app-tools/graph.server.ts')
+    expect(ENTRY_CLOSURE).toContain('src/lib/auth/graph-token.server.ts')
     expect(ENTRY_CLOSURE.length).toBeGreaterThan(10)
   })
 

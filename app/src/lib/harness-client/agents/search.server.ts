@@ -21,7 +21,7 @@ import {
   type ConfiguredPattern,
 } from '@hames/harness-patterns'
 import { bamlPatterns, createLoopControllerAdapter } from '@hames/harness-baml'
-import { mcpNamespace } from '../../app-tools/mcp-catalog'
+import { mcpNamespace } from '@hames/connectors/mcp-catalog'
 import type { SessionData } from '../session.server'
 import type { AgentConfig } from '../registry.server'
 import { getGraphSchema } from './graph-schema.server'

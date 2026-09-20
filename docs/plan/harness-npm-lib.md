@@ -185,6 +185,16 @@ holding once each box is a separately versioned package.
 > <https://github.com/mknw/hames-playground/issues/225#issuecomment-5749052479>.
 > The doc's invariants (one-directional deps, no back-edges) are unchanged and
 > are what that design implements; only those three line items are overtaken.
+>
+> **Landed (PR-C2, #225 PR-3):** the move happened — `packages/connectors`
+> now holds the neo4j non-agentic layer (client/ops/plain/transform), the
+> app-tool registry, the MCP namespace catalog and the Microsoft Graph tool
+> bodies, all behind injected seams. What stayed app-side from those three
+> entries: the thin gated `'use server'` wrappers at `lib/neo4j/queries.ts`
+> and `graph-edit.server.ts` (the retained RPC surface), the composition
+> root `lib/app-tools/index.server.ts`, `auth/graph-token.server.ts` (the
+> injected `graphFetch`), and doc-convert + stash upload-service behind the
+> content seam (the S4 back-edge constraint).
 
 Everything that is inherently app-specific: `baml_src/` (and the generated
 `baml_client/` — `app/` is still where `baml-generate` runs; `harness-baml`

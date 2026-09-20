@@ -13,40 +13,8 @@
  *    parent folder's id.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-
-vi.mock('@hames/harness-patterns/assert.server', () => ({
-  assertServerOnImport: vi.fn(),
-  assertServer: vi.fn(),
-  ServerOnlyError: class ServerOnlyError extends Error {},
-}))
-
-const getRequestUserId = vi.fn<() => string | null>(() => 'oid-1')
-const getRequestSessionId = vi.fn<() => string | null>(() => 'sess-1')
-vi.mock('../../../lib/harness-client/request-user.server', () => ({
-  getRequestUserId: () => getRequestUserId(),
-  getRequestSessionId: () => getRequestSessionId(),
-  runWithUserId: (_u: string, fn: () => Promise<unknown>) => fn(),
-  runWithRequestContext: (_c: unknown, fn: () => Promise<unknown>) => fn(),
-}))
-
-const graphFetch = vi.fn()
-vi.mock('../../../lib/auth/graph-token.server', () => ({
-  GraphAuthRequiredError: class GraphAuthRequiredError extends Error {
-    constructor(
-      message: string,
-      readonly userId: string,
-      readonly status?: number,
-    ) {
-      super(message)
-      this.name = 'GraphAuthRequiredError'
-    }
-  },
-  graphFetch: (...a: unknown[]) => graphFetch(...a),
-  GRAPH_BASE: 'https://graph.microsoft.com/v1.0',
-  DEFAULT_GRAPH_SCOPES: ['User.Read'],
-}))
-
-import { runAppTool, appToolDescriptions } from '../../../lib/app-tools/index.server'
+import { buildGraphHarness } from './harness'
+import { GraphAuthRequiredError } from '../../graph/graph-auth'
 import {
   composeFileQuery,
   kqlTerms,
@@ -63,7 +31,11 @@ import {
   type GraphFileEntry,
   type GraphFileSearchResult,
   type GraphFileListResult,
-} from '../../../lib/app-tools/graph.server'
+} from '../../graph/graph-tools.server'
+
+const h = buildGraphHarness()
+const { runAppTool, appToolDescriptions } = h
+const graphFetch = h.graphFetch
 
 /** Last graphFetch call as [userId, path, init]. */
 function lastCall() {
@@ -119,9 +91,7 @@ function searchResponse(hits: unknown[], total: number | null = hits.length) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
-  getRequestUserId.mockReturnValue('oid-1')
-  getRequestSessionId.mockReturnValue('sess-1')
+  h.restoreDefaults()
   graphFetch.mockResolvedValue(searchResponse([]))
 })
 

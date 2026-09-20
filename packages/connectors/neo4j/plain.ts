@@ -33,7 +33,7 @@ export const CIRCULAR_PLACEHOLDER = '[Circular]'
  *   string. Silently rounding an int64 past 2^53 would be worse than a string.
  * - `Node` → `{ elementId, identity, labels, properties }`, `Relationship` →
  *   the same plus `type` and its endpoints, `Path` → `{ start, end, segments }`.
- *   These keep the field names `graph/transform.ts` duck-types on, so the
+ *   These keep the field names `neo4j/transform.ts` duck-types on, so the
  *   Cytoscape projection is built from the plain form too.
  * - temporal types and points → their `toString()` / component form.
  * - anything else object-shaped → its own enumerable keys, recursively.

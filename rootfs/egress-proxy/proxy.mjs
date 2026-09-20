@@ -19,8 +19,10 @@
  *     HTTPS, and supporting absolute-URI forwarding would widen the surface
  *     for nothing. Fail closed.
  *   - Every request — allowed and denied — is written to stdout as one JSON
- *     audit line, so `docker logs kg-sandbox-egress-<profile>-gw` is the
- *     outbound audit trail.
+ *     audit line, so `docker logs kg-sandbox-egress-<profile>-<sandbox-id>-gw`
+ *     is the outbound audit trail. The gateway is PER BOOT (multi-user
+ *     isolation, docs/plan/sandbox.md → channel 2): one audit trail names
+ *     exactly one sandbox's outbound traffic.
  *
  * Host matching: exact, or a subdomain of an entry (`githubusercontent.com`
  * admits `objects.githubusercontent.com`). Case-insensitive; trailing dots

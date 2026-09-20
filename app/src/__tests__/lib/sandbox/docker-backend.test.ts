@@ -811,20 +811,22 @@ describe('DockerBackend — egress profiles (#116)', () => {
     }
   })
 
-  it('pypi: creates the internal network + gateway, and puts the sandbox on that network behind the proxy', async () => {
+  it("pypi: creates the boot's OWN internal network + gateway, and puts the sandbox on that network behind the proxy", async () => {
     spawnPlan = egressPlan({ gwRunning: false })
     const backend = await makeBackend()
-    await backend.boot('base', { egress: 'pypi' })
+    const handle = await backend.boot('base', { egress: 'pypi' })
+    const net = `kg-sandbox-egress-pypi-${handle.id}`
+    const gw = `${net}-gw`
 
-    // network created once, --internal
+    // network created once, --internal, labeled for the reaper's sweep
     const create = spawnCalls.find((c) => c.args[0] === 'network' && c.args[1] === 'create')!
-    expect(create.args).toEqual(['network', 'create', '--internal', 'kg-sandbox-egress-pypi'])
+    expect(create.args).toEqual(['network', 'create', '--internal', '--label', 'kg-sandbox=1', net])
 
     // gateway booted from the sandbox image running the allowlist proxy…
     const gwRun = spawnCalls.find(
       (c) => c.args[0] === 'run' && c.args.some((a) => a.endsWith('proxy.mjs')),
     )!
-    expect(gwRun.args).toContain('kg-sandbox-egress-pypi-gw')
+    expect(gwRun.args).toContain(gw)
     expect(gwRun.args).toContain('--label')
     expect(gwRun.args).toContain('kg-sandbox=1')
     // …bypassing the init.sh ENTRYPOINT so the argv actually runs the proxy
@@ -843,19 +845,14 @@ describe('DockerBackend — egress profiles (#116)', () => {
     expect(hostFlags).toEqual(['pypi.org', 'files.pythonhosted.org'])
     expect(gwRun.args).toContain('3128')
 
-    // …and attached to the internal network (idempotency handled below)
+    // …and attached to ITS boot's internal network (idempotency handled below)
     const connect = spawnCalls.find((c) => c.args[0] === 'network' && c.args[1] === 'connect')!
-    expect(connect.args).toEqual([
-      'network',
-      'connect',
-      'kg-sandbox-egress-pypi',
-      'kg-sandbox-egress-pypi-gw',
-    ])
+    expect(connect.args).toEqual(['network', 'connect', net, gw])
 
-    // the sandbox itself: on the internal network, proxied, cache mounted
+    // the sandbox itself: on ITS OWN internal network, proxied, cache mounted
     const args = sandboxRunArgs()
-    expect(flagValue(args, '--network')).toBe('kg-sandbox-egress-pypi')
-    expect(args.join(' ')).toContain('HTTPS_PROXY=http://kg-sandbox-egress-pypi-gw:3128')
+    expect(flagValue(args, '--network')).toBe(net)
+    expect(args.join(' ')).toContain(`HTTPS_PROXY=http://${gw}:3128`)
     expect(args.join(' ')).toContain('NO_PROXY=localhost,127.0.0.1')
     expect(flagValue(args, '-v')).toBe('kg-sandbox-cache:/cache')
   })
@@ -871,9 +868,11 @@ describe('DockerBackend — egress profiles (#116)', () => {
       return { stdout: '', code: 0 }
     }
     const backend = await makeBackend()
-    await expect(backend.boot('base', { egress: 'pypi' })).resolves.toBeDefined()
+    const handle = await backend.boot('base', { egress: 'pypi' })
     expect(
-      spawnCalls.some((c) => c.args[0] === 'rm' && c.args.includes('kg-sandbox-egress-pypi-gw')),
+      spawnCalls.some(
+        (c) => c.args[0] === 'rm' && c.args.includes(`kg-sandbox-egress-pypi-${handle.id}-gw`),
+      ),
     ).toBe(false)
     expect(
       spawnCalls.some((c) => c.args[0] === 'run' && c.args.some((a) => a.endsWith('proxy.mjs'))),
@@ -916,13 +915,15 @@ describe('DockerBackend — egress profiles (#116)', () => {
     process.env.SANDBOX_EGRESS_GITHUB_ALLOWLIST = 'ghe.corp.example,github.com'
     spawnPlan = egressPlan({ gwRunning: false })
     const backend = await makeBackend()
-    await backend.boot('base', { egress: 'github-trusted' })
+    const handle = await backend.boot('base', { egress: 'github-trusted' })
     const gwRun = spawnCalls.find(
       (c) => c.args[0] === 'run' && c.args.some((a) => a.endsWith('proxy.mjs')),
     )!
     const hostFlags = gwRun.args.filter((_a, i, arr) => arr[i - 1] === '--host')
     expect(hostFlags).toEqual(['ghe.corp.example', 'github.com'])
-    expect(flagValue(sandboxRunArgs(), '--network')).toBe('kg-sandbox-egress-github-trusted')
+    expect(flagValue(sandboxRunArgs(), '--network')).toBe(
+      `kg-sandbox-egress-github-trusted-${handle.id}`,
+    )
   })
 
   it('reset re-applies the full hardening + egress argv on the recycled container', async () => {
@@ -943,7 +944,154 @@ describe('DockerBackend — egress profiles (#116)', () => {
     const args = sandboxRunArgs()
     expect(flagValue(args, '--cap-drop')).toBe('ALL')
     expect(args).toContain('--read-only')
-    expect(flagValue(args, '--network')).toBe('kg-sandbox-egress-pypi')
+    // the SAME boot's network: a reset re-runs the boot under the same
+    // sandbox id, so it re-ensures the same names instead of accumulating a
+    // second network + gateway per recycle.
+    expect(flagValue(args, '--network')).toBe(`kg-sandbox-egress-pypi-${handle.id}`)
     expect(flagValue(args, '--memory')).toBe('256m')
+  })
+})
+
+// ============================================================================
+// Per-boot egress isolation & lifecycle (docs/plan/sandbox.md → channel 2,
+// Lane B). Every networked boot owns its internal network + gateway: no
+// sandbox-to-sandbox adjacency even within a tenant, gateway created with
+// the boot and reaped with it, leftovers covered by the labeled sweeps.
+// ============================================================================
+
+describe('DockerBackend — per-boot egress isolation & lifecycle (Lane B)', () => {
+  it('two CONCURRENT boots of the same profile get DIFFERENT networks, each gateway on its own network', async () => {
+    spawnPlan = egressPlan({ gwRunning: false })
+    const backend = await makeBackend()
+    const [h1, h2] = await Promise.all([
+      backend.boot('base', { egress: 'pypi' }),
+      backend.boot('base', { egress: 'pypi' }),
+    ])
+
+    expect(h1.id).not.toBe(h2.id)
+    const net1 = `kg-sandbox-egress-pypi-${h1.id}`
+    const net2 = `kg-sandbox-egress-pypi-${h2.id}`
+    // THE per-boot guard: same profile, different boots, different networks.
+    expect(net1).not.toBe(net2)
+
+    // Each sandbox attached to its OWN network (set-compare: Promise.all
+    // ordering is not guaranteed).
+    const sandboxRuns = spawnCalls.filter(
+      (c) =>
+        c.args[0] === 'run' &&
+        c.args.includes('kg-sandbox=1') &&
+        !c.args.some((a) => a.endsWith('proxy.mjs')),
+    )
+    expect(sandboxRuns).toHaveLength(2)
+    expect(new Set(sandboxRuns.map((r) => flagValue(r.args, '--network')))).toEqual(
+      new Set([net1, net2]),
+    )
+
+    // One gateway per boot — never a shared per-profile gateway.
+    const gwRuns = spawnCalls.filter(
+      (c) => c.args[0] === 'run' && c.args.some((a) => a.endsWith('proxy.mjs')),
+    )
+    expect(gwRuns).toHaveLength(2)
+    expect(new Set(gwRuns.map((r) => flagValue(r.args, '--name')))).toEqual(
+      new Set([`${net1}-gw`, `${net2}-gw`]),
+    )
+
+    // …and each gateway joins exactly ITS boot's network (the gateway is the
+    // only shared-shape container; two boots share nothing).
+    const connects = spawnCalls
+      .filter((c) => c.args[0] === 'network' && c.args[1] === 'connect')
+      .map((c) => c.args.slice(2))
+    expect(new Set(connects.map((p) => p.join(' ')))).toEqual(
+      new Set([`${net1} ${net1}-gw`, `${net2} ${net2}-gw`]),
+    )
+  })
+
+  it('destroy reaps the boot: container, then gateway, then its labeled network (in that order)', async () => {
+    spawnPlan = egressPlan({ gwRunning: false })
+    const backend = await makeBackend()
+    const handle = await backend.boot('base', { egress: 'pypi' })
+    const cid = (handle.native as { containerId: string }).containerId
+    const net = `kg-sandbox-egress-pypi-${handle.id}`
+    const gw = `${net}-gw`
+
+    spawnCalls.length = 0
+    await backend.destroy(handle)
+
+    const rmContainer = spawnCalls.findIndex((c) => c.args[0] === 'rm' && c.args[2] === cid)
+    const rmGateway = spawnCalls.findIndex((c) => c.args[0] === 'rm' && c.args[2] === gw)
+    const rmNetwork = spawnCalls.findIndex(
+      (c) => c.args[0] === 'network' && c.args[1] === 'rm' && c.args[2] === net,
+    )
+    expect(rmContainer).toBeGreaterThanOrEqual(0)
+    expect(rmGateway).toBeGreaterThan(rmContainer)
+    expect(rmNetwork).toBeGreaterThan(rmGateway)
+  })
+
+  it('destroying a non-networked boot removes only the container (no gateway/network teardown)', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const backend = await makeBackend()
+    const handle = await backend.boot('base', {}) // mcp-only default
+    spawnCalls.length = 0
+    await backend.destroy(handle)
+    // one rm (the container); no network calls at all — mcp-only owns neither.
+    expect(spawnCalls.filter((c) => c.args[0] === 'rm')).toHaveLength(1)
+    expect(spawnCalls.some((c) => c.args[0] === 'network')).toBe(false)
+  })
+
+  it('destroying a failed-closed (unknown profile) boot has no egress teardown either', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      spawnPlan = () => ({ stdout: 'cid', code: 0 })
+      const backend = await makeBackend()
+      const handle = await backend.boot('base', { egress: 'weird-new-profile' as never })
+      spawnCalls.length = 0
+      await backend.destroy(handle)
+      expect(spawnCalls.some((c) => c.args[0] === 'network')).toBe(false)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('reapOrphans sweeps labeled per-boot networks AFTER the container sweep', async () => {
+    spawnPlan = (cmd, args) => {
+      if (args[0] === 'ps') return { stdout: 'abc123\n', code: 0 }
+      if (args[0] === 'network' && args[1] === 'prune')
+        return { stdout: 'kg-sandbox-egress-pypi-sbx-a\nkg-sandbox-egress-pypi-sbx-b\n', code: 0 }
+      return { stdout: '', code: 0 }
+    }
+    const backend = await makeBackend()
+    // 1 container + 2 pruned networks — the count covers both sweeps.
+    expect(await backend.reapOrphans()).toBe(3)
+    const prune = spawnCalls.find((c) => c.args[0] === 'network' && c.args[1] === 'prune')!
+    expect(prune.args).toEqual(['network', 'prune', '-f', '--filter', 'label=kg-sandbox=1'])
+    // prune runs AFTER the container rm: prune is a no-op on networks still
+    // in use by a leftover gateway, so the gateway sweep must go first.
+    const rmIdx = spawnCalls.findIndex((c) => c.args[0] === 'rm')
+    const pruneIdx = spawnCalls.findIndex((c) => c.args[0] === 'network' && c.args[1] === 'prune')
+    expect(pruneIdx).toBeGreaterThan(rmIdx)
+  })
+
+  it('reset re-ensures the SAME boot network and gateway (no accumulation, no re-create)', async () => {
+    let runCount = 0
+    spawnPlan = (cmd, args) => {
+      if (args[0] === 'run') {
+        runCount += 1
+        return { stdout: `container-${runCount}`, code: 0 }
+      }
+      if (args[0] === 'network' && args[1] === 'inspect') return { stdout: 'netid', code: 0 }
+      if (args[0] === 'inspect') return { stdout: 'true', code: 0 } // gateway still running
+      return { stdout: '', code: 0 }
+    }
+    const backend = await makeBackend()
+    const handle = await backend.boot('base', { egress: 'pypi' })
+    spawnCalls.length = 0
+    await backend.reset(handle)
+
+    // no new network created, no gateway re-run — the same names, re-ensured
+    expect(spawnCalls.some((c) => c.args[0] === 'network' && c.args[1] === 'create')).toBe(false)
+    expect(
+      spawnCalls.some((c) => c.args[0] === 'run' && c.args.some((a) => a.endsWith('proxy.mjs'))),
+    ).toBe(false)
+    expect(flagValue(sandboxRunArgs(), '--network')).toBe(`kg-sandbox-egress-pypi-${handle.id}`)
   })
 })

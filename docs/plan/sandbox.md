@@ -496,6 +496,8 @@ Assets at stake: other tenants' Data Stash documents and `/work` contents; the l
 
 **Why per-boot rather than per-tenant:** the per-boot gateway is the dominant cost and is required either way (a shared gateway on a shared network is precisely the mutual reachability being closed); per-boot *additionally* closes **within-tenant** cross-session reachability (a poisoned session of user A attacking user A's other session) with the same one-line mechanism; and the extra cost over per-tenant is one tiny node container per networked boot.
 
+**Deployment prerequisite (Lane B, documented only — nothing here touches a running daemon config):** per-boot networks multiply docker's address-pool consumption. The default pools allow only ~30 user-defined networks (`dockerd --default-address-pool`), so a deployment running networked sandboxes must widen the pool (e.g. `--default-address-pool base=10.0.0.0/8,size=24`) in the daemon config of the host that runs them, or boots fail once the pools exhaust. Also documented in [`rootfs/README.md`](../../rootfs/README.md) → "Hardening & egress" and `app/.env.example` → egress section.
+
 #### 3. Warm pool — global, keyed by rootfs flavor only → **fingerprint-scoped pool**
 
 Verified from source ([`warm-pool.server.ts`](../../app/src/lib/sandbox/warm-pool.server.ts)): the pool is **process-global, keyed by `RootfsId` only** — not per-session, not per-tenant. What does and does not cross sessions:
@@ -540,6 +542,7 @@ Verified from source ([`warm-pool.server.ts`](../../app/src/lib/sandbox/warm-poo
 
 - The default tenant maps to today's names: the cache volume keeps `SANDBOX_CACHE_VOLUME`'s value **verbatim** (no suffix), so the warm cache survives the upgrade.
 - The per-profile gateway containers carry `kg-sandbox=1` and are removed by the expanded container sweep. The two per-profile *networks* are unlabeled today (`docker network create --internal`, no `--label` — [`docker-backend.server.ts`](../../app/src/lib/sandbox/docker-backend.server.ts)) and are not covered by the label-scoped prune — remove them by name (`docker network rm kg-sandbox-egress-pypi kg-sandbox-egress-github-trusted`) or leave them; nothing references them after the change.
+- **Lane B prerequisite:** widen the docker daemon's address pools on any host that runs networked sandboxes (`--default-address-pool base=10.0.0.0/8,size=24`) BEFORE the upgrade — per-boot networks consume pools at one-network-per-boot, and an exhausted pool fails networked boots. Documented in [`rootfs/README.md`](../../rootfs/README.md) and `app/.env.example`; the daemon config is a deployment step, not a repo change.
 - No DB migration, no settings-schema change, no new required env var. One behavior change: `open` without `SANDBOX_ENABLE_OPEN_EGRESS` fail-closes to `mcp-only` with a named warning — the same class as an unknown profile.
 
 ### Env knobs (after)

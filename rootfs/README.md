@@ -72,8 +72,18 @@ The image also carries `/opt/mcp/egress-proxy/proxy.mjs` — a zero-dependency
 allowlist CONNECT proxy. It is not an MCP server: the backend runs it as a
 gateway container beside the `pypi` / `github-trusted` egress profiles, and
 its stdout (one JSON line per allowed AND denied connection) is the outbound
-audit log: `docker logs kg-sandbox-egress-<profile>-gw`. See
-`docs/sandbox-flavours.md` → "Hardening & egress".
+audit log: `docker logs kg-sandbox-egress-<profile>-<sandbox-id>-gw`. The
+gateway and its internal network are **per boot** (multi-user isolation —
+`docs/plan/sandbox.md` → channel 2): each networked boot gets its own
+internal network and its own gateway, so two sandboxes are never
+network-adjacent.
+
+**Deployment prerequisite — docker address pools.** Per-boot networks
+multiply docker's address-pool consumption: the default pools allow only ~30
+user-defined networks. A deployment running networked sandboxes must widen
+the daemon's pool (e.g. `dockerd --default-address-pool base=10.0.0.0/8,size=24`)
+or boot failures will surface once the pools are exhausted. See
+`docs/plan/sandbox.md` → channel 2 and `app/.env.example` → egress section.
 
 ### Flavours
 

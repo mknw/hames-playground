@@ -287,10 +287,14 @@ class DockerMcpTransport implements McpTransport {
 export class DockerBackend implements ComputeBackend {
   readonly kind = 'docker' as const
 
-  /** In-flight egress-gateway boots, per profile — two sandboxes with the same
-   *  profile booting concurrently must not race each other into `docker run`
-   *  with the same container name. Mirrors the wake-poll dedupe shape: the
-   *  promise wraps the whole ensure, the next boot joins it. */
+  /** In-flight egress-gateway boots, per BOOT id — two networked boots must
+   *  not race each other into `docker run` with the same gateway name.
+   *  Per-boot (docs/plan/sandbox.md → channel 2, Lane B): the map is keyed
+   *  by the sandbox id, not the profile, because each boot derives its own
+   *  network + gateway from that id; two boots of the same profile no longer
+   *  share anything to race over, and a warm-pool `reset` re-ensures the
+   *  SAME boot's names. Mirrors the wake-poll dedupe shape: the promise
+   *  wraps the whole ensure, the next boot joins it. */
   private readonly gatewayBoots = new Map<string, Promise<void>>()
 
   async boot(rootfs: RootfsId, runtime: RuntimeConfig): Promise<VMHandle> {
@@ -312,6 +316,30 @@ export class DockerBackend implements ComputeBackend {
     await docker(['rm', '-f', cid]).catch(() => {
       /* already gone — destroy is idempotent */
     })
+    await this.teardownEgress(vm)
+  }
+
+  /** Per-boot egress teardown (multi-user channel 2): a networked boot owns
+   *  its internal network + gateway, so they are reaped WITH the boot —
+   *  container, then gateway, then the network (in that order: `docker
+   *  network rm` refuses while the gateway endpoint remains attached). Only
+   *  proxied profiles own either; unknown profiles fail closed at boot to no
+   *  network, so there is nothing to tear down and the default treats them
+   *  the same. Every removal is best-effort — destroy is idempotent and
+   *  reapOrphans' labeled sweeps catch anything left behind. */
+  private async teardownEgress(vm: VMHandle): Promise<void> {
+    const native = vm.native as DockerNative
+    const egress = native.runtime?.egress ?? 'mcp-only'
+    if (!(isEgressProfile(egress) && isProxiedProfile(egress))) return
+    const gw = egressGatewayName(egress, vm.id)
+    const net = egressNetworkName(egress, vm.id)
+    await docker(['rm', '-f', gw]).catch(() => {
+      /* already gone */
+    })
+    await docker(['network', 'rm', net]).catch(() => {
+      /* already gone, or still attached (a gateway that would not die —
+         reapOrphans' labeled sweep catches the leftovers at next start) */
+    })
   }
 
   async connectMcp(vm: VMHandle): Promise<McpTransport> {
@@ -328,6 +356,12 @@ export class DockerBackend implements ComputeBackend {
    * *concurrent* harness process on the same Docker host owns. Correct for
    * single-process dev (the only v0 shape); gate behind a setting / grace
    * window if multi-process sharing of one host becomes real.
+   *
+   * Per-boot networks (channel 2, Lane B) are swept too: `docker network
+   * prune` scoped to the same label runs AFTER the container sweep, since
+   * prune is a no-op on networks still in use by a leftover gateway — the
+   * container sweep above removes those first. The return counts both
+   * (containers + pruned networks).
    */
   async reapOrphans(): Promise<number> {
     let listed: string
@@ -341,12 +375,26 @@ export class DockerBackend implements ComputeBackend {
       .split('\n')
       .map((s) => s.trim())
       .filter(Boolean)
-    if (ids.length === 0) return 0
-    await docker(['rm', '-f', ...ids]).catch(() => {
-      // Best-effort: a container may have exited/auto-removed between the
-      // `ps` and the `rm`. The id count still reflects what we found.
-    })
-    return ids.length
+    let reaped = 0
+    if (ids.length > 0) {
+      await docker(['rm', '-f', ...ids]).catch(() => {
+        // Best-effort: a container may have exited/auto-removed between the
+        // `ps` and the `rm`. The id count still reflects what we found.
+      })
+      reaped += ids.length
+    }
+    // Labeled per-boot networks are prunable only once their gateways are
+    // gone — hence after the container sweep, never before.
+    try {
+      const pruned = await docker(['network', 'prune', '-f', '--filter', 'label=kg-sandbox=1'])
+      reaped += pruned
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean).length
+    } catch {
+      // A failed prune is not a startup failure; the next reap re-sweeps.
+    }
+    return reaped
   }
 
   async health(vm: VMHandle): Promise<HealthStatus> {
@@ -395,10 +443,12 @@ export class DockerBackend implements ComputeBackend {
 
     // Egress enforcement (#116). mcp-only ⇒ no network at all (in-VM MCP is
     // reached over the docker-exec stdio pipe, which does NOT require
-    // container networking). pypi / github-trusted ⇒ internal-only network
-    // + allowlist CONNECT proxy (see egress-policy.ts). open ⇒ the default
-    // bridge, unrestricted by design. An UNKNOWN profile fails CLOSED to no
-    // network — an unrecognized name must never mean "unrestricted".
+    // container networking). pypi / github-trusted ⇒ a PER-BOOT internal-only
+    // network + PER-BOOT allowlist CONNECT proxy (see egress-policy.ts for
+    // why per-boot: a shared per-profile network makes every boot of that
+    // profile mutually reachable). open ⇒ the default bridge, unrestricted
+    // by design. An UNKNOWN profile fails CLOSED to no network — an
+    // unrecognized name must never mean "unrestricted".
     const egress = runtime.egress ?? 'mcp-only'
     if (!isEgressProfile(egress)) {
       console.warn(
@@ -410,11 +460,11 @@ export class DockerBackend implements ComputeBackend {
       args.push('--network', 'none')
     } else {
       if (isProxiedProfile(egress)) {
-        await this.ensureEgressGateway(egress)
+        await this.ensureEgressGateway(egress, id)
         args.push(
           '--network',
-          egressNetworkName(egress),
-          ...proxyEnvArgs(egress, readIntEnv('SANDBOX_EGRESS_PROXY_PORT', 3128)),
+          egressNetworkName(egress, id),
+          ...proxyEnvArgs(egress, id, readIntEnv('SANDBOX_EGRESS_PROXY_PORT', 3128)),
         )
       }
       // `open` keeps the default bridge — no proxy, no audit, by design.
@@ -435,39 +485,54 @@ export class DockerBackend implements ComputeBackend {
   }
 
   /**
-   * Ensure the per-profile egress gateway exists and is reachable from its
-   * internal network: an allowlist CONNECT proxy (rootfs/egress-proxy)
-   * running beside the sandboxes (see egress-policy.ts for why this is
-   * enforcement, not decoration). Idempotent — the steady-state boot pays two
-   * `docker inspect` calls; a missing network/gateway is created on demand.
-   * Failure is LOUD: a sandbox that would otherwise have network without its
-   * proxy is a worse outcome than a failed boot, so errors here surface as
+   * Ensure THIS boot's egress gateway exists on its own internal network: an
+   * allowlist CONNECT proxy (rootfs/egress-proxy) running beside the sandbox
+   * (see egress-policy.ts for why this is enforcement, not decoration, and
+   * why the network is per boot). Names derive from the boot's sandbox id,
+   * so two boots — even of the same profile, even of the same tenant — share
+   * no network and no gateway. Idempotent — the steady-state boot pays two
+   * `docker inspect` calls; a missing network/gateway is created on demand,
+   * and a warm-pool `reset` re-ensures the SAME boot's names. Failure is
+   * LOUD: a sandbox that would otherwise have network without its proxy is a
+   * worse outcome than a failed boot, so errors here surface as
    * SandboxBootError and the turn fails (#116 egress bullet).
    *
-   * Gateway containers are labelled `kg-sandbox=1`, so a crashed harness's
-   * leftover is reaped by `reapOrphans` at the next process start and lazily
-   * rebuilt here. They are NOT destroyed by `destroy()` — they outlive any
-   * one sandbox and hold no per-session state.
+   * Gateway containers are labelled `kg-sandbox=1` and the per-boot networks
+   * are created with the same label, so a crashed harness's leftovers are
+   * reaped by `reapOrphans` at the next process start (containers first, then
+   * the label-scoped network prune) and lazily rebuilt here. They are NOT
+   * destroyed by `reset()` — the boot re-ensures the same names — and
+   * `destroy()` tears down all three (see teardownEgress). A parked (pooled)
+   * VM keeps its gateway, exactly as a per-profile gateway outlived any one
+   * sandbox before it.
    */
-  private async ensureEgressGateway(profile: 'pypi' | 'github-trusted'): Promise<void> {
-    const inflight = this.gatewayBoots.get(profile)
+  private async ensureEgressGateway(
+    profile: 'pypi' | 'github-trusted',
+    bootId: string,
+  ): Promise<void> {
+    const inflight = this.gatewayBoots.get(bootId)
     if (inflight) return inflight
-    const boot = this.doEnsureEgressGateway(profile).finally(() => {
-      this.gatewayBoots.delete(profile)
+    const boot = this.doEnsureEgressGateway(profile, bootId).finally(() => {
+      this.gatewayBoots.delete(bootId)
     })
-    this.gatewayBoots.set(profile, boot)
+    this.gatewayBoots.set(bootId, boot)
     return boot
   }
 
-  private async doEnsureEgressGateway(profile: 'pypi' | 'github-trusted'): Promise<void> {
-    const net = egressNetworkName(profile)
-    const gw = egressGatewayName(profile)
+  private async doEnsureEgressGateway(
+    profile: 'pypi' | 'github-trusted',
+    bootId: string,
+  ): Promise<void> {
+    const net = egressNetworkName(profile, bootId)
+    const gw = egressGatewayName(profile, bootId)
     try {
       await docker(['network', 'inspect', net])
     } catch {
       // --internal: no external route for attached containers — the proxy is
-      // the ONLY way out, which is what makes the allowlist enforced.
-      await docker(['network', 'create', '--internal', net])
+      // the ONLY way out, which is what makes the allowlist enforced. The
+      // `kg-sandbox=1` label is what lets reapOrphans' network sweep find
+      // this network once its gateway is gone.
+      await docker(['network', 'create', '--internal', '--label', 'kg-sandbox=1', net])
     }
     const running = await docker(['inspect', '-f', '{{.State.Running}}', gw]).catch(() => 'false')
     if (running !== 'true') {
@@ -512,10 +577,11 @@ export class DockerBackend implements ComputeBackend {
         )
       }
     }
-    // Attach the gateway to the internal network. It already runs on the
-    // default bridge (its own external reach); this is the sandbox-facing
-    // side. "Already connected" is the idempotent steady state; any other
-    // failure is a real boot failure.
+    // Attach the gateway to the boot's internal network. It already runs on
+    // the default bridge (its own external reach); this is the sandbox-facing
+    // side. "Already connected" is the idempotent steady state (a reset
+    // re-ensuring the same boot's names); any other failure is a real boot
+    // failure.
     try {
       await docker(['network', 'connect', net, gw])
     } catch (err) {

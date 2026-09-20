@@ -36,10 +36,27 @@ describe('isEgressProfile / isProxiedProfile', () => {
 })
 
 describe('egress names', () => {
-  it('derives a stable network + gateway container name per profile', () => {
-    expect(egressNetworkName('pypi')).toBe('kg-sandbox-egress-pypi')
-    expect(egressGatewayName('pypi')).toBe('kg-sandbox-egress-pypi-gw')
-    expect(egressGatewayName('github-trusted')).toBe('kg-sandbox-egress-github-trusted-gw')
+  it('derives the network + gateway names from the profile AND the boot id', () => {
+    expect(egressNetworkName('pypi', 'sbx-abc123')).toBe('kg-sandbox-egress-pypi-sbx-abc123')
+    expect(egressGatewayName('pypi', 'sbx-abc123')).toBe('kg-sandbox-egress-pypi-sbx-abc123-gw')
+    expect(egressGatewayName('github-trusted', 'sbx-abc123')).toBe(
+      'kg-sandbox-egress-github-trusted-sbx-abc123-gw',
+    )
+  })
+
+  it('TWO boots of the same profile get DIFFERENT network and gateway names (per-boot isolation, Lane B)', () => {
+    // The whole point of the bootId suffix: two boots of the same profile
+    // must share no network and no gateway — a shared per-profile network
+    // made every boot of that profile mutually reachable at L3.
+    const a = egressNetworkName('pypi', 'sbx-aaaaaaaa')
+    const b = egressNetworkName('pypi', 'sbx-bbbbbbbb')
+    expect(a).not.toBe(b)
+    expect(egressGatewayName('pypi', 'sbx-aaaaaaaa')).not.toBe(
+      egressGatewayName('pypi', 'sbx-bbbbbbbb'),
+    )
+    // …and each gateway lives on exactly ITS boot's network.
+    expect(egressGatewayName('pypi', 'sbx-aaaaaaaa')).toBe(`${a}-gw`)
+    expect(egressGatewayName('pypi', 'sbx-bbbbbbbb')).toBe(`${b}-gw`)
   })
 })
 
@@ -66,14 +83,14 @@ describe('egressAllowlist', () => {
 
 describe('proxyEnvArgs', () => {
   it('hands the sandbox both proxy spellings and a localhost no-proxy carve-out', () => {
-    const args = proxyEnvArgs('pypi', 3128)
+    const args = proxyEnvArgs('pypi', 'sbx-abc123', 3128)
     const joined = args.join(' ')
-    // uppercase (curl) + lowercase (most runtimes), both pointing at the
-    // gateway's container name on the internal network
-    expect(joined).toContain('HTTPS_PROXY=http://kg-sandbox-egress-pypi-gw:3128')
-    expect(joined).toContain('https_proxy=http://kg-sandbox-egress-pypi-gw:3128')
-    expect(joined).toContain('HTTP_PROXY=http://kg-sandbox-egress-pypi-gw:3128')
-    expect(joined).toContain('http_proxy=http://kg-sandbox-egress-pypi-gw:3128')
+    // uppercase (curl) + lowercase (most runtimes), both pointing at THIS
+    // boot's gateway (container name on the boot's own internal network)
+    expect(joined).toContain('HTTPS_PROXY=http://kg-sandbox-egress-pypi-sbx-abc123-gw:3128')
+    expect(joined).toContain('https_proxy=http://kg-sandbox-egress-pypi-sbx-abc123-gw:3128')
+    expect(joined).toContain('HTTP_PROXY=http://kg-sandbox-egress-pypi-sbx-abc123-gw:3128')
+    expect(joined).toContain('http_proxy=http://kg-sandbox-egress-pypi-sbx-abc123-gw:3128')
     expect(joined).toContain('NO_PROXY=localhost,127.0.0.1')
     expect(joined).toContain('no_proxy=localhost,127.0.0.1')
     // everything is -e NAME=value pairs

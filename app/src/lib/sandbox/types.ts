@@ -39,7 +39,8 @@ export interface RuntimeConfig {
    *     the backend runs beside it — a process that ignores the proxy env vars
    *     has no route out at all, so the allowlist is enforced, not advisory.
    *     Every allowed AND denied connection is audited by the proxy
-   *     (`docker logs kg-sandbox-egress-<profile>-gw`).
+   *     (`docker logs kg-sandbox-egress-<profile>-<sandbox-id>-gw`; the
+   *     network and gateway are PER BOOT — see egress-policy.ts).
    *   - `open`       unrestricted outbound on the default bridge. No proxy,
    *     no audit — "open" is the honest name for what it is.
    *

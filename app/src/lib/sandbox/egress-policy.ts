@@ -17,6 +17,14 @@
  * the host's docker DNS behaviour; connections are not routed — at most
  * this reveals that a hostname exists.
  *
+ * The network and its gateway are PER BOOT (multi-user isolation,
+ * docs/plan/sandbox.md → channel 2, Lane B): a boot names its own internal
+ * network after its sandbox id, so two boots of the same profile share no
+ * network and no gateway — containers on one docker network are mutually
+ * reachable at L3 regardless of names, which made the old per-profile
+ * shared network a sandbox-to-sandbox channel the day a second boot
+ * (tenant or not) went networked.
+ *
  * `open` is deliberately unproxied — no enforcement and no audit, because
  * there is no chokepoint to log at. An unknown profile fails CLOSED to
  * `mcp-only` at the backend, never falls through to the bridge.
@@ -47,16 +55,21 @@ export const DEFAULT_EGRESS_ALLOWLISTS: Record<'pypi' | 'github-trusted', readon
   ],
 }
 
-/** Docker network that carries a profile's sandboxes + its proxy. */
-export function egressNetworkName(profile: 'pypi' | 'github-trusted'): string {
-  return `kg-sandbox-egress-${profile}`
+/** Docker network that carries ONE boot's sandbox + its proxy. `bootId` is
+ *  the boot's `sbx-*` sandbox id, so two boots of the same profile derive
+ *  DIFFERENT names — the adjacency the per-profile name used to create is
+ *  the channel this closes. Stable across warm-pool `reset` (which re-runs
+ *  the boot under the same sandbox id, re-ensuring the same network). */
+export function egressNetworkName(profile: 'pypi' | 'github-trusted', bootId: string): string {
+  return `kg-sandbox-egress-${profile}-${bootId}`
 }
 
-/** Container name of the profile's allowlist proxy (resolvable by that name
- *  from inside the internal network — docker's embedded DNS serves container
- *  names on user-defined networks). */
-export function egressGatewayName(profile: 'pypi' | 'github-trusted'): string {
-  return `${egressNetworkName(profile)}-gw`
+/** Container name of ONE boot's allowlist proxy (resolvable by that name
+ *  from inside the boot's internal network — docker's embedded DNS serves
+ *  container names on user-defined networks). Same lifetime as the network:
+ *  created with the boot, reaped with it (`kg-sandbox=1` labels). */
+export function egressGatewayName(profile: 'pypi' | 'github-trusted', bootId: string): string {
+  return `${egressNetworkName(profile, bootId)}-gw`
 }
 
 /** Profiles routed through the allowlist proxy. */
@@ -98,8 +111,12 @@ export function egressAllowlist(
  * reads the uppercase pair, most runtimes the lowercase one) so no client
  * falls out of the policy by spelling.
  */
-export function proxyEnvArgs(profile: 'pypi' | 'github-trusted', port: number): string[] {
-  const proxy = `http://${egressGatewayName(profile)}:${port}`
+export function proxyEnvArgs(
+  profile: 'pypi' | 'github-trusted',
+  bootId: string,
+  port: number,
+): string[] {
+  const proxy = `http://${egressGatewayName(profile, bootId)}:${port}`
   return [
     '-e',
     `HTTPS_PROXY=${proxy}`,

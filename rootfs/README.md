@@ -76,7 +76,10 @@ audit log: `docker logs kg-sandbox-egress-<profile>-<sandbox-id>-gw`. The
 gateway and its internal network are **per boot** (multi-user isolation —
 `docs/plan/sandbox.md` → channel 2): each networked boot gets its own
 internal network and its own gateway, so two sandboxes are never
-network-adjacent.
+network-adjacent. **Audit retention: the trail lives exactly as long as the
+boot** — the gateway is removed (`--rm` + `rm -f`) when the sandbox is
+destroyed, so `docker logs` is readable until then and gone after; the old
+per-profile long-lived window is gone with it.
 
 **Deployment prerequisite — docker address pools.** Per-boot networks
 multiply docker's address-pool consumption: the default pools allow only ~30

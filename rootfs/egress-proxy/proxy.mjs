@@ -22,7 +22,10 @@
  *     audit line, so `docker logs kg-sandbox-egress-<profile>-<sandbox-id>-gw`
  *     is the outbound audit trail. The gateway is PER BOOT (multi-user
  *     isolation, docs/plan/sandbox.md → channel 2): one audit trail names
- *     exactly one sandbox's outbound traffic.
+ *     exactly one sandbox's outbound traffic. RETENTION: the trail lives
+ *     exactly as long as the boot — the gateway is `--rm`'d when the sandbox
+ *     is destroyed, so the logs are readable until then and gone after (the
+ *     per-profile long-lived window is gone with it).
  *
  * Host matching: exact, or a subdomain of an entry (`githubusercontent.com`
  * admits `objects.githubusercontent.com`). Case-insensitive; trailing dots

@@ -40,7 +40,9 @@ export interface RuntimeConfig {
    *     has no route out at all, so the allowlist is enforced, not advisory.
    *     Every allowed AND denied connection is audited by the proxy
    *     (`docker logs kg-sandbox-egress-<profile>-<sandbox-id>-gw`; the
-   *     network and gateway are PER BOOT — see egress-policy.ts).
+   *     network and gateway are PER BOOT — see egress-policy.ts — so the
+   *     audit trail survives only until the sandbox is destroyed: the
+   *     gateway is `--rm`'d with the boot).
    *   - `open`       unrestricted outbound on the default bridge. No proxy,
    *     no audit — "open" is the honest name for what it is.
    *

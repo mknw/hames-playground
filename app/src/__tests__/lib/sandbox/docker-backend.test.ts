@@ -1114,11 +1114,17 @@ describe('DockerBackend — per-boot egress isolation & lifecycle (Lane B)', () 
     spawnPlan = (cmd, args) => {
       if (args[0] === 'ps') return { stdout: 'abc123\n', code: 0 }
       if (args[0] === 'network' && args[1] === 'prune')
-        return { stdout: 'kg-sandbox-egress-pypi-sbx-a\nkg-sandbox-egress-pypi-sbx-b\n', code: 0 }
+        // REAL `docker network prune -f` output shape: a "Deleted Networks:"
+        // header line ahead of the removed names. A headerless fixture here
+        // is exactly what let the count run one high for every real prune.
+        return {
+          stdout: 'Deleted Networks:\nkg-sandbox-egress-pypi-sbx-a\nkg-sandbox-egress-pypi-sbx-b\n',
+          code: 0,
+        }
       return { stdout: '', code: 0 }
     }
     const backend = await makeBackend()
-    // 1 container + 2 pruned networks — the count covers both sweeps.
+    // 1 container + 2 pruned networks — the header line is NOT counted.
     expect(await backend.reapOrphans()).toBe(3)
     const prune = spawnCalls.find((c) => c.args[0] === 'network' && c.args[1] === 'prune')!
     expect(prune.args).toEqual(['network', 'prune', '-f', '--filter', 'label=kg-sandbox=1'])
@@ -1151,5 +1157,95 @@ describe('DockerBackend — per-boot egress isolation & lifecycle (Lane B)', () 
       spawnCalls.some((c) => c.args[0] === 'run' && c.args.some((a) => a.endsWith('proxy.mjs'))),
     ).toBe(false)
     expect(flagValue(sandboxRunArgs(), '--network')).toBe(`kg-sandbox-egress-pypi-${handle.id}`)
+  })
+
+  it('a boot that fails AFTER its gateway came up reaps the leaked gateway + network (no address-pool leak)', async () => {
+    // Gateway boots fine, then the SANDBOX `docker run` fails — no VMHandle
+    // is ever produced, so destroy() is unreachable and only this teardown
+    // path can reap the boot's egress names.
+    let gwName: string | undefined
+    let sandboxRunFailed = false
+    spawnPlan = (_cmd, args) => {
+      if (args[0] === 'network' && args[1] === 'inspect')
+        return { stderr: 'no such network', code: 1 }
+      if (args[0] === 'network') return { stdout: '', code: 0 } // create / connect
+      if (args[0] === 'inspect') return { stdout: 'false', code: 0 }
+      if (args[0] === 'run') {
+        if (args.some((a) => a.endsWith('proxy.mjs'))) {
+          gwName = flagValue(args, '--name')
+          return { stdout: 'gwid', code: 0 }
+        }
+        sandboxRunFailed = true
+        return { stderr: 'port already allocated', code: 1 }
+      }
+      return { stdout: '', code: 0 }
+    }
+    const backend = await makeBackend()
+    await expect(backend.boot('base', { egress: 'pypi' })).rejects.toThrow(/boot failed/)
+    expect(sandboxRunFailed).toBe(true)
+    expect(gwName).toMatch(/^kg-sandbox-egress-pypi-sbx-/)
+    // the gateway was force-removed…
+    const rmGw = spawnCalls.find((c) => c.args[0] === 'rm' && c.args[2] === gwName)!
+    // …and its network too, AFTER the gateway (network rm refuses while the
+    // gateway endpoint is still attached).
+    const rmNet = spawnCalls.find(
+      (c) =>
+        c.args[0] === 'network' && c.args[1] === 'rm' && c.args[2] === gwName?.replace(/-gw$/, ''),
+    )!
+    expect(rmNet.args[2]).toMatch(/^kg-sandbox-egress-pypi-sbx-/)
+    expect(spawnCalls.indexOf(rmGw)).toBeLessThan(spawnCalls.indexOf(rmNet))
+  })
+
+  it('a boot whose GATEWAY fails to come up also reaps the per-boot network it created', async () => {
+    // network created, gateway run fails — the network must not outlive the
+    // failed boot either.
+    let createdNet: string | undefined
+    spawnPlan = (_cmd, args) => {
+      if (args[0] === 'network' && args[1] === 'inspect')
+        return { stderr: 'no such network', code: 1 }
+      if (args[0] === 'network' && args[1] === 'create') {
+        createdNet = args[args.length - 1]
+        return { stdout: '', code: 0 }
+      }
+      if (args[0] === 'network') return { stdout: '', code: 0 }
+      if (args[0] === 'inspect') return { stdout: 'false', code: 0 }
+      if (args[0] === 'run' && args.some((a) => a.endsWith('proxy.mjs')))
+        return { stderr: 'image missing', code: 1 }
+      return { stdout: '', code: 0 }
+    }
+    const backend = await makeBackend()
+    await expect(backend.boot('base', { egress: 'pypi' })).rejects.toThrow(
+      /egress gateway boot failed.*refusing to start a networked sandbox/,
+    )
+    expect(createdNet).toMatch(/^kg-sandbox-egress-pypi-sbx-/)
+    expect(
+      spawnCalls.some(
+        (c) => c.args[0] === 'network' && c.args[1] === 'rm' && c.args[2] === createdNet,
+      ),
+    ).toBe(true)
+  })
+
+  it('a network create failure surfaces as SandboxBootError (address-pool exhaustion is a LOUD boot failure)', async () => {
+    spawnPlan = (_cmd, args) => {
+      if (args[0] === 'network' && args[1] === 'inspect')
+        return { stderr: 'no such network', code: 1 }
+      if (args[0] === 'network' && args[1] === 'create')
+        return {
+          stderr: 'could not find an available, non-overlapping IPv4 address pool',
+          code: 1,
+        }
+      return { stdout: '', code: 0 }
+    }
+    const backend = await makeBackend()
+    const err = await backend.boot('base', { egress: 'pypi' }).then(
+      () => {
+        throw new Error('boot should have failed')
+      },
+      (e: Error) => e,
+    )
+    // Plain Error would contradict the ensure's jsdoc promise; it is a
+    // SandboxBootError, named like every other boot failure.
+    expect(err.name).toBe('SandboxBootError')
+    expect(err.message).toMatch(/egress network create failed.*address pool/)
   })
 })

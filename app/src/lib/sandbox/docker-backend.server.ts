@@ -299,16 +299,6 @@ class DockerMcpTransport implements McpTransport {
 export class DockerBackend implements ComputeBackend {
   readonly kind = 'docker' as const
 
-  /** In-flight egress-gateway boots, per BOOT id — two networked boots must
-   *  not race each other into `docker run` with the same gateway name.
-   *  Per-boot (docs/plan/sandbox.md → channel 2, Lane B): the map is keyed
-   *  by the sandbox id, not the profile, because each boot derives its own
-   *  network + gateway from that id; two boots of the same profile no longer
-   *  share anything to race over, and a warm-pool `reset` re-ensures the
-   *  SAME boot's names. Mirrors the wake-poll dedupe shape: the promise
-   *  wraps the whole ensure, the next boot joins it. */
-  private readonly gatewayBoots = new Map<string, Promise<void>>()
-
   async boot(rootfs: RootfsId, runtime: RuntimeConfig): Promise<VMHandle> {
     const id = `sbx-${randomUUID().slice(0, 8)}`
     const containerId = await this.runContainer(id, rootfs, runtime)
@@ -328,23 +318,27 @@ export class DockerBackend implements ComputeBackend {
     await docker(['rm', '-f', cid]).catch(() => {
       /* already gone — destroy is idempotent */
     })
-    await this.teardownEgress(vm)
+    const native = vm.native as DockerNative
+    await this.teardownBootEgress(native.runtime?.egress ?? 'mcp-only', vm.id)
   }
 
   /** Per-boot egress teardown (multi-user channel 2): a networked boot owns
    *  its internal network + gateway, so they are reaped WITH the boot —
-   *  container, then gateway, then the network (in that order: `docker
-   *  network rm` refuses while the gateway endpoint remains attached). Only
-   *  proxied profiles own either; unknown profiles fail closed at boot to no
-   *  network, so there is nothing to tear down and the default treats them
-   *  the same. Every removal is best-effort — destroy is idempotent and
-   *  reapOrphans' labeled sweeps catch anything left behind. */
-  private async teardownEgress(vm: VMHandle): Promise<void> {
-    const native = vm.native as DockerNative
-    const egress = native.runtime?.egress ?? 'mcp-only'
+   *  gateway, then the network (in that order: `docker network rm` refuses
+   *  while the gateway endpoint remains attached). Called from destroy()
+   *  AND from a FAILED boot (a networked boot that dies after its gateway
+   *  came up would otherwise leak the gateway container and its network —
+   *  destroy() is unreachable because no VMHandle was ever produced, and
+   *  every such leak permanently burns one address-pool slot until the next
+   *  process start). Only proxied profiles own either; unknown profiles
+   *  fail closed at boot to no network, so there is nothing to tear down
+   *  and the guard treats them the same. Every removal is best-effort —
+   *  destroy is idempotent and reapOrphans' labeled sweeps catch anything
+   *  left behind. */
+  private async teardownBootEgress(egress: string, bootId: string): Promise<void> {
     if (!(isEgressProfile(egress) && isProxiedProfile(egress))) return
-    const gw = egressGatewayName(egress, vm.id)
-    const net = egressNetworkName(egress, vm.id)
+    const gw = egressGatewayName(egress, bootId)
+    const net = egressNetworkName(egress, bootId)
     await docker(['rm', '-f', gw]).catch(() => {
       /* already gone */
     })
@@ -402,7 +396,12 @@ export class DockerBackend implements ComputeBackend {
       reaped += pruned
         .split('\n')
         .map((s) => s.trim())
-        .filter(Boolean).length
+        .filter(Boolean)
+        // Real `docker network prune -f` output carries a "Deleted Networks:"
+        // header line ahead of the names — not a network, not counted. (The
+        // pin's fixture IS the real output shape, which is what catches a
+        // headerless-lines regression.)
+        .filter((s) => !/^Deleted Networks:/i.test(s)).length
     } catch {
       // A failed prune is not a startup failure; the next reap re-sweeps.
     }
@@ -472,7 +471,16 @@ export class DockerBackend implements ComputeBackend {
       args.push('--network', 'none')
     } else {
       if (isProxiedProfile(egress)) {
-        await this.ensureEgressGateway(egress, id)
+        try {
+          await this.ensureEgressGateway(egress, id)
+        } catch (err) {
+          // The ensure may have died AFTER the network (or even the gateway)
+          // was created — reap the boot's egress names before surfacing the
+          // failure, or every failed networked boot leaks an address-pool
+          // slot (no VMHandle ⇒ destroy() can never reap it).
+          await this.teardownBootEgress(egress, id)
+          throw err
+        }
         args.push(
           '--network',
           egressNetworkName(egress, id),
@@ -493,6 +501,11 @@ export class DockerBackend implements ComputeBackend {
     try {
       return await docker(args)
     } catch (err) {
+      // A networked boot that fails AFTER its gateway came up must not leak
+      // the gateway container or its per-boot network: no VMHandle is ever
+      // produced, so destroy() is unreachable and reapOrphans runs only
+      // once per process. Reap the boot's egress names, then rethrow loud.
+      await this.teardownBootEgress(egress, id)
       const msg = err instanceof Error ? err.message : String(err)
       throw new SandboxBootError(`boot failed for ${id} (${image}): ${msg}`)
     }
@@ -506,7 +519,11 @@ export class DockerBackend implements ComputeBackend {
    * so two boots — even of the same profile, even of the same tenant — share
    * no network and no gateway. Idempotent — the steady-state boot pays two
    * `docker inspect` calls; a missing network/gateway is created on demand,
-   * and a warm-pool `reset` re-ensures the SAME boot's names. Failure is
+   * and a warm-pool `reset` re-ensures the SAME boot's names. The per-boot
+   * names made the old in-flight dedupe map unreachable — boot ids are
+   * unique, so two boots can never race the same gateway name, and a reset
+   * re-ensures its own names sequentially — so the map is GONE, not kept
+   * out of inertia. Failure is
    * LOUD: a sandbox that would otherwise have network without its proxy is a
    * worse outcome than a failed boot, so errors here surface as
    * SandboxBootError and the turn fails (#116 egress bullet).
@@ -516,24 +533,11 @@ export class DockerBackend implements ComputeBackend {
    * reaped by `reapOrphans` at the next process start (containers first, then
    * the label-scoped network prune) and lazily rebuilt here. They are NOT
    * destroyed by `reset()` — the boot re-ensures the same names — and
-   * `destroy()` tears down all three (see teardownEgress). A parked (pooled)
-   * VM keeps its gateway, exactly as a per-profile gateway outlived any one
-   * sandbox before it.
+   * `destroy()` (and a failed boot) tears down gateway + network via
+   * teardownBootEgress. A parked (pooled) VM keeps its gateway, exactly as a
+   * per-profile gateway outlived any one sandbox before it.
    */
   private async ensureEgressGateway(
-    profile: 'pypi' | 'github-trusted',
-    bootId: string,
-  ): Promise<void> {
-    const inflight = this.gatewayBoots.get(bootId)
-    if (inflight) return inflight
-    const boot = this.doEnsureEgressGateway(profile, bootId).finally(() => {
-      this.gatewayBoots.delete(bootId)
-    })
-    this.gatewayBoots.set(bootId, boot)
-    return boot
-  }
-
-  private async doEnsureEgressGateway(
     profile: 'pypi' | 'github-trusted',
     bootId: string,
   ): Promise<void> {
@@ -546,7 +550,19 @@ export class DockerBackend implements ComputeBackend {
       // the ONLY way out, which is what makes the allowlist enforced. The
       // `kg-sandbox=1` label is what lets reapOrphans' network sweep find
       // this network once its gateway is gone.
-      await docker(['network', 'create', '--internal', '--label', 'kg-sandbox=1', net])
+      try {
+        await docker(['network', 'create', '--internal', '--label', 'kg-sandbox=1', net])
+      } catch (err) {
+        // LOUD, as the jsdoc promises: an unwrapped error here (the classic
+        // case is docker address-pool exhaustion) would surface as a plain
+        // Error instead of the SandboxBootError every boot failure turns
+        // into.
+        const msg = err instanceof Error ? err.message : String(err)
+        throw new SandboxBootError(
+          `egress network create failed for ${profile} (${net}): ${msg} — refusing to start a ` +
+            `networked sandbox without its allowlist proxy`,
+        )
+      }
     }
     const running = await docker(['inspect', '-f', '{{.State.Running}}', gw]).catch(() => 'false')
     if (running !== 'true') {

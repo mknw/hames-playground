@@ -1,33 +1,26 @@
 /**
- * Intent-shaped graph edit actions (#226 C2).
+ * Intent-shaped graph edit WRAPPER tests (#226 C2 / #225 PR-C2).
  *
- * Replaces write-action.test.ts: the arbitrary-Cypher RPC is gone, so these
- * pin the new contract — every operation requires an authenticated user,
- * owns its Cypher (values ride as parameters), rejects identifiers that
- * could smuggle query syntax, and closes the session even on failure.
+ * The op bodies moved into `@hames/connectors`; this module's tests pin the
+ * RETAINED `'use server'` wrapper's own contract — every operation requires
+ * an authenticated user (or the gated dev bypass) before the package op is
+ * touched. The ops' identifier validation and Cypher ownership are pinned
+ * co-located in the package.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-const sessionRun = vi.fn(async (..._a: unknown[]) => ({ records: [] as unknown[] }))
-
-/** Make the mocked session look like it matched `n` rows — the value of the
- *  final `RETURN count(*)` column the ops read to detect a zero match. */
-const matchedRows = (n: number) => sessionRun.mockResolvedValueOnce({ records: [{ get: () => n }] })
-const sessionClose = vi.fn(async () => undefined)
-const driverSession = vi.fn(() => ({ run: sessionRun, close: sessionClose }))
-
-vi.mock('../../../lib/neo4j/client', () => ({
-  getNeo4jDriver: () => ({ session: driverSession }),
+const ops = vi.hoisted(() => ({
+  createGraphNode: vi.fn(async () => '4:abc:99'),
+  linkGraphNodes: vi.fn(async () => undefined),
+  setGraphNodeProperty: vi.fn(async () => undefined),
 }))
+vi.mock('@hames/connectors/neo4j/graph-edit.server', () => ops)
 
 const getAuthenticatedUser = vi.fn(async () => ({ id: 'user-a' }))
 vi.mock('../../../lib/auth/server', () => ({
   getAuthenticatedUser: () => getAuthenticatedUser(),
 }))
-
-const lastCypher = () => String(sessionRun.mock.calls.at(-1)![0])
-const lastParams = () => sessionRun.mock.calls.at(-1)![1]
 
 const repo = () => import('../../../lib/neo4j/graph-edit.server')
 
@@ -49,7 +42,7 @@ afterEach(() => {
 })
 
 describe('auth gate', () => {
-  it('rejects an unauthenticated caller on every operation, before touching the driver', async () => {
+  it('rejects an unauthenticated caller on every operation, before touching the ops', async () => {
     getAuthenticatedUser.mockRejectedValue(
       new Error('Authentication required: No user found in session.'),
     )
@@ -62,7 +55,9 @@ describe('auth gate', () => {
     await expect(setGraphNodeProperty('Alpha', 'summary', 'v')).rejects.toThrow(
       'Authentication required',
     )
-    expect(driverSession).not.toHaveBeenCalled()
+    for (const op of Object.values(ops)) {
+      expect(op).not.toHaveBeenCalled()
+    }
   })
 
   it('is bypassed by the dev flag — which is what makes the pin above load-bearing', async () => {
@@ -73,136 +68,19 @@ describe('auth gate', () => {
     // fails rather than silently reverting the test to environment-dependent.
     vi.stubEnv('VITE_DEV_BYPASS_AUTH', 'true')
     getAuthenticatedUser.mockRejectedValue(new Error('Authentication required: no session.'))
-    sessionRun.mockResolvedValueOnce({ records: [{ get: () => '4:bypass:1' }] })
     const { createGraphNode } = await repo()
 
-    await expect(createGraphNode('Concept', 'GraphQL')).resolves.toBe('4:bypass:1')
-    expect(driverSession).toHaveBeenCalled()
-  })
-})
-
-describe('identifier validation', () => {
-  it('rejects an injected relationship type without running any query', async () => {
-    const { linkGraphNodes } = await repo()
-
-    await expect(
-      linkGraphNodes('Alpha', 'Beta', 'X]->(b) MATCH (n) DETACH DELETE n //'),
-    ).rejects.toThrow(/Invalid relationship type/)
-    expect(sessionRun).not.toHaveBeenCalled()
+    await expect(createGraphNode('Concept', 'GraphQL')).resolves.toBe('4:abc:99')
+    expect(ops.createGraphNode).toHaveBeenCalledWith('Concept', 'GraphQL', undefined)
   })
 
-  it('rejects a label that escapes its backtick quoting', async () => {
-    const { createGraphNode } = await repo()
-
-    await expect(createGraphNode('X` {a:1}) MATCH (n) DETACH DELETE n //', 'name')).rejects.toThrow(
-      /Invalid label/,
-    )
-    expect(sessionRun).not.toHaveBeenCalled()
-  })
-
-  it('rejects a property key with query syntax', async () => {
-    const { setGraphNodeProperty } = await repo()
-
-    await expect(setGraphNodeProperty('Alpha', 'k = 1 WITH n MATCH (m)', 'v')).rejects.toThrow(
-      /Invalid property key/,
-    )
-    expect(sessionRun).not.toHaveBeenCalled()
-  })
-})
-
-describe('createGraphNode', () => {
-  it('creates a node with description, values as parameters, and returns its elementId', async () => {
-    sessionRun.mockResolvedValueOnce({ records: [{ get: () => '4:abc:99' }] })
-    const { createGraphNode } = await repo()
-
-    await expect(createGraphNode('Concept', 'GraphQL', 'A query language')).resolves.toBe(
-      '4:abc:99',
-    )
-
-    expect(lastCypher()).toBe(
-      'CREATE (n:`Concept` {name: $name, description: $description}) RETURN elementId(n) AS elementId',
-    )
-    expect(lastParams()).toEqual({ name: 'GraphQL', description: 'A query language' })
-    expect(sessionClose).toHaveBeenCalledTimes(1)
-  })
-
-  it('resolves with the created node\u2019s elementId when no description is given (#323 B1)', async () => {
-    sessionRun.mockResolvedValueOnce({ records: [{ get: () => '4:abc:7' }] })
-    const { createGraphNode } = await repo()
-
-    await expect(createGraphNode('Concept', 'REST')).resolves.toBe('4:abc:7')
-    expect(lastCypher()).toBe('CREATE (n:`Concept` {name: $name}) RETURN elementId(n) AS elementId')
-    expect(lastParams()).toEqual({ name: 'REST' })
-  })
-})
-
-describe('linkGraphNodes', () => {
-  it('creates a typed edge between elementId-matched nodes (the normal UI path)', async () => {
-    matchedRows(1)
-    const { linkGraphNodes } = await repo()
+  it('delegates each op with its caller arguments', async () => {
+    const { linkGraphNodes, setGraphNodeProperty } = await repo()
 
     await linkGraphNodes('4:abc:11', '4:abc:12', 'DEPENDS_ON')
+    expect(ops.linkGraphNodes).toHaveBeenCalledWith('4:abc:11', '4:abc:12', 'DEPENDS_ON')
 
-    expect(lastCypher()).toBe(
-      'MATCH (a), (b) WHERE elementId(a) = $sourceId AND elementId(b) = $targetId MERGE (a)-[:`DEPENDS_ON`]->(b) RETURN count(*) AS linked',
-    )
-    expect(lastParams()).toEqual({ sourceId: '4:abc:11', targetId: '4:abc:12' })
-    expect(sessionClose).toHaveBeenCalledTimes(1)
-  })
-
-  it('node ids are parameters — a hostile id cannot reach the query text', async () => {
-    matchedRows(1)
-    const { linkGraphNodes } = await repo()
-
-    const hostile = `"}) MATCH (n) DETACH DELETE n //`
-    await linkGraphNodes(hostile, '4:abc:12', 'RELATES_TO')
-
-    expect(lastCypher()).not.toContain('DETACH')
-    expect(lastParams()).toEqual({ sourceId: hostile, targetId: '4:abc:12' })
-  })
-
-  it('rejects when an endpoint matches no node instead of resolving as success (#314)', async () => {
-    matchedRows(0)
-    const { linkGraphNodes } = await repo()
-
-    await expect(linkGraphNodes('4:abc:404', '4:abc:12', 'RELATES_TO')).rejects.toThrow(
-      /no graph node/i,
-    )
-    expect(sessionClose).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('setGraphNodeProperty', () => {
-  it('sets one property on the elementId-matched node, key backtick-quoted, value as a parameter', async () => {
-    matchedRows(1)
-    const { setGraphNodeProperty } = await repo()
-
-    await setGraphNodeProperty('4:abc:11', 'summary', 'new summary')
-
-    expect(lastCypher()).toBe(
-      'MATCH (n) WHERE elementId(n) = $nodeId SET n.`summary` = $value RETURN count(n) AS matched',
-    )
-    expect(lastParams()).toEqual({ nodeId: '4:abc:11', value: 'new summary' })
-  })
-
-  it('rejects when the node matches nothing instead of resolving as success (#314)', async () => {
-    // A display label that is not a `name` property (e.g. an org-graph GUID)
-    // used to issue MATCH ... matching zero nodes and still resolve — the edit
-    // reported success and the canvas fabricated the result.
-    matchedRows(0)
-    const { setGraphNodeProperty } = await repo()
-
-    await expect(setGraphNodeProperty('4:abc:404', 'summary', 'v')).rejects.toThrow(
-      /no graph node/i,
-    )
-    expect(sessionClose).toHaveBeenCalledTimes(1)
-  })
-
-  it('closes the session even when the query throws', async () => {
-    sessionRun.mockRejectedValueOnce(new Error('neo4j down'))
-    const { setGraphNodeProperty } = await repo()
-
-    await expect(setGraphNodeProperty('Alpha', 'summary', 'v')).rejects.toThrow('neo4j down')
-    expect(sessionClose).toHaveBeenCalledTimes(1)
+    await setGraphNodeProperty('4:abc:11', 'summary', 'v')
+    expect(ops.setGraphNodeProperty).toHaveBeenCalledWith('4:abc:11', 'summary', 'v')
   })
 })

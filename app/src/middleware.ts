@@ -23,7 +23,7 @@ import {
   installDevFakeInference,
 } from './lib/inference/dev-fake-inference.server'
 import { getEndpoints } from './lib/config/endpoints'
-import { configureNeo4j } from './lib/neo4j/client'
+import { configureNeo4j } from '@hames/connectors/neo4j/client'
 // Side effect only: registers the app-side tools AND the process transport that
 // makes `callTool` dispatch to them. `harness-patterns` deliberately does not
 // import `app-tools` any more — core owns the seam and the ORDER, the app owns

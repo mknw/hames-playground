@@ -5,7 +5,7 @@
  * for graph visualization in the UI
  */
 
-import type { ElementDefinition } from 'cytoscape';
+import type { ElementDefinition } from 'cytoscape'
 
 // ============================================================================
 // Type Definitions
@@ -15,35 +15,35 @@ import type { ElementDefinition } from 'cytoscape';
  * Neo4j Node structure from query results
  */
 export interface Neo4jNode {
-  identity: string | number;
-  labels: string[];
-  properties: Record<string, unknown>;
-  elementId?: string;  // Neo4j 5.x element ID
+  identity: string | number
+  labels: string[]
+  properties: Record<string, unknown>
+  elementId?: string // Neo4j 5.x element ID
 }
 
 /**
  * Neo4j Relationship structure from query results
  */
 export interface Neo4jRelationship {
-  identity: string | number;
-  type: string;
-  start: string | number;
-  end: string | number;
-  startNode?: string;  // Neo4j 5.x element ID (deprecated naming)
-  endNode?: string;  // Neo4j 5.x element ID (deprecated naming)
-  startNodeElementId?: string;  // Neo4j 5.x element ID
-  endNodeElementId?: string;  // Neo4j 5.x element ID
-  properties: Record<string, unknown>;
-  elementId?: string;
+  identity: string | number
+  type: string
+  start: string | number
+  end: string | number
+  startNode?: string // Neo4j 5.x element ID (deprecated naming)
+  endNode?: string // Neo4j 5.x element ID (deprecated naming)
+  startNodeElementId?: string // Neo4j 5.x element ID
+  endNodeElementId?: string // Neo4j 5.x element ID
+  properties: Record<string, unknown>
+  elementId?: string
 }
 
 /**
  * Neo4j query result structure
  */
 export interface Neo4jQueryResult {
-  nodes?: Neo4jNode[];
-  relationships?: Neo4jRelationship[];
-  records?: unknown[];  // Raw Neo4j records
+  nodes?: Neo4jNode[]
+  relationships?: Neo4jRelationship[]
+  records?: unknown[] // Raw Neo4j records
 }
 
 // ============================================================================
@@ -59,21 +59,21 @@ export interface Neo4jQueryResult {
  */
 export function transformNeo4jToCytoscape(
   nodes: Neo4jNode[],
-  relationships: Neo4jRelationship[]
+  relationships: Neo4jRelationship[],
 ): ElementDefinition[] {
-  const elements: ElementDefinition[] = [];
+  const elements: ElementDefinition[] = []
 
   // Transform nodes
   for (const node of nodes) {
-    elements.push(transformNode(node));
+    elements.push(transformNode(node))
   }
 
   // Transform relationships
   for (const rel of relationships) {
-    elements.push(transformRelationship(rel));
+    elements.push(transformRelationship(rel))
   }
 
-  return elements;
+  return elements
 }
 
 /**
@@ -81,10 +81,10 @@ export function transformNeo4jToCytoscape(
  */
 function transformNode(node: Neo4jNode): ElementDefinition {
   // Use elementId if available (Neo4j 5.x), otherwise use identity
-  const id = node.elementId?.toString() || node.identity.toString();
+  const id = node.elementId?.toString() || node.identity.toString()
 
   // Determine node label (prefer name, title, or first label)
-  const label = getNodeLabel(node);
+  const label = getNodeLabel(node)
 
   return {
     data: {
@@ -94,10 +94,10 @@ function transformNode(node: Neo4jNode): ElementDefinition {
       labels: node.labels,
       properties: node.properties,
       // Store original identity for reference
-      neo4jId: node.identity
+      neo4jId: node.identity,
     },
-    classes: node.labels.map(l => `label-${l.toLowerCase()}`).join(' ')
-  };
+    classes: node.labels.map((l) => `label-${l.toLowerCase()}`).join(' '),
+  }
 }
 
 /**
@@ -105,19 +105,16 @@ function transformNode(node: Neo4jNode): ElementDefinition {
  */
 function transformRelationship(rel: Neo4jRelationship): ElementDefinition {
   // Use elementId if available (Neo4j 5.x), otherwise use identity
-  const id = rel.elementId?.toString() || rel.identity.toString();
+  const id = rel.elementId?.toString() || rel.identity.toString()
 
   // For source/target, we need to match the node IDs
   // Neo4j 5.x uses startNodeElementId/endNodeElementId (full element IDs)
   // Fall back to startNode/start for older formats
-  const source = rel.startNodeElementId?.toString()
-    || rel.startNode?.toString()
-    || rel.start.toString();
-  const target = rel.endNodeElementId?.toString()
-    || rel.endNode?.toString()
-    || rel.end.toString();
+  const source =
+    rel.startNodeElementId?.toString() || rel.startNode?.toString() || rel.start.toString()
+  const target = rel.endNodeElementId?.toString() || rel.endNode?.toString() || rel.end.toString()
 
-  console.log('[transform] Relationship source:', source, 'target:', target);
+  console.log('[transform] Relationship source:', source, 'target:', target)
 
   return {
     data: {
@@ -128,10 +125,10 @@ function transformRelationship(rel: Neo4jRelationship): ElementDefinition {
       type: rel.type,
       properties: rel.properties,
       // Store original identity for reference
-      neo4jId: rel.identity
+      neo4jId: rel.identity,
     },
-    classes: `rel-${rel.type.toLowerCase().replace(/_/g, '-')}`
-  };
+    classes: `rel-${rel.type.toLowerCase().replace(/_/g, '-')}`,
+  }
 }
 
 /**
@@ -139,23 +136,23 @@ function transformRelationship(rel: Neo4jRelationship): ElementDefinition {
  * Prefers: name > title > id > first property > first label
  */
 function getNodeLabel(node: Neo4jNode): string {
-  const props = node.properties;
+  const props = node.properties
 
   // Check common label properties
-  if (props.name) return String(props.name);
-  if (props.title) return String(props.title);
-  if (props.id) return String(props.id);
-  if (props.label) return String(props.label);
+  if (props.name) return String(props.name)
+  if (props.title) return String(props.title)
+  if (props.id) return String(props.id)
+  if (props.label) return String(props.label)
 
   // Use first string property value
   for (const [_key, value] of Object.entries(props)) {
     if (typeof value === 'string' && value.length > 0 && value.length < 50) {
-      return value;
+      return value
     }
   }
 
   // Fall back to first label or 'Node'
-  return node.labels[0] || 'Node';
+  return node.labels[0] || 'Node'
 }
 
 /**
@@ -165,8 +162,8 @@ function getNodeLabel(node: Neo4jNode): string {
 function formatRelationshipLabel(type: string): string {
   return type
     .split('_')
-    .map(word => word.charAt(0) + word.slice(1).toLowerCase())
-    .join(' ');
+    .map((word) => word.charAt(0) + word.slice(1).toLowerCase())
+    .join(' ')
 }
 
 // ============================================================================
@@ -178,45 +175,45 @@ function formatRelationshipLabel(type: string): string {
  * Handles different result formats from neo4j-cypher MCP server
  */
 export function parseNeo4jResults(mcpResponse: unknown): Neo4jQueryResult {
-  console.log('[transform] parseNeo4jResults called');
+  console.log('[transform] parseNeo4jResults called')
 
   // Type guard for response object
-  const response = mcpResponse as Record<string, unknown>;
+  const response = mcpResponse as Record<string, unknown>
 
   // If response is already in expected format
   if (response?.nodes && response?.relationships) {
-    console.log('[transform] Response already in expected format');
-    return response as unknown as Neo4jQueryResult;
+    console.log('[transform] Response already in expected format')
+    return response as unknown as Neo4jQueryResult
   }
 
   // If response has records array
   if (response?.records && Array.isArray(response.records)) {
-    console.log('[transform] Found records array, length:', response.records.length);
+    console.log('[transform] Found records array, length:', response.records.length)
     if (response.records.length > 0) {
       // Log the structure of the first record
-      const firstRecord = response.records[0];
-      console.log('[transform] First record type:', typeof firstRecord);
-      console.log('[transform] First record constructor:', firstRecord?.constructor?.name);
+      const firstRecord = response.records[0]
+      console.log('[transform] First record type:', typeof firstRecord)
+      console.log('[transform] First record constructor:', firstRecord?.constructor?.name)
       // If it has keys() method (Neo4j Record), log keys
       if (firstRecord && typeof firstRecord.keys === 'function') {
-        console.log('[transform] Record keys:', firstRecord.keys());
+        console.log('[transform] Record keys:', firstRecord.keys())
       }
       if (firstRecord && typeof firstRecord.toObject === 'function') {
-        console.log('[transform] Record toObject:', JSON.stringify(firstRecord.toObject(), null, 2));
+        console.log('[transform] Record toObject:', JSON.stringify(firstRecord.toObject(), null, 2))
       }
     }
-    return extractNodesAndRelsFromRecords(response.records);
+    return extractNodesAndRelsFromRecords(response.records)
   }
 
   // If response is a simple array
   if (Array.isArray(mcpResponse)) {
-    console.log('[transform] Response is array, length:', mcpResponse.length);
-    return extractNodesAndRelsFromRecords(mcpResponse);
+    console.log('[transform] Response is array, length:', mcpResponse.length)
+    return extractNodesAndRelsFromRecords(mcpResponse)
   }
 
   // Empty result
-  console.log('[transform] No valid format found, returning empty');
-  return { nodes: [], relationships: [] };
+  console.log('[transform] No valid format found, returning empty')
+  return { nodes: [], relationships: [] }
 }
 
 /**
@@ -224,124 +221,133 @@ export function parseNeo4jResults(mcpResponse: unknown): Neo4jQueryResult {
  * Handles the case where MCP returns raw record arrays
  */
 function extractNodesAndRelsFromRecords(records: unknown[]): Neo4jQueryResult {
-  console.log('[transform] extractNodesAndRelsFromRecords called with', records.length, 'records');
+  console.log('[transform] extractNodesAndRelsFromRecords called with', records.length, 'records')
 
-  const nodes = new Map<string, Neo4jNode>();
-  const relationships: Neo4jRelationship[] = [];
+  const nodes = new Map<string, Neo4jNode>()
+  const relationships: Neo4jRelationship[] = []
 
   for (const record of records) {
     // Neo4j Record objects have a toObject() method
-    const recordObj = record && typeof (record as { toObject?: () => unknown }).toObject === 'function'
-      ? (record as { toObject: () => unknown }).toObject()
-      : record;
+    const recordObj =
+      record && typeof (record as { toObject?: () => unknown }).toObject === 'function'
+        ? (record as { toObject: () => unknown }).toObject()
+        : record
 
     // Record can be an object with keys or an array
     const values = Array.isArray(recordObj)
       ? recordObj
-      : Object.values(recordObj as Record<string, unknown>);
+      : Object.values(recordObj as Record<string, unknown>)
 
-    console.log('[transform] Processing record with', values.length, 'values');
+    console.log('[transform] Processing record with', values.length, 'values')
 
     for (const value of values) {
-      console.log('[transform] Checking value:', typeof value, value?.constructor?.name);
+      console.log('[transform] Checking value:', typeof value, value?.constructor?.name)
 
       if (isNode(value)) {
-        const id = value.elementId?.toString() || value.identity.toString();
-        console.log('[transform] Found node:', id);
-        nodes.set(id, value);
+        const id = value.elementId?.toString() || value.identity.toString()
+        console.log('[transform] Found node:', id)
+        nodes.set(id, value)
       } else if (isRelationship(value)) {
-        console.log('[transform] Found relationship');
-        relationships.push(value);
+        console.log('[transform] Found relationship')
+        relationships.push(value)
 
         // Also extract connected nodes if present
         if (value.start && value.end) {
           // These are node references - we might get the full nodes separately
         }
       } else if (isPath(value)) {
-        console.log('[transform] Found path');
+        console.log('[transform] Found path')
         // Path contains nodes and relationships
-        extractFromPath(value, nodes, relationships);
+        extractFromPath(value, nodes, relationships)
       } else {
-        console.log('[transform] Value not recognized as node/rel/path');
+        console.log('[transform] Value not recognized as node/rel/path')
       }
     }
   }
 
-  console.log('[transform] Extracted', nodes.size, 'nodes and', relationships.length, 'relationships');
+  console.log(
+    '[transform] Extracted',
+    nodes.size,
+    'nodes and',
+    relationships.length,
+    'relationships',
+  )
 
   return {
     nodes: Array.from(nodes.values()),
-    relationships
-  };
+    relationships,
+  }
 }
 
 /**
  * Check if value is a Neo4j node
  */
 function isNode(value: unknown): value is Neo4jNode {
-  const v = value as Record<string, unknown>;
-  return !!v && (v.labels !== undefined || v.label !== undefined) &&
-    v.properties !== undefined;
+  const v = value as Record<string, unknown>
+  return !!v && (v.labels !== undefined || v.label !== undefined) && v.properties !== undefined
 }
 
 /**
  * Check if value is a Neo4j relationship
  */
 function isRelationship(value: unknown): value is Neo4jRelationship {
-  const v = value as Record<string, unknown>;
-  return !!v && v.type !== undefined &&
+  const v = value as Record<string, unknown>
+  return (
+    !!v &&
+    v.type !== undefined &&
     (v.start !== undefined || v.startNode !== undefined) &&
-    (v.end !== undefined || v.endNode !== undefined);
+    (v.end !== undefined || v.endNode !== undefined)
+  )
 }
 
 /**
  * Check if value is a Neo4j path
  */
 function isPath(value: unknown): boolean {
-  const v = value as Record<string, unknown>;
-  return !!v && v.segments !== undefined;
+  const v = value as Record<string, unknown>
+  return !!v && v.segments !== undefined
 }
 
 /**
  * Extract nodes and relationships from a Neo4j path
  */
 interface Neo4jPath {
-  start?: Neo4jNode;
-  end?: Neo4jNode;
+  start?: Neo4jNode
+  end?: Neo4jNode
   segments?: Array<{
-    start?: Neo4jNode;
-    end?: Neo4jNode;
-    relationship?: Neo4jRelationship;
-  }>;
+    start?: Neo4jNode
+    end?: Neo4jNode
+    relationship?: Neo4jRelationship
+  }>
 }
 
 function extractFromPath(
   path: Neo4jPath,
   nodes: Map<string, Neo4jNode>,
-  relationships: Neo4jRelationship[]
+  relationships: Neo4jRelationship[],
 ): void {
   if (path.start && isNode(path.start)) {
-    const id = path.start.elementId?.toString() || path.start.identity.toString();
-    nodes.set(id, path.start);
+    const id = path.start.elementId?.toString() || path.start.identity.toString()
+    nodes.set(id, path.start)
   }
 
   if (path.end && isNode(path.end)) {
-    const id = path.end.elementId?.toString() || path.end.identity.toString();
-    nodes.set(id, path.end);
+    const id = path.end.elementId?.toString() || path.end.identity.toString()
+    nodes.set(id, path.end)
   }
 
   if (path.segments && Array.isArray(path.segments)) {
     for (const segment of path.segments) {
       if (segment.start && isNode(segment.start)) {
-        const id = segment.start.elementId?.toString() || segment.start.identity.toString();
-        nodes.set(id, segment.start);
+        const id = segment.start.elementId?.toString() || segment.start.identity.toString()
+        nodes.set(id, segment.start)
       }
       if (segment.end && isNode(segment.end)) {
-        const id = segment.end.elementId?.toString() || segment.end.identity.toString();
-        nodes.set(id, segment.end);
+        const id = segment.end.elementId?.toString() || segment.end.identity.toString()
+        nodes.set(id, segment.end)
       }
       if (segment.relationship && isRelationship(segment.relationship)) {
-        relationships.push(segment.relationship);
+        relationships.push(segment.relationship)
       }
     }
   }
@@ -363,24 +369,24 @@ export function createSampleGraph(): ElementDefinition[] {
         id: '1',
         label: 'Alice',
         type: 'Person',
-        properties: { name: 'Alice', age: 30 }
-      }
+        properties: { name: 'Alice', age: 30 },
+      },
     },
     {
       data: {
         id: '2',
         label: 'Bob',
         type: 'Person',
-        properties: { name: 'Bob', age: 25 }
-      }
+        properties: { name: 'Bob', age: 25 },
+      },
     },
     {
       data: {
         id: '3',
         label: 'Company X',
         type: 'Company',
-        properties: { name: 'Company X', founded: 2020 }
-      }
+        properties: { name: 'Company X', founded: 2020 },
+      },
     },
     // Relationships
     {
@@ -389,8 +395,8 @@ export function createSampleGraph(): ElementDefinition[] {
         source: '1',
         target: '2',
         label: 'Knows',
-        type: 'KNOWS'
-      }
+        type: 'KNOWS',
+      },
     },
     {
       data: {
@@ -398,8 +404,8 @@ export function createSampleGraph(): ElementDefinition[] {
         source: '1',
         target: '3',
         label: 'Works At',
-        type: 'WORKS_AT'
-      }
+        type: 'WORKS_AT',
+      },
     },
     {
       data: {
@@ -407,8 +413,8 @@ export function createSampleGraph(): ElementDefinition[] {
         source: '2',
         target: '3',
         label: 'Works At',
-        type: 'WORKS_AT'
-      }
-    }
-  ];
+        type: 'WORKS_AT',
+      },
+    },
+  ]
 }

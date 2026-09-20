@@ -8,21 +8,21 @@
  * import order, and all are why callers import this barrel rather than the
  * modules beneath it.
  *
- * Since the #225 PR-3 peel (PR-C1), this barrel is also where the seams are
- * COMPOSED: it creates the registry with the app's identity resolver (design
- * S3 — `registry.server.ts` imports no app code), and it calls
- * `registerGraphConnectorTools` with the app's own `graphFetch` and
- * content-classifier supplier (S1/S4 — `graph.server.ts` no longer self-registers
- * at import and no longer imports the token or conversion modules). Behavior is
- * byte-identical to the self-registration it replaces: same tools, same order,
- * same schemas, same executors.
+ * Since #225 PR-C2, the modules beneath it live in `@hames/connectors` and
+ * this barrel is where they are COMPOSED with the app's own implementations:
+ * it creates the registry with the app's identity resolver (design S3), and
+ * it calls `registerGraphConnectorTools` with the app's own `graphFetch`,
+ * content-classifier supplier and Data Stash bridge (S1/S4 + the stash seam).
+ * Behavior is byte-identical to the app-side seams PR-C1 introduced: same
+ * tools, same order, same schemas, same executors — the package owns the
+ * bodies, the app owns everything they close over.
  *
  * `src/middleware.ts` — the app's server-boot hook — imports this module for
  * exactly that reason. Core no longer imports it from `mcp-client.server.ts`:
  * dispatch asks the seam, and the app is what puts something on it. The
  * namespace catalog moved out of core for the same reason (#225 L5): which
- * tool names exist is the deployment's fact, and `app-tools/mcp-catalog.ts`
- * is where it now lives.
+ * tool names exist is the deployment's fact, and `@hames/connectors`
+ * `mcp-catalog` is where it now lives.
  *
  * Add new app-side tool modules to the factory-call list in
  * `registerGraphConnectorTools` (or a sibling factory) — e.g. Pattern B (#109)
@@ -37,15 +37,17 @@ import { getRequestUserId, getRequestSessionId } from '../harness-client/request
 import { graphFetch } from '../auth/graph-token.server'
 import { conversionEnabled, isConvertible } from '../doc-convert.server'
 import { guessMimeType, isTextMime } from '../stash/upload-service.server'
-import { createAppToolRegistry } from './registry.server'
-import { registerGraphConnectorTools } from './graph.server'
-import { mcpNamespace } from './mcp-catalog'
+import { createAppToolRegistry } from '@hames/connectors/app-tools/registry'
+import {
+  registerGraphConnectorTools,
+  type GraphStashStore,
+} from '@hames/connectors/graph/graph-tools.server'
+import { mcpNamespace } from '@hames/connectors/mcp-catalog'
 
 // The registry, with the app's identity resolution injected (design S3): the
-// app passes its own getRequestUserId/getRequestSessionId pair, so
-// `registry.server.ts` stays free of app imports and lifts into
-// `@hames/connectors` (PR-C2) unchanged. A missing supplier throws at factory
-// call — never a silent identity default.
+// app passes its own getRequestUserId/getRequestSessionId pair, so the
+// package's registry stays free of host imports. A missing supplier throws at
+// factory call — never a silent identity default.
 const appToolRegistry = createAppToolRegistry({
   resolveContext: {
     userId: getRequestUserId,
@@ -57,11 +59,23 @@ const appToolRegistry = createAppToolRegistry({
 // token seam: `graphFetch` here IS `auth/graph-token.server.ts`'s — the tools
 // never see a token. The content seam: the four classifier functions stay
 // app-side this cycle (stash imports them; moving them would create a
-// stash→connectors back-edge), so they are injected rather than imported.
+// stash→connectors back-edge), so they are injected rather than imported. The
+// stash seam (PR-C2's disclosed addition): the ingest tool's storage and
+// background ingest, both LAZILY resolved exactly where the tool bodies'
+// dynamic imports used to sit, so composing the tools still loads none of the
+// storage stack.
 registerGraphConnectorTools({
   registerAppTool: appToolRegistry.registerAppTool,
   graphFetch,
   content: { conversionEnabled, isConvertible, guessMimeType, isTextMime },
+  stash: {
+    loadStore: async (): Promise<GraphStashStore> => {
+      const { storeDocument, MAX_CONTENT_BYTES } = await import('../document-store.server')
+      return { storeDocument, maxContentBytes: MAX_CONTENT_BYTES }
+    },
+    ingest: (sessionId, documentId) =>
+      import('../document-ingest.server').then((m) => m.ingestStashDocument(sessionId, documentId)),
+  },
 })
 
 /**
@@ -112,4 +126,4 @@ export type {
   AppToolContext,
   AppToolResolveContext,
   AppToolRegistry,
-} from './registry.server'
+} from '@hames/connectors/app-tools/registry'

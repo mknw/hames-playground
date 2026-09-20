@@ -13,7 +13,7 @@ import {
   createSampleGraph,
   type Neo4jNode,
   type Neo4jRelationship,
-} from '../../../lib/graph/transform'
+} from '../../neo4j/transform'
 
 /** The transform is chatty by design; keep the test log readable. */
 beforeEach(() => {

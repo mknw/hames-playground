@@ -295,3 +295,90 @@ PROBE
 
 echo "== run agents probe =="
 pnpm dlx tsx probe.mts
+# ===========================================================================
+# @hames/connectors — the same four checks, on the connectors package's
+# tarball (#225 PR-C2). Its scratch install overrides
+# @hames/harness-patterns with the patterns tarball (the connectors package
+# depends on it as `workspace:*`, whose packed rewrite resolves to an
+# unpublished 0.1.0 — the same reason the baml scratch carries the override).
+# ===========================================================================
+
+echo "== pack @hames/connectors =="
+(cd "$root" && pnpm install --frozen-lockfile --filter @hames/connectors)
+(cd "$root/packages/connectors" && pnpm pack --pack-destination "$tmp")
+connectors_tarball="$(ls "$tmp"/hames-connectors-*.tgz)"
+echo "tarball: $connectors_tarball"
+
+echo "== install @hames/connectors into scratch project =="
+mkdir -p "$tmp/scratch-connectors"
+cd "$tmp/scratch-connectors"
+printf '{"name":"pack-smoke-scratch-connectors","private":true,"type":"module",\n "pnpm":{"overrides":{"@hames/harness-patterns":"file:%s"}}}\n' \
+  "$patterns_tarball" > package.json
+pnpm add "$connectors_tarball"
+
+cat > probe.mts <<'PROBE'
+import { strict as assert } from 'node:assert'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+const pkgDir = fileURLToPath(new URL('./node_modules/@hames/connectors/', import.meta.url))
+const manifest = JSON.parse((await import('node:fs')).readFileSync(pkgDir + 'package.json', 'utf8'))
+
+// 1. every explicit export target exists in the tarball (the wildcard is
+//    exercised by the direct imports below)
+for (const [key, target] of Object.entries<string>(manifest.exports)) {
+  if (key === './package.json' || key.includes('*')) continue
+  const file = pkgDir + target.replace(/^\.\//, '')
+  assert.ok(existsSync(file), `export ${key} -> ${target} is missing from the tarball`)
+}
+
+// 2. the tarball carries NO tests: the co-located suite is excluded from
+//    `files` by design, and a test file riding along would both bloat the
+//    package and pull vitest-shaped imports into the consumer's tree.
+assert.ok(!existsSync(pkgDir + '__tests__'), 'the __tests__/ dir must not ship in the tarball')
+
+// 3. the client is explicit-config-only (design S5): the named unset error,
+//    never an env fallback.
+const client = await import('@hames/connectors/neo4j/client')
+assert.equal(typeof client.configureNeo4j, 'function', 'configureNeo4j missing')
+assert.throws(() => client.getNeo4jDriver(), client.Neo4jNotConfiguredError, 'unset config must be the NAMED error at first use')
+
+// 4. the client seam behaves once configured
+client.configureNeo4j({ url: 'bolt://x:7687', user: 'u', password: 'p' })
+assert.doesNotThrow(() => client.getNeo4jDriver(), 'configured client must build a driver')
+
+// 5. the catalog data and the pure transforms (the client-safe root barrel)
+const catalog = await import('@hames/connectors/mcp-catalog')
+assert.equal(catalog.mcpNamespace('search'), 'web', 'catalog data must resolve after tarball install')
+assert.equal(Object.keys(catalog.MCP_TOOL_CATALOG).length, 86, 'catalog must hold 86 names')
+const root = await import('@hames/connectors')
+assert.equal(typeof root.transformNeo4jToCytoscape, 'function', 'root barrel must export the transform')
+
+// 6. the query ops and the graph-edit ops evaluate (server-only modules; they
+//    import the package's own client + neo4j-driver via the declared deps)
+const queries = await import('@hames/connectors/neo4j/queries')
+assert.equal(typeof queries.runManualCypher, 'function', 'runManualCypher missing')
+const edit = await import('@hames/connectors/neo4j/graph-edit.server')
+assert.equal(typeof edit.createGraphNode, 'function', 'createGraphNode missing')
+const graphAuth = await import('@hames/connectors/graph/graph-auth')
+assert.equal(graphAuth.GraphAuthRequiredError.name, 'GraphAuthRequiredError', 'the error class must be one identity both sides can instanceof')
+
+// 7. the Graph tools + registry compose from the tarball with injected
+//    suppliers (the seam the host uses) — including the F1 alignment: a
+//    non-function supplier throws AT FACTORY CALL, not at first tool use.
+const registryMod = await import('@hames/connectors/app-tools/registry')
+const graphTools = await import('@hames/connectors/graph/graph-tools.server')
+const registry = registryMod.createAppToolRegistry({
+  resolveContext: { userId: () => 'u1', sessionId: () => 's1' },
+})
+assert.throws(
+  () => graphTools.registerGraphConnectorTools({ registerAppTool: registry.registerAppTool, graphFetch: 42, content: {}, stash: {} } as never),
+  /graphFetch/,
+  'a non-function supplier must throw at factory call (review finding F1)',
+)
+
+console.log('connectors pack smoke OK: exports resolve, no tests in tarball, client explicit-only, tools + registry compose')
+PROBE
+
+echo "== run connectors probe =="
+pnpm dlx tsx probe.mts

@@ -29,7 +29,8 @@ import {
   WIPE_CONFIRMATION,
 } from '../schema.server'
 import { CONSTRAINT_NAMES } from '../ontology'
-import { resetDriver } from '../../neo4j/client'
+import { configureNeo4j, resetDriver } from '@hames/connectors/neo4j/client'
+import { getEndpoints } from '../../config/endpoints'
 
 async function report(stage: string): Promise<void> {
   const [constraints, drift] = await Promise.all([listConstraintNames(), countNonConforming()])
@@ -66,6 +67,16 @@ async function confirm(): Promise<boolean> {
 
 async function main(): Promise<void> {
   const wipe = process.argv.includes('--wipe')
+  // The package's driver client is explicit-config-only (design S5, #225
+  // PR-C2): a standalone script — no app boot, no middleware — constructs its
+  // connection from the environment itself, exactly what the app-side env
+  // fallback this script used to ride on would have resolved.
+  configureNeo4j({
+    url: getEndpoints().neo4j.bolt,
+    user: process.env.NEO4J_USER || 'neo4j',
+    password: process.env.NEO4J_PASSWORD || 'password',
+  })
+
   const preapproved = process.argv.includes('--yes')
 
   console.log(`🗂  org-graph schema setup${wipe ? ' — WIPE mode' : ''}`)

@@ -34,7 +34,8 @@ import { ingestRoster } from '../roster-ingest.server'
 import { countNonConforming, listConstraintNames } from '../schema.server'
 import { CONSTRAINT_NAMES } from '../ontology'
 import { loadDirectoryRoster } from '../roster-source.server'
-import { resetDriver } from '../../neo4j/client'
+import { configureNeo4j, resetDriver } from '@hames/connectors/neo4j/client'
+import { getEndpoints } from '../../config/endpoints'
 import { formatCounts, maskGraphIds } from './_redact'
 
 function requireEnv(): void {
@@ -50,6 +51,16 @@ function requireEnv(): void {
 
 async function main(): Promise<void> {
   requireEnv()
+  // The package's driver client is explicit-config-only (design S5, #225
+  // PR-C2): a standalone script — no app boot, no middleware — constructs its
+  // connection from the environment itself, exactly what the app-side env
+  // fallback this script used to ride on would have resolved.
+  configureNeo4j({
+    url: getEndpoints().neo4j.bolt,
+    user: process.env.NEO4J_USER || 'neo4j',
+    password: process.env.NEO4J_PASSWORD || 'password',
+  })
+
   console.log('👥 org-graph roster ingest (app-only Graph credential)')
 
   const startedAt = Date.now()

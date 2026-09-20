@@ -14,15 +14,12 @@
  * original (un-enriched) tool result is preserved.
  */
 
-"use server";
+'use server'
 
-import { getNeo4jDriver } from '../neo4j/client'
+import { getNeo4jDriver } from '@hames/connectors/neo4j/client'
 import type { OnToolResult } from '@hames/harness-patterns/types'
 
-const ENRICHABLE_TOOLS = new Set([
-  'read_neo4j_cypher',
-  'write_neo4j_cypher',
-])
+const ENRICHABLE_TOOLS = new Set(['read_neo4j_cypher', 'write_neo4j_cypher'])
 
 /** Cap to avoid blowing up the IN-clause and neighborhood result. */
 const MAX_TOUCHED_NAMES = 50
@@ -82,7 +79,8 @@ function identityEquals(a: unknown, b: unknown): boolean {
   if (a === undefined || b === undefined) return false
   // neo4j-driver Integer wraps int64 with .equals(). Fall back to string compare
   // if either side isn't an Integer (defensive — shouldn't happen in practice).
-  const aHasEquals = a !== null && typeof a === 'object' && typeof (a as { equals?: unknown }).equals === 'function'
+  const aHasEquals =
+    a !== null && typeof a === 'object' && typeof (a as { equals?: unknown }).equals === 'function'
   if (aHasEquals) {
     return (a as { equals: (other: unknown) => boolean }).equals(b)
   }

@@ -14,11 +14,11 @@
  * ## Identity is injected, not imported (design S3, #225 PR-3)
  * The registry is a generic in-process registry: it resolves the caller's
  * identity through the `resolveContext` supplier the composition root hands to
- * `createAppToolRegistry()`, so this module carries **no app imports** and lifts
- * into `@hames/connectors` (PR-C2) unchanged. A missing supplier throws at
- * factory call rather than degrading (PR-2 doctrine) — a registry that silently
- * guessed or defaulted an identity would be the one failure this module exists
- * to prevent.
+ * `createAppToolRegistry()`, so this module carries **no host imports** —
+ * this IS the `@hames/connectors` module the PR-C1 peel prepared (moved
+ * #225 PR-C2). A missing supplier throws at factory call rather than
+ * degrading (PR-2 doctrine) — a registry that silently guessed or defaulted
+ * an identity would be the one failure this module exists to prevent.
  *
  * ## Invariants
  * - The schema advertised to the model has **no credential field** (#107

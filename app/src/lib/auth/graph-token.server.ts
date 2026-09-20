@@ -32,6 +32,7 @@ import {
   type AccountInfo,
 } from '@azure/msal-node'
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { GraphAuthRequiredError } from '@hames/connectors/graph/graph-auth'
 import { buildEntraConfig, msalConfiguration } from './entra-config.server'
 import { loadUserTokenCache, saveUserTokenCache } from './user-tokens.server'
 
@@ -48,27 +49,12 @@ export const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
  */
 export const DEFAULT_GRAPH_SCOPES = ['User.Read'] as const
 
-/**
- * Raised when we cannot get a token without user interaction — no stored cache,
- * an unusable/expired refresh token, or a scope the user hasn't consented to.
- * Tool wrappers translate this into a "please sign in again" result rather than
- * failing the whole run.
- */
-export class GraphAuthRequiredError extends Error {
-  constructor(
-    message: string,
-    readonly userId: string,
-    /** HTTP status when Graph itself rejected the call (401 expired token,
-     *  403 missing consent OR resource-level denial such as SharePoint
-     *  Embedded); undefined when token ACQUISITION failed before any HTTP
-     *  request. Lets tools tell "sign in again" apart from "re-auth won't
-     *  help" (e.g. Loop content, #137). */
-    readonly status?: number,
-  ) {
-    super(message)
-    this.name = 'GraphAuthRequiredError'
-  }
-}
+// `GraphAuthRequiredError` moved INTO `@hames/connectors` verbatim (#225
+// PR-C2, design S1) so `instanceof` keeps working across the seam: this
+// module keeps throwing it (re-exported below for every existing importer),
+// and the package's Graph tools check it without either side importing the
+// other's copy. One class, two importers.
+export { GraphAuthRequiredError }
 
 /**
  * Acquire a delegated Graph access token for `userId`.

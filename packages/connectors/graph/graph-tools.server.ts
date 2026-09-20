@@ -6,19 +6,19 @@
  * so we don't write a scoping guard and the model never sees a credential.
  *
  * ## Registration is an explicit factory call (design S1/S4, #225 PR-3)
- * This module no longer self-registers at import and no longer imports the
- * app's token or conversion modules: the composition root
+ * This module never self-registers at import and never imports the host's
+ * token or conversion modules: the host's composition root
  * (`app-tools/index.server.ts`) calls `registerGraphConnectorTools(deps)` with
- * the app's own `graphFetch` and the content-classifier supplier. Every `deps`
- * field is REQUIRED — a missing supplier throws at the factory call, never a
- * silent default or an env fallback (PR-2 doctrine). This is the peel (PR-C1):
- * behavior is byte-identical to the import-time registration it replaces; the
- * move into `@hames/connectors` (PR-C2) re-uses the same seam unchanged.
+ * its own `graphFetch`, content classifier and Data Stash bridge. Every `deps`
+ * field is REQUIRED — a missing or non-function supplier throws at the
+ * factory call, never a silent default or an env fallback (PR-2 doctrine).
+ * The PR-C1 peel introduced the seam app-side; PR-C2 (this move) re-uses it
+ * unchanged except where a dynamic import into host code could not survive
+ * the move (the stash bridge, below).
  *
- * `GraphAuthRequiredError` is deliberately still imported from the app's
- * `auth/graph-token.server.ts` rather than injected: per the design it moves
- * INTO the package verbatim in PR-C2, so `instanceof` keeps working across the
- * seam without the app needing to know the class moved.
+ * `GraphAuthRequiredError` is owned by THIS package (`graph/graph-auth.ts`,
+ * moved verbatim from the host's token module) so `instanceof` keeps working
+ * across the seam without the host needing to know the class moved.
  *
  * First slice was deliberately `User.Read`-only — the scope already has tenant
  * admin consent, so the whole per-user token path was provable end-to-end with
@@ -37,8 +37,8 @@
  * KQL, so no model-authored operator can reshape the query it didn't write.
  */
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import { GraphAuthRequiredError } from '../auth/graph-token.server'
-import type { AppToolDefinition } from './registry.server'
+import { GraphAuthRequiredError } from './graph-auth'
+import type { AppToolDefinition } from '../app-tools/registry'
 
 assertServerOnImport()
 
@@ -47,9 +47,9 @@ assertServerOnImport()
 // ============================================================================
 
 /** What the injected `graphFetch` accepts and resolves — declared here so this
- *  module types the seam without importing the app's token module (S1: the
- *  package never sees a token). Same shape as `auth/graph-token.server.ts`'s
- *  own `graphFetch`. */
+ *  module types the seam without importing the host's token module (S1: the
+ *  package never sees a token). Same shape as the host's own `graphFetch`
+ *  (its delegated-token module IS the injected implementation). */
 export interface GraphFetchInit {
   method?: string
   scopes?: readonly string[]
@@ -60,18 +60,19 @@ export interface GraphFetchInit {
   responseType?: 'json' | 'base64'
 }
 
-/** Call Microsoft Graph as `userId` — the app's `auth/graph-token.server.ts`
- *  IS the injected implementation (S1: one seam, the package never sees a
+/** Call Microsoft Graph as `userId` — the host's delegated-token module IS
+ *  the injected implementation (S1: one seam, the package never sees a
  *  token). */
 export type GraphFetchFn = (userId: string, path: string, init?: GraphFetchInit) => Promise<unknown>
 
 /**
  * The content classifier `graph_file_ingest` needs (S4) — ONE required
- * supplier, injected rather than imported because `doc-convert.server.ts` is
- * the app's conversion pipeline and `guessMimeType`/`isTextMime` CANNOT move
- * into the package: stash (`stash/upload-service.server.ts`) imports them
- * app-side this cycle, and moving them would create a stash→connectors
- * back-edge. A later "cleanup" must not reintroduce that edge.
+ * supplier, injected rather than imported because the host's
+ * `doc-convert.server.ts` is its conversion pipeline and
+ * `guessMimeType`/`isTextMime` CANNOT move into the package: the host's
+ * stash (`stash/upload-service.server.ts`) imports them this cycle, and
+ * moving them would create a stash→connectors back-edge. A later "cleanup"
+ * must not reintroduce that edge.
  */
 export interface GraphContentClassifier {
   /** Is document conversion enabled on this deployment (`STASH_CONVERT_DOCS`)? */
@@ -84,15 +85,60 @@ export interface GraphContentClassifier {
   isTextMime(mimeType: string): boolean
 }
 
+/** What `graph_file_ingest` writes into the conversation's Data Stash —
+ *  declared structurally so the host's own richer document type satisfies it
+ *  without the package importing it. */
+export interface GraphStashDocumentInput {
+  /** Conversation whose stash the document belongs to. */
+  sessionId: string
+  filename: string
+  mimeType: string
+  /** UTF-8 text content, or base64 when `encoding` is set. */
+  content: string
+  encoding?: 'base64'
+  /** Persisted in the FIRST write so a status poll never reads a doc with no
+   *  ingest status and flickers (same contract as the upload route). */
+  ingestStatus?: 'pending'
+}
+
+/** The storage layer of the Data Stash, as the ingest tool needs it — resolved
+ *  LAZILY so composing the Graph tools never loads the storage stack. */
+export interface GraphStashStore {
+  /** Store a document; resolves with at least its id and stored size. */
+  storeDocument(input: GraphStashDocumentInput): Promise<{ id: string; size: number }>
+  /** The stash's per-document byte ceiling, checked BEFORE download. */
+  maxContentBytes: number
+}
+
+/**
+ * The Data Stash bridge — the seam PR-C2 had to ADD to the design sketch,
+ * disclosed: the ingest tool's two lazy `import()`s reached into host modules
+ * (`document-store.server.ts`, `document-ingest.server.ts`) and could not
+ * survive the move. The host supplies both halves; laziness is preserved by
+ * contract (`loadStore` is called only on ingest, `ingest` only after a
+ * storing write), so nothing about when the storage stack loads changes.
+ */
+export interface GraphStashBridge {
+  /** Lazily resolve the stash's storage layer. */
+  loadStore(): Promise<GraphStashStore>
+  /** Kick off the background ingest of a stored document — fire-and-forget by
+   *  contract; failures are recorded in the document's ingest status by the
+   *  implementation, not surfaced to the tool result. */
+  ingest(sessionId: string, documentId: string): Promise<unknown>
+}
+
 /** Everything the Graph tools close over — supplied by the composition root. */
 export interface GraphConnectorDeps {
-  /** Where tools register: the app registry's `registerAppTool`. */
+  /** Where tools register: the host registry's `registerAppTool`. */
   registerAppTool: (def: AppToolDefinition) => void
   /** Delegated-token Graph fetch (S1). REQUIRED — throws if missing. */
   graphFetch: GraphFetchFn
   /** Content classification for the file-ingest path (S4). REQUIRED — throws
    *  if missing, including any missing member. */
   content: GraphContentClassifier
+  /** The Data Stash bridge for the file-ingest path. REQUIRED — throws if
+   *  missing, including any missing member. */
+  stash: GraphStashBridge
 }
 
 /** Fields we surface from `/me`. Explicit so we never dump the whole payload
@@ -1135,10 +1181,29 @@ export function shapeAttachmentMessage(
 // ============================================================================
 
 /** Required-supplier check (PR-2 doctrine: missing suppliers throw, never
- *  degrade — no silent default, no env fallback). */
+ *  degrade — no silent default, no env fallback). The check is
+ *  `typeof value !== 'function'`, aligned with the registry's own
+ *  `requireSupplier` (PR-C1 review finding F1): a present-but-wrong-typed
+ *  supplier (e.g. `graphFetch: 42`) is refused AT FACTORY CALL, not at first
+ *  tool use. */
 function requireGraphSupplier<T>(bag: unknown, field: string): T {
   const value = (bag as Record<string, unknown> | null | undefined)?.[field]
-  if (value == null) {
+  if (typeof value !== 'function') {
+    throw new Error(
+      `registerGraphConnectorTools: missing required supplier "${field}" — the Graph ` +
+        'tools refuse to compose without it. No silent default, no env fallback.',
+    )
+  }
+  return value as T
+}
+
+/** A required supplier BAG (an object whose members are themselves required
+ *  function suppliers) — same doctrine as {@link requireGraphSupplier}, one
+ *  level down: the bag must be a present object and every named member must
+ *  be a function. */
+function requireGraphBag<T extends object>(deps: unknown, field: string): T {
+  const value = (deps as Record<string, unknown> | null | undefined)?.[field]
+  if (typeof value !== 'object' || value === null) {
     throw new Error(
       `registerGraphConnectorTools: missing required supplier "${field}" — the Graph ` +
         'tools refuse to compose without it. No silent default, no env fallback.',
@@ -1150,11 +1215,11 @@ function requireGraphSupplier<T>(bag: unknown, field: string): T {
 /**
  * Register every Microsoft Graph tool against the supplied registry.
  *
- * Called once by the composition root (`app-tools/index.server.ts`) with the
- * app's own `graphFetch` and content classifier; importing this module alone
- * registers nothing and imports no app code beyond the error class above.
- * Tool bodies are unchanged from the import-time registration this replaces
- * (PR-C1 peel, #225 PR-3): same definitions, same executors, same order.
+ * Called once by the host's composition root (`app-tools/index.server.ts`)
+ * with its own `graphFetch`, content classifier and Data Stash bridge;
+ * importing this module alone registers nothing. Tool bodies are unchanged
+ * from the import-time registration the host app used before the peel
+ * (PR-C1, #225 PR-3): same definitions, same executors, same order.
  */
 export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
   const registerAppTool = requireGraphSupplier<(def: AppToolDefinition) => void>(
@@ -1162,11 +1227,14 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
     'registerAppTool',
   )
   const graphFetch = requireGraphSupplier<GraphFetchFn>(deps, 'graphFetch')
-  const content = requireGraphSupplier<GraphContentClassifier>(deps, 'content')
+  const content = requireGraphBag<GraphContentClassifier>(deps, 'content')
   requireGraphSupplier(content, 'conversionEnabled')
   requireGraphSupplier(content, 'isConvertible')
   requireGraphSupplier(content, 'guessMimeType')
   requireGraphSupplier(content, 'isTextMime')
+  const stash = requireGraphBag<GraphStashBridge>(deps, 'stash')
+  requireGraphSupplier(stash, 'loadStore')
+  requireGraphSupplier(stash, 'ingest')
   const { conversionEnabled, isConvertible, guessMimeType, isTextMime } = content
 
   registerAppTool({
@@ -1328,17 +1396,18 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
         )
       }
 
-      // The Data Stash layer is imported lazily: it pulls in ioredis and the whole
-      // chunk/embed/vector stack, and `mcp-client.server.ts` imports this registry
-      // eagerly for *every* harness run — including deployments with no stash.
-      const { storeDocument, MAX_CONTENT_BYTES } = await import('../document-store.server')
+      // The Data Stash layer is injected as a LAZY supplier (the stash bridge
+      // seam): in the host it pulls in ioredis and the whole chunk/embed/vector
+      // stack, and nothing else in this module needs it — so it is only
+      // resolved here, on ingest, never at composition time.
+      const store = await stash.loadStore()
       // A missing size (Graph reports one for every file in practice) is not
-      // treated as oversized; `storeDocument` re-checks the limit on the decoded
+      // treated as oversized; the store re-checks the limit on the decoded
       // bytes, so an unreported giant still can't be stored.
-      if (meta.size != null && meta.size > MAX_CONTENT_BYTES) {
+      if (meta.size != null && meta.size > store.maxContentBytes) {
         throw new Error(
           `"${meta.name ?? itemId}" is ${meta.size} bytes, above the Data Stash limit of ` +
-            `${MAX_CONTENT_BYTES} bytes, so it was not downloaded. Use a smaller file or ` +
+            `${store.maxContentBytes} bytes, so it was not downloaded. Use a smaller file or ` +
             'an extract of this one.',
         )
       }
@@ -1370,7 +1439,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       // usable, and a retriever added later reads an already-indexed corpus.
       const ingesting = isText || (conversionEnabled() && isConvertible(mimeType))
 
-      const doc = await storeDocument({
+      const doc = await store.storeDocument({
         sessionId,
         filename,
         mimeType,
@@ -1386,9 +1455,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
         // and the tool result must come back inside the turn. Failures are
         // recorded in the document's `ingestStatus`, which is why the rejection is
         // swallowed here rather than surfaced.
-        void import('../document-ingest.server')
-          .then(({ ingestStashDocument }) => ingestStashDocument(sessionId, doc.id))
-          .catch(() => {})
+        void stash.ingest(sessionId, doc.id).catch(() => {})
       }
 
       return {

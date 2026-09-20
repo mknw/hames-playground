@@ -2,19 +2,27 @@
  * Source scan: core never imports a companion or its host (the 0-app-imports
  * pin, BAML-companion seam lane).
  *
- * `packages/harness-patterns/` is the published library; `app/src` is its
- * HOST. The direction rule (#225 L3) is that core never imports a companion —
- * and app code is exactly that, a companion the package must not know about.
- * The Step 1a interim re-points (four import statements reaching
- * `app/src/lib/harness-baml`) were the last deliberate debt; the
- * BAML-companion seam lane removed them, and this pin is the exit criterion
- * made permanent: a single new import that escapes the package goes red, in
- * the same commit that adds it.
+ * `packages/harness-patterns/`, and since #225 PR-C2 `packages/connectors/`
+ * too, are published libraries; `app/src` is their HOST. The direction rule
+ * (#225 L3) is that core never imports a companion — and app code is exactly
+ * that, a companion the package must not know about. The Step 1a interim
+ * re-points (four import statements reaching `app/src/lib/harness-baml`)
+ * were the last deliberate debt; the BAML-companion seam lane removed them,
+ * and this pin is the exit criterion made permanent: a single new import that
+ * escapes the package goes red, in the same commit that adds it.
+ *
+ * The connectors widening (PR-C2) covers the moved modules wholesale: the
+ * #346 lesson is that a TYPE-ONLY import still counts — tsx erases it before
+ * pack, so only this pin sees it — and the moved graph tools / registry /
+ * neo4j modules previously imported app code as values, types and dynamic
+ * `import()`s alike. Raw text catches all three shapes.
  *
  * Like `core-types-source-scan.test.ts`, this scans the RAW TEXT of every
- * non-test file under `packages/harness-patterns/` AND `packages/agents/`
- * (extended at the @hames/agents extraction, #225 PR-2 — same pin shape, one
- * scan over both published packages) — import lines and inline `import()`
+ * non-test file under `packages/harness-patterns/`, `packages/agents/`
+ * (extended at the @hames/agents extraction, #225 PR-2) and
+ * `packages/connectors/` (extended at the connectors move, #225 PR-C2 — same
+ * pin shape, one scan over the published packages) — import lines and inline
+ * `import()`
  * positions alike, comments included, because a static import cannot hide
  * anywhere else. Three escape shapes are checked:
  *
@@ -33,6 +41,7 @@ import { join, relative, resolve } from 'node:path'
 const PACKAGE_ROOTS = [
   resolve(process.cwd(), '../packages/harness-patterns'),
   resolve(process.cwd(), '../packages/agents'),
+  resolve(process.cwd(), '../packages/connectors'),
 ]
 
 /** A relative climb out of the package (`../app`, `../../app`, …), whatever
@@ -57,11 +66,14 @@ async function walk(dir: string): Promise<string[]> {
 }
 
 describe('zero app imports under the published packages (BAML-companion seam lane pin)', () => {
-  it('no non-test file under either package imports app code', async () => {
+  it('no non-test file under any published package imports app code', async () => {
     const offenders: string[] = []
     for (const root of PACKAGE_ROOTS) {
       const files = await walk(root)
-      expect(files.length).toBeGreaterThan(0)
+      expect(
+        files.length,
+        `${root} scanned nothing — a broken walk must fail loudly`,
+      ).toBeGreaterThan(0)
 
       for (const file of files) {
         const text = await readFile(file, 'utf8')

@@ -82,7 +82,7 @@ const toolsSpy = vi.spyOn(await import('@hames/harness-patterns/tools.server'), 
 // each wrapped to supply `agentDeps()`.
 const { getAgent } = await import('../../../lib/harness-client/registry.server')
 const { agentDeps } = await import('../../../lib/harness-client/session.server')
-const { mcpNamespace } = await import('../../../lib/app-tools/mcp-catalog')
+const { mcpNamespace } = await import('@hames/connectors/mcp-catalog')
 
 interface Pattern {
   name: string

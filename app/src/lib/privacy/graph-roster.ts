@@ -6,7 +6,7 @@
  * `organizer`, `attendees[]`, `createdBy.user`, `lastModifiedBy.user`, …), so
  * finding the people in a payload never needs a model: harvest the labelled
  * fields. This module walks any JSON value — a raw Graph resource or one of the
- * app's own compact projections from `app-tools/graph.server.ts` — and returns
+ * app's own compact projections from the Graph connector tools — and returns
  * every identity it names.
  *
  * Detection is STRUCTURAL, not a whitelist of top-level keys, so it survives

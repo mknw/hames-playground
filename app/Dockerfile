@@ -70,7 +70,11 @@ COPY --from=root packages/harness-patterns /ws/packages/harness-patterns
 # workspace source inside the image too. Its pre-generated baml_client ships
 # in the copy; nothing regenerates at build time.
 COPY --from=root packages/harness-baml /ws/packages/harness-baml
-# PR-2 (#225): the third workspace member — the ready-made agent definitions —
+# PR-C2 (#225): the third workspace member, same rule — the connectors
+# package's source tree arrives by name, before the frozen install, so its
+# `workspace:*` resolution is workspace source inside the image too.
+COPY --from=root packages/connectors /ws/packages/connectors
+# PR-2 (#225): the fourth workspace member — the ready-made agent definitions —
 # copied by name, before the frozen install, for the same `workspace:*`
 # resolution as the other two. Nothing here is generated; the package ships
 # source.
@@ -89,6 +93,9 @@ RUN test -L /ws/app/node_modules/@hames/harness-patterns \
  && test -f /ws/packages/harness-patterns/package.json \
  && test -L /ws/app/node_modules/@hames/harness-baml \
  && test -f /ws/packages/harness-baml/baml_client/index.ts \
+ && test -L /ws/app/node_modules/@hames/connectors \
+ && test -f /ws/packages/connectors/index.ts \
+ && test -f /ws/packages/connectors/package.json \
  && test -L /ws/app/node_modules/@hames/agents \
  && test -f /ws/packages/agents/agents/index.ts \
  && cd /ws/app \

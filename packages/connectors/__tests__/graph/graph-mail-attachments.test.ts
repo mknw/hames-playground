@@ -9,41 +9,12 @@
  * Sent Items, and a tool named "shares" would relay confident undercounts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { buildGraphHarness } from './harness'
+import { type GraphMailAttachmentsResult } from '../../graph/graph-tools.server'
 
-vi.mock('@hames/harness-patterns/assert.server', () => ({
-  assertServerOnImport: vi.fn(),
-  assertServer: vi.fn(),
-  ServerOnlyError: class ServerOnlyError extends Error {},
-}))
-
-const getRequestUserId = vi.fn<() => string | null>(() => 'oid-1')
-const getRequestSessionId = vi.fn<() => string | null>(() => 'sess-1')
-vi.mock('../../../lib/harness-client/request-user.server', () => ({
-  getRequestUserId: () => getRequestUserId(),
-  getRequestSessionId: () => getRequestSessionId(),
-  runWithUserId: (_u: string, fn: () => Promise<unknown>) => fn(),
-  runWithRequestContext: (_c: unknown, fn: () => Promise<unknown>) => fn(),
-}))
-
-const graphFetch = vi.fn()
-vi.mock('../../../lib/auth/graph-token.server', () => ({
-  graphFetch: (...a: unknown[]) => graphFetch(...a),
-  GRAPH_BASE: 'https://graph.microsoft.com/v1.0',
-  DEFAULT_GRAPH_SCOPES: ['User.Read'],
-  GraphAuthRequiredError: class GraphAuthRequiredError extends Error {
-    constructor(
-      message: string,
-      readonly userId: string,
-      readonly status?: number,
-    ) {
-      super(message)
-      this.name = 'GraphAuthRequiredError'
-    }
-  },
-}))
-
-import { runAppTool, appToolDescriptions } from '../../../lib/app-tools/index.server'
-import { type GraphMailAttachmentsResult } from '../../../lib/app-tools/graph.server'
+const h = buildGraphHarness()
+const { runAppTool, appToolDescriptions } = h
+const graphFetch = h.graphFetch
 
 function message(
   subject: string,
@@ -70,9 +41,7 @@ const THIBAULT = { name: 'Thibault Desmet', address: 'thibault.desmet@contoso.co
 const MARCO = { name: 'Marco Di Rienzo', address: 'marco@contoso.com' }
 
 beforeEach(() => {
-  vi.clearAllMocks()
-  getRequestUserId.mockReturnValue('oid-1')
-  getRequestSessionId.mockReturnValue('sess-1')
+  h.restoreDefaults()
   graphFetch.mockResolvedValue({
     value: [
       message('Co-Working booking', [THIBAULT]),

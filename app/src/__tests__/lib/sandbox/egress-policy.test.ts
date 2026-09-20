@@ -8,7 +8,9 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  OPEN_EGRESS_ENV,
   isEgressProfile,
+  isOpenEgressEnabled,
   isProxiedProfile,
   egressNetworkName,
   egressGatewayName,
@@ -18,10 +20,13 @@ import {
 } from '../../../lib/sandbox/egress-policy'
 
 describe('isEgressProfile / isProxiedProfile', () => {
-  it('recognizes exactly the four named profiles', () => {
-    for (const p of ['mcp-only', 'pypi', 'github-trusted', 'open'] as const) {
+  it('recognizes exactly the three SELECTABLE profiles — open is not one of them', () => {
+    for (const p of ['mcp-only', 'pypi', 'github-trusted'] as const) {
       expect(isEgressProfile(p)).toBe(true)
     }
+    // 'open' is not selectable (#357 channel 4): a caller cannot request it —
+    // the backend fails closed on it unless SANDBOX_ENABLE_OPEN_EGRESS=1.
+    expect(isEgressProfile('open')).toBe(false)
     // An unknown string is NOT a profile — the backend fails closed on it.
     expect(isEgressProfile('unrestricted')).toBe(false)
     expect(isEgressProfile(undefined)).toBe(false)
@@ -32,6 +37,20 @@ describe('isEgressProfile / isProxiedProfile', () => {
     expect(isProxiedProfile('github-trusted')).toBe(true)
     expect(isProxiedProfile('mcp-only')).toBe(false)
     expect(isProxiedProfile('open')).toBe(false)
+  })
+})
+
+describe('isOpenEgressEnabled (#357 channel 4)', () => {
+  it(`is enabled ONLY by ${OPEN_EGRESS_ENV}=1 — unset is off`, () => {
+    expect(isOpenEgressEnabled({})).toBe(false)
+    expect(isOpenEgressEnabled({ [OPEN_EGRESS_ENV]: '' })).toBe(false)
+    expect(isOpenEgressEnabled({ [OPEN_EGRESS_ENV]: ' ' })).toBe(false)
+    expect(isOpenEgressEnabled({ [OPEN_EGRESS_ENV]: '0' })).toBe(false)
+    expect(isOpenEgressEnabled({ [OPEN_EGRESS_ENV]: 'true' })).toBe(false)
+    // Fail-closed spelling: anything that is not exactly '1' does not enable
+    // unrestricted egress — a stray 'yes' or 'TRUE' must never open the box.
+    expect(isOpenEgressEnabled({ [OPEN_EGRESS_ENV]: '1' })).toBe(true)
+    expect(isOpenEgressEnabled({ [OPEN_EGRESS_ENV]: ' 1 ' })).toBe(true)
   })
 })
 

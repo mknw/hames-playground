@@ -40,8 +40,12 @@ export interface RuntimeConfig {
    *     has no route out at all, so the allowlist is enforced, not advisory.
    *     Every allowed AND denied connection is audited by the proxy
    *     (`docker logs kg-sandbox-egress-<profile>-gw`).
-   *   - `open`       unrestricted outbound on the default bridge. No proxy,
-   *     no audit — "open" is the honest name for what it is.
+   *   - `open`       NOT selectable by callers (#357 channel 4): a requested
+   *     `open` fails CLOSED to `--network none` like an unknown profile. The
+   *     single-operator escape hatch `SANDBOX_ENABLE_OPEN_EGRESS=1` re-admits
+   *     it, and only then it keeps its documented posture: unrestricted
+   *     outbound on the default bridge, no proxy, no audit — "open" is the
+   *     honest name for what it is.
    *
    * An unknown profile at runtime fails CLOSED to no network (the strictest
    * choice), with a warning — an unrecognized name must never silently mean

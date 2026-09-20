@@ -182,8 +182,7 @@ stay deferred below. What shipped:
   (the flavour Dockerfiles `USER root` for their build steps and drop back),
   with `HOME` on the /work tmpfs and a pre-owned `/cache`.
 - **Egress enforcement** (`egress-policy.ts` + `rootfs/egress-proxy/proxy.mjs`).
-  `mcp-only` → `--network none`; `open` → the default bridge, unrestricted and
-  un-audited by design; `pypi` / `github-trusted` → an **internal-only docker
+  `mcp-only` → `--network none`; `pypi` / `github-trusted` → an **internal-only docker
   network whose only way out is an allowlist CONNECT proxy** the backend runs
   beside the sandboxes — a process that ignores the proxy env vars has no
   route out at all, so the allowlist is enforced, not advisory. Every allowed
@@ -193,7 +192,15 @@ stay deferred below. What shipped:
   installs don't re-download wheels per container. An unknown profile at
   runtime fails CLOSED to no network.
 
-Known edges, stated rather than implied: `open` has no audit trail (no
+`open` is not a selectable profile (#357 channel 4): a caller requesting it
+boots with `--network none`, exactly like an unknown profile. The single-
+operator escape hatch is `SANDBOX_ENABLE_OPEN_EGRESS=1` (read per boot at the
+backend; only the exact value `1` enables it) — set, it restores `open`'s
+documented posture: the default bridge, unrestricted, un-audited by design.
+A single-operator deployment may; a multi-user deployment must not.
+
+Known edges, stated rather than implied: an env-enabled `open` has no audit
+trail (no
 chokepoint to log at); DNS _resolution_ may still resolve depending on the
 host's docker DNS behaviour (at most this reveals that a hostname exists —
 connections are not routed); the proxy

@@ -252,14 +252,41 @@ are how a Run accumulates a terminal zoo (36 observed 2026-08-30). Never substit
 a broad `terminal close` when release returns `release_pending` or
 `release_unknown`; follow the receipt's recovery action.
 
-## Writing the spec safely
+## Writing any agent-bound text safely
 
-Pass a long spec through a **file**, not an inline shell string:
+Every text-carrying Orca flag — `--spec`, `--body`, `--payload` — is written to a file
+with a **quoted** heredoc first, then interpolated once. The enumeration is illustrative,
+not exhaustive: any flag carrying text takes the same path (`--task-title`, `--subject`,
+`--question`, `--objective` are the same class).
 
 ```bash
-orca orchestration task-create --task-title "..." --spec "$(cat spec.txt)"
+cat > /tmp/msg.txt <<'XEOF'
+...text, backticks and all...
+XEOF
+cat > /tmp/title.txt <<'XEOF'
+...title or subject...
+XEOF
+orca orchestration task-create --task-title "$(cat /tmp/title.txt)" --spec "$(cat /tmp/msg.txt)"
+orca orchestration send --to <handle> --subject "$(cat /tmp/title.txt)" --body "$(cat /tmp/msg.txt)"
 ```
 
-A spec quoting code will contain backticks, and inside double quotes the shell executes
-them as command substitution — silently deleting those terms from the spec that reaches
-the lane. Writing the spec to a file first and interpolating it once keeps it intact.
+Unconditionally, with no length or content test — applying one is the failure mode. Text
+quoting code contains backticks, and inside double quotes the shell executes them as
+command substitution, silently deleting those terms from what reaches the agent. The
+quoted `<<'XEOF'` delimiter suppresses every expansion inside the heredoc, and
+command-substitution output is not re-scanned, so `"$(cat ...)"` delivers the file
+verbatim — any content that does not contain the delimiter as its own line (pick a
+delimiter the payload cannot collide with); `$()` strips the file's trailing newline.
+
+**The receipt lies.** The send returns `ok: true` — the transport succeeded, it simply
+carried text nobody wrote. One trace is `command not found` on **stderr**, which the
+usual `2>&1 | grep '"ok"'` receipt check filters out of view — but it is one shape, not
+the worst: a fragment that happens to be a valid command substitutes silently, with no
+stderr at all. So a non-empty stderr on a send proves the message was mangled; an empty
+one proves nothing. Either way, resend from a file with an explicit ERRATUM line
+telling the recipient to ignore the earlier copy, rather than assuming they will spot the
+gap in a message that still reads as fluent prose.
+
+This rule was once scoped to "a long spec", and both words were the escape hatch — the
+messages that broke under it were short, and were `--body` rather than `--spec`
+(2026-09-19, twice in one session).

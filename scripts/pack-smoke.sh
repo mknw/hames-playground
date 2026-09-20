@@ -53,6 +53,13 @@ patterns_tarball="$(ls "$tmp"/hames-harness-patterns-*.tgz)"
 echo "tarball: $patterns_tarball"
 
 echo "== pnpm pack (harness-baml) =="
+# `pnpm pack` resolves `workspace:*` against the INSTALLED workspace graph, and
+# the patterns dependency is what a tarball consumer resolves anyway — but CI's
+# pack job deliberately runs no full workspace install (the probe must resolve
+# against the tarball, never the workspace symlink). This filtered install
+# materialises just enough of the graph for pack to rewrite the protocol; the
+# probe below still runs inside the scratch project.
+(cd "$root" && pnpm install --frozen-lockfile --filter @hames/harness-baml)
 (cd "$root/packages/harness-baml" && pnpm pack --pack-destination "$tmp")
 baml_tarball="$(ls "$tmp"/hames-harness-baml-*.tgz)"
 echo "tarball: $baml_tarball"

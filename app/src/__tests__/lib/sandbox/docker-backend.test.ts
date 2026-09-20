@@ -178,6 +178,9 @@ describe('DockerBackend.boot', () => {
   })
 
   it('applies cpu/memory caps and leaves network in place for open egress', async () => {
+    // 'open' is not selectable (#357 channel 4) — only the single-operator env
+    // escape hatch admits it, and only then does it keep the default bridge.
+    process.env.SANDBOX_ENABLE_OPEN_EGRESS = '1'
     spawnPlan = () => ({ stdout: 'cid', code: 0 })
     const backend = await makeBackend()
     await backend.boot('base', { cpus: 2, memoryMB: 512, egress: 'open' })
@@ -483,6 +486,7 @@ describe('DockerBackend.reset', () => {
       return { stdout: 'ok', code: 0 }
     }
     const backend = await makeBackend()
+    process.env.SANDBOX_ENABLE_OPEN_EGRESS = '1'
     const handle = await backend.boot('base', { cpus: 2, memoryMB: 512, egress: 'open' })
 
     spawnCalls.length = 0
@@ -607,6 +611,7 @@ const HARDENING_ENV_VARS = [
   'SANDBOX_BASH_ALLOW',
   'SANDBOX_CACHE_VOLUME',
   'SANDBOX_EGRESS_PROXY_PORT',
+  'SANDBOX_ENABLE_OPEN_EGRESS',
 ]
 let envSnapshot: Record<string, string | undefined> = {}
 beforeEach(() => {
@@ -786,7 +791,26 @@ describe('DockerBackend — egress profiles (#116)', () => {
     expect(args).not.toContain('-v')
   })
 
-  it('open keeps the default bridge, mounts the wheel-cache volume, no proxy env', async () => {
+  it("'open' with the env gate UNSET fails CLOSED to no network — never the bridge (#357 channel 4)", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      // No SANDBOX_ENABLE_OPEN_EGRESS in the env: a requested 'open' is
+      // treated like an unknown profile — warn + --network none.
+      spawnPlan = () => ({ stdout: 'cid', code: 0 })
+      const backend = await makeBackend()
+      await backend.boot('base', { egress: 'open' })
+      const args = sandboxRunArgs()
+      expect(flagValue(args, '--network')).toBe('none')
+      expect(args).not.toContain('-v')
+      expect(args.join(' ')).not.toContain('_PROXY')
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/SANDBOX_ENABLE_OPEN_EGRESS/))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it(`'open' with ${'SANDBOX_ENABLE_OPEN_EGRESS'}=1 keeps the default bridge, mounts the wheel-cache volume, no proxy env`, async () => {
+    process.env.SANDBOX_ENABLE_OPEN_EGRESS = '1'
     spawnPlan = () => ({ stdout: 'cid', code: 0 })
     const backend = await makeBackend()
     await backend.boot('base', { egress: 'open' })
@@ -958,6 +982,13 @@ describe('DockerBackend — egress profiles (#116)', () => {
 // ============================================================================
 
 describe('DockerBackend — per-tenant cache volume (Lane A)', () => {
+  // 'open' is not selectable (#357 channel 4): these Lane A pins boot under
+  // the env escape hatch so the profile itself, not the gate, is what's under
+  // test. The gate's own fail-closed/opened pins live in the egress block.
+  beforeEach(() => {
+    process.env.SANDBOX_ENABLE_OPEN_EGRESS = '1'
+  })
+
   it("tenant 'default' keeps the base name VERBATIM (single-operator upgrade keeps the warm cache)", async () => {
     process.env.SANDBOX_CACHE_VOLUME = 'custom-cache-base'
     spawnPlan = () => ({ stdout: 'cid', code: 0 })

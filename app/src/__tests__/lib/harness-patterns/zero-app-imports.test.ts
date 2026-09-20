@@ -18,7 +18,11 @@
  * `import()`s alike. Raw text catches all three shapes.
  *
  * Like `core-types-source-scan.test.ts`, this scans the RAW TEXT of every
- * non-test file under each package — import lines and inline `import()`
+ * non-test file under `packages/harness-patterns/`, `packages/agents/`
+ * (extended at the @hames/agents extraction, #225 PR-2) and
+ * `packages/connectors/` (extended at the connectors move, #225 PR-C2 — same
+ * pin shape, one scan over the published packages) — import lines and inline
+ * `import()`
  * positions alike, comments included, because a static import cannot hide
  * anywhere else. Three escape shapes are checked:
  *
@@ -34,10 +38,11 @@ import { join, relative, resolve } from 'node:path'
 
 // `process.cwd()` is `app/` under vitest (same anchor the other source-scan
 // pins use); `import.meta.url` is not a file URL in this jsdom environment.
-const PACKAGES = [
+const PACKAGE_ROOTS = [
   resolve(process.cwd(), '../packages/harness-patterns'),
+  resolve(process.cwd(), '../packages/agents'),
   resolve(process.cwd(), '../packages/connectors'),
-] as const
+]
 
 /** A relative climb out of the package (`../app`, `../../app`, …), whatever
  *  the depth or the trailing path. */
@@ -60,26 +65,26 @@ async function walk(dir: string): Promise<string[]> {
   return files
 }
 
-describe('zero app imports under the workspace packages (BAML-companion seam lane pin)', () => {
-  it('no non-test file under any package imports app code', async () => {
+describe('zero app imports under the published packages (BAML-companion seam lane pin)', () => {
+  it('no non-test file under any published package imports app code', async () => {
     const offenders: string[] = []
-    for (const pkg of PACKAGES) {
-      const files = await walk(pkg)
+    for (const root of PACKAGE_ROOTS) {
+      const files = await walk(root)
       expect(
         files.length,
-        `${pkg} scanned nothing — a broken walk must fail loudly`,
+        `${root} scanned nothing — a broken walk must fail loudly`,
       ).toBeGreaterThan(0)
 
       for (const file of files) {
         const text = await readFile(file, 'utf8')
-        const rel = relative(pkg, file)
+        const rel = relative(root, file)
         if (RELATIVE_ESCAPE.test(text)) {
-          offenders.push(`${rel} (relative escape into app/)`)
+          offenders.push(`${root.split('/').pop()}/${rel} (relative escape into app/)`)
           continue
         }
         for (const specifier of APP_SPECIFIERS) {
           if (text.includes(specifier)) {
-            offenders.push(`${rel} (${specifier})`)
+            offenders.push(`${root.split('/').pop()}/${rel} (${specifier})`)
             break
           }
         }

@@ -23,6 +23,9 @@ importers:
       '@boundaryml/baml':
         specifier: 0.224.0
         version: 0.224.0
+      '@hames/agents':
+        specifier: workspace:*
+        version: link:../packages/agents
       '@hames/connectors':
         specifier: workspace:*
         version: link:../packages/connectors
@@ -180,6 +183,19 @@ importers:
       vitest:
         specifier: ^4.1.5
         version: 4.1.5(@opentelemetry/api@1.9.1)(@types/node@24.12.2)(@vitest/coverage-v8@4.1.5)(jsdom@27.4.0)(vite@6.4.2(@types/node@24.12.2)(jiti@2.6.1)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))
+
+  packages/agents:
+    dependencies:
+      '@hames/harness-baml':
+        specifier: workspace:*
+        version: link:../harness-baml
+      '@hames/harness-patterns':
+        specifier: workspace:*
+        version: link:../harness-patterns
+    devDependencies:
+      cytoscape:
+        specifier: ^3.33.2
+        version: 3.33.2
 
   packages/connectors:
     dependencies:

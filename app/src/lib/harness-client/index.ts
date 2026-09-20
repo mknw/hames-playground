@@ -28,22 +28,24 @@ export {
   type ConversationTierState,
   type PinResult,
   type LoadedConversation,
-  type ReplayedMessage,
 } from './actions.server'
 
 // Agent Registry - MUST be imported separately to avoid loading all example agents
 // Use: import { getAgentMetadata } from '~/lib/harness-client/registry.server'
 export type { AgentConfig } from './registry.server'
 
-// Graph Extraction (client-safe)
-export { extractGraphElements, extractGraphFromResult } from './graph-extractor'
-
-// Reference Extraction (client-safe) — retriever citations
+// Graph Extraction (client-safe) — moved to @hames/agents (#225 PR-2);
+// re-exported here so client components keep one import site.
 export {
+  extractGraphElements,
+  extractGraphFromResult,
+  isEdgeElement,
+  isNodeElement,
   extractReferences,
   referencesForDoc,
+  errorBubble,
+  replayMessages,
   type OpenReferenceTarget,
-} from './reference-extractor'
-
-// Types
-export type { GraphElement } from './types'
+  type ReplayedMessage,
+  type GraphElement,
+} from '@hames/agents'

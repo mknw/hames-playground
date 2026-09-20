@@ -30,9 +30,9 @@
  * The Supabase backend (company pgvector via the Supabase MCP) is a deferred
  * stub; add `createSupabaseBackend()` to `backends` once IT provides access.
  */
-'use server'
-
-// @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
+// @unocss-include — the icon class literal lives in the app's registry overlay
+// (see the host's harness-client/registry.server.ts), not here: `icon`/`accent`
+// are UI fields and stay app-side (the #225 composition-root decision).
 import {
   router,
   routes,
@@ -45,24 +45,41 @@ import {
   type ConfiguredPattern,
 } from '@hames/harness-patterns'
 import { bamlPatterns, createLoopControllerAdapter } from '@hames/harness-baml'
-import { mcpNamespace } from '@hames/connectors/mcp-catalog'
-import type { SessionData } from '../session.server'
-import type { AgentConfig } from '../registry.server'
+import type { AgentData, AgentDefinition, AgentDeps } from '../types'
+
 import { getGraphSchema } from './graph-schema.server'
 import { NEO4J_FEW_SHOTS_DEFAULT } from './neo4j-fewshots.server'
-import { enrichNeo4jResult } from '../neo4j-enricher.server'
-import { createRedisBackend } from '../../retriever'
 
-async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
-  const tools = await Tools({ namespaces: mcpNamespace })
-  const schema = await getGraphSchema('retriever-agent', sessionId)
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+
+// The 'use server' directive this file carried before the move was the only
+// thing keeping its exports off the client; this is the real guard, and the
+// reason stripping the directive removes nothing load-bearing.
+assertServerOnImport()
+
+async function createPatterns(
+  sessionId: string,
+  deps: AgentDeps,
+): Promise<ConfiguredPattern<AgentData>[]> {
+  const tools = await Tools({ namespaces: deps.toolNamespaces })
+  const schema = await getGraphSchema('retriever-agent', sessionId, deps)
   const baml = bamlPatterns()
 
   // ── retriever route: vector search over this session's uploaded docs ──
   // Raw user message by default; rewritten to a search query only when the turn
   // has history (generateQuery).
-  const redisBackend = createRedisBackend(sessionId)
-  const retrieverPattern = retriever<SessionData>({
+  //
+  // The backend factory is injected app-side wiring (the Data Stash). Its
+  // absence is not a degraded composition — it is a misconfigured one — so
+  // it fails loudly instead of silently building a retriever with nowhere to
+  // search.
+  if (!deps.createRedisBackend) {
+    throw new Error(
+      'retriever-agent requires deps.createRedisBackend — the composition root must supply it (AgentDeps)',
+    )
+  }
+  const redisBackend = deps.createRedisBackend(sessionId)
+  const retrieverPattern = retriever<AgentData>({
     patternId: 'retriever',
     backends: [redisBackend],
     k: 5,
@@ -78,22 +95,22 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
 
   // L14 (#225 Lane B3): each list appears exactly once, at the loop — it is
   // the allowlist AND what the controller advertises, via the seam.
-  const neo4jPattern = simpleLoop<SessionData>(createLoopControllerAdapter(), tools.neo4j ?? [], {
+  const neo4jPattern = simpleLoop<AgentData>(createLoopControllerAdapter(), tools.neo4j ?? [], {
     patternId: 'neo4j-query',
     schema,
     liveEvents: true,
     rememberPriorTurns: false,
     fewShots: NEO4J_FEW_SHOTS_DEFAULT,
-    onToolResult: enrichNeo4jResult,
+    onToolResult: deps.enrichNeo4jResult,
   })
 
-  const webPattern = simpleLoop<SessionData>(createLoopControllerAdapter(), webTools, {
+  const webPattern = simpleLoop<AgentData>(createLoopControllerAdapter(), webTools, {
     patternId: 'web-search',
     liveEvents: true,
     rememberPriorTurns: false,
   })
 
-  const routerPattern = router<SessionData>(
+  const routerPattern = router<AgentData>(
     {
       retriever:
         "Answer from the user's uploaded documents (the Data Stash) — fast semantic search over ingested files",
@@ -117,18 +134,18 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     namespaces: ['web', 'retriever'],
     catalog: tools.all,
   })(
-    routes<SessionData>(
+    routes<AgentData>(
       {
         // The retriever does its own context-scoped search, so it isn't wrapped
         // in `withReferences` (which injects prior tool_results) — unlike the
         // neo4j / web loops, which benefit from cross-turn reference curation.
         retriever: retrieverPattern,
-        neo4j: withReferences<SessionData>(neo4jPattern, {
+        neo4j: withReferences<AgentData>(neo4jPattern, {
           scope: 'global',
           liveEvents: true,
           selector: baml.selector,
         }),
-        web_search: withReferences<SessionData>(webPattern, {
+        web_search: withReferences<AgentData>(webPattern, {
           scope: 'global',
           liveEvents: true,
           selector: baml.selector,
@@ -138,7 +155,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     ),
   )
 
-  const responseSynth = compactExecution<SessionData>({
+  const responseSynth = compactExecution<AgentData>({
     mode: 'thread',
     patternId: 'response-synth',
     liveEvents: true,
@@ -148,7 +165,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   return [routerPattern, routesPattern, responseSynth]
 }
 
-export const retrieverAgent: AgentConfig = {
+export const retrieverAgent: AgentDefinition = {
   id: 'retriever',
   name: 'Retriever Agent',
   description:
@@ -157,8 +174,6 @@ export const retrieverAgent: AgentConfig = {
     'Upload documents in the Data tab and I answer from them, with a citation ' +
     'back to the passage I used. I can also go to the knowledge graph or the web ' +
     'when the answer is not in your files.',
-  icon: 'i-material-symbols-document-search-outline',
-  accent: 'violet',
   servers: ['neo4j-cypher', 'web_search', 'fetch'],
   createPatterns,
 }

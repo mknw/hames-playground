@@ -4,7 +4,7 @@ import type { ToolCallInfo } from './types'
 import { ToolCallDisplay } from './ToolCallDisplay'
 import { marked } from 'marked'
 import type { RetrievalReference } from '@hames/harness-patterns'
-import type { OpenReferenceTarget } from '~/lib/harness-client/reference-extractor'
+import type { OpenReferenceTarget } from '@hames/agents'
 import { escapeHtmlAttribute, sanitizeMarkdownHtml } from '~/lib/sanitize-html'
 
 // Rendering options only — marked passes raw HTML in the source through

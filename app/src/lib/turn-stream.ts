@@ -19,16 +19,16 @@
  *
  * The wire format is untouched — `parseChatStream` still owns it.
  */
-import { extractGraphElements, extractGraphFromResult } from '~/lib/harness-client/graph-extractor'
-import { extractReferences } from '~/lib/harness-client/reference-extractor'
+import { extractGraphElements, extractGraphFromResult } from '@hames/agents'
+import { extractReferences } from '@hames/agents'
 // Imported from the module rather than the barrel: `replay.ts` is deliberately
 // dependency-free (no server-only imports), and the stream handler wants
 // exactly that guarantee.
-import { errorBubble } from '~/lib/harness-client/replay'
+import { errorBubble } from '@hames/agents/replay'
 import { parseChatStream, type DoneEventData, type WarmingEventData } from '~/lib/sse-client'
 import { openChatStream } from '~/lib/api-client'
 import type { Message } from '~/components/ark-ui/ChatMessages'
-import type { GraphElement } from '~/lib/harness-client/types'
+import type { GraphElement } from '@hames/agents'
 import type {
   ContextEvent,
   UnifiedContext,

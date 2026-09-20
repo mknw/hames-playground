@@ -23,6 +23,13 @@ vi.mock('@hames/harness-patterns', () => ({
   harnessUsesSyncWorkspace,
 }))
 
+// The overlay imports the composition root's `agentDeps()` (session.server);
+// stub it so the registry tests boot neither the DB chain nor the deps graph.
+vi.mock('../../../lib/harness-client/session.server', () => ({
+  doNotCachePatterns: vi.fn(),
+  agentDeps: () => ({}),
+}))
+
 // The module registers the six agents on import; each one pulls in the whole
 // pattern/tool graph, so stub them down to bare configs.
 function stubAgent(id: string): AgentConfig {
@@ -37,22 +44,22 @@ function stubAgent(id: string): AgentConfig {
     createPatterns: async () => [],
   }
 }
-vi.mock('../../../lib/harness-client/agents/search.server', () => ({
+vi.mock('@hames/agents/agents/search.server', () => ({
   searchAgent: stubAgent('search'),
 }))
-vi.mock('../../../lib/harness-client/agents/general.server', () => ({
+vi.mock('@hames/agents/agents/general.server', () => ({
   generalAgent: stubAgent('general'),
 }))
-vi.mock('../../../lib/harness-client/agents/sandbox-session.server', () => ({
+vi.mock('@hames/agents/agents/sandbox-session.server', () => ({
   sandboxSessionAgent: stubAgent('sandbox-session'),
 }))
-vi.mock('../../../lib/harness-client/agents/flavoured-sandbox.server', () => ({
+vi.mock('@hames/agents/agents/flavoured-sandbox.server', () => ({
   flavouredSandboxAgent: stubAgent('flavoured-sandbox'),
 }))
-vi.mock('../../../lib/harness-client/agents/retriever-agent.server', () => ({
+vi.mock('@hames/agents/agents/retriever-agent.server', () => ({
   retrieverAgent: stubAgent('retriever'),
 }))
-vi.mock('../../../lib/harness-client/agents/microsoft-365.server', () => ({
+vi.mock('@hames/agents/agents/microsoft-365.server', () => ({
   microsoft365Agent: stubAgent('microsoft-365'),
 }))
 

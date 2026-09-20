@@ -7,7 +7,7 @@ converged. No code changes in this PR — it revises this plan doc, adds a
 skeleton developer guide (`docs/plan/hames-guide.md`), and updates
 `docs/INDEX.md`.
 
-**Landed so far (updated 2026-09-15, Step 1d)** — migration progress against
+**Landed so far (updated 2026-09-20, after #351/#352)** — migration progress against
 §5, so the steps below can be read as history rather than as-to-do:
 
 - **Step 0 DONE** (`ffd93371`) — repo root promoted to a pnpm workspace, root
@@ -45,10 +45,25 @@ skeleton developer guide (`docs/plan/hames-guide.md`), and updates
   module-eval probe (§3.3/§4.3) evaluates all 22 entries through the
   installed tarball, and the CI `packages` job is **REQUIRED** —
   `continue-on-error` and the `::warning::` annotation are removed. What
-  remains for Step 3 (harness-baml extraction) is packaging the companion
-  itself, not de-coupling core.
-- **Not yet landed**: Step 2 (first publish — blocked on the re-points),
-  the Lane C BAML-companion half, Lanes D–G, Steps 3–6.
+  remained for Step 3 (harness-baml extraction) was packaging the companion
+  itself, not de-coupling core — done next.
+- **Step 3 landed (2026-09-20, #351, merged 0378c73a1)**: `@hames/harness-baml`
+  is extracted as `packages/harness-baml/` — a byte-identical move of the
+  adapters, clients and version-check, with a **pre-generated
+  `baml_client/`** committed in the package (a consumer never runs
+  `baml-generate`) and the §4.4 v1 client scope (Anthropic +
+  custom-endpoint) as the shipped `baml_src/`. Its README carries the
+  LLM-seam guide material (hames-guide §3), compile-checked by
+  `baml-readme-docs-pins.test.ts`.
+- **Step 5's package landed (2026-09-20, #352, merged 2b8dc9e5a)**:
+  `@hames/agents` is extracted as `packages/agents/` — the nine ready-made
+  agent definitions moved behind `AgentDefinition`/`AgentData`/`AgentDeps`,
+  the composition root staying in the app, framework-agnostic (no
+  SolidJS/UnoCSS/Ark UI in the package). README snippets compile-checked by
+  `agents-readme-docs-pins.test.ts`.
+- **Not yet landed**: Step 2 (first publish — the packages above are
+  workspace members only, nothing is on npm yet), Lanes D–G, Step 4
+  (`harness-guard`/`sandbox-docker`/`stash`/`retriever`), and Step 6.
 
 **Name: `@hames/harness-patterns`** — final (owner decision 2026-08-23 chose the bare
 name `hames` — free on npm, no search collisions; owner ruling 2026-09-15 placed it in

@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { testAgentDeps } from './test-deps'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 
 const toolSets = {
@@ -64,8 +65,8 @@ beforeEach(() => vi.clearAllMocks())
 
 describe('agents that consume untrusted content are guarded', () => {
   it('search: the web route is guarded, the neo4j route is not', async () => {
-    const { searchAgent } = await import('../../../../lib/harness-client/agents/search.server')
-    const patterns = (await searchAgent.createPatterns('s')) as Pattern[]
+    const { searchAgent } = await import('@hames/agents/agents/search.server')
+    const patterns = (await searchAgent.createPatterns('s', testAgentDeps)) as Pattern[]
 
     // The guard sits INSIDE routes, on the web route only — the chain itself is
     // router → routes → compactExecution, unchanged.
@@ -82,9 +83,8 @@ describe('agents that consume untrusted content are guarded', () => {
   })
 
   it('microsoft-365: the graph loop is guarded', async () => {
-    const { microsoft365Agent } =
-      await import('../../../../lib/harness-client/agents/microsoft-365.server')
-    const patterns = (await microsoft365Agent.createPatterns('s')) as Pattern[]
+    const { microsoft365Agent } = await import('@hames/agents/agents/microsoft-365.server')
+    const patterns = (await microsoft365Agent.createPatterns('s', testAgentDeps)) as Pattern[]
     const guard = guardOf(patterns)
     expect(guard).toBeDefined()
     expect(guard!.children?.[0].config.patternId).toBe('microsoft-365')
@@ -92,9 +92,8 @@ describe('agents that consume untrusted content are guarded', () => {
   })
 
   it('retriever: routes is guarded, covering both web and the stash', async () => {
-    const { retrieverAgent } =
-      await import('../../../../lib/harness-client/agents/retriever-agent.server')
-    const patterns = (await retrieverAgent.createPatterns('s')) as Pattern[]
+    const { retrieverAgent } = await import('@hames/agents/agents/retriever-agent.server')
+    const patterns = (await retrieverAgent.createPatterns('s', testAgentDeps)) as Pattern[]
     const guard = guardOf(patterns)
     expect(guard).toBeDefined()
     expect(guard!.children?.[0].name).toBe('routes(retriever|neo4j|web_search)')
@@ -109,8 +108,8 @@ describe('agents that consume untrusted content are guarded', () => {
 
 describe('agents deliberately NOT guarded (yet)', () => {
   it('general: left to the sibling general-agent lane (#206) to wire at its seam', async () => {
-    const { generalAgent } = await import('../../../../lib/harness-client/agents/general.server')
-    const patterns = (await generalAgent.createPatterns('s')) as Pattern[]
+    const { generalAgent } = await import('@hames/agents/agents/general.server')
+    const patterns = (await generalAgent.createPatterns('s', testAgentDeps)) as Pattern[]
     expect(guardOf(patterns)).toBeUndefined()
   })
 })

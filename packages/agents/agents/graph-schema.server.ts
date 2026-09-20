@@ -22,6 +22,7 @@
 
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { callTool } from '@hames/harness-patterns'
+import type { AgentDeps } from '../types'
 
 assertServerOnImport()
 
@@ -33,17 +34,29 @@ assertServerOnImport()
  * @param sessionId   The session whose pattern build must not be cached when the
  *                    fetch fails.
  */
-export async function getGraphSchema(agentLabel: string, sessionId: string): Promise<string> {
+export async function getGraphSchema(
+  agentLabel: string,
+  sessionId: string,
+  deps: AgentDeps,
+): Promise<string> {
   const result = await callTool('get_neo4j_schema', {})
   if (result.success) return JSON.stringify(result.data)
 
+  // Two things have to happen on failure, and neither is optional (the header
+  // above): WARN, and REFUSE THE CACHE. The cache refusal is the host's
+  // `doNotCachePatterns`, injected through `AgentDeps` — the pattern cache is
+  // app-side state (the app's session.server), not package state. When a
+  // consumer supplies no refusal hook, that fact is NAMED in the same warning
+  // instead of the degradation going silent: a consumer that ignores it keeps
+  // a schema-blind controller frozen for the conversation's whole life.
   console.warn(
     `[${agentLabel}] graph schema unavailable (${result.error ?? 'unknown error'}) — the ` +
-      'controller runs without it this turn; patterns will be rebuilt on the next message.',
+      'controller runs without it this turn; patterns will be rebuilt on the next message.' +
+      (deps.doNotCachePatterns
+        ? ''
+        : ' No doNotCachePatterns supplied via AgentDeps: without the refusal hook ' +
+          'this degraded build may be CACHED schema-blind (sf-M6).'),
   )
-  // Dynamic import: `session.server.ts` imports the registry, which imports
-  // every example agent, so a static import here would close a cycle.
-  const { doNotCachePatterns } = await import('../session.server')
-  doNotCachePatterns(sessionId)
+  deps.doNotCachePatterns?.(sessionId)
   return ''
 }

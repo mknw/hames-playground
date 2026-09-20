@@ -18,9 +18,9 @@
  * Kept alongside `search` deliberately: same session shape, different
  * strategy, so the two can be compared on the same questions.
  */
-'use server'
-
-// @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
+// @unocss-include — the icon class literal lives in the app's registry overlay
+// (see the host's harness-client/registry.server.ts), not here: `icon`/`accent`
+// are UI fields and stay app-side (the #225 composition-root decision).
 import {
   planner,
   simpleLoop,
@@ -29,29 +29,38 @@ import {
   type ConfiguredPattern,
 } from '@hames/harness-patterns'
 import { bamlPatterns, createLoopControllerAdapter } from '@hames/harness-baml'
-import { mcpNamespace } from '@hames/connectors/mcp-catalog'
-import type { SessionData } from '../session.server'
-import type { AgentConfig } from '../registry.server'
+import type { AgentData, AgentDefinition, AgentDeps } from '../types'
+
 import { getGraphSchema } from './graph-schema.server'
 
-async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
-  const tools = await Tools({ namespaces: mcpNamespace })
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+
+// The 'use server' directive this file carried before the move was the only
+// thing keeping its exports off the client; this is the real guard, and the
+// reason stripping the directive removes nothing load-bearing.
+assertServerOnImport()
+
+async function createPatterns(
+  sessionId: string,
+  deps: AgentDeps,
+): Promise<ConfiguredPattern<AgentData>[]> {
+  const tools = await Tools({ namespaces: deps.toolNamespaces })
   // Warns and refuses the pattern cache on failure — see `graph-schema.server.ts`,
   // which this function used to be the only correct copy of (sf-M6).
-  const schema = await getGraphSchema('general', sessionId)
+  const schema = await getGraphSchema('general', sessionId, deps)
   // Lane A6: the BAML-backed implementations come from `harness-baml` — one
   // factory call, then each pattern takes its injected fn.
   const baml = bamlPatterns()
 
   // The planner sees exactly the tool surface the executor will have — a plan
   // that names a tool the loop cannot call is worse than no plan.
-  const planPattern = planner<SessionData>(baml.planner(tools.all), tools.all, {
+  const planPattern = planner<AgentData>(baml.planner(tools.all), tools.all, {
     patternId: 'plan',
     schema,
     liveEvents: true,
   })
 
-  const executePattern = simpleLoop<SessionData>(createLoopControllerAdapter(), tools.all, {
+  const executePattern = simpleLoop<AgentData>(createLoopControllerAdapter(), tools.all, {
     patternId: 'execute',
     schema,
     liveEvents: true,
@@ -88,7 +97,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   // `user_message` (patternId 'harness') is listed so the compactExecution still
   // sees the question: this chain has no router or compactIntent to set
   // `data.intent`, so an executor-only window would leave it with neither.
-  const responseSynth = compactExecution<SessionData>({
+  const responseSynth = compactExecution<AgentData>({
     mode: 'thread',
     patternId: 'response-synth',
     liveEvents: true,
@@ -103,7 +112,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   return [planPattern, executePattern, responseSynth]
 }
 
-export const generalAgent: AgentConfig = {
+export const generalAgent: AgentDefinition = {
   id: 'general',
   name: 'General Agent',
   description: 'Plans first, then executes across every available tool namespace',
@@ -111,8 +120,6 @@ export const generalAgent: AgentConfig = {
     'I write a plan first, then work through it across every tool I have — the ' +
     'knowledge graph, web search and fetch, library docs, and the memory graph. ' +
     'Best for questions that need more than one of those.',
-  icon: 'i-material-symbols-robot-2-outline',
-  accent: 'indigo',
   servers: ['neo4j-cypher', 'web_search', 'fetch', 'context7', 'memory'],
   createPatterns,
 }

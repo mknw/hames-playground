@@ -17,7 +17,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
 import { render, fireEvent } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
 import type { ContextEvent } from '@hames/harness-patterns'
-import type { OpenReferenceTarget } from '~/lib/harness-client/reference-extractor'
+import type { OpenReferenceTarget } from '@hames/agents'
 import type { StashDocumentMeta } from '~/lib/document-store.server'
 
 const { DataStashPanel } = await import('../../../components/ark-ui/DataStashPanel')

@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { testAgentDeps } from './test-deps'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 import type { ContextEvent, EventType, UnifiedContext } from '@hames/harness-patterns'
 
@@ -24,6 +25,10 @@ const mockDoNotCachePatterns = vi.fn()
 vi.mock('../../../../lib/harness-client/session.server', () => ({
   doNotCachePatterns: (...args: unknown[]) => mockDoNotCachePatterns(...args),
 }))
+
+// The refusal hook rides `AgentDeps` now (the pattern cache is app-side state
+// the package receives) — so the degraded build gets a bag wired to the mock.
+const degradedDeps = { ...testAgentDeps, doNotCachePatterns: mockDoNotCachePatterns }
 
 const schemaOk = mockCallTool({ responses: { get_neo4j_schema: { Concept: ['name'] } } })
 const schemaFails = mockCallTool({ errors: { get_neo4j_schema: 'connection refused' } })
@@ -40,8 +45,8 @@ interface Pattern {
 }
 
 async function buildPatterns(sessionId = 'sess-1'): Promise<Pattern[]> {
-  const { generalAgent } = await import('../../../../lib/harness-client/agents/general.server')
-  return (await generalAgent.createPatterns(sessionId)) as unknown as Pattern[]
+  const { generalAgent } = await import('@hames/agents/agents/general.server')
+  return (await generalAgent.createPatterns(sessionId, degradedDeps)) as unknown as Pattern[]
 }
 
 beforeEach(() => {

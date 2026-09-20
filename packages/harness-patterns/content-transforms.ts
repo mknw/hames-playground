@@ -76,3 +76,21 @@ export function omitResultFields(result: unknown, omit: readonly string[] | unde
   }
   return out
 }
+
+/**
+ * Index of the most recent `user_message` in the stream, or -1 when there is
+ * none. This is the turn boundary: everything after it belongs to the current
+ * turn.
+ *
+ * An event-stream boundary helper beside the read-time lenses above. It moved
+ * into core from the app's `turn-utils.ts` (the @hames/agents extraction, #225):
+ * the citation extractor moved into `@hames/agents` and reads it, and the app's
+ * Data Stash partition reads it — two consumers, one definition, both from
+ * this module now.
+ */
+export function findLastUserMessageIndex(events: ContextEvent[]): number {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].type === 'user_message') return i
+  }
+  return -1
+}

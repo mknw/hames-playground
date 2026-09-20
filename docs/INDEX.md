@@ -27,7 +27,7 @@ Forward-looking design docs. Live item-tracking stays on the GitHub project boar
 | [plan/pseudonym-fidelity-bench.md](plan/pseudonym-fidelity-bench.md) | Measured answer to open question 4 of the above: **do `PERSON_1` placeholders survive an LLM paraphrase?** Live Synthesize run over NL/FR/EN × prompt-guidance off/on, with per-language survival/mangle/hallucination rates and a recommendation on wiring the guidance and on widening `reverse`                                                                                                                                                                                             |
 | [plan/offline-agent-auth.md](plan/offline-agent-auth.md)             | Credential model for `POST /api/agents/:id` acting for an **offline** user (#106/#107/#110/#119/#129): why the shipped encrypted per-user MSAL cache + `acquireTokenSilent` is already the right offline mechanism and the OBO grant is not, why `configs/action-tokens.yaml` — not the refresh token — is the dangerous secret, the `action_tokens` table that replaces it (hashed, scoped, revocable, audited), a risk-ordered 7-step migration, and a 9-row threat table                    |
 | [plan/harness-npm-lib.md](plan/harness-npm-lib.md)                   | Extracting harness-patterns into an npm package — working name **`hames`** (#225/#226 owner decisions, 2026-08-23): one core package first, companions (`harness-baml`, `sandbox-docker`, `stash`, `retriever`, ready-made harnesses) later; `stash` is a dependency of sandbox+retriever, not a standalone companion; `workspace:*` dev loading and a **workspace-built** production docker image (publishing serves external devs only); a Changesets publish flow; a risk-ordered migration |
-| [plan/hames-guide.md](plan/hames-guide.md)                           | **Pointer (re-homing in progress)** for the developer guide that ships per package: the core-owned sections (composition model, writing a pattern, tool transports, error surface, consuming) now live in [`packages/harness-patterns/GUIDE.md`](../packages/harness-patterns/GUIDE.md); this file keeps the LLM-seam stub, the repo-local command half, and the app-only list until the remaining packages extract                                                                            |     |
+| [plan/hames-guide.md](plan/hames-guide.md)                           | **Pointer (final)** for the developer guide that ships per package: the core-owned sections (composition model, writing a pattern, tool transports, error surface, consuming) live in [`packages/harness-patterns/GUIDE.md`](../packages/harness-patterns/GUIDE.md), the LLM seam in [`packages/harness-baml/README.md`](../packages/harness-baml/README.md); what stays here — §6's repo-local command half and §7's app-only list — has no package home by design                            |     |
 
 ---
 
@@ -84,7 +84,8 @@ Authoritative source-level docs (closer to the code):
 - [`packages/harness-patterns/SPEC.md`](../packages/harness-patterns/SPEC.md) — full framework API and design spec
 - [`packages/harness-patterns/README.md`](../packages/harness-patterns/README.md) — the `hames` library front page
 - [`packages/harness-patterns/GUIDE.md`](../packages/harness-patterns/GUIDE.md) — the developer guide: composition model, writing a pattern, tool transports, the error surface, consuming the package (every snippet typecheck-pinned by `guide-docs-pins.test.ts`)
-- [`app/src/lib/harness-client/agents/README.md`](../app/src/lib/harness-client/agents/README.md) — example implementations
+- [`packages/agents/README.md`](../packages/agents/README.md) — the ready-made agents package: the nine moved definitions, the `AgentDefinition`/`AgentData`/`AgentDeps` surface, the agent catalog with guard coverage, and what the app's composition root overlays (every API-call snippet compile-checked by `agents-readme-docs-pins.test.ts`)
+- [`packages/harness-baml/README.md`](../packages/harness-baml/README.md) — the BAML companion's front page: the LLM seam — injected-function shape, `bamlPatterns()`, the adapter factories, the v1 client scope (Anthropic + custom-endpoint), and how to point a custom-endpoint client at your own model; compile-checked by `baml-readme-docs-pins.test.ts`
 
 ### UI Frontend
 
@@ -217,7 +218,7 @@ kg-agent/
 │   │   ├── graph-pseudonymisation.md      # No-NER identity stripping over Graph's own labels
 │   │   ├── pseudonym-fidelity-bench.md    # Do PERSON_1 placeholders survive an LLM paraphrase?
 │   │   ├── harness-npm-lib.md             # Extracting harness-patterns to npm as `hames`
-│   │   └── hames-guide.md                 # Draft skeleton: hames developer guide
+│   │   └── hames-guide.md                 # Pointer: hames developer guide (final)
 │   ├── agents/
 │   │   └── issue-tracker.md     # gh commands + the issue-body-is-the-spec rule
 │   ├── deployment/

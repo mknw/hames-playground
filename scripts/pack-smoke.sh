@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Pack + install-from-tarball smoke for the workspace packages:
 #   - @hames/harness-patterns (#225 Step 1d; docs/plan/harness-npm-lib.md §3.3/§4.3)
-#   - @hames/harness-baml    (#225 PR-1b — REQUIRED by the PR-1b amendment:
-#     both packages must pass the tarball smoke before PR-2). Its scratch
-#     install carries a pnpm override pointing @hames/harness-patterns at the
-#     patterns tarball, because the tarball's rewritten `workspace:*`
-#     dependency (→ "0.1.0") is unpublished and a registry fetch must not be
-#     the thing under test.
+#   - @hames/harness-baml    (#225 PR-1b)
+#   - @hames/agents          (#225 PR-2 — REQUIRED by the PR-2 amendment: all
+#     published packages pass the tarball smoke; a red is a regression). Its
+#     scratch install carries pnpm overrides pointing BOTH dependencies at
+#     their tarballs, for the same unpublished-`workspace:*` reason as above.
 #
 # This is the ONLY mechanism anywhere in CI that exercises "does the published
 # tarball actually work" — the docker image boots from the workspace symlink,
@@ -228,6 +227,74 @@ echo "== run harness-baml probe =="
 pnpm dlx tsx probe.mts
 
 
+# ===========================================================================
+# @hames/agents — same checks on the third package's tarball. The scratch
+# install overrides BOTH dependencies (patterns and harness-baml) with their
+# tarballs — each tarball's rewritten `workspace:*` dependency (→ "0.1.0") is
+# unpublished, and a registry fetch must not be the thing under test.
+# ===========================================================================
+
+echo "== install @hames/agents into scratch project =="
+(cd "$root" && pnpm install --frozen-lockfile --filter @hames/agents)
+(cd "$root/packages/agents" && pnpm pack --pack-destination "$tmp")
+agents_tarball="$(ls "$tmp"/hames-agents-*.tgz)"
+echo "tarball: $agents_tarball"
+
+mkdir -p "$tmp/scratch-agents"
+cd "$tmp/scratch-agents"
+printf '{"name":"pack-smoke-scratch-agents","private":true,"type":"module",\n "pnpm":{"overrides":{"@hames/harness-patterns":"file:%s","@hames/harness-baml":"file:%s"}}}\n' \
+  "$patterns_tarball" "$baml_tarball" > package.json
+pnpm add "$agents_tarball"
+
+cat > probe.mts <<'PROBE'
+import { strict as assert } from 'node:assert'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+const pkgDir = fileURLToPath(new URL('./node_modules/@hames/agents/', import.meta.url))
+const manifest = JSON.parse((await import('node:fs')).readFileSync(pkgDir + 'package.json', 'utf8'))
+
+// 1. every explicit export target exists in the tarball (the wildcards are
+//    exercised by the direct imports below)
+for (const [key, target] of Object.entries<string>(manifest.exports)) {
+  if (key === './package.json' || key.includes('*')) continue
+  const file = pkgDir + target.replace(/^\.\//, '')
+  assert.ok(existsSync(file), `export ${key} -> ${target} is missing from the tarball`)
+}
+
+// 2. the root barrel is client-safe and evaluates: extractors, replay and
+//    the agent-surface types resolve through it
+const root = await import('@hames/agents')
+for (const fn of ['extractGraphElements', 'extractGraphFromResult', 'isEdgeElement',
+  'isNodeElement', 'isNeo4jGraphResult', 'isMemoryGraphResult', 'extractReferences',
+  'referencesForDoc', 'errorBubble', 'replayMessages']) {
+  assert.equal(typeof (root as Record<string, unknown>)[fn], 'function', `${fn} missing from the root barrel`)
+}
+
+// 3. the definitions barrel evaluates — the nine moved modules, through the
+//    tarball (which transitively loads the two overridden dependency
+//    tarballs and @boundaryml/baml)
+const agents = await import('@hames/agents/agents')
+for (const name of ['searchAgent', 'generalAgent', 'sandboxSessionAgent',
+  'flavouredSandboxAgent', 'retrieverAgent', 'microsoft365Agent']) {
+  const def = (agents as Record<string, { id?: string }>)[name]
+  assert.equal(typeof def?.id, 'string', `${name} missing from the agents barrel`)
+  assert.equal(typeof def.createPatterns, 'function', `${name}.createPatterns missing`)
+}
+for (const name of ['getGraphSchema', 'NEO4J_FEW_SHOTS', 'NEO4J_FEW_SHOTS_DEFAULT',
+  'createTitleAgent', 'sanitizeTitle', 'runFirstTurnTitleGen', 'runRegenerateTitle']) {
+  assert.notEqual((agents as Record<string, unknown>)[name], undefined, `${name} missing from the agents barrel`)
+}
+
+// 4. the ./* wildcard spot-check: the types module (the AgentDeps surface is
+//    type-only, so presence is what the tarball owes)
+await import('@hames/agents/types')
+
+console.log('agents pack smoke OK: exports map resolves, root + agents barrels evaluate, types resolve')
+PROBE
+
+echo "== run agents probe =="
+pnpm dlx tsx probe.mts
 # ===========================================================================
 # @hames/connectors — the same four checks, on the connectors package's
 # tarball (#225 PR-C2). Its scratch install overrides

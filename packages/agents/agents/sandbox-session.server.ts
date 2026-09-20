@@ -11,9 +11,9 @@
  * Contrast with an *ephemeral* sandbox (a fresh, reset VM per turn): pick this
  * agent when follow-ups should build on prior state.
  */
-'use server'
-
-// @unocss-include — the icon class literal below must be extracted (see uno.config content.filesystem)
+// @unocss-include — the icon class literal lives in the app's registry overlay
+// (see the host's harness-client/registry.server.ts), not here: `icon`/`accent`
+// are UI fields and stay app-side (the #225 composition-root decision).
 import {
   actorCritic,
   compactExecution,
@@ -25,10 +25,15 @@ import {
   createActorControllerAdapter,
   createCriticAdapter,
 } from '@hames/harness-baml'
-import { withSandbox } from '../../sandbox/index.server'
-import type { SessionData } from '../session.server'
-import type { AgentConfig } from '../registry.server'
+import type { AgentData, AgentDefinition, AgentDeps } from '../types'
 import type { FewShot } from '@hames/harness-patterns/types'
+
+import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+
+// The 'use server' directive this file carried before the move was the only
+// thing keeping its exports off the client; this is the real guard, and the
+// reason stripping the directive removes nothing load-bearing.
+assertServerOnImport()
 
 const SANDBOX_SESSION_GUIDANCE = `
 You have a PERSISTENT Linux sandbox for this conversation, shared with the
@@ -87,14 +92,26 @@ const SANDBOX_SESSION_FEW_SHOTS: FewShot[] = [
   },
 ]
 
-async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
+async function createPatterns(
+  sessionId: string,
+  deps: AgentDeps,
+): Promise<ConfiguredPattern<AgentData>[]> {
+  // The sandbox wrapper is injected app-side wiring (SD-19: the containment
+  // posture stays app-side and is supplied, not carried). A missing one is not
+  // a degraded composition — it is a misconfigured one — so it fails loudly
+  // instead of silently running the loop on the host process.
+  if (!deps.withSandbox) {
+    throw new Error(
+      'sandbox-session requires deps.withSandbox — the composition root must supply it (AgentDeps)',
+    )
+  }
   const actor = createActorControllerAdapter({
     contextPrefix: SANDBOX_SESSION_GUIDANCE,
     fewShots: SANDBOX_SESSION_FEW_SHOTS,
   })
   const critic = createCriticAdapter()
 
-  const loop = actorCritic<SessionData>(actor, critic, [], {
+  const loop = actorCritic<AgentData>(actor, critic, [], {
     patternId: 'sandbox-session-loop',
     liveEvents: true,
     maxRetries: 6,
@@ -109,7 +126,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   // it persists across turns AND is the same container the Shell terminal
   // attaches to (PtyManager keys on sessionId). Release decrements refCount
   // without resetting, so /work survives between turns.
-  const sandboxedLoop = withSandbox({
+  const sandboxedLoop = deps.withSandbox({
     id: sessionId,
     sessionId,
     rootfs: 'base',
@@ -128,7 +145,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   // empty USER MESSAGE (SA-M1). Listing 'harness' beside the loop restores it.
   // The rewritten brief from `sandbox-session-intent` needs no entry — it
   // reaches this pattern as `data.intent`, not as an event.
-  const synth = compactExecution<SessionData>({
+  const synth = compactExecution<AgentData>({
     mode: 'thread',
     patternId: 'sandbox-session-synth',
     liveEvents: true,
@@ -145,7 +162,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   // On turn 1 (no history) it passes the message through and skips the LLM call.
   // Lane A6: the rewrite implementation is REQUIRED injected config now —
   // the describe-tier implementation comes from `harness-baml`.
-  const intent = compactIntent<SessionData>(bamlPatterns().compactIntent, {
+  const intent = compactIntent<AgentData>(bamlPatterns().compactIntent, {
     patternId: 'sandbox-session-intent',
     liveEvents: true,
   })
@@ -153,7 +170,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   return [intent, sandboxedLoop, synth]
 }
 
-export const sandboxSessionAgent: AgentConfig = {
+export const sandboxSessionAgent: AgentDefinition = {
   id: 'sandbox-session',
   name: 'Sandbox · Session',
   description:
@@ -162,8 +179,6 @@ export const sandboxSessionAgent: AgentConfig = {
     'I have a Linux box for this conversation — I can write files and run shell ' +
     'or Python in it, and it keeps everything between messages. The Terminal tab ' +
     'opens the same box, and anything I put in /work/out is kept for next time.',
-  icon: 'i-material-symbols-castle-outline',
-  accent: 'orange',
   servers: [],
   createPatterns,
 }

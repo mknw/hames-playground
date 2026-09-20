@@ -29,11 +29,10 @@ import {
   refreshDocuments,
   type StashDocumentMeta,
 } from '~/lib/stash-documents'
-import {
-  referencesForDoc,
-  type OpenReferenceTarget,
-} from '~/lib/harness-client/reference-extractor'
-import { findLastUserMessageIndex } from '~/lib/turn-utils'
+import { referencesForDoc, type OpenReferenceTarget } from '@hames/agents'
+// Core event-stream boundary helper — shared with the citation extractor,
+// which reads it from the same core module now (SA-H7).
+import { findLastUserMessageIndex } from '@hames/harness-patterns/content-transforms'
 import { SanitizedChip } from './SanitizedChip'
 
 // ============================================================================

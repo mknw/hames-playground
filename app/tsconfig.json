@@ -28,6 +28,7 @@
     "scripts",
     "../packages/harness-patterns",
     "../packages/harness-baml",
-    "../packages/connectors"
+    "../packages/connectors",
+    "../packages/agents"
   ]
 }

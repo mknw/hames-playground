@@ -1,17 +1,16 @@
 # `hames` developer guide (pointing)
 
-**Status:** the guide is being **re-homed into the packages it documents**
-(owner decision on record: "the guide should later go in each respective npm
-module"; planned per-package in the #225 design note, 2026-09-16, §5). The
-core-owned sections now live in
-[`packages/harness-patterns/GUIDE.md`](../../packages/harness-patterns/GUIDE.md)
-— the composition model, writing a pattern, tool transports, the error
-surface, and consuming the package, with every code snippet typecheck-pinned
-by `app/src/__tests__/lib/harness-patterns/guide-docs-pins.test.ts`. This file
-keeps only what has no package home yet: §3 (the LLM seam — waits for the
-`harness-baml` package), §6's repo-local half (this workspace's own commands —
-not package material), and §7 (the app-only list). When the remaining packages
-extract, the rest of this file becomes a pointer and nothing else.
+**Status:** the guide is **re-homed into the packages it documents** (owner
+decision on record: "the guide should later go in each respective npm
+module"; planned per-package in the #225 design note, 2026-09-16, §5) — and
+that re-homing is now **complete**: §§1/2/4/5 live in
+[`packages/harness-patterns/GUIDE.md`](../../packages/harness-patterns/GUIDE.md),
+§3 in [`packages/harness-baml/README.md`](../../packages/harness-baml/README.md),
+and §6's consumer-facing half in the package guide's §5, every code snippet
+typecheck-pinned by the per-package pins tests. What stays in this file
+stays **by design**, not pending: §6's repo-local half (this workspace's own
+commands — not package material) and §7 (the app-only list). This is the
+final shape.
 
 This guide was app-external by design: it documented the library a consumer
 installs, not kg-agent's own usage of it. That intent now lives in the package
@@ -76,8 +75,9 @@ repeated here). Two command facts are repo-local and stay:
 
 ## 7. Things the app does that the library does not ship
 
-Stub — **NOT yet re-homed; feeds the final pointer when the agents/baml
-packages exist.** The explicit list of what a consumer must bring themselves,
+Stays here **by design** — the app-only list has no package home (the
+`agents` package documents its own surface; this list is what the _app_
+adds on top). The explicit list of what a consumer must bring themselves,
 so nobody mistakes kg-agent's own wiring for part of the package contract:
 
 - `typeof window === 'undefined'` / `.server.ts`-suffix guards — this
@@ -89,6 +89,5 @@ so nobody mistakes kg-agent's own wiring for part of the package contract:
   auth, and the Neo4j/MCP tool catalog (`KNOWN_TOOL_SERVERS`) — all app-side
   configuration a consumer replaces with their own.
 - The mixed-provider BAML fallback chains (Groq/OpenRouter/OpenAI) — removed
-  from the repo entirely on 2026-08-24 (ADR-0001), and never part of the
-  published
-  `harness-baml` package.
+  from the repo entirely on 2026-08-24 (ADR-0001), and never part of
+  `@hames/harness-baml`.

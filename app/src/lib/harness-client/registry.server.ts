@@ -19,6 +19,7 @@
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import type { ConfiguredPattern } from '@hames/harness-patterns'
 import { harnessHasRedisRetriever, harnessUsesSyncWorkspace } from '@hames/harness-patterns'
+import type { AgentDefinition } from '@hames/agents'
 import type { SessionData } from './session.server'
 import type { AgentAccent } from '../agent-palette'
 
@@ -30,36 +31,30 @@ assertServerOnImport()
 // Types
 // ============================================================================
 
-export interface AgentConfig {
-  id: string
-  name: string
-  description: string
-  /** The greeting an empty conversation shows for this agent — one or two
-   *  plain sentences saying what it can actually do, in the words a user can
-   *  act on. `description` is the one-liner the picker lists; this is the
-   *  same claim written to be read *before* the first message.
-   *
-   *  Required, not optional: every agent greeted as "your knowledge
-   *  assistant" until 2026-08-27 because the copy was one string in
-   *  `ChatInterface`. A required field makes a new agent's greeting a
-   *  compile error rather than someone else's wrong sentence. */
-  welcome: string
+export interface AgentConfig extends Omit<AgentDefinition, 'createPatterns'> {
   /** Iconify class for UI display (e.g. `i-material-symbols-robot-2-outline`).
    *  Must appear as a literal in a file matched by uno.config.ts
    *  `content.filesystem`, or UnoCSS emits no CSS for it and the icon
    *  renders as an empty span. Render with `class=` + inline style sizing —
-   *  never attributify. */
+   *  never attributify.
+   *
+   *  App-side ON PURPOSE (#225): the package's `AgentDefinition` carries no
+   *  presentation — `icon` is this app's UnoCSS extraction semantics,
+   *  `accent` is this app's palette union — so the literals live HERE, at the
+   *  overlay, and this file carries the `@unocss-include` marker the moved
+   *  agent files used to carry. */
   icon: string
   /** Accent family for the icon glyph (see lib/agent-palette.ts). Colour
    *  groups agents by *kind* — the glyph itself distinguishes agents inside
    *  a family, so pick the family, not a unique hue. Sent to the client as
    *  the token, resolved to hex there. */
   accent: AgentAccent
-  /** Server namespaces this agent uses */
-  servers: string[]
-  /** Factory function that creates the pattern chain. Receives the
-   *  sessionId so per-conversation context can be loaded inside the pattern
-   *  closures. Most agents accept and ignore the parameter. */
+  /** Factory function that creates the pattern chain — the package's
+   *  `(sessionId, deps)` signature with the deps SUPPLIED by this composition
+   *  root, so every caller of the registered config keeps the one-argument
+   *  shape it has always had. Receives the sessionId so per-conversation
+   *  context can be loaded inside the pattern closures. Most agents accept
+   *  and ignore the parameter. */
   createPatterns: (sessionId: string) => Promise<ConfiguredPattern<SessionData>[]>
 }
 
@@ -239,18 +234,40 @@ export async function agentUsesSyncWorkspace(agentId: string, sessionId: string)
 // Default Agent Registration
 // ============================================================================
 
-// Import and register all example agents
-import { searchAgent } from './agents/search.server'
-import { generalAgent } from './agents/general.server'
-import { sandboxSessionAgent } from './agents/sandbox-session.server'
-import { flavouredSandboxAgent } from './agents/flavoured-sandbox.server'
-import { retrieverAgent } from './agents/retriever-agent.server'
-import { microsoft365Agent } from './agents/microsoft-365.server'
+/**
+ * The overlay: a moved `AgentDefinition` becomes an `AgentConfig` here — the
+ * icon and accent are supplied BY THIS APP (they are presentation, and stay
+ * app-side per the #225 composition-root decision), and the package's
+ * `(sessionId, deps)` factory is wrapped into the one-argument shape every
+ * app-side caller has always used, closing over THE composition root's
+ * `agentDeps()` bag (session.server.ts — the only bag; see its header).
+ *
+ * @unocss-include — the icon literals below are Iconify classes; the
+ * `content.filesystem` glob covers this file, so UnoCSS extracts them. The
+ * marker is load-bearing (see the uno.config comment).
+ */
+import { searchAgent } from '@hames/agents/agents/search.server'
+import { generalAgent } from '@hames/agents/agents/general.server'
+import { sandboxSessionAgent } from '@hames/agents/agents/sandbox-session.server'
+import { flavouredSandboxAgent } from '@hames/agents/agents/flavoured-sandbox.server'
+import { retrieverAgent } from '@hames/agents/agents/retriever-agent.server'
+import { microsoft365Agent } from '@hames/agents/agents/microsoft-365.server'
+import { agentDeps } from './session.server'
 
-// Register all agents
-registerAgent(searchAgent)
-registerAgent(generalAgent)
-registerAgent(sandboxSessionAgent)
-registerAgent(flavouredSandboxAgent)
-registerAgent(retrieverAgent)
-registerAgent(microsoft365Agent)
+/** Wrap a package definition with this app's presentation + deps supply. */
+function overlay(def: AgentDefinition, icon: string, accent: AgentAccent): AgentConfig {
+  return {
+    ...def,
+    icon,
+    accent,
+    createPatterns: (sessionId) => def.createPatterns(sessionId, agentDeps()),
+  }
+}
+
+// Register all agents — one overlay site per agent, beside the palette.
+registerAgent(overlay(searchAgent, 'i-material-symbols-search', 'indigo'))
+registerAgent(overlay(generalAgent, 'i-material-symbols-robot-2-outline', 'indigo'))
+registerAgent(overlay(sandboxSessionAgent, 'i-material-symbols-castle-outline', 'orange'))
+registerAgent(overlay(flavouredSandboxAgent, 'i-material-symbols-stack-star-outline', 'orange'))
+registerAgent(overlay(retrieverAgent, 'i-material-symbols-document-search-outline', 'violet'))
+registerAgent(overlay(microsoft365Agent, 'i-material-symbols-window-sharp', 'blue'))

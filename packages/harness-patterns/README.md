@@ -48,28 +48,71 @@ which is what keeps the primitives portable.
 ## The anatomy of a harness
 
 Patterns are values, so composing one is ordinary TypeScript — classify, dispatch
-to a guarded loop, synthesize:
+to a guarded loop, synthesize. The one thing you bring is the controller callable
+(the LLM seam — adapter factories live in the harness-baml companion module;
+core ships no LLM defaults by design), so this example scripts one to keep the
+composition the star:
 
 ```typescript
-import { createLoopControllerAdapter } from '../harness-baml' // the BAML companion (Lane A6)
+import {
+  Tools,
+  simpleLoop,
+  router,
+  routes,
+  withInjectionGuard,
+  compactExecution,
+  harness,
+} from "@hames/harness-patterns";
+import type {
+  ConfiguredPattern,
+  ControllerFn,
+  RouterData,
+  SimpleLoopData,
+  CompactExecutionData,
+} from "@hames/harness-patterns";
+import type { HarnessData } from "@hames/harness-patterns/harness.server";
 
-const tools = await Tools()
+// One data type across the composition — extends the pieces it rides and
+// carries an index signature (what `harness()`'s generic requires):
+interface AgentData
+  extends HarnessData, RouterData, SimpleLoopData, CompactExecutionData {
+  [key: string]: unknown;
+}
 
-const search = simpleLoop(createLoopControllerAdapter(), tools.web ?? [], {
-  patternId: 'web-search',
-})
+// Yours to bring — the adapter factories in the harness-baml companion wrap
+// BAML functions into this shape. A scripted one keeps the example honest:
+const controller: ControllerFn = async (input) => ({
+  action: { reasoning: "", tool_name: "", tool_args: "", is_final: true },
+});
 
-const agent = harness(
-  router({ web_search: 'Web lookups and information retrieval' }),
-  routes({ web_search: withInjectionGuard({ namespaces: ['web'] })(search) }),
-  compactExecution({ mode: 'thread', patternId: 'response-synth' }),
-)
+const tools = await Tools({
+  namespaces: (name) => (name.startsWith("web_") ? "web" : undefined),
+});
 
-const result = await agent('What shipped in TypeScript 5.7?', 'session-123')
+const search = simpleLoop<AgentData>(controller, tools.web ?? [], {
+  patternId: "web-search",
+});
+
+const patterns: ConfiguredPattern<AgentData>[] = [
+  router<AgentData>({ web_search: "Web lookups and information retrieval" }),
+  routes<AgentData>({
+    web_search: withInjectionGuard({ namespaces: ["web"], catalog: tools.all })(
+      search,
+    ),
+  }),
+  compactExecution<AgentData>({ mode: "thread", patternId: "response-synth" }),
+];
+const agent = harness(...patterns);
+
+const result = await agent("What shipped in TypeScript 5.7?", "session-123");
 ```
 
 Nothing in that chain hands state to the next step by hand: each pattern finds
 what it needs in the log, and leaves its own events there for whatever runs next.
+
+**[The developer guide →](./GUIDE.md)** — the composition model, writing your
+own pattern, tool transports, the error surface, and how to consume the
+package, in buildable prose with every snippet typecheck-pinned.
 
 ## The pieces
 
@@ -90,15 +133,15 @@ configuration and per-pattern semantics that belong there rather than here.
 
 ## Status and licence
 
-This directory — and only this directory — is [MIT](./LICENSE) (Copyright (c) 2026
-Michael Accetto). It is the `hames` library, and it is intended to be extracted as
-a standalone npm package once the core API has been validated across enough use
-cases.
+This package — and only this package — is [MIT](./LICENSE) (Copyright (c) 2026
+Michael Accetto). It is the `hames` library: a pnpm workspace package today
+(consumed via `workspace:*`, not yet published to npm — see the guide's
+"Consuming the package" for exactly where that stands).
 
-Until then it lives inside the
+It lives inside the
 [hames playground](https://github.com/mknw/hames-playground#readme), which is both
-its consumer and its proving ground: the agents under `harness-client/agents/` are
-what put these primitives under load. The playground around this directory is
+its consumer and its proving ground: the ready-made agents are what put these
+primitives under load. The playground around this package is
 licensed separately, under PolyForm Noncommercial 1.0.0.
 
 The library boundary rules that keep extraction cheap — and everything else about

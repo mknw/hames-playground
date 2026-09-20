@@ -20,7 +20,8 @@
     "patterns",
     "assets",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "GUIDE.md"
   ],
   "publishConfig": {
     "access": "public"

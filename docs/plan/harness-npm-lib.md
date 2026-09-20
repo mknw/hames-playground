@@ -177,6 +177,15 @@ holding once each box is a separately versioned package.
 
 ### 1.3 What stays in `app/`
 
+> **Superseded in part (2026-09):** the owner's topology ruling for the #225
+> extraction cycle — `patterns ← connectors ← agents` — supersedes the
+> `neo4j/`, `app-tools/` and `graph/` entries in the list below: those move
+> into `@hames/connectors` (PR-3) rather than staying in `app/`. The design of
+> record is the comment on #225:
+> <https://github.com/mknw/hames-playground/issues/225#issuecomment-5749052479>.
+> The doc's invariants (one-directional deps, no back-edges) are unchanged and
+> are what that design implements; only those three line items are overtaken.
+
 Everything that is inherently app-specific: `baml_src/` (and the generated
 `baml_client/` — `app/` is still where `baml-generate` runs; `harness-baml`
 ships its own pre-generated copy, see §1.4), `settings.ts` / `settings-store.ts`
@@ -279,8 +288,8 @@ only the doc's signpost for the "later" framing, not a second copy of either.
 
 ```yaml
 packages:
-  - 'app'
-  - 'packages/*'
+  - "app"
+  - "packages/*"
 ```
 
 ### 2.2 `@hames/harness-patterns`'s `package.json`

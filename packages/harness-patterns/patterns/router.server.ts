@@ -11,7 +11,6 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { routeMessageOp } from '../../../app/src/lib/harness-baml/routing.server'
 import { LLMCallError } from '../types'
 import type {
   PatternScope,
@@ -80,7 +79,7 @@ export interface RouterData {
  */
 export function router<T extends RouterData>(
   routeDescriptions: Routes,
-  config?: RouterConfig,
+  config: RouterConfig,
 ): ConfiguredPattern<T> {
   // Default viewConfig: cross-turn visibility of the last 5 turns, messages only.
   // Caller can override entirely by passing their own viewConfig in config.
@@ -95,11 +94,10 @@ export function router<T extends RouterData>(
     ...config, // caller's config overrides defaults (including viewConfig)
   })
   const directRoute = config?.directResponseRoute ?? DIRECT_RESPONSE_ROUTE
-  // Lane A6 seam: the routing implementation is an override — its default is
-  // `routeMessageOp`, which moved whole to `harness-baml` (the same shape the
-  // design note prescribes for `ReferenceSelector`; raw-llm-visibility pins
-  // the pattern end-to-end through this default, so it stays the default).
-  const routeFn: RouteFn = config?.route ?? routeMessageOp
+  // Lane A6 seam, now REQUIRED: the routing implementation is supplied at the
+  // composition root (`bamlPatterns().router` in the app) — core hosts no
+  // default, so no import reaches a companion (#225 L3).
+  const routeFn: RouteFn = config.route
 
   /** Drop a route + intent carried over from an earlier turn. Every exit path
    *  that does NOT produce a fresh routing decision goes through this:

@@ -77,6 +77,9 @@ vi.mock('@hames/harness-patterns', () => ({
 // the factory args so the tests below can inspect them.
 vi.mock('../../../../lib/harness-baml', () => ({
   createLoopControllerAdapter: (...args: unknown[]) => ({ adapterArgs: args }),
+  // The compactExecution's synthesize is REQUIRED config now — the agent wires
+  // it from `bamlPatterns()` at the composition root; a stub suffices here.
+  bamlPatterns: () => ({ synthesize: async () => ({ value: '' }) }),
 }))
 
 import {

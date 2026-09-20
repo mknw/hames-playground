@@ -21,6 +21,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockCallTool, mockListTools, fixtures } from '../../mocks/mcp'
+import { defaultSynthesize } from '../../../lib/harness-baml/defaults.server'
 import type { SimpleLoopData } from '@hames/harness-patterns/patterns/simpleLoop.server'
 import type { CompactExecutionData } from '@hames/harness-patterns/types'
 
@@ -214,7 +215,13 @@ function makeLoop(h: Harness, returnStyle?: 'summary' | 'answer') {
  *  registered simpleLoop agent has (microsoft-365 is exactly this). */
 async function runAgent(returnStyle?: 'summary' | 'answer') {
   const h = await loadHarness()
-  const synth = h.compactExecution<TestData>({ mode: 'thread', patternId: 'response-synth' })
+  // defaultSynthesize arrives as explicit REQUIRED config (BAML-companion seam
+  // lane) — the pinned default synthesis path is unchanged.
+  const synth = h.compactExecution<TestData>({
+    mode: 'thread',
+    patternId: 'response-synth',
+    synthesize: defaultSynthesize,
+  })
   return h.harness(makeLoop(h, returnStyle), synth)('list the people')
 }
 

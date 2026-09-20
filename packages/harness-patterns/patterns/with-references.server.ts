@@ -26,7 +26,6 @@ import type {
   AssistantMessageEventData,
 } from '../types'
 import type { PriorResult } from '../types'
-import { defaultSelector } from '../../../app/src/lib/harness-baml/defaults.server'
 import { LLMCallError } from '../types'
 
 assertServerOnImport()
@@ -184,11 +183,14 @@ function toPriorResults(refs: ReferenceCandidate[]): PriorResult[] {
  */
 export function withReferences<T>(
   wrappedPattern: ConfiguredPattern<T>,
-  config?: WithReferencesConfig,
+  config: WithReferencesConfig,
 ): ConfiguredPattern<T> {
   const resolved = resolveConfig('withReferences', config)
   const maxRefs = config?.maxRefs ?? DEFAULT_MAX_REFS
-  const selector = config?.selector ?? defaultSelector
+  // REQUIRED config: the composition root supplies the BAML-backed selector
+  // (`bamlPatterns().selector` in the app) or its own deterministic policy —
+  // core hosts no default import (#225 L3).
+  const selector = config.selector
 
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
     try {

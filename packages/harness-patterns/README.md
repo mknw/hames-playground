@@ -66,8 +66,10 @@ import {
 import type {
   ConfiguredPattern,
   ControllerFn,
+  RouteFn,
   RouterData,
   SimpleLoopData,
+  SynthesisFn,
   CompactExecutionData,
 } from "@hames/harness-patterns";
 import type { HarnessData } from "@hames/harness-patterns/harness.server";
@@ -80,9 +82,21 @@ interface AgentData
 }
 
 // Yours to bring — the adapter factories in the harness-baml companion wrap
-// BAML functions into this shape. A scripted one keeps the example honest:
+// BAML functions into these shapes (core ships no LLM defaults by design, so
+// every seam is REQUIRED config). Scripted ones keep the example honest:
 const controller: ControllerFn = async (input) => ({
   action: { reasoning: "", tool_name: "", tool_args: "", is_final: true },
+});
+
+const route: RouteFn = async (message, history, routes) => ({
+  intent: routes?.[0]?.name ?? "user",
+  tool_call_needed: false,
+  tool_name: null,
+  response_text: message,
+});
+
+const synthesize: SynthesisFn = async (input) => ({
+  value: input.userMessage,
 });
 
 const tools = await Tools({
@@ -94,13 +108,20 @@ const search = simpleLoop<AgentData>(controller, tools.web ?? [], {
 });
 
 const patterns: ConfiguredPattern<AgentData>[] = [
-  router<AgentData>({ web_search: "Web lookups and information retrieval" }),
+  router<AgentData>(
+    { web_search: "Web lookups and information retrieval" },
+    { route },
+  ),
   routes<AgentData>({
     web_search: withInjectionGuard({ namespaces: ["web"], catalog: tools.all })(
       search,
     ),
   }),
-  compactExecution<AgentData>({ mode: "thread", patternId: "response-synth" }),
+  compactExecution<AgentData>({
+    mode: "thread",
+    patternId: "response-synth",
+    synthesize,
+  }),
 ];
 const agent = harness(...patterns);
 

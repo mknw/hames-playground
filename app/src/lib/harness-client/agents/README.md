@@ -93,7 +93,11 @@ return [
     // round carries up to 4 calls. Raised 8 → 12 on a captured run (#269).
     maxTurns: 12,
   }),
-  compactExecution<SessionData>({ mode: 'thread', patternId: 'response-synth' }),
+  compactExecution<SessionData>({
+    mode: 'thread',
+    patternId: 'response-synth',
+    synthesize: baml.synthesize,
+  }),
 ]
 ```
 
@@ -187,7 +191,8 @@ const sessionTracker: ConfiguredPattern<SessionData> = {
 }
 
 // Router classifies intent; routes dispatches to domain patterns (neo4j, web)
-const routerPattern = router(routeDescriptions) // default route fn: harness-baml's routeMessageOp
+// The route fn is REQUIRED config — baml.router is harness-baml's routeMessageOp:
+const routerPattern = router(routeDescriptions, { route: baml.router })
 const routesPattern = routes(domainPatterns)
 
 // Compose: track → route → dispatch → memorize → synthesize

@@ -21,10 +21,10 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServer: vi.fn(),
 }))
 
+// The routing implementation is REQUIRED config now (BAML-companion seam
+// lane): the router constructions below pass this stub explicitly, where the
+// mock of `routing.server` used to intercept the pattern's deleted import.
 const mockRouteMessageOp = vi.fn()
-vi.mock('../../../../lib/harness-baml/routing.server', () => ({
-  routeMessageOp: (...args: unknown[]) => mockRouteMessageOp(...args),
-}))
 
 vi.mock('../../../../../baml_client', () => ({
   b: {
@@ -119,7 +119,10 @@ describe('router: cross-turn route/intent pollution (SA-H2)', () => {
       assistantMsg('Here they are', 2),
       userMsg('and now?', 3),
     ]
-    const pattern = router({ neo4j: 'Database queries', web: 'Web search' })
+    const pattern = router(
+      { neo4j: 'Database queries', web: 'Web search' },
+      { route: mockRouteMessageOp },
+    )
     const scope = createScope('router', priorData)
     const view = createEventView(ctxOf(events), pattern.config.viewConfig, 'router')
     return { result: await pattern.fn(scope, view), routes: (await load()).routes }

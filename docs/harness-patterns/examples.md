@@ -28,12 +28,12 @@ All agents are registered in `registry.server.ts` and available via `getAgentLis
 Router-based agent with Neo4j and Web Search routes. Each route is wrapped with `withReferences` so the inner pattern receives an LLM-curated set of relevant prior `tool_result` events from any earlier turn (subsumes #26 / #29 — see [`with-references.md`](with-references.md)).
 
 ```typescript
-router({ neo4j: '...', web_search: '...' })
+router({ neo4j: '...', web_search: '...' }, { route: baml.router })
 → routes({
-    neo4j:      withReferences(neo4jPattern, { scope: 'global' }),
-    web_search: withReferences(webPattern,   { scope: 'global' })
+    neo4j:      withReferences(neo4jPattern, { scope: 'global', selector: baml.selector }),
+    web_search: withReferences(webPattern,   { scope: 'global', selector: baml.selector })
   })
-→ compactExecution({ mode: 'thread' })
+→ compactExecution({ mode: 'thread', synthesize: baml.synthesize })
 ```
 
 - Neo4j queries (`read_neo4j_cypher`, `write_neo4j_cypher`, `get_neo4j_schema`)

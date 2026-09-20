@@ -30,18 +30,23 @@ skeleton developer guide (`docs/plan/hames-guide.md`), and updates
   the sandbox cycle inverted) are already on `main`. Core is BAML-free and
   holds zero role vocabulary; what §1.4 called "the hard part" is largely
   behind the tree now.
-- **The Step 1a interim re-points are the one deliberate debt**: 4 import
-  statements across 4 package files still reach `app/src/lib` (the harness-baml
-  defaults and companions — `router.server.ts` `routeMessageOp`,
-  `actorCritic.server.ts` `CriticFnWithLLMData`, `compactExecution.server.ts`
-  `defaultSynthesize`, `with-references.server.ts` `defaultSelector`) and
-  resolve only via the workspace symlink. The settings seam is GONE: Lane C
-  half-landed 2026-09-20 (PR #342) — core owns `HarnessRuntimeConfig`, its
-  defaults, its ALS scope and `resolveTurnBudget`, and all seven
-  settings-context/settings re-points are removed; what remains for Lane C is
-  exactly the four BAML-companion imports above. Step 3 (harness-baml
-  extraction) removes those; until then the pack smoke (§3.3/§4.3) deliberately
-  scopes its runtime probe to the exports that evaluate without them.
+- **The Step 1a interim re-points are GONE (2026-09-20, the BAML-companion
+  seam lane)**: the last four imports reaching `app/src/lib` are removed —
+  `router.server.ts`'s `routeMessageOp`, `actorCritic.server.ts`'s
+  `CriticFnWithLLMData` (the type moved INTO core `types.ts`, app re-exports
+  it), `compactExecution.server.ts`'s `defaultSynthesize` and
+  `with-references.server.ts`'s `defaultSelector`. Every injected
+  implementation is now REQUIRED config supplied at the composition root via
+  `bamlPatterns()` (which gained `synthesize` and `selector` beside
+  `router`); core declares only the types. There are **zero `app/src` imports
+  under `packages/harness-patterns/`**, pinned by
+  `zero-app-imports.test.ts` (verified by mutation: a temporary relative
+  import into `app/` turns it red). With the edges gone, the pack smoke's
+  module-eval probe (§3.3/§4.3) evaluates all 22 entries through the
+  installed tarball, and the CI `packages` job is **REQUIRED** —
+  `continue-on-error` and the `::warning::` annotation are removed. What
+  remains for Step 3 (harness-baml extraction) is packaging the companion
+  itself, not de-coupling core.
 - **Not yet landed**: Step 2 (first publish — blocked on the re-points),
   the Lane C BAML-companion half, Lanes D–G, Steps 3–6.
 

@@ -30,9 +30,12 @@ vi.mock('@boundaryml/baml', () => ({
   BamlValidationError: class extends Error {},
 }))
 vi.mock('../../../baml_client', () => ({ b: {} }))
-vi.mock('../../../lib/harness-baml/routing.server', () => ({
-  routeMessageOp: vi.fn(),
-}))
+
+// Construction-only assertions: the REQUIRED injected implementations
+// (`route`, `synthesize` — BAML-companion seam lane) are stubs; the pattern
+// bodies never run here.
+const stubRoute = vi.fn()
+const stubSynthesize = vi.fn(async () => ({ value: '' }))
 
 const settings = { maxToolTurns: 5, maxRetries: 3 }
 
@@ -62,8 +65,8 @@ describe('estimateTurns', () => {
     const { compactExecution } =
       await import('@hames/harness-patterns/patterns/compactExecution.server')
 
-    const r = router({ neo4j: 'db' })
-    const s = compactExecution({ mode: 'thread' })
+    const r = router({ neo4j: 'db' }, { route: stubRoute })
+    const s = compactExecution({ mode: 'thread', synthesize: stubSynthesize })
     expect(r.estimateTurns?.(settings)).toBe(1)
     expect(s.estimateTurns?.(settings)).toBe(1)
   })
@@ -117,9 +120,9 @@ describe('estimateTurns', () => {
     const loop = asAny(simpleLoop(stubController(), [], { patternId: 'loop', maxTurns: 5 }))
     // Default agent shape: router(1) + routes-with-5-turn-loop(5) + synth(1) = 7
     const agent = chain(
-      asAny(router({ x: '' })),
+      asAny(router({ x: '' }, { route: stubRoute })),
       asAny(routes({ x: loop })),
-      asAny(compactExecution({ mode: 'thread' })),
+      asAny(compactExecution({ mode: 'thread', synthesize: stubSynthesize })),
     )
     expect(agent.estimateTurns?.(settings)).toBe(7)
   })

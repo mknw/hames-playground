@@ -6,15 +6,15 @@ compliance artefact exists yet — this document is the input to producing them.
 **What this is and isn't.** Everything under "Where the data is" and "Findings"
 is fact, established by reading the code and querying the live database, and can
 be re-verified. Everything under "Legal reading" is a non-lawyer's mapping of
-those facts onto the obligations they plausibly engage, and needs DTSC's counsel
-or DPO to confirm. The value here is that the factual groundwork is the first
+those facts onto the obligations they plausibly engage, and needs the company's
+counsel or DPO to confirm. The value here is that the factual groundwork is the first
 thing either of them will ask for.
 
 ---
 
 ## Scope and roles
 
-DTSC is the **controller**; the data subjects are DTSC employees using the
+The company is the **controller**; the data subjects are its employees using the
 assistant. Anthropic is the **processor** (it is now the only LLM provider —
 the Groq / OpenRouter / OpenAI chains and their `USE_MIXED_CHAINS` switch were
 removed 2026-08-24; see finding 1). The app is internal-only and reached through Entra
@@ -101,7 +101,7 @@ is passed to them.
 Each is a processor under **Art. 28** (needs a data processing agreement) and,
 being US-based, a **Chapter V transfer** (needs EU–US Data Privacy Framework
 certification or Standard Contractual Clauses, plus a transfer impact
-assessment). Which DPAs DTSC holds, and each vendor's current DPF status, must
+assessment). Which DPAs the company holds, and each vendor's current DPF status, must
 be checked — this cannot be determined from the codebase.
 
 Two things follow that _are_ in our control:
@@ -288,15 +288,15 @@ explicit out-of-scope commitment now, while it is free, is worthwhile.
 Ordered by a mix of risk and cost. Items 1–3 and 5 are independent of the legal
 questions and can start immediately; only item 4 blocks on someone else.
 
-| #   | Action                                                                                                                                                                                                                                                       | Depends on               |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------ |
-| 1   | **ROPA + employee privacy notice.** One page each. Draftable from the data map above; the parts needing DTSC input are legal basis and retention period.                                                                                                     | DTSC input on two fields |
-| 2   | **Decide and enforce a retention period for `conversations`.** A dated sweep is a small amount of code; the number is a business decision. Resolves the asymmetry with the stash's 7 days.                                                                   | retention decision       |
-| 3   | ~~**Arm the session sweep**~~ (done — `startSessionSweepTimer`) and ~~**encrypt Graph-derived `tool_result` content**~~ (done — the whole `context` blob is encrypted, following the `user_tokens` pattern). Remaining: Redis and Neo4j are still plaintext. | —                        |
-| 4   | **Confirm DPAs and the transfer mechanism** for Anthropic — now the only LLM processor. Gates production rollout more than any code here.                                                                                                                    | counsel                  |
-| 5   | **Postgres backups, with the encryption keys escrowed separately.** Now triply justified: Art. 32(1)(c), ops, and the fact that a dump without `DATA_ENCRYPTION_KEY` is unrecoverable ciphertext.                                                            | —                        |
-| 6   | **Before rollout:** works council information, and the CAO 81 purpose statement.                                                                                                                                                                             | HR / works council       |
-| 7   | Drop the dead `auth_sessions.token_cache` column.                                                                                                                                                                                                            | —                        |
+| #   | Action                                                                                                                                                                                                                                                       | Depends on                  |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------- |
+| 1   | **ROPA + employee privacy notice.** One page each. Draftable from the data map above; the parts needing company input are legal basis and retention period.                                                                                                  | company input on two fields |
+| 2   | **Decide and enforce a retention period for `conversations`.** A dated sweep is a small amount of code; the number is a business decision. Resolves the asymmetry with the stash's 7 days.                                                                   | retention decision          |
+| 3   | ~~**Arm the session sweep**~~ (done — `startSessionSweepTimer`) and ~~**encrypt Graph-derived `tool_result` content**~~ (done — the whole `context` blob is encrypted, following the `user_tokens` pattern). Remaining: Redis and Neo4j are still plaintext. | —                           |
+| 4   | **Confirm DPAs and the transfer mechanism** for Anthropic — now the only LLM processor. Gates production rollout more than any code here.                                                                                                                    | counsel                     |
+| 5   | **Postgres backups, with the encryption keys escrowed separately.** Now triply justified: Art. 32(1)(c), ops, and the fact that a dump without `DATA_ENCRYPTION_KEY` is unrecoverable ciphertext.                                                            | —                           |
+| 6   | **Before rollout:** works council information, and the CAO 81 purpose statement.                                                                                                                                                                             | HR / works council          |
+| 7   | Drop the dead `auth_sessions.token_cache` column.                                                                                                                                                                                                            | —                           |
 
 ## Related
 

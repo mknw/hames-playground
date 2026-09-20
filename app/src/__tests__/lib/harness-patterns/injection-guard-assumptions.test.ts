@@ -441,7 +441,7 @@ describe('exfil-data-url: which real URLs it defangs, and which slip past', () =
     // --- does NOT fire, including on shapes that genuinely could carry data
     [
       'SharePoint/OneDrive webUrl — percent-encoding breaks every run',
-      'https://dtsc-my.sharepoint.com/personal/jan_vandamme_dtsc_be/Documents/Offertes/Offerte%20Van%20Damme%202026.docx',
+      'https://contoso-my.sharepoint.com/personal/jan_vandamme_contoso_com/Documents/Offertes/Offerte%20Van%20Damme%202026.docx',
       [],
     ],
     [

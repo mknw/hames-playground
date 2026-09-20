@@ -64,7 +64,7 @@ function shared(title: string, by: string, refType = 'microsoft.graph.driveItem'
   return {
     resourceVisualization: { title },
     lastShared: {
-      sharedBy: { displayName: by, address: `${by.split(' ')[0].toLowerCase()}@dtsc.be` },
+      sharedBy: { displayName: by, address: `${by.split(' ')[0].toLowerCase()}@contoso.com` },
       sharedDateTime: '2026-07-30T08:00:00Z',
       sharingType: how,
     },
@@ -96,7 +96,7 @@ function owaAttachment(
   return {
     resourceVisualization: { title: attachmentName.replace(/\.[^.]+$/, '') },
     lastShared: {
-      sharedBy: { displayName: by, address: `${by.split(' ')[0].toLowerCase()}@dtsc.be` },
+      sharedBy: { displayName: by, address: `${by.split(' ')[0].toLowerCase()}@contoso.com` },
       sharedDateTime: sharedAt,
       sharingType: 'Attachment',
     },
@@ -118,11 +118,11 @@ function teamsPaste(
   sharedAt = '2026-08-03T12:01:58Z',
   folder = 'Fichiers de conversation Microsoft Teams',
 ) {
-  const base = 'https://dtsc-my.sharepoint.com/personal/dbudin_dtsc_be/Documents'
+  const base = 'https://contoso-my.sharepoint.com/personal/dverlinden_contoso_com/Documents'
   return {
     resourceVisualization: { title: name },
     lastShared: {
-      sharedBy: { displayName: by, address: `${by.split(' ')[0].toLowerCase()}@dtsc.be` },
+      sharedBy: { displayName: by, address: `${by.split(' ')[0].toLowerCase()}@contoso.com` },
       sharedDateTime: sharedAt,
       sharingType: 'Attachment',
     },
@@ -140,10 +140,10 @@ beforeEach(() => {
   getRequestSessionId.mockReturnValue('sess-1')
   graphFetch.mockResolvedValue({
     value: [
-      shared('plan.docx', 'Quentin Delière'),
-      shared('invoice.pdf', 'Thibault Draye', 'microsoft.graph.fileAttachment', 'Attachment'),
-      shared('mystery', 'Denis Budin', 'microsoft.graph.entity', 'Direct'),
-      shared('dpa.docx', 'Thibault Draye'),
+      shared('plan.docx', 'Quentin Delaunay'),
+      shared('invoice.pdf', 'Thibault Desmet', 'microsoft.graph.fileAttachment', 'Attachment'),
+      shared('mystery', 'Denis Verlinden', 'microsoft.graph.entity', 'Direct'),
+      shared('dpa.docx', 'Thibault Desmet'),
     ],
   })
 })
@@ -175,10 +175,10 @@ describe('advertisement', () => {
 
 describe('shapeSharedInsight', () => {
   it('a driveItem row is kind=file with the handoff pair', () => {
-    expect(shapeSharedInsight(shared('plan.docx', 'Quentin Delière'))).toEqual({
+    expect(shapeSharedInsight(shared('plan.docx', 'Quentin Delaunay'))).toEqual({
       name: 'plan.docx',
       kind: 'file',
-      shared_by: 'Quentin Delière',
+      shared_by: 'Quentin Delaunay',
       shared_when: '2026-07-30T08:00:00Z',
       how: 'Link',
       via: 'link',
@@ -190,7 +190,7 @@ describe('shapeSharedInsight', () => {
 
   it('an email attachment is kind=attachment with null ids — it lives in a mailbox', () => {
     const row = shapeSharedInsight(
-      shared('invoice.pdf', 'Thibault Draye', 'microsoft.graph.fileAttachment', 'Attachment'),
+      shared('invoice.pdf', 'Thibault Desmet', 'microsoft.graph.fileAttachment', 'Attachment'),
     )!
     expect(row.kind).toBe('attachment')
     expect(row.drive_id).toBeNull()
@@ -205,7 +205,7 @@ describe('shapeSharedInsight', () => {
 
   it('an attachment row is rewritten to the email and regains its extension', () => {
     const row = shapeSharedInsight(
-      owaAttachment('AAMkADkx-MSG-1=', '20260802-07346747.pdf', 'Chargemap Business'),
+      owaAttachment('AAMkADkx-MSG-1=', '20260802-07346747.pdf', 'Evergrid Business'),
     )!
     // The insights title was "20260802-07346747" — extensionless and unopenable.
     expect(row.name).toBe('20260802-07346747.pdf')
@@ -218,14 +218,14 @@ describe('shapeSharedInsight', () => {
   it('an unparseable attachment URL changes nothing — degrades to the old behaviour', () => {
     // The existing fixture's webUrl is a plain SharePoint path, not an OWA link.
     const row = shapeSharedInsight(
-      shared('invoice.pdf', 'Thibault Draye', 'microsoft.graph.fileAttachment', 'Attachment'),
+      shared('invoice.pdf', 'Thibault Desmet', 'microsoft.graph.fileAttachment', 'Attachment'),
     )!
     expect(row.name).toBe('invoice.pdf')
     expect(row.webUrl).toBe('https://contoso.sharepoint.com/x/invoice.pdf')
   })
 
   it('a Teams chat paste is via=teams even though Graph calls it an Attachment', () => {
-    const row = shapeSharedInsight(teamsPaste("Capture d'écran.png", 'David Budin'))!
+    const row = shapeSharedInsight(teamsPaste("Capture d'écran.png", 'David Verlinden'))!
     expect(row.how).toBe('Attachment')
     expect(row.via).toBe('teams')
   })
@@ -337,13 +337,13 @@ describe('graph_files_shared', () => {
     // nothing should — but the description must not promise they are absent.
     graphFetch.mockResolvedValue({
       value: [
-        shared('someone-elses.docx', 'Quentin Delière'),
-        shared('my-screen-recording.mov', 'Michael Accetto'),
+        shared('someone-elses.docx', 'Quentin Delaunay'),
+        shared('my-screen-recording.mov', 'Michael Verstraete'),
       ],
     })
     const items = ((await runAppTool('graph_files_shared', {})).data as GraphSharedFilesResult)
       .items
-    expect(items.map((i) => i.shared_by)).toEqual(['Quentin Delière', 'Michael Accetto'])
+    expect(items.map((i) => i.shared_by)).toEqual(['Quentin Delaunay', 'Michael Verstraete'])
   })
 
   it('shared_by is the actor, so it can be pointed at the signed-in person', async () => {
@@ -351,12 +351,12 @@ describe('graph_files_shared', () => {
     // then filter on it. Partial coverage — not a substitute for an outbound feed.
     graphFetch.mockResolvedValue({
       value: [
-        shared('someone-elses.docx', 'Quentin Delière'),
-        shared('my-screen-recording.mov', 'Michael Accetto'),
+        shared('someone-elses.docx', 'Quentin Delaunay'),
+        shared('my-screen-recording.mov', 'Michael Verstraete'),
       ],
     })
     const items = (
-      (await runAppTool('graph_files_shared', { shared_by: 'Michael Accetto' }))
+      (await runAppTool('graph_files_shared', { shared_by: 'Michael Verstraete' }))
         .data as GraphSharedFilesResult
     ).items
     expect(items.map((i) => i.name)).toEqual(['my-screen-recording.mov'])
@@ -405,9 +405,9 @@ describe('via filter', () => {
   beforeEach(() => {
     graphFetch.mockResolvedValue({
       value: [
-        shared('plan.docx', 'Quentin Delière'),
-        teamsPaste('screenshot.png', 'David Budin'),
-        owaAttachment('MSG-1', 'invoice.pdf', 'Chargemap Business'),
+        shared('plan.docx', 'Quentin Delaunay'),
+        teamsPaste('screenshot.png', 'David Verlinden'),
+        owaAttachment('MSG-1', 'invoice.pdf', 'Evergrid Business'),
       ],
     })
   })
@@ -458,9 +458,9 @@ describe('newest first, guaranteed rather than inherited', () => {
     // purpose: before the local sort this test would return Graph's order.
     graphFetch.mockResolvedValue({
       value: [
-        owaAttachment('MSG-OLD', 'old.pdf', 'Denis Budin', '2026-07-29T15:20:25Z'),
-        teamsPaste('newest.png', 'David Budin', '2026-08-03T12:01:58Z'),
-        shared('middle.docx', 'Quentin Delière'), // 2026-07-30T08:00:00Z
+        owaAttachment('MSG-OLD', 'old.pdf', 'Denis Verlinden', '2026-07-29T15:20:25Z'),
+        teamsPaste('newest.png', 'David Verlinden', '2026-08-03T12:01:58Z'),
+        shared('middle.docx', 'Quentin Delaunay'), // 2026-07-30T08:00:00Z
       ],
     })
     const res = await runAppTool('graph_files_shared', {})
@@ -478,9 +478,9 @@ describe('newest first, guaranteed rather than inherited', () => {
     // answered "nothing was shared today".
     graphFetch.mockResolvedValue({
       value: [
-        shared('old-share.docx', 'Quentin Delière'), // 2026-07-30
-        teamsPaste('today-a.png', 'David Budin', '2026-08-03T12:01:58Z'),
-        teamsPaste('today-b.png', 'David Budin', '2026-08-03T11:16:58Z'),
+        shared('old-share.docx', 'Quentin Delaunay'), // 2026-07-30
+        teamsPaste('today-a.png', 'David Verlinden', '2026-08-03T12:01:58Z'),
+        teamsPaste('today-b.png', 'David Verlinden', '2026-08-03T11:16:58Z'),
       ],
     })
     const res = await runAppTool('graph_files_shared', { limit: 2 })
@@ -491,10 +491,10 @@ describe('newest first, guaranteed rather than inherited', () => {
   })
 
   it('a row with an unparseable date sorts last instead of jumping to the front', async () => {
-    const undated = shared('undated.docx', 'Quentin Delière')
+    const undated = shared('undated.docx', 'Quentin Delaunay')
     undated.lastShared.sharedDateTime = 'not a date'
     graphFetch.mockResolvedValue({
-      value: [undated, teamsPaste('dated.png', 'David Budin', '2026-08-03T12:01:58Z')],
+      value: [undated, teamsPaste('dated.png', 'David Verlinden', '2026-08-03T12:01:58Z')],
     })
     const res = await runAppTool('graph_files_shared', {})
     expect((res.data as GraphSharedFilesResult).items.map((i) => i.name)).toEqual([
@@ -511,10 +511,10 @@ describe('attachments from one email', () => {
     // throw away the useful part — the names.
     graphFetch.mockResolvedValue({
       value: [
-        owaAttachment('MSG-TESLA', 'TCO simulation.pdf', 'Denis Budin'),
-        owaAttachment('MSG-TESLA', 'TCO recap.pdf', 'Denis Budin'),
-        owaAttachment('MSG-TESLA', 'Offre QUO26GQ0D.pdf', 'Denis Budin'),
-        owaAttachment('MSG-TESLA', "Option d'achat.pdf", 'Denis Budin'),
+        owaAttachment('MSG-TESLA', 'TCO simulation.pdf', 'Denis Verlinden'),
+        owaAttachment('MSG-TESLA', 'TCO recap.pdf', 'Denis Verlinden'),
+        owaAttachment('MSG-TESLA', 'Offre QUO26GQ0D.pdf', 'Denis Verlinden'),
+        owaAttachment('MSG-TESLA', "Option d'achat.pdf", 'Denis Verlinden'),
       ],
     })
     const items = ((await runAppTool('graph_files_shared', {})).data as GraphSharedFilesResult)
@@ -529,10 +529,10 @@ describe('attachments from one email', () => {
   it('gives separate messages separate ordinals', async () => {
     graphFetch.mockResolvedValue({
       value: [
-        owaAttachment('MSG-A', 'a1.pdf', 'Chargemap Business'),
-        owaAttachment('MSG-A', 'a2.pdf', 'Chargemap Business'),
-        owaAttachment('MSG-B', 'b1.png', 'Quentin Delière'),
-        owaAttachment('MSG-B', 'b2.png', 'Quentin Delière'),
+        owaAttachment('MSG-A', 'a1.pdf', 'Evergrid Business'),
+        owaAttachment('MSG-A', 'a2.pdf', 'Evergrid Business'),
+        owaAttachment('MSG-B', 'b1.png', 'Quentin Delaunay'),
+        owaAttachment('MSG-B', 'b2.png', 'Quentin Delaunay'),
       ],
     })
     const items = ((await runAppTool('graph_files_shared', {})).data as GraphSharedFilesResult)
@@ -542,7 +542,7 @@ describe('attachments from one email', () => {
 
   it('omits the field entirely for an email that shared one file', async () => {
     graphFetch.mockResolvedValue({
-      value: [owaAttachment('MSG-SOLO', 'solo.pdf', 'Chargemap Business')],
+      value: [owaAttachment('MSG-SOLO', 'solo.pdf', 'Evergrid Business')],
     })
     const items = ((await runAppTool('graph_files_shared', {})).data as GraphSharedFilesResult)
       .items
@@ -553,9 +553,9 @@ describe('attachments from one email', () => {
   it('collapses the same file arriving twice from the same message', async () => {
     graphFetch.mockResolvedValue({
       value: [
-        owaAttachment('MSG-A', 'dupe.pdf', 'Chargemap Business'),
-        owaAttachment('MSG-A', 'dupe.pdf', 'Chargemap Business'),
-        owaAttachment('MSG-A', 'other.pdf', 'Chargemap Business'),
+        owaAttachment('MSG-A', 'dupe.pdf', 'Evergrid Business'),
+        owaAttachment('MSG-A', 'dupe.pdf', 'Evergrid Business'),
+        owaAttachment('MSG-A', 'other.pdf', 'Evergrid Business'),
       ],
     })
     const items = ((await runAppTool('graph_files_shared', {})).data as GraphSharedFilesResult)

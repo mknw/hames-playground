@@ -1,7 +1,8 @@
 # Preview deployment runbook
 
 The procedure the owner executes to put the app in front of 5–15 colleagues on a
-single Azure VM, signed in with Entra and restricted to `*@dtsc.be`.
+single Azure VM, signed in with Entra and restricted to `*@contoso.com` (set
+`VITE_ALLOWED_EMAILS` to the real domain when deploying).
 
 **Relationship to [`deployment/azure-vm.md`](deployment/azure-vm.md):** that
 document is the general single-VM architecture and stays the reference for _why_
@@ -24,13 +25,13 @@ prerequisites.
 
 You need, and this list is the whole list:
 
-| Thing                          | Why                                                                                |
-| ------------------------------ | ---------------------------------------------------------------------------------- |
-| Azure subscription access      | to create the VM and its network security group                                    |
-| Control of a DNS name          | Caddy's certificate is issued against it, and Entra's redirect URI is pinned to it |
-| Entra admin on the DTSC tenant | to add a redirect URI and (if not already done) grant the delegated Graph scopes   |
-| An `ANTHROPIC_API_KEY`         | the only LLM provider key; without it people sign in and then get no answers       |
-| A password manager or vault    | to escrow three secrets **off** the VM — see §7                                    |
+| Thing                             | Why                                                                                |
+| --------------------------------- | ---------------------------------------------------------------------------------- |
+| Azure subscription access         | to create the VM and its network security group                                    |
+| Control of a DNS name             | Caddy's certificate is issued against it, and Entra's redirect URI is pinned to it |
+| Entra admin on the company tenant | to add a redirect URI and (if not already done) grant the delegated Graph scopes   |
+| An `ANTHROPIC_API_KEY`            | the only LLM provider key; without it people sign in and then get no answers       |
+| A password manager or vault       | to escrow three secrets **off** the VM — see §7                                    |
 
 ---
 
@@ -488,7 +489,7 @@ declares the password both as a secret and as a config-substituted env var
 | 1   | `curl -sI http://<APP_DOMAIN>/`                                                                            | `301` to `https://` — Caddy's automatic redirect                                                                                                                                                                                         |
 | 2   | `curl -s https://<APP_DOMAIN>/api/health`                                                                  | `{"status":"ok","uptimeSeconds":…}` over a **valid** certificate (no `-k`)                                                                                                                                                               |
 | 3   | Open `https://<APP_DOMAIN>/` **in a browser**, private window                                              | lands on `/auth/signin`, no session. Use a browser, not `curl`: the redirect is client-side, so `curl /` returns `200 text/html` — that is the SSR shell, not a session                                                                  |
-| 4   | Click **Sign in with Microsoft**, use your `@dtsc.be` account                                              | Entra prompt → back to `/` signed in. A redirect-URI mismatch shows as an Entra error page, not an app error                                                                                                                             |
+| 4   | Click **Sign in with Microsoft**, use your `@contoso.com` account (the value the allow-list is set to)     | Entra prompt → back to `/` signed in. A redirect-URI mismatch shows as an Entra error page, not an app error                                                                                                                             |
 | 5   | Sign in with an account **outside** the allow-list (a personal MS account, or temporarily narrow the list) | lands on `/auth/access-denied` with no session. **Do not skip this** — it is the only test of the gate itself                                                                                                                            |
 | 6   | Send a message in a chat and wait for a full answer                                                        | tokens stream in; the turn completes. Failure here is usually `ANTHROPIC_API_KEY`                                                                                                                                                        |
 | 7   | Ask something that touches the graph, then open the graph panel                                            | nodes render. Failure here is usually the Neo4j password (§11)                                                                                                                                                                           |
@@ -555,7 +556,7 @@ followed by a green MANIFEST; the run now stops so somebody looks at it.
 Install the cron entry as the user in the `docker` group:
 
 ```cron
-MAILTO=you@dtsc.be
+MAILTO=you@contoso.com
 # /opt/kg-agent — nightly at 03:30 local time.
 # stdout to the log; stderr deliberately NOT redirected, so cron mails you the
 # failure and only the failure.

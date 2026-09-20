@@ -18,9 +18,9 @@ import { apply, buildTable, reverse } from '../../../lib/privacy/pseudonymise'
 import { DIRECTORY_ROLE, mergeRosters, rosterFromDirectory } from '../../../lib/privacy/org-roster'
 
 const DIRECTORY = [
-  { displayName: 'Jan Van Damme', mail: 'jan.van.damme@dtsc.test' },
-  { displayName: 'Karel Peeters', mail: 'karel.peeters@dtsc.test' },
-  { displayName: 'Sofie Maes', mail: 'sofie.maes@dtsc.test' },
+  { displayName: 'Jan Van Damme', mail: 'jan.van.damme@contoso.com' },
+  { displayName: 'Karel Peeters', mail: 'karel.peeters@contoso.com' },
+  { displayName: 'Sofie Maes', mail: 'sofie.maes@contoso.com' },
 ]
 
 describe('rosterFromDirectory', () => {
@@ -30,7 +30,7 @@ describe('rosterFromDirectory', () => {
     expect(roster).toHaveLength(3)
     expect(roster[0]).toEqual({
       name: 'Jan Van Damme',
-      address: 'jan.van.damme@dtsc.test',
+      address: 'jan.van.damme@contoso.com',
       nameVariants: ['Jan Van Damme'],
       roles: [DIRECTORY_ROLE],
     })
@@ -45,8 +45,8 @@ describe('rosterFromDirectory', () => {
   it('dedupes by address case-insensitively, keeping both spellings', () => {
     // Same rule as extractRoster, so the two sources dedupe the same way.
     const roster = rosterFromDirectory([
-      { displayName: 'Jan Van Damme', mail: 'jan@dtsc.test' },
-      { displayName: 'J. Van Damme', mail: 'JAN@DTSC.TEST' },
+      { displayName: 'Jan Van Damme', mail: 'jan@contoso.com' },
+      { displayName: 'J. Van Damme', mail: 'JAN@contoso.com' },
     ])
 
     expect(roster).toHaveLength(1)
@@ -57,22 +57,22 @@ describe('rosterFromDirectory', () => {
     const roster = rosterFromDirectory([
       { displayName: '   ', mail: '' },
       {},
-      { displayName: 'Real Person', mail: 'r@dtsc.test' },
+      { displayName: 'Real Person', mail: 'r@contoso.com' },
     ])
     expect(roster.map((e) => e.name)).toEqual(['Real Person'])
   })
 
   it('accepts a name-only or address-only member', () => {
-    const roster = rosterFromDirectory([{ displayName: 'Name Only' }, { mail: 'a@dtsc.test' }])
+    const roster = rosterFromDirectory([{ displayName: 'Name Only' }, { mail: 'a@contoso.com' }])
     expect(roster[0]).toMatchObject({ name: 'Name Only', address: null })
-    expect(roster[1]).toMatchObject({ name: null, address: 'a@dtsc.test' })
+    expect(roster[1]).toMatchObject({ name: null, address: 'a@contoso.com' })
   })
 
   it('reads only displayName and mail', () => {
     // Pulling givenName/surname out of Graph would add personal data for no
     // coverage gain: buildTable derives the name parts from displayName.
     const roster = rosterFromDirectory([
-      { displayName: 'Jan Van Damme', mail: 'j@dtsc.test', department: 'D' } as never,
+      { displayName: 'Jan Van Damme', mail: 'j@contoso.com', department: 'D' } as never,
     ])
     expect(Object.keys(roster[0]).sort()).toEqual(['address', 'name', 'nameVariants', 'roles'])
   })

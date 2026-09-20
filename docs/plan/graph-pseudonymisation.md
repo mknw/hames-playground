@@ -73,8 +73,8 @@ the roster into per-payload placeholders: `PERSON_1` for the primary name,
 `PERSON_1_EMAIL`, `PERSON_1_NAME2` for a second spelling, `PERSON_1_GIVEN` /
 `PERSON_1_FAMILY` for the parts of a name (the family name keeps its particles:
 "Van Damme", not "Damme"), `PERSON_1_LOCAL` for a name-like local part
-(`michael.accetto`), and `PERSON_1_SLUG` for the underscored form Microsoft puts
-in personal-site URLs (`michael_accetto_dtsc_be`). Numbering is positional and
+(`jan.vandamme`), and `PERSON_1_SLUG` for the underscored form Microsoft puts
+in personal-site URLs (`jan_vandamme_contoso_com`). Numbering is positional and
 therefore payload-scoped: the same person is a different number in the next tool
 result, so the placeholders cannot be joined across a conversation into a
 directory.
@@ -83,14 +83,14 @@ directory.
 and free text alike — in **one left-to-right pass over a single alternation
 regex**, needles sorted longest-first. That ordering is what makes overlapping
 identities safe: at any position "Jan Van Damme" beats "Jan", and
-"jan.vandamme@dtsc.be" beats both. A single pass also means the output can never
+"jan.vandamme@contoso.com" beats both. A single pass also means the output can never
 be re-matched by a later needle.
 
 Three hazards were worth solving explicitly, and each has tests:
 
 | Hazard        | What breaks naively                                                              | What is done                                                                                                                                                                     |
 | ------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Substrings    | replacing "Michael" corrupts "Michaelson"                                        | Unicode boundary lookarounds on every needle                                                                                                                                     |
+| Substrings    | replacing "Jan" corrupts "Janvier"                                               | Unicode boundary lookarounds on every needle                                                                                                                                     |
 | Unicode names | JS `\b` fires _inside_ "José" and "Müller", so `\bJosé\b` matches within "Josée" | `(?<![\p{L}\p{N}_])` / `(?![\p{L}\p{N}_])` under the `u` flag                                                                                                                    |
 | HTML bodies   | `body.content` is usually HTML; a blind replace can rewrite a tag                | markup and text are separated first: text nodes and _quoted attribute values_ are rewritten (so `href="mailto:…"` and `title="…"` are caught), tag and attribute names never are |
 
@@ -118,8 +118,8 @@ passing test, so a future change that "fixes" one has to say so out loud.
    mechanism reduces exposure sharply and provably, but it does not eliminate it.
    How much residual risk that leaves is an empirical question nobody here has
    measured yet: it wants a count over real payloads, not an opinion.
-2. **Inflected forms are missed.** Dutch glues the genitive on — "Michaels
-   planning" — and word boundaries are exactly what protect "Michaelson", so the
+2. **Inflected forms are missed.** Dutch glues the genitive on — "Jans
+   planning" — and word boundaries are exactly what protect "Janvier", so the
    two cannot both be had with this mechanism. A suffix allowance (`'s`, `s`) is
    possible and was not taken, because it trades a hard guarantee for a heuristic.
 3. **The app's own projections cost the roster information.** `shapeMessages`
@@ -135,7 +135,7 @@ passing test, so a future change that "fixes" one has to say so out loud.
    `driveItem.webUrl` carries the file name encoded —
    `Offerte%20Van%20Damme%202026.docx` — and `%20` breaks the literal the roster
    searches for, so the surname is not replaced there. The `_SLUG` form in the
-   _same_ URL (`jan_vandamme_dtsc_be`) and the un-encoded `name` field of the same
+   _same_ URL (`jan_vandamme_contoso_com`) and the un-encoded `name` field of the same
    item both substitute correctly, so this is narrow, but it is a real surname
    reaching the prompt. Decoding the URL before matching would fix it and is not
    done: it widens `apply` from "replace literals" to "replace literals under an

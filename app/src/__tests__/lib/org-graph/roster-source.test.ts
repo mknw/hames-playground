@@ -36,13 +36,13 @@ describe('loadDirectoryRoster', () => {
   it('returns displayName/mail pairs', async () => {
     const { loadDirectoryRoster } = await mod()
     queue.push([
-      { displayName: 'Jan Van Damme', mail: 'jan@dtsc.test' },
-      { displayName: 'Sofie Maes', mail: 'sofie@dtsc.test' },
+      { displayName: 'Jan Van Damme', mail: 'jan@contoso.com' },
+      { displayName: 'Sofie Maes', mail: 'sofie@contoso.com' },
     ])
 
     await expect(loadDirectoryRoster()).resolves.toEqual([
-      { displayName: 'Jan Van Damme', mail: 'jan@dtsc.test' },
-      { displayName: 'Sofie Maes', mail: 'sofie@dtsc.test' },
+      { displayName: 'Jan Van Damme', mail: 'jan@contoso.com' },
+      { displayName: 'Sofie Maes', mail: 'sofie@contoso.com' },
     ])
   })
 

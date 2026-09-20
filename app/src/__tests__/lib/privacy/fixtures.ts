@@ -14,7 +14,7 @@
  * because that is what this mailbox looks like and because it is the case an
  * English-trained NER model handles worst.
  *
- * Not real people: the addresses are on `dtsc.be` / `partner.example` and the
+ * Not real people: the addresses are on `contoso.com` / `partner.example` and the
  * names are invented.
  */
 
@@ -33,20 +33,20 @@ export const graphMessage = {
     content:
       'Beste Michael, Jan Van Damme heeft de offerte doorgestuurd naar Sofie Vermeulen. ' +
       'Sofie kijkt ernaar voor vrijdag; Jan wacht op je antwoord. ' +
-      'Antwoorden mag rechtstreeks aan jan.vandamme@dtsc.be.',
+      'Antwoorden mag rechtstreeks aan jan.vandamme@contoso.com.',
   },
   from: {
-    emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@dtsc.be' },
+    emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@contoso.com' },
   },
   sender: {
-    emailAddress: { name: 'Jan Van Damme', address: 'Jan.VanDamme@dtsc.be' },
+    emailAddress: { name: 'Jan Van Damme', address: 'Jan.VanDamme@contoso.com' },
   },
   toRecipients: [
-    { emailAddress: { name: 'Michael Accetto', address: 'michael.accetto@dtsc.be' } },
-    { emailAddress: { name: 'Sofie Vermeulen', address: 'sofie.vermeulen@dtsc.be' } },
+    { emailAddress: { name: 'Michael Verstraete', address: 'michael.verstraete@contoso.com' } },
+    { emailAddress: { name: 'Sofie Vermeulen', address: 'sofie.vermeulen@contoso.com' } },
   ],
   ccRecipients: [{ emailAddress: { name: 'José Müller', address: 'jose.muller@partner.example' } }],
-  replyTo: [{ emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@dtsc.be' } }],
+  replyTo: [{ emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@contoso.com' } }],
   webLink: 'https://outlook.office365.com/owa/?ItemID=AAMkAGI2THVSAAA%3D&viewmodel=ReadMessageItem',
 }
 
@@ -59,7 +59,9 @@ export const graphHtmlMessage = {
   from: {
     emailAddress: { name: 'Élodie Lefèvre', address: 'elodie.lefevre@partner.example' },
   },
-  toRecipients: [{ emailAddress: { name: 'Michael Accetto', address: 'michael.accetto@dtsc.be' } }],
+  toRecipients: [
+    { emailAddress: { name: 'Michael Verstraete', address: 'michael.verstraete@contoso.com' } },
+  ],
   body: {
     contentType: 'html',
     content:
@@ -83,23 +85,23 @@ export const graphEvent = {
   location: { displayName: 'Vergaderzaal Brussel' },
   bodyPreview: 'Sofie Vermeulen brengt de cijfers mee. Jan licht de marge toe.',
   organizer: {
-    emailAddress: { name: 'Sofie Vermeulen', address: 'sofie.vermeulen@dtsc.be' },
+    emailAddress: { name: 'Sofie Vermeulen', address: 'sofie.vermeulen@contoso.com' },
   },
   attendees: [
     {
       type: 'required',
       status: { response: 'accepted', time: '2026-08-10T10:00:00Z' },
-      emailAddress: { name: 'Michael Accetto', address: 'michael.accetto@dtsc.be' },
+      emailAddress: { name: 'Michael Verstraete', address: 'michael.verstraete@contoso.com' },
     },
     {
       type: 'required',
       status: { response: 'none', time: '0001-01-01T00:00:00Z' },
-      emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@dtsc.be' },
+      emailAddress: { name: 'Jan Van Damme', address: 'jan.vandamme@contoso.com' },
     },
     {
       type: 'resource',
       status: { response: 'none', time: '0001-01-01T00:00:00Z' },
-      emailAddress: { name: 'Vergaderzaal Brussel', address: 'zaal.brussel@dtsc.be' },
+      emailAddress: { name: 'Vergaderzaal Brussel', address: 'zaal.brussel@contoso.com' },
     },
   ],
 }
@@ -112,28 +114,28 @@ export const graphDriveItem = {
   name: 'Offerte Van Damme 2026.docx',
   size: 48213,
   webUrl:
-    'https://dtsc-my.sharepoint.com/personal/jan_vandamme_dtsc_be/Documents/Offertes/Offerte%20Van%20Damme%202026.docx',
+    'https://contoso-my.sharepoint.com/personal/jan_vandamme_contoso_com/Documents/Offertes/Offerte%20Van%20Damme%202026.docx',
   lastModifiedDateTime: '2026-08-09T15:02:44Z',
   file: { mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
   createdBy: {
     user: {
       displayName: 'Jan Van Damme',
-      email: 'jan.vandamme@dtsc.be',
+      email: 'jan.vandamme@contoso.com',
       id: '9f3c0b1e-0000-4000-8000-abcdefabcdef',
     },
   },
   lastModifiedBy: {
-    user: { displayName: 'Sofie Vermeulen', email: 'sofie.vermeulen@dtsc.be' },
+    user: { displayName: 'Sofie Vermeulen', email: 'sofie.vermeulen@contoso.com' },
   },
   parentReference: {
     driveId: 'b!driveid',
     id: '01PARENT',
     path: '/drives/b!driveid/root:/Offertes',
-    siteId: 'dtsc.sharepoint.com,site-guid,web-guid',
+    siteId: 'contoso.sharepoint.com,site-guid,web-guid',
   },
   shared: {
     scope: 'users',
-    sharedBy: { user: { displayName: 'Jan Van Damme', email: 'jan.vandamme@dtsc.be' } },
+    sharedBy: { user: { displayName: 'Jan Van Damme', email: 'jan.vandamme@contoso.com' } },
     sharedDateTime: '2026-08-09T15:04:00Z',
   },
 }
@@ -145,7 +147,7 @@ export const graphPerson = {
   displayName: 'Jan Van Damme',
   givenName: 'Jan',
   surname: 'Van Damme',
-  scoredEmailAddresses: [{ address: 'jan.vandamme@dtsc.be', relevanceScore: 12.4 }],
+  scoredEmailAddresses: [{ address: 'jan.vandamme@contoso.com', relevanceScore: 12.4 }],
   personType: { class: 'Person', subclass: 'OrganizationUser' },
 }
 
@@ -161,8 +163,8 @@ export const graphChatMessage = {
   mentions: [
     {
       id: 0,
-      mentionText: 'Michael Accetto',
-      mentioned: { user: { displayName: 'Michael Accetto', id: 'michael-oid' } },
+      mentionText: 'Michael Verstraete',
+      mentioned: { user: { displayName: 'Michael Verstraete', id: 'michael-oid' } },
     },
   ],
 }
@@ -186,7 +188,7 @@ export const compactMailResult = {
     },
     {
       subject: 'Planning week 33',
-      from: 'sofie.vermeulen@dtsc.be',
+      from: 'sofie.vermeulen@contoso.com',
       received: '2026-08-10T16:11:02Z',
       isRead: true,
       hasAttachments: false,
@@ -226,7 +228,7 @@ export const compactSharedResult = {
       drive_id: 'b!driveid',
       item_id: '01ABCDEF7890',
       webUrl:
-        'https://dtsc-my.sharepoint.com/personal/jan_vandamme_dtsc_be/Documents/Offertes/Offerte%20Van%20Damme%202026.docx',
+        'https://contoso-my.sharepoint.com/personal/jan_vandamme_contoso_com/Documents/Offertes/Offerte%20Van%20Damme%202026.docx',
     },
   ],
 }
@@ -250,11 +252,11 @@ export const compactAttachmentsResult = {
 /** `graph_me` → `shapeMe`. Flat, and the only place `givenName`/`surname`
  *  arrive as separate fields. */
 export const compactMeResult = {
-  displayName: 'Michael Accetto',
+  displayName: 'Michael Verstraete',
   givenName: 'Michael',
-  surname: 'Accetto',
-  userPrincipalName: 'michael.accetto@dtsc.be',
-  mail: 'michael.accetto@dtsc.be',
+  surname: 'Verstraete',
+  userPrincipalName: 'michael.verstraete@contoso.com',
+  mail: 'michael.verstraete@contoso.com',
   jobTitle: 'Solutions Architect',
   officeLocation: 'Brussel',
   preferredLanguage: 'nl-BE',

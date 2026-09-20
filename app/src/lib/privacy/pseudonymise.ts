@@ -15,13 +15,13 @@
  * English, often in one thread).
  *
  * ## The three matching hazards, and what is done about them
- * - **Substrings.** Replacing "Michael" must not touch "Michaelson", so every
+ * - **Substrings.** Replacing "Jan" must not touch "Janvier", so every
  *   needle is fenced by Unicode-aware boundary lookarounds.
  * - **Unicode names.** JS `\b` is ASCII-only: it fires *inside* "José" and
  *   "Müller". The fences use `(?<![\p{L}\p{N}_])` / `(?![\p{L}\p{N}_])` under
  *   the `u` flag instead.
  * - **Overlap.** "Jan Van Damme" and "Jan" both match at the same index, and
- *   "jan.van.damme@dtsc.be" contains both. One alternation regex is built with
+ *   "jan.van.damme@contoso.com" contains both. One alternation regex is built with
  *   the needles sorted longest-first, so the longest identity wins at every
  *   position and a single left-to-right pass never rewrites its own output.
  *
@@ -114,7 +114,7 @@ const NAME_PARTICLES = new Set([
 ])
 
 /** A local part is treated as name-like when it joins two or more alphabetic
- *  runs with a separator (`michael.accetto`, `jan-van-damme`). A bare
+ *  runs with a separator (`jan.vandamme`, `jan-van-damme`). A bare
  *  single-token local part is only used when it matches one of the person's own
  *  name variants, because "info" and "jan" are not identities on their own. */
 const NAME_LIKE_LOCAL = /^\p{L}[\p{L}\p{N}]*(?:[._-]\p{L}[\p{L}\p{N}]*)+$/u
@@ -161,8 +161,8 @@ function localPart(address: string): string | null {
 
 /**
  * The underscored form of an address that SharePoint/OneDrive personal-site URLs
- * carry — `michael.accetto@dtsc.be` appears in a webUrl as
- * `michael_accetto_dtsc_be`. It is the same identifier in a different encoding,
+ * carry — `jan.vandamme@contoso.com` appears in a webUrl as
+ * `jan_vandamme_contoso_com`. It is the same identifier in a different encoding,
  * so it belongs in the table.
  */
 function addressSlug(address: string): string {

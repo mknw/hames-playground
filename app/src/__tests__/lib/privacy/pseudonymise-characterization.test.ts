@@ -57,7 +57,7 @@ describe('leak — a name spelled without its diacritics is not matched', () => 
   it('replaces the accented spelling and leaves the unaccented one in clear', () => {
     const out = scrubBody(
       'José Núñez',
-      'jose.nunez@dtsc.be',
+      'jose.nunez@contoso.com',
       'Ik sprak met José Núñez en daarna met Jose Nunez over de offerte.',
     )
     expect(out).toContain('PERSON_1')
@@ -85,10 +85,10 @@ describe('leak — a given name shorter than three characters is never minted', 
   // set, and takes short real given names with it. "Jo", "Ed", "Bo", "Li" are
   // ordinary Flemish/Chinese given names, so this is not a corner case.
   it('mints no needle for the two-letter part, so it survives standing alone', () => {
-    const table = tableFor(message('Jo Smit', 'jo.smit@dtsc.be', ''))
+    const table = tableFor(message('Jo Smit', 'jo.smit@contoso.com', ''))
     expect(forms(table).map(([value]) => value)).not.toContain('Jo')
 
-    const out = scrubBody('Jo Smit', 'jo.smit@dtsc.be', 'Jo Smit belde. Jo belde. Smit belde.')
+    const out = scrubBody('Jo Smit', 'jo.smit@contoso.com', 'Jo Smit belde. Jo belde. Smit belde.')
     expect(out).toContain('PERSON_1 belde') // the full name is caught
     expect(out).toContain('Jo belde') // the leak, pinned
   })
@@ -97,7 +97,7 @@ describe('leak — a given name shorter than three characters is never minted', 
     // `nameParts` picks the first word of length >= 3 as `given`, which for
     // "Jo Smit" is the SURNAME. The placeholder name is then misleading to
     // anyone auditing the table, though nothing leaks from it.
-    const table = tableFor(message('Jo Smit', 'jo.smit@dtsc.be', ''))
+    const table = tableFor(message('Jo Smit', 'jo.smit@contoso.com', ''))
     expect(forms(table)).toContainEqual(['Smit', 'PERSON_1_GIVEN'])
   })
 })
@@ -124,14 +124,14 @@ describe('leak — an empty or unobtainable roster degrades silently to a no-op'
   it('returns the payload unchanged when no labelled identity field is present', () => {
     const payload = {
       subject: 'Offerte',
-      body: { content: 'Ik sprak met Karel Peeters, bereikbaar op karel.peeters@dtsc.be.' },
+      body: { content: 'Ik sprak met Karel Peeters, bereikbaar op karel.peeters@contoso.com.' },
     }
     expect(tableFor(payload).entries).toEqual([])
     expect(scrub(payload)).toEqual(payload)
   })
 
   it('is a plain deep clone under an empty table — no signal of any kind', () => {
-    const payload = { a: 'Jan Van Damme', b: 'jan.vandamme@dtsc.be' }
+    const payload = { a: 'Jan Van Damme', b: 'jan.vandamme@contoso.com' }
     const out = apply(payload, { entries: [] })
     expect(out).toEqual(payload)
     expect(out).not.toBe(payload)
@@ -143,11 +143,11 @@ describe('leak — an empty or unobtainable roster degrades silently to a no-op'
     // scanned for identity shapes at all, only for known roster literals.
     const out = scrubBody(
       'Jan Van Damme',
-      'jan.vandamme@dtsc.be',
-      'Zet karel.peeters@dtsc.be in cc; ik ben jan.vandamme@dtsc.be.',
+      'jan.vandamme@contoso.com',
+      'Zet karel.peeters@contoso.com in cc; ik ben jan.vandamme@contoso.com.',
     )
     expect(out).toContain('PERSON_1_EMAIL') // declared, so caught
-    expect(out).toContain('karel.peeters@dtsc.be') // undeclared, so leaked
+    expect(out).toContain('karel.peeters@contoso.com') // undeclared, so leaked
   })
 })
 
@@ -162,7 +162,7 @@ describe('over-replacement — a family name that is also an ordinary word', () 
   it('replaces the common noun as well as the person', () => {
     const out = scrubBody(
       'Tom Wit',
-      'tom.wit@dtsc.be',
+      'tom.wit@contoso.com',
       'Het rapport is wit en Tom Wit heeft het geschreven. De WIT-analyse volgt.',
     )
     expect(out).toContain('Het rapport is PERSON_1_FAMILY') // the ordinary adjective
@@ -179,14 +179,14 @@ describe('over-replacement — a display name ending in a particle mints the par
   // particle, `family` becomes that particle — exactly what the module's
   // NAME_PARTICLES comment says must never become a standalone needle.
   it('mints "Van" as a name part from the display name "Damme, Jan Van"', () => {
-    const table = tableFor(message('Damme, Jan Van', 'jan.van.damme@dtsc.be', ''))
+    const table = tableFor(message('Damme, Jan Van', 'jan.van.damme@contoso.com', ''))
     expect(forms(table)).toContainEqual(['Van', 'PERSON_1_FAMILY'])
   })
 
   it('so the ordinary Dutch preposition is replaced throughout the payload', () => {
     const out = scrubBody(
       'Damme, Jan Van',
-      'jan.van.damme@dtsc.be',
+      'jan.van.damme@contoso.com',
       'De prijs van het product en het rapport van de audit.',
     )
     expect(out).toBe(
@@ -197,9 +197,13 @@ describe('over-replacement — a display name ending in a particle mints the par
   it('the guard DOES hold when the particle is interior, as in "De Wit, Tom"', () => {
     // Contrast case, so the block above reads as the specific hole it is rather
     // than as "particles are unguarded".
-    const table = tableFor(message('De Wit, Tom', 'tom.dewit@dtsc.be', ''))
+    const table = tableFor(message('De Wit, Tom', 'tom.dewit@contoso.com', ''))
     expect(forms(table).map(([value]) => value)).not.toContain('De')
-    const out = scrubBody('De Wit, Tom', 'tom.dewit@dtsc.be', 'De vergadering de facto de nieuwe.')
+    const out = scrubBody(
+      'De Wit, Tom',
+      'tom.dewit@contoso.com',
+      'De vergadering de facto de nieuwe.',
+    )
     expect(out).toBe('De vergadering de facto de nieuwe.')
   })
 })
@@ -214,7 +218,7 @@ describe('"Surname, Firstname" display names — a very common Exchange policy',
   // reads positionally. Coverage survives (both halves are still minted, so
   // both are still replaced) but two things degrade, and both are pinned.
   it('inverts the _GIVEN / _FAMILY labels, so the table misreports itself', () => {
-    const table = tableFor(message('Vermeulen, Sofie', 'sofie.vermeulen@dtsc.be', ''))
+    const table = tableFor(message('Vermeulen, Sofie', 'sofie.vermeulen@contoso.com', ''))
     expect(forms(table)).toContainEqual(['Vermeulen', 'PERSON_1_GIVEN']) // the surname
     expect(forms(table)).toContainEqual(['Sofie', 'PERSON_1_FAMILY']) // the given name
   })
@@ -225,7 +229,7 @@ describe('"Surname, Firstname" display names — a very common Exchange policy',
     // placeholders rather than the one whole-identity `PERSON_1`.
     const out = scrubBody(
       'Vermeulen, Sofie',
-      'sofie.vermeulen@dtsc.be',
+      'sofie.vermeulen@contoso.com',
       'Sofie Vermeulen heeft de offerte ontvangen.',
     )
     expect(out).toBe('PERSON_1_FAMILY PERSON_1_GIVEN heeft de offerte ontvangen.')
@@ -239,7 +243,7 @@ describe('"Surname, Firstname" display names — a very common Exchange policy',
     // recorded because it is the visible symptom of the block above.
     const out = scrubBody(
       'Van Damme, Jan',
-      'jan.vandamme@dtsc.be',
+      'jan.vandamme@contoso.com',
       'De offerte van Jan Van Damme is binnen.',
     )
     expect(out).toBe('De offerte van PERSON_1_FAMILY Van PERSON_1_GIVEN is binnen.')
@@ -252,20 +256,20 @@ describe('"Surname, Firstname" display names — a very common Exchange policy',
 
 describe('hyphenated given names', () => {
   it('keeps the compound whole and does not fire on either half alone', () => {
-    const table = tableFor(message('Jean-Pierre Dubois', 'jean-pierre.dubois@dtsc.be', ''))
+    const table = tableFor(message('Jean-Pierre Dubois', 'jean-pierre.dubois@contoso.com', ''))
     expect(forms(table)).toContainEqual(['Jean-Pierre', 'PERSON_1_GIVEN'])
 
     const out = scrubBody(
       'Jean-Pierre Dubois',
-      'jean-pierre.dubois@dtsc.be',
+      'jean-pierre.dubois@contoso.com',
       'Jean-Pierre Dubois a répondu. Jean-Pierre est absent. Jean est parti.',
     )
     expect(out).toBe('PERSON_1 a répondu. PERSON_1_GIVEN est absent. Jean est parti.')
   })
 
   it('carries the hyphen through into the address, slug and local forms', () => {
-    const table = tableFor(message('Jean-Pierre Dubois', 'jean-pierre.dubois@dtsc.be', ''))
-    expect(forms(table)).toContainEqual(['jean-pierre_dubois_dtsc_be', 'PERSON_1_SLUG'])
+    const table = tableFor(message('Jean-Pierre Dubois', 'jean-pierre.dubois@contoso.com', ''))
+    expect(forms(table)).toContainEqual(['jean-pierre_dubois_contoso_com', 'PERSON_1_SLUG'])
     expect(forms(table)).toContainEqual(['jean-pierre.dubois', 'PERSON_1_LOCAL'])
   })
 })
@@ -274,8 +278,8 @@ describe('a name embedded in an address, a slug and a URL path', () => {
   it('catches all three encodings the roster knows about', () => {
     const out = scrubBody(
       'Sofie Vermeulen',
-      'sofie.vermeulen@dtsc.be',
-      'Mail sofie.vermeulen@dtsc.be, of via https://intra/u/sofie.vermeulen, of sofie_vermeulen_dtsc_be.',
+      'sofie.vermeulen@contoso.com',
+      'Mail sofie.vermeulen@contoso.com, of via https://intra/u/sofie.vermeulen, of sofie_vermeulen_contoso_com.',
     )
     expect(out).toBe(
       'Mail PERSON_1_EMAIL, of via https://intra/u/PERSON_1_LOCAL, of PERSON_1_SLUG.',
@@ -284,10 +288,10 @@ describe('a name embedded in an address, a slug and a URL path', () => {
 
   it('re-pins limitation 5: a percent-encoded name in a webUrl path survives', () => {
     const payload = {
-      createdBy: { user: { displayName: 'Jan Van Damme', email: 'jan.vandamme@dtsc.be' } },
+      createdBy: { user: { displayName: 'Jan Van Damme', email: 'jan.vandamme@contoso.com' } },
       name: 'Offerte Van Damme 2026.docx',
       webUrl:
-        'https://dtsc-my.sharepoint.com/personal/jan_vandamme_dtsc_be/Documents/Offerte%20Van%20Damme%202026.docx',
+        'https://contoso-my.sharepoint.com/personal/jan_vandamme_contoso_com/Documents/Offerte%20Van%20Damme%202026.docx',
     }
     const out = scrub(payload)
     expect(out.name).toBe('Offerte PERSON_1_FAMILY 2026.docx') // un-encoded: caught
@@ -299,8 +303,8 @@ describe('a name embedded in an address, a slug and a URL path', () => {
 describe('possessives and inflections', () => {
   it('re-pins limitation 2: the glued Dutch genitive is missed, the apostrophe form is not', () => {
     const out = scrubBody(
-      'Michael Accetto',
-      'michael.accetto@dtsc.be',
+      'Michael Verstraete',
+      'michael.verstraete@contoso.com',
       "Michaels planning. Michael's planning. Michaelson belde.",
     )
     expect(out).toContain('Michaels planning') // glued genitive: leaked
@@ -319,8 +323,8 @@ describe('two people sharing a name part', () => {
     // for surnames too, which matters more: siblings and married colleagues
     // share a surname far more often than a given name.
     const payload = {
-      from: { emailAddress: { name: 'Jan Peeters', address: 'jan.peeters@dtsc.be' } },
-      toRecipients: [{ emailAddress: { name: 'Eva Peeters', address: 'eva.peeters@dtsc.be' } }],
+      from: { emailAddress: { name: 'Jan Peeters', address: 'jan.peeters@contoso.com' } },
+      toRecipients: [{ emailAddress: { name: 'Eva Peeters', address: 'eva.peeters@contoso.com' } }],
       body: { content: 'Jan Peeters en Eva Peeters. Peeters belde.' },
     }
     const table = tableFor(payload)
@@ -338,8 +342,8 @@ describe('two people sharing a name part', () => {
     // no name form at all: "Van Damme" is already claimed as PERSON_1_FAMILY.
     // Person 2 exists in the table with an address form only.
     const payload = {
-      from: { emailAddress: { name: 'Jan Van Damme', address: 'a@dtsc.be' } },
-      toRecipients: [{ emailAddress: { name: 'Van Damme', address: 'b@dtsc.be' } }],
+      from: { emailAddress: { name: 'Jan Van Damme', address: 'a@contoso.com' } },
+      toRecipients: [{ emailAddress: { name: 'Van Damme', address: 'b@contoso.com' } }],
       body: { content: 'Jan Van Damme en Van Damme.' },
     }
     expect(forms(tableFor(payload)).map(([, p]) => p)).not.toContain('PERSON_2')
@@ -352,8 +356,8 @@ describe('two people sharing a name part', () => {
 // ============================================================================
 
 describe('placeholder stability across payloads', () => {
-  const anna = { emailAddress: { name: 'Anna Bakker', address: 'anna.bakker@dtsc.be' } }
-  const bram = { emailAddress: { name: 'Bram Claes', address: 'bram.claes@dtsc.be' } }
+  const anna = { emailAddress: { name: 'Anna Bakker', address: 'anna.bakker@contoso.com' } }
+  const bram = { emailAddress: { name: 'Bram Claes', address: 'bram.claes@contoso.com' } }
 
   it('does NOT give the same person the same placeholder in a second payload', () => {
     // Numbering is positional and payload-scoped by design (the privacy-maximal
@@ -396,7 +400,7 @@ describe('placeholder stability across payloads', () => {
 
 describe('reverse fails safe', () => {
   const table = tableFor({
-    from: { emailAddress: { name: 'Anna Bakker', address: 'anna.bakker@dtsc.be' } },
+    from: { emailAddress: { name: 'Anna Bakker', address: 'anna.bakker@contoso.com' } },
   })
 
   it('leaves a mangled placeholder as-is rather than guessing at it', () => {
@@ -433,8 +437,10 @@ describe('apply / reverse round-trip', () => {
     // Extends the existing round-trip fixtures to the Exchange display-name
     // shape, since that shape mints its parts differently.
     const payload = {
-      from: { emailAddress: { name: 'Vermeulen, Sofie', address: 'sofie.vermeulen@dtsc.be' } },
-      toRecipients: [{ emailAddress: { name: 'Van Damme, Jan', address: 'jan.vandamme@dtsc.be' } }],
+      from: { emailAddress: { name: 'Vermeulen, Sofie', address: 'sofie.vermeulen@contoso.com' } },
+      toRecipients: [
+        { emailAddress: { name: 'Van Damme, Jan', address: 'jan.vandamme@contoso.com' } },
+      ],
       subject: 'Offerte van de leverancier',
       body: { content: 'Sofie Vermeulen heeft de offerte van Jan Van Damme ontvangen.' },
     }
@@ -452,7 +458,7 @@ describe('apply / reverse round-trip', () => {
 
   it('preserves non-string leaves, including Date instances', () => {
     const payload = {
-      from: { emailAddress: { name: 'Jan Peeters', address: 'jan.peeters@dtsc.be' } },
+      from: { emailAddress: { name: 'Jan Peeters', address: 'jan.peeters@contoso.com' } },
       count: 5,
       flag: true,
       nothing: null,

@@ -98,10 +98,22 @@ function hardeningArgs(): string[] {
  *  initialized from the image's /cache (owned by the non-root user), so it is
  *  writable by the sandbox without a chown. mcp-only boots skip it — no
  *  network means no live install; a warm cache there would be a convenience,
- *  not a control. */
-function cacheVolumeArgs(): string[] {
-  const volume = process.env.SANDBOX_CACHE_VOLUME?.trim() || 'kg-sandbox-cache'
-  return ['-v', `${volume}:/cache`]
+ *  not a control.
+ *
+ *  Per-tenant (docs/plan/sandbox.md → channel 1): every tenant's sandbox runs
+ *  as the same uid and would otherwise share one writable cache — a poisoned
+ *  wheel written by one tenant is code execution in the next tenant's install.
+ *  The volume name derives from the base name (SANDBOX_CACHE_VOLUME) by ONE
+ *  rule: tenant 'default' (or absent — the producers resolve it) → the base
+ *  name VERBATIM, so a single-operator deploy keeps its warm cache across the
+ *  upgrade; any other tenantId → `${base}-${tenantId}`. */
+function cacheVolumeName(tenantId: string | undefined): string {
+  const base = process.env.SANDBOX_CACHE_VOLUME?.trim() || 'kg-sandbox-cache'
+  return !tenantId || tenantId === 'default' ? base : `${base}-${tenantId}`
+}
+
+function cacheVolumeArgs(runtime: RuntimeConfig): string[] {
+  return ['-v', `${cacheVolumeName(runtime.tenantId)}:/cache`]
 }
 
 // ============================================================================
@@ -435,8 +447,10 @@ export class DockerBackend implements ComputeBackend {
         )
       }
       // `open` keeps the default bridge — no proxy, no audit, by design.
-      // Any networked profile gets the shared wheel-cache volume.
-      args.push(...cacheVolumeArgs())
+      // Any networked profile gets the wheel-cache volume — PER TENANT: the
+      // default tenant keeps the base name verbatim, every other tenant gets
+      // its own, so tenant A's writes are never tenant B's installs' reads.
+      args.push(...cacheVolumeArgs(runtime))
     }
 
     // Label so orphaned sandboxes are findable/reapable.

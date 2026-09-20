@@ -132,7 +132,9 @@ describe('GET /api/sandbox/pty/stream', () => {
     const res = await stream.GET(get('http://x/api/sandbox/pty/stream?sessionId=fresh'))
     expect(res.status).toBe(200)
     expect(claimSessionOwnership).toHaveBeenCalledWith('fresh', 'user-1')
-    expect(ensure).toHaveBeenCalledWith('fresh', { syncWorkspace: false })
+    // Lane A: the route passes the verified owner's id as the boot tenant, so
+    // the Shell path's per-tenant /cache volume is scoped to this user.
+    expect(ensure).toHaveBeenCalledWith('fresh', { syncWorkspace: false, tenantId: 'user-1' })
   })
 
   it('500s with the reason when the sandbox terminal fails to start', async () => {
@@ -160,11 +162,11 @@ describe('GET /api/sandbox/pty/stream', () => {
 
   it('hydrates the workspace only for an agent that syncs one', async () => {
     await stream.GET(get('http://x/api/sandbox/pty/stream?sessionId=s1'))
-    expect(ensure).toHaveBeenCalledWith('s1', { syncWorkspace: false })
+    expect(ensure).toHaveBeenCalledWith('s1', { syncWorkspace: false, tenantId: 'user-1' })
 
     agentUsesSyncWorkspace.mockResolvedValue(true)
     await stream.GET(get('http://x/api/sandbox/pty/stream?sessionId=s1&agentId=sandbox'))
-    expect(ensure).toHaveBeenLastCalledWith('s1', { syncWorkspace: true })
+    expect(ensure).toHaveBeenLastCalledWith('s1', { syncWorkspace: true, tenantId: 'user-1' })
   })
 
   it('still opens the terminal when the capability lookup fails', async () => {
@@ -173,7 +175,7 @@ describe('GET /api/sandbox/pty/stream', () => {
       get('http://x/api/sandbox/pty/stream?sessionId=s1&agentId=sandbox'),
     )
     expect(res.status).toBe(200)
-    expect(ensure).toHaveBeenCalledWith('s1', { syncWorkspace: false })
+    expect(ensure).toHaveBeenCalledWith('s1', { syncWorkspace: false, tenantId: 'user-1' })
   })
 
   it('unsubscribes from the PTY when the client disconnects', async () => {

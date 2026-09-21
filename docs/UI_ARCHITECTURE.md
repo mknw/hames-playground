@@ -614,12 +614,12 @@ A second page — `routes/dashboard.tsx`, reached from the monitoring icon in th
 nav (the old "Home"/"About" text links are gone; the chat _is_ `/`). It shows
 token, cache and cost aggregates across everything the signed-in user has run.
 
-| Layer  | File                              | Role                                                                                                                                                                                        |
-| ------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Layer  | File                                        | Role                                                                                                                                                                                        |
+| ------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Fold   | `@hames/harness-patterns/metrics/aggregate` | Pure, client-safe folds over `ContextEvent[]`: `getEventMetrics` (the single accessor for step accounting), `foldEvents`, `aggregateByPattern`, `aggregateByConversation`, `buildDashboard` |
-| Action | `lib/metrics/dashboard.server.ts` | `getMetricsDashboard(topN)` — `requireUser()`, load, fold, return aggregates only (raw events never cross the wire)                                                                         |
-| Query  | `lib/db/conversations.server.ts`  | `listConversationEvents(userId)` projects `context -> 'events'` in SQL (same 200-row ceiling as the sidebar list)                                                                           |
-| Page   | `routes/dashboard.tsx`            | Global cards + input-composition bar, per-pattern table, top-N conversations. No chart library — bars are divs                                                                              |
+| Action | `lib/metrics/dashboard.server.ts`           | `getMetricsDashboard(topN)` — `requireUser()`, load, fold, return aggregates only (raw events never cross the wire)                                                                         |
+| Query  | `lib/db/conversations.server.ts`            | `listConversationEvents(userId)` projects `context -> 'events'` in SQL (same 200-row ceiling as the sidebar list)                                                                           |
+| Page   | `routes/dashboard.tsx`                      | Global cards + input-composition bar, per-pattern table, top-N conversations. No chart library — bars are divs                                                                              |
 
 Numbers come from `event.metrics` (#122 / PR #130) and **only** from there:
 `llmCall.usage` has no cache-write bucket and no cost, so folding it in would

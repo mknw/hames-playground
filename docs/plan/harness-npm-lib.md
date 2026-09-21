@@ -42,8 +42,9 @@ skeleton developer guide (`docs/plan/hames-guide.md`), and updates
   under `packages/harness-patterns/`**, pinned by
   `zero-app-imports.test.ts` (verified by mutation: a temporary relative
   import into `app/` turns it red). With the edges gone, the pack smoke's
-  module-eval probe (§3.3/§4.3) evaluates all 22 entries through the
-  installed tarball, and the CI `packages` job is **REQUIRED** —
+  module-eval probe (§3.3/§4.3) evaluates every entry through the
+  installed tarball — 55 for this package as of 2026-09-22, derived rather
+  than typed — and the CI `packages` job is **REQUIRED** —
   `continue-on-error` and the `::warning::` annotation are removed. What
   remained for Step 3 (harness-baml extraction) was packaging the companion
   itself, not de-coupling core — done next.
@@ -550,13 +551,14 @@ every app-only PR:
   has a `files`/`exports` allowlist to get wrong.
   **Landed (Step 1d)** as the CI `packages` job running
   `scripts/pack-smoke.sh`: pack → install into a throwaway scratch project →
-  walk the installed manifest's `exports` map asserting each target exists →
-  import and behaviourally probe the `./guard` subpath and the `./*`
-  wildcard. The job needs no workspace install (packing reads only the
+  behaviourally probe the `./guard` subpath → assert and evaluate the DERIVED
+  entry sets. The job needs no workspace install (packing reads only the
   manifest; the probe must resolve against the scratch copy, never the
-  workspace symlink). Its runtime eval probe is deliberately scoped to the
-  exports that evaluate today — see the "Landed so far" block for the
-  Step-1a interim re-points that still block the `.` barrel.
+  workspace symlink). The entry list is no longer typed into the probe
+  (2026-09-22, architecture loop candidate 7): it is derived from the app's
+  own `@hames/*` imports and from each package's `exports` map, with the `./*`
+  pattern expanded against the packed tarball's file list, so both halves move
+  when the code does.
 
 ### 4.4 v1 client scope for `harness-baml`
 

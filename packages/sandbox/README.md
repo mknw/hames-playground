@@ -134,14 +134,16 @@ Three, and none of them subsumes the others:
    climb into `app/` resolves fine) — and a suite that reaches into the host is
    the one thing that would make the package not independently runnable.
 2. **`scripts/pack-smoke.sh`** (CI, `packages` job) — packs the tarball, installs
-   it into a scratch project and _evaluates_ every entry the host imports. This
-   is what catches a **value** import escaping into `app/src` (as
+   it into a scratch project and _evaluates_ every entry in a set DERIVED from
+   the app's imports and this package's `exports` map, never a list typed into
+   the probe. This is what catches a **value** import escaping into `app/src` (as
    `ERR_MODULE_NOT_FOUND` naming the app path) or a dependency the manifest does
-   not declare. In practice such an edge surfaces at the probe's **step 3**, not
-   its step-6 eval loop — step 3 imports `pty-manager.server`, which transitively
-   imports `with-sandbox.server` — so step 3 reports it under its own headline
-   rather than under the node-pty one. It also asserts that neither `__tests__/` nor `scripts/` ships,
-   and that node-pty is declared but not needed at module load (above).
+   not declare. In practice such an edge surfaces at the probe's **node-pty
+   check**, not its derived eval loop — that check imports `pty-manager.server`,
+   which transitively imports `with-sandbox.server` — so it reports the edge under
+   its own headline rather than under the node-pty one. It also asserts that
+   neither `__tests__/` nor `scripts/` ships, and that node-pty is declared but
+   not needed at module load (above).
 3. **`package-conventions.test.ts`** — every workspace package carries a
    `.prettierrc.json` (issue #354: without one, prettier's defaults reformat
    whole files and `--check` agrees with itself, which once hid a lost docblock

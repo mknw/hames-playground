@@ -7,7 +7,7 @@
  *   - routes(patternMap)   — dispatches to the matched pattern
  *
  * Both are plain ConfiguredPattern<T> and compose inside chain(), parallel(),
- * guardrail(), or any other composition without special-casing.
+ * or any other composition without special-casing.
  */
 
 import { assertServerOnImport } from '../assert.server'

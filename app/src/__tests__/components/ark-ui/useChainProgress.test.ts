@@ -268,7 +268,7 @@ describe('createChainProgress', () => {
     it('discards a wrapper pattern_enter immediately followed by a child enter', () => {
       createRoot(() => {
         const p = createChainProgress()
-        p.ingest(ev('pattern_enter', 'wrapper', { pattern: 'guardrail' }))
+        p.ingest(ev('pattern_enter', 'wrapper', { pattern: 'withReferences' }))
         p.ingest(ev('pattern_enter', 'inner', { pattern: 'simpleLoop', maxTurns: 3 }))
         p.ingest(
           ev('controller_action', 'inner', { action: { status: 's' }, turn: 0, maxTurns: 3 }),

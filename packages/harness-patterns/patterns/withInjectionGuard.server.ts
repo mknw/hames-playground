@@ -13,15 +13,10 @@
  * (`callTool`, and the retriever's own result assembly). Nothing in between —
  * `chain`, `router`, `routes`, `parallel`, `withReferences` — needs to know.
  *
- * ## Why not the existing `guardrail()` pattern
+ * ## Why not a rails-style pre/post check
  *
- * `guardrail(pattern, { rails })` is a different tool for a different job and
- * cannot do this one: its output rails run only AFTER the inner pattern has
- * fully completed (by which point every injected instruction has already been
- * through the controller), and a `RailResult` can block, warn or retry but
- * never REWRITE content. Note also that its `phase: 'execution'` rails are
- * never dispatched, and its input rails read `scope.data.input`, which nothing
- * in the framework populates.
+ * A check that runs before or after a pattern sees content only after the model
+ * has, and cannot rewrite it mid-loop — which is the whole job here (ADR-0006).
  *
  * ## Config transparency
  *
@@ -401,7 +396,7 @@ export function withInjectionGuard(config: InjectionGuardConfig) {
     const fn = (scope: PatternScope<T>, view: Parameters<typeof pattern.fn>[1]) => {
       // Push directly rather than via `trackEvent`: a loop's `trackHistory` is
       // `['controller_action','tool_call','tool_result']`, which would filter a
-      // guardrail firing out of existence. A security event is not optional
+      // guard firing out of existence. A security event is not optional
       // history — `content_sanitized` is in ALWAYS_COMMIT_TYPES for the same
       // reason `error` is.
       const guard = createInjectionGuard(
@@ -409,7 +404,7 @@ export function withInjectionGuard(config: InjectionGuardConfig) {
         (event) => {
           scope.events.push(event)
           // `trackEvent` is what normally calls `emitLive`, and we bypass it —
-          // so call it here, or a guardrail firing would be the ONE event
+          // so call it here, or a guard firing would be the ONE event
           // missing from the live SSE stream, arriving only in `runChain`'s
           // post-commit sweep after the whole pattern finished. It is also the
           // only copy that survives if the inner pattern THROWS, since a throw

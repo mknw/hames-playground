@@ -323,7 +323,7 @@ describe('composition in a chain', () => {
 describe('content_sanitized commit semantics', () => {
   it("is committed even under 'on-success' after an error", async () => {
     // A loop that neutralizes an injection and THEN fails must not discard the
-    // one event proving the guardrail fired.
+    // one event proving the guard fired.
     const { createContext, createScope, commitEvents, createEvent } =
       await import('@hames/harness-patterns/context.server')
     const ctx = createContext('q')

@@ -792,7 +792,7 @@ Once the first user turn completes, a minimal harness agent generates a 3–5 wo
 
 ### Why a harness agent for one BAML call?
 
-The `harness-patterns/` library is the testbed for an eventual standalone npm package. Its current example catalog (`harness-client/agents/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, `guardrail`, and a full ontology-builder pipeline — but had no _minimum-rung_ example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
+The `harness-patterns/` library is the testbed for an eventual standalone npm package. Its current example catalog (`harness-client/agents/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, and a full ontology-builder pipeline — but had no _minimum-rung_ example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
 
 ```ts
 // app/src/lib/harness-client/agents/title-generator.server.ts
@@ -952,7 +952,7 @@ app/
 │   ├── local-client.baml         # Local GLM-4.7 client (manual wiring)
 │   ├── router.baml               # Router (intent classification)
 │   ├── simpleLoop.baml           # Generic LoopController (used by every simpleLoop route)
-│   ├── actorCritic.baml          # ActorController + Critic (used by guardrailed/ontology agents)
+│   ├── actorCritic.baml          # ActorController + Critic (used by sandbox/ontology agents)
 │   ├── compactExecution.baml          # Final response synthesis
 │   ├── describe.baml             # Lightweight tool-result summarization
 │   ├── title.baml                # Conversation title generation
@@ -1008,8 +1008,6 @@ app/
 │       │       ├── simpleLoop.server.ts   # ReAct loop + callId (+ batchId on multi-call turns) on tool events
 │       │       ├── actorCritic.server.ts  # Generate-evaluate + callId (+ batchId)
 │       │       ├── parallel.server.ts     # Concurrent branches + pattern_enter/exit
-│       │       ├── guardrail.server.ts    # Rail validation + pattern_enter/exit
-│       │       ├── hook.server.ts         # Lifecycle hook + pattern_enter/exit
 │       │       ├── compactExecution.server.ts  # Final response synthesis
 │       │       ├── chain.server.ts        # Sequential composition
 │       │       └── event-view.server.ts   # EventViewImpl (fluent query API)

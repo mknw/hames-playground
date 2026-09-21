@@ -187,7 +187,7 @@ function readBamlSrc(file: string): string {
   return readFileSync(found, 'utf8')
 }
 
-describe('router — BAML prompt guardrails (#53)', () => {
+describe('router — BAML prompt rules (#53)', () => {
   it('Router carries the INTENT FORMULATION rules', () => {
     const src = readBamlSrc('router.baml')
     expect(src).toContain('INTENT FORMULATION')

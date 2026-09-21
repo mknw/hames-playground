@@ -38,8 +38,6 @@ MCP Tools ───────┘
 | `withReferences` | LLM-curated prior-result attachment at pattern ingress | Cross-pattern data flow ([#30](with-references.md)) |
 | `parallel` | Concurrent execution | Multi-source search |
 | `judge` | Quality ranking | Best-of-N selection |
-| `guardrail` | Multi-layer validation | Input/output safety |
-| `hook` | Lifecycle events | Session cleanup |
 | `chain` | Sequential composition | Multi-stage pipelines |
 
 > **Synthetic tool:** when prior results are present, simpleLoop's `LoopController` prompt also exposes `expandPreviousResult` — a virtual tool that loads the full data behind a `ref:<id>` and records it as a normal turn so subsequent iterations see it inline. See [`with-references.md`](with-references.md) for the full ingress/expansion taxonomy. (Singular-only: it cannot appear inside a multi-call turn's `additional_calls`.)

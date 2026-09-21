@@ -190,13 +190,13 @@ function firstIrrecoverable<T>(
  *
  * Unlike `runChain` (which takes a UnifiedContext), `chain` is a pattern factory
  * that returns a ConfiguredPattern. This enables composition inside harness() or
- * within other pattern factories like parallel() and guardrail().
+ * within other pattern factories like parallel() and routes().
  *
  * @param patterns - ConfiguredPatterns to execute in sequence
  * @returns A single ConfiguredPattern wrapping all sub-patterns
  *
  * @example
- * // Compose router + routes + synth as a single unit inside parallel/guardrail
+ * // Compose router + routes + synth as a single unit inside parallel/routes
  * const routedAgent = chain(
  *   router({ neo4j: 'DB queries', web: 'Web lookups' }),
  *   routes({ neo4j: neo4jPattern, web: webPattern }),
@@ -204,7 +204,7 @@ function firstIrrecoverable<T>(
  * )
  *
  * // Use in harness alongside other patterns
- * const agent = harness(guardrail(routedAgent, piiScanRail))
+ * const agent = harness(routedAgent)
  */
 export function chain<T extends Record<string, unknown>>(
   ...patterns: ConfiguredPattern<T>[]
@@ -226,8 +226,8 @@ export function chain<T extends Record<string, unknown>>(
       // ancestry (no view of its sibling's emit) or — worse — selects its
       // OWN patternId as "last" (because the outer view was constructed
       // for the wrapping pattern, not for the synth). Mirrors `runChain`
-      // above (chain.server.ts:60-122) and the single-child wrappers
-      // (`guardrail`/`hook`/`with-references`).
+      // above (chain.server.ts:60-122) and the single-child wrapper
+      // (`with-references`).
       const outerCtx = (view as unknown as { ctx: UnifiedContext }).ctx
       let currentData = scope.data
       for (const pattern of patterns) {

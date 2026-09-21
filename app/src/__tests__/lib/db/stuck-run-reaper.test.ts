@@ -152,7 +152,10 @@ describe('the reap statement', () => {
     // same way in `verda-wake.test.ts`). This scan is what makes the copy safe —
     // without it, the one number that moves the threshold could drift from its
     // declaration with every other test still green.
-    const declared = readFileSync(path.resolve(process.cwd(), 'baml_src/verda-client.baml'), 'utf8')
+    const declared = readFileSync(
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/verda-client.baml'),
+      'utf8',
+    )
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('//'))
       .join('\n')

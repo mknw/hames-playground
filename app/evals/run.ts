@@ -94,7 +94,7 @@ function selected(): Scenario[] {
  * would prove the box is up without proving this key can complete on it.
  */
 async function preflight(client: string | undefined): Promise<void> {
-  const { b } = await import('../baml_client')
+  const { b } = await import('@hames/harness-baml/baml_client')
   const collector = new Collector('eval-preflight')
   const opts = { collector, ...(client ? { client } : {}) }
   const t0 = Date.now()

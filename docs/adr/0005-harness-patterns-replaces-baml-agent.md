@@ -42,7 +42,7 @@ for it re-splits the session state that `UnifiedContext` exists to unify.
 
 > **Correction (2026-09-15, #225 L23; amended after review):** the example in
 > the last bullet above, `b.Neo4jController.bind(b)`, names a function that
-> does not exist — `baml_src/` declares no per-domain controller functions.
+> does not exist — `packages/harness-baml/baml_src/` declares no per-domain controller functions.
 > The runnable replacement is an adapter factory, `createLoopControllerAdapter`
 > (or a domain alias such as `createNeo4jController`), which adapts the
 > generated function's positional signature and returns `{ action, llmCall }`.

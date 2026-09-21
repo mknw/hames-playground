@@ -223,14 +223,17 @@ async function preflight(): Promise<void> {
   // not this repo — decides what it serves: a redeploy under a different id, or
   // a `--served-model-name`, turns every call into a 400 that reads like a
   // client bug. Cheap, and it runs before anything is billed.
-  const client = readFileSync(path.resolve(process.cwd(), 'baml_src/verda-client.baml'), 'utf8')
+  const client = readFileSync(
+    path.resolve(process.cwd(), '../packages/harness-baml/baml_src/verda-client.baml'),
+    'utf8',
+  )
   const pinned = /model "([^"]+)"/.exec(client)?.[1]
   const served = await servedModelIds()
   if (!pinned || !served.includes(pinned)) {
     throw new Error(
       `baml_src/verda-client.baml pins model ${JSON.stringify(pinned)}, but the endpoint ` +
         `serves ${served.map((m) => JSON.stringify(m)).join(', ') || '(nothing)'}. ` +
-        'Put the served id in the client, run `pnpm baml-generate`, and re-run this.',
+        'Put the served id in the client, regenerate from packages/harness-baml, and re-run this.',
     )
   }
   const override = clientOverrideFor('controller')
@@ -283,7 +286,7 @@ async function critic(): Promise<void> {
 
 async function controller(): Promise<void> {
   console.log('\n▶ 2/5 LoopController — the action envelope')
-  const { b } = await import('../../../../baml_client')
+  const { b } = await import('@hames/harness-baml/baml_client')
   const collector = new Collector('smoke-verda-controller')
   const opts = { collector, ...clientOverrideFor('controller') }
   const t0 = Date.now()
@@ -343,7 +346,7 @@ async function controller(): Promise<void> {
  */
 async function actorRetry(): Promise<void> {
   console.log('\n▶ 3/6 ActorController — retry shape (attempt log + context)')
-  const { b } = await import('../../../../baml_client')
+  const { b } = await import('@hames/harness-baml/baml_client')
   const collector = new Collector('smoke-verda-actor-retry')
   // 'controller' — the one role covers BOTH loop patterns' controllers, which
   // is exactly why the actor's 400 rode in on the same map entry that the

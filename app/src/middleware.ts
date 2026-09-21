@@ -124,6 +124,20 @@ installUsageRecorder()
  * anywhere below here — that drags BAML in fails on every push rather than only
  * in the docker job.
  *
+ * ## Why the PACKAGE client, and not a relative one
+ *
+ * There is ONE generated client — `@hames/harness-baml/baml_client` — and it is
+ * the `b` every production call runs through: the package's adapters, its
+ * defaults and routing modules, and the title agent all import that exact
+ * module. The redirect works by patching `bamlOptions` on the singleton, so it
+ * has to be the same one. It was not, between the corpus split and 2026-09-22:
+ * this line read `import('../baml_client')`, the app's own generated tree,
+ * which nothing else called — so the browser suite installed its fake on a `b`
+ * no request reached and would have reported a hermetic run while every call
+ * went to a real provider on the developer's own key. Deleting the app's
+ * duplicate `baml_src/` is what makes the wrong module unnameable;
+ * `src/__tests__/one-baml-corpus.test.ts` is what keeps it that way.
+ *
  * ## Why a handler at all rather than a top-level await
  *
  * Nitro transpiles the server bundle to es2019, where top-level `await` is a
@@ -142,7 +156,9 @@ let fakeInferenceReady: Promise<unknown> | null = null
 export default createMiddleware({
   onRequest: devFakeInferenceUrl()
     ? async () => {
-        fakeInferenceReady ??= import('../baml_client').then(({ b }) => installDevFakeInference(b))
+        fakeInferenceReady ??= import('@hames/harness-baml/baml_client').then(({ b }) =>
+          installDevFakeInference(b),
+        )
         await fakeInferenceReady
       }
     : undefined,

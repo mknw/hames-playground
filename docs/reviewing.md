@@ -10,8 +10,10 @@ else**, so this file stays cheap to maintain and safe to read in parallel.
 
 - **Hard rules** — a breach is a violation, not a judgement call:
   [`CLAUDE.md`](../CLAUDE.md), whole file; the reviewer-critical ones live under
-  _Commands_ (pnpm-only from `app/`, `baml-generate` after any `baml_src/`
-  edit), _Design Decisions_ (`.server.ts` boundary, generated `baml_client/`),
+  _Commands_ (pnpm-only from `app/`; the one BAML corpus is
+  `packages/harness-baml/baml_src/` and its `baml_client/` is committed, so a
+  `.baml` edit ships with its regenerated client), _Design Decisions_
+  (`.server.ts` boundary, generated `baml_client/`),
   _Harness Patterns_ (`.bind(b)`, prefer the adapter factories), _BAML Clients_
   (`CLIENT_MAX_OUTPUT_TOKENS` ↔ client `max_tokens` sync, the positional-args
   trap), and _Styling_ (UnoCSS attributify only; `i-material-symbols-*` icons).

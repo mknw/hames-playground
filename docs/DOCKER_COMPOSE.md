@@ -78,8 +78,11 @@ curl localhost:3444/api/health
 
 **The image**: three stages — `deps` (full `pnpm install --frozen-lockfile`,
 with a C toolchain because node-pty compiles from source) → `build`
-(`baml-generate` **then** `vinxi build`, sequentially: `pnpm build`'s `&`
-backgrounds the generate step, and `baml_client/` is gitignored so it is never
+(just `vinxi build` since the one-corpus change: the BAML client is committed
+in `packages/harness-baml/` and arrives with the workspace copy, so there is
+nothing to generate first. It used to be `baml-generate` **then** `vinxi build`,
+sequentially, because `pnpm build`'s `&` backgrounded the generate step and the
+app's own `baml_client/` was gitignored so it was never
 already on disk here) → `runtime` (`node:22-bookworm-slim` + `.output`).
 Nitro's node-server output carries its own `node_modules`, so the runtime stage
 installs nothing — but its tracer only follows the `require`/`import` graph it

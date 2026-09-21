@@ -111,19 +111,19 @@ RUN test -L /ws/app/node_modules/@hames/harness-patterns \
  && node -e "const r = require.resolve('@hames/harness-patterns'); if (!r.startsWith('/ws/packages/')) { console.error('resolved OUTSIDE the workspace source (registry fetch?): ' + r); process.exit(1); } console.log('workspace link OK: ' + r)"
 
 # ---------------------------------------------------------------------------
-# build — regenerate the BAML client, then build the server.
+# build — just the server.
 #
-# `pnpm build` is `pnpm baml-generate & vinxi build`: the `&` backgrounds the
-# generate step, which is a race the dev loop tolerates because baml_client/ is
-# usually already on disk. Here it never is (generated + gitignored), so the two
-# run sequentially and in order — a build that raced would compile against a
-# missing or half-written client.
+# Nothing generates a BAML client here any more. There is ONE corpus,
+# `packages/harness-baml/baml_src`, and its `baml_client/` is COMMITTED: the
+# `COPY --from=root packages/harness-baml` above brings the generated client
+# into the image with the sources, so the build has nothing to wait for. The
+# earlier `pnpm baml-generate && vinxi build` existed because the app carried a
+# second, gitignored tree that was never on disk in a fresh image.
 # ---------------------------------------------------------------------------
 FROM deps AS build
 WORKDIR /ws/app
 COPY . .
-RUN pnpm baml-generate \
- && pnpm exec vinxi build
+RUN pnpm exec vinxi build
 
 # Nitro traces the `require`/`import` graph it can statically see, which is not
 # enough for two packages — and it fails silently, leaving an image that boots

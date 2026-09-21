@@ -111,9 +111,9 @@ export function checkBamlClient(input: BamlClientCheckInput): BamlClientWarning[
 
 /** Read the .baml sources sitting in `dir` right now. Defaults to THIS
  *  package's own baml_src — resolved relative to the module, not to
- *  `process.cwd()`: after the extraction (PR-1b) the package tree is NOT the
- *  process's cwd (the app runs from `app/`), and a committed client must be
- *  checked against its own tree wherever the process happens to start. */
+ *  `process.cwd()`: the package tree is NOT the process's cwd (the app runs
+ *  from `app/`), and a committed client must be checked against its own tree
+ *  wherever the process happens to start. */
 export function readBamlSources(dir?: string): Record<string, string> | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -154,12 +154,11 @@ function readInstalledVersion(): string | null {
   }
 }
 
-/** Gather the real inputs and run the comparison for THIS PACKAGE's tree:
- *  its own `baml_src/` against its own pre-generated `baml_client/` (both
- *  package-relative). The APP tree's check lives app-side
- *  (`lib/baml-client-check.server.ts`), which calls the pure
- *  {@link checkBamlClient} with the app's own inputs — one comparison, two
- *  callers. Never throws. */
+/** Gather the real inputs and run the comparison for the ONE corpus: this
+ *  package's `baml_src/` against its own pre-generated `baml_client/` (both
+ *  package-relative). This is the only staleness check there is — the app
+ *  carried a second `baml_src/` and its own copy of this call until
+ *  2026-09-22, and both are gone. Never throws. */
 export async function collectBamlClientWarnings(): Promise<BamlClientWarning[]> {
   const diskSources = readBamlSources()
   const pinnedVersion = diskSources?.['generators.baml']

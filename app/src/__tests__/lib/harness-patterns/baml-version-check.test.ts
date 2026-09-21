@@ -175,8 +175,11 @@ describe('collectBamlClientWarnings', () => {
   })
 
   it('reports no staleness against a freshly generated client', async () => {
-    // `pnpm baml-generate` runs before the suite (predev / CI step), so a
-    // stale-client warning here means the generated client really has drifted.
+    // The package ships a COMMITTED `baml_client/` and nothing regenerates it
+    // on the way in any more, so a stale-client warning here is not a missing
+    // setup step — it means the checked-in client really has drifted from the
+    // one corpus it was generated from, and the fix is to regenerate from
+    // `packages/harness-baml/` and commit the result.
     const { collectBamlClientWarnings } = await load()
 
     const warnings = await collectBamlClientWarnings()

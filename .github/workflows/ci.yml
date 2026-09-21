@@ -41,20 +41,17 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      # Both steps are load-bearing, in this order. A node_modules that predates
-      # the lockfile makes `baml-generate` fail on a @boundaryml/baml version
-      # mismatch, which leaves a stale generated client and surfaces as ~7
-      # phantom test failures plus an inflated type-error count — failures with
-      # nothing to do with the change under test.
-      #
       # The lockfile is the workspace root's (#225 Step 0), so the install runs
       # from the repo root, not from the `app` default below.
+      #
+      # There is no generate step any more: the ONE BAML corpus lives in
+      # `packages/harness-baml/baml_src` and its `baml_client/` is COMMITTED
+      # beside it, so a checkout already has the generated client. A client
+      # that drifts from that corpus is caught by the app-path e2e layer's
+      # fake-fidelity scenario rather than papered over by regenerating on the
+      # way in.
       - run: pnpm install --frozen-lockfile
         working-directory: .
-
-      # baml_client/ is generated and gitignored. Without it ~270 tests fail on
-      # `Failed to resolve import "../../../baml_client/inlinedbaml"`.
-      - run: pnpm baml-generate
 
       # configs/mcp-config.yaml is COMMITTED with the compose-default
       # credentials (same laptop-only defaults docker-compose.yaml ships). The

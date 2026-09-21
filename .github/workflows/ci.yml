@@ -154,9 +154,15 @@ jobs:
       # their lowest seam, as they were app-side — so this needs no daemon.
       # What stayed app-side: `egress-proxy.test.ts`, which drives
       # `rootfs/egress-proxy/proxy.mjs` (repo infrastructure, not package code).
-      - name: Package tests (@hames/sandbox)
+      #
+      # `--coverage` on the command line, not in the package's `test` script:
+      # the app step above does it the same way, so a local `pnpm test` stays
+      # fast while CI runs the floor. The thresholds live in
+      # packages/sandbox/vitest.config.ts — without this flag they would be
+      # inert, which is the shape the #365 review's O1 was about.
+      - name: Package tests (@hames/sandbox, with coverage floor)
         working-directory: packages/sandbox
-        run: pnpm test
+        run: pnpm test --coverage
 
       # Catches SSR/vinxi breakage the unit tests cannot see.
       - run: pnpm build

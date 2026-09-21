@@ -13,15 +13,16 @@
   },
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "node -e \"const ua=process.env.npm_config_user_agent||'';const ex=process.env.npm_execpath||'';if(ua.startsWith('npm/')||ex.includes('npm-cli'))throw new Error('This package must be published with pnpm publish, not npm: npm does not rewrite workspace: specifiers and ships them literally.')\""
   },
   "dependencies": {
-    "@hames/harness-patterns": "workspace:*",
+    "@hames/harness-patterns": "workspace:^",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "node-pty": "^1.1.0"
   },
   "devDependencies": {
-    "@hames/harness-baml": "workspace:*",
+    "@hames/harness-baml": "workspace:^",
     "@vitest/coverage-v8": "^4.1.5",
     "vitest": "^4.1.5"
   },

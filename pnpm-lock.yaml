@@ -190,28 +190,21 @@ importers:
   packages/agents:
     dependencies:
       '@hames/harness-baml':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../harness-baml
       '@hames/harness-patterns':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../harness-patterns
-    devDependencies:
-      cytoscape:
-        specifier: ^3.33.2
-        version: 3.33.2
 
   packages/connectors:
     dependencies:
       '@hames/harness-patterns':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../harness-patterns
       neo4j-driver:
         specifier: ^6.0.1
         version: 6.0.1
     devDependencies:
-      cytoscape:
-        specifier: ^3.33.2
-        version: 3.33.2
       seroval:
         specifier: ~1.5.0
         version: 1.5.2
@@ -225,7 +218,7 @@ importers:
         specifier: 0.224.0
         version: 0.224.0
       '@hames/harness-patterns':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../harness-patterns
 
   packages/harness-patterns:
@@ -237,7 +230,7 @@ importers:
   packages/sandbox:
     dependencies:
       '@hames/harness-patterns':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../harness-patterns
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
@@ -247,7 +240,7 @@ importers:
         version: 1.1.0
     devDependencies:
       '@hames/harness-baml':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../harness-baml
       '@vitest/coverage-v8':
         specifier: ^4.1.5

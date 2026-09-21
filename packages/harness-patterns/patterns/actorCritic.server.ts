@@ -8,7 +8,7 @@
 
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
-import { repairJson } from '../json-repair'
+import { repairJsonTracked, type JsonRepairNote } from '../json-repair'
 import { normalizeControllerAction } from '../controller-action'
 import type {
   ControllerAction,
@@ -306,6 +306,8 @@ export function actorCritic<T extends ActorCriticData>(
           const scopedTransports = activeTransports()
           const callIds: string[] = []
           const trackedArgs: unknown[] = []
+          // Parallel to `trackedArgs` — see the simpleLoop twin (#217b).
+          const trackedRepairs: (JsonRepairNote | undefined)[] = []
           const subCalls: SubCall[] = []
 
           for (const c of allCalls) {
@@ -325,10 +327,14 @@ export function actorCritic<T extends ActorCriticData>(
               continue
             }
             let callArgs: Record<string, unknown>
+            let callRepair: JsonRepairNote | undefined
             try {
-              callArgs = repairJson(c.tool_args)
+              const parsed = repairJsonTracked(c.tool_args)
+              callArgs = parsed.args
+              callRepair = parsed.repair
             } catch {
               trackedArgs.push(c.tool_args)
+              trackedRepairs.push(undefined)
               subCalls.push({
                 tool: c.tool_name,
                 precheckError: actorLlmCall?.hitOutputCap
@@ -339,6 +345,7 @@ export function actorCritic<T extends ActorCriticData>(
               continue
             }
             trackedArgs.push(callArgs)
+            trackedRepairs.push(callRepair)
             subCalls.push({
               tool: c.tool_name,
               run: async () => {
@@ -384,6 +391,7 @@ export function actorCritic<T extends ActorCriticData>(
                 batchId,
                 tool: sc.tool,
                 args: trackedArgs[i],
+                ...(trackedRepairs[i] ? { repaired: trackedRepairs[i] } : {}),
               } as ToolCallEventData,
               resolved.trackHistory,
             ),
@@ -503,8 +511,11 @@ export function actorCritic<T extends ActorCriticData>(
 
         // Parse args (lenient — LLMs may output unquoted keys/values)
         let args: Record<string, unknown>
+        let argsRepair: JsonRepairNote | undefined
         try {
-          args = repairJson(action.tool_args)
+          const parsed = repairJsonTracked(action.tool_args)
+          args = parsed.args
+          argsRepair = parsed.repair
         } catch {
           // Surface unparseable tool_args as a recoverable error too — same
           // observability reasoning as the allowlist branch above.
@@ -557,7 +568,12 @@ export function actorCritic<T extends ActorCriticData>(
         trackEvent(
           scope,
           'tool_call',
-          { callId, tool: action.tool_name, args } as ToolCallEventData,
+          {
+            callId,
+            tool: action.tool_name,
+            args,
+            ...(argsRepair ? { repaired: argsRepair } : {}),
+          } as ToolCallEventData,
           resolved.trackHistory,
         )
 

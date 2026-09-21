@@ -113,6 +113,52 @@ describe('actorCritic execution', () => {
     })
   })
 
+  it('dispatches under-escaped tool_args and marks the call as reconstructed', async () => {
+    // actorCritic is where the incident landed — `.harness-logs/
+    // sandbox-tool-recovery.json`, event ev-tey7ez, a `sandbox_edit` whose
+    // content quotes were escaped one level instead of two. Shape-for-shape
+    // repro; the 19 KB original is pinned in
+    // json-repair-unescaped-content.test.ts.
+    const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
+
+    const mockActor = vi.fn().mockResolvedValue({
+      action: mockAction({
+        tool_name: 'code-mode',
+        tool_args: '{"script": "print("ok")", "path": "/work/f.py"}',
+      }),
+      llmCall: undefined,
+    })
+    const mockCritic = vi.fn().mockResolvedValue({
+      result: mockCriticResult({ is_sufficient: true }),
+      llmCall: undefined,
+    })
+
+    const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], { patternId: 'test' })
+
+    const result = await pattern.fn(
+      createScope('test', { intent: 'edit' }),
+      createEventView({
+        sessionId: 'test',
+        createdAt: Date.now(),
+        events: [],
+        status: 'running' as const,
+        data: {},
+        input: 'edit',
+      }),
+    )
+
+    expect(result.events.filter((e) => e.type === 'error')).toHaveLength(0)
+
+    const toolCall = result.events.find((e) => e.type === 'tool_call')
+    expect(toolCall?.data).toMatchObject({
+      tool: 'code-mode',
+      args: { script: 'print("ok")', path: '/work/f.py' },
+      repaired: { strategy: 'unescaped-content', counts: { quotes: 2, controlChars: 0 } },
+    })
+  })
+
   it('should track controller_action and critic_result events', async () => {
     const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
     const { createScope } = await import('@hames/harness-patterns/context.server')

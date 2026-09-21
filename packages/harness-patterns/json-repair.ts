@@ -8,19 +8,6 @@
  */
 
 /**
- * Parse a JSON string leniently, repairing common LLM mistakes.
- *
- * Handles:
- * - Unquoted keys:   {query: "val"}  → {"query": "val"}
- * - Unquoted string values: {query: hello world} → {"query": "hello world"}
- * - Trailing commas:  {a: 1,}  → {a: 1}
- * - Single-quoted strings: {'key': 'val'} → {"key": "val"}
- * - Bracketed values with unquoted contents: {author: [X], limit: 5}
- *   → {"author": ["X"], "limit": 5}
- *
- * @returns Parsed object — throws if still invalid after repair.
- */
-/**
  * Index just past the bracket matching the one at `start`, or -1 when the
  * literal is unbalanced. Double-quoted strings (with backslash escapes) are
  * skipped, so `["a]b"]` closes at the right place. Single quotes are NOT
@@ -215,22 +202,310 @@ function unparkBracketedValues(s: string, parked: string[]): string {
   })
 }
 
-export function repairJson(raw: string): Record<string, unknown> {
+// ---------------------------------------------------------------------------
+// Strategy 1: string CONTENT that was not escaped
+// ---------------------------------------------------------------------------
+//
+// `ControllerAction.tool_args` is a STRING whose content is JSON (#145), so a
+// `"` belonging to the payload's own data has to survive two encodings and is
+// written `\\\"`, while a `"` belonging to the payload's JSON structure is
+// written `\"`. Captured live in `.harness-logs/sandbox-tool-recovery.json`
+// (event `ev-tey7ez`, the `flavour-office-loop` actor): a 19 180-character
+// `sandbox_edit` whose `newText` was openpyxl code full of Excel formulas —
+// `"='Revenue Model'!N" + str(row)` — reached this module with 5 of its 38
+// content quotes doubly escaped and 33 singly escaped, so the first of the 33
+// ended `newText` 13 706 characters in and `JSON.parse` asked for a `,`.
+// Nothing upstream could have caught it: the response was 9 913 tokens against
+// a 32 768 cap (no truncation), the envelope itself was a well-formed JSON
+// object (no shape to recover, cf. `controller-action.ts`), and the prompt the
+// model was reading DID demonstrate the `\\\"` form — the flavoured-sandbox
+// few-shot writes `print(\\\"hello\\\")` — 5 KB above the defect. A
+// demonstration that holds for a 40-character script does not hold for 18 KB
+// of quote-dense code, which is why this is a parse-side fix.
+//
+// The failure leaves the document's STRUCTURE intact and corrupts only string
+// CONTENT, and that is what makes it recoverable without guessing: a `"` can be
+// read as content whenever the grammar does not need it as a delimiter there.
+// Two readings of the same character, decided by what may legally follow it —
+// `:` after a key, `,`/`}` after a member value, `,`/`]` after an element.
+//
+// It is DELIBERATELY the first strategy tried after a strict parse, ahead of
+// the token rewriting below: this one reads the whole document under the JSON
+// grammar and declines when anything is off, while the regex chain rewrites
+// tokens in place and cannot tell a mangled result from a good one. On the
+// corpus of nine distinct `Invalid tool_args JSON` payloads in `.harness-logs`
+// the ordering is load-bearing, not cosmetic — a `code-mode` script arriving
+// with raw newlines was being "repaired" by the chain into
+// `{"script": "\"const g = read_graph({});\n…\""}`, two quote characters the
+// model never wrote, wrapping the whole program in a string literal that would
+// have run as a no-op expression. That is precisely the silent mis-coercion
+// #217(b) is open about, and it is why every repair now reports itself.
+//
+// Scope is the escaping class and nothing else. Unquoted keys, single-quoted
+// strings and trailing commas are DECLINED here and fall through to the
+// lenient chain, which is what they were written for.
+
+/** The escapes JSON defines. An escape outside this set means the model's
+ *  escaping is broken in a way this strategy cannot infer — it declines. */
+const JSON_ESCAPES: Record<string, string> = {
+  '"': '"',
+  '\\': '\\',
+  '/': '/',
+  b: '\b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+}
+
+/** Thrown to abandon a tolerant parse. Never escapes this module. */
+class DeclineParse extends Error {}
+
+/** What the tolerant parse had to read as content rather than as syntax. */
+export interface UnescapedContentCounts {
+  /** `"` characters inside a string that the structure did not need as a
+   *  closing delimiter. */
+  quotes: number
+  /** Raw control characters (a literal newline or tab inside a string), which
+   *  strict JSON rejects outright — so escaping them is the only reading. */
+  controlChars: number
+}
+
+/**
+ * Parse `raw` under the JSON grammar, reading a `"` inside a string as CONTENT
+ * unless the structure requires it to close the string, and a raw control
+ * character as itself.
+ *
+ * Returns `null` — never a partial value — when anything else is off: an
+ * unquoted key, an unknown escape, a value the grammar does not allow, or one
+ * character of trailing junk. A greedy reading that guesses wrong runs out of
+ * grammar and declines the whole document rather than handing back a
+ * plausible-looking half of it.
+ *
+ * The root must be an object, because that is `tool_args`' contract.
+ */
+function parseUnescapedContent(
+  raw: string,
+): { value: Record<string, unknown>; counts: UnescapedContentCounts } | null {
+  const n = raw.length
+  let i = 0
+  const counts: UnescapedContentCounts = { quotes: 0, controlChars: 0 }
+
+  function skipWs(): void {
+    while (i < n && (raw[i] === ' ' || raw[i] === '\t' || raw[i] === '\n' || raw[i] === '\r')) i++
+  }
+
+  /** `follow` is the set of characters the STRUCTURE allows after this string
+   *  ('' = end of input). A `"` followed by anything else is content. */
+  function readString(follow: string): string {
+    if (raw[i] !== '"') throw new DeclineParse()
+    i++
+    let out = ''
+    while (i < n) {
+      const ch = raw[i]
+      if (ch === '\\') {
+        const esc = raw[i + 1]
+        if (esc === 'u') {
+          const hex = raw.slice(i + 2, i + 6)
+          if (!/^[0-9a-fA-F]{4}$/.test(hex)) throw new DeclineParse()
+          out += String.fromCharCode(parseInt(hex, 16))
+          i += 6
+          continue
+        }
+        const mapped = esc === undefined ? undefined : JSON_ESCAPES[esc]
+        if (mapped === undefined) throw new DeclineParse()
+        out += mapped
+        i += 2
+        continue
+      }
+      if (ch === '"') {
+        let j = i + 1
+        while (j < n && (raw[j] === ' ' || raw[j] === '\t' || raw[j] === '\n' || raw[j] === '\r'))
+          j++
+        const next = j < n ? raw[j] : ''
+        // `''.includes(x)` is true for every x, so end-of-input is compared
+        // explicitly rather than through the follow set.
+        if (next === '' ? follow === '' : follow.includes(next)) {
+          i++
+          return out
+        }
+        counts.quotes++
+        out += '"'
+        i++
+        continue
+      }
+      if (ch < ' ') {
+        counts.controlChars++
+        out += ch
+        i++
+        continue
+      }
+      out += ch
+      i++
+    }
+    throw new DeclineParse()
+  }
+
+  function readObject(): Record<string, unknown> {
+    i++ // '{'
+    const obj: Record<string, unknown> = {}
+    skipWs()
+    if (raw[i] === '}') {
+      i++
+      return obj
+    }
+    for (;;) {
+      skipWs()
+      const key = readString(':')
+      skipWs()
+      if (raw[i] !== ':') throw new DeclineParse()
+      i++
+      const value = readValue(',}')
+      // `obj['__proto__'] = v` mutates the prototype instead of adding a
+      // member. `JSON.parse` makes it an ordinary own property and so does
+      // this — model output is a trust boundary.
+      if (key === '__proto__') {
+        Object.defineProperty(obj, key, {
+          value,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        })
+      } else {
+        obj[key] = value
+      }
+      skipWs()
+      if (raw[i] === ',') {
+        i++
+        continue
+      }
+      if (raw[i] === '}') {
+        i++
+        return obj
+      }
+      throw new DeclineParse()
+    }
+  }
+
+  function readArray(): unknown[] {
+    i++ // '['
+    const arr: unknown[] = []
+    skipWs()
+    if (raw[i] === ']') {
+      i++
+      return arr
+    }
+    for (;;) {
+      arr.push(readValue(',]'))
+      skipWs()
+      if (raw[i] === ',') {
+        i++
+        continue
+      }
+      if (raw[i] === ']') {
+        i++
+        return arr
+      }
+      throw new DeclineParse()
+    }
+  }
+
+  function readValue(follow: string): unknown {
+    skipWs()
+    if (i >= n) throw new DeclineParse()
+    const ch = raw[i]
+    if (ch === '"') return readString(follow)
+    if (ch === '{') return readObject()
+    if (ch === '[') return readArray()
+    let j = i
+    while (j < n && !' \t\n\r,}]'.includes(raw[j])) j++
+    const token = raw.slice(i, j)
+    i = j
+    let scalar: unknown
+    try {
+      scalar = JSON.parse(token)
+    } catch {
+      throw new DeclineParse()
+    }
+    if (scalar !== null && typeof scalar === 'object') throw new DeclineParse()
+    return scalar
+  }
+
+  try {
+    skipWs()
+    if (raw[i] !== '{') return null
+    const value = readObject()
+    skipWs()
+    if (i !== n) return null
+    return { value, counts }
+  } catch (err) {
+    if (err instanceof DeclineParse) return null
+    throw err
+  }
+}
+
+/**
+ * How a value was obtained, when it was not obtained by `JSON.parse` alone.
+ *
+ * A repaired call is indistinguishable downstream from one the model emitted
+ * cleanly — #217(b) tracks that as a hidden-repair-loop concern — so both
+ * strategies say so, and the loop patterns carry the note onto the `tool_call`
+ * event they emit.
+ */
+export interface JsonRepairNote {
+  /** `unescaped-content`: the structure parsed under the JSON grammar and only
+   *  string content had to be re-read (see `parseUnescapedContent`).
+   *  `lenient-tokens`: the regex chain rewrote tokens — unquoted keys, bare
+   *  values, single quotes, a trailing comma. */
+  strategy: 'unescaped-content' | 'lenient-tokens'
+  /** `unescaped-content` only. */
+  counts?: UnescapedContentCounts
+}
+
+/** A parsed args object plus how it was obtained. */
+export interface RepairedJson {
+  args: Record<string, unknown>
+  /** Absent when `JSON.parse` accepted the input exactly as the model wrote it. */
+  repair?: JsonRepairNote
+}
+
+const LENIENT: JsonRepairNote = { strategy: 'lenient-tokens' }
+
+/**
+ * Parse a JSON string leniently, repairing common LLM mistakes, and report
+ * WHICH repair (if any) produced the value.
+ *
+ * Callers that only want the value use `repairJson`; the loop patterns use
+ * this one so the `tool_call` event can record that the args were
+ * reconstructed rather than emitted cleanly (#217b).
+ */
+export function repairJsonTracked(raw: string): RepairedJson {
   // Fast path: already valid JSON
   try {
-    return JSON.parse(raw)
+    return { args: JSON.parse(raw) }
   } catch {
     // continue to repair
   }
 
   let s = raw.trim()
 
+  // Strategy 1 — string content that was not escaped. Ahead of the token
+  // rewriting below on purpose; see the block comment on
+  // `parseUnescapedContent` for why the ordering is load-bearing.
+  const content = parseUnescapedContent(s)
+  if (content) {
+    return {
+      args: content.value,
+      repair: { strategy: 'unescaped-content', counts: content.counts },
+    }
+  }
+
   // Replace single quotes with double quotes (but not inside double-quoted strings)
   // Simple approach: if there are no double quotes at all, swap all single quotes
   if (!s.includes('"') && s.includes("'")) {
     s = s.replace(/'/g, '"')
     try {
-      return JSON.parse(s)
+      return { args: JSON.parse(s), repair: LENIENT }
     } catch {
       /* continue */
     }
@@ -244,7 +519,7 @@ export function repairJson(raw: string): Record<string, unknown> {
 
   // Try again — keys are now quoted, values may already be valid
   try {
-    return JSON.parse(s)
+    return { args: JSON.parse(s), repair: LENIENT }
   } catch {
     // continue to fix values
   }
@@ -269,7 +544,7 @@ export function repairJson(raw: string): Record<string, unknown> {
   s = unparkBracketedValues(s, parked)
 
   try {
-    return JSON.parse(s)
+    return { args: JSON.parse(s), repair: LENIENT }
   } catch {
     // continue to last-resort handler
   }
@@ -289,9 +564,28 @@ export function repairJson(raw: string): Record<string, unknown> {
     if (!value.includes('{') && !value.includes('}')) {
       // Strip optional surrounding quotes the LLM may or may not have added.
       const unquoted = value.replace(/^['"`]([\s\S]*)['"`]$/, '$1')
-      return { [key]: unquoted }
+      return { args: { [key]: unquoted }, repair: LENIENT }
     }
   }
 
-  return JSON.parse(s)
+  return { args: JSON.parse(s), repair: LENIENT }
+}
+
+/**
+ * Parse a JSON string leniently, repairing common LLM mistakes.
+ *
+ * Handles:
+ * - Unescaped `"` and raw newlines inside string CONTENT (the `tool_args`
+ *   double-encoding class, #145) — see `parseUnescapedContent`
+ * - Unquoted keys:   {query: "val"}  → {"query": "val"}
+ * - Unquoted string values: {query: hello world} → {"query": "hello world"}
+ * - Trailing commas:  {a: 1,}  → {a: 1}
+ * - Single-quoted strings: {'key': 'val'} → {"key": "val"}
+ * - Bracketed values with unquoted contents: {author: [X], limit: 5}
+ *   → {"author": ["X"], "limit": 5}
+ *
+ * @returns Parsed object — throws if still invalid after repair.
+ */
+export function repairJson(raw: string): Record<string, unknown> {
+  return repairJsonTracked(raw).args
 }

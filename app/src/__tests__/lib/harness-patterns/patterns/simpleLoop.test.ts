@@ -435,6 +435,90 @@ describe('simpleLoop execution', () => {
     expect(JSON.stringify(errorEvents[0].data)).toContain('Invalid tool_args JSON')
   })
 
+  it('dispatches under-escaped tool_args and marks the call as reconstructed', async () => {
+    // The `flavour-office-loop` incident's shape (see
+    // json-repair-unescaped-content.test.ts): the payload's own structure is
+    // intact and only a content quote was singly escaped. It used to take the
+    // branch above. It now runs — and says on the event that it was rebuilt,
+    // because a repaired call is otherwise indistinguishable from a clean one
+    // (#217b).
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
+
+    const mockController = vi
+      .fn()
+      .mockResolvedValueOnce({
+        action: mockAction({
+          tool_name: 'read_neo4j_cypher',
+          tool_args: '{"query": "MATCH (n) WHERE n.name = "Revenue Model" RETURN n"}',
+        }),
+        llmCall: undefined,
+      })
+      .mockResolvedValueOnce({ action: mockFinalAction('done'), llmCall: undefined })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'test',
+    })
+
+    const scope = createScope('test', {})
+    const view = createEventView({
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [],
+      status: 'running' as const,
+      data: {},
+      input: 'test',
+    })
+
+    const result = await pattern.fn(scope, view)
+
+    expect(result.events.filter((e) => e.type === 'error')).toHaveLength(0)
+
+    const toolCall = result.events.find((e) => e.type === 'tool_call')
+    expect(toolCall?.data).toMatchObject({
+      tool: 'read_neo4j_cypher',
+      args: { query: 'MATCH (n) WHERE n.name = "Revenue Model" RETURN n' },
+      repaired: { strategy: 'unescaped-content', counts: { quotes: 2, controlChars: 0 } },
+    })
+  })
+
+  it('leaves the repaired marker off a call the model encoded cleanly', async () => {
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
+
+    const mockController = vi
+      .fn()
+      .mockResolvedValueOnce({
+        action: mockAction({
+          tool_name: 'read_neo4j_cypher',
+          tool_args: '{"query": "MATCH (n) RETURN n"}',
+        }),
+        llmCall: undefined,
+      })
+      .mockResolvedValueOnce({ action: mockFinalAction('done'), llmCall: undefined })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'test',
+    })
+
+    const result = await pattern.fn(
+      createScope('test', {}),
+      createEventView({
+        sessionId: 'test',
+        createdAt: Date.now(),
+        events: [],
+        status: 'running' as const,
+        data: {},
+        input: 'test',
+      }),
+    )
+
+    const toolCall = result.events.find((e) => e.type === 'tool_call')
+    expect(toolCall?.data).not.toHaveProperty('repaired')
+  })
+
   it('should track error when tool execution fails', async () => {
     const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('@hames/harness-patterns/context.server')

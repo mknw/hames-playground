@@ -1052,6 +1052,13 @@ export interface ToolCallEventData {
   batchId?: string
   tool: string
   args: unknown
+  /** Set when `args` did NOT come out of a strict `JSON.parse` of the model's
+   *  `tool_args` — i.e. `repairJsonTracked` had to reconstruct them. A repaired
+   *  call is otherwise indistinguishable downstream from one the model emitted
+   *  cleanly, which #217(b) tracks as a hidden-repair-loop concern: without
+   *  this the only record that a tool ran on rebuilt arguments is that it ran.
+   *  Absent on the overwhelming majority of calls. */
+  repaired?: import('./json-repair').JsonRepairNote
 }
 
 /** Data payload for tool_result event */

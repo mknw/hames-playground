@@ -3,7 +3,7 @@
  * pre-publish audit, finding 11): the existing `package-conventions.test.ts`
  * pins the two cheapest conventions (prettier config, LICENSE/README beside
  * the manifest) and would not have caught any of the audit's four must-fix
- * findings. This test drives `npm pack` per workspace package and asserts
+ * findings. This test drives `pnpm pack` per workspace package and asserts
  * what a consumer actually receives, mechanically:
  *
  *   (a) the packed manifest — produced with `pnpm pack`, i.e. the artifact

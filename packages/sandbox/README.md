@@ -22,7 +22,7 @@ wants containment adds this.
 | `./egress-policy`            | the four egress profiles and the per-boot network/gateway naming                               | yes                                            |
 | `./workspace-store`          | `configureWorkspaceStore(...)` — the durable `/work` seam a host wires                         | server                                         |
 | `./with-sandbox.server`      | the wrapper itself, for a host that skips the barrel                                           | server                                         |
-| `./pty-manager.server`       | the interactive Shell path (node-pty) the host's routes drive                                  | server                                         |
+| `./pty-manager.server`       | the interactive Shell path the host's routes drive (node-pty, loaded lazily — see below)       | server                                         |
 | `./docker-backend.server`    | the compute backend — an implementation detail; named here because the host's tests mock it    | server                                         |
 
 **The barrel is server-only and it pulls Docker with it.** That is not an
@@ -55,6 +55,26 @@ imports, and neither reaches a `node:` module or the server assertion.
 `context.server`, `tool-transport.server`), `@modelcontextprotocol/sdk` (the
 in-VM MCP client) and `node-pty` (the Shell path). Nothing else — there are no
 `app/src` imports, type-only included, pinned two ways (see **Guards**).
+
+**`node-pty` is declared but loaded lazily.** It is a NATIVE module, and the
+only thing that needs its `.node` addon is one `spawn` call on the
+interactive-shell path — so `pty-manager.server.ts` imports the _type_
+statically (erased) and the _value_ with `await import('node-pty')` at that
+call. Importing the module therefore costs nothing, and a consumer who never
+opens a shell never touches the addon. This is not hypothetical: pnpm's
+build-script allowlist (`onlyBuiltDependencies`) lives in a **workspace root**
+manifest that a consumer of this tarball does not inherit, so node-pty installs
+with its build scripts ignored and works only where a prebuild happens to match.
+Deferring the import turns "this package cannot be imported" into "this
+package's PTY feature is unavailable on this host", which is the truthful scope
+of it.
+
+It stays a real `dependency` — not `optional`, not `peer` — for the other half:
+a consumer who _does_ open a shell must get it installed without reading a
+README. Lazy about **when** it loads, explicit about **that** it is required.
+The pack smoke pins both halves: it asserts the manifest still declares it, then
+renames the installed copy away and requires `./pty-manager.server` to import
+anyway.
 
 **Composed host-side:** the `'use server'` route handlers around the PTY
 manager with their per-route auth gates, the document store itself, and the
@@ -112,7 +132,8 @@ Three, and none of them subsumes the others:
    it into a scratch project and _evaluates_ every entry the host imports. This
    is what catches a **value** import escaping into `app/src` (as
    `ERR_MODULE_NOT_FOUND` naming the app path) or a dependency the manifest does
-   not declare. It also asserts that neither `__tests__/` nor `scripts/` ships.
+   not declare. It also asserts that neither `__tests__/` nor `scripts/` ships,
+   and that node-pty is declared but not needed at module load (above).
 3. **`package-conventions.test.ts`** — every workspace package carries a
    `.prettierrc.json` (issue #354: without one, prettier's defaults reformat
    whole files and `--check` agrees with itself, which once hid a lost docblock

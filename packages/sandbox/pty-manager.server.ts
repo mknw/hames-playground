@@ -23,6 +23,30 @@
  * Every caller must verify the requesting user owns the session BEFORE
  * touching a PTY (the routes gate via `lib/stash/http.server.ts`:
  * `claimSession` on stream/ensure, `requireSessionOwner` on input/resize).
+ *
+ * ## node-pty is loaded LAZILY, at the one call that needs it
+ *
+ * `node-pty` is a NATIVE module: importing it resolves a `.node` addon, and
+ * the only thing in this package that needs that addon is `spawn` — one call,
+ * on the interactive-shell path. Everything else here (the session map, the
+ * scrollback, the subscriber fan-out, the idle close, and the `IPty` type
+ * itself, which is `import type` and erased) is plain TypeScript.
+ *
+ * A static import would make the addon a condition of merely IMPORTING this
+ * module, and a consumer that never opens a shell would pay for it — with a
+ * module-load crash, not a degraded feature. That is not hypothetical for a
+ * tarball consumer: pnpm's dependency build-script allowlist
+ * (`onlyBuiltDependencies`) lives in a WORKSPACE ROOT manifest, which a
+ * consumer installing `@hames/sandbox` does not inherit, so node-pty arrives
+ * with its build scripts ignored and works only where a prebuild happens to
+ * match. Deferring the import moves that failure from "this package cannot be
+ * imported" to "this package's PTY feature is unavailable on this host", which
+ * is the truthful scope of it.
+ *
+ * `node-pty` stays a real `dependency` (not optional, not peer) for the other
+ * half of the same story: a consumer who DOES open a shell must get it
+ * installed without reading a README. Lazy about WHEN it loads, explicit about
+ * THAT it is required.
  */
 
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
@@ -31,7 +55,10 @@ import { getDefaultAttachments } from './with-sandbox.server'
 import { hydrateWorkspace } from './work-artifacts.server'
 import type { Attachment } from './attachment-table.server'
 import type { RuntimeConfig } from './types'
-import * as pty from 'node-pty'
+// Type-only: erased at compile time, so naming `IPty` below creates no
+// runtime edge to the native module. The value side is imported lazily in
+// `start()` — see the header.
+import type * as pty from 'node-pty'
 
 assertServerOnImport()
 
@@ -125,7 +152,11 @@ export class PtyManager {
 
     const cols = 80
     const rows = 24
-    const term = pty.spawn(DOCKER_BIN, ['exec', '-it', containerId, 'bash'], {
+    // The one place the native addon is actually needed (see the header). ESM
+    // caches the module, so only the first shell of the process pays the
+    // resolution; every later one is a hit on the same record.
+    const { spawn } = await import('node-pty')
+    const term = spawn(DOCKER_BIN, ['exec', '-it', containerId, 'bash'], {
       name: 'xterm-color',
       cols,
       rows,

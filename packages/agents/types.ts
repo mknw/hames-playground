@@ -12,7 +12,25 @@
  *     `SessionData` aliases `AgentData`).
  */
 
-import type { ElementDefinition } from 'cytoscape'
+/**
+ * Local stand-in for cytoscape's `ElementDefinition` — the fields this
+ * package's output actually touches. Declared here rather than imported so a
+ * consumer who wants these helpers is never forced to install a graph
+ * rendering library (these packages ship raw TypeScript, so a consumer's
+ * `tsc` compiles this file directly and would report TS2307 on an unresolved
+ * import). Structurally compatible with cytoscape's own `ElementDefinition`
+ * (its data is `{ id?: string; [key: string]: any }`), so a consumer holding
+ * the real type can consume ours unchanged.
+ */
+export interface ElementDefinition {
+  /** Element payload — cytoscape allows arbitrary extra fields here. */
+  data: { [key: string]: unknown; id?: string }
+  /** Which collection the element belongs to (cytoscape: an explicit group always wins over its inference). */
+  group?: 'nodes' | 'edges'
+  /** A space-separated list of class names, for cytoscape styling selectors. */
+  classes?: string
+}
+
 import type {
   ConfiguredPattern,
   RetrieverBackend,

@@ -246,6 +246,70 @@ describe('withSandbox', () => {
     expect(backend.calls.boot[0].runtime).toMatchObject({ tenantId: 'user-42' })
   })
 
+  // The RESOLVER half of the tenant seam (#365 post-merge review, D1). The
+  // literal case above is the Shell path; the agent path passes a function,
+  // because a chain is built once and cached for the conversation's life while
+  // the authenticated user is only in scope for one turn. The regression this
+  // pins is the one the config's docblock warns about and that nothing saw: a
+  // resolution hoisted out of `fn` freezes the build-time tenant onto every
+  // later turn — and since an out-of-request build resolves to `'default'`,
+  // the freeze lands every tenant on the SHARED /cache volume that #348 exists
+  // to close. Both shapes of that break are silent: `tsc` is happy and every
+  // other assertion in this file still passes. Hence: drive `fn` twice, count
+  // the calls, and read the answer back off each boot.
+  it('calls a tenantId RESOLVER per run, and each boot carries that run’s answer', async () => {
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+
+    const seen: string[] = []
+    let current = 'user-a'
+    const wrapped = withSandbox({
+      backend,
+      tenantId: () => {
+        seen.push(current)
+        return current
+      },
+    })(inner)
+
+    await wrapped.fn(fakeScope({}), fakeView)
+    current = 'user-b'
+    await wrapped.fn(fakeScope({}), fakeView)
+
+    // Called per RUN, not once at wrap time: a hoisted resolution calls it once.
+    expect(seen).toEqual(['user-a', 'user-b'])
+    // …and the boot each run actually made carries that run's answer. This is
+    // the assertion a never-called resolver fails too: it would leave both
+    // boots on 'default'.
+    expect(backend.calls.boot).toHaveLength(2)
+    expect(backend.calls.boot[0].runtime.tenantId).toBe('user-a')
+    expect(backend.calls.boot[1].runtime.tenantId).toBe('user-b')
+  })
+
+  it("degrades a THROWING tenant resolver to the 'default' tenant with a warning, not a failed turn", async () => {
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // A resolver throws when the caller's tenant is unknowable — which IS the
+    // 'default' case. Taking the turn down instead would trade an
+    // unauthenticated boot for a dead chain.
+    await withSandbox({
+      backend,
+      tenantId: () => {
+        throw new Error('no request scope')
+      },
+    })(inner).fn(fakeScope({}), fakeView)
+
+    expect(backend.calls.boot).toHaveLength(1)
+    expect(backend.calls.boot[0].runtime.tenantId).toBe('default')
+    // Degraded, but never silently: the operator sees which tenant it fell to
+    // and why, because a verbatim-name boot is a posture change.
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('no request scope')
+    expect(warn.mock.calls[0][0]).toContain("'default'")
+    warn.mockRestore()
+  })
+
   it('prefixes the inner pattern name and preserves config / estimateTurns', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)

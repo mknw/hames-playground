@@ -62,7 +62,7 @@ import {
   withInjectionGuard,
   compactExecution,
   harness,
-} from "@hames/harness-patterns";
+} from '@hames/harness-patterns'
 import type {
   ConfiguredPattern,
   ControllerFn,
@@ -71,61 +71,55 @@ import type {
   SimpleLoopData,
   SynthesisFn,
   CompactExecutionData,
-} from "@hames/harness-patterns";
-import type { HarnessData } from "@hames/harness-patterns/harness.server";
+} from '@hames/harness-patterns'
+import type { HarnessData } from '@hames/harness-patterns/harness.server'
 
 // One data type across the composition — extends the pieces it rides and
 // carries an index signature (what `harness()`'s generic requires):
-interface AgentData
-  extends HarnessData, RouterData, SimpleLoopData, CompactExecutionData {
-  [key: string]: unknown;
+interface AgentData extends HarnessData, RouterData, SimpleLoopData, CompactExecutionData {
+  [key: string]: unknown
 }
 
 // Yours to bring — the adapter factories in the harness-baml companion wrap
 // BAML functions into these shapes (core ships no LLM defaults by design, so
 // every seam is REQUIRED config). Scripted ones keep the example honest:
 const controller: ControllerFn = async (input) => ({
-  action: { reasoning: "", tool_name: "", tool_args: "", is_final: true },
-});
+  action: { reasoning: '', tool_name: '', tool_args: '', is_final: true },
+})
 
 const route: RouteFn = async (message, history, routes) => ({
-  intent: routes?.[0]?.name ?? "user",
+  intent: routes?.[0]?.name ?? 'user',
   tool_call_needed: false,
   tool_name: null,
   response_text: message,
-});
+})
 
 const synthesize: SynthesisFn = async (input) => ({
   value: input.userMessage,
-});
+})
 
 const tools = await Tools({
-  namespaces: (name) => (name.startsWith("web_") ? "web" : undefined),
-});
+  namespaces: (name) => (name.startsWith('web_') ? 'web' : undefined),
+})
 
 const search = simpleLoop<AgentData>(controller, tools.web ?? [], {
-  patternId: "web-search",
-});
+  patternId: 'web-search',
+})
 
 const patterns: ConfiguredPattern<AgentData>[] = [
-  router<AgentData>(
-    { web_search: "Web lookups and information retrieval" },
-    { route },
-  ),
+  router<AgentData>({ web_search: 'Web lookups and information retrieval' }, { route }),
   routes<AgentData>({
-    web_search: withInjectionGuard({ namespaces: ["web"], catalog: tools.all })(
-      search,
-    ),
+    web_search: withInjectionGuard({ namespaces: ['web'], catalog: tools.all })(search),
   }),
   compactExecution<AgentData>({
-    mode: "thread",
-    patternId: "response-synth",
+    mode: 'thread',
+    patternId: 'response-synth',
     synthesize,
   }),
-];
-const agent = harness(...patterns);
+]
+const agent = harness(...patterns)
 
-const result = await agent("What shipped in TypeScript 5.7?", "session-123");
+const result = await agent('What shipped in TypeScript 5.7?', 'session-123')
 ```
 
 Nothing in that chain hands state to the next step by hand: each pattern finds
@@ -155,9 +149,9 @@ configuration and per-pattern semantics that belong there rather than here.
 ## Status and licence
 
 This package — and only this package — is [MIT](./LICENSE) (Copyright (c) 2026
-Michael Accetto). It is the `hames` library: a pnpm workspace package today
-(consumed via `workspace:*`, not yet published to npm — see the guide's
-"Consuming the package" for exactly where that stands).
+Michael Accetto). It is the `hames` library: a pnpm workspace package, published to npm as
+`@hames/harness-patterns` (see the guide's "Consuming the package" for how
+each consumer — workspace, Docker image, tarball — takes it).
 
 It lives inside the
 [hames playground](https://github.com/mknw/hames-playground#readme), which is both

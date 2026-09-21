@@ -18,7 +18,7 @@
  * `import()`s alike. Raw text catches all three shapes.
  *
  * Like `core-types-source-scan.test.ts`, this scans the RAW TEXT of every
- * non-test file under `packages/harness-patterns/`, `packages/agents/`
+ * `.ts`/`.tsx` file under `packages/harness-patterns/`, `packages/agents/`
  * (extended at the @hames/agents extraction, #225 PR-2) and
  * `packages/connectors/` (extended at the connectors move, #225 PR-C2 — same
  * pin shape, one scan over the published packages) and `packages/sandbox/`
@@ -26,7 +26,23 @@
  * hardest, since the composition root, three PTY routes and a browser
  * component all import it) — import lines and inline `import()`
  * positions alike, comments included, because a static import cannot hide
- * anywhere else. Three escape shapes are checked:
+ * anywhere else.
+ *
+ * **Including each package's own co-located `__tests__/` tree** (#365
+ * post-merge review, D2). The skip that used to sit in `walk()` dates from
+ * when every test lived app-side, where climbing into `app/` is not an
+ * escape; since #225 PR-C2 and the @hames/sandbox extraction the tests moved
+ * INTO `packages/connectors/` and `packages/sandbox/`, and nothing else can
+ * see them: the tarball does not ship tests, so the pack smoke is blind to
+ * them, and CI runs each package's suite from inside the full workspace
+ * checkout, where a relative climb into `app/` resolves fine. That left the
+ * claim those very fixtures make about themselves — "a package whose suite
+ * reaches back into the host's test tree is not independently shippable,
+ * which is the whole point of co-locating the tests here"
+ * (`packages/sandbox/__tests__/fixtures/baml.ts`) — as convention rather than
+ * an invariant, and a standalone clone would fail to run its own suite.
+ *
+ * Three escape shapes are checked:
  *
  *   - a relative specifier climbing out of the package into `app/`
  *     (`../../app/…` — the shape all four removed edges had);
@@ -59,9 +75,13 @@ async function walk(dir: string): Promise<string[]> {
   for (const entry of entries) {
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
-      if (entry.name === '__tests__' || entry.name === 'node_modules') continue
+      // Only the installed dependency tree is out of scope — a package's own
+      // `__tests__/` is IN it (see the header). Tests and fixtures are held to
+      // the same rule as the modules beside them, so no filename filter here
+      // either: a `.test.ts` reaching into `app/` is exactly the shape D2 named.
+      if (entry.name === 'node_modules') continue
       files.push(...(await walk(full)))
-    } else if (/\.tsx?$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name)) {
+    } else if (/\.tsx?$/.test(entry.name)) {
       files.push(full)
     }
   }
@@ -69,7 +89,7 @@ async function walk(dir: string): Promise<string[]> {
 }
 
 describe('zero app imports under the published packages (BAML-companion seam lane pin)', () => {
-  it('no non-test file under any published package imports app code', async () => {
+  it('no file under any published package imports app code, tests and fixtures included', async () => {
     const offenders: string[] = []
     for (const root of PACKAGE_ROOTS) {
       const files = await walk(root)

@@ -30,25 +30,18 @@ store, no second state machine.
 Patterns are values of one shape:
 
 ```typescript
-import { configurePattern } from "@hames/harness-patterns";
-import type {
-  ConfiguredPattern,
-  ScopedPattern,
-  PatternScope,
-} from "@hames/harness-patterns";
+import { configurePattern } from '@hames/harness-patterns'
+import type { ConfiguredPattern, ScopedPattern, PatternScope } from '@hames/harness-patterns'
 
-const myPattern: ScopedPattern<Record<string, unknown>> = async (
-  scope,
-  view,
-) => {
+const myPattern: ScopedPattern<Record<string, unknown>> = async (scope, view) => {
   // read the log through `view`, append events through `scope.events`
-  return scope;
-};
+  return scope
+}
 
 const patterns: ConfiguredPattern<Record<string, unknown>>[] = [
   // combinators and leaves — every one of them is a ConfiguredPattern
-  configurePattern("my-pattern", myPattern),
-];
+  configurePattern('my-pattern', myPattern),
+]
 ```
 
 `ScopedPattern<T>` — a function `(scope: PatternScope<T>, view: EventView) => Promise<PatternScope<T>>` —
@@ -107,24 +100,21 @@ next turn of a conversation.
 A leaf pattern is the type above plus events. Concretely:
 
 ```typescript
-import { trackEvent, harness, configurePattern } from "@hames/harness-patterns";
-import type { PatternScope, EventView } from "@hames/harness-patterns";
+import { trackEvent, harness, configurePattern } from '@hames/harness-patterns'
+import type { PatternScope, EventView } from '@hames/harness-patterns'
 
-async function announce(
-  scope: PatternScope,
-  view: EventView,
-): Promise<PatternScope> {
-  const turns = view.ofType("user_message").get().length;
+async function announce(scope: PatternScope, view: EventView): Promise<PatternScope> {
+  const turns = view.ofType('user_message').get().length
   trackEvent(
     scope,
-    "assistant_message",
+    'assistant_message',
     { content: `saw ${turns} user messages`, final: true },
     true,
-  );
-  return scope;
+  )
+  return scope
 }
 
-const agent = harness(configurePattern("announce", announce));
+const agent = harness(configurePattern('announce', announce))
 ```
 
 - **Read** through `view` — the slice your `viewConfig` declared. `get()`
@@ -149,31 +139,21 @@ today you mirror the five in-tree wrappers, of which `patterns/with-references.s
 is the reference:
 
 ```typescript
-import { createScope, createEvent } from "@hames/harness-patterns";
-import type {
-  ConfiguredPattern,
-  PatternScope,
-  EventView,
-} from "@hames/harness-patterns";
+import { createScope, createEvent } from '@hames/harness-patterns'
+import type { ConfiguredPattern, PatternScope, EventView } from '@hames/harness-patterns'
 
 function wrapChild(child: ConfiguredPattern<Record<string, unknown>>) {
-  return async (
-    scope: PatternScope,
-    view: EventView,
-  ): Promise<PatternScope> => {
-    const childScope = createScope(
-      child.config.patternId ?? child.name,
-      scope.data,
-    );
-    const result = await child.fn(childScope, view);
+  return async (scope: PatternScope, view: EventView): Promise<PatternScope> => {
+    const childScope = createScope(child.config.patternId ?? child.name, scope.data)
+    const result = await child.fn(childScope, view)
     scope.events.push(
-      createEvent("pattern_enter", child.name, { pattern: child.name }),
+      createEvent('pattern_enter', child.name, { pattern: child.name }),
       ...result.events,
-      createEvent("pattern_exit", child.name, { status: "completed" }),
-    );
-    scope.data = result.data;
-    return scope;
-  };
+      createEvent('pattern_exit', child.name, { status: 'completed' }),
+    )
+    scope.data = result.data
+    return scope
+  }
 }
 ```
 
@@ -213,35 +193,31 @@ A **transport** is anything that owns some tool names and can run them. The
 seam has four members and no rank:
 
 ```typescript
-import {
-  registerTransport,
-  withTransport,
-  activeTransports,
-} from "@hames/harness-patterns";
-import type { ToolTransport } from "@hames/harness-patterns";
+import { registerTransport, withTransport, activeTransports } from '@hames/harness-patterns'
+import type { ToolTransport } from '@hames/harness-patterns'
 
 const myBackend = {
   run: async (name: string, args: Record<string, unknown>) => ({
     success: true,
-    data: "ok",
+    data: 'ok',
   }),
   describe: async () => [],
-};
+}
 
 const mine: ToolTransport = {
-  id: "my-sandbox",
-  ownsTool: (name) => name.startsWith("sandbox_"),
+  id: 'my-sandbox',
+  ownsTool: (name) => name.startsWith('sandbox_'),
   callTool: (name, args) => myBackend.run(name, args),
   listTools: () => myBackend.describe(),
-};
+}
 
 // PROCESS-wide: consulted only after every scoped transport.
-const unregister = registerTransport(mine);
+const unregister = registerTransport(mine)
 
 // SCOPED: consulted FIRST, innermost-first, for the duration of one call.
 await withTransport(mine, async () => {
   /* any dispatch inside this call reaches `mine` first */
-});
+})
 ```
 
 Two properties are the design, not accidents:
@@ -266,31 +242,29 @@ Two properties are the design, not accidents:
 everything):
 
 ```typescript
-import { Tools, simpleLoop, harness } from "@hames/harness-patterns";
-import type { ControllerFn, SimpleLoopData } from "@hames/harness-patterns";
-import type { HarnessData } from "@hames/harness-patterns/harness.server";
+import { Tools, simpleLoop, harness } from '@hames/harness-patterns'
+import type { ControllerFn, SimpleLoopData } from '@hames/harness-patterns'
+import type { HarnessData } from '@hames/harness-patterns/harness.server'
 
 interface WebData extends HarnessData, SimpleLoopData {
-  [key: string]: unknown;
+  [key: string]: unknown
 }
 
 // The controller callable is yours to bring (see the LLM seam — it re-homes
 // into the harness-baml companion). A hand-rolled one is legal and is how
 // you unit-test a loop without a model:
 const scripted: ControllerFn = async (input) => ({
-  action: { reasoning: "done", tool_name: "", tool_args: "", is_final: true },
-});
+  action: { reasoning: 'done', tool_name: '', tool_args: '', is_final: true },
+})
 
 // `namespaces` is REQUIRED: the deployment's tool→namespace map, passed
 // explicitly. A missing map is how `tools.web` disappears silently on the
 // day a catalog moves.
 const tools = await Tools({
-  namespaces: (toolName) => (toolName.startsWith("web_") ? "web" : undefined),
-});
+  namespaces: (toolName) => (toolName.startsWith('web_') ? 'web' : undefined),
+})
 
-const agent = harness(
-  simpleLoop<WebData>(scripted, tools.web ?? [], { patternId: "web-loop" }),
-);
+const agent = harness(simpleLoop<WebData>(scripted, tools.web ?? [], { patternId: 'web-loop' }))
 ```
 
 `ToolsFrom(descriptions, options?)` groups a tool list you already hold — tests
@@ -332,16 +306,14 @@ stops when one is irrecoverable.
   so a failed call still counts.
 
 ```typescript
-import { LLMCallError } from "@hames/harness-patterns";
+import { LLMCallError } from '@hames/harness-patterns'
 
 function explain(err: unknown): string {
   if (err instanceof LLMCallError) {
     // `rawOutput` is the model's verbatim output — show it, don't paraphrase it.
-    return err.llmCall.rawOutput
-      ? `model said: ${err.llmCall.rawOutput}`
-      : err.message;
+    return err.llmCall.rawOutput ? `model said: ${err.llmCall.rawOutput}` : err.message
   }
-  return err instanceof Error ? err.message : String(err);
+  return err instanceof Error ? err.message : String(err)
 }
 ```
 
@@ -368,13 +340,13 @@ The exports map:
 | `./guard`    | the injection guard's deterministic sanitizer, import-free on its own                                   |
 | `./*`        | any package file by path (deep imports, e.g. `@hames/harness-patterns/tool-transport.server`)           |
 
-The package is **not yet published to npm** — the workspace and the Docker
-image consume it by path. The CI `pack smoke` (`scripts/pack-smoke.sh`) is the
-stand-in proof: it `pnpm pack`s the package, installs the tarball into a
-scratch project, and asserts every exports entry exists, `./guard` behaves, and
-the app-imported entries evaluate. When Step 2 of the extraction plan
-(`docs/plan/harness-npm-lib.md` §5) unblocks, an external developer installs it
-the ordinary way and brings their own model adapter for the six config-injected
-functions — the core ships no LLM defaults, by design; see the companion
-module's guide for the LLM seam (§3 of the plan's guide skeleton re-homes
-there).
+The package publishes to npm (`pnpm publish`, which rewrites `workspace:`
+specifiers at pack time); inside this workspace the app and the Docker image
+consume it by path. The CI `pack smoke` (`scripts/pack-smoke.sh`) is the
+proof that the tarball a consumer installs actually works: it `pnpm pack`s
+the package, installs the tarball into a scratch project, and asserts every
+exports entry exists, `./guard` behaves, and the app-imported entries
+evaluate. An external developer installs it the ordinary way and brings
+their own model adapter for the six config-injected functions — the core
+ships no LLM defaults, by design; see the companion module's guide for the
+LLM seam (§3 of the plan's guide skeleton re-homes there).

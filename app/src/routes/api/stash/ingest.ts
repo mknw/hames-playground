@@ -10,8 +10,8 @@
  */
 
 import type { APIEvent } from '@solidjs/start/server'
-import { getDocument } from '../../../lib/document-store.server'
-import { ingestDocument } from '../../../lib/document-ingest.server'
+import { getDocument } from '@hames/harness-patterns/stash/document-store.server'
+import { ingestDocument } from '@hames/harness-patterns/stash/document-ingest.server'
 import { claimSession, json, withUser } from '../../../lib/stash/http.server'
 
 export async function POST(event: APIEvent) {

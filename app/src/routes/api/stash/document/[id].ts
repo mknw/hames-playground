@@ -20,7 +20,7 @@ import {
   deleteDocument,
   setDocumentFlags,
   stripContent,
-} from '../../../../lib/document-store.server'
+} from '@hames/harness-patterns/stash/document-store.server'
 import {
   claimSession,
   json,

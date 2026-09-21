@@ -18,7 +18,7 @@ import {
   isConvertible,
   conversionEnabled,
   docConvertUrl,
-} from '../../lib/doc-convert.server'
+} from '../../stash/doc-convert.server'
 
 /** Minimal Response-shaped stub so we don't depend on a global Response ctor. */
 function fakeResponse(body: unknown, ok = true, status = 200): Response {

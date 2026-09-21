@@ -45,7 +45,7 @@ let doc: Doc | null = null
 const storeDocument = vi.fn<(input: Record<string, unknown>) => Promise<Doc>>()
 const deleteDocument = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {})
 const listDocuments = vi.fn(async () => [])
-vi.mock('../../../lib/document-store.server', () => ({
+vi.mock('@hames/harness-patterns/stash/document-store.server', () => ({
   DEFAULT_TTL_SECONDS: 604800,
   storeDocument: (...a: unknown[]) => storeDocument(...(a as [never])),
   getDocument: async () => doc,
@@ -57,7 +57,7 @@ vi.mock('../../../lib/document-store.server', () => ({
 
 const ingestDocument = vi.fn<() => Promise<{ chunks: number }>>()
 const searchDocuments = vi.fn<() => Promise<unknown[]>>()
-vi.mock('../../../lib/document-ingest.server', () => ({
+vi.mock('@hames/harness-patterns/stash/document-ingest.server', () => ({
   ingestDocument: () => ingestDocument(),
   searchDocuments: () => searchDocuments(),
   ingestStashDocument: async () => {},
@@ -67,7 +67,7 @@ vi.mock('../../../lib/harness-client/registry.server', () => ({
   agentUsesRedisRetriever: async () => false,
 }))
 vi.mock('../../../lib/harness-client/session.server', () => ({ loadSession: async () => null }))
-vi.mock('../../../lib/doc-convert.server', () => ({
+vi.mock('@hames/harness-patterns/stash/doc-convert.server', () => ({
   conversionEnabled: () => false,
   isConvertible: () => false,
 }))

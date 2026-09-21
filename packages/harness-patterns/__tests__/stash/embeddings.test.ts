@@ -19,7 +19,7 @@ import {
   embeddingSpaceId,
   assertSameSpace,
   type EmbeddingSpace,
-} from '../../lib/embeddings.server'
+} from '../../stash/embeddings.server'
 
 // ----------------------------------------------------------------------------
 // Fake OpenAI-compatible /embeddings endpoint

@@ -60,7 +60,7 @@ const storeDocument = vi.fn<
     encoding: string
   }) => Promise<{ id: string }>
 >(async () => ({ id: 'doc-1' }))
-vi.mock('../../../lib/document-store.server', () => ({ storeDocument }))
+vi.mock('@hames/harness-patterns/stash/document-store.server', () => ({ storeDocument }))
 
 vi.mock('../../../lib/stash/upload-service.server', () => ({
   guessMimeType: (f: string) => (f.endsWith('.m4a') ? 'audio/mp4' : 'text/plain'),

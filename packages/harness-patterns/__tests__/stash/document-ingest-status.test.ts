@@ -17,11 +17,11 @@ vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   callTool: vi.fn(async () => ({ success: false, data: null, error: 'no gateway' })),
 }))
 
-import { ingestStashDocument, ensureSessionIngested } from '../../lib/document-ingest.server'
-import { storeDocument, setDocumentFlags, getDocument } from '../../lib/document-store.server'
-import type { CallTool } from '../../lib/document-store.server'
-import type { ToolCallResult } from '@hames/harness-patterns/types'
-import type { EmbeddingConfig, EmbeddingResult } from '../../lib/embeddings.server'
+import { ingestStashDocument, ensureSessionIngested } from '../../stash/document-ingest.server'
+import { storeDocument, setDocumentFlags, getDocument } from '../../stash/document-store.server'
+import type { CallTool } from '../../stash/document-store.server'
+import type { ToolCallResult } from '../../types'
+import type { EmbeddingConfig, EmbeddingResult } from '../../stash/embeddings.server'
 
 // ----------------------------------------------------------------------------
 // Fake Redis: JSON docs + a per-session index set + vector hashes.

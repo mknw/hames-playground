@@ -10,12 +10,12 @@
  */
 
 import type { APIEvent } from '@solidjs/start/server'
-import { storeDocument, listDocuments } from '../../../lib/document-store.server'
-import { ingestStashDocument } from '../../../lib/document-ingest.server'
+import { storeDocument, listDocuments } from '@hames/harness-patterns/stash/document-store.server'
+import { ingestStashDocument } from '@hames/harness-patterns/stash/document-ingest.server'
 import { loadSession } from '../../../lib/harness-client/session.server'
 import { agentUsesRedisRetriever } from '../../../lib/harness-client/registry.server'
 import { parseUploadRequest } from '../../../lib/stash/upload-service.server'
-import { conversionEnabled, isConvertible } from '../../../lib/doc-convert.server'
+import { conversionEnabled, isConvertible } from '@hames/harness-patterns/stash/doc-convert.server'
 import { claimSession, json, sessionNotFound, withUser } from '../../../lib/stash/http.server'
 import { resolveSessionOwner } from '../../../lib/stash/ownership.server'
 

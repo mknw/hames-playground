@@ -33,7 +33,7 @@ vi.mock('../../../lib/harness-client/action-runner.server', () => ({
 }))
 
 const storeDocument = vi.fn<(input: Record<string, unknown>) => Promise<{ id: string }>>()
-vi.mock('../../../lib/document-store.server', () => ({ storeDocument }))
+vi.mock('@hames/harness-patterns/stash/document-store.server', () => ({ storeDocument }))
 
 vi.mock('../../../lib/stash/upload-service.server', () => ({
   guessMimeType: (f: string) => (f.endsWith('.m4a') ? 'audio/mp4' : 'application/octet-stream'),

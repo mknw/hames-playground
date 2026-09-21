@@ -18,7 +18,17 @@ query ─────────────────────── embe
 > diagrams for this pipeline (upload → store → ingest → search) and how it
 > bridges into the sandbox `/work` durable workspace (#89).
 
-## Modules (`app/src/lib/`)
+## Modules
+
+Since the core-absorb move (2026-09), the portable pipeline lives in
+`packages/harness-patterns/stash/` (and the retriever backends in the same
+package's `retriever/`), reachable only by explicit subpath import — the root
+barrel never evaluates it (pinned by the package's `stash-opt-in.test.ts`), and
+its Redis transport resolves through the package's `stash-transport.server`
+seam: gateway by default, with the app registering its direct-ioredis adapter
+(`redis-direct.server.ts`, still app-side) at boot in `middleware.ts`.
+`lib/stash/` (upload-service, http, ownership) stays app-side — it is auth- and
+db-coupled.
 
 | Module                                                                      | Role                                                                                                                                                                |
 | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -111,7 +121,7 @@ compactExecution({ mode: 'thread', synthesize: baml.synthesize }),
 
 **Query formulation.** By default the query is the user's **raw last message** — their own words embed better than a paraphrase (a generic rewrite like _"search the documents for all sections that discuss X"_ dilutes the vector). `generateQuery: true` rewrites it with a cheap `RetrieveQuery` (Haiku) call **only when the turn has history** — to resolve back-references (_"more on that"_, _"those sections"_) into a self-contained query; turn-1 messages are searched verbatim. `turnWindow: N` is a no-LLM alternative that concatenates the last N user turns.
 
-**Backends** (`app/src/lib/retriever/`) implement `RetrieverBackend { name, type, search() }`:
+**Backends** (`packages/harness-patterns/retriever/`) implement `RetrieverBackend { name, type, search() }`:
 
 - **`redis`** (`createRedisBackend`, `type: 'vector'`) — wraps `searchDocuments` (local Data Stash KNN), embedding the query locally with the corpus's recorded model. **Live.**
 - **`supabase`** (`createSupabaseBackend`, `type: 'vector'`) — the company pgvector corpus via the **Supabase MCP** server; **text-in** (Supabase embeds server-side via Automatic Embeddings / Edge Functions, so no client-side embedding and no OpenAI provider here). **Deferred stub** pending IT access: when `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` land, add the Supabase MCP to `configs/custom-catalog.yaml` and implement `search()` against its match RPC. Until then `search()` throws and the retriever's per-backend guard turns it into an empty result + error event — a misconfigured backend never sinks a run.

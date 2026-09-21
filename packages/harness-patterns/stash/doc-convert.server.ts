@@ -19,7 +19,7 @@
  * never fails.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '../assert.server'
 
 assertServerOnImport()
 

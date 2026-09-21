@@ -15,7 +15,7 @@ import {
   hasPendingIngest,
   refreshDocuments,
 } from '~/lib/stash-documents'
-import type { StashDocumentMeta } from '~/lib/document-store.server'
+import type { StashDocumentMeta } from '@hames/harness-patterns/stash/document-store.server'
 
 const doc = (id: string, over: Partial<StashDocumentMeta> = {}): StashDocumentMeta =>
   ({ id, filename: `${id}.md`, ...over }) as StashDocumentMeta

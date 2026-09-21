@@ -27,10 +27,10 @@
  *   - delete:              `key` (note: not `name`)
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import { stashCallTool, directCallTool, gatewayCallTool } from './redis-direct.server'
-import type { ToolCallResult } from '@hames/harness-patterns/types'
-import type { PriorResult } from '@hames/harness-patterns/types'
+import { assertServerOnImport } from '../assert.server'
+import { resolveStashCallTool, isBuiltinStashTransport } from '../stash-transport.server'
+import type { ToolCallResult } from '../types'
+import type { PriorResult } from '../types'
 
 assertServerOnImport()
 
@@ -291,7 +291,7 @@ export function redisWriteError(result: ToolCallResult): string | null {
  */
 export async function storeDocument(
   input: StoreDocumentInput,
-  callTool: CallTool = stashCallTool(),
+  callTool: CallTool = resolveStashCallTool(),
 ): Promise<StashDocument> {
   const encoding = input.encoding ?? 'utf8'
   // `size` is the ORIGINAL byte count: for base64 that's the decoded length
@@ -353,7 +353,7 @@ export async function storeDocument(
 export async function getDocument(
   sessionId: string,
   docId: string,
-  callTool: CallTool = stashCallTool(),
+  callTool: CallTool = resolveStashCallTool(),
 ): Promise<StashDocument | null> {
   const res = await callTool('json_get', {
     name: docKey(sessionId, docId),
@@ -370,7 +370,7 @@ export async function getDocument(
 export async function getDocumentMeta(
   sessionId: string,
   docId: string,
-  callTool: CallTool = stashCallTool(),
+  callTool: CallTool = resolveStashCallTool(),
 ): Promise<StashDocumentMeta | null> {
   const doc = await getDocument(sessionId, docId, callTool)
   if (!doc) return null
@@ -403,9 +403,9 @@ export function invalidateDocumentList(sessionId: string): void {
  */
 export async function listDocuments(
   sessionId: string,
-  callTool: CallTool = stashCallTool(),
+  callTool: CallTool = resolveStashCallTool(),
 ): Promise<StashDocumentMeta[]> {
-  const cacheable = callTool === gatewayCallTool || callTool === directCallTool
+  const cacheable = isBuiltinStashTransport(callTool)
   if (cacheable) {
     const hit = listCache.get(sessionId)
     if (hit && Date.now() - hit.at < LIST_CACHE_TTL_MS) return hit.docs
@@ -452,7 +452,7 @@ export async function setDocumentFlags(
     /** Derived markdown for a converted binary (see {@link StashDocument.derivedText}). */
     derivedText?: string
   },
-  callTool: CallTool = stashCallTool(),
+  callTool: CallTool = resolveStashCallTool(),
 ): Promise<StashDocument | null> {
   const doc = await getDocument(sessionId, docId, callTool)
   if (!doc) return null
@@ -500,7 +500,7 @@ export async function setDocumentFlags(
 export async function deleteDocument(
   sessionId: string,
   docId: string,
-  callTool: CallTool = stashCallTool(),
+  callTool: CallTool = resolveStashCallTool(),
 ): Promise<void> {
   // `delete` uses `key` (not `name`) — see CLAUDE.md Redis quirks.
   // Both writes are attempted even if the first fails, so a retry of a

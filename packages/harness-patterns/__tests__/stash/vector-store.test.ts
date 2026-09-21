@@ -21,9 +21,9 @@ import {
   decodeMeta,
   spaceTag,
   sanitize,
-} from '../../lib/vector-store.server'
-import type { CallTool } from '../../lib/document-store.server'
-import type { ToolCallResult } from '@hames/harness-patterns/types'
+} from '../../stash/vector-store.server'
+import type { CallTool } from '../../stash/document-store.server'
+import type { ToolCallResult } from '../../types'
 
 function makeFakeRedis() {
   const hashes = new Map<string, Record<string, unknown>>()

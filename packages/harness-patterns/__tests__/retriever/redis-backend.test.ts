@@ -16,8 +16,8 @@ vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
   callTool: vi.fn(async () => ({ success: false, data: null, error: 'no gateway' })),
 }))
 
-import { createRedisBackend } from '../../../lib/retriever/redis-backend.server'
-import type { SearchHit } from '../../../lib/document-ingest.server'
+import { createRedisBackend } from '../../retriever/redis-backend.server'
+import type { SearchHit } from '../../stash/document-ingest.server'
 
 const SAMPLE: SearchHit[] = [
   {

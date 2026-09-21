@@ -33,8 +33,8 @@ import {
   DEFAULT_TTL_SECONDS,
   MAX_CONTENT_BYTES,
   type CallTool,
-} from '../../lib/document-store.server'
-import type { ToolCallResult } from '@hames/harness-patterns/types'
+} from '../../stash/document-store.server'
+import type { ToolCallResult } from '../../types'
 
 // ----------------------------------------------------------------------------
 // Fake Redis backing a fake callTool

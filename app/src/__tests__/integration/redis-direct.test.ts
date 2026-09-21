@@ -18,7 +18,7 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
 }))
 
 import { directCallTool, getRedis, closeRedisDirect } from '../../lib/redis-direct.server'
-import { createVectorStore } from '../../lib/vector-store.server'
+import { createVectorStore } from '@hames/harness-patterns/stash/vector-store.server'
 
 const RUN = process.env.REDIS_DIRECT_IT === '1'
 
@@ -38,8 +38,18 @@ describe.skipIf(!RUN)('redis-direct integration (live redis-stack)', () => {
 
   it('round-trips create → upsert → KNN search, closest first', async () => {
     await store.ensureIndex()
-    await store.upsert('docA:0', [1, 0, 0, 0], { content: 'alpha', doc_id: 'docA', chunk_index: 0 }, 300)
-    await store.upsert('docB:0', [0, 1, 0, 0], { content: 'beta', doc_id: 'docB', chunk_index: 0 }, 300)
+    await store.upsert(
+      'docA:0',
+      [1, 0, 0, 0],
+      { content: 'alpha', doc_id: 'docA', chunk_index: 0 },
+      300,
+    )
+    await store.upsert(
+      'docB:0',
+      [0, 1, 0, 0],
+      { content: 'beta', doc_id: 'docB', chunk_index: 0 },
+      300,
+    )
 
     const hits = await store.search([0.9, 0.1, 0, 0], 5)
     expect(hits.length).toBeGreaterThanOrEqual(2)

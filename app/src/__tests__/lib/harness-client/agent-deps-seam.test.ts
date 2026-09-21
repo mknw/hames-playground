@@ -65,7 +65,7 @@ const createRedisBackend = vi.fn(() => ({
 const withSandbox = vi.fn((_config: { tenantId?: unknown }) => (p: unknown) => p)
 const enrichNeo4jResult = vi.fn()
 
-vi.mock('../../../lib/retriever', () => ({ createRedisBackend }))
+vi.mock('@hames/harness-patterns/retriever', () => ({ createRedisBackend }))
 vi.mock('@hames/sandbox', () => ({ withSandbox }))
 vi.mock('../../../lib/harness-client/neo4j-enricher.server', () => ({ enrichNeo4jResult }))
 vi.mock('../../../lib/db/conversations.server', () => ({

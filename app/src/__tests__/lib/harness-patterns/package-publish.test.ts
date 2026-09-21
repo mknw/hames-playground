@@ -164,7 +164,9 @@ describe('packed artifact pin (pnpm pack — the publish path — what a consume
     // no cross-package edge at all — including one whose edge was reverted to a
     // `dependency` AND dropped. This is the half that reddens on a revert:
     // packed here, not read off the source manifest, because the artifact is
-    // what a consumer resolves.
+    // what a consumer resolves. Named rather than counted, for the reason its
+    // twin in `package-conventions.test.ts` gives: a count does not notice one
+    // companion losing its edge.
     const withPeers = packages.filter(
       (name) =>
         Object.keys(packedByName.get(name)!.manifest.peerDependencies ?? {}).filter((spec) =>
@@ -186,16 +188,24 @@ describe('packed artifact pin (pnpm pack — the publish path — what a consume
         // into two copies of a package holding four module-level
         // AsyncLocalStorage singletons — the boundary stops applying silently
         // (pre-publish audit finding 2, the SD-1/SD-5 class).
-        const source = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as {
-          dependencies?: Record<string, string>
-          peerDependencies?: Record<string, string>
-          devDependencies?: Record<string, string>
-        }
-        const crossPackage = Object.entries({
-          ...source.dependencies,
-          ...source.peerDependencies,
-          ...source.devDependencies,
-        }).filter(([spec]) => spec.startsWith('@hames/'))
+        const source = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as Record<
+          string,
+          Record<string, string> | undefined
+        >
+        // Keyed by FIELD.spec, never merged into one object. The same spec now
+        // appears in two fields by design — the 2026-09-22 ruling requires a
+        // cross-package edge to be a peer AND a devDependency — and a merge
+        // spreading devDependencies last let the dev entry MASK the peer's
+        // range: `workspace:*` in a peer whose dev entry was `workspace:^`
+        // passed this assertion. The pin survived only while each edge lived
+        // in exactly one field, which is the invariant this ruling removed.
+        const crossPackage = (
+          ['dependencies', 'peerDependencies', 'devDependencies'] as const
+        ).flatMap((field) =>
+          Object.entries(source[field] ?? {})
+            .filter(([spec]) => spec.startsWith('@hames/'))
+            .map(([spec, range]) => [`${field}.${spec}`, range] as const),
+        )
         // Vacuously true for the root package (no @hames deps) — fine.
         const offenders = Object.fromEntries(
           crossPackage.filter(([, range]) => range !== 'workspace:^'),

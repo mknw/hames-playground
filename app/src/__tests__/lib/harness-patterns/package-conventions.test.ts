@@ -133,9 +133,12 @@ describe('workspace package conventions', () => {
    * real caret range at pack time, which `package-publish.test.ts` asserts on
    * the tarball itself.
    *
-   * Discovered, never listed — same rule as the scans above, and for the same
-   * reason: a hardcoded companion list goes stale on exactly the event this
-   * pin exists for.
+   * The package ENUMERATION is discovered, never listed — same rule as the
+   * scans above, and for the same reason: a hardcoded list goes stale on
+   * exactly the event this pin exists for, a new package. The one exception is
+   * the non-vacuity assertion's expected value, which names the four
+   * companions the ruling is about; the comment on it says why that list is
+   * deliberate rather than an oversight.
    */
   describe('cross-package edges are peers (owner ruling 2026-09-22)', () => {
     interface Manifest {
@@ -189,8 +192,13 @@ describe('workspace package conventions', () => {
 
     it('the companions DO declare @hames peers, so neither scan above passes vacuously', () => {
       // The four companions of harness-patterns, which is the one package with
-      // no @hames edge of its own. Asserted by COUNT, not by name, for the same
-      // reason the enumeration is discovered: a sixth companion needs no edit.
+      // no @hames edge of its own. Asserted BY NAME, and deliberately so: a
+      // bare count, or an "at least one", would not notice `connectors`
+      // silently losing its peer — which is the exact revert the two scans
+      // above cannot catch by themselves, since both are emptiness assertions.
+      // The cost is owned: a sixth companion edits this line, which is the
+      // moment someone should be deciding on purpose whether it has a
+      // cross-package edge at all.
       const withPeers = [...manifests.entries()].filter(
         ([, m]) => hames(m.peerDependencies).length > 0,
       )

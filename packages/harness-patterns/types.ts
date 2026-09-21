@@ -1435,13 +1435,14 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   // compactExecution answers from whatever else is in context — never fatal.
   retriever: 'recoverable',
   // ---------------------------------------------------------------------------
-  // The three below were unlisted until #273 D-d, and therefore inherited
-  // `resolveConfig`'s `'irrecoverable'` fallback. That was harmless while
-  // nothing read severity for control flow and wrong the moment something did:
-  // each of these emits `error` events for things a turn plainly survives, so a
-  // chain-fatal default would have let one kill the turn. They are spelled out
-  // rather than left to the fallback so the next reader sees a decision instead
-  // of an omission.
+  // The FIVE best-effort types were unlisted until #273 D-d, and therefore
+  // inherited `resolveConfig`'s `'irrecoverable'` fallback; the three that
+  // survive ADR-0006 are below, the other two having gone with the patterns
+  // they classified. That was harmless while nothing read severity for control
+  // flow and wrong the moment something did: each of these emits `error` events
+  // for things a turn plainly survives, so a chain-fatal default would have let
+  // one kill the turn. They are spelled out rather than left to the fallback so
+  // the next reader sees a decision instead of an omission.
   // ---------------------------------------------------------------------------
   // judge is advisory ranking. "No candidates to evaluate" is a normal outcome
   // of an execution that found nothing, not a reason to stop.

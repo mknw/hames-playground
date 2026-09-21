@@ -202,9 +202,6 @@ function firstIrrecoverable<T>(
  *   routes({ neo4j: neo4jPattern, web: webPattern }),
  *   compactExecution({ mode: 'thread' })
  * )
- *
- * // Use in harness alongside other patterns
- * const agent = harness(routedAgent)
  */
 export function chain<T extends Record<string, unknown>>(
   ...patterns: ConfiguredPattern<T>[]

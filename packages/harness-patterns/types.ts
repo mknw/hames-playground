@@ -863,6 +863,45 @@ export interface ConfiguredPattern<T> {
    *  the wrapper stays config-transparent (`pattern.config` remains the inner
    *  pattern's own object). */
   injectionGuard?: { namespaces: string[]; tools: string[] }
+  /** Statically declared capabilities — see {@link PatternCapabilities}. Same
+   *  charter as `children` and `injectionGuard`: introspection only, never read
+   *  during execution, and NOT part of `config`, so a wrapper that declares one
+   *  stays config-transparent. */
+  capabilities?: PatternCapabilities
+}
+
+/**
+ * What a pattern DECLARES about itself for a host to read without running it.
+ *
+ * Every field is a capability in the host's own vocabulary, named for what it
+ * DOES rather than for the package that supplies it — core hosts the contract,
+ * other packages fill it in. The probes in `pattern-capabilities.ts` walk a
+ * pattern graph and read these; nothing here is consulted during execution.
+ *
+ * It is one typed field instead of the ad-hoc config keys it replaced
+ * (`backendKinds`, `sandboxSyncWorkspace`), because those rode between packages
+ * as STRINGS: the declaring side widened `PatternConfig` with a cast and the
+ * reading side widened it back with a second, independent cast, so renaming
+ * either one compiled on both sides and silently turned the capability off.
+ * With the fact in a type core owns, a rename is a compile error in every
+ * package that names it — which is the whole reason the field exists.
+ *
+ * Adding a capability means adding a field here. That is deliberate friction:
+ * a cross-package fact should be declared once, in the type, rather than
+ * agreed by convention at two call sites that never see each other.
+ */
+export interface PatternCapabilities {
+  /** Names of the retrieval backends this pattern will query (the
+   *  `RetrieverBackend.name`s it was built with). Declared by `retriever`. A
+   *  host gates on the backend it owns — `'redis'` is the local Data Stash
+   *  vector path, which is what makes an upload worth auto-ingesting. */
+  retrievalBackends?: readonly string[]
+  /** This pattern's subtree runs against a DURABLE workspace: files are
+   *  restored into it on entry and deliverables promoted back out on exit, so
+   *  the workspace outlives the container. Declared by a wrapper that actually
+   *  performs that sync — a host reads it to decide whether it must hydrate the
+   *  workspace itself when it is the first to boot the session's container. */
+  workspaceSync?: boolean
 }
 
 // ============================================================================

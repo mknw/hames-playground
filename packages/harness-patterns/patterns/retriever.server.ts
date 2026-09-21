@@ -35,6 +35,7 @@ import type {
   PatternScope,
   EventView,
   ConfiguredPattern,
+  PatternCapabilities,
   PatternConfig,
   UserMessageEventData,
   AssistantMessageEventData,
@@ -159,13 +160,6 @@ export interface RetrieverData {
   matches?: RetrievalHit[]
 }
 
-/** Marker the resolved config carries so `pattern-capabilities` can answer
- *  "does this harness contain a retriever wired to backend X" without running
- *  it (mirrors the `dynamicToolPattern` probe). */
-export interface RetrieverConfigMarker extends PatternConfig {
-  backendKinds?: string[]
-}
-
 // ============================================================================
 // Pattern
 // ============================================================================
@@ -182,8 +176,13 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
   const backendKinds = backends.map((b) => b.name)
 
   const resolved = resolveConfig('retriever', { patternId: 'retriever', ...patternConfig })
-  // Stamp the backend kinds onto the resolved config for static introspection.
-  ;(resolved as RetrieverConfigMarker).backendKinds = backendKinds
+  // The backends this pattern will query, declared for static introspection —
+  // it lets a host answer "is there a retriever wired to backend X in here"
+  // (`harnessHasRedisRetriever`, the upload auto-ingest gate) without running
+  // the harness. Typed, so a rename of the field is a compile error here and in
+  // every probe that reads it; it used to be a `backendKinds` key cast onto the
+  // resolved config, which is a rename nothing would have caught.
+  const capabilities: PatternCapabilities = { retrievalBackends: backendKinds }
 
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
     try {
@@ -321,7 +320,7 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
     }
   }
 
-  return { name: 'retriever', fn, config: resolved, estimateTurns: () => 0 }
+  return { name: 'retriever', fn, config: resolved, capabilities, estimateTurns: () => 0 }
 }
 
 /**

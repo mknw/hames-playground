@@ -22,6 +22,7 @@ export type {
 
   // Configuration Types
   PatternConfig,
+  PatternCapabilities,
   ViewConfig,
   ContentTransform,
   CommitStrategy,
@@ -139,7 +140,7 @@ export {
   isRetrieverConfig,
   harnessHasRetriever,
   harnessHasRedisRetriever,
-  isSyncWorkspaceConfig,
+  declaresWorkspaceSync,
   harnessUsesSyncWorkspace,
 } from './pattern-capabilities'
 

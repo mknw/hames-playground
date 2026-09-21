@@ -182,8 +182,32 @@ interface ConfiguredPattern<T> {
   name: string
   fn: ScopedPattern<T>
   config: ResolvedConfig
+  children?: ConfiguredPattern<T>[] // combinators expose what they wrap
+  injectionGuard?: { namespaces: string[]; tools: string[] } // withInjectionGuard's declared boundary
+  capabilities?: PatternCapabilities // what the pattern declares about itself
+}
+
+// What a pattern declares for a host to read WITHOUT running it. Core owns the
+// type; other packages fill fields in. Introspection only — execution never
+// reads it — and NOT part of `config`, so a wrapper that declares one stays
+// config-transparent (the same charter `children` and `injectionGuard` have).
+interface PatternCapabilities {
+  retrievalBackends?: readonly string[] // declared by `retriever`: the backends it will query
+  workspaceSync?: boolean // declared by a wrapper that gives its subtree a durable workspace
 }
 ```
+
+`capabilities` is ONE typed field rather than the ad-hoc config keys it replaced
+(`backendKinds`, `sandboxSyncWorkspace`). Those rode between packages as
+strings: the declaring side widened `PatternConfig` with a cast and the reading
+probe widened it back with a second, independent one, so renaming either
+compiled on both sides and silently turned the capability off — the upload
+auto-ingest gate or the Shell's `/work/in` hydration would simply stop firing,
+with nothing red anywhere. A capability named in a type core owns is a compile
+error in every package that names it. Adding one means adding a field here;
+that friction is the point — a cross-package fact should be declared once, in
+the type, not agreed by convention at two call sites that never see each other.
+The probes are in `pattern-capabilities.ts`.
 
 ### BAML Types
 
@@ -857,6 +881,11 @@ and the declared trust boundary is readable off
 `ConfiguredPattern.injectionGuard` (`{ namespaces, tools }`) — a sibling field,
 NOT part of `config`, so config identity is preserved. That field is what lets a
 test assert an agent's namespace list instead of merely that a wrapper exists.
+`capabilities` follows the same rule, and for the same reason: `withSandbox`
+once cloned the wrapped config to carry a `sandboxSyncWorkspace` key, which
+broke transparency for exactly the agents that use durable workspaces. It now
+declares `capabilities.workspaceSync` beside `children`, and the inner
+`config` is passed through by identity.
 
 **Nesting only ever tightens.** Guards nest through AsyncLocalStorage, and
 `createInjectionGuard` reads the enclosing guard at construction to take the
@@ -1146,9 +1175,9 @@ interface RetrieverBackend {
 Framework-pure: the concrete backends live in this package's `retriever/` behind
 the explicit `./retriever` subpath, opt-in like the stash (core-absorb PR-2 —
 `createRedisBackend` is live; `createSupabaseBackend` is a deferred stub). The
-resolved config carries a `backendKinds: string[]` marker so
-`harnessHasRedisRetriever` (pattern-capabilities) can gate the Data Stash's
-auto-ingest-on-upload. **Best-effort / `recoverable`**: on total failure it
+pattern declares `capabilities.retrievalBackends` (see
+[`ConfiguredPattern`](#core-types)) so `harnessHasRedisRetriever`
+(pattern-capabilities) can gate the Data Stash's auto-ingest-on-upload. **Best-effort / `recoverable`**: on total failure it
 leaves `matches` empty and the compactExecution answers from the rest of context.
 
 **Untrusted by default in practice.** Stash chunks come from INGESTED DOCUMENTS

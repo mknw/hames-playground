@@ -29,7 +29,7 @@ import type { ComputeBackend, McpTransport, RootfsId, RuntimeConfig } from './ty
 import type {
   ConfiguredPattern,
   ErrorEventData,
-  PatternConfig,
+  PatternCapabilities,
   PatternScope,
   EventView,
 } from '@hames/harness-patterns/types'
@@ -287,7 +287,9 @@ export function withSandbox(config?: WithSandboxConfig) {
     const syncWorkspace = config?.syncWorkspace === true
     // Durable-workspace sync only runs on the id-addressable path (hydrate on
     // entry, promote on exit — see runWithIdAttachment). The capability
-    // marker below reflects that reality: syncWorkspace without an id is a no-op.
+    // declaration below reflects that reality: syncWorkspace without an id is a
+    // no-op, and declaring a capability the run does not honour is worse than
+    // declaring none — the Shell would skip a hydration nobody performs.
     const willSyncWorkspace = syncWorkspace && id !== undefined
     // …and a no-op is exactly what the caller did NOT ask for. Asking for a
     // durable workspace and silently getting none is how #243's follow-up bug
@@ -302,6 +304,19 @@ export function withSandbox(config?: WithSandboxConfig) {
           'workspace). Pass `id` — e.g. `${sessionId}:${rootfs}` — to hydrate /work/in.',
       )
     }
+
+    // The capability this wrapper DECLARES, in core's own vocabulary. Core does
+    // not know what a sandbox is (see the `runWithSandbox` note above); what it
+    // knows is that some pattern's subtree runs against a workspace that
+    // outlives its container, and `PatternCapabilities.workspaceSync` is the
+    // typed field it owns for saying so. The annotation is what makes this
+    // package fail to compile if core renames the field — the
+    // `sandboxSyncWorkspace` config key it replaced was a string both sides
+    // declared independently, so a rename typechecked in both packages and
+    // silently turned Shell hydration off.
+    const capabilities: PatternCapabilities | undefined = willSyncWorkspace
+      ? { workspaceSync: true }
+      : undefined
 
     const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
       // The per-call defaults were read from the app's request-scoped settings
@@ -354,15 +369,16 @@ export function withSandbox(config?: WithSandboxConfig) {
       // Expose the wrapped pattern so static introspection (pattern-capabilities)
       // can see patterns nested inside a sandbox wrapper.
       children: [pattern],
-      // When durable workspaces are active, stamp a marker the registry's
-      // `agentUsesSyncWorkspace` reads so the interactive Shell knows to hydrate
-      // /work on a first boot it triggers (#97 Gap 3). Stamped only when it will
-      // sync, so the wrapper stays config-transparent otherwise; the spread
-      // suppresses the excess-property check (mirrors the retriever's
-      // `backendKinds`).
-      ...(willSyncWorkspace
-        ? { config: { ...pattern.config, sandboxSyncWorkspace: true } as PatternConfig }
-        : {}),
+      // Declared so the registry's `agentUsesSyncWorkspace` can read it and the
+      // interactive Shell knows to hydrate /work on a first boot it triggers
+      // (#97 Gap 3). A TYPED SIBLING FIELD, not a config key: the wrapper stays
+      // config-transparent — `pattern.config` is still the inner pattern's own
+      // object, identity included — which is the same charter `injectionGuard`
+      // has. It used to clone the config to carry a `sandboxSyncWorkspace` key,
+      // which broke that transparency for exactly the agents that need the
+      // capability, and did it through a cast that hid the key from both
+      // packages' compilers.
+      ...(capabilities ? { capabilities } : {}),
     }
   }
 }

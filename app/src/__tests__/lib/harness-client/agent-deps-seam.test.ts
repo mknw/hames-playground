@@ -88,7 +88,8 @@ const { mcpNamespace } = await import('@hames/connectors/mcp-catalog')
 
 interface Pattern {
   name: string
-  config: { patternId?: string; backendKinds?: string[] }
+  config: { patternId?: string }
+  capabilities?: { retrievalBackends?: readonly string[] }
   children?: Pattern[]
 }
 
@@ -122,13 +123,13 @@ describe('the bag the composition root supplies is the bag the moved factories r
 
     // The backend in the built retriever pattern is the one the APP-side
     // factory produced — the whole reason the bag exists. The retriever
-    // pattern stamps the backends' names (not the objects) onto its resolved
-    // config for introspection, so the readout is the kind list; the call
+    // pattern declares the backends' names (not the objects) as a typed
+    // capability for introspection, so the readout is the name list; the call
     // assertion above is the identity check.
     expect(createRedisBackend).toHaveBeenCalledWith('seam-sess-2')
     const retrieverPattern = findPattern(patterns, 'retriever')
     expect(retrieverPattern).toBeDefined()
-    expect(retrieverPattern!.config.backendKinds).toEqual(['redis'])
+    expect(retrieverPattern!.capabilities?.retrievalBackends).toEqual(['redis'])
   })
 
   it('the bag the entry points take is the same composition-root bag', () => {

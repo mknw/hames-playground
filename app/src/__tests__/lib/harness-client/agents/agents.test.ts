@@ -323,9 +323,9 @@ describe('Agent Harnesses', () => {
       expect(routesPattern.children!.length).toBe(4)
       for (const route of routesPattern.children!) {
         expect(route.name).toContain('withSandbox')
-        // The marker `withSandbox` stamps only when `id` + `syncWorkspace` are
-        // BOTH set — i.e. only when hydrate/promote will actually run.
-        expect((route.config as { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace).toBe(true)
+        // `withSandbox` declares the capability only when `id` + `syncWorkspace`
+        // are BOTH set — i.e. only when hydrate/promote will actually run.
+        expect(route.capabilities?.workspaceSync).toBe(true)
       }
     })
   })

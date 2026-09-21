@@ -9,6 +9,7 @@
     ".": "./index.ts",
     "./package.json": "./package.json",
     "./clients.server": "./clients.server.ts",
+    "./consumer-clients.server": "./consumer-clients.server.ts",
     "./baml-adapters.server": "./baml-adapters.server.ts",
     "./baml_client": "./baml_client/index.ts",
     "./baml_client/*": "./baml_client/*.ts",

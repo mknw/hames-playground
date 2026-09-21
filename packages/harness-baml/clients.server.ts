@@ -113,6 +113,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import type { ModelLimits, CostBasis } from '@hames/harness-patterns/types'
+// TYPE-ONLY by design: this module owns the routing seam and reads the
+// consumer layer's SHAPE, while `consumer-clients.server.ts` imports the seam
+// itself. A value import here would make the consumer module load whenever the
+// tier module does — the direction the #225 extraction already ruled out for
+// host code, applied one hop closer to the package.
+import type { BamlClientOverride, ClientOverride } from './consumer-clients.server'
 
 assertServerOnImport()
 
@@ -274,6 +280,42 @@ export function configureCostPricing(pricing: CostPricing): void {
 
 export function activeCostPricing(): CostPricing {
   return costPricing
+}
+
+// ---------------------------------------------------------------------------
+// THE CONSUMER LAYER (issue #374 D1 — bring your own provider or model)
+//
+// One module-level `ClientOverride`, fed in by the host (or any consumer) via
+// `configureConsumerClients` and composed ON TOP of the built-in tier inside
+// `clientOverrideFor` below — the one function every adapter call site spreads
+// and the one the reference host also feeds to the agents package as
+// `AgentDeps.clientOverride`. Composition lives HERE, at the meeting point of
+// the two routing paths, so the precedence is explicit rather than accidental:
+//
+//   - a role the consumer MAPS takes the consumer's client (registry + primary)
+//     over the built-in tier, whatever the tier scope says;
+//   - a role the consumer does not map falls through to `verdaClientFor`
+//     untouched — the declared Anthropic chain, or the built-in private tier
+//     under a Verda-tier scope;
+//   - with no layer registered this module behaves exactly as it did before
+//     the layer existed.
+//
+// The `screen` role is covered by the same rule by construction: `byRole` is
+// keyed by role (SA-M5 / SD-4), so mapping `describe` never moves the screen.
+let consumerClients: ClientOverride | undefined
+
+/** Feed the consumer's client layer in (or clear it with `undefined`). Called
+ *  once at the composition root, beside the other `configure*` accessors;
+ *  `consumer-clients.server.ts`'s `activateConsumerClients` is the convenience
+ *  wrapper that keeps the consumer's imports to one subpath. */
+export function configureConsumerClients(override: ClientOverride | undefined): void {
+  consumerClients = override
+}
+
+/** The active consumer layer, if any — introspection for tests and the frame
+ *  lane's lift, not a second routing path. */
+export function activeConsumerClients(): ClientOverride | undefined {
+  return consumerClients
 }
 
 /** The LEAF output cap for a client name, from the host-fed table — the
@@ -649,7 +691,15 @@ export function activeInferenceTier(): InferenceTier {
  * an empty `{}` where the old code passed nothing is not equivalent — hence
  * the branch (#154).
  */
-export function clientOverrideFor(role: BamlRole): { client: string } | undefined {
+export function clientOverrideFor(role: BamlRole): BamlClientOverride | undefined {
+  // THE COMPOSITION RULE, stated where it is enforced (pinned — see the
+  // module's own test): the consumer's client wins over the built-in tier for
+  // a role the consumer maps; everything else falls through unchanged. A
+  // mapped role returns BEFORE the verda path, so the consumer's registry and
+  // primary ride the options bag and the private-call hook below does not fire
+  // — the consumer's client is not the private tier and owes nobody a wake.
+  const consumerBag = consumerClients?.(role)
+  if (consumerBag) return consumerBag
   const client = verdaClientFor(role)
   if (!client) return undefined
   // A bag naming a private-tier client is a call about to take the override —
@@ -691,7 +741,15 @@ function verdaClientFor(role: BamlRole): string | undefined {
  * costs context, under-trimming costs the whole call.
  */
 export function resolveClientForRole(role: BamlRole): string {
-  return verdaClientFor(role) ?? CLIENT_BY_ROLE[role]
+  // Same composition as `clientOverrideFor`, and for the same reason: this
+  // function's docstring promises "the client BAML uses for `role`", so a
+  // mapped role must report the consumer's client — budgeting against a chain
+  // no call reaches is the silent mis-budget this file already warns about.
+  // A consumer client name is unknown to the host-fed tables until the host
+  // adds it, which falls back SAFELY: a 16 384 window and the fixed batch
+  // ceiling (over-trimming, never overflowing) — see the consumer module's
+  // header.
+  return consumerClients?.(role)?.client ?? verdaClientFor(role) ?? CLIENT_BY_ROLE[role]
 }
 
 /**

@@ -52,6 +52,7 @@ import {
   type SanitizeReport,
 } from '../injection-guard'
 import { inferServer } from '../tools.server'
+import { isDegradedToolSurface } from '../gateway-health.server'
 import type {
   ConfiguredPattern,
   ContentSanitizedEventData,
@@ -68,25 +69,34 @@ assertServerOnImport()
 export interface InjectionGuardConfig extends InjectionGuardOptions {
   /**
    * Tool namespaces whose results are UNTRUSTED — the names `inferServer()`
-   * produces (`'web'`, `'graph'`, `'filesystem'`, `'retriever'`, …). Declare
+   * produces (`'web'`, `'graph'`, `'filesystem'`, …). Declare
    * these at the agent definition, not via a shared default: which sources an
    * agent treats as untrusted is a property of that agent's threat model and
-   * should be readable where the agent is defined.
+   * should be readable where the agent is defined. Each declared namespace
+   * is VERIFIED at construction against `catalog` — a namespace no catalog
+   * name produces refuses the guard (#242 item 4). A source that never rides
+   * a tool name (the retriever's own sanitize key) is declared under
+   * `tools` by exact name instead. An explicit `namespaces: []` is the
+   * deliberate "this agent trusts everything it calls" line.
    */
   namespaces?: string[]
   /**
    * Explicit tool names to treat as untrusted, in addition to `namespaces`.
-   * For a single hostile tool inside an otherwise trusted namespace.
+   * For a single hostile tool inside an otherwise trusted namespace, and for
+   * sanitize keys that are not namespaces at all (`'retriever'`) — exact
+   * names need no catalog evidence: they match by literal membership.
    */
   tools?: string[]
   /**
    * The tool-name catalog to validate `namespaces` against at construction —
    * the `tools.all` the agent just built with `Tools()`, passed by every
-   * production agent (#225 L5, §3's strengthened warning). Without it the
-   * second check has no name universe to walk and only the fixed-point check
-   * runs. The namespace also rides `SanitizeSummary`/`injectionGuard`
-   * projections, which carry counts and ids only (SD-3), so this is a label
-   * input, never a content input.
+   * production agent (#225 L5). REQUIRED whenever `namespaces` is non-empty:
+   * a declaration the guard cannot verify against the tool names it will
+   * actually see is refused like an unmatchable one (#242 item 4). Without
+   * this argument the second check has no name universe to walk. The
+   * namespace also rides `SanitizeSummary`/`injectionGuard` projections,
+   * which carry counts and ids only (SD-3), so this is a label input, never a
+   * content input.
    */
   catalog?: string[]
 }
@@ -115,9 +125,37 @@ export function createInjectionGuard(
   // safe; narrowing is what needs an explicit decision, and there is no way to
   // ask for it (deliberately).
   const outer = getActiveInjectionGuard()
+  // A guard that declares neither namespaces nor tools covers nothing and
+  // would read as protection while doing none (#242 item 4). Omission is not
+  // indistinguishable from decision: `namespaces: []` is the explicit line
+  // that says "this agent trusts everything it calls", and it still unions
+  // with any outer guard (SD-5).
+  if (
+    config.namespaces === undefined &&
+    (config.tools === undefined || config.tools.length === 0)
+  ) {
+    throw new Error(
+      `[withInjectionGuard] the guard declares no namespaces and no tools, so it ` +
+        `would sanitize nothing. Declare the namespaces it must screen, or write ` +
+        '`namespaces: []` explicitly if this agent trusts everything it calls.',
+    )
+  }
+  // REQUIRED whenever namespaces are declared: a declaration the guard cannot
+  // verify against the tool names it will actually see is refused below like
+  // an unmatchable one (#242 item 4).
   const namespaces = new Set(config.namespaces ?? [])
   const tools = new Set(config.tools ?? [])
-  warnOnUnmatchableNamespaces(namespaces, config.catalog)
+  if (namespaces.size > 0) {
+    if (!config.catalog) {
+      throw new Error(
+        `[withInjectionGuard] namespaces are declared but no catalog was passed. ` +
+          `Pass \`catalog: tools.all\` (the ToolSet you just built with \`Tools()\`) ` +
+          `so the guard can verify every declared namespace is actually produced — ` +
+          `an unverifiable boundary is refused, not trusted. (#242 item 4)`,
+      )
+    }
+    refuseUnmatchableNamespaces(namespaces, config.catalog)
+  }
 
   const isUntrusted = (tool: string): boolean =>
     tools.has(tool) || namespaces.has(inferServer(tool)) || (outer?.isUntrusted(tool) ?? false)
@@ -204,62 +242,77 @@ export function createInjectionGuard(
 }
 
 /** Declared namespaces already reported, so a per-turn pattern build doesn't
- *  repeat the warning for the whole process lifetime. */
+ *  repeat the degraded-surface warning for the whole process lifetime. */
 const warnedNamespaces = new Set<string>()
 
 /**
- * Warn about a declared namespace that can never match anything.
+ * REFUSE a guard whose declared namespaces cannot be verified (#242 item 4).
  *
  * `isUntrusted` asks `namespaces.has(inferServer(tool))`, so the only strings
- * that can ever match are the ones `inferServer` actually PRODUCES. Two checks,
- * because there are two ways to be unmatchable:
+ * that can ever match are the ones `inferServer` actually PRODUCES. A
+ * namespace nothing produces is a guard that is present, reports green, and
+ * neutralizes nothing — the exact failure mode the extraction shipped to
+ * external consumers, where the catalog lives in a third package nobody is
+ * obliged to register. The repo's rule everywhere else applies here: fail
+ * closed, at the seam where the catalog is in hand, before any LLM call.
  *
- * 1. **Fixed point** — the declared string is not even a fixed point of
+ * Three cases, each its own decision:
+ *
+ * 1. **Fixed-point violation** — the declared string is not a fixed point of
  *    `inferServer`: `inferServer('web_search')` is `'web'`,
- *    `inferServer('rust-mcp-filesystem')` is `'rust'`,
- *    `inferServer('database-server')` is `'database'`. So
- *    `namespaces: ['web_search']` type-checks, reads like protection, and
- *    sanitizes exactly nothing — the failure mode a security control must
- *    never have (sf-H5). The check is a fixed-point test rather than a
- *    live-catalog lookup on purpose: it is synchronous, needs no gateway, and
- *    cannot false-positive on a server that merely happens to be disabled
- *    right now.
- * 2. **Unproduced** (#225 L5, §3) — the string IS a fixed point
- *    (`inferServer('wikipedia') === 'wikipedia'` — a bare single word is
- *    always its own fixed point), yet no name in the declared `catalog`
- *    resolves to it. The first check is structurally blind to this: it
- *    validates the namespace STRING, never that any tool actually lands there
- *    — SD-5's "a control that is present but unreachable" in a new position.
- *    The catalog is in hand at construction, because the guard is built at
- *    pattern-build time immediately after `Tools()` and the agents pass
- *    `tools.all` as `catalog`. That converts the blind spot into a console
- *    warning at construction, which is where SD-5 already puts this class.
+ *    `inferServer('rust-mcp-filesystem')` is `'rust'`. It type-checks, reads
+ *    like protection, and sanitizes exactly nothing (sf-H5). Always refused:
+ *    a string property of the config, independent of any catalog, with zero
+ *    false positives.
+ * 2. **Healthy catalog, nothing produces the namespace** — the string IS a
+ *    fixed point (`inferServer('wikipedia') === 'wikipedia'`), yet no name in
+ *    the catalog resolves to it. This is the unregistered-catalog signature:
+ *    the gateway answered its 86 names and none lands in the declared
+ *    namespace, because `registerToolNamespaces(mcpNamespace)` never ran.
+ *    Refused, with a message naming the registration and the package that
+ *    exports it.
+ * 3. **Degraded surface** (#278 F1) — the catalog itself was built while the
+ *    gateway was unreachable (`isDegradedToolSurface`), so it is amputated by
+ *    provenance, not by misregistration. No untrusted tool can be reached
+ *    through it, so a refusal here would fail a turn for an outage that costs
+ *    the guard nothing and contradict #276's "one dead transport must not take
+ *    a turn down". The deduped warning stays for exactly this case.
  *
- * Caveat stated rather than buried: the second check can warn during a
- * gateway outage, when the catalog the agent built is amputated to the
- * app-side survivors — a namespace the gateway would have filled warns
- * spuriously. It is a warning, deduped per process, never a refusal.
+ * The catalog is REQUIRED whenever namespaces are declared (checked by the
+ * caller): a declaration the guard cannot verify is refused like an
+ * unmatchable one.
  */
-function warnOnUnmatchableNamespaces(namespaces: Set<string>, catalog?: string[]): void {
+function refuseUnmatchableNamespaces(namespaces: Set<string>, catalog: string[]): void {
   for (const ns of namespaces) {
-    if (warnedNamespaces.has(ns)) continue
     const canonical = inferServer(ns)
     if (canonical !== ns) {
-      warnedNamespaces.add(ns)
-      console.warn(
+      throw new Error(
         `[withInjectionGuard] declared namespace '${ns}' can never match a tool: ` +
-          `inferServer('${ns}') is '${canonical}'. NOTHING is being sanitized for it — ` +
-          `declare '${canonical}' instead, or list the exact tool names under \`tools\`.`,
+          `inferServer('${ns}') is '${canonical}'. Refusing to build a guard that ` +
+          `would sanitize nothing — declare '${canonical}' instead, or list the exact ` +
+          `tool names under \`tools\`. (#242 item 4)`,
       )
-      continue
     }
-    if (catalog && !catalog.some((tool) => inferServer(tool) === ns)) {
-      warnedNamespaces.add(ns)
-      console.warn(
-        `[withInjectionGuard] declared namespace '${ns}' matches no tool in the current ` +
-          `catalog (${catalog.length} names): NOTHING is being sanitized for it. If the ` +
-          `namespace is real, the catalog it was validated against was amputated or the ` +
-          `tool name is missing from it — check the resolver the catalog was built from.`,
+    if (!catalog.some((tool) => inferServer(tool) === ns)) {
+      if (isDegradedToolSurface(catalog)) {
+        // Outage-provenance amputation, not misregistration: warn, deduped.
+        if (warnedNamespaces.has(ns)) continue
+        warnedNamespaces.add(ns)
+        console.warn(
+          `[withInjectionGuard] declared namespace '${ns}' matches no tool in the ` +
+            `current catalog (${catalog.length} names), which was built while the ` +
+            `gateway was unreachable — the guard cannot verify it this turn. If the ` +
+            `namespace is real, this is the outage, not a missing registration.`,
+        )
+        continue
+      }
+      throw new Error(
+        `[withInjectionGuard] declared namespace '${ns}' matches no tool in the ` +
+          `catalog (${catalog.length} names). NOTHING would be sanitized for it — ` +
+          `most likely the tool→namespace resolver was never registered: call ` +
+          `\`registerToolNamespaces(mcpNamespace)\` once at boot (the resolver ships ` +
+          `in \`@hames/connectors/mcp-catalog\`). If the gateway is down instead, the ` +
+          `degraded-surface provenance (#278 F1) suppresses this refusal. (#242 item 4)`,
       )
     }
   }
@@ -326,14 +379,20 @@ function buildEvent(patternId: string, report: SanitizeReport): ContextEvent {
  * Wrap a pattern so every untrusted tool result produced inside it is
  * sanitized before it can reach an LLM-visible surface.
  *
+ * The declared namespaces are VERIFIED against `catalog` at construction —
+ * a namespace nothing produces refuses the guard (#242 item 4), so pass the
+ * `tools.all` the pattern's tools were built from.
+ *
  * @example
- * withInjectionGuard({ namespaces: ['web'] })(
+ * withInjectionGuard({ namespaces: ['web'], catalog: tools.all })(
  *   simpleLoop(webController, tools.web, { patternId: 'web-search' }),
  * )
  *
  * @example
  * // Guards every route at once — the ALS scope reaches nested patterns.
- * withInjectionGuard({ namespaces: ['web', 'graph'] })(routes({ … }))
+ * withInjectionGuard({ namespaces: ['web', 'graph'], catalog: tools.all })(
+ *   routes({ … }),
+ * )
  */
 export function withInjectionGuard(config: InjectionGuardConfig) {
   return <T>(pattern: ConfiguredPattern<T>): ConfiguredPattern<T> => {

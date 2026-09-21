@@ -271,7 +271,12 @@ const agent = harness(simpleLoop<WebData>(scripted, tools.web ?? [], { patternId
 and static inventories; the production path is `Tools()`.
 `registerToolNamespaces(map)` sets the process-wide default the **injection
 guard** consults; the explicit `namespaces` argument is what **grouping**
-consults. Both exist so a missing catalog is loud, not silent.
+consults. Both exist so a missing catalog is loud, not silent — and the guard
+is louder still: it **refuses** a declared namespace it cannot verify (#242
+item 4). When you wrap a pattern, pass `catalog: tools.all`; the guard walks
+that catalog at construction and throws if no tool name in it resolves to a
+namespace you declared — the signature of a missing registration. An agent
+with no untrusted namespaces says so explicitly: `namespaces: []`.
 
 What a transport is then _allowed_ to do — a sandbox's capabilities, network
 profile, workspace paths — is that transport's business and is unchanged by the

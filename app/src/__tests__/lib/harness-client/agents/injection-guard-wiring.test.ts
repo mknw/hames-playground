@@ -91,17 +91,20 @@ describe('agents that consume untrusted content are guarded', () => {
     expect(guard!.injectionGuard).toEqual({ namespaces: ['graph'], tools: [] })
   })
 
-  it('retriever: routes is guarded, covering both web and the stash', async () => {
+  it('retriever: routes is guarded, covering web by namespace and the stash by exact name', async () => {
     const { retrieverAgent } = await import('@hames/agents/agents/retriever-agent.server')
     const patterns = (await retrieverAgent.createPatterns('s', testAgentDeps)) as Pattern[]
     const guard = guardOf(patterns)
     expect(guard).toBeDefined()
     expect(guard!.children?.[0].name).toBe('routes(retriever|neo4j|web_search)')
     // `retriever` MUST be listed: stash chunks bypass callTool, so the
-    // retriever's write-time sanitize only engages when this names it.
+    // retriever's write-time sanitize only engages when this names it. It is
+    // an exact-name `tools` entry (#242 item 4) — never a namespace anything
+    // infers to, so a namespace declaration for it is unverifiable and the
+    // guard would refuse it.
     expect(guard!.injectionGuard).toEqual({
-      namespaces: ['web', 'retriever'],
-      tools: [],
+      namespaces: ['web'],
+      tools: ['retriever'],
     })
   })
 })

@@ -321,11 +321,18 @@ tools.all // all tool names
 
 The resolver seam is ONE shared value: `withInjectionGuard`'s `isUntrusted`
 resolves namespaces through the same `inferServer`, so the grouping and the
-trust boundary can never disagree. Its construction-time warning is therefore
-strengthened with a second check — a declared namespace must not merely be a
-fixed point of `inferServer`, it must be PRODUCED for at least one name in the
-catalog the agent built (passed as `catalog: tools.all`); otherwise it reads
-like protection and sanitizes nothing.
+trust boundary can never disagree. The guard **refuses to build** when a
+declared namespace cannot be verified (#242 item 4): a namespace that is not
+even a fixed point of `inferServer` is refused outright, and a fixed point
+that no name in the catalog the agent built (passed as `catalog: tools.all`,
+REQUIRED whenever namespaces are declared) is PRODUCED for is refused too —
+the signature of a registration that never ran, the failure mode the package
+split shipped to external consumers. The one exception carries provenance: a
+catalog built while the gateway was unreachable (`isDegradedToolSurface`,
+#278 F1) is amputated by outage, not by misregistration, and only warns
+(deduped) — no untrusted tool can be reached through it anyway. A guard that
+declares neither namespaces nor tools is refused as well; the deliberate
+"this agent trusts everything" line is an explicit `namespaces: []`.
 
 **Three dispatch phases, and the order is the containment invariant.**
 `callTool()` routes a tool name to whichever transport owns it, in this order

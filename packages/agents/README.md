@@ -168,6 +168,15 @@ function buildRoutes(tools: ToolSet): ConfiguredPattern<AgentData> {
 }
 ```
 
+> **The guard needs the namespace catalog registered.** `withInjectionGuard`
+> verifies every declared namespace against the `catalog` you pass and
+> **refuses to build** if nothing in it produces the namespace (#242 item 4).
+> The usual cause: the tool→namespace resolver was never registered. Call
+> `registerToolNamespaces(mcpNamespace)` once at boot — the deployment's map
+> ships in `@hames/connectors/mcp-catalog` — or supply your own resolver the
+> same way. An agent with no untrusted namespaces writes `namespaces: []`
+> explicitly.
+
 ```typescript
 // A session-persistent sandbox loop — the wrapper is INJECTED (SD-19: the
 // containment posture stays app-side and is supplied, not carried). Lifted
@@ -215,14 +224,14 @@ function buildRetrieverRoute(redisBackend: RetrieverBackend): ConfiguredPattern<
 
 ## The agent catalog
 
-| Agent               | Composition                                                   | Tools                            | Guard coverage                                                             |
-| ------------------- | ------------------------------------------------------------- | -------------------------------- | -------------------------------------------------------------------------- |
-| `search`            | router → routes(neo4j loop, web loop) → compactExecution      | neo4j-cypher, web_search, fetch  | web route guarded; neo4j trusted (our own graph)                           |
-| `retriever-agent`   | router → routes(retriever, neo4j, web) → compactExecution     | neo4j-cypher, web_search, fetch  | web + retriever routes guarded together (ingested documents are untrusted) |
-| `microsoft-365`     | explicit graph-tool allowlist loop → compactExecution         | graph (app-side, per-user token) | whole graph loop guarded (mail/files are attacker-authored)                |
-| `general`           | planner → simpleLoop(tools.all) → compactExecution            | everything                       | **no guard** — known, filed gap (#206)                                     |
-| `sandbox-session`   | compactIntent → withSandbox(actorCritic) → compactExecution   | in-VM `sandbox_*`                | no guard (in-VM results pass callTool)                                     |
-| `flavoured-sandbox` | router → routes(base, image, data, office) → compactExecution | in-VM `sandbox_*`                | no guard on any of the four routes                                         |
+| Agent               | Composition                                                   | Tools                            | Guard coverage                                                                           |
+| ------------------- | ------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------- |
+| `search`            | router → routes(neo4j loop, web loop) → compactExecution      | neo4j-cypher, web_search, fetch  | web route guarded; neo4j trusted (our own graph)                                         |
+| `retriever-agent`   | router → routes(retriever, neo4j, web) → compactExecution     | neo4j-cypher, web_search, fetch  | web namespace + retriever exact-name guarded together (ingested documents are untrusted) |
+| `microsoft-365`     | explicit graph-tool allowlist loop → compactExecution         | graph (app-side, per-user token) | whole graph loop guarded (mail/files are attacker-authored)                              |
+| `general`           | planner → simpleLoop(tools.all) → compactExecution            | everything                       | **no guard** — known, filed gap (#206)                                                   |
+| `sandbox-session`   | compactIntent → withSandbox(actorCritic) → compactExecution   | in-VM `sandbox_*`                | no guard (in-VM results pass callTool)                                                   |
+| `flavoured-sandbox` | router → routes(base, image, data, office) → compactExecution | in-VM `sandbox_*`                | no guard on any of the four routes                                                       |
 
 The guard coverage is pinned by the app's inventory test
 (`injection-guard-coverage-inventory.test.ts`) — a guard added or dropped

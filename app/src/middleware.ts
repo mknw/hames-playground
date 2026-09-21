@@ -31,7 +31,11 @@ import {
 import { getEndpoints } from './lib/config/endpoints'
 import { configureNeo4j } from '@hames/connectors/neo4j/client'
 import { configureWorkspaceStore } from '@hames/sandbox/workspace-store'
-import { listDocuments, getDocument, storeDocument } from './lib/document-store.server'
+import {
+  listDocuments,
+  getDocument,
+  storeDocument,
+} from '@hames/harness-patterns/stash/document-store.server'
 import { guessMimeType, isTextMime } from './lib/stash/upload-service.server'
 // Side effect only: registers the app-side tools AND the process transport that
 // makes `callTool` dispatch to them. `harness-patterns` deliberately does not
@@ -41,6 +45,19 @@ import { guessMimeType, isTextMime } from './lib/stash/upload-service.server'
 // closure, so the subtree it drags in is held to the no-BAML-at-module-scope
 // rule stated below.
 import './lib/app-tools/index.server'
+
+// Stash transport seam (core-absorb PR-2): the Data Stash pipeline moved to
+// `@hames/harness-patterns`, and its default `CallTool` resolves through the
+// package's `stash-transport.server` seam — the gateway by default, the app's
+// direct-ioredis adapter when `STASH_DIRECT_REDIS=1` (the gateway's serial
+// stdio pipe makes a large ingest O(chunks)×2 round-trips; see
+// `redis-direct.server.ts`). This side-effect import registers that resolver
+// and marks the direct adapter cacheable — the same explicit-seam shape as the
+// Neo4j config handover below: the package owns the seam, the app owns what
+// goes on it. The import opens nothing (the Redis client is lazy); it only
+// runs when the stash path is actually reached, exactly where the
+// gateway-vs-direct choice always used to be made.
+import './lib/redis-direct.server'
 
 // Neo4j config seam (design S5, #225 PR-3): the driver's connection is handed
 // over explicitly at app boot — `getEndpoints().neo4j.bolt` plus the same env

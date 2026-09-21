@@ -15,6 +15,7 @@
     "./package.json": "./package.json",
     "./patterns": "./patterns/index.ts",
     "./guard": "./injection-guard.ts",
+    "./retriever": "./retriever/index.ts",
     "./*": "./*.ts"
   },
   "dependencies": {
@@ -28,6 +29,8 @@
     "patterns",
     "observability",
     "metrics",
+    "stash",
+    "retriever",
     "assets",
     "LICENSE",
     "README.md",

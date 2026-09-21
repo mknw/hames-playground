@@ -34,7 +34,7 @@
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { getConversationOwner } from '../db/conversations.server'
 import { claimSession, getSessionClaimOwner } from '../db/session-claims.server'
-import { DEFAULT_TTL_SECONDS } from '../document-store.server'
+import { DEFAULT_TTL_SECONDS } from '@hames/harness-patterns/stash/document-store.server'
 
 assertServerOnImport()
 

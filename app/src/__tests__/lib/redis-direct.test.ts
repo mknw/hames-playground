@@ -22,7 +22,7 @@ vi.mock('@hames/harness-patterns/mcp-client.server', () => ({
 }))
 
 import { makeDirectCallTool } from '../../lib/redis-direct.server'
-import { createVectorStore, encodeMeta } from '../../lib/vector-store.server'
+import { createVectorStore, encodeMeta } from '@hames/harness-patterns/stash/vector-store.server'
 import type { Redis } from 'ioredis'
 
 // ----------------------------------------------------------------------------

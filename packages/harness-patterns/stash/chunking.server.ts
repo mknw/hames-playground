@@ -28,7 +28,7 @@
  * server-only, but keeping it server-side avoids shipping it to the client.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { assertServerOnImport } from '../assert.server'
 
 assertServerOnImport()
 
@@ -278,7 +278,12 @@ function packUnits(text: string, units: Unit[], maxChars: number, overlap: numbe
     } else {
       const [s, e] = trimSpan(text, spanStart, spanEnd)
       if (e > s) {
-        chunks.push({ index: chunks.length, content: text.slice(s, e), startOffset: s, endOffset: e })
+        chunks.push({
+          index: chunks.length,
+          content: text.slice(s, e),
+          startOffset: s,
+          endOffset: e,
+        })
       }
     }
 

@@ -21,11 +21,11 @@ import {
   getEmbeddingSpace,
   indexNameFor,
   prefixFor,
-} from '../../lib/document-ingest.server'
-import type { StashDocument } from '../../lib/document-store.server'
-import type { CallTool } from '../../lib/document-store.server'
-import type { ToolCallResult } from '@hames/harness-patterns/types'
-import type { EmbeddingConfig, EmbeddingResult } from '../../lib/embeddings.server'
+} from '../../stash/document-ingest.server'
+import type { StashDocument } from '../../stash/document-store.server'
+import type { CallTool } from '../../stash/document-store.server'
+import type { ToolCallResult } from '../../types'
+import type { EmbeddingConfig, EmbeddingResult } from '../../stash/embeddings.server'
 
 // ----------------------------------------------------------------------------
 // Fake Redis (json + hashes + vector search) behind a fake callTool
@@ -37,7 +37,10 @@ function makeFakeRedis() {
   const indexes = new Map<string, { prefix: string; dim: number }>()
   const calls: Array<[string, Record<string, unknown>]> = []
 
-  const callTool = (async (name: string, args: Record<string, unknown>): Promise<ToolCallResult> => {
+  const callTool = (async (
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<ToolCallResult> => {
     calls.push([name, args])
     switch (name) {
       case 'json_set':
@@ -213,9 +216,7 @@ describe('document-ingest', () => {
         return base(name, args)
       }) as CallTool
       const { embedFn } = makeEmbedder('fake-model', 3)
-      await expect(
-        ingestDocument(makeDoc(), { callTool, embedFn }),
-      ).resolves.toBeTruthy()
+      await expect(ingestDocument(makeDoc(), { callTool, embedFn })).resolves.toBeTruthy()
     })
   })
 

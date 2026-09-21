@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
 import { createSignal } from 'solid-js'
 import { installDomStubs } from './dom-stubs'
 import type { ContextEvent } from '@hames/harness-patterns/types'
-import type { StashDocumentMeta } from '../../../lib/document-store.server'
+import type { StashDocumentMeta } from '@hames/harness-patterns/stash/document-store.server'
 
 beforeAll(() => installDomStubs())
 

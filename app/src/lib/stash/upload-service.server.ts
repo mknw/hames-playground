@@ -18,7 +18,7 @@
  */
 
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import type { StoreDocumentInput } from '../document-store.server'
+import type { StoreDocumentInput } from '@hames/harness-patterns/stash/document-store.server'
 
 assertServerOnImport()
 
@@ -108,8 +108,7 @@ export async function parseUploadRequest(
     const agentId = String(form.get('agentId') ?? '').trim() || undefined
     const filename = blob.name || 'upload'
     const ttlRaw = form.get('ttlSeconds')
-    const ttlSeconds =
-      ttlRaw != null && ttlRaw !== '' ? Number(ttlRaw) : undefined
+    const ttlSeconds = ttlRaw != null && ttlRaw !== '' ? Number(ttlRaw) : undefined
     const mimeType = blob.type || guessMimeType(filename)
     const isText = isTextMime(mimeType)
     const content = isText

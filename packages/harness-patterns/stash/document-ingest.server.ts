@@ -26,8 +26,8 @@
  * a live gateway or model server.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import { stashCallTool } from './redis-direct.server'
+import { assertServerOnImport } from '../assert.server'
+import { resolveStashCallTool } from '../stash-transport.server'
 import {
   DEFAULT_TTL_SECONDS,
   getDocument,
@@ -137,7 +137,7 @@ function spaceKey(sessionId: string): string {
  *  "no matches" answer. */
 export async function getEmbeddingSpace(
   sessionId: string,
-  callTool: CallTool = stashCallTool(),
+  callTool: CallTool = resolveStashCallTool(),
 ): Promise<EmbeddingSpace | null> {
   const res = await callTool('json_get', { name: spaceKey(sessionId), path: '$' })
   if (!res.success) {
@@ -191,7 +191,7 @@ export async function ingestDocument(
   doc: StashDocument,
   opts: IngestOptions = {},
 ): Promise<IngestResult> {
-  const callTool = opts.callTool ?? stashCallTool()
+  const callTool = opts.callTool ?? resolveStashCallTool()
   const embedFn = opts.embedFn ?? defaultEmbed
   const ttl = opts.ttlSeconds ?? DEFAULT_TTL_SECONDS
 
@@ -280,7 +280,7 @@ export async function ingestStashDocument(
   docId: string,
   opts: IngestOptions = {},
 ): Promise<IngestResult | null> {
-  const callTool = opts.callTool ?? stashCallTool()
+  const callTool = opts.callTool ?? resolveStashCallTool()
   const doc = await getDocument(sessionId, docId, callTool)
   if (!doc) return null
 
@@ -369,7 +369,7 @@ export async function ensureSessionIngested(
   sessionId: string,
   opts: IngestOptions = {},
 ): Promise<void> {
-  const callTool = opts.callTool ?? stashCallTool()
+  const callTool = opts.callTool ?? resolveStashCallTool()
   const metas = await listDocuments(sessionId, callTool)
   for (const m of metas) {
     if (m.ingestStatus === 'indexed' || m.ingestStatus === 'pending') continue
@@ -406,7 +406,7 @@ export async function searchDocuments(
   query: string,
   opts: SearchOptions = {},
 ): Promise<SearchHit[]> {
-  const callTool = opts.callTool ?? stashCallTool()
+  const callTool = opts.callTool ?? resolveStashCallTool()
   const embedOneFn = opts.embedOneFn ?? defaultEmbedOne
 
   const recorded = await getEmbeddingSpace(sessionId, callTool)

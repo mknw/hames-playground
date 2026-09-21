@@ -27,7 +27,8 @@
 import { Redis } from 'ioredis'
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { callTool as gatewayCallTool } from '@hames/harness-patterns/mcp-client.server'
-import type { CallTool } from './document-store.server'
+import type { CallTool } from '@hames/harness-patterns/stash/document-store.server'
+import { registerStashTransport } from '@hames/harness-patterns/stash-transport.server'
 import type { ToolCallResult } from '@hames/harness-patterns/types'
 
 assertServerOnImport()
@@ -290,3 +291,18 @@ export function stashCallTool(): CallTool {
 /** Re-exported so the document-store list cache can recognise a "real" backend
  *  (either default) and still bypass caching for injected test fakes. */
 export { gatewayCallTool }
+
+// ============================================================================
+// Package seam registration
+// ============================================================================
+
+// The stash pipeline moved to @hames/harness-patterns (core-absorb PR-2); its
+// default `CallTool` resolves through the package's transport seam. Register
+// THIS module as the host's transport at import: `stashCallTool()` reads
+// `STASH_DIRECT_REDIS` per call (gateway by default, this direct adapter when
+// the flag is set), and `directCallTool` joins the gateway on the list of
+// "real" backends the document list cache may serve from. Importing this
+// module opens nothing — the client is lazy — so the registration is safe at
+// module scope; it runs whenever the app loads the stash path, exactly where
+// the gateway-vs-direct choice used to be made.
+registerStashTransport(stashCallTool, (ct) => ct === directCallTool)

@@ -35,7 +35,7 @@ import {
 import { registerToolNamespaces } from '@hames/harness-patterns/tools.server'
 import { getRequestUserId, getRequestSessionId } from '../harness-client/request-user.server'
 import { graphFetch } from '../auth/graph-token.server'
-import { conversionEnabled, isConvertible } from '../doc-convert.server'
+import { conversionEnabled, isConvertible } from '@hames/harness-patterns/stash/doc-convert.server'
 import { guessMimeType, isTextMime } from '../stash/upload-service.server'
 import { createAppToolRegistry } from '@hames/connectors/app-tools/registry'
 import {
@@ -70,11 +70,14 @@ registerGraphConnectorTools({
   content: { conversionEnabled, isConvertible, guessMimeType, isTextMime },
   stash: {
     loadStore: async (): Promise<GraphStashStore> => {
-      const { storeDocument, MAX_CONTENT_BYTES } = await import('../document-store.server')
+      const { storeDocument, MAX_CONTENT_BYTES } =
+        await import('@hames/harness-patterns/stash/document-store.server')
       return { storeDocument, maxContentBytes: MAX_CONTENT_BYTES }
     },
     ingest: (sessionId, documentId) =>
-      import('../document-ingest.server').then((m) => m.ingestStashDocument(sessionId, documentId)),
+      import('@hames/harness-patterns/stash/document-ingest.server').then((m) =>
+        m.ingestStashDocument(sessionId, documentId),
+      ),
   },
 })
 

@@ -22,8 +22,8 @@
  * `redisearch.so` SIGILL-crashes on vector ops.
  */
 
-import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import { stashCallTool } from './redis-direct.server'
+import { assertServerOnImport } from '../assert.server'
+import { resolveStashCallTool } from '../stash-transport.server'
 import { redisWriteError, type CallTool } from './document-store.server'
 import type { EmbeddingSpace } from './embeddings.server'
 
@@ -80,7 +80,7 @@ const VID_KEY = '_vid'
 // ============================================================================
 
 export function createVectorStore(opts: VectorStoreOptions): VectorStore {
-  const callTool = opts.callTool ?? stashCallTool()
+  const callTool = opts.callTool ?? resolveStashCallTool()
   const metric = opts.distanceMetric ?? 'COSINE'
 
   async function ensureIndex(): Promise<void> {

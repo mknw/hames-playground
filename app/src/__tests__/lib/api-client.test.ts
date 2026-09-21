@@ -25,7 +25,7 @@ import {
   uploadStashDocument,
 } from '~/lib/api-client'
 import type { HarnessSettings } from '~/lib/settings'
-import type { StashDocumentMeta } from '~/lib/document-store.server'
+import type { StashDocumentMeta } from '@hames/harness-patterns/stash/document-store.server'
 
 let fetchMock: ReturnType<typeof vi.fn>
 

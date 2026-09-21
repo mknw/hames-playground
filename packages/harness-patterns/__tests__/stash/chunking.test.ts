@@ -23,7 +23,7 @@ import {
   chunkCsv,
   DEFAULT_CHUNK_CONFIG,
   type Chunk,
-} from '../../lib/chunking.server'
+} from '../../stash/chunking.server'
 
 // ----------------------------------------------------------------------------
 // Helpers

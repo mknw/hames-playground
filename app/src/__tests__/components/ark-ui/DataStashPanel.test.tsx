@@ -18,7 +18,7 @@ import { render, fireEvent } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
 import type { ContextEvent } from '@hames/harness-patterns'
 import type { OpenReferenceTarget } from '@hames/agents'
-import type { StashDocumentMeta } from '~/lib/document-store.server'
+import type { StashDocumentMeta } from '@hames/harness-patterns/stash/document-store.server'
 
 const { DataStashPanel } = await import('../../../components/ark-ui/DataStashPanel')
 

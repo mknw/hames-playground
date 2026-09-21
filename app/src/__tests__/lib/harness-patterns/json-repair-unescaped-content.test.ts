@@ -123,6 +123,39 @@ describe('repairJson — string content that was not escaped', () => {
       })
     })
 
+    // A REGRESSION GUARD, not a mutation-killed pin, and labelled so rather
+    // than left looking like one: the decline below is over-determined —
+    // readString's "a key must start with a quote", readObject's unexpected-
+    // token throw, and the full-consumption check each catch it alone, so no
+    // single mutation (nor the two in combination) reddens it. It is here
+    // because the plausible future change is someone adding BACKTRACKING to
+    // "improve" the recovery rate, and that would break it.
+    it('declines when a content quote is followed by a real delimiter — the one ambiguous site', () => {
+      // `print("hello", x)`: the quote after `hello` is followed by `,`, which
+      // IS what closes a member value, so the structure cannot tell the two
+      // readings apart. The greedy reading runs out of grammar one token later
+      // and the WHOLE document is declined — a half-read `print("hello` must
+      // never reach a write tool. What the lenient chain then makes of it is
+      // its own pre-existing business; the assertion is that this strategy
+      // refused rather than guessed.
+      const raw = '{"c": "print("hello", x)", "path": "/work/f.py"}'
+      const out = repairJsonTracked(raw)
+
+      expect(out.repair?.strategy).not.toBe('unescaped-content')
+      expect(out.args.c).not.toBe('print("hello')
+    })
+
+    it('but keeps reading when the delimiter is the wrong one for this position', () => {
+      // `]` closes an ARRAY element, and this is a member value, so the `"`
+      // before it is content. Only the quote followed by `,` closes. This is
+      // what the position-specific follow set buys over a flat "any delimiter"
+      // rule, which would have truncated at `d[`.
+      expect(repairJson('{"c": "d["k"]", "path": "/p"}')).toEqual({
+        c: 'd["k"]',
+        path: '/p',
+      })
+    })
+
     it('declines a root that is not an object — tool_args has one shape', () => {
       expect(() => repairJson('["a" "b"]')).toThrow()
     })

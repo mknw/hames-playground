@@ -33,7 +33,7 @@ export function printEventSummary(scope: PatternScope<unknown>): void {
         const ok = data.success ? '✓' : '✗'
         const payload = data.success
           ? truncate(safeJson(data.result), 120)
-          : data.error ?? 'error'
+          : (data.error ?? 'error')
         console.log(`           ${ok} ${data.tool} → ${payload}`)
         break
       }

@@ -18,7 +18,7 @@ import type { PatternScope } from '@hames/harness-patterns/types'
 const spawn = vi.hoisted(() => vi.fn())
 vi.mock('node:child_process', () => ({ spawn, default: { spawn } }))
 
-import { printEventSummary, checkRootfsImage } from '../../../../lib/sandbox/scripts/_shared'
+import { printEventSummary, checkRootfsImage } from '../../scripts/_shared'
 
 /** Everything printed by the call under test, joined into one string. */
 let printed: string[]

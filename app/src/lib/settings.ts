@@ -14,6 +14,10 @@ import {
   type HarnessRuntimeConfig,
 } from '@hames/harness-patterns/runtime-config'
 import type { CostBasis } from '@hames/harness-patterns'
+// Same client-safety rule as the package subpath above: `@hames/sandbox/settings`
+// is types + plain constants, so importing it here never drags the Docker
+// backend (or any `node:` module) into the browser bundle.
+import { DEFAULT_SANDBOX_SETTINGS, type SandboxSettings } from '@hames/sandbox/settings'
 
 // Re-exported so the app's settings API is unchanged: the loop-budget resolver
 // now lives in the library beside the config it clamps against.
@@ -21,36 +25,15 @@ export { resolveTurnBudget, RUNTIME_CONFIG_BOUNDS, DEFAULT_RUNTIME_CONFIG }
 export type { HarnessRuntimeConfig }
 
 /**
- * Sandbox compute settings. See docs/plan/sandbox.md → "Settings".
- *
- * Process-scoped values (`globalCap`, `perSessionCap`, `warmPool`, `idleEvictMs`)
- * are read once when the harness lazily constructs its singleton scheduler
- * and pool; per-call defaults (`defaultTimeoutSec`, `defaultMemoryMB`,
- * `defaultEgress`) are read each time `withSandbox` boots a VM whose caller
- * didn't override them. The settings panel UI does not currently surface
- * these — they're programmatic for v0.
+ * Sandbox compute settings — the type and the values both moved to
+ * `@hames/sandbox/settings` at the sandbox extraction, beside the code that
+ * dereferences them. Re-exported here so the app's settings API is unchanged
+ * (the same move `DEFAULT_RUNTIME_CONFIG` made to `@hames/harness-patterns`).
+ * The settings panel UI does not surface these — they are programmatic for v0,
+ * which is why `resolveSettings` below assigns the package defaults verbatim
+ * rather than clamping anything.
  */
-export interface SandboxSettings {
-  /** Max concurrent sandbox attachments across the harness. */
-  globalCap: number
-  /** Max concurrent sandbox attachments per session. */
-  perSessionCap: number
-  /** Hard ceiling on parked (at-rest) attachments in the AttachmentTable. When
-   *  a new boot would exceed it, the least-recently-used idle attachment is
-   *  evicted. Bounds at-rest VMs regardless of idleness; `globalCap` only
-   *  bounds in-flight allocations. */
-  maxAttachments: number
-  /** Per-rootfs warm-pool depth. e.g. `{ base: 1 }`. */
-  warmPool: Partial<Record<string, number>>
-  /** Idle time before a pooled VM is destroyed (ms). */
-  idleEvictMs: number
-  /** Per-tool-call wall-clock cap when caller does not override. */
-  defaultTimeoutSec: number
-  /** Per-VM memory cap (MB) when caller does not override. */
-  defaultMemoryMB: number
-  /** Default egress profile when caller does not override. */
-  defaultEgress: 'mcp-only' | 'pypi' | 'github-trusted' | 'open'
-}
+export type { SandboxSettings }
 
 /**
  * The app's extension of the library's {@link HarnessRuntimeConfig}: the six
@@ -73,22 +56,7 @@ export const DEFAULT_SETTINGS: HarnessSettings = {
   // carries the per-value rationale); the app adds only its own two settings.
   ...DEFAULT_RUNTIME_CONFIG,
   maxConcurrentRuns: 3,
-  sandbox: {
-    globalCap: 16,
-    perSessionCap: 4,
-    // At-rest ceiling on the attachment table (#82). 8 = 2× perSessionCap, so a
-    // handful of persistent-flavour sessions can coexist while a runaway
-    // accumulation of parked VMs is capped even if the idle sweep hasn't fired.
-    maxAttachments: 8,
-    warmPool: { base: 1, 'image-processing': 1, data: 1, office: 1 },
-    // Hot-cache window only: a parked VM is reused instantly within this window.
-    // Durable workspace state lives in the document store (hydrated into /work on
-    // first boot, promoted from /work/out on exit), so this need not be long — 1h.
-    idleEvictMs: 3_600_000,
-    defaultTimeoutSec: 60,
-    defaultMemoryMB: 512,
-    defaultEgress: 'mcp-only',
-  },
+  sandbox: DEFAULT_SANDBOX_SETTINGS,
 }
 
 /**

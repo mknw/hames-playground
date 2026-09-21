@@ -6,6 +6,16 @@
 #     published packages pass the tarball smoke; a red is a regression). Its
 #     scratch install carries pnpm overrides pointing BOTH dependencies at
 #     their tarballs, for the same unpublished-`workspace:*` reason as above.
+#   - @hames/connectors      (#225 PR-C2)
+#   - @hames/sandbox         (the sandbox extraction) — the containment
+#     companion. Its probe is the one that matters most for the
+#     zero-app-imports story, because the module it evaluates
+#     (`with-sandbox.server`) is the one that used to reach into the app's
+#     settings and document store: a VALUE import escaping back into `app/src`
+#     fails ITS module evaluation here, while a TYPE-ONLY one is erased by tsx
+#     before a tarball exists and is caught only by the source-scan pin
+#     (`app/src/__tests__/lib/harness-patterns/zero-app-imports.test.ts`).
+#     Two guards, two shapes, and neither one subsumes the other.
 #
 # This is the ONLY mechanism anywhere in CI that exercises "does the published
 # tarball actually work" — the docker image boots from the workspace symlink,
@@ -381,4 +391,188 @@ console.log('connectors pack smoke OK: exports resolve, no tests in tarball, cli
 PROBE
 
 echo "== run connectors probe =="
+pnpm dlx tsx probe.mts
+
+# ===========================================================================
+# @hames/sandbox — same checks on the containment companion's tarball. Its
+# scratch install overrides @hames/harness-patterns with the patterns tarball
+# (the `workspace:*` dependency packs to an unpublished "0.1.0", same reason
+# as every scratch above). @hames/harness-baml is a devDependency here — the
+# smoke scripts and the end-to-end test use it — so it is not installed and
+# not needed: a consumer of the tarball never sees it.
+# ===========================================================================
+
+echo "== pack @hames/sandbox =="
+(cd "$root" && pnpm install --frozen-lockfile --filter @hames/sandbox)
+(cd "$root/packages/sandbox" && pnpm pack --pack-destination "$tmp")
+sandbox_tarball="$(ls "$tmp"/hames-sandbox-*.tgz)"
+echo "tarball: $sandbox_tarball"
+
+echo "== install @hames/sandbox into scratch project =="
+mkdir -p "$tmp/scratch-sandbox"
+cd "$tmp/scratch-sandbox"
+printf '{"name":"pack-smoke-scratch-sandbox","private":true,"type":"module",\n "pnpm":{"overrides":{"@hames/harness-patterns":"file:%s"}}}\n' \
+  "$patterns_tarball" > package.json
+pnpm add "$sandbox_tarball"
+
+cat > probe.mts <<'PROBE'
+import { strict as assert } from 'node:assert'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+const pkgDir = fileURLToPath(new URL('./node_modules/@hames/sandbox/', import.meta.url))
+const manifest = JSON.parse((await import('node:fs')).readFileSync(pkgDir + 'package.json', 'utf8'))
+
+// 1. every explicit export target exists in the tarball (the wildcard is
+//    exercised by the direct imports below)
+for (const [key, target] of Object.entries<string>(manifest.exports)) {
+  if (key === './package.json' || key.includes('*')) continue
+  const file = pkgDir + target.replace(/^\.\//, '')
+  assert.ok(existsSync(file), `export ${key} -> ${target} is missing from the tarball`)
+}
+
+// 2. neither the co-located suite nor the live smoke scripts ship: both are
+//    excluded from `files` by design. The scripts drive the `kg-sandbox:*`
+//    images that live in this REPO's rootfs/, so they are dev tooling for the
+//    host, not package surface — and a test file riding along would pull
+//    vitest-shaped imports into a consumer's tree.
+assert.ok(!existsSync(pkgDir + '__tests__'), 'the __tests__/ dir must not ship in the tarball')
+assert.ok(!existsSync(pkgDir + 'scripts'), 'the scripts/ dir must not ship in the tarball')
+
+// 3. node-pty is DECLARED but LAZY, and this is the order-sensitive check in
+//    this probe: it must run before anything else imports pty-manager, because
+//    ESM caches module records and a second import would pass vacuously.
+//
+//    Declared, because a consumer who opens a shell must get it installed
+//    without reading a README. Lazy, because it is a NATIVE module and the
+//    only thing that needs its `.node` addon is one `spawn` call: pnpm's
+//    build-script allowlist (`onlyBuiltDependencies`) lives in a WORKSPACE
+//    ROOT manifest that a consumer of this tarball does not inherit — note
+//    this scratch install's own "Ignored build scripts: node-pty" warning — so
+//    the addon is exactly the thing a consumer may not have.
+//
+//    Proven the blunt way: take the installed node-pty away and require the
+//    module to import anyway. A static import fails here with
+//    ERR_MODULE_NOT_FOUND; a lazy one does not care until someone opens a
+//    shell.
+assert.equal(typeof manifest.dependencies?.['node-pty'], 'string',
+  'node-pty must stay a real dependency — a consumer who opens a shell needs it installed')
+
+const fs = await import('node:fs')
+// pnpm layout: the package's own deps are siblings under one node_modules —
+// .pnpm/@hames+sandbox@<hash>/node_modules/{@hames/sandbox,node-pty} — so from
+// the REALPATH of the package dir, node-pty is two levels up.
+const ptyLink = fileURLToPath(new URL('../../node-pty', `file://${fs.realpathSync(pkgDir)}/`))
+assert.ok(existsSync(ptyLink),
+  `could not locate the installed node-pty at ${ptyLink} — this check must not pass vacuously`)
+// Take away the REAL directory, not the symlink that points at it. pnpm hoists
+// a second node-pty into `.pnpm/node_modules/`, and node's resolver walks UP
+// the tree, so renaming only the package's own sibling link leaves a resolvable
+// copy one level higher and the check passes over a STATIC import — which is
+// exactly how the first draft of this assertion failed to redden under its own
+// mutation. Every link points into the one real directory; move that.
+const ptyDir = fs.realpathSync(ptyLink)
+const ptyStash = ptyDir + '.stashed'
+fs.renameSync(ptyDir, ptyStash)
+try {
+  await import('@hames/sandbox/pty-manager.server')
+  console.log('  lazy ok:   @hames/sandbox/pty-manager.server imports with node-pty absent')
+} catch (err) {
+  throw new Error(
+    'pty-manager.server must not need the node-pty native addon at MODULE LOAD — only to spawn a ' +
+      `shell. Got: ${(err as Error)?.message ?? String(err)}`,
+  )
+} finally {
+  fs.renameSync(ptyStash, ptyDir)
+}
+
+// 4. the client-safe subpaths evaluate WITHOUT the server barrel: these are
+//    what the host's browser bundle and its own settings module import, so a
+//    `node:` import or a server assertion sneaking into either is a bug a
+//    consumer only discovers in a browser build.
+const types = await import('@hames/sandbox/types')
+assert.equal(types.SANDBOX_TOOL_PREFIX, 'sandbox_', 'the tool prefix must resolve from ./types')
+assert.ok(Array.isArray(types.V0_IN_VM_SERVERS), 'V0_IN_VM_SERVERS missing from ./types')
+const settings = await import('@hames/sandbox/settings')
+assert.equal(settings.DEFAULT_SANDBOX_SETTINGS.defaultEgress, 'mcp-only')
+assert.equal(typeof settings.DEFAULT_SANDBOX_SETTINGS.globalCap, 'number')
+
+// 5. the durable-workspace seam is explicit-config-only: the NAMED error at
+//    first use, never a silent no-op, and a half-built supplier is refused at
+//    configuration rather than on the turn that produces a deliverable.
+const store = await import('@hames/sandbox/workspace-store')
+assert.equal(store.isWorkspaceStoreConfigured(), false, 'a fresh package must have no store')
+assert.throws(() => store.getWorkspaceStore(), store.WorkspaceStoreNotConfiguredError,
+  'an unset store must be the NAMED error at first use')
+assert.throws(
+  () => store.configureWorkspaceStore({ list: () => {}, get: () => {} } as never),
+  /"store"/,
+  'a missing supplier must throw at configuration (the connectors F1 rule)',
+)
+store.configureWorkspaceStore({
+  list: async () => [], get: async () => null, store: async () => ({}),
+  guessMimeType: () => 'text/plain', isTextMime: () => true,
+})
+assert.ok(store.isWorkspaceStoreConfigured(), 'a configured store must register')
+
+// 6. module EVALUATION of every entry the app imports, through the INSTALLED
+//    tarball — the barrel plus each `./*` subpath the host reaches for
+//    (`rg "@hames/sandbox" app/src`). This is the half that catches a VALUE
+//    import escaping into app/src: it fails here as ERR_MODULE_NOT_FOUND
+//    naming the app path, because a tarball consumer has no app/ to resolve.
+const appEntries = [
+  '.',
+  './bash-guard',
+  './docker-backend.server',
+  './egress-policy',
+  './pty-manager.server',
+  './settings',
+  './types',
+  './with-sandbox.server',
+  './work-artifacts.server',
+  './workspace-store',
+]
+const evalFailures: Array<[string, unknown]> = []
+for (const entry of appEntries) {
+  const specifier = entry === '.' ? '@hames/sandbox' : '@hames/sandbox' + entry.slice(1)
+  try {
+    await import(specifier)
+    console.log(`  eval ok:   ${specifier}`)
+  } catch (err) {
+    evalFailures.push([specifier, err])
+    console.error(`  eval FAIL: ${specifier}: ${(err as Error)?.message ?? String(err)}`)
+  }
+}
+if (evalFailures.length > 0) {
+  console.error(
+    `\npack smoke: ${evalFailures.length}/${appEntries.length} @hames/sandbox entries failed` +
+      ' module evaluation — a regression: the package imports something a tarball consumer' +
+      ' cannot resolve (an app/src edge returning, or an undeclared dependency).',
+  )
+  throw evalFailures[0][1]
+}
+
+// 7. the ./guard companion subpath imports and behaves (the bash guard is the
+//    containment half a consumer composes directly).
+const guard = await import('@hames/sandbox/guard')
+assert.equal(typeof guard.screenBashCommand, 'function', 'screenBashCommand missing from ./guard')
+const direct = await import('@hames/sandbox/bash-guard')
+assert.equal(direct.screenBashCommand, guard.screenBashCommand, './guard and ./bash-guard disagree')
+
+// 8. the harness surface composes: withSandbox wraps a pattern without a
+//    docker daemon in sight (the wrap is pure; the boot is not).
+const sandbox = await import('@hames/sandbox')
+assert.equal(typeof sandbox.withSandbox, 'function', 'withSandbox missing from the barrel')
+const wrapped = sandbox.withSandbox({ id: 'probe' })({
+  name: 'probe', config: {}, fn: async (scope: unknown) => scope,
+} as never)
+assert.equal(wrapped.name, 'withSandbox(probe)', 'the wrapper must rename the pattern it wraps')
+assert.equal(typeof sandbox.getComputeBackend, 'function', 'getComputeBackend missing')
+
+console.log('sandbox pack smoke OK: exports resolve, no tests/scripts in tarball, ' +
+  'node-pty declared but lazy, client-safe subpaths evaluate, the store seam refuses, ' +
+  'all entries evaluate')
+PROBE
+
+echo "== run sandbox probe =="
 pnpm dlx tsx probe.mts

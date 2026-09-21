@@ -36,7 +36,7 @@ const subscribe = vi.fn<(sid: string, send: (chunk: string) => void) => () => vo
 )
 const write = vi.fn()
 const resize = vi.fn()
-vi.mock('../../../lib/sandbox/pty-manager.server', () => ({
+vi.mock('@hames/sandbox/pty-manager.server', () => ({
   ptyManager: {
     ensure: (...a: unknown[]) => ensure(...(a as [never, never])),
     getScrollback: (...a: unknown[]) => getScrollback(...(a as [never])),

@@ -18,7 +18,7 @@
  *     (`ActorAnthropic` / `CriticAnthropic` &c.).
  *
  * Run from `app/`:
- *   pnpm dlx tsx src/lib/sandbox/scripts/smoke-llm.ts
+ *   pnpm dlx tsx packages/sandbox/scripts/smoke-llm.ts
  *
  * Cost: a handful of Sonnet calls (actor + critic per turn). Should be a
  * few cents at most. Look for the word count (9) in the final result; the

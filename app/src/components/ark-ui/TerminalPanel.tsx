@@ -15,7 +15,7 @@
 
 import { For, Show, createMemo, createSignal } from 'solid-js'
 import type { ContextEvent } from '@hames/harness-patterns'
-import { SANDBOX_TOOL_PREFIX } from '~/lib/sandbox/types'
+import { SANDBOX_TOOL_PREFIX } from '@hames/sandbox/types'
 import { InteractiveTerminal } from './InteractiveTerminal'
 
 // Local, defensive views of the event payloads (the panel never trusts shape).

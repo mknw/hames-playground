@@ -12,7 +12,7 @@
 Sandbox v0 shipped one rootfs, `base` ([`rootfs/Dockerfile`](../rootfs/Dockerfile)):
 `node:22-bookworm-slim` + `python3`/`pip`/`venv` + `curl` + the two in-VM MCP
 servers. No image/data/office tooling, and the default `egress: 'mcp-only'` sets
-`--network none` ([`docker-backend.server.ts`](../app/src/lib/sandbox/docker-backend.server.ts)),
+`--network none` ([`docker-backend.server.ts`](../packages/sandbox/docker-backend.server.ts)),
 so the actor can't install packages at runtime either. Image processing, data
 analysis, and office-document generation were effectively blocked.
 
@@ -46,9 +46,9 @@ write engine for `pd.ExcelWriter` / `pl.DataFrame.write_excel`.
 
 ## What already existed (the plumbing)
 
-- `RootfsId` is an open string; widened here to `'base' | 'image-processing' | 'data' | (string & {})` ([`types.ts`](../app/src/lib/sandbox/types.ts)).
-- `imageForRootfs` maps `base` → `SANDBOX_IMAGE` and falls through to `kg-sandbox:${rootfs}` — no backend change to add a flavour ([`docker-backend.server.ts`](../app/src/lib/sandbox/docker-backend.server.ts)).
-- `WarmPool` is keyed by rootfs flavour, segmented by the posture fingerprint `tenantId|rootfs|egress` ([`warm-pool.server.ts`](../app/src/lib/sandbox/warm-pool.server.ts) — a pool handoff must match all three; a mismatch is a cold-boot); caps added for the new flavours in `DEFAULT_SETTINGS.sandbox.warmPool`.
+- `RootfsId` is an open string; widened here to `'base' | 'image-processing' | 'data' | (string & {})` ([`types.ts`](../packages/sandbox/types.ts)).
+- `imageForRootfs` maps `base` → `SANDBOX_IMAGE` and falls through to `kg-sandbox:${rootfs}` — no backend change to add a flavour ([`docker-backend.server.ts`](../packages/sandbox/docker-backend.server.ts)).
+- `WarmPool` is keyed by rootfs flavour, segmented by the posture fingerprint `tenantId|rootfs|egress` ([`warm-pool.server.ts`](../packages/sandbox/warm-pool.server.ts) — a pool handoff must match all three; a mismatch is a cold-boot); caps added for the new flavours in `DEFAULT_SANDBOX_SETTINGS.warmPool`.
 
 ## The composable recipe — router over flavoured sandboxes
 
@@ -160,7 +160,7 @@ bullets (flavour-in-identity, flavour-aware Shell, per-flavour tool surface)
 stay deferred below. What shipped:
 
 - **Advisory host-side command allow/denylist for `sandbox_bash`**
-  (`app/src/lib/sandbox/bash-guard.ts`). Every actor-authored command is
+  (`packages/sandbox/bash-guard.ts`). Every actor-authored command is
   screened in the transport before it reaches the VM: a narrow default deny
   set (container control, the docker socket, namespace/mount escapes, raw
   devices, the power commands), `SANDBOX_BASH_DENY` to replace it,
@@ -222,7 +222,7 @@ screen it — its routes are owner-gated instead.
   (today `AttachmentTable.acquire` reuses by `id`, ignoring `rootfs`). Ergonomic/safety,
   not a correctness blocker given the convention works now.
 - **Flavour-aware Shell.** `PtyManager.start` acquires `(sessionId, 'base')`
-  ([`pty-manager.server.ts`](../app/src/lib/sandbox/pty-manager.server.ts)) — with
+  ([`pty-manager.server.ts`](../packages/sandbox/pty-manager.server.ts)) — with
   flavour-scoped agent containers the terminal opens a _separate_ base box (it still
   hydrates `/work/in` from the shared Data Stash, so it shows promoted deliverables
   but not the flavoured containers' live scratch). Make the tab pick a flavour and

@@ -19,8 +19,7 @@
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { trackEvent } from '@hames/harness-patterns/context.server'
 import { withTransport } from '@hames/harness-patterns/tool-transport.server'
-import { DEFAULT_SETTINGS } from '../settings'
-import { getRequestSettings } from '../settings-context.server'
+import { DEFAULT_SANDBOX_SETTINGS } from './settings'
 import { AttachmentTable } from './attachment-table.server'
 import { DockerBackend } from './docker-backend.server'
 import { SandboxScheduler } from './scheduler.server'
@@ -88,8 +87,21 @@ export interface WithSandboxConfig {
    * Resolved server-side by the caller from the conversation's owner — never
    * accepted from client input; `'default'` (or absent) is the single-operator
    * tenant and keeps today's volume name verbatim. See `RuntimeConfig`.
+   *
+   * **A literal OR a resolver, and the agent path needs the resolver.**
+   * `withSandbox(config)` is called when a host BUILDS its patterns, and a
+   * built chain is cached for the conversation's life (the app's
+   * `getOrBuildPatterns`); the authenticated user, meanwhile, is only in scope
+   * for the duration of one turn. A literal read at wrap time therefore freezes
+   * whichever tenant happened to be in scope during the build — including
+   * `'default'` for a build that ran outside a request, e.g. a capability
+   * probe — onto every later turn of that conversation, silently, on the one
+   * field the poisoned-wheel channel (#348) is scoped by. A function is called
+   * instead on EVERY run, inside the request scope, which is where the answer
+   * is actually knowable. Direct callers that already hold the owner (the Shell
+   * path's `PtyManager.start`) pass the string.
    */
-  tenantId?: string
+  tenantId?: string | (() => string | undefined)
   /** Session id for `SandboxScheduler` per-session-cap accounting. */
   sessionId?: string
   /** Backend override. Defaults to a process-shared `DockerBackend`. */
@@ -168,8 +180,8 @@ function reapOrphansOnce(backend: ComputeBackend): void {
 function getDefaultPool(): WarmPool {
   if (!defaultPool) {
     defaultPool = new WarmPool(getDefaultBackend(), {
-      caps: DEFAULT_SETTINGS.sandbox.warmPool,
-      idleEvictMs: DEFAULT_SETTINGS.sandbox.idleEvictMs,
+      caps: DEFAULT_SANDBOX_SETTINGS.warmPool,
+      idleEvictMs: DEFAULT_SANDBOX_SETTINGS.idleEvictMs,
     })
   }
   return defaultPool
@@ -177,8 +189,8 @@ function getDefaultPool(): WarmPool {
 function getDefaultScheduler(): SandboxScheduler {
   if (!defaultScheduler) {
     defaultScheduler = new SandboxScheduler({
-      globalCap: DEFAULT_SETTINGS.sandbox.globalCap,
-      perSessionCap: DEFAULT_SETTINGS.sandbox.perSessionCap,
+      globalCap: DEFAULT_SANDBOX_SETTINGS.globalCap,
+      perSessionCap: DEFAULT_SANDBOX_SETTINGS.perSessionCap,
     })
   }
   return defaultScheduler
@@ -186,8 +198,8 @@ function getDefaultScheduler(): SandboxScheduler {
 export function getDefaultAttachments(): AttachmentTable {
   if (!defaultAttachments) {
     defaultAttachments = new AttachmentTable(getDefaultBackend(), getDefaultPool(), {
-      idleMs: DEFAULT_SETTINGS.sandbox.idleEvictMs,
-      maxAttachments: DEFAULT_SETTINGS.sandbox.maxAttachments,
+      idleMs: DEFAULT_SANDBOX_SETTINGS.idleEvictMs,
+      maxAttachments: DEFAULT_SANDBOX_SETTINGS.maxAttachments,
     })
     // Timer-driven sweep (#82): reap parked VMs even on a fully idle harness,
     // which the per-acquire lazy sweep never reaches. Only the default
@@ -218,6 +230,24 @@ export function __resetSandboxDefaultsForTests(): void {
  * The sandbox handle propagates to nested tool-calling controllers via ALS;
  * `chain` / `router` / `withReferences` don't need to be sandbox-aware.
  */
+/** Read {@link WithSandboxConfig.tenantId} — a literal, or a resolver called
+ *  per run. A resolver that throws must not take the turn down with it: the
+ *  caller's tenant is unknowable, which is exactly the `'default'` case, so it
+ *  is reported and degraded rather than propagated (the boot still happens, on
+ *  the verbatim-name tenant, which is what an unauthenticated boot gets). */
+function resolveTenantId(tenantId: WithSandboxConfig['tenantId']): string | undefined {
+  if (typeof tenantId !== 'function') return tenantId
+  try {
+    return tenantId()
+  } catch (err) {
+    console.warn(
+      `[sandbox] tenant resolver threw; booting on the 'default' tenant: ` +
+        (err instanceof Error ? err.message : String(err)),
+    )
+    return undefined
+  }
+}
+
 export function withSandbox(config?: WithSandboxConfig) {
   return <T>(pattern: ConfiguredPattern<T>): ConfiguredPattern<T> => {
     const backend = config?.backend ?? getDefaultBackend()
@@ -231,23 +261,23 @@ export function withSandbox(config?: WithSandboxConfig) {
       (usingDefaultBackend
         ? getDefaultPool()
         : new WarmPool(backend, {
-            caps: DEFAULT_SETTINGS.sandbox.warmPool,
-            idleEvictMs: DEFAULT_SETTINGS.sandbox.idleEvictMs,
+            caps: DEFAULT_SANDBOX_SETTINGS.warmPool,
+            idleEvictMs: DEFAULT_SANDBOX_SETTINGS.idleEvictMs,
           }))
     const scheduler =
       config?.scheduler ??
       (usingDefaultBackend
         ? getDefaultScheduler()
         : new SandboxScheduler({
-            globalCap: DEFAULT_SETTINGS.sandbox.globalCap,
-            perSessionCap: DEFAULT_SETTINGS.sandbox.perSessionCap,
+            globalCap: DEFAULT_SANDBOX_SETTINGS.globalCap,
+            perSessionCap: DEFAULT_SANDBOX_SETTINGS.perSessionCap,
           }))
     const attachments =
       config?.attachments ??
       (usingDefaultBackend
         ? getDefaultAttachments()
         : new AttachmentTable(backend, pool, {
-            idleMs: DEFAULT_SETTINGS.sandbox.idleEvictMs,
+            idleMs: DEFAULT_SANDBOX_SETTINGS.idleEvictMs,
           }))
 
     const rootfs: RootfsId = config?.rootfs ?? 'base'
@@ -274,15 +304,22 @@ export function withSandbox(config?: WithSandboxConfig) {
     }
 
     const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
-      const settings = getRequestSettings()
+      // The per-call defaults were read from the app's request-scoped settings
+      // before the extraction. That scope never carried a sandbox block of its
+      // own — the app's `resolveSettings` assigned `DEFAULT_SETTINGS.sandbox`
+      // unconditionally and its reader spread the same defaults back in — so
+      // this reads the package's own constants and the three values are
+      // unchanged. A host that wants different ones passes `resources` /
+      // `egress` per call, which is the override that always won anyway.
       const runtime: RuntimeConfig = {
         cpus: config?.resources?.cpus,
-        memoryMB: config?.resources?.memoryMB ?? settings.sandbox.defaultMemoryMB,
-        timeoutSec: config?.resources?.timeoutSec ?? settings.sandbox.defaultTimeoutSec,
-        egress: config?.egress ?? settings.sandbox.defaultEgress,
+        memoryMB: config?.resources?.memoryMB ?? DEFAULT_SANDBOX_SETTINGS.defaultMemoryMB,
+        timeoutSec: config?.resources?.timeoutSec ?? DEFAULT_SANDBOX_SETTINGS.defaultTimeoutSec,
+        egress: config?.egress ?? DEFAULT_SANDBOX_SETTINGS.defaultEgress,
         // Tenant seam: 'default' when the caller has no authenticated user —
         // the backend treats it (and absent) as the verbatim-name tenant.
-        tenantId: config?.tenantId ?? 'default',
+        // Resolved HERE, per run, not at wrap time: see `WithSandboxConfig.tenantId`.
+        tenantId: resolveTenantId(config?.tenantId) ?? 'default',
       }
 
       const slot = await scheduler.allocate(sessionId)

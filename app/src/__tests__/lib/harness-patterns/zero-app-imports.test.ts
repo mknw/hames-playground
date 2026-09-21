@@ -21,8 +21,10 @@
  * non-test file under `packages/harness-patterns/`, `packages/agents/`
  * (extended at the @hames/agents extraction, #225 PR-2) and
  * `packages/connectors/` (extended at the connectors move, #225 PR-C2 — same
- * pin shape, one scan over the published packages) — import lines and inline
- * `import()`
+ * pin shape, one scan over the published packages) and `packages/sandbox/`
+ * (extended at the @hames/sandbox extraction — the package the app leans on
+ * hardest, since the composition root, three PTY routes and a browser
+ * component all import it) — import lines and inline `import()`
  * positions alike, comments included, because a static import cannot hide
  * anywhere else. Three escape shapes are checked:
  *
@@ -42,6 +44,7 @@ const PACKAGE_ROOTS = [
   resolve(process.cwd(), '../packages/harness-patterns'),
   resolve(process.cwd(), '../packages/agents'),
   resolve(process.cwd(), '../packages/connectors'),
+  resolve(process.cwd(), '../packages/sandbox'),
 ]
 
 /** A relative climb out of the package (`../app`, `../../app`, …), whatever

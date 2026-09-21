@@ -25,6 +25,11 @@ export default defineConfig({
       // the floors below would otherwise silently cover a smaller surface.
       // Same for the agents package (#225 PR-2): the moved definitions and
       // extractors stay measured from their new home.
+      // NOT here: `packages/connectors` and `packages/sandbox`. Both moved
+      // their tests out with their code, so this run never exercises them —
+      // including them would measure instrumented-but-unexercised source and
+      // drag the floors down for a reason that has nothing to do with app
+      // coverage. Each runs its own suite (CI's two `Package tests` steps).
       include: [
         'src/**/*.{ts,tsx,js,jsx}',
         '../packages/harness-patterns/**/*.{ts,tsx,js,jsx}',
@@ -49,8 +54,11 @@ export default defineConfig({
         // — a container engine, a self-hosted inference endpoint), not
         // unit-testable: recommendation from the sandbox coverage lane,
         // widened from `src/lib/sandbox/scripts/` when the same convention
-        // grew a second home under `src/lib/harness-baml/scripts/` (the
-        // library itself moved to packages/ — #225 Step 1a).
+        // grew a second home under `src/lib/harness-baml/scripts/`. Both of
+        // those homes have since left the app (#225 Step 1a, and the
+        // @hames/sandbox extraction); what the pattern still covers is
+        // `src/lib/inference/scripts/smoke-verda*.ts`, and it stays a glob so
+        // the next one needs no edit.
         'src/lib/**/scripts/smoke-*.ts',
         // Same reason: run by hand against the live tenant and the live Neo4j.
         // The logic they drive is covered by the hermetic suites under

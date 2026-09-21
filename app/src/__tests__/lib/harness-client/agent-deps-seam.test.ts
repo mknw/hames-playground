@@ -60,11 +60,13 @@ const createRedisBackend = vi.fn(() => ({
   type: 'vector' as const,
   search: async () => [],
 }))
-const withSandbox = vi.fn(() => (p: unknown) => p)
+// The config parameter is declared so `mock.calls[0][0]` is typed: the tenant
+// assertion below reads the bag the adapter built, not just that it was called.
+const withSandbox = vi.fn((_config: { tenantId?: unknown }) => (p: unknown) => p)
 const enrichNeo4jResult = vi.fn()
 
 vi.mock('../../../lib/retriever', () => ({ createRedisBackend }))
-vi.mock('../../../lib/sandbox/index.server', () => ({ withSandbox }))
+vi.mock('@hames/sandbox', () => ({ withSandbox }))
 vi.mock('../../../lib/harness-client/neo4j-enricher.server', () => ({ enrichNeo4jResult }))
 vi.mock('../../../lib/db/conversations.server', () => ({
   loadConversation: vi.fn(),
@@ -138,6 +140,34 @@ describe('the bag the composition root supplies is the bag the moved factories r
     // config type), so its identity is the adapter's — asserted by delegation:
     expect(typeof bag.withSandbox).toBe('function')
     bag.withSandbox!({ id: 'x' })(undefined as never)
-    expect(withSandbox).toHaveBeenCalledWith({ id: 'x' })
+    expect(withSandbox).toHaveBeenCalledWith(expect.objectContaining({ id: 'x' }))
+  })
+
+  // The agent-path tenant source (docs/plan/sandbox.md → "Tenant identity
+  // seam"): Lane A shipped `WithSandboxConfig.tenantId` and left this producer
+  // unwired, so until now every agent-path boot ran on the 'default' tenant —
+  // i.e. on the SHARED /cache volume that #348 is about.
+  it('supplies the tenant as a RESOLVER, read per run from the request scope', async () => {
+    const { runWithRequestContext } =
+      await import('../../../lib/harness-client/request-user.server')
+    const bag = agentDeps()
+    bag.withSandbox!({ id: 'x', sessionId: 's' })(undefined as never)
+    const config = withSandbox.mock.calls[0][0]
+
+    // A function, not a string. A string would be read at pattern-BUILD time
+    // and frozen onto a conversation whose patterns are cached for its life.
+    expect(typeof config.tenantId).toBe('function')
+    const resolve = config.tenantId as () => string | undefined
+
+    // Outside a request there is no user, which the package turns into the
+    // verbatim-name 'default' tenant.
+    expect(resolve()).toBeUndefined()
+    // Inside one it is the authenticated owner, every time it is asked.
+    await runWithRequestContext({ userId: 'owner-1', sessionId: 's' }, async () => {
+      expect(resolve()).toBe('owner-1')
+    })
+    await runWithRequestContext({ userId: 'owner-2', sessionId: 's' }, async () => {
+      expect(resolve()).toBe('owner-2')
+    })
   })
 })

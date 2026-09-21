@@ -15,10 +15,10 @@
  *   - `kg-sandbox:base` image built:
  *       cd rootfs && docker build -t kg-sandbox:base .
  *     (Inside the nix shell, the flake's shellHook bridges
- *     ~/.docker/contexts. See rootfs/README.md → "Inside the nix shell".)
+ *     $HOME/.docker/contexts. See rootfs/README.md → "Inside the nix shell".)
  *
  * Run from `app/`:
- *   pnpm dlx tsx src/lib/sandbox/scripts/smoke-scripted.ts
+ *   pnpm dlx tsx packages/sandbox/scripts/smoke-scripted.ts
  *
  * Expected: each invocation writes a Python script counting words in a
  * fixed sentence, runs it via in-VM bash, and prints the count (9). After

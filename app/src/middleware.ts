@@ -13,6 +13,12 @@
  * The first three are import side effects, so they cost nothing per request.
  * The fourth needs an `await`, and must not be reachable from module scope at
  * all; see below.
+ *
+ * It is also where the two PACKAGE seams are handed their host suppliers —
+ * `configureNeo4j` (@hames/connectors) and `configureWorkspaceStore`
+ * (@hames/sandbox) — for the same reason: both are explicit-config-only, so the
+ * one place that runs before any request is the one place that can guarantee
+ * they are set before a turn asks.
  */
 
 import { createMiddleware } from '@solidjs/start/middleware'
@@ -24,6 +30,9 @@ import {
 } from './lib/inference/dev-fake-inference.server'
 import { getEndpoints } from './lib/config/endpoints'
 import { configureNeo4j } from '@hames/connectors/neo4j/client'
+import { configureWorkspaceStore } from '@hames/sandbox/workspace-store'
+import { listDocuments, getDocument, storeDocument } from './lib/document-store.server'
+import { guessMimeType, isTextMime } from './lib/stash/upload-service.server'
 // Side effect only: registers the app-side tools AND the process transport that
 // makes `callTool` dispatch to them. `harness-patterns` deliberately does not
 // import `app-tools` any more — core owns the seam and the ORDER, the app owns
@@ -43,6 +52,26 @@ configureNeo4j({
   url: getEndpoints().neo4j.bolt,
   user: process.env.NEO4J_USER || 'neo4j',
   password: process.env.NEO4J_PASSWORD || 'password',
+})
+
+// Durable-workspace seam (@hames/sandbox): the package owns the `/work`
+// protocol — what is hydrated into `/work/in`, what is promoted out of
+// `/work/out`, and the diffs that make both idempotent — while storage and
+// content classification stay the host's. Wired here, not lazily at first use,
+// because the package refuses rather than degrades: an agent that opted into
+// `syncWorkspace: true` with no store raises a named error on the turn instead
+// of silently running blind over an empty workspace.
+//
+// `guessMimeType`/`isTextMime` ride along for the reason the Graph tools' own
+// `content` seam takes them: the extension→MIME table decides what this stash
+// stores verbatim and what it base64s, and a second copy inside the package
+// would drift toward writing a binary deliverable out as mangled UTF-8.
+configureWorkspaceStore({
+  list: listDocuments,
+  get: getDocument,
+  store: storeDocument,
+  guessMimeType,
+  isTextMime,
 })
 
 // Both are idempotent and HMR-safe (the armed timer / install flag are parked

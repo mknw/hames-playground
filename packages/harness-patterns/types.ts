@@ -1334,6 +1334,21 @@ export interface RoutesConfig extends PatternConfig {
 // tests; #269 raised the default and deleted the copy rather than leaving a
 // second declaration free to disagree with the one the loops actually run on.
 
+/**
+ * Static USD→EUR rate the pricing folds multiply by — the library-side default
+ * the host's settings extend (the app may override it at `EUR_PER_USD`, read
+ * per call in its own cost-rates module). One definition, here: the event
+ * metrics fold (`metrics/aggregate.ts`) needs it to convert pre-EUR `costUsd`
+ * stamps, and the host re-exports this constant rather than restating it, so
+ * the two cannot disagree.
+ *
+ * 0.86 ≈ EUR/USD 1.16, the rate around 2026-08. Update by hand; the figure it
+ * feeds is labelled an estimate everywhere it renders. The multiplication
+ * direction is named on purpose — see the host's `pricing-eur` pin, which
+ * scans for the reversed spelling.
+ */
+export const DEFAULT_EUR_PER_USD = 0.86
+
 /** Default trackHistory by pattern type */
 export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
   simpleLoop: ['controller_action', 'tool_call', 'tool_result'],

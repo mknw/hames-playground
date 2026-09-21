@@ -7,8 +7,8 @@ import { Match, Show, Switch, createSignal } from 'solid-js'
 import { Accordion } from '@ark-ui/solid/accordion'
 import type { LLMCallData } from '@hames/harness-patterns'
 import type { EventMetrics } from '@hames/harness-patterns/types'
-import { fmtEur } from '~/lib/observability/token-totals'
-import { isTimePricedStep, stepCostEur } from '~/lib/metrics/aggregate'
+import { fmtEur } from '@hames/harness-patterns/observability/token-totals'
+import { isTimePricedStep, stepCostEur } from '@hames/harness-patterns/metrics/aggregate'
 import { CodeBlock, ParsedPromptView } from './PromptView'
 
 /** The floor caveat, in the words all three time-priced tooltips end with. */

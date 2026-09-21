@@ -9,7 +9,7 @@
  * hit-rate, savings) stay defined on empty input.
  */
 import { describe, it, expect } from 'vitest'
-import type { ContextEvent, EventMetrics } from '@hames/harness-patterns/types'
+import type { ContextEvent, EventMetrics } from '../../types'
 import {
   getEventMetrics,
   isLlmBearing,
@@ -21,8 +21,8 @@ import {
   summarize,
   emptyTotals,
   type ConversationEvents,
-} from '../../../lib/metrics/aggregate'
-import { DEFAULT_EUR_PER_USD } from '../../../lib/settings'
+} from '../../metrics/aggregate'
+import { DEFAULT_EUR_PER_USD } from '../../types'
 
 // ============================================================================
 // Fixtures

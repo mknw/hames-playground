@@ -13,7 +13,7 @@ import {
   formatParamValue,
   hasSystemContent,
   parsePromptBody,
-} from '~/lib/observability/prompt-parse'
+} from '../../observability/prompt-parse'
 
 describe('flattenContent', () => {
   it('passes a plain string through and renders nullish content as empty', () => {

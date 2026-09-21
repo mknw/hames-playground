@@ -1,13 +1,13 @@
 /**
  * Metrics dashboard page render (#132).
  *
- * The fold is covered exhaustively in `lib/metrics/aggregate.test.ts`; this
+ * The fold is covered exhaustively in `packages/harness-patterns/__tests__/metrics/aggregate.test.ts`; this
  * mounts the route over a stubbed server action to check the numbers actually
  * reach the DOM — global cards, both aggregate tables, the unmetered notice,
  * and the empty state when nothing has been run yet.
  */
 import { describe, it, expect, vi } from 'vitest'
-import { buildDashboard, type ConversationEvents } from '~/lib/metrics/aggregate'
+import { buildDashboard, type ConversationEvents } from '@hames/harness-patterns/metrics/aggregate'
 import type { ContextEvent } from '@hames/harness-patterns/types'
 
 const getMetricsDashboard = vi.fn()

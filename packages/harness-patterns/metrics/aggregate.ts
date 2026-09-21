@@ -21,8 +21,8 @@
  * same thing on every surface that renders one.
  */
 
-import type { ContextEvent, EventMetrics } from '@hames/harness-patterns/types'
-import { DEFAULT_EUR_PER_USD } from '../settings'
+import type { ContextEvent, EventMetrics } from '../types'
+import { DEFAULT_EUR_PER_USD } from '../types'
 
 // ============================================================================
 // Selector

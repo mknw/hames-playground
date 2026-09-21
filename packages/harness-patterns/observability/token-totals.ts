@@ -3,7 +3,7 @@
  * plus its two formatters. Split out of `ObservabilityPanel.tsx` (#226 B5).
  */
 
-import type { ContextEvent } from '@hames/harness-patterns'
+import type { ContextEvent } from '../types'
 import { isTimePricedStep, stepCostEur } from '../metrics/aggregate'
 
 /** Compact token count: 1234 → "1.2k", 25_320 → "25.3k". */

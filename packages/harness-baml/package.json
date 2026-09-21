@@ -19,7 +19,12 @@
     "prepublishOnly": "node -e \"const ua=process.env.npm_config_user_agent||'';const ex=process.env.npm_execpath||'';if(ua.startsWith('npm/')||ex.includes('npm-cli'))throw new Error('This package must be published with pnpm publish, not npm: npm does not rewrite workspace: specifiers and ships them literally.')\""
   },
   "dependencies": {
-    "@boundaryml/baml": "0.224.0",
+    "@boundaryml/baml": "0.224.0"
+  },
+  "peerDependencies": {
+    "@hames/harness-patterns": "workspace:^"
+  },
+  "devDependencies": {
     "@hames/harness-patterns": "workspace:^"
   },
   "files": [

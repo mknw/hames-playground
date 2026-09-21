@@ -4,8 +4,9 @@
 #   - @hames/harness-baml    (#225 PR-1b)
 #   - @hames/agents          (#225 PR-2 — REQUIRED by the PR-2 amendment: all
 #     published packages pass the tarball smoke; a red is a regression). Its
-#     scratch install carries pnpm overrides pointing BOTH dependencies at
-#     their tarballs, for the same unpublished-`workspace:*` reason as above.
+#     scratch install adds BOTH peer tarballs alongside it, for the
+#     unpublished-version reason under "Why the scratch consumers install the
+#     peers" below.
 #   - @hames/connectors      (#225 PR-C2)
 #   - @hames/sandbox         (the sandbox extraction) — the containment
 #     companion. Its probe is the one that matters most for the
@@ -20,6 +21,25 @@
 #     3 imports `pty-manager.server`, which transitively imports
 #     `with-sandbox.server`. Step 3 says so in its own words rather than
 #     blaming node-pty (#365 post-merge review, D3).
+#
+# ## Why the scratch consumers install the peers themselves
+#
+# Since the 2026-09-22 owner ruling, each companion declares its @hames edges
+# as `peerDependencies` (+ devDependencies), so a consumer owns the single
+# copy of @hames/harness-patterns rather than letting its tree resolve a
+# second one behind the module-level AsyncLocalStorage scopes. The scratch
+# projects below therefore `pnpm add` the peer tarballs ALONGSIDE the package
+# under test — which is precisely the contract a peer creates, and is a
+# stronger probe than what it replaced: the peer range in the packed manifest
+# (`^0.1.0`) has to be satisfiable by the packed peer, or the install warns
+# and the probe's imports fail.
+#
+# It replaces a `pnpm.overrides` map because that map no longer works and
+# would have failed OPEN: overrides are not applied to a peer that
+# `auto-install-peers` resolves, so pnpm went to the registry for
+# @hames/harness-patterns and died with ERR_PNPM_FETCH_404. Declaring the peer
+# is also what a real consumer's package.json does, so nothing here is a
+# workaround for the test.
 #
 # This is the ONLY mechanism anywhere in CI that exercises "does the published
 # tarball actually work" — the docker image boots from the workspace symlink,
@@ -191,17 +211,17 @@ pnpm dlx tsx probe.mts
 
 # ===========================================================================
 # @hames/harness-baml — same four checks, on the second package's tarball.
-# The scratch install overrides @hames/harness-patterns with the patterns
-# tarball (see header): the dependency itself is what the tarball DEPENDS on,
-# and its registry fetch would be an unrelated failure.
+# The scratch install adds the @hames/harness-patterns tarball as its own
+# direct dependency: that package is harness-baml's PEER (see header), so the
+# consumer is the one that owns the copy, and its version has to satisfy the
+# packed peer range.
 # ===========================================================================
 
 echo "== install harness-baml into scratch project =="
 mkdir -p "$tmp/scratch-baml"
 cd "$tmp/scratch-baml"
-printf '{"name":"pack-smoke-scratch-baml","private":true,"type":"module",\n "pnpm":{"overrides":{"@hames/harness-patterns":"file:%s"}}}\n' \
-  "$patterns_tarball" > package.json
-pnpm add "$baml_tarball"
+printf '{"name":"pack-smoke-scratch-baml","private":true,"type":"module"}\n' > package.json
+pnpm add "$patterns_tarball" "$baml_tarball"
 
 cat > probe.mts <<'PROBE'
 import { strict as assert } from 'node:assert'
@@ -251,10 +271,10 @@ pnpm dlx tsx probe.mts
 
 
 # ===========================================================================
-# @hames/agents — same checks on the third package's tarball. The scratch
-# install overrides BOTH dependencies (patterns and harness-baml) with their
-# tarballs — each tarball's rewritten `workspace:*` dependency (→ "0.1.0") is
-# unpublished, and a registry fetch must not be the thing under test.
+# @hames/agents — same checks on the third package's tarball. It peers on
+# BOTH patterns and harness-baml, so the scratch adds both tarballs beside it:
+# each peer range packs to an unpublished "^0.1.0", and a registry fetch must
+# not be the thing under test.
 # ===========================================================================
 
 echo "== install @hames/agents into scratch project =="
@@ -265,9 +285,8 @@ echo "tarball: $agents_tarball"
 
 mkdir -p "$tmp/scratch-agents"
 cd "$tmp/scratch-agents"
-printf '{"name":"pack-smoke-scratch-agents","private":true,"type":"module",\n "pnpm":{"overrides":{"@hames/harness-patterns":"file:%s","@hames/harness-baml":"file:%s"}}}\n' \
-  "$patterns_tarball" "$baml_tarball" > package.json
-pnpm add "$agents_tarball"
+printf '{"name":"pack-smoke-scratch-agents","private":true,"type":"module"}\n' > package.json
+pnpm add "$patterns_tarball" "$baml_tarball" "$agents_tarball"
 
 cat > probe.mts <<'PROBE'
 import { strict as assert } from 'node:assert'
@@ -320,10 +339,10 @@ echo "== run agents probe =="
 pnpm dlx tsx probe.mts
 # ===========================================================================
 # @hames/connectors — the same four checks, on the connectors package's
-# tarball (#225 PR-C2). Its scratch install overrides
-# @hames/harness-patterns with the patterns tarball (the connectors package
-# depends on it as `workspace:*`, whose packed rewrite resolves to an
-# unpublished 0.1.0 — the same reason the baml scratch carries the override).
+# tarball (#225 PR-C2). Its scratch install adds the @hames/harness-patterns
+# tarball beside it (the connectors package PEERS on it, and the packed peer
+# range resolves to an unpublished ^0.1.0 — the same reason the baml scratch
+# installs its peer).
 # ===========================================================================
 
 echo "== pack @hames/connectors =="
@@ -335,9 +354,8 @@ echo "tarball: $connectors_tarball"
 echo "== install @hames/connectors into scratch project =="
 mkdir -p "$tmp/scratch-connectors"
 cd "$tmp/scratch-connectors"
-printf '{"name":"pack-smoke-scratch-connectors","private":true,"type":"module",\n "pnpm":{"overrides":{"@hames/harness-patterns":"file:%s"}}}\n' \
-  "$patterns_tarball" > package.json
-pnpm add "$connectors_tarball"
+printf '{"name":"pack-smoke-scratch-connectors","private":true,"type":"module"}\n' > package.json
+pnpm add "$patterns_tarball" "$connectors_tarball"
 
 cat > probe.mts <<'PROBE'
 import { strict as assert } from 'node:assert'
@@ -408,11 +426,11 @@ pnpm dlx tsx probe.mts
 
 # ===========================================================================
 # @hames/sandbox — same checks on the containment companion's tarball. Its
-# scratch install overrides @hames/harness-patterns with the patterns tarball
-# (the `workspace:*` dependency packs to an unpublished "0.1.0", same reason
-# as every scratch above). @hames/harness-baml is a devDependency here — the
-# smoke scripts and the end-to-end test use it — so it is not installed and
-# not needed: a consumer of the tarball never sees it.
+# scratch install adds the @hames/harness-patterns tarball beside it (its
+# PEER, whose packed range is an unpublished "^0.1.0", same reason as every
+# scratch above). @hames/harness-baml is a devDependency here — the smoke
+# scripts and the end-to-end test use it — so it is neither a peer nor
+# installed: a consumer of the tarball never sees it.
 # ===========================================================================
 
 echo "== pack @hames/sandbox =="
@@ -424,9 +442,8 @@ echo "tarball: $sandbox_tarball"
 echo "== install @hames/sandbox into scratch project =="
 mkdir -p "$tmp/scratch-sandbox"
 cd "$tmp/scratch-sandbox"
-printf '{"name":"pack-smoke-scratch-sandbox","private":true,"type":"module",\n "pnpm":{"overrides":{"@hames/harness-patterns":"file:%s"}}}\n' \
-  "$patterns_tarball" > package.json
-pnpm add "$sandbox_tarball"
+printf '{"name":"pack-smoke-scratch-sandbox","private":true,"type":"module"}\n' > package.json
+pnpm add "$patterns_tarball" "$sandbox_tarball"
 
 cat > probe.mts <<'PROBE'
 import { strict as assert } from 'node:assert'

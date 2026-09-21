@@ -14,6 +14,15 @@
  *       every consumer's resolution with EUNSUPPORTEDPROTOCOL (audit
  *       finding 1). The companion assertion drives `npm publish --dry-run`
  *       and asserts it REFUSES — the guard is the belt to that brace.
+ *   (a3) the cross-package edges ship as PEERS: no `@hames/*` entry survives
+ *       in the packed `dependencies`, and every `@hames/*` peer packs as a
+ *       real caret range. That is the rewrite (a) proves happened at all,
+ *       read on the field it now has to happen in — `pnpm pack` rewrites
+ *       `workspace:^` wherever it appears, but nothing else asserts the
+ *       companion edges MOVED, and a revert of one manifest is invisible to
+ *       every other assertion in this file (owner ruling 2026-09-22; the
+ *       duplicate-instance rationale is on the pin in
+ *       `package-conventions.test.ts`).
  *   (b) every manifest carries the `prepublishOnly` npm-vs-pnpm guard —
  *       the belt-and-braces that stops `npm publish` at the counter
  *       (finding 1's fix);
@@ -35,7 +44,10 @@
  * on the record in the PR that shipped this file — reintroduce a
  * `workspace:*` (reddens (a)), reintroduce the `cytoscape` type-only import
  * (reddens (d)), drop a `prepublishOnly` script (reddens (b) and the
- * npm-refusal assertion).
+ * npm-refusal assertion). (a3)'s is on the PR that added it: move one
+ * companion's `@hames/*` peer back under `dependencies` — the emptiness half
+ * reddens for that package, and deleting the edge outright reddens the
+ * non-vacuity half instead.
  */
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
@@ -138,18 +150,34 @@ function bareImports(src: string): string[] {
 
 describe('packed artifact pin (pnpm pack — the publish path — what a consumer actually receives)', () => {
   const packages = workspacePackages()
+  // One pack per package for the whole suite. `pnpm pack` is by far the
+  // slowest thing here, and every assertion below reads the same artifact.
+  const packedByName = new Map(packages.map((name) => [name, pack(name)]))
 
   it('there are packages to check, so the scan cannot pass vacuously', () => {
     expect(packages.length).toBeGreaterThanOrEqual(4)
     expect(packages).toContain('harness-patterns')
   })
 
+  it('(a3, non-vacuity) the four companions each pack at least one @hames peer', () => {
+    // (a3) is a pair of emptiness assertions, so it passes for a package with
+    // no cross-package edge at all — including one whose edge was reverted to a
+    // `dependency` AND dropped. This is the half that reddens on a revert:
+    // packed here, not read off the source manifest, because the artifact is
+    // what a consumer resolves.
+    const withPeers = packages.filter(
+      (name) =>
+        Object.keys(packedByName.get(name)!.manifest.peerDependencies ?? {}).filter((spec) =>
+          spec.startsWith('@hames/'),
+        ).length > 0,
+    )
+    expect(withPeers.sort()).toEqual(['agents', 'connectors', 'harness-baml', 'sandbox'])
+  })
+
   for (const name of packages) {
     describe(name, () => {
       const pkgDir = join(PACKAGES, name)
-      let packed: Packed
-      // One pack per package, read by every assertion below.
-      packed = pack(name)
+      const packed = packedByName.get(name)!
 
       it('(a0) every cross-package dependency spec is workspace:^ — the caret, not the exact pin', () => {
         // The SOURCE manifest is where the protocol is declared; pnpm rewrites
@@ -195,6 +223,32 @@ describe('packed artifact pin (pnpm pack — the publish path — what a consume
             'with EUNSUPPORTEDPROTOCOL; the publish path is `pnpm publish`, which ' +
             'rewrites `workspace:^` to a caret range — see the prepublishOnly guard',
         ).toEqual([])
+      })
+
+      it('(a3) cross-package edges pack as peers: none under dependencies, all real ranges', () => {
+        const hamesDeps = Object.keys(packed.manifest.dependencies ?? {}).filter((spec) =>
+          spec.startsWith('@hames/'),
+        )
+        expect(
+          hamesDeps,
+          'a cross-package edge must ship under `peerDependencies`: as a `dependency` a ' +
+            'consumer can resolve a second copy of harness-patterns, and the module-level ' +
+            'AsyncLocalStorage scopes stop applying silently rather than failing',
+        ).toEqual([])
+
+        // The packed peer ranges are the rewrite's OUTPUT. `workspace:` absence
+        // is assertion (a); this asserts the range is one a consumer's resolver
+        // can actually satisfy, i.e. that the rewrite produced a caret over a
+        // released-looking version rather than a pin or an empty string.
+        const peers = Object.entries(packed.manifest.peerDependencies ?? {}).filter(([spec]) =>
+          spec.startsWith('@hames/'),
+        )
+        const malformed = peers.filter(([, range]) => !/^\^\d+\.\d+\.\d+(-[\w.]+)?$/.test(range))
+        expect(
+          Object.fromEntries(malformed),
+          'pnpm rewrites `workspace:^` to a caret range at pack time — anything else here is ' +
+            'either an unrewritten protocol or an exact pin that splits the consumer tree',
+        ).toEqual({})
       })
 
       it('(a2) `npm publish --dry-run` REFUSES — the prepublishOnly guard fires', () => {

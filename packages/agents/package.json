@@ -11,7 +11,11 @@
     "./agents": "./agents/index.ts",
     "./*": "./*.ts"
   },
-  "dependencies": {
+  "peerDependencies": {
+    "@hames/harness-baml": "workspace:^",
+    "@hames/harness-patterns": "workspace:^"
+  },
+  "devDependencies": {
     "@hames/harness-baml": "workspace:^",
     "@hames/harness-patterns": "workspace:^"
   },

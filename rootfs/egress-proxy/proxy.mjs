@@ -9,7 +9,7 @@
  * process, and the network itself has no external route — so a client that
  * ignores the proxy vars has no path out at all. That topology is what makes
  * the allowlist below ENFORCED rather than advisory (see
- * app/src/lib/sandbox/egress-policy.ts).
+ * packages/sandbox/egress-policy.ts).
  *
  * Surface:
  *   - HTTPS CONNECT tunneling, filtered by destination host against the

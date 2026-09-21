@@ -18,7 +18,7 @@
  * indistinguishable from outside.
  */
 import type { APIEvent } from '@solidjs/start/server'
-import { ptyManager } from '../../../../lib/sandbox/pty-manager.server'
+import { ptyManager } from '@hames/sandbox/pty-manager.server'
 import { agentUsesSyncWorkspace } from '../../../../lib/harness-client/registry.server'
 import { withUser, claimSession } from '../../../../lib/stash/http.server'
 

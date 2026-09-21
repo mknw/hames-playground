@@ -1,17 +1,31 @@
 /**
- * Sandbox compute — server-only barrel + backend selection.
+ * `@hames/sandbox` — server-only barrel + backend selection.
  *
  * `withSandbox` and the (future) sandbox manager import `getComputeBackend()`
  * here rather than constructing a backend directly, so substrate choice stays
  * a single operational decision (see docs/plan/sandbox.md → "macOS
  * development" / "Substrate options").
  *
- * This is also the package's PUBLIC surface: `withSandbox` — the scoped
- * registrant on core's tool-transport seam — is exported here rather than
- * deep-imported, so a consumer never names a file inside this package. The
- * exceptions are app files reaching an app module (`pty-manager.server`, and
- * `TerminalPanel`'s type import), which are not library consumers and would
- * otherwise drag `DockerBackend` into a browser component's graph.
+ * This is the package's PUBLIC surface: `withSandbox` — the scoped registrant
+ * on core's tool-transport seam — is exported here rather than deep-imported,
+ * so a consumer never names a file inside this package.
+ *
+ * **This barrel is SERVER-ONLY and it pulls the Docker backend with it**
+ * (`with-sandbox.server.ts` constructs one by default, so a lazy import here
+ * would move the edge rather than remove it). Two subpaths exist for the
+ * consumers that must not drag it in, and both are free of `node:` imports and
+ * of the server assertion:
+ *
+ *   - `@hames/sandbox/types` — the compute types plus `SANDBOX_TOOL_PREFIX`
+ *     and `V0_IN_VM_SERVERS`. This is what a browser component imports (the
+ *     app's `TerminalPanel` does).
+ *   - `@hames/sandbox/settings` — `SandboxSettings` + `DEFAULT_SANDBOX_SETTINGS`,
+ *     imported by the app's own client-safe settings module.
+ *
+ * Two more are host-facing and server-side: `./workspace-store` (the durable
+ * `/work` seam a host configures) and `./pty-manager.server` (the interactive
+ * Shell path, which the host's routes drive directly — it is not part of the
+ * harness surface and would otherwise put node-pty in every consumer's graph).
  */
 
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
@@ -33,6 +47,17 @@ export type {
 export { SANDBOX_TOOL_PREFIX, V0_IN_VM_SERVERS } from './types'
 export { DockerBackend, SandboxBootError } from './docker-backend.server'
 export { withSandbox, type WithSandboxConfig } from './with-sandbox.server'
+export { type SandboxSettings, DEFAULT_SANDBOX_SETTINGS } from './settings'
+export {
+  configureWorkspaceStore,
+  isWorkspaceStoreConfigured,
+  WorkspaceStoreNotConfiguredError,
+  type WorkspaceStore,
+  type WorkspaceCallTool,
+  type WorkspaceDocument,
+  type WorkspaceDocumentInput,
+  type WorkspaceDocumentMeta,
+} from './workspace-store'
 
 let backendSingleton: ComputeBackend | null = null
 

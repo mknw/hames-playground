@@ -149,7 +149,7 @@ beforeEach(() => {
 })
 
 async function makeBackend() {
-  const mod = await import('../../../lib/sandbox/docker-backend.server')
+  const mod = await import('../docker-backend.server')
   return new mod.DockerBackend()
 }
 

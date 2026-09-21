@@ -16,7 +16,7 @@ import {
   screenBashCommand,
   DEFAULT_DENY_RULES,
   type BashGuardPolicy,
-} from '../../../lib/sandbox/bash-guard'
+} from '../bash-guard'
 
 const denyOnly: BashGuardPolicy = { deny: DEFAULT_DENY_RULES, allowHeads: [] }
 

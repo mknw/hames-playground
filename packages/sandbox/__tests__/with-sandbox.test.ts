@@ -26,18 +26,18 @@ const artifacts = vi.hoisted(() => ({
     skipped: [] as Array<{ filename: string; error: string }>,
   })),
 }))
-vi.mock('../../../lib/sandbox/work-artifacts.server', () => artifacts)
+vi.mock('../work-artifacts.server', () => artifacts)
 
 import {
   withSandbox,
   getDefaultAttachments,
   __resetSandboxDefaultsForTests,
-} from '../../../lib/sandbox/with-sandbox.server'
+} from '../with-sandbox.server'
 import { activeTransports } from '@hames/harness-patterns/tool-transport.server'
-import { WarmPool } from '../../../lib/sandbox/warm-pool.server'
-import { SandboxScheduler } from '../../../lib/sandbox/scheduler.server'
-import { AttachmentTable } from '../../../lib/sandbox/attachment-table.server'
-import { DockerBackend } from '../../../lib/sandbox/docker-backend.server'
+import { WarmPool } from '../warm-pool.server'
+import { SandboxScheduler } from '../scheduler.server'
+import { AttachmentTable } from '../attachment-table.server'
+import { DockerBackend } from '../docker-backend.server'
 import { harnessUsesSyncWorkspace } from '@hames/harness-patterns/pattern-capabilities'
 import type {
   ComputeBackend,
@@ -46,7 +46,7 @@ import type {
   RootfsId,
   RuntimeConfig,
   VMHandle,
-} from '../../../lib/sandbox/types'
+} from '../types'
 import type { ConfiguredPattern, PatternScope, EventView } from '@hames/harness-patterns/types'
 
 type Calls = {

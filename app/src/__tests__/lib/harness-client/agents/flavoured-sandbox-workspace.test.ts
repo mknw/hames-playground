@@ -18,11 +18,14 @@
  * so whichever flavour a turn lands in, `/work/in` exists and holds the
  * session's stored documents.
  *
- * Mocked at three seams, so no Docker and no Redis: `docker-backend.server`
+ * Faked at three seams, so no Docker and no Redis: `docker-backend.server`
  * (a fake backend whose every container carries its own in-memory filesystem — that
  * per-container isolation is what makes the cross-flavour bug reproducible),
- * `document-store.server` (one stored document), and BAML (a scripted router +
- * actor + critic). Everything between — `withSandbox`, the attachment table,
+ * the @hames/sandbox WORKSPACE STORE (one stored document, registered through
+ * `configureWorkspaceStore` the way the app's boot hook registers the real one
+ * — since the extraction the package takes the store as a supplier rather than
+ * importing the app's module), and BAML (a scripted router + actor + critic).
+ * Everything between — `withSandbox`, the attachment table,
  * `work-artifacts`/`work-sync`, `callTool`'s sandbox dispatch, `router`/`routes`
  * and `actorCritic` — is the real code.
  */
@@ -42,7 +45,8 @@ import type { AgentDeps } from '@hames/agents'
  * import would keep wrapping the stale one across tests.
  */
 async function realSandboxDeps(): Promise<AgentDeps> {
-  const sandbox = await import('../../../../lib/sandbox/index.server')
+  const sandbox = await import('@hames/sandbox')
+  await installWorkspaceStore()
   return {
     toolNamespaces: () => undefined,
     withSandbox: (attach) => sandbox.withSandbox(attach as never),
@@ -141,7 +145,7 @@ const vms: Array<{ id: string; rootfs: string; fs: FakeVmFs }> = []
 
 const backendMock = vi.hoisted(() => ({ nextId: 0 }))
 
-vi.mock('../../../../lib/sandbox/docker-backend.server', () => {
+vi.mock('@hames/sandbox/docker-backend.server', () => {
   class FakeDockerBackend {
     kind = 'docker' as const
 
@@ -224,33 +228,31 @@ const docs = vi.hoisted(() => ({
   store: [] as Array<{ id: string; filename: string; content: string }>,
 }))
 
-vi.mock('../../../../lib/document-store.server', () => ({
-  listDocuments: vi.fn(async () =>
-    docs.store.map((d, i) => ({
-      id: d.id,
-      sessionId: 'sess-243',
-      filename: d.filename,
-      mimeType: 'text/csv',
-      size: d.content.length,
-      uploadedAt: 1_000 + i,
-    })),
-  ),
-  getDocument: vi.fn(async (_sessionId: string, docId: string) => {
-    const d = docs.store.find((x) => x.id === docId)
-    return d
-      ? {
-          id: d.id,
-          sessionId: 'sess-243',
-          filename: d.filename,
-          mimeType: 'text/csv',
-          size: d.content.length,
-          uploadedAt: 1_000,
-          content: d.content,
-        }
-      : null
-  }),
-  storeDocument: vi.fn(async () => ({ id: 'stored' })),
-}))
+/**
+ * The store the package hydrates `/work/in` from. Registered per test through
+ * the package's own seam rather than module-mocked, because `afterEach` calls
+ * `vi.resetModules()` — a registration on a stale module instance would be
+ * invisible to the next test's fresh one, which is exactly the class of bug
+ * `hydrateWorkspace`'s named refusal exists to make loud.
+ */
+async function installWorkspaceStore(): Promise<void> {
+  const { configureWorkspaceStore } = await import('@hames/sandbox/workspace-store')
+  configureWorkspaceStore({
+    list: async () =>
+      docs.store.map((d, i) => ({
+        id: d.id,
+        filename: d.filename,
+        uploadedAt: 1_000 + i,
+      })),
+    get: async (_sessionId: string, docId: string) => {
+      const d = docs.store.find((x) => x.id === docId)
+      return d ? { filename: d.filename, content: d.content } : null
+    },
+    store: async () => ({ id: 'stored' }),
+    guessMimeType: () => 'text/csv',
+    isTextMime: () => true,
+  })
+}
 
 // ---- BAML: a scripted router + actor + critic ------------------------------
 // The router's picks are the reproduction: `data` on turn 1, `basic` on turn 2.
@@ -316,8 +318,7 @@ describe('flavoured-sandbox — one session workspace across flavours (#243 foll
   })
 
   afterEach(async () => {
-    const { __resetSandboxDefaultsForTests } =
-      await import('../../../../lib/sandbox/with-sandbox.server')
+    const { __resetSandboxDefaultsForTests } = await import('@hames/sandbox/with-sandbox.server')
     __resetSandboxDefaultsForTests()
     vi.resetModules()
   })

@@ -17,16 +17,12 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
 // DockerBackend's constructor is inert, but stub the module anyway so no MCP
 // SDK / docker CLI machinery loads just to resolve a backend.
 const DockerBackend = vi.hoisted(() => vi.fn(function () {}))
-vi.mock('../../../lib/sandbox/docker-backend.server', () => ({
+vi.mock('../docker-backend.server', () => ({
   DockerBackend,
   SandboxBootError: class SandboxBootError extends Error {},
 }))
 
-import {
-  selectBackendKind,
-  getComputeBackend,
-  __setComputeBackend,
-} from '../../../lib/sandbox/index.server'
+import { selectBackendKind, getComputeBackend, __setComputeBackend } from '../index'
 
 const originalBackendEnv = process.env.COMPUTE_BACKEND
 

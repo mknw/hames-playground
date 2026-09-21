@@ -29,6 +29,7 @@
     "../packages/harness-patterns",
     "../packages/harness-baml",
     "../packages/connectors",
-    "../packages/agents"
+    "../packages/agents",
+    "../packages/sandbox"
   ]
 }

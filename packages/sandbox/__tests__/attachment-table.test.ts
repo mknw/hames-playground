@@ -13,8 +13,8 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-import { AttachmentTable } from '../../../lib/sandbox/attachment-table.server'
-import { WarmPool } from '../../../lib/sandbox/warm-pool.server'
+import { AttachmentTable } from '../attachment-table.server'
+import { WarmPool } from '../warm-pool.server'
 import type {
   ComputeBackend,
   HealthStatus,
@@ -22,7 +22,7 @@ import type {
   RootfsId,
   RuntimeConfig,
   VMHandle,
-} from '../../../lib/sandbox/types'
+} from '../types'
 
 // ---- fakes ---------------------------------------------------------------
 

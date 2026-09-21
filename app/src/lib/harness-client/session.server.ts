@@ -19,9 +19,10 @@ import type { AgentData, AgentDeps } from '@hames/agents'
 import { mcpNamespace } from '@hames/connectors/mcp-catalog'
 import { enrichNeo4jResult } from './neo4j-enricher.server'
 import { createRedisBackend } from '../retriever'
-import { withSandbox, type WithSandboxConfig } from '../sandbox/index.server'
+import { withSandbox, type WithSandboxConfig } from '@hames/sandbox'
 import { clientOverrideFor, type BamlRole } from '@hames/harness-baml/clients.server'
 import { canonicalAgentId, getAgent } from './registry.server'
+import { getRequestUserId } from './request-user.server'
 import {
   loadConversation,
   saveConversation,
@@ -68,6 +69,27 @@ export function agentDeps(): AgentDeps {
     // The package's contract names the five fields its factories pass as
     // plain strings; the app narrows `rootfs`/`egress` onto its own unions
     // here — the one adapter seam between the two type surfaces.
+    //
+    // THE TENANT IS SUPPLIED HERE, and it is the only agent-path source there
+    // is (design: docs/plan/sandbox.md → "Tenant identity seam"; Lane A shipped
+    // the seam and left this producer unwired). Three properties, each
+    // deliberate:
+    //
+    //   - It is the conversation OWNER's `users.id`, resolved server-side from
+    //     the request scope. Never `users.tid` (that names the Entra org, a
+    //     different boundary), and never anything an agent factory or a client
+    //     could name: a tenant that arrived as input is not an isolation
+    //     boundary, it is a parameter.
+    //   - It is a FUNCTION, not a string, because this adapter runs when the
+    //     conversation's patterns are BUILT and a built chain is cached for the
+    //     session's life (`getOrBuildPatterns` below), while `getRequestUserId`
+    //     only answers inside a turn. A string read here would pin whatever was
+    //     in scope at build time — `null` for a capability probe — onto every
+    //     later turn of that conversation. The package calls it per run.
+    //   - `undefined` (no authenticated user — dev bypass, a background build)
+    //     becomes the `'default'` tenant package-side, which keeps the cache
+    //     volume's name verbatim. That is the single-operator migration rule,
+    //     not a fallback that widens anything.
     withSandbox: (attach) =>
       withSandbox({
         id: attach.id,
@@ -75,6 +97,7 @@ export function agentDeps(): AgentDeps {
         rootfs: attach.rootfs as WithSandboxConfig['rootfs'],
         egress: attach.egress as WithSandboxConfig['egress'],
         syncWorkspace: attach.syncWorkspace,
+        tenantId: () => getRequestUserId() ?? undefined,
       }),
     clientOverride: (role) => clientOverrideFor(role as BamlRole),
     persistTitle: updateConversationTitle,

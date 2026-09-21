@@ -31,7 +31,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mockAction, mockCriticResult } from '../../mocks/baml'
+import { mockAction, mockCriticResult } from './fixtures/baml'
 
 vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -223,7 +223,7 @@ describe('withSandbox(actorCritic) end-to-end — word count', () => {
     const { createEventView } = await import('@hames/harness-patterns/patterns')
     const { createActorControllerAdapter, createCriticAdapter } =
       await import('@hames/harness-baml/baml-adapters.server')
-    const { withSandbox } = await import('../../../lib/sandbox/with-sandbox.server')
+    const { withSandbox } = await import('../with-sandbox.server')
 
     const script =
       'text = "the quick brown fox jumps over the lazy dog"\nprint(len(text.split()))\n'

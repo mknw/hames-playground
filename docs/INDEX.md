@@ -85,6 +85,7 @@ Authoritative source-level docs (closer to the code):
 - [`packages/harness-patterns/README.md`](../packages/harness-patterns/README.md) — the `hames` library front page
 - [`packages/harness-patterns/GUIDE.md`](../packages/harness-patterns/GUIDE.md) — the developer guide: composition model, writing a pattern, tool transports, the error surface, consuming the package (every snippet typecheck-pinned by `guide-docs-pins.test.ts`)
 - [`packages/agents/README.md`](../packages/agents/README.md) — the ready-made agents package: the nine moved definitions, the `AgentDefinition`/`AgentData`/`AgentDeps` surface, the agent catalog with guard coverage, and what the app's composition root overlays (every API-call snippet compile-checked by `agents-readme-docs-pins.test.ts`)
+- [`packages/sandbox/README.md`](../packages/sandbox/README.md) — the containment companion: `withSandbox`, the Docker backend, the egress profiles and the bash guard; the injected seams (the durable-workspace store, the tenant resolver), why the `rootfs/` images stay repo infrastructure, and the three guards that keep the package free of `app/src`
 - [`packages/harness-baml/README.md`](../packages/harness-baml/README.md) — the BAML companion's front page: the LLM seam — injected-function shape, `bamlPatterns()`, the adapter factories, the v1 client scope (Anthropic + custom-endpoint), and how to point a custom-endpoint client at your own model; compile-checked by `baml-readme-docs-pins.test.ts`
 
 ### UI Frontend

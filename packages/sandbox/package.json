@@ -1,0 +1,36 @@
+{
+  "name": "@hames/sandbox",
+  "version": "0.1.0",
+  "description": "The containment companion for @hames/harness-patterns — withSandbox, the Docker compute backend, the egress profiles and the bash guard, behind injected host seams.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./package.json": "./package.json",
+    "./guard": "./bash-guard.ts",
+    "./*": "./*.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@hames/harness-patterns": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@hames/harness-baml": "workspace:*",
+    "vitest": "^4.1.5"
+  },
+  "files": [
+    "*.ts",
+    "!vitest.config.ts",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

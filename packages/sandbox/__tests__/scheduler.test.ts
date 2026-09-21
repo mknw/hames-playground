@@ -11,7 +11,7 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-import { SandboxScheduler, type Slot } from '../../../lib/sandbox/scheduler.server'
+import { SandboxScheduler, type Slot } from '../scheduler.server'
 
 describe('SandboxScheduler.allocate', () => {
   it('grants immediately when under both caps', async () => {

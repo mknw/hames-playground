@@ -9,7 +9,7 @@
  * Ownership: same read gate as input — see `input.ts`.
  */
 import type { APIEvent } from '@solidjs/start/server'
-import { ptyManager } from '../../../../lib/sandbox/pty-manager.server'
+import { ptyManager } from '@hames/sandbox/pty-manager.server'
 import { withUser, requireSessionOwner } from '../../../../lib/stash/http.server'
 
 export async function POST(event: APIEvent) {

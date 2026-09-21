@@ -18,11 +18,15 @@
  * the container without a trace (sf-L8). Keyed by sessionId, which for the
  * Sandbox · Session agent equals the conversation id (the same key uploads are
  * stored under).
+ *
+ * The document store itself is INJECTED, not imported: see `workspace-store.ts`
+ * for why ({@link getWorkspaceStore} raises a named error when a host asked for
+ * `syncWorkspace` and wired nothing). This module owns the `/work` protocol;
+ * the host owns storage and content classification.
  */
 
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import { listDocuments, getDocument, storeDocument, type CallTool } from '../document-store.server'
-import { guessMimeType, isTextMime } from '../stash/upload-service.server'
+import { getWorkspaceStore, type WorkspaceCallTool } from './workspace-store'
 import type { McpTransport } from './types'
 import {
   WORK_IN_DIR,
@@ -74,9 +78,10 @@ export interface SkippedWorkFile {
 export async function hydrateWorkspace(
   transport: McpTransport,
   sessionId: string,
-  callTool?: CallTool,
+  callTool?: WorkspaceCallTool,
 ): Promise<{ written: number; skipped: SkippedWorkFile[] }> {
-  const metas = await listDocuments(sessionId, callTool)
+  const store = getWorkspaceStore()
+  const metas = await store.list(sessionId, callTool)
   // Relative paths (basenames, for anything hydrate wrote) of what is already
   // in /work/in. `listWorkFiles` hashes too; only the key set matters here.
   const present = await listWorkFiles(transport, WORK_IN_DIR)
@@ -92,7 +97,7 @@ export async function hydrateWorkspace(
     // Already in the workspace (hydrated earlier, promoted from a previous
     // turn's /work/out, or written by the agent) → leave it alone.
     if (present.has(name)) continue
-    const doc = await getDocument(sessionId, meta.id, callTool)
+    const doc = await store.get(sessionId, meta.id, callTool)
     if (!doc) {
       // The list said it existed and the read says it doesn't — a TTL expiry
       // between the two calls, or a store that lost it. Either way the agent
@@ -148,8 +153,9 @@ export async function promoteOutputs(
   transport: McpTransport,
   sessionId: string,
   baseline: Map<string, string>,
-  callTool?: CallTool,
+  callTool?: WorkspaceCallTool,
 ): Promise<{ promoted: string[]; skipped: SkippedWorkFile[] }> {
+  const store = getWorkspaceStore()
   const current = await listWorkFiles(transport, WORK_OUT_DIR)
   const changed = diffWorkFiles(baseline, current)
   const promoted: string[] = []
@@ -157,11 +163,11 @@ export async function promoteOutputs(
   for (const rel of changed) {
     const abs = `${WORK_OUT_DIR}/${rel}`
     const filename = rel.replace(/^.*\//, '')
-    const mimeType = guessMimeType(filename)
-    const text = isTextMime(mimeType)
+    const mimeType = store.guessMimeType(filename)
+    const text = store.isTextMime(mimeType)
     try {
       const content = await readWorkFile(transport, abs, text ? 'utf8' : 'base64')
-      await storeDocument(
+      await store.store(
         {
           sessionId,
           filename,

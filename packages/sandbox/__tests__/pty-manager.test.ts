@@ -30,15 +30,15 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
 
 vi.mock('node-pty', () => ({ spawn: mocks.spawnMock }))
 
-vi.mock('../../../lib/sandbox/work-artifacts.server', () => ({
+vi.mock('../work-artifacts.server', () => ({
   hydrateWorkspace: mocks.hydrateMock,
 }))
 
-vi.mock('../../../lib/sandbox/with-sandbox.server', () => ({
+vi.mock('../with-sandbox.server', () => ({
   getDefaultAttachments: () => ({ acquire: mocks.acquireMock, release: mocks.releaseMock }),
 }))
 
-import { PtyManager } from '../../../lib/sandbox/pty-manager.server'
+import { PtyManager } from '../pty-manager.server'
 
 // ---- fakes ---------------------------------------------------------------
 

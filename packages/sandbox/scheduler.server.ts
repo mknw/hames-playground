@@ -84,10 +84,7 @@ export class SandboxScheduler {
 
   private grant(sessionId: string): Slot {
     this.inflightGlobal += 1
-    this.inflightPerSession.set(
-      sessionId,
-      (this.inflightPerSession.get(sessionId) ?? 0) + 1,
-    )
+    this.inflightPerSession.set(sessionId, (this.inflightPerSession.get(sessionId) ?? 0) + 1)
     let released = false
     return {
       release: () => {

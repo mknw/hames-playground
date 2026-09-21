@@ -14,14 +14,9 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-import type { McpTransport } from '../../../lib/sandbox/types'
+import type { McpTransport } from '../types'
 import type { ToolCallResult } from '@hames/harness-patterns/types'
-import {
-  writeWorkFile,
-  readWorkFile,
-  listWorkFiles,
-  diffWorkFiles,
-} from '../../../lib/sandbox/work-sync.server'
+import { writeWorkFile, readWorkFile, listWorkFiles, diffWorkFiles } from '../work-sync.server'
 
 /** Strip the single-quoting `shq()` applies. */
 const unq = (s: string): string => s.replace(/^'|'$/g, '').replace(/'\\''/g, "'")

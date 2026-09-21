@@ -1,7 +1,7 @@
 # Sandbox smoke scripts
 
 Live-container smoke checks for `withSandbox(actorCritic(...))`. Complement
-the hermetic vitest tests under `app/src/__tests__/lib/sandbox/` — those mock
+the hermetic vitest tests under `packages/sandbox/__tests__/` — those mock
 `node:child_process.spawn` and the MCP SDK at the lowest seam to stay
 CI-friendly. These scripts spin up **real Docker containers** and prove the
 chain works for real.
@@ -35,16 +35,21 @@ that the SDK mocks gloss over.
 | `smoke-scripted.ts` | hand-scripted actor + critic, **runs twice to prove pool hit** | none        | ~1.5s (1 cold boot + 1 pool hit + 1 reset) |
 | `smoke-llm.ts`      | real Anthropic via BAML adapters                               | a few cents | ~4–5s (2× Anthropic calls)                 |
 
-Run from `app/`:
+Run from the repo root:
 
 ```sh
-pnpm dlx tsx src/lib/sandbox/scripts/smoke-scripted.ts
-pnpm dlx tsx --env-file=.env src/lib/sandbox/scripts/smoke-llm.ts
+pnpm dlx tsx packages/sandbox/scripts/smoke-scripted.ts
+pnpm dlx tsx --env-file=app/.env packages/sandbox/scripts/smoke-llm.ts
 ```
 
 `smoke-llm.ts` needs `ANTHROPIC_API_KEY` — the only provider key the app needs
-(see `CLAUDE.md` → "Client routing"). The `--env-file=.env` flag lets the script
-pick up the repo's `.env` without a separate `dotenv` import.
+(see `CLAUDE.md` → "Client routing"). The `--env-file` flag lets the script pick
+up the app's `.env` without a separate `dotenv` import.
+
+These scripts are dev tooling for THIS repo, not package surface: they build
+and drive the `kg-sandbox:*` images that live in `rootfs/` at the repo root, so
+they are excluded from the published tarball by the `files` allowlist along
+with `__tests__/`.
 
 Each script's file header documents its own actor/critic logic, the
 expected event log, and any quirks. Read those before extending.

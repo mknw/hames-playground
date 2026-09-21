@@ -6,6 +6,16 @@
 #     published packages pass the tarball smoke; a red is a regression). Its
 #     scratch install carries pnpm overrides pointing BOTH dependencies at
 #     their tarballs, for the same unpublished-`workspace:*` reason as above.
+#   - @hames/connectors      (#225 PR-C2)
+#   - @hames/sandbox         (the sandbox extraction) — the containment
+#     companion. Its probe is the one that matters most for the
+#     zero-app-imports story, because the module it evaluates
+#     (`with-sandbox.server`) is the one that used to reach into the app's
+#     settings and document store: a VALUE import escaping back into `app/src`
+#     fails ITS module evaluation here, while a TYPE-ONLY one is erased by tsx
+#     before a tarball exists and is caught only by the source-scan pin
+#     (`app/src/__tests__/lib/harness-patterns/zero-app-imports.test.ts`).
+#     Two guards, two shapes, and neither one subsumes the other.
 #
 # This is the ONLY mechanism anywhere in CI that exercises "does the published
 # tarball actually work" — the docker image boots from the workspace symlink,
@@ -381,4 +391,140 @@ console.log('connectors pack smoke OK: exports resolve, no tests in tarball, cli
 PROBE
 
 echo "== run connectors probe =="
+pnpm dlx tsx probe.mts
+
+# ===========================================================================
+# @hames/sandbox — same checks on the containment companion's tarball. Its
+# scratch install overrides @hames/harness-patterns with the patterns tarball
+# (the `workspace:*` dependency packs to an unpublished "0.1.0", same reason
+# as every scratch above). @hames/harness-baml is a devDependency here — the
+# smoke scripts and the end-to-end test use it — so it is not installed and
+# not needed: a consumer of the tarball never sees it.
+# ===========================================================================
+
+echo "== pack @hames/sandbox =="
+(cd "$root" && pnpm install --frozen-lockfile --filter @hames/sandbox)
+(cd "$root/packages/sandbox" && pnpm pack --pack-destination "$tmp")
+sandbox_tarball="$(ls "$tmp"/hames-sandbox-*.tgz)"
+echo "tarball: $sandbox_tarball"
+
+echo "== install @hames/sandbox into scratch project =="
+mkdir -p "$tmp/scratch-sandbox"
+cd "$tmp/scratch-sandbox"
+printf '{"name":"pack-smoke-scratch-sandbox","private":true,"type":"module",\n "pnpm":{"overrides":{"@hames/harness-patterns":"file:%s"}}}\n' \
+  "$patterns_tarball" > package.json
+pnpm add "$sandbox_tarball"
+
+cat > probe.mts <<'PROBE'
+import { strict as assert } from 'node:assert'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+const pkgDir = fileURLToPath(new URL('./node_modules/@hames/sandbox/', import.meta.url))
+const manifest = JSON.parse((await import('node:fs')).readFileSync(pkgDir + 'package.json', 'utf8'))
+
+// 1. every explicit export target exists in the tarball (the wildcard is
+//    exercised by the direct imports below)
+for (const [key, target] of Object.entries<string>(manifest.exports)) {
+  if (key === './package.json' || key.includes('*')) continue
+  const file = pkgDir + target.replace(/^\.\//, '')
+  assert.ok(existsSync(file), `export ${key} -> ${target} is missing from the tarball`)
+}
+
+// 2. neither the co-located suite nor the live smoke scripts ship: both are
+//    excluded from `files` by design. The scripts drive the `kg-sandbox:*`
+//    images that live in this REPO's rootfs/, so they are dev tooling for the
+//    host, not package surface — and a test file riding along would pull
+//    vitest-shaped imports into a consumer's tree.
+assert.ok(!existsSync(pkgDir + '__tests__'), 'the __tests__/ dir must not ship in the tarball')
+assert.ok(!existsSync(pkgDir + 'scripts'), 'the scripts/ dir must not ship in the tarball')
+
+// 3. the client-safe subpaths evaluate WITHOUT the server barrel: these are
+//    what the host's browser bundle and its own settings module import, so a
+//    `node:` import or a server assertion sneaking into either is a bug a
+//    consumer only discovers in a browser build.
+const types = await import('@hames/sandbox/types')
+assert.equal(types.SANDBOX_TOOL_PREFIX, 'sandbox_', 'the tool prefix must resolve from ./types')
+assert.ok(Array.isArray(types.V0_IN_VM_SERVERS), 'V0_IN_VM_SERVERS missing from ./types')
+const settings = await import('@hames/sandbox/settings')
+assert.equal(settings.DEFAULT_SANDBOX_SETTINGS.defaultEgress, 'mcp-only')
+assert.equal(typeof settings.DEFAULT_SANDBOX_SETTINGS.globalCap, 'number')
+
+// 4. the durable-workspace seam is explicit-config-only: the NAMED error at
+//    first use, never a silent no-op, and a half-built supplier is refused at
+//    configuration rather than on the turn that produces a deliverable.
+const store = await import('@hames/sandbox/workspace-store')
+assert.equal(store.isWorkspaceStoreConfigured(), false, 'a fresh package must have no store')
+assert.throws(() => store.getWorkspaceStore(), store.WorkspaceStoreNotConfiguredError,
+  'an unset store must be the NAMED error at first use')
+assert.throws(
+  () => store.configureWorkspaceStore({ list: () => {}, get: () => {} } as never),
+  /"store"/,
+  'a missing supplier must throw at configuration (the connectors F1 rule)',
+)
+store.configureWorkspaceStore({
+  list: async () => [], get: async () => null, store: async () => ({}),
+  guessMimeType: () => 'text/plain', isTextMime: () => true,
+})
+assert.ok(store.isWorkspaceStoreConfigured(), 'a configured store must register')
+
+// 5. module EVALUATION of every entry the app imports, through the INSTALLED
+//    tarball — the barrel plus each `./*` subpath the host reaches for
+//    (`rg "@hames/sandbox" app/src`). This is the half that catches a VALUE
+//    import escaping into app/src: it fails here as ERR_MODULE_NOT_FOUND
+//    naming the app path, because a tarball consumer has no app/ to resolve.
+const appEntries = [
+  '.',
+  './bash-guard',
+  './docker-backend.server',
+  './egress-policy',
+  './pty-manager.server',
+  './settings',
+  './types',
+  './with-sandbox.server',
+  './work-artifacts.server',
+  './workspace-store',
+]
+const evalFailures: Array<[string, unknown]> = []
+for (const entry of appEntries) {
+  const specifier = entry === '.' ? '@hames/sandbox' : '@hames/sandbox' + entry.slice(1)
+  try {
+    await import(specifier)
+    console.log(`  eval ok:   ${specifier}`)
+  } catch (err) {
+    evalFailures.push([specifier, err])
+    console.error(`  eval FAIL: ${specifier}: ${(err as Error)?.message ?? String(err)}`)
+  }
+}
+if (evalFailures.length > 0) {
+  console.error(
+    `\npack smoke: ${evalFailures.length}/${appEntries.length} @hames/sandbox entries failed` +
+      ' module evaluation — a regression: the package imports something a tarball consumer' +
+      ' cannot resolve (an app/src edge returning, or an undeclared dependency).',
+  )
+  throw evalFailures[0][1]
+}
+
+// 6. the ./guard companion subpath imports and behaves (the bash guard is the
+//    containment half a consumer composes directly).
+const guard = await import('@hames/sandbox/guard')
+assert.equal(typeof guard.screenBashCommand, 'function', 'screenBashCommand missing from ./guard')
+const direct = await import('@hames/sandbox/bash-guard')
+assert.equal(direct.screenBashCommand, guard.screenBashCommand, './guard and ./bash-guard disagree')
+
+// 7. the harness surface composes: withSandbox wraps a pattern without a
+//    docker daemon in sight (the wrap is pure; the boot is not).
+const sandbox = await import('@hames/sandbox')
+assert.equal(typeof sandbox.withSandbox, 'function', 'withSandbox missing from the barrel')
+const wrapped = sandbox.withSandbox({ id: 'probe' })({
+  name: 'probe', config: {}, fn: async (scope: unknown) => scope,
+} as never)
+assert.equal(wrapped.name, 'withSandbox(probe)', 'the wrapper must rename the pattern it wraps')
+assert.equal(typeof sandbox.getComputeBackend, 'function', 'getComputeBackend missing')
+
+console.log('sandbox pack smoke OK: exports resolve, no tests/scripts in tarball, ' +
+  'client-safe subpaths evaluate, the store seam refuses, all entries evaluate')
+PROBE
+
+echo "== run sandbox probe =="
 pnpm dlx tsx probe.mts

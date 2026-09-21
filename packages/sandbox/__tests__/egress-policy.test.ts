@@ -17,7 +17,7 @@ import {
   egressAllowlist,
   proxyEnvArgs,
   DEFAULT_EGRESS_ALLOWLISTS,
-} from '../../../lib/sandbox/egress-policy'
+} from '../egress-policy'
 
 describe('isEgressProfile / isProxiedProfile', () => {
   it('recognizes exactly the three SELECTABLE profiles — open is not one of them', () => {

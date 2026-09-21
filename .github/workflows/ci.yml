@@ -148,6 +148,16 @@ jobs:
         working-directory: packages/connectors
         run: pnpm test
 
+      # Same story for the sandbox package (the @hames/sandbox extraction): the
+      # thirteen suites that moved with the code run from their workspace
+      # member. They are hermetic — the docker CLI and the MCP SDK are mocked at
+      # their lowest seam, as they were app-side — so this needs no daemon.
+      # What stayed app-side: `egress-proxy.test.ts`, which drives
+      # `rootfs/egress-proxy/proxy.mjs` (repo infrastructure, not package code).
+      - name: Package tests (@hames/sandbox)
+        working-directory: packages/sandbox
+        run: pnpm test
+
       # Catches SSR/vinxi breakage the unit tests cannot see.
       - run: pnpm build
 

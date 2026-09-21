@@ -1,9 +1,16 @@
 /**
  * work-artifacts tests — hydrate (store → /work/in) and promote
- * (/work/out → store), with the document store mocked and a simulated `/work`
- * transport. Verifies routing (which docs land where), the text/binary encoding
- * decision, that hydrate only writes what /work/in is missing (#206 §6.1), and
- * that promotion only stores files changed since the baseline.
+ * (/work/out → store), with the host's document store SUPPLIED as a test
+ * double and a simulated `/work` transport. Verifies routing (which docs land
+ * where), the text/binary encoding decision, that hydrate only writes what
+ * /work/in is missing (#206 §6.1), and that promotion only stores files changed
+ * since the baseline.
+ *
+ * The store used to be a `vi.mock` of the app's `document-store.server`. At the
+ * @hames/sandbox extraction it became an injected supplier
+ * (`configureWorkspaceStore`), so the double is now registered rather than
+ * mocked — which is a stronger test of the same behaviour: it exercises the
+ * seam a real host goes through instead of module-graph interception.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -13,20 +20,55 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-vi.mock('../../../lib/document-store.server', () => ({
-  listDocuments: vi.fn(),
-  getDocument: vi.fn(),
-  storeDocument: vi.fn(async () => ({})),
-}))
-
-import type { McpTransport } from '../../../lib/sandbox/types'
+import type { McpTransport } from '../types'
 import type { ToolCallResult } from '@hames/harness-patterns/types'
-import { listDocuments, getDocument, storeDocument } from '../../../lib/document-store.server'
 import {
-  hydrateWorkspace,
-  promoteOutputs,
-  snapshotOutputs,
-} from '../../../lib/sandbox/work-artifacts.server'
+  configureWorkspaceStore,
+  WorkspaceStoreNotConfiguredError,
+  __resetWorkspaceStoreForTests,
+  type WorkspaceDocument,
+  type WorkspaceDocumentInput,
+  type WorkspaceDocumentMeta,
+} from '../workspace-store'
+import { hydrateWorkspace, promoteOutputs, snapshotOutputs } from '../work-artifacts.server'
+
+// The three store operations, as the doubles the body drives. Named exactly as
+// the app functions they stand in for so every `vi.mocked(...)` below reads the
+// same as it did before the seam.
+const listDocuments = vi.fn<(s: string, c?: unknown) => Promise<WorkspaceDocumentMeta[]>>()
+const getDocument =
+  vi.fn<(s: string, id: string, c?: unknown) => Promise<WorkspaceDocument | null>>()
+const storeDocument = vi.fn<(input: WorkspaceDocumentInput, c?: unknown) => Promise<unknown>>(
+  async () => ({}),
+)
+
+/** A host's content classification, cut down to the extensions this file uses.
+ *  The real table is the app's (`stash/upload-service.server.ts`); what the
+ *  package's behaviour actually depends on is only the text/binary split, which
+ *  this reproduces faithfully. */
+const MIME_BY_EXT: Record<string, string> = {
+  csv: 'text/csv',
+  md: 'text/markdown',
+  txt: 'text/plain',
+  json: 'application/json',
+  png: 'image/png',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+}
+
+function installStore(): void {
+  configureWorkspaceStore({
+    list: listDocuments,
+    get: getDocument,
+    store: storeDocument,
+    guessMimeType: (filename) => {
+      const dot = filename.lastIndexOf('.')
+      if (dot < 0 || dot === filename.length - 1) return 'text/plain'
+      return MIME_BY_EXT[filename.slice(dot + 1).toLowerCase()] ?? 'text/plain'
+    },
+    isTextMime: (mimeType) =>
+      mimeType.startsWith('text/') || /^application\/(json|xml|yaml)$/.test(mimeType),
+  })
+}
 
 const unq = (s: string): string => s.replace(/^'|'$/g, '').replace(/'\\''/g, "'")
 function bashOk(stdout = ''): ToolCallResult {
@@ -85,7 +127,41 @@ function makeFsTransport() {
   return { transport, fs }
 }
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  __resetWorkspaceStoreForTests()
+  installStore()
+})
+
+// The seam's own contract: a host that opted into durable workspaces and wired
+// no store gets a NAMED error, on both directions, rather than a quiet
+// "0 files written" that is indistinguishable from a healthy steady-state turn.
+describe('the workspace store is required, not optional', () => {
+  it('hydrate and promote both raise the named error when nothing is configured', async () => {
+    __resetWorkspaceStoreForTests()
+    const { transport } = makeFsTransport()
+    await expect(hydrateWorkspace(transport, 's')).rejects.toBeInstanceOf(
+      WorkspaceStoreNotConfiguredError,
+    )
+    await expect(promoteOutputs(transport, 's', new Map())).rejects.toBeInstanceOf(
+      WorkspaceStoreNotConfiguredError,
+    )
+  })
+
+  it('refuses a half-built supplier AT CONFIGURATION, not at the turn that needs it', () => {
+    __resetWorkspaceStoreForTests()
+    expect(() =>
+      configureWorkspaceStore({
+        list: listDocuments,
+        get: getDocument,
+        // `store` omitted: the supplier a host forgets is the one that only
+        // matters on the turn that produces a deliverable.
+        guessMimeType: () => 'text/plain',
+        isTextMime: () => true,
+      } as never),
+    ).toThrow(/"store"/)
+  })
+})
 
 describe('hydrateWorkspace', () => {
   it('writes visible docs into /work/in (text verbatim, binary decoded) and skips hidden/archived', async () => {

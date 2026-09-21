@@ -26,7 +26,7 @@
  */
 
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
-import { DEFAULT_SETTINGS } from '../settings'
+import { DEFAULT_SANDBOX_SETTINGS } from './settings'
 import { getDefaultAttachments } from './with-sandbox.server'
 import { hydrateWorkspace } from './work-artifacts.server'
 import type { Attachment } from './attachment-table.server'
@@ -95,9 +95,9 @@ export class PtyManager {
 
   private async start(sessionId: string, opts: PtyEnsureOptions): Promise<PtySession> {
     const runtime: RuntimeConfig = {
-      memoryMB: DEFAULT_SETTINGS.sandbox.defaultMemoryMB,
-      timeoutSec: DEFAULT_SETTINGS.sandbox.defaultTimeoutSec,
-      egress: DEFAULT_SETTINGS.sandbox.defaultEgress,
+      memoryMB: DEFAULT_SANDBOX_SETTINGS.defaultMemoryMB,
+      timeoutSec: DEFAULT_SANDBOX_SETTINGS.defaultTimeoutSec,
+      egress: DEFAULT_SANDBOX_SETTINGS.defaultEgress,
       // Tenant seam (docs/plan/sandbox.md → channel 1): the Shell path boots
       // through a DIRECT attachments.acquire, so without this the PTY would be
       // the one boot path a per-tenant cache volume cannot reach. Resolved

@@ -79,6 +79,13 @@ COPY --from=root packages/connectors /ws/packages/connectors
 # resolution as the other two. Nothing here is generated; the package ships
 # source.
 COPY --from=root packages/agents /ws/packages/agents
+# The @hames/sandbox extraction: the fifth workspace member — the containment
+# layer `withSandbox` and the three PTY routes come from — copied by name,
+# before the frozen install, for the same `workspace:*` resolution reason. Its
+# rootfs/ image definitions are deliberately NOT copied: they are built and
+# published separately (see packages/sandbox/README.md), and the app talks to
+# the docker socket rather than building images at boot.
+COPY --from=root packages/sandbox /ws/packages/sandbox
 WORKDIR /ws/app
 RUN pnpm install --frozen-lockfile
 
@@ -98,6 +105,8 @@ RUN test -L /ws/app/node_modules/@hames/harness-patterns \
  && test -f /ws/packages/connectors/package.json \
  && test -L /ws/app/node_modules/@hames/agents \
  && test -f /ws/packages/agents/agents/index.ts \
+ && test -f /ws/packages/sandbox/index.ts \
+ && test -f /ws/packages/sandbox/package.json \
  && cd /ws/app \
  && node -e "const r = require.resolve('@hames/harness-patterns'); if (!r.startsWith('/ws/packages/')) { console.error('resolved OUTSIDE the workspace source (registry fetch?): ' + r); process.exit(1); } console.log('workspace link OK: ' + r)"
 

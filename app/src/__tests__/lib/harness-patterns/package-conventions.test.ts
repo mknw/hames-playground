@@ -1,6 +1,8 @@
 /**
  * Source scan: every workspace package under `packages/` carries the house
- * conventions a published package cannot be added without.
+ * conventions a published package cannot be added without — a prettier config,
+ * a LICENSE and README beside the manifest, and (owner ruling 2026-09-22) a
+ * cross-package dependency edge declared as a PEER rather than a dependency.
  *
  * ## Why a pin rather than a note in a review checklist
  *
@@ -100,5 +102,118 @@ describe('workspace package conventions', () => {
       }
     }
     expect(incomplete).toEqual([])
+  })
+
+  /**
+   * ## Why a cross-package edge is a PEER and not a dependency
+   *
+   * `@hames/harness-patterns` holds module-level `AsyncLocalStorage`
+   * singletons — the inference-tier scope, the settings scope, the cold-start
+   * watch. Everything those seams enforce is a property of ONE module
+   * instance: a scope opened in one copy is invisible to a read from another.
+   *
+   * As an ordinary `dependency`, nothing stops a consumer's tree holding two
+   * copies. The app resolves one at the top level; a companion whose declared
+   * range does not overlap it gets its own nested copy; and then a private-tier
+   * scope opened by the app is simply not there when the companion's code asks
+   * for it. The turn does not fail — it runs on the wrong tier, silently, which
+   * is the SD-1/SD-5 class the (a0) assertion in `package-publish.test.ts`
+   * already guards one half of (`workspace:^` over `workspace:*`, so a patch
+   * release does not split the tree).
+   *
+   * A peer edge closes the other half: the consumer owns the single copy, and a
+   * version it cannot satisfy is an install-time warning naming both ranges
+   * rather than a duplicate nobody sees. This is the shape every plugin
+   * ecosystem converged on for the same reason.
+   *
+   * The devDependency half is not bookkeeping. A peer alone installs nothing,
+   * so without it `pnpm install` leaves the package's own `node_modules/@hames`
+   * empty and its tests, its typecheck and its `pnpm pack` all lose the
+   * workspace link. Both entries are `workspace:^`; pnpm rewrites that to a
+   * real caret range at pack time, which `package-publish.test.ts` asserts on
+   * the tarball itself.
+   *
+   * The package ENUMERATION is discovered, never listed — same rule as the
+   * scans above, and for the same reason: a hardcoded list goes stale on
+   * exactly the event this pin exists for, a new package. The one exception is
+   * the non-vacuity assertion's expected value, which names the four
+   * companions the ruling is about; the comment on it says why that list is
+   * deliberate rather than an oversight.
+   */
+  describe('cross-package edges are peers (owner ruling 2026-09-22)', () => {
+    interface Manifest {
+      dependencies?: Record<string, string>
+      peerDependencies?: Record<string, string>
+      devDependencies?: Record<string, string>
+    }
+    const manifests = new Map<string, Manifest>(
+      packages.map((name) => [
+        name,
+        JSON.parse(readFileSync(join(PACKAGES, name, 'package.json'), 'utf8')) as Manifest,
+      ]),
+    )
+    const hames = (field?: Record<string, string>): string[] =>
+      Object.keys(field ?? {})
+        .filter((spec) => spec.startsWith('@hames/'))
+        .sort()
+
+    it('no package lists an @hames/* package under dependencies', () => {
+      const offenders = Object.fromEntries(
+        [...manifests.entries()]
+          .map(([name, m]) => [name, hames(m.dependencies)] as const)
+          .filter(([, specs]) => specs.length > 0),
+      )
+      expect(
+        offenders,
+        'a cross-package edge under `dependencies` lets a consumer resolve a SECOND copy of ' +
+          "harness-patterns, whose module-level AsyncLocalStorage scopes then don't apply — " +
+          'declare it under `peerDependencies` (and keep it as a devDependency)',
+      ).toEqual({})
+    })
+
+    it('every @hames/* peer is also a devDependency, so the workspace link survives', () => {
+      const unlinked = Object.fromEntries(
+        [...manifests.entries()]
+          .map(
+            ([name, m]) =>
+              [
+                name,
+                hames(m.peerDependencies).filter((s) => !(m.devDependencies ?? {})[s]),
+              ] as const,
+          )
+          .filter(([, specs]) => specs.length > 0),
+      )
+      expect(
+        unlinked,
+        'a peer installs nothing: without the matching devDependency this package has no ' +
+          'node_modules/@hames link, so its own tests, typecheck and pack all break',
+      ).toEqual({})
+    })
+
+    it('the companions DO declare @hames peers, so neither scan above passes vacuously', () => {
+      // The four companions of harness-patterns, which is the one package with
+      // no @hames edge of its own. Asserted BY NAME, and deliberately so: a
+      // bare count, or an "at least one", would not notice `connectors`
+      // silently losing its peer — which is the exact revert the two scans
+      // above cannot catch by themselves, since both are emptiness assertions.
+      // The cost is owned: a sixth companion edits this line, which is the
+      // moment someone should be deciding on purpose whether it has a
+      // cross-package edge at all.
+      const withPeers = [...manifests.entries()].filter(
+        ([, m]) => hames(m.peerDependencies).length > 0,
+      )
+      expect(withPeers.map(([name]) => name).sort()).toEqual([
+        'agents',
+        'connectors',
+        'harness-baml',
+        'sandbox',
+      ])
+      // agents peers on both harness-baml and harness-patterns; the other three
+      // on harness-patterns alone.
+      expect(hames(manifests.get('agents')?.peerDependencies)).toEqual([
+        '@hames/harness-baml',
+        '@hames/harness-patterns',
+      ])
+    })
   })
 })

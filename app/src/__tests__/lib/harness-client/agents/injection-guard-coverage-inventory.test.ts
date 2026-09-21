@@ -242,21 +242,25 @@ describe('per-agent guard coverage (pinned — a wiring change must update this)
     ])
   })
 
-  it('retriever — one guard over all three routes, covering web + the stash', async () => {
+  it('retriever — one guard over all three routes, covering web by namespace and the stash by exact name', async () => {
     expect(inventory(await patternsOf('retriever-agent.server.ts', 'retrieverAgent'))).toEqual([
       'router-* [router] UNGUARDED',
-      'routes-* [routes] guarded:web+retriever',
-      'retriever [retriever] guarded:web+retriever',
-      'withReferences-* [withReferences] guarded:web+retriever',
+      // `retriever` rides the guard as `tool:retriever` (#242 item 4): it is
+      // the retriever pattern's own sanitize key, never a namespace any tool
+      // name infers to, so a namespace declaration for it is unverifiable and
+      // the guard refuses it. Exact-name entries match by literal membership.
+      'routes-* [routes] guarded:web+tool:retriever',
+      'retriever [retriever] guarded:web+tool:retriever',
+      'withReferences-* [withReferences] guarded:web+tool:retriever',
       // Inside the guard's SCOPE, but `neo4j` is not one of its declared
       // namespaces, so `isUntrusted('read_neo4j_cypher')` is false and nothing
       // is sanitized on this route. "Inside the scope" and "protected" are
       // different properties — this row is the one place that distinction is
-      // visible, so read `guarded:` as the declared namespace list, not as a
+      // visible, so read `guarded:` as the declared coverage list, not as a
       // promise about every tool underneath.
-      'neo4j-query [simpleLoop] guarded:web+retriever',
-      'withReferences-* [withReferences] guarded:web+retriever',
-      'web-search [simpleLoop] guarded:web+retriever',
+      'neo4j-query [simpleLoop] guarded:web+tool:retriever',
+      'withReferences-* [withReferences] guarded:web+tool:retriever',
+      'web-search [simpleLoop] guarded:web+tool:retriever',
       'response-synth [compactExecution] UNGUARDED',
     ])
   })

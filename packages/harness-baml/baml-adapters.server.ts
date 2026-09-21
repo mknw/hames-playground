@@ -1592,7 +1592,11 @@ describeToolResultsBatchOp.limits = () => limitsFor('describe')
  * BAML-backed `InjectionScreen` — the OPT-IN second layer of
  * `withInjectionGuard`. Pass it as the guard's `screen`:
  *
- *   withInjectionGuard({ namespaces: ['web'], screen: createInjectionScreen() })
+ *   withInjectionGuard({
+ *     namespaces: ['web'],
+ *     catalog: tools.all,
+ *     screen: createInjectionScreen(),
+ *   })
  *
  * The guard invokes it only for content its deterministic corpus passed clean,
  * so this costs one cheap call per otherwise-clean untrusted result — never one

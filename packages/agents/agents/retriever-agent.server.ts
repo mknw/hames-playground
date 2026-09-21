@@ -123,15 +123,22 @@ async function createPatterns(
     { liveEvents: true, route: baml.router },
   )
 
-  // Two untrusted routes, guarded together. `web` is the obvious one; `retriever`
-  // is the one that is easy to miss — Data Stash chunks come from INGESTED
-  // DOCUMENTS (uploads, and ms-graph files via `graph_file_ingest`), so a
-  // poisoned .docx reaches the response as a retrieved chunk. Retriever hits
-  // never pass through `callTool`, so the retriever pattern sanitizes its own
-  // hits at write-time through this same guard (see `sanitizeHits` in
+  // Two untrusted sources, guarded together. `web` is the obvious one;
+  // `retriever` is the one that is easy to miss — Data Stash chunks come from
+  // INGESTED DOCUMENTS (uploads, and ms-graph files via `graph_file_ingest`),
+  // so a poisoned .docx reaches the response as a retrieved chunk. Retriever
+  // hits never pass through `callTool`, so the retriever pattern sanitizes its
+  // own hits at write-time through this same guard (see `sanitizeHits` in
   // retriever.server.ts). `neo4j` stays unguarded — our own graph.
+  //
+  // `retriever` is declared under `tools`, not `namespaces` (#242 item 4): it
+  // is the retriever pattern's own sanitize key, never a namespace any tool
+  // name infers to, so a namespace declaration for it is unverifiable by
+  // construction — the guard would refuse it. An exact-name entry needs no
+  // catalog evidence: it matches by literal membership.
   const routesPattern = withInjectionGuard({
-    namespaces: ['web', 'retriever'],
+    namespaces: ['web'],
+    tools: ['retriever'],
     catalog: tools.all,
   })(
     routes<AgentData>(

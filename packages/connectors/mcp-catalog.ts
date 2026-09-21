@@ -15,6 +15,11 @@
  * without any call site passing it. The `Tools({ namespaces })` argument
  * (REQUIRED, owner ruling B-iii) is the same map passed explicitly.
  *
+ * For a package consumer, the registration is not advisory: since #242 item 4
+ * the guard REFUSES a declared namespace it cannot verify, and the refusal
+ * names this registration. Skipping it is a build-time error, not a silent
+ * pass-through.
+ *
  * 86 distinct names across 6 namespaces. The app-side per-user tools are NOT
  * here — they declare their own namespaces (`registry.server.ts`), which ride
  * `inferServer` through the app transport's `namespaceFor`.

@@ -517,7 +517,11 @@ describe('the screen gate: any cheap-rule hit suppresses semantic screening of t
     // Outlook mints permalinks that way.
     const createInjectionGuard = await loadGuard()
     const screen = vi.fn().mockResolvedValue(verdictDetected)
-    const guard = createInjectionGuard({ namespaces: ['graph'], screen }, () => {}, 'microsoft-365')
+    const guard = createInjectionGuard(
+      { namespaces: ['graph'], catalog: ['list_graph_messages'], screen },
+      () => {},
+      'microsoft-365',
+    )
 
     const { data, summary } = await guard.sanitize(CTX.tool, { messages: [mailMessage()] })
 
@@ -533,7 +537,11 @@ describe('the screen gate: any cheap-rule hit suppresses semantic screening of t
     // catches it. The payload did not change; only an unrelated field did.
     const createInjectionGuard = await loadGuard()
     const screen = vi.fn().mockResolvedValue(verdictDetected)
-    const guard = createInjectionGuard({ namespaces: ['graph'], screen }, () => {}, 'microsoft-365')
+    const guard = createInjectionGuard(
+      { namespaces: ['graph'], catalog: ['list_graph_messages'], screen },
+      () => {},
+      'microsoft-365',
+    )
 
     const { data, summary } = await guard.sanitize(CTX.tool, {
       messages: [mailMessage({ webLink: 'https://outlook.office365.com/owa/?ItemID=SHORT' })],
@@ -553,7 +561,12 @@ describe('the screen gate: any cheap-rule hit suppresses semantic screening of t
     const createInjectionGuard = await loadGuard()
     const screen = vi.fn().mockResolvedValue(verdictDetected)
     const guard = createInjectionGuard(
-      { namespaces: ['graph'], screen, disableRules: ['exfil-data-url'] },
+      {
+        namespaces: ['graph'],
+        catalog: ['list_graph_messages'],
+        screen,
+        disableRules: ['exfil-data-url'],
+      },
       () => {},
       'microsoft-365',
     )
@@ -576,7 +589,11 @@ describe('the screen gate: any cheap-rule hit suppresses semantic screening of t
     // a large batch the blobs can also push real prose out of the window.)
     const createInjectionGuard = await loadGuard()
     const screen = vi.fn().mockResolvedValue({ injection_detected: false, reason: '', spans: [] })
-    const guard = createInjectionGuard({ namespaces: ['graph'], screen }, () => {}, 'p')
+    const guard = createInjectionGuard(
+      { namespaces: ['graph'], catalog: ['list_graph_messages'], screen },
+      () => {},
+      'p',
+    )
 
     await guard.sanitize(CTX.tool, {
       messages: [mailMessage({ webLink: 'https://outlook.office365.com/owa/?ItemID=SHORT' })],
@@ -695,13 +712,13 @@ describe('spotlight modes: what actually reaches the controller', () => {
       const { runWithInjectionGuard } =
         await import('@hames/harness-patterns/injection-guard-scope.server')
       const outer = createInjectionGuard(
-        { namespaces: ['web'], spotlight: 'always' },
+        { namespaces: ['web'], catalog: ['search', 'fetch'], spotlight: 'always' },
         () => {},
         'outer',
       )
       await runWithInjectionGuard(outer, async () => {
         const inner = createInjectionGuard(
-          { namespaces: ['graph'], spotlight: 'off' },
+          { namespaces: ['graph'], catalog: ['list_graph_messages'], spotlight: 'off' },
           () => {},
           'inner',
         )
@@ -719,12 +736,16 @@ describe('spotlight modes: what actually reaches the controller', () => {
       const { runWithInjectionGuard } =
         await import('@hames/harness-patterns/injection-guard-scope.server')
       const outer = createInjectionGuard(
-        { namespaces: ['web'], spotlight: 'always' },
+        { namespaces: ['web'], catalog: ['search', 'fetch'], spotlight: 'always' },
         () => {},
         'outer',
       )
       const out = await runWithInjectionGuard(outer, async () => {
-        const inner = createInjectionGuard({ namespaces: ['graph'] }, () => {}, 'inner')
+        const inner = createInjectionGuard(
+          { namespaces: ['graph'], catalog: ['list_graph_messages'] },
+          () => {},
+          'inner',
+        )
         const { data } = await inner.sanitize('search', ATTACK)
         return data as string
       })
@@ -739,15 +760,19 @@ describe('spotlight modes: what actually reaches the controller', () => {
       const outerScreen = vi.fn()
       const innerScreen = vi.fn()
       const outer = createInjectionGuard(
-        { namespaces: ['web'], screen: outerScreen },
+        { namespaces: ['web'], catalog: ['search', 'fetch'], screen: outerScreen },
         () => {},
         'outer',
       )
       await runWithInjectionGuard(outer, async () => {
-        const bare = createInjectionGuard({ namespaces: ['graph'] }, () => {}, 'inner')
+        const bare = createInjectionGuard(
+          { namespaces: ['graph'], catalog: ['list_graph_messages'] },
+          () => {},
+          'inner',
+        )
         expect(bare.options.screen).toBe(outerScreen)
         const own = createInjectionGuard(
-          { namespaces: ['graph'], screen: innerScreen },
+          { namespaces: ['graph'], catalog: ['list_graph_messages'], screen: innerScreen },
           () => {},
           'i2',
         )
@@ -784,7 +809,7 @@ describe('failure asymmetry: the rule engine fails CLOSED, the screen fails OPEN
     // rather than chosen.
     const createInjectionGuard = await loadGuard()
     const guard = createInjectionGuard(
-      { namespaces: ['web'], rules: [explodingRule] },
+      { namespaces: ['web'], catalog: ['search', 'fetch'], rules: [explodingRule] },
       () => {},
       'p',
     )
@@ -808,7 +833,11 @@ describe('failure asymmetry: the rule engine fails CLOSED, the screen fails OPEN
     const createInjectionGuard = await loadGuard()
     const events: unknown[] = []
     const screen = vi.fn().mockRejectedValue(new Error('rate limited'))
-    const guard = createInjectionGuard({ namespaces: ['web'], screen }, (e) => events.push(e), 'p')
+    const guard = createInjectionGuard(
+      { namespaces: ['web'], catalog: ['search', 'fetch'], screen },
+      (e) => events.push(e),
+      'p',
+    )
 
     const { data, summary } = await guard.sanitize('search', 'Paris is the capital of France.')
 
@@ -827,7 +856,11 @@ describe('failure asymmetry: the rule engine fails CLOSED, the screen fails OPEN
     const createInjectionGuard = await loadGuard()
     const events: unknown[] = []
     const screen = vi.fn().mockResolvedValue({ reason: 'x', spans: ['whatever'] })
-    const guard = createInjectionGuard({ namespaces: ['web'], screen }, (e) => events.push(e), 'p')
+    const guard = createInjectionGuard(
+      { namespaces: ['web'], catalog: ['search', 'fetch'], screen },
+      (e) => events.push(e),
+      'p',
+    )
 
     const { data, summary } = await guard.sanitize('search', 'clean enough')
     expect(data).toBe('clean enough')

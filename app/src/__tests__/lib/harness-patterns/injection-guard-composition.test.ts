@@ -27,6 +27,12 @@ import type { SimpleLoopData } from '@hames/harness-patterns/patterns/simpleLoop
  *  what the real agents get from `SessionData`. */
 type TestData = SimpleLoopData & { [key: string]: unknown }
 
+// #242 item 4: the guard refuses a declared namespace nothing in the catalog
+// produces, so every namespaces declaration here rides a catalog. The
+// namespace-catalog resolver is armed in the first describe's beforeEach and
+// the registration is process-global, so these gateway names group correctly.
+const WEB_CATALOG = ['search', 'fetch', 'fetch_content']
+
 vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
@@ -117,7 +123,7 @@ describe('verbatim spans never reach an LLM-facing serialization', () => {
 
     const ctx = createContext('what do the docs say?')
     const guard = createInjectionGuard(
-      { namespaces: ['web'] },
+      { namespaces: ['web'], catalog: WEB_CATALOG },
       (event) => ctx.events.push(event),
       'web-search',
     )
@@ -150,7 +156,11 @@ describe('verbatim spans never reach an LLM-facing serialization', () => {
       await import('@hames/harness-patterns/patterns/withInjectionGuard.server')
 
     const ctx = createContext('q')
-    const guard = createInjectionGuard({ namespaces: ['web'] }, (e) => ctx.events.push(e), 'p')
+    const guard = createInjectionGuard(
+      { namespaces: ['web'], catalog: WEB_CATALOG },
+      (e) => ctx.events.push(e),
+      'p',
+    )
     await guard.sanitize('search', ATTACK)
 
     const xml = createEventView(ctx, undefined).fromAll().serialize()
@@ -170,7 +180,11 @@ describe('verbatim spans never reach an LLM-facing serialization', () => {
       await import('@hames/harness-patterns/patterns/withInjectionGuard.server')
 
     const ctx = createContext('q')
-    const guard = createInjectionGuard({ namespaces: ['web'] }, (e) => ctx.events.push(e), 'p')
+    const guard = createInjectionGuard(
+      { namespaces: ['web'], catalog: WEB_CATALOG },
+      (e) => ctx.events.push(e),
+      'p',
+    )
     const { data, summary } = await guard.sanitize('search', ATTACK)
 
     // The tool_result belongs to turn 1...
@@ -260,7 +274,7 @@ describe('composition in a chain', () => {
   }
 
   it('preserves the inner pattern config (transparent wrapper)', async () => {
-    const { pattern, loop } = await runGuarded({ namespaces: ['web'] })
+    const { pattern, loop } = await runGuarded({ namespaces: ['web'], catalog: WEB_CATALOG })
     // Same config object, so commitStrategy / trackHistory / viewConfig and
     // every downstream consumer behave identically to the unwrapped pattern.
     expect(pattern.config).toBe(loop.config)
@@ -271,7 +285,7 @@ describe('composition in a chain', () => {
 
   it('changes nothing about uninvolved behaviour on clean content', async () => {
     const unguarded = await runGuarded()
-    const guarded = await runGuarded({ namespaces: ['web'] })
+    const guarded = await runGuarded({ namespaces: ['web'], catalog: WEB_CATALOG })
 
     const shape = (ctx: { events: Array<{ type: string; patternId: string }> }) =>
       ctx.events.map((e) => `${e.patternId}:${e.type}`)
@@ -296,7 +310,7 @@ describe('composition in a chain', () => {
       patternId: 'p',
       maxTurns: 4,
     })
-    const guarded = withInjectionGuard({ namespaces: ['web'] })(loop)
+    const guarded = withInjectionGuard({ namespaces: ['web'], catalog: WEB_CATALOG })(loop)
     const settings = { maxToolTurns: 5, maxRetries: 3 }
     expect(guarded.estimateTurns?.(settings)).toBe(loop.estimateTurns?.(settings))
   })
@@ -342,130 +356,133 @@ describe('content_sanitized commit semantics', () => {
 })
 
 // ============================================================================
-// Declared-namespace validation (sf-H5)
+// Declared-namespace validation (sf-H5, #242 item 4)
 // ============================================================================
 
 // `isUntrusted` asks `namespaces.has(inferServer(tool))`, so only the strings
 // `inferServer` PRODUCES can ever match. A catalog/server name — `web_search`,
 // `rust-mcp-filesystem`, `database-server` — type-checks, reads like
-// protection, and sanitizes nothing at all. A security control must not have a
-// silent no-op mode.
-describe('unmatchable declared namespaces warn (sf-H5)', () => {
+// protection, and sanitizes nothing at all. A security control must not have
+// a silent no-op mode — and since #242 item 4 it does not: the guard REFUSES
+// at construction instead of warning.
+describe('unmatchable declared namespaces are refused (sf-H5, #242 item 4)', () => {
+  const CATALOG = ['search', 'fetch', 'fetch_content']
+
   async function load() {
+    // Arm the registration explicitly: this block must not depend on an
+    // earlier describe having run first.
+    const { registerAppNamespaceCatalog } = await import('../../mocks/namespace-catalog')
+    registerAppNamespaceCatalog()
     const mod = await import('@hames/harness-patterns/patterns/withInjectionGuard.server')
     mod.__resetInjectionGuardNamespaceWarnings()
     return mod
   }
 
-  it('warns for a catalog/server name used where a namespace was expected', async () => {
+  it('refuses a catalog/server name used where a namespace was expected', async () => {
     const { createInjectionGuard } = await load()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    const guard = createInjectionGuard({ namespaces: ['web_search'] }, () => {}, 'p')
-
-    expect(warn).toHaveBeenCalledTimes(1)
-    // The warning names the namespace that WOULD have worked.
-    expect(warn.mock.calls[0][0]).toContain("'web_search'")
-    expect(warn.mock.calls[0][0]).toContain("'web'")
-    // And the demonstration of why it matters: the web tool is not untrusted.
-    expect(guard.isUntrusted('search')).toBe(false)
-    warn.mockRestore()
+    const attempt = () =>
+      createInjectionGuard({ namespaces: ['web_search'], catalog: CATALOG }, () => {}, 'p')
+    expect(attempt).toThrow(/'web_search'/)
+    // The refusal names the namespace that WOULD have worked.
+    expect(attempt).toThrow(/declare 'web' instead/)
   })
 
   it.each(['rust-mcp-filesystem', 'database-server'])(
-    'warns for %s (the other two NAMESPACE_TO_SERVER renames)',
+    'refuses %s (the other two NAMESPACE_TO_SERVER renames)',
     async (ns) => {
       const { createInjectionGuard } = await load()
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      createInjectionGuard({ namespaces: [ns] }, () => {}, 'p')
-      expect(warn).toHaveBeenCalledTimes(1)
-      warn.mockRestore()
+      expect(() =>
+        createInjectionGuard({ namespaces: [ns], catalog: CATALOG }, () => {}, 'p'),
+      ).toThrow(new RegExp(`'${ns}'`))
     },
   )
 
-  it('stays silent for every namespace the real agents declare', async () => {
+  it('builds the namespaces the real agents declare — and `retriever` by exact name', async () => {
     const { createInjectionGuard } = await load()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    createInjectionGuard(
-      { namespaces: ['web', 'context7', 'retriever', 'graph', 'filesystem', 'neo4j'] },
+    // All six namespaces the shipped agents declare, against a catalog using
+    // the real names that produce each: the gateway names (registered
+    // resolver), the app-side graph namespace (whose tool names verb-strip to
+    // 'graph' without any app transport in unit tests), and the neo4j /
+    // context7 names the deployment catalog pins.
+    const catalog = [
+      'search',
+      'fetch',
+      'fetch_content',
+      'list_graph_messages',
+      'list_allowed_directories',
+      'resolve-library-id',
+      'read_neo4j_cypher',
+    ]
+    const guard = createInjectionGuard(
+      { namespaces: ['web', 'context7', 'graph', 'filesystem', 'neo4j'], catalog },
       () => {},
       'p',
     )
-
-    expect(warn).not.toHaveBeenCalled()
-    warn.mockRestore()
+    expect(guard.isUntrusted('fetch')).toBe(true)
+    expect(guard.isUntrusted('retriever')).toBe(false)
+    // 'retriever' is NEVER a produced namespace — it is the retriever
+    // pattern's own sanitize key — so production declares it by exact name
+    // (#242 item 4).
+    const named = createInjectionGuard(
+      { namespaces: [], tools: ['retriever'], catalog },
+      () => {},
+      'p',
+    )
+    expect(named.isUntrusted('retriever')).toBe(true)
   })
 
-  it('warns once per namespace, not once per pattern build', async () => {
+  it('refuses on EVERY pattern build, not once per process', async () => {
     const { createInjectionGuard } = await load()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    // The guard is rebuilt on every turn; the warning must not become noise.
+    // The guard is rebuilt on every turn; a refusal must not degrade into a
+    // once-per-process warning that scrolls away (the old behaviour).
     for (let i = 0; i < 5; i++) {
-      createInjectionGuard({ namespaces: ['web_search'] }, () => {}, 'p')
+      expect(() =>
+        createInjectionGuard({ namespaces: ['web_search'], catalog: CATALOG }, () => {}, 'p'),
+      ).toThrow(/'web_search'/)
     }
-
-    expect(warn).toHaveBeenCalledTimes(1)
-    warn.mockRestore()
   })
 
   it('leaves explicit `tools` entries alone — they are matched by exact name', async () => {
     const { createInjectionGuard } = await load()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
     const guard = createInjectionGuard({ tools: ['web_search'] }, () => {}, 'p')
-
-    expect(warn).not.toHaveBeenCalled()
     expect(guard.isUntrusted('web_search')).toBe(true)
-    warn.mockRestore()
   })
 
-  // The SECOND check (#225 L5, §3): a bare single word is always its own fixed
-  // point — `inferServer('wikipedia') === 'wikipedia'` — so the first check is
-  // structurally blind to it. When the agent hands the guard the catalog it
-  // just built (`catalog: tools.all`), a declared namespace that no catalog
-  // name resolves to is warned about too.
-  it('warns for a fixed-point namespace no catalog name resolves to', async () => {
+  // The SECOND case (#225 L5, §3): a bare single word is always its own fixed
+  // point — `inferServer('wikipedia') === 'wikipedia'` — so the fixed-point
+  // check is structurally blind to it. When the agent hands the guard the
+  // catalog it just built (`catalog: tools.all`), a declared namespace that no
+  // catalog name resolves to is refused too — the unregistered-catalog
+  // signature.
+  it('refuses a fixed-point namespace no catalog name resolves to', async () => {
     const { createInjectionGuard } = await load()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    createInjectionGuard(
-      { namespaces: ['wikipedia'], catalog: ['search', 'fetch', 'fetch_content'] },
-      () => {},
-      'p',
-    )
-
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn.mock.calls[0][0]).toContain("'wikipedia'")
-    expect(warn.mock.calls[0][0]).toContain('matches no tool in the current catalog')
-    warn.mockRestore()
+    const attempt = () =>
+      createInjectionGuard({ namespaces: ['wikipedia'], catalog: CATALOG }, () => {}, 'p')
+    expect(attempt).toThrow(/'wikipedia'/)
+    expect(attempt).toThrow(/registerToolNamespaces/)
   })
 
-  it('stays silent when a catalog name DOES resolve to the declared namespace', async () => {
+  it('builds when a catalog name DOES resolve to the declared namespace', async () => {
     const { createInjectionGuard } = await load()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     // 'web' is a fixed point AND produced: inferServer('search') is 'web'.
-    createInjectionGuard(
-      { namespaces: ['web'], catalog: ['search', 'fetch', 'fetch_content'] },
-      () => {},
-      'p',
-    )
-
+    expect(() =>
+      createInjectionGuard({ namespaces: ['web'], catalog: CATALOG }, () => {}, 'p'),
+    ).not.toThrow()
     expect(warn).not.toHaveBeenCalled()
     warn.mockRestore()
   })
 
-  it('skips the catalog check when the caller supplies no catalog', async () => {
+  it('refuses namespaces declared with no catalog at all', async () => {
     const { createInjectionGuard } = await load()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    // No catalog in hand — tests, and any caller that has not built a ToolSet.
-    // Only the fixed-point check runs, so 'wikipedia' is silent here.
-    createInjectionGuard({ namespaces: ['wikipedia'] }, () => {}, 'p')
-
-    expect(warn).not.toHaveBeenCalled()
-    warn.mockRestore()
+    // No catalog in hand — the guard cannot verify the declaration, so an
+    // unverifiable boundary is refused, not trusted (#242 item 4).
+    expect(() => createInjectionGuard({ namespaces: ['wikipedia'] }, () => {}, 'p')).toThrow(
+      /catalog: tools\.all/,
+    )
+    expect(() => createInjectionGuard({ namespaces: ['web'] }, () => {}, 'p')).toThrow(
+      /catalog: tools\.all/,
+    )
   })
 })

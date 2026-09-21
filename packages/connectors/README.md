@@ -9,17 +9,17 @@ classification and storage**, every one of them injected.
 
 ## Surface
 
-| Subpath | What lives there |
-| --- | --- |
-| `.` (root barrel) | client-safe surface only: `mcpNamespace` / `MCP_TOOL_CATALOG`, the Neo4j→Cytoscape `transformNeo4jToCytoscape` / `parseNeo4jResults` |
-| `./neo4j/client` | `configureNeo4j({ url, user, password })` + the driver singleton — **explicit-config-only**: unset config is a named error at first use, never an env fallback |
-| `./neo4j/queries` | the identity-free read ops (`getSchema`, `runManualCypher`, …) — every session READ-mode (SD-14) |
-| `./neo4j/graph-edit.server` | the intent-shaped write ops (`createGraphNode`, `linkGraphNodes`, `setGraphNodeProperty`) |
-| `./neo4j/plain`, `./neo4j/transform` | plain projections of driver values; the Cytoscape projection |
-| `./app-tools/registry` | `createAppToolRegistry({ resolveContext })` — the generic in-process tool registry |
-| `./mcp-catalog` | this deployment's tool→namespace catalog (pure data) |
-| `./graph/graph-tools.server` | `registerGraphConnectorTools(deps)` — the nine Microsoft Graph tools |
-| `./graph/graph-auth` | `GraphAuthRequiredError`, owned by the package so `instanceof` survives across the seam |
+| Subpath                              | What lives there                                                                                                                                               |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.` (root barrel)                    | client-safe surface only: `mcpNamespace` / `MCP_TOOL_CATALOG`, the Neo4j→Cytoscape `transformNeo4jToCytoscape` / `parseNeo4jResults`                           |
+| `./neo4j/client`                     | `configureNeo4j({ url, user, password })` + the driver singleton — **explicit-config-only**: unset config is a named error at first use, never an env fallback |
+| `./neo4j/queries`                    | the identity-free read ops (`getSchema`, `runManualCypher`, …) — every session READ-mode (SD-14)                                                               |
+| `./neo4j/graph-edit.server`          | the intent-shaped write ops (`createGraphNode`, `linkGraphNodes`, `setGraphNodeProperty`)                                                                      |
+| `./neo4j/plain`, `./neo4j/transform` | plain projections of driver values; the Cytoscape projection                                                                                                   |
+| `./app-tools/registry`               | `createAppToolRegistry({ resolveContext })` — the generic in-process tool registry                                                                             |
+| `./mcp-catalog`                      | this deployment's tool→namespace catalog (pure data)                                                                                                           |
+| `./graph/graph-tools.server`         | `registerGraphConnectorTools(deps)` — the nine Microsoft Graph tools                                                                                           |
+| `./graph/graph-auth`                 | `GraphAuthRequiredError`, owned by the package so `instanceof` survives across the seam                                                                        |
 
 ## What is injected vs imported vs composed
 
@@ -58,5 +58,6 @@ tarball via the `files` allowlist. Run it with `pnpm test` from
 host-app code; tests that need the app's request scope or its composition
 root stayed in the app's `src/__tests__/` tree.
 
-No npm publish has ever been performed for this package; `publishConfig` is
-`public` for when that changes.
+The package publishes to npm as `@hames/connectors` with `publishConfig.access:
+public` (set at first publication; the setting travels with every future
+version).

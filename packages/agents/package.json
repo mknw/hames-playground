@@ -12,11 +12,8 @@
     "./*": "./*.ts"
   },
   "dependencies": {
-    "@hames/harness-baml": "workspace:*",
-    "@hames/harness-patterns": "workspace:*"
-  },
-  "devDependencies": {
-    "cytoscape": "^3.33.2"
+    "@hames/harness-baml": "workspace:^",
+    "@hames/harness-patterns": "workspace:^"
   },
   "files": [
     "*.ts",
@@ -26,5 +23,8 @@
   ],
   "publishConfig": {
     "access": "public"
+  },
+  "scripts": {
+    "prepublishOnly": "node -e \"const ua=process.env.npm_config_user_agent||'';const ex=process.env.npm_execpath||'';if(ua.startsWith('npm/')||ex.includes('npm-cli'))throw new Error('This package must be published with pnpm publish, not npm: npm does not rewrite workspace: specifiers and ships them literally.')\""
   }
 }

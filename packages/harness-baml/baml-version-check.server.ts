@@ -1,18 +1,35 @@
 /**
  * Startup staleness check for the generated BAML client — Server Only.
  *
- * `baml_client/` is git-ignored and generated, so a `git pull` can leave it
- * older than `baml_src/`. Because the generated functions take their arguments
- * positionally, a signature change does not error against a stale client — it
- * shifts every later argument by one slot and silently drops the trailing
- * `__baml_options__` object (collector + client override). Issue #154 lost
- * ~18 hours of observability data that way.
+ * `baml_client/` is COMMITTED beside its `baml_src/`, so it drifts when a
+ * `.baml` edit is pushed without a regeneration. Because the generated
+ * functions take their arguments positionally, a signature change does not
+ * error against a stale client — it shifts every later argument by one slot
+ * and silently drops the trailing `__baml_options__` object (collector +
+ * client override). Issue #154 lost ~18 hours of observability data that way.
  *
- * `predev` now regenerates before the dev server starts, and
- * `warnIfCollectorEmpty` (baml-adapters.server.ts) catches the drop at call
- * time. This module is the third layer: a boot-time warning, before the first
- * LLM call, so the operator is told to regenerate rather than discovering the
- * loss afterwards.
+ * This is now the ONLY staleness guard, and that is why three defects in it
+ * were fixed together on 2026-09-22 (#376 review, B1). Nothing regenerates
+ * implicitly any more — the app's duplicate corpus, its own copy of this
+ * check, the `predev` hook and CI's generate step are all gone — so a
+ * warning here is the first and last chance to say so before the call-time
+ * `warnIfCollectorEmpty` (baml-adapters.server.ts) reports the loss after it
+ * has happened. The three:
+ *
+ *   1. the default source path read `../baml_src/`, i.e. `packages/baml_src/`,
+ *      which does not exist;
+ *   2. the filesystem reads went through `require('node:fs')` in an ESM
+ *      module, where `require` is undefined — so they threw into their own
+ *      catch and returned null whatever the path (measured under `tsx`:
+ *      `typeof require` → `undefined`). They are static imports now, which
+ *      this module may take because `assertServerOnImport()` below already
+ *      forbids it a browser bundle;
+ *   3. its test ran under the config's default jsdom environment, where (2)
+ *      throws — so every assertion about the real tree passed vacuously and
+ *      hid (1). It now declares `@vitest-environment node`.
+ *
+ * Each defect alone was enough to make this module return "no opinion" for
+ * every input, which is indistinguishable from a clean bill of health.
  *
  * Two independent signals:
  *  - **version drift** — the `version` pinned in `baml_src/generators.baml` vs
@@ -27,6 +44,8 @@
  * than to a false alarm.
  */
 
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import path from 'node:path'
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 
 assertServerOnImport()
@@ -86,7 +105,7 @@ export function checkBamlClient(input: BamlClientCheckInput): BamlClientWarning[
       message:
         `[baml] version mismatch: ${detail}. The generated client may not match the ` +
         'installed runtime. Align the `version` in baml_src/generators.baml with the ' +
-        'installed @boundaryml/baml, then run `pnpm baml-generate`.',
+        'installed @boundaryml/baml, then run `pnpm baml-generate` from packages/harness-baml.',
     })
   }
 
@@ -101,7 +120,7 @@ export function checkBamlClient(input: BamlClientCheckInput): BamlClientWarning[
           'generated. BAML functions take their arguments positionally, so a signature ' +
           'change against a stale client silently shifts arguments and drops the ' +
           'collector/client-override options object (#154) — calls still succeed, ' +
-          'observability data does not. Run `pnpm baml-generate`.',
+          'observability data does not. Run `pnpm baml-generate` from packages/harness-baml, and commit the result.',
       })
     }
   }
@@ -116,16 +135,15 @@ export function checkBamlClient(input: BamlClientCheckInput): BamlClientWarning[
  *  wherever the process happens to start. */
 export function readBamlSources(dir?: string): Record<string, string> | null {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require('node:fs') as typeof import('node:fs')
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('node:path') as typeof import('node:path')
-    const bamlSrc = dir ?? new URL('../baml_src/', import.meta.url).pathname
-    if (!fs.existsSync(bamlSrc)) return null
+    // `./` — relative to THIS MODULE'S directory, which is the package root.
+    // It read `../baml_src/` until 2026-09-22, i.e. `packages/baml_src/`,
+    // which does not exist.
+    const bamlSrc = dir ?? new URL('./baml_src/', import.meta.url).pathname
+    if (!existsSync(bamlSrc)) return null
     const sources: Record<string, string> = {}
-    for (const entry of fs.readdirSync(bamlSrc)) {
+    for (const entry of readdirSync(bamlSrc)) {
       if (!entry.endsWith('.baml')) continue
-      sources[entry] = fs.readFileSync(path.join(bamlSrc, entry), 'utf8')
+      sources[entry] = readFileSync(path.join(bamlSrc, entry), 'utf8')
     }
     return Object.keys(sources).length > 0 ? sources : null
   } catch {
@@ -136,16 +154,12 @@ export function readBamlSources(dir?: string): Record<string, string> | null {
 /** Version of the installed @boundaryml/baml package, if resolvable. */
 function readInstalledVersion(): string | null {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require('node:fs') as typeof import('node:fs')
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('node:path') as typeof import('node:path')
     // pnpm symlinks node_modules/@boundaryml/baml into the store; readFileSync
     // follows the link. Resolving via `require.resolve` is unreliable here
     // because package.json need not be in the package's `exports` map.
     const pkgPath = path.resolve(process.cwd(), 'node_modules/@boundaryml/baml/package.json')
-    if (!fs.existsSync(pkgPath)) return null
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as {
+    if (!existsSync(pkgPath)) return null
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
       version?: string
     }
     return pkg.version ?? null

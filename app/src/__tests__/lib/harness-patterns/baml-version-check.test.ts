@@ -1,3 +1,11 @@
+// @vitest-environment node
+//
+// NOT the config default (jsdom), and it is load-bearing rather than tidy:
+// `baml-version-check.server.ts` reads the corpus with `require('node:fs')`
+// inside a try/catch that returns null on failure. Under jsdom that require
+// throws, `readBamlSources()` returns null whatever the path, and every
+// assertion below about the REAL tree passes vacuously — which is how the
+// wrong default path survived in that module.
 /**
  * BAML client staleness check (#154).
  *

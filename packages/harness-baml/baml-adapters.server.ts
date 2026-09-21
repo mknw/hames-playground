@@ -156,7 +156,7 @@ export type CriticAdapterFn = (
  * lost ~18 hours of prompt/output/metrics/cost data exactly this way before
  * anyone noticed.
  *
- * Remedy when this fires: `pnpm baml-generate`.
+ * Remedy when this fires: `pnpm baml-generate` from packages/harness-baml.
  *
  * Call this on SUCCESS paths only. After a thrown call the collector may
  * legitimately be empty (e.g. a pre-request network failure), which is why
@@ -173,7 +173,7 @@ export function warnIfCollectorEmpty(
     `[baml] ${functionName} was called WITH a collector but captured nothing ` +
       '(collector.last === null): no prompt, output, metrics or cost for this step. ' +
       'This is a data-loss signal, never a normal state — the usual cause is a stale ' +
-      'baml_client after a BAML signature change (#154). Run `pnpm baml-generate`.',
+      'baml_client after a BAML signature change (#154). Run `pnpm baml-generate` from packages/harness-baml.',
   )
   return true
 }

@@ -205,10 +205,11 @@ async function boot(): Promise<AppHandles> {
   delete process.env.USE_VERDA_INFERENCE
 
   // ---- Routing -----------------------------------------------------------
-  // PR-1b: the corpus is two generated singletons — heavy + screen in the
-  // app's client, the describe set + title in the package's pre-generated one.
-  // The fake registry is installed on BOTH, and the preflight call goes
-  // through the client that owns the function it names.
+  // PR-1b: the corpus is two generated singletons — the package's client is
+  // the superset production renders through (its adapters own `b`); the app
+  // tree's client is the dev-fake middleware's. The fake registry is
+  // installed on BOTH, and the preflight call goes through the package
+  // client.
   const [{ b: appB }, { b: pkgB }] = await Promise.all([
     import('../../baml_client'),
     import('@hames/harness-baml/baml_client'),

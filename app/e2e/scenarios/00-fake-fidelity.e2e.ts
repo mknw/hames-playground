@@ -60,14 +60,13 @@ beforeAll(async () => {
   // Boots only for its env side effects — `VerdaQwen` refuses to resolve
   // without a `/v1` endpoint, and `bootApp` is the one place that is set.
   await bootApp()
-  // #351: the corpus is two generated singletons. Production routes the heavy
-  // roles + screen through the app's client and the describe set + title
-  // through the package's, so each render goes through the tree PRODUCTION
-  // renders it with: the app tree where it declares the name, else the package
-  // (its superset). The method is read off the owner and invoked WITH the
-  // owner as `this` — a spread call against the owner, not an extraction —
-  // because these methods read private runtime state and an unbound call is
-  // the crash this file shipped with.
+  // #351: the corpus is two generated singletons. Production renders every
+  // role through the PACKAGE client — its baml-adapters own `b` — while the
+  // app tree's client is what the dev-fake middleware installs. Each function
+  // renders through the app tree where it declares the name (pinning that
+  // tree's prompt copies), else the package; the shared prompt files are
+  // byte-identical across the trees, so the wire shape tested is the one
+  // production sends.
   const [{ b: appB }, { b: pkgB }] = await Promise.all([
     import('../../baml_client'),
     import('@hames/harness-baml/baml_client'),
@@ -82,9 +81,10 @@ beforeAll(async () => {
     (fn: string) =>
     (...args: unknown[]) => {
       const owner = appDeclaredLocal.includes(fn) ? appReq : pkgReq
-      // Spread, not `.apply` (lint): the spread also keeps the call expression's
-      // receiver explicit — `owner[fn](...)` would call the method unbound and
-      // reintroduce the crash this file shipped with.
+      // `owner[fn](...args)` is a method call — the receiver rides on the
+      // member expression. What loses `this` is extracting the function
+      // first, e.g. `(cond ? a[fn] : b[fn])(...)`: the conditional yields the
+      // bare function value, which is the crash this file shipped with.
       return owner[fn](...args)
     }
   const via = { client: 'VerdaQwen' }

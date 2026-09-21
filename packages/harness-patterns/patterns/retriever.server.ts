@@ -335,7 +335,9 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
  * viewer would open at the wrong place.
  *
  * The guard is keyed on the tool name `'retriever'` (so an agent opts in with
- * `namespaces: ['retriever']`), and each hit is sanitized separately so a
+ * `tools: ['retriever']` — an exact-name declaration, #242 item 4: it is this
+ * pattern's own sanitize key, never a namespace any tool name infers to), and
+ * each hit is sanitized separately so a
  * single poisoned chunk is neutralized and reported without touching the rest.
  * Emitting the `content_sanitized` event is the guard's own contract, so there
  * is nothing to track here.

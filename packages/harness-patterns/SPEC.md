@@ -677,12 +677,13 @@ Neutralize prompt injection carried in **untrusted tool-result content** before
 it reaches any LLM-visible surface. Defensive, opt-in per agent.
 
 ```typescript
-withInjectionGuard({ namespaces: ['web'] })(
+withInjectionGuard({ namespaces: ['web'], catalog: tools.all })(
   simpleLoop(webController, tools.web, { patternId: 'web-search' }),
 )
 
 interface InjectionGuardConfig extends InjectionGuardOptions {
   namespaces?: string[] // inferServer() names treated as UNTRUSTED
+  catalog?: string[] // REQUIRED when namespaces is non-empty — pass tools.all (#242 item 4)
   tools?: string[] // explicit per-tool opt-in, added to namespaces
   spotlight?: 'on-detection' | 'always' | 'off' // default 'on-detection'
   screen?: InjectionScreen // optional LLM second opinion; OFF by default
@@ -715,7 +716,10 @@ content is produced:
    directly and emits its own `tool_result`, so retrieved chunks never reach
    `callTool`. It sanitizes its hits at write-time through the same guard
    (`sanitizeHits`), before `scope.data.matches` is set and before the event
-   exists. Opt in with `namespaces: ['retriever']`.
+   exists. Opt in with `tools: ['retriever']` — an exact-name declaration
+   (#242 item 4): `'retriever'` is this pattern's own sanitize key, never a
+   namespace any tool name infers to, so a namespace declaration for it is
+   unverifiable and the guard refuses it.
 
 Both the `data` and the `error` channel are sanitized at the chokepoint:
 `demoteErrorString` turns a SUCCESSFUL result whose text starts with `Error:`
@@ -903,11 +907,11 @@ There is deliberately no way to ask for narrowing.
 **Wired agents** (their untrusted namespaces are declared at each agent
 definition, deliberately not in a shared default):
 
-| Agent           | Untrusted namespaces    | Not guarded             |
-| --------------- | ----------------------- | ----------------------- |
-| `search`        | `web` (that route only) | `neo4j` — our own graph |
-| `microsoft-365` | `graph`                 | —                       |
-| `retriever`     | `web`, `retriever`      | `neo4j`                 |
+| Agent           | Untrusted namespaces                         | Not guarded             |
+| --------------- | -------------------------------------------- | ----------------------- |
+| `search`        | `web` (that route only)                      | `neo4j` — our own graph |
+| `microsoft-365` | `graph`                                      | —                       |
+| `retriever`     | `web` (namespace) + `retriever` (exact name) | `neo4j`                 |
 
 > Compare [`guardrail()`](#guardrailpattern-config): that pattern's output rails
 > run only AFTER the inner pattern completes, and a `RailResult` can block, warn
@@ -1204,7 +1208,9 @@ leaves `matches` empty and the compactExecution answers from the rest of context
 reaches the final response as a retrieved chunk. Retriever hits never pass through
 `callTool`, so the pattern sanitizes its own hits at write-time via the active
 [`withInjectionGuard`](#withinjectionguardconfigpattern) — opt in with
-`namespaces: ['retriever']`. Only `content` and `source` are scanned; `docId`,
+`tools: ['retriever']`, an exact-name declaration (`'retriever'` is the
+pattern's own sanitize key, never a namespace any tool name infers to —
+#242 item 4). Only `content` and `source` are scanned; `docId`,
 `chunkIndex` and the offsets stay byte-exact so the inline file viewer still
 opens at the right place.
 

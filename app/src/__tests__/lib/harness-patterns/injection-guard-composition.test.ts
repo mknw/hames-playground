@@ -399,17 +399,22 @@ describe('unmatchable declared namespaces are refused (sf-H5, #242 item 4)', () 
 
   it('builds the namespaces the real agents declare — and `retriever` by exact name', async () => {
     const { createInjectionGuard } = await load()
-    // Gateway catalog names plus the app-side graph namespace, whose tool
-    // names verb-strip to 'graph' without any app transport in unit tests.
+    // All six namespaces the shipped agents declare, against a catalog using
+    // the real names that produce each: the gateway names (registered
+    // resolver), the app-side graph namespace (whose tool names verb-strip to
+    // 'graph' without any app transport in unit tests), and the neo4j /
+    // context7 names the deployment catalog pins.
     const catalog = [
       'search',
       'fetch',
       'fetch_content',
       'list_graph_messages',
       'list_allowed_directories',
+      'resolve-library-id',
+      'read_neo4j_cypher',
     ]
     const guard = createInjectionGuard(
-      { namespaces: ['web', 'graph', 'filesystem'], catalog },
+      { namespaces: ['web', 'context7', 'graph', 'filesystem', 'neo4j'], catalog },
       () => {},
       'p',
     )

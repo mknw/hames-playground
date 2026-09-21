@@ -224,10 +224,13 @@ function unparkBracketedValues(s: string, parked: string[]): string {
 // of quote-dense code, which is why this is a parse-side fix.
 //
 // The failure leaves the document's STRUCTURE intact and corrupts only string
-// CONTENT, and that is what makes it recoverable without guessing: a `"` can be
-// read as content whenever the grammar does not need it as a delimiter there.
-// Two readings of the same character, decided by what may legally follow it —
+// CONTENT, and that is what makes it recoverable at all: a `"` can be read as
+// content whenever the grammar does not need it as a delimiter there. Two
+// readings of the same character, decided by what may legally follow it —
 // `:` after a key, `,`/`}` after a member value, `,`/`]` after an element.
+// Where BOTH readings are grammatical the payload carries no signal to choose
+// between them; `parseUnescapedContent` documents what that costs and what
+// bounds it, and it is a bound rather than a proof.
 //
 // It is DELIBERATELY the first strategy tried after a strict parse, ahead of
 // the token rewriting below: this one reads the whole document under the JSON
@@ -276,11 +279,31 @@ export interface UnescapedContentCounts {
  * unless the structure requires it to close the string, and a raw control
  * character as itself.
  *
- * Returns `null` — never a partial value — when anything else is off: an
- * unquoted key, an unknown escape, a value the grammar does not allow, or one
- * character of trailing junk. A greedy reading that guesses wrong runs out of
- * grammar and declines the whole document rather than handing back a
- * plausible-looking half of it.
+ * WHAT THIS GUARANTEES: the result is `null`, or a value parsed from the
+ * ENTIRE input — never a prefix of one. It declines a non-object root, an
+ * unquoted key, a single-quoted string, an unknown escape, a token the grammar
+ * disallows, and a single character of trailing junk.
+ *
+ * WHAT IT DOES NOT GUARANTEE is that a wrong reading is always caught, and an
+ * earlier version of this comment claimed it did. Where a content `"` is
+ * followed by a delimiter the structure accepts, both readings are grammatical
+ * and nothing in the payload chooses between them. Usually the greedy choice
+ * runs out of grammar a token or two later and the whole document declines —
+ * but not always: `{"cmd":"echo "a", "b"","p":"/x"}` (one `cmd` holding two
+ * quoted words) splits at the `",` and came back COMPLETE, well-formed and
+ * WRONG, reported as a clean recovery.
+ *
+ * The key guard in `readObject` is what closes that shape: a KEY that needed
+ * content recovery is evidence the split is wrong, because a key is a short
+ * identifier and a quote legitimately inside one arrives as an ESCAPE, not as
+ * a bare character. It costs nothing on real payloads — all three recoveries
+ * in the `.harness-logs` corpus, including the 19 KB incident, are untouched.
+ *
+ * So the honest bound is: this returns the intended object or declines on
+ * every mis-split we have been able to CONSTRUCT, which is not the same as on
+ * every one that exists. The residual risk is a tool running on rebuilt
+ * arguments, and the `JsonRepairNote` on the event is the only signal that it
+ * did.
  *
  * The root must be an object, because that is `tool_args`' contract.
  */
@@ -356,7 +379,12 @@ function parseUnescapedContent(
     }
     for (;;) {
       skipWs()
+      // A key that needed CONTENT recovery means the split is wrong — see the
+      // docblock. Counting is how we ask: `readString` only bumps these when
+      // it had to read a character the grammar would have rejected.
+      const recoveredBefore = counts.quotes + counts.controlChars
       const key = readString(':')
+      if (counts.quotes + counts.controlChars !== recoveredBefore) throw new DeclineParse()
       skipWs()
       if (raw[i] !== ':') throw new DeclineParse()
       i++

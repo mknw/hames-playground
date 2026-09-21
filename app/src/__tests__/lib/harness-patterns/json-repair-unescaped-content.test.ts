@@ -156,6 +156,32 @@ describe('repairJson — string content that was not escaped', () => {
       })
     })
 
+    it('declines a mis-split that would otherwise come back complete and WRONG', () => {
+      // The counterexample that falsified this module's original "a wrong
+      // greedy reading always runs out of grammar" claim. The model meant one
+      // `cmd` holding two quoted words; encoded with one escape level it
+      // splits at the `",` and the REMAINDER parses — so the result was a
+      // complete, well-formed object with a fabricated second key, reported as
+      // a clean `unescaped-content` recovery. Nothing downstream could tell.
+      //
+      // The key guard catches it: `b"",\"p` is a key that needed content
+      // recovery, and a real key never does (a legitimate quote in one arrives
+      // escaped). It falls through to the lenient chain instead, which is free
+      // to make its own mess of it — but tags that as `lenient-tokens` rather
+      // than claiming a structural read.
+      const intended = { cmd: 'echo "a", "b"', p: '/x' }
+      const underEscaped = JSON.stringify(intended).replace(/\\"/g, '"')
+
+      expect(underEscaped).toBe('{"cmd":"echo "a", "b"","p":"/x"}')
+      expect(repairJsonTracked(underEscaped).repair?.strategy).not.toBe('unescaped-content')
+    })
+
+    it('leaves a key alone when its quote arrived properly escaped', () => {
+      // The guard keys off CONTENT recovery, not off quotes as such, so a key
+      // the model encoded correctly still parses while the rest is recovered.
+      expect(repairJson('{"a\\"b": "x = "y""}')).toEqual({ 'a"b': 'x = "y"' })
+    })
+
     it('declines a root that is not an object — tool_args has one shape', () => {
       expect(() => repairJson('["a" "b"]')).toThrow()
     })

@@ -18,19 +18,22 @@ export default defineConfig({
       // Still emit the report when a test fails, so a red run tells you both
       // what broke and where coverage stands (the app config's reasoning).
       reportOnFailure: true,
-      // Exactly what the tarball ships: the top-level modules named by the
-      // manifest's `files` allowlist. Both halves are load-bearing — `include`
-      // decides which UNLOADED files still get counted, `exclude` is what drops
-      // a LOADED one, so `scripts/_shared.ts` and the test fixtures reappear in
-      // the report without the explicit excludes below.
+      // Exactly what the tarball ships: the top-level modules the manifest's
+      // `files` allowlist names. Both halves are load-bearing and they do
+      // DIFFERENT jobs — `include` decides which never-loaded files are still
+      // counted (at 0%), `exclude` is the only thing that drops a file the
+      // suite DID load.
       //
-      // `scripts/` is out because those are the live-container smoke checks,
-      // run by hand against a docker daemon: they do not ship, nothing
-      // hermetic can exercise them, and counting them would put ~280
-      // unreachable lines under a gate that is supposed to describe the
-      // containment layer. Same call the app config makes for
-      // `src/lib/**/scripts/smoke-*.ts`, for the same reason. `__tests__/` is
-      // out for the app config's reason: tests are not source.
+      // So `include: ['*.ts']` is what keeps `scripts/smoke-{llm,scripted}.ts`
+      // out: 78 statements no hermetic run can reach, because they are the
+      // live-container smoke checks driven by hand against a docker daemon,
+      // and they do not ship either. Same call the app config makes for
+      // `src/lib/**/scripts/smoke-*.ts`, for the same reason. The excludes then
+      // drop the two files the suite loads but that are not this package's
+      // shipped surface: `__tests__/` (tests are not source — the app config's
+      // rule) and `scripts/_shared.ts`, the smoke scripts' helper, which rides
+      // in at 38/38 lines and would otherwise flatter the floor with coverage
+      // of something the tarball does not contain.
       include: ['*.ts'],
       exclude: ['vitest.config.ts', '__tests__/**', 'scripts/**'],
       // Backstop floors, not aspirations — the app's convention (see

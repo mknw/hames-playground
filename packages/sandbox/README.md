@@ -126,13 +126,21 @@ dependencies, or its own fixtures.
 Three, and none of them subsumes the others:
 
 1. **`zero-app-imports.test.ts`** (host-side source scan) — no file here imports
-   `app/src`, including **type-only**. A type-only import is erased by tsx before
-   a tarball exists, so this raw-text scan is the only thing that sees it.
+   `app/src`, including **type-only** and including the co-located `__tests__/`
+   tree. A type-only import is erased by tsx before a tarball exists, so this
+   raw-text scan is the only thing that sees it; the tests are in scope because
+   nothing else reaches them either (they do not ship, so the pack smoke is
+   blind to them, and CI runs this suite from inside the workspace, where a
+   climb into `app/` resolves fine) — and a suite that reaches into the host is
+   the one thing that would make the package not independently runnable.
 2. **`scripts/pack-smoke.sh`** (CI, `packages` job) — packs the tarball, installs
    it into a scratch project and _evaluates_ every entry the host imports. This
    is what catches a **value** import escaping into `app/src` (as
    `ERR_MODULE_NOT_FOUND` naming the app path) or a dependency the manifest does
-   not declare. It also asserts that neither `__tests__/` nor `scripts/` ships,
+   not declare. In practice such an edge surfaces at the probe's **step 3**, not
+   its step-6 eval loop — step 3 imports `pty-manager.server`, which transitively
+   imports `with-sandbox.server` — so step 3 reports it under its own headline
+   rather than under the node-pty one. It also asserts that neither `__tests__/` nor `scripts/` ships,
    and that node-pty is declared but not needed at module load (above).
 3. **`package-conventions.test.ts`** — every workspace package carries a
    `.prettierrc.json` (issue #354: without one, prettier's defaults reformat

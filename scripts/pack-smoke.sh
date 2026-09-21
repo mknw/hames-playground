@@ -15,7 +15,11 @@
 #     fails ITS module evaluation here, while a TYPE-ONLY one is erased by tsx
 #     before a tarball exists and is caught only by the source-scan pin
 #     (`app/src/__tests__/lib/harness-patterns/zero-app-imports.test.ts`).
-#     Two guards, two shapes, and neither one subsumes the other.
+#     Two guards, two shapes, and neither one subsumes the other. Which STEP
+#     the value shape lands on is step 3, not the step-6 eval loop below: step
+#     3 imports `pty-manager.server`, which transitively imports
+#     `with-sandbox.server`. Step 3 says so in its own words rather than
+#     blaming node-pty (#365 post-merge review, D3).
 #
 # This is the ONLY mechanism anywhere in CI that exercises "does the published
 # tarball actually work" — the docker image boots from the workspace symlink,
@@ -478,9 +482,27 @@ try {
   await import('@hames/sandbox/pty-manager.server')
   console.log('  lazy ok:   @hames/sandbox/pty-manager.server imports with node-pty absent')
 } catch (err) {
+  const message = (err as Error)?.message ?? String(err)
+  // The stash above makes exactly ONE specifier unresolvable, so only a
+  // failure that NAMES node-pty is this step's invariant. Anything else is a
+  // different one breaking, and step 3 is simply where it lands first:
+  // pty-manager transitively imports `with-sandbox.server`, so an `app/src`
+  // edge escaping the package fails HERE rather than at step 6, where the
+  // header and the package README both say to expect it. Reporting that under
+  // the pty headline names an invariant that did not break — the sort of
+  // misdirection that costs a debugging round-trip at 2am (#365 review, D3).
+  if (!message.includes('node-pty')) {
+    const code = (err as { code?: string })?.code
+    if (code !== 'ERR_MODULE_NOT_FOUND') throw err
+    throw new Error(
+      '@hames/sandbox/pty-manager.server could not RESOLVE a module that is not node-pty — an ' +
+        'edge escaping the package (a tarball consumer has no app/ to resolve, which is the ' +
+        `step-6 ERR_MODULE_NOT_FOUND arriving three steps early). Got: ${message}`,
+    )
+  }
   throw new Error(
     'pty-manager.server must not need the node-pty native addon at MODULE LOAD — only to spawn a ' +
-      `shell. Got: ${(err as Error)?.message ?? String(err)}`,
+      `shell. Got: ${message}`,
   )
 } finally {
   fs.renameSync(ptyStash, ptyDir)

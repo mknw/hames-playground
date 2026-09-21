@@ -22,6 +22,7 @@
   },
   "devDependencies": {
     "@hames/harness-baml": "workspace:*",
+    "@vitest/coverage-v8": "^4.1.5",
     "vitest": "^4.1.5"
   },
   "files": [

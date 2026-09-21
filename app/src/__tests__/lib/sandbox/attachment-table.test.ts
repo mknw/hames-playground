@@ -2,6 +2,9 @@
  * AttachmentTable unit tests.
  *
  * Hermetic — vi.fn() backend, real WarmPool. No Docker / no MCP SDK.
+ * Covers id-addressable reuse, refCounting, health-check-on-reuse (#97),
+ * sweeps, LRU cap (#82), and fingerprint-scoped reuse (Lane C —
+ * docs/plan/sandbox.md → channel 3).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -24,14 +27,16 @@ import type {
 // ---- fakes ---------------------------------------------------------------
 
 let bootCount = 0
-function makeHandle(rootfs: RootfsId = 'base'): VMHandle {
+/** Like the real DockerBackend, the fake records the booted runtime into
+ *  native.runtime — the pool parks releases under the VM's own record. */
+function makeHandle(rootfs: RootfsId = 'base', runtime: RuntimeConfig = {}): VMHandle {
   bootCount += 1
   return {
     id: `sbx-${bootCount}`,
     backend: 'docker',
     rootfs,
     bootedAt: Date.now(),
-    native: { containerId: `c-${bootCount}`, runtime: {} },
+    native: { containerId: `c-${bootCount}`, runtime },
   }
 }
 
@@ -57,7 +62,7 @@ function makeTransport(vmId: string): FakeTransport {
 function makeBackend(overrides: Partial<ComputeBackend> = {}): ComputeBackend {
   const backend: ComputeBackend = {
     kind: 'docker',
-    boot: vi.fn(async (rootfs: RootfsId, _runtime: RuntimeConfig) => makeHandle(rootfs)),
+    boot: vi.fn(async (rootfs: RootfsId, runtime: RuntimeConfig) => makeHandle(rootfs, runtime)),
     destroy: vi.fn(async () => undefined),
     reset: vi.fn(async (vm: VMHandle) => {
       ;(vm as { bootedAt: number }).bootedAt = Date.now()
@@ -475,5 +480,122 @@ describe('AttachmentTable.startSweepTimer (#82)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// ============================================================================
+// Fingerprint-scoped reuse (Lane C — docs/plan/sandbox.md → channel 3).
+// Same-session reuse must never hand over a VM running a different posture
+// (tenantId / egress / rootfs) than the request — the same advisory the warm
+// pool's handoff rule closes. Owner-scoping stays where it is: the Shell
+// route's `claimSession` gate and the id being server-derived (Lane A).
+// ============================================================================
+
+describe('AttachmentTable — fingerprint-scoped reuse (Lane C)', () => {
+  const RA = { egress: 'pypi' as const, tenantId: 'tenant-a' }
+  const RB = { egress: 'pypi' as const, tenantId: 'tenant-b' }
+
+  it('MUTATION PIN: same id, tenantId differs → NO reuse; the old VM is recycled, a fresh one boots', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+    const table = new AttachmentTable(backend, pool, { idleMs: 60_000 })
+
+    const first = await table.acquire('alpha', 'base', RA)
+    const firstTransport = first.transport as FakeTransport
+
+    const second = await table.acquire('alpha', 'base', RB)
+
+    expect(second).not.toBe(first)
+    expect(second.isFirstBoot).toBe(true) // re-hydration trigger (#206 §6.1)
+    expect(backend.boot).toHaveBeenCalledTimes(2)
+    expect(firstTransport.closes).toBe(1)
+    // Recycled, not destroyed: the VM parks under its OWN fingerprint.
+    expect(backend.reset).toHaveBeenCalledWith(first.vm)
+    expect(backend.destroy).not.toHaveBeenCalledWith(first.vm)
+    expect(pool.size('base')).toBe(1)
+    expect(table.size()).toBe(1) // no leak — exactly one entry under 'alpha'
+  })
+
+  it('same id, egress differs → NO reuse (egress is an isolation knob, not a knob to leak)', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+    const table = new AttachmentTable(backend, pool, { idleMs: 60_000 })
+
+    const first = await table.acquire('alpha', 'base', { egress: 'pypi', tenantId: 't' })
+    const second = await table.acquire('alpha', 'base', { egress: 'open', tenantId: 't' })
+
+    expect(second).not.toBe(first)
+    expect(backend.boot).toHaveBeenCalledTimes(2)
+  })
+
+  it('same id, rootfs differs → NO reuse (rootfs is part of the fingerprint)', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 2, data: 2 }, idleEvictMs: 60_000 })
+    const table = new AttachmentTable(backend, pool, { idleMs: 60_000 })
+
+    const first = await table.acquire('alpha', 'base', {})
+    const second = await table.acquire('alpha', 'data' as RootfsId, {})
+
+    expect(second).not.toBe(first)
+    expect(second.vm.rootfs).toBe('data')
+    expect(backend.boot).toHaveBeenCalledTimes(2)
+  })
+
+  it('identical fingerprints (non-default tenant) still reuse WITHOUT a second boot', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+    const table = new AttachmentTable(backend, pool, { idleMs: 60_000 })
+
+    const first = await table.acquire('alpha', 'base', RA)
+    const second = await table.acquire('alpha', 'base', { ...RA, cpus: 4 })
+
+    expect(second).toBe(first)
+    expect(backend.boot).toHaveBeenCalledTimes(1) // resource caps aren't posture
+  })
+
+  it('the recycled VM is an exact-match pool hit for its own posture afterwards', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+    const table = new AttachmentTable(backend, pool, { idleMs: 60_000 })
+
+    await table.acquire('alpha', 'base', RA)
+    await table.acquire('alpha', 'base', RB) // recycles tenant-a's VM into the pool
+
+    // A DIFFERENT session (id 'beta') asking for tenant-a's posture gets the
+    // recycled VM from the pool — no boot. Posture never crosses a handoff;
+    // it also never gets wasted.
+    vi.mocked(backend.boot).mockClear()
+    await table.acquire('beta', 'base', RA)
+    expect(backend.boot).not.toHaveBeenCalled()
+  })
+
+  it('concurrent acquires of one id with different fingerprints do not share a boot', async () => {
+    const resolvers: Array<(vm: VMHandle) => void> = []
+    const bootRuntimes: RuntimeConfig[] = []
+    const backend = makeBackend({
+      boot: vi.fn(async (_rootfs: RootfsId, runtime: RuntimeConfig) => {
+        bootRuntimes.push(runtime)
+        return new Promise<VMHandle>((resolve) => resolvers.push(resolve))
+      }),
+    })
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+    const table = new AttachmentTable(backend, pool, { idleMs: 60_000 })
+
+    const p1 = table.acquire('alpha', 'base', RA)
+    await new Promise((r) => setImmediate(r))
+    const p2 = table.acquire('alpha', 'base', RB)
+    await new Promise((r) => setImmediate(r))
+    // The second acquire did NOT join the first's boot — wrong posture.
+    expect(bootRuntimes).toEqual([RA])
+
+    resolvers[0](makeHandle('base', RA))
+    const a = await p1
+    await new Promise((r) => setImmediate(r))
+    expect(bootRuntimes).toHaveLength(2) // it waited, then booted its own
+    resolvers[1](makeHandle('base', RB))
+    const b = await p2
+
+    expect(b.vm).not.toBe(a.vm)
+    expect(table.size()).toBe(1) // the wrong-posture attachment was recycled away
   })
 })

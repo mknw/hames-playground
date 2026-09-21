@@ -306,8 +306,13 @@ export function actorCritic<T extends ActorCriticData>(
           const scopedTransports = activeTransports()
           const callIds: string[] = []
           const trackedArgs: unknown[] = []
-          // Parallel to `trackedArgs` — see the simpleLoop twin (#217b).
           const trackedRepairs: (JsonRepairNote | undefined)[] = []
+          // One writer for both, read positionally at the emit below — see the
+          // simpleLoop twin for the F1 desync this shape prevents (#217b).
+          const track = (args: unknown, repair?: JsonRepairNote) => {
+            trackedArgs.push(args)
+            trackedRepairs.push(repair)
+          }
           const subCalls: SubCall[] = []
 
           for (const c of allCalls) {
@@ -319,7 +324,7 @@ export function actorCritic<T extends ActorCriticData>(
               scopedTransports.some((t) => t.ownsTool(c.tool_name)) ||
               (config?.dynamicToolPattern?.test(c.tool_name) ?? false)
             if (!callAllowed) {
-              trackedArgs.push(c.tool_args)
+              track(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
                 precheckError: `Tool not allowed: ${c.tool_name}`,
@@ -333,8 +338,7 @@ export function actorCritic<T extends ActorCriticData>(
               callArgs = parsed.args
               callRepair = parsed.repair
             } catch {
-              trackedArgs.push(c.tool_args)
-              trackedRepairs.push(undefined)
+              track(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
                 precheckError: actorLlmCall?.hitOutputCap
@@ -344,8 +348,7 @@ export function actorCritic<T extends ActorCriticData>(
               })
               continue
             }
-            trackedArgs.push(callArgs)
-            trackedRepairs.push(callRepair)
+            track(callArgs, callRepair)
             subCalls.push({
               tool: c.tool_name,
               run: async () => {

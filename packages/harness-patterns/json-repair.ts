@@ -299,11 +299,27 @@ export interface UnescapedContentCounts {
  * a bare character. It costs nothing on real payloads — all three recoveries
  * in the `.harness-logs` corpus, including the 19 KB incident, are untouched.
  *
- * So the honest bound is: this returns the intended object or declines on
- * every mis-split we have been able to CONSTRUCT, which is not the same as on
- * every one that exists. The residual risk is a tool running on rebuilt
- * arguments, and the `JsonRepairNote` on the event is the only signal that it
- * did.
+ * That guard does NOT close the whole family, and review F4 named the part it
+ * leaves open. The rule is EAGER-CLOSE, not greedy-for-content: a string ends
+ * at the first `"` followed by a structurally legal delimiter. When a value's
+ * bare quotes are ODD in number and the truncated remainder stays legal, the
+ * keys are all clean, the guard never fires, and the VALUE is silently cut:
+ *
+ *   in : {"a": "say "hi", "b": 1}
+ *   out: {"a":"say \"hi","b":1}          ← `a` truncated, tagged `repaired`
+ *
+ * It stays open rather than being fixed because under-escaping produces quotes
+ * in PAIRS: an eager close on the first of a pair leaves the second unpaired
+ * and cascades into a decline, which is why every realistic shape behaves
+ * (`{"len": "5" wide", …}`, `{"a": "x "y" z", …}`, `python3 -c "import os,
+ * sys"` all recover correctly, pinned below). Closing it would mean
+ * BACKTRACKING, and refusing to backtrack is the discipline that keeps this
+ * module from guessing.
+ *
+ * So the bound, stated so it cannot be read as stronger than it is: no partial
+ * DOCUMENT, ever; a partial VALUE is possible at a site where the grammar
+ * permits both readings. When it happens the step is tagged `repaired`, and
+ * that tag is the only signal downstream that a tool ran on rebuilt arguments.
  *
  * The root must be an object, because that is `tool_args`' contract.
  */

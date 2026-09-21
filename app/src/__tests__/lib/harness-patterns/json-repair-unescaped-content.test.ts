@@ -182,6 +182,33 @@ describe('repairJson — string content that was not escaped', () => {
       expect(repairJson('{"a\\"b": "x = "y""}')).toEqual({ 'a"b': 'x = "y"' })
     })
 
+    // DOCUMENTED LIMITATION (review F4), pinned so the docblock is verifiable
+    // and so anyone who later "fixes" it sees this fail rather than discovers
+    // it. Eager-close plus an ODD number of bare quotes in a value leaves every
+    // key clean, so the key guard never fires and the VALUE is cut short. Left
+    // open deliberately: closing it means backtracking, and refusing to
+    // backtrack is what keeps this module from guessing.
+    it('can still truncate a VALUE when a value holds an odd number of bare quotes', () => {
+      expect(repairJsonTracked('{"a": "say "hi", "b": 1}')).toEqual({
+        args: { a: 'say "hi', b: 1 },
+        repair: { strategy: 'unescaped-content', counts: { quotes: 1, controlChars: 0 } },
+      })
+    })
+
+    it('recovers the realistic under-escaped shapes, which come in quote PAIRS', () => {
+      // Why the limitation above is tolerable: real under-escaping emits both
+      // quotes of a pair, and an eager close on the first leaves the second
+      // unpaired, which cascades into a decline instead of a silent cut.
+      expect(repairJson('{"len": "5" wide", "unit": "in"}')).toEqual({
+        len: '5" wide',
+        unit: 'in',
+      })
+      expect(repairJson('{"a": "x "y" z", "b": 1}')).toEqual({ a: 'x "y" z', b: 1 })
+      expect(repairJson('{"command": "python3 -c "import os, sys""}')).toEqual({
+        command: 'python3 -c "import os, sys"',
+      })
+    })
+
     it('declines a root that is not an object — tool_args has one shape', () => {
       expect(() => repairJson('["a" "b"]')).toThrow()
     })

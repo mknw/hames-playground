@@ -557,10 +557,21 @@ export function simpleLoop<T extends SimpleLoopData>(
           const allExpansions: ExpandedRef[] = []
           const callIds: string[] = []
           const trackedArgs: unknown[] = []
-          // Parallel to `trackedArgs`: the repair note for the sub-call at the
-          // same index, so a reconstructed batch member is as visible as a
-          // reconstructed singular one (#217b).
+          // The repair note for the sub-call at the same index, so a
+          // reconstructed batch member is as visible as a reconstructed
+          // singular one (#217b).
           const trackedRepairs: (JsonRepairNote | undefined)[] = []
+          // Two arrays read POSITIONALLY at the tool_call emit below, so they
+          // must grow together. Review F1: three of the five branches that
+          // recorded args forgot the note, and a precheck-declined sub-call
+          // ahead of a repaired one shifted every later index by one — the
+          // marker landed on a call that never ran and the reconstructed call
+          // was recorded as clean, which is worse than no marker at all. One
+          // writer instead of five, so a new branch cannot reintroduce it.
+          const track = (args: unknown, repair?: JsonRepairNote) => {
+            trackedArgs.push(args)
+            trackedRepairs.push(repair)
+          }
           const subCalls: SubCall[] = []
 
           for (const c of allCalls) {
@@ -570,7 +581,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             // loop before any tool runs, expand resolves synchronously against
             // the event store — neither composes with a batch.
             if (c.tool_name === 'Return' || c.tool_name === EXPAND_TOOL_NAME) {
-              trackedArgs.push(c.tool_args)
+              track(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
                 precheckError: `${c.tool_name} cannot be part of a multi-call turn — issue it as the only call of its own turn`,
@@ -580,7 +591,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             const callAllowed =
               tools.includes(c.tool_name) || scopedTransports.some((t) => t.ownsTool(c.tool_name))
             if (!callAllowed) {
-              trackedArgs.push(c.tool_args)
+              track(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
                 precheckError: `Tool not allowed: ${c.tool_name}. Allowed: ${tools.join(', ')}`,
@@ -594,8 +605,7 @@ export function simpleLoop<T extends SimpleLoopData>(
               callArgs = parsed.args
               callRepair = parsed.repair
             } catch {
-              trackedArgs.push(c.tool_args)
-              trackedRepairs.push(undefined)
+              track(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
                 precheckError: controllerLlmCall?.hitOutputCap
@@ -610,8 +620,7 @@ export function simpleLoop<T extends SimpleLoopData>(
               MAX_RESULT_CHARS,
             )
             allExpansions.push(...expansions)
-            trackedArgs.push(callArgs)
-            trackedRepairs.push(callRepair)
+            track(callArgs, callRepair)
             subCalls.push({
               tool: c.tool_name,
               run: async () => {

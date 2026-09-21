@@ -483,6 +483,66 @@ describe('simpleLoop execution', () => {
     })
   })
 
+  it('pins the repaired marker to the right sub-call when a batch member is precheck-declined', async () => {
+    // Review F1. `trackedArgs` and `trackedRepairs` are read POSITIONALLY at
+    // the batch emit, and three of the branches that recorded args skipped the
+    // note — so a declined sub-call AHEAD of a repaired one shifted every later
+    // index by one: the marker landed on the call that never ran, and the call
+    // that WAS reconstructed was recorded as clean. Worse than no marker, and
+    // reachable on exactly this PR's traffic (the sandbox agents run batches; a
+    // hallucinated tool beside a quote-dense edit is the ordinary shape).
+    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames/harness-patterns/context.server')
+    const { createEventView } = await import('@hames/harness-patterns/patterns')
+
+    const mockController = vi
+      .fn()
+      .mockResolvedValueOnce({
+        action: mockAction({
+          tool_name: 'not_allowed_tool',
+          tool_args: '{"a":1}',
+          additional_calls: [
+            {
+              tool_name: 'read_neo4j_cypher',
+              tool_args: '{"query": "MATCH (n) WHERE n.x = "v" RETURN n"}',
+            },
+          ],
+        }),
+        llmCall: undefined,
+      })
+      .mockResolvedValueOnce({ action: mockFinalAction('done'), llmCall: undefined })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'test',
+    })
+
+    const result = await pattern.fn(
+      createScope('test', {}),
+      createEventView({
+        sessionId: 'test',
+        createdAt: Date.now(),
+        events: [],
+        status: 'running' as const,
+        data: {},
+        input: 'test',
+      }),
+    )
+
+    const calls = result.events.filter((e) => e.type === 'tool_call')
+    expect(calls.map((e) => (e.data as { tool: string }).tool)).toEqual([
+      'not_allowed_tool',
+      'read_neo4j_cypher',
+    ])
+    // The declined call was never repaired — and never ran.
+    expect(calls[0].data).not.toHaveProperty('repaired')
+    // The reconstructed one carries the marker, and its real args.
+    expect(calls[1].data).toMatchObject({
+      tool: 'read_neo4j_cypher',
+      args: { query: 'MATCH (n) WHERE n.x = "v" RETURN n' },
+      repaired: { strategy: 'unescaped-content', counts: { quotes: 2, controlChars: 0 } },
+    })
+  })
+
   it('leaves the repaired marker off a call the model encoded cleanly', async () => {
     const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('@hames/harness-patterns/context.server')

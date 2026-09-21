@@ -849,11 +849,10 @@ export interface ConfiguredPattern<T> {
    *  equivalent to a contribution of 1. */
   estimateTurns?: (settings: TurnEstimateSettings) => number
   /** Wrapped sub-patterns, for combinators that compose others
-   *  (`chain`, `routes`, `parallel`, `guardrail`, `hook`,
-   *  `withReferences`). Leaf patterns omit it. Purely for static
-   *  introspection of the pattern graph — execution runs through `fn`, never
-   *  this — so it's safe and additive. See `pattern-capabilities.ts`
-   *  (`harnessHasRetriever`) for the canonical walk. */
+   *  (`chain`, `routes`, `parallel`, `withReferences`). Leaf patterns omit it.
+   *  Purely for static introspection of the pattern graph — execution runs
+   *  through `fn`, never this — so it's safe and additive. See
+   *  `pattern-capabilities.ts` (`harnessHasRetriever`) for the canonical walk. */
   children?: ConfiguredPattern<T>[]
   /** Set by `withInjectionGuard`: the untrusted sources it declared. Same
    *  charter as `children` — purely for static introspection, never read during
@@ -1436,27 +1435,21 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   // compactExecution answers from whatever else is in context — never fatal.
   retriever: 'recoverable',
   // ---------------------------------------------------------------------------
-  // The five below were unlisted until #273 D-d, and therefore inherited
-  // `resolveConfig`'s `'irrecoverable'` fallback. That was harmless while
-  // nothing read severity for control flow and wrong the moment something did:
-  // each of these emits `error` events for things a turn plainly survives, and
-  // the guardrail one is the clearest — an output rail with `action: 'warn'`
-  // records an `error` event BY DESIGN, so a chain-fatal default would have let
-  // a warning kill the turn. They are spelled out rather than left to the
-  // fallback so the next reader sees a decision instead of an omission.
+  // The FIVE best-effort types were unlisted until #273 D-d, and therefore
+  // inherited `resolveConfig`'s `'irrecoverable'` fallback; the three that
+  // survive ADR-0006 are below, the other two having gone with the patterns
+  // they classified. That was harmless while nothing read severity for control
+  // flow and wrong the moment something did: each of these emits `error` events
+  // for things a turn plainly survives, so a chain-fatal default would have let
+  // one kill the turn. They are spelled out rather than left to the fallback so
+  // the next reader sees a decision instead of an omission.
   // ---------------------------------------------------------------------------
-  // A blocked rail returns the scope early and a warning does not even do that;
-  // the wrapped pattern's own errors carry their own severity.
-  guardrail: 'recoverable',
   // judge is advisory ranking. "No candidates to evaluate" is a normal outcome
   // of an execution that found nothing, not a reason to stop.
   judge: 'recoverable',
   // parallel logs one event per rejected BRANCH and keeps every fulfilled
   // one — the surviving branches are exactly what the rest of the chain is for.
   parallel: 'recoverable',
-  // hook fires side effects (session close, approval timeout). Its failure
-  // costs the side effect, never the answer.
-  hook: 'recoverable',
   // withReferences failing means the inner pattern ran without curated prior
   // results, i.e. the behaviour it had before the wrapper existed.
   withReferences: 'recoverable',

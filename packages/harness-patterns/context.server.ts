@@ -152,7 +152,7 @@ export function trackEvent(
  *  Includes 'content_sanitized' for the same reason, sharpened: it is the audit
  *  record of a security control firing. A loop that neutralizes an injection
  *  and THEN fails would, under 'on-success', discard the one event proving the
- *  guardrail did anything — the failure would look unexplained and the attack
+ *  guard did anything — the failure would look unexplained and the attack
  *  invisible. */
 const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set([
   'pattern_enter',

@@ -326,67 +326,6 @@ interface JudgeConfig extends PatternConfig {
 }
 ```
 
-### guardrail
-
-Wrap pattern with validation rails.
-
-```typescript
-function guardrail<T>(
-  pattern: ConfiguredPattern<T>,
-  config: GuardrailConfig<T>
-): ConfiguredPattern<T>
-
-interface GuardrailConfig<T> extends PatternConfig {
-  rails: Rail<T>[]
-  circuitBreaker?: CircuitBreakerConfig
-  onBlock?: (rail: string, reason: string) => void
-}
-
-interface Rail<T> {
-  name: string
-  phase: 'input' | 'execution' | 'output'
-  check: (ctx: RailContext<T>) => Promise<RailResult>
-}
-
-interface RailResult {
-  ok: boolean
-  reason?: string
-  action?: 'block' | 'warn' | 'redact' | 'retry'
-  redacted?: string
-}
-
-interface CircuitBreakerConfig {
-  maxFailures: number
-  windowMs: number
-  cooldownMs: number
-}
-```
-
-**Built-in Rails:**
-```typescript
-piiScanRail       // Detect and redact secrets/tokens
-pathAllowlistRail // Block paths outside workspace
-driftDetectorRail // Detect large file changes (>60%)
-```
-
-### hook
-
-Execute pattern on lifecycle events.
-
-```typescript
-function hook<T>(
-  pattern: ConfiguredPattern<T>,
-  config: HookConfig<T>
-): ConfiguredPattern<T>
-
-interface HookConfig<T> extends PatternConfig {
-  trigger: HookTrigger
-  background?: boolean        // Fire-and-forget
-}
-
-type HookTrigger = 'session_close' | 'error' | 'approval_timeout' | 'custom'
-```
-
 ### chain
 
 Sequential pattern composition.

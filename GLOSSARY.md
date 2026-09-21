@@ -25,9 +25,9 @@ the older `baml-agent` module (ADR-0005). See
 **Pattern** — one composable step inside a harness: a named function that runs in
 its own isolated scope and commits its events back to the shared context when it
 finishes. `simpleLoop`, `actorCritic`, `planner`, `compactIntent`, `router`,
-`routes`, `compactExecution`, `retriever`, `withReferences`, `parallel`, `judge`,
-`guardrail` and `hook` are all patterns; a pattern is identified by its
-`patternId`, which is also how its events are tagged and later queried.
+`routes`, `compactExecution`, `retriever`, `withReferences`, `parallel` and
+`judge` are all patterns; a pattern is identified by its `patternId`, which is
+also how its events are tagged and later queried.
 
 **Compaction** — shrinking context with a cheap LLM call so a later, expensive
 call sees a shorter prompt. Three members, one prefix, distinguished by *what*

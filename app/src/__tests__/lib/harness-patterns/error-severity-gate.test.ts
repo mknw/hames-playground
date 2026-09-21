@@ -7,13 +7,13 @@
  * straight past it: the next pattern executed against a missing result and the
  * `compactExecution` at the end composed an answer out of the hole. The tests
  * here are about the control flow, in both directions, because a gate that
- * fires too eagerly is as wrong as one that never fires: a warning from an
- * output rail must not end a turn.
+ * fires too eagerly is as wrong as one that never fires: a loop that exhausted
+ * its turn budget must not end a turn that can still answer from what it got.
  *
  * The last case is a source scan rather than a behaviour test. The map is now
  * load-bearing, and its dangerous shape is an OMISSION — a new pattern type
- * with no entry inherits a default it never declared, which is exactly how
- * `guardrail` came to be classified chain-fatal.
+ * with no entry inherits a default it never declared, which is exactly how the
+ * best-effort wrapper types came to be classified chain-fatal (#273 D-d).
  */
 import { describe, it, expect, vi } from 'vitest'
 import { readFile, readdir } from 'node:fs/promises'
@@ -126,22 +126,22 @@ describe('a recoverable error does not', () => {
     expect(ctx.error).toBeUndefined()
   })
 
-  it('treats an output-rail warning as the warning it is', async () => {
+  it('treats a best-effort wrapper failure as the warning it is', async () => {
     const ran: string[] = []
     const ctx = createContext<Data>('q')
 
-    // `guardrail` records an `error` event for `action: 'warn'` BY DESIGN, and
-    // carries no severity on it — so the pattern default decides. Until this
-    // change `guardrail` had no entry in the map and inherited
-    // `'irrecoverable'`, which would have made a warning end the turn.
+    // `withReferences` records an `error` event and carries no severity on it —
+    // so the pattern default decides. Until #273 D-d it had no entry in the map
+    // and inherited `'irrecoverable'`, which would have made "the inner pattern
+    // ran without curated prior results" end the turn.
     await runChain(ctx, [
       // The name is the pattern TYPE `resolveConfig` looks up, so this reads
-      // the real `guardrail` entry rather than the fallback.
-      failing('guardrail', { error: "Output rail 'pii' warning: 2 matches" }),
+      // the real `withReferences` entry rather than the fallback.
+      failing('withReferences', { error: 'reference selection failed' }),
       marker('synth', ran),
     ])
 
-    expect(DEFAULT_ERROR_SEVERITY.guardrail).toBe('recoverable')
+    expect(DEFAULT_ERROR_SEVERITY.withReferences).toBe('recoverable')
     expect(ran).toEqual(['synth'])
     expect(ctx.status).toBe('running')
   })
@@ -251,9 +251,9 @@ describe('the classification map', () => {
    * mutations that went green against the full 3972-test suite:
    * `compactExecution → recoverable`; all four chain-fatal types → recoverable,
    * i.e. the gate switched off entirely; and the five best-effort types →
-   * irrecoverable, i.e. a warning ending every turn. Only `guardrail` and
-   * `simpleLoop` were asserted at all, and only in one direction, because two
-   * behaviour tests happened to name them.
+   * irrecoverable, i.e. a warning ending every turn. Only two types were
+   * asserted at all, and only in one direction, because two behaviour tests
+   * happened to name them.
    *
    * The rule each value answers is the owner's, stated on the map itself:
    *
@@ -282,10 +282,8 @@ describe('the classification map', () => {
     'compactIntent', // leaves intent unset; the actor falls back to the raw message
     'planner', // clears the plan; the loop runs unplanned
     'retriever', // empty matches; the compactExecution answers from the rest
-    'guardrail', // a `warn` rail records an `error` event BY DESIGN
     'judge', // advisory ranking; "no candidates" is a normal outcome
     'parallel', // per-branch; the surviving branches are what the chain is for
-    'hook', // costs the side effect, never the answer
     'withReferences', // the inner pattern ran without curated prior results
   ] as const
 

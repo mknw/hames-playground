@@ -84,8 +84,6 @@ Every combinator takes patterns and returns a pattern, so they nest freely:
 | `chain` / `harness`  | run patterns in order; `harness` is the top-level entry that stops on irrecoverable error |
 | `routes`             | dispatch on `data.route` (set by `router`); pass-through on the `'user'` route            |
 | `parallel`           | run patterns concurrently, merge their event sets                                         |
-| `guardrail`          | input/execution/output rails plus circuit breakers around a pattern                       |
-| `hook`               | fire side effects on lifecycle events; supports background fire-and-forget                |
 | `withReferences`     | attach the relevant results of earlier turns at pattern ingress, expandable on demand     |
 | `withInjectionGuard` | neutralize untrusted tool output before a controller reads it                             |
 
@@ -131,12 +129,12 @@ const agent = harness(configurePattern('announce', announce))
 
 ### The wrapper discipline
 
-A **wrapper** — `guardrail`, `hook`, `withReferences`, the router's dispatch —
-runs a child pattern inside a **child scope** so the child's events are
-delimited by `pattern_enter` / `pattern_exit` and can be committed or discarded
-as a unit. There is no public helper for this yet (a `runChild` is planned);
-today you mirror the five in-tree wrappers, of which `patterns/with-references.server.ts`
-is the reference:
+A **wrapper** — `withReferences`, the router's dispatch — runs a child pattern
+inside a **child scope** so the child's events are delimited by `pattern_enter` /
+`pattern_exit` and can be committed or discarded as a unit. There is no public
+helper for this yet (a `runChild` is planned); today you mirror the three
+in-tree wrappers, of which `patterns/with-references.server.ts` is the
+reference:
 
 ```typescript
 import { createScope, createEvent } from '@hames/harness-patterns'

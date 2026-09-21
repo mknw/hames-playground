@@ -38,7 +38,10 @@ import { WarmPool } from '../warm-pool.server'
 import { SandboxScheduler } from '../scheduler.server'
 import { AttachmentTable } from '../attachment-table.server'
 import { DockerBackend } from '../docker-backend.server'
-import { harnessUsesSyncWorkspace } from '@hames/harness-patterns/pattern-capabilities'
+import {
+  declaresWorkspaceSync,
+  harnessUsesSyncWorkspace,
+} from '@hames/harness-patterns/pattern-capabilities'
 import type {
   ComputeBackend,
   HealthStatus,
@@ -609,35 +612,61 @@ describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
     expect(wrapped.children).toEqual([inner])
   })
 
-  it('stamps sandboxSyncWorkspace when id + syncWorkspace are both set', () => {
+  it('declares workspaceSync when id + syncWorkspace are both set', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
     const wrapped = withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner)
-    expect((wrapped.config as { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace).toBe(true)
+    expect(wrapped.capabilities?.workspaceSync).toBe(true)
     // Detectable by the capability walker (the registry's agentUsesSyncWorkspace path).
     expect(harnessUsesSyncWorkspace([wrapped])).toBe(true)
   })
 
-  it('does NOT stamp the marker without syncWorkspace (config stays transparent)', () => {
+  // MUTATION PIN: the field this wrapper WRITES is the field the core probe
+  // READS — one typed contract, not two string literals that agree by luck.
+  // Drop `capabilities` from the wrapper's return and both halves go red; the
+  // probe half is what the `sandboxSyncWorkspace` config key could not pin,
+  // because either side could be renamed alone and still compile.
+  it('MUTATION PIN: the declared capability IS what the core probe reads', () => {
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+    const wrapped = withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner)
+
+    expect(declaresWorkspaceSync(wrapped)).toBe(true)
+    expect(declaresWorkspaceSync(wrapped)).toBe(wrapped.capabilities?.workspaceSync === true)
+    // …and the walker finds it through a nesting wrapper, which is the shape the
+    // Shell's `agentUsesSyncWorkspace` actually meets (routes → withSandbox).
+    expect(harnessUsesSyncWorkspace([{ ...inner, children: [wrapped] }])).toBe(true)
+  })
+
+  // The capability is a SIBLING field, so the wrapper is config-transparent —
+  // `pattern.config` is the inner pattern's own object, identity included. The
+  // `sandboxSyncWorkspace` key it replaced was carried on a CLONE of that
+  // config, i.e. transparency was broken for precisely the durable agents.
+  it('leaves the wrapped pattern`s config untouched, by identity, even when declaring', () => {
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+    const wrapped = withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner)
+    expect(wrapped.config).toBe(inner.config)
+    expect(inner.capabilities).toBeUndefined()
+  })
+
+  it('does NOT declare it without syncWorkspace (config stays transparent)', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
     const wrapped = withSandbox({ backend, id: 'sess-1' })(inner)
-    expect(
-      (wrapped.config as { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace,
-    ).toBeUndefined()
+    expect(wrapped.capabilities).toBeUndefined()
     expect(wrapped.config).toEqual(inner.config)
     expect(harnessUsesSyncWorkspace([wrapped])).toBe(false)
   })
 
-  it('does NOT stamp the marker for syncWorkspace without an id (a no-op at runtime)', () => {
+  it('does NOT declare it for syncWorkspace without an id (a no-op at runtime)', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const wrapped = withSandbox({ backend, syncWorkspace: true })(inner)
-    expect(
-      (wrapped.config as { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace,
-    ).toBeUndefined()
+    expect(wrapped.capabilities).toBeUndefined()
     expect(wrapped.config).toEqual(inner.config)
+    expect(harnessUsesSyncWorkspace([wrapped])).toBe(false)
     warn.mockRestore()
   })
 

@@ -136,17 +136,17 @@ describe('retriever', () => {
     expect(pattern.estimateTurns?.({} as never)).toBe(0)
   })
 
-  it('stamps backendKinds on its resolved config (the seam pattern-capabilities reads)', async () => {
+  it('declares its backends as a typed capability (the seam pattern-capabilities reads)', async () => {
     const { retriever, rewrite } = await load()
     const pattern = retriever({
       rewrite,
       backends: [mockBackend('redis', []), mockBackend('supabase', [])],
       patternId: PATTERN_ID,
     })
-    expect((pattern.config as { backendKinds?: string[] }).backendKinds).toEqual([
-      'redis',
-      'supabase',
-    ])
+    expect(pattern.capabilities?.retrievalBackends).toEqual(['redis', 'supabase'])
+    // …and it stays OFF the config: the capability is a sibling field, so a
+    // config comparison between two retrievers is about their config only.
+    expect(pattern.config).not.toHaveProperty('backendKinds')
   })
 
   it('uses the raw last user message as the query by default (ignores scope.data.intent)', async () => {

@@ -8,7 +8,7 @@
     "postinstall": "find node_modules ../node_modules -path '*/node-pty/prebuilds/*/spawn-helper' -exec chmod +x {} + 2>/dev/null || true",
     "predev": "node scripts/check-workspace-links.mjs && pnpm baml-generate",
     "dev": "vinxi dev --port 3444",
-    "predev:exposed": "pnpm baml-generate",
+    "predev:exposed": "node scripts/check-workspace-links.mjs && pnpm baml-generate",
     "dev:exposed": "vinxi dev --port 3444 --host 0.0.0.0",
     "build": "pnpm baml-generate & vinxi build",
     "start": "vinxi start",

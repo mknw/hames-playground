@@ -950,12 +950,12 @@ withReferences(simpleLoop(createLoopControllerAdapter(tools.neo4j), tools.neo4j,
 
 **Config:**
 
-| Field      | Type                 | Default                            | Notes                                                 |
-| ---------- | -------------------- | ---------------------------------- | ----------------------------------------------------- |
-| `scope`    | `'self' \| 'global'` | `'global'`                         | `'self'` = only the wrapper's own `patternId`.        |
-| `source`   | `string \| string[]` | —                                  | Explicit `patternId` allow-list. Overrides `scope`.   |
-| `maxRefs`  | `number`             | `5`                                | Cap on attached refs after selection.                 |
-| `selector` | `SelectorFn`         | REQUIRED                           | The BAML-backed one (`bamlPatterns().selector`), or a deterministic policy for tests, evals, or deterministic policies. |
+| Field      | Type                 | Default    | Notes                                                                                                                   |
+| ---------- | -------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `scope`    | `'self' \| 'global'` | `'global'` | `'self'` = only the wrapper's own `patternId`.                                                                          |
+| `source`   | `string \| string[]` | —          | Explicit `patternId` allow-list. Overrides `scope`.                                                                     |
+| `maxRefs`  | `number`             | `5`        | Cap on attached refs after selection.                                                                                   |
+| `selector` | `SelectorFn`         | REQUIRED   | The BAML-backed one (`bamlPatterns().selector`), or a deterministic policy for tests, evals, or deterministic policies. |
 
 **Skip optimizations** — the selector is bypassed when:
 
@@ -1184,7 +1184,8 @@ interface RetrieverBackend {
    (`tool: 'retriever'`) — the same channel `compactExecution` reads via
    `view.fromLastPattern()`.
 
-Framework-pure: concrete backends live app-side (`app/src/lib/retriever/` —
+Framework-pure: the concrete backends live in this package's `retriever/` behind
+the explicit `./retriever` subpath, opt-in like the stash (core-absorb PR-2 —
 `createRedisBackend` is live; `createSupabaseBackend` is a deferred stub). The
 resolved config carries a `backendKinds: string[]` marker so
 `harnessHasRedisRetriever` (pattern-capabilities) can gate the Data Stash's

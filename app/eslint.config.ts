@@ -10,6 +10,10 @@ export default tseslint.config(
   // only when `ignores` is the sole key in the object.
   {
     ignores: [
+      // `app/baml_client/` can no longer exist (one corpus, committed client in
+      // packages/harness-baml). Kept deliberately — it is the load-bearing one
+      // of the three: a stale local copy would otherwise be linted as source.
+      // See PR #376 §11.
       'baml_client/**',
       '.output/**',
       '.vinxi/**',

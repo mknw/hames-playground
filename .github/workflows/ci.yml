@@ -47,9 +47,11 @@ jobs:
       # There is no generate step any more: the ONE BAML corpus lives in
       # `packages/harness-baml/baml_src` and its `baml_client/` is COMMITTED
       # beside it, so a checkout already has the generated client. A client
-      # that drifts from that corpus is caught by the app-path e2e layer's
-      # fake-fidelity scenario rather than papered over by regenerating on the
-      # way in.
+      # that drifts from that corpus is caught by `baml-version-check.test.ts`
+      # in the Test step below — which is IN this gate — rather than papered
+      # over by regenerating on the way in. (The app-path e2e layer has its own
+      # client-vs-sources pin, but this workflow never invokes that layer, so it
+      # is not what makes drift a CI failure.)
       - run: pnpm install --frozen-lockfile
         working-directory: .
 

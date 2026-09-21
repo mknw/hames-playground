@@ -335,6 +335,12 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
 
     // One call site, bounded by the guarded arm.
     //
+    // Scanned on RAW source, deliberately unlike `one-baml-corpus.test.ts`,
+    // which strips comments first. A doc comment spelling `installDevFakeInference(`
+    // would redden this — a false positive, but a LOUD one that names the line,
+    // where stripping risks the opposite trade on the assertion that matters
+    // most in this file.
+    //
     // This used to be "no LINE begins with the call", a proxy for "no bare
     // statement" — and the proxy broke on formatting alone: when the dynamic
     // import moved to the package specifier the guarded expression no longer

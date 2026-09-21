@@ -293,7 +293,7 @@ Inject `[REF: ev-abc summary: ...]` directly into the user message string. Rejec
 
 - Cross-session reference reuse (long-term memory).
 - Vector-similarity pre-filtering as cheap heuristic (good v2 optimization).
-- "Ask user for confirmation when budget exceeded" (a separate guardrail-style pattern).
+- "Ask user for confirmation when budget exceeded" (a separate approval-gate pattern).
 - Refactoring `priorTurnCount` (orthogonal — the existing turn-window mechanism stays as a different feature).
 
 ---

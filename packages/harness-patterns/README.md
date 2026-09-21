@@ -139,7 +139,7 @@ package, in buildable prose with every snippet typecheck-pinned.
 | **Views & scopes**    | A view queries the log (by pattern, type, recency); a pattern's scope declares its slice once, so old detail expires by itself     |
 | **Carrying data**     | `withReferences` hands a pattern the relevant results of earlier turns, expandable on demand · `retriever` searches a vector store |
 | **Compaction**        | `compactExecution` turns the accumulated events into the answer · `compactIntent` rewrites the request into a brief                |
-| **Guards**            | `withInjectionGuard` neutralizes untrusted tool output before a controller reads it · `guardrail` · `hook`                         |
+| **Guards**            | `withInjectionGuard` neutralizes untrusted tool output before a controller reads it                                                |
 | **Composition**       | `chain` · `harness` · `continueSession` · `resumeHarness`                                                                          |
 | **Leaves**            | BAML adapter factories for controllers, critics and synthesizers · MCP tools via `Tools()` and `callTool`                          |
 

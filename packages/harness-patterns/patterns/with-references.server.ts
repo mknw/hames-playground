@@ -269,7 +269,7 @@ export function withReferences<T>(
       ;(scope.data as { attachedRefs?: PriorResult[] }).attachedRefs = toPriorResults(attached)
 
       // 5. Dispatch to inner pattern with a child scope so its events are
-      //    surrounded by pattern_enter/exit. Mirrors guardrail/hook wrapping.
+      //    surrounded by pattern_enter/exit. Mirrors `chain`'s per-step wrapping.
       const childScope = createScope<T>(
         wrappedPattern.config.patternId ?? wrappedPattern.name,
         scope.data,

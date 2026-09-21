@@ -99,17 +99,6 @@ describe('estimateTurns', () => {
     expect(par.estimateTurns?.(settings)).toBe(6)
   })
 
-  it('hook: 0 when background, delegates otherwise', async () => {
-    const { hook } = await import('@hames/harness-patterns/patterns/hook.server')
-    const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
-
-    const inner = asAny(simpleLoop(stubController(), [], { patternId: 'inner', maxTurns: 4 }))
-    const bg = hook(inner, { trigger: 'session_close', background: true })
-    const sync = hook(inner, { trigger: 'session_close' })
-    expect(bg.estimateTurns?.(settings)).toBe(0)
-    expect(sync.estimateTurns?.(settings)).toBe(4)
-  })
-
   it('chain: sums children', async () => {
     const { chain } = await import('@hames/harness-patterns/patterns/chain.server')
     const { router, routes } = await import('@hames/harness-patterns/patterns/router.server')

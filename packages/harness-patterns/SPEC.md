@@ -646,31 +646,6 @@ parallel<SimpleLoopData & Record<string, unknown>>([
 3. Fulfilled branches: events wrapped with `pattern_enter` / `pattern_exit` markers, then merged into parent scope
 4. Rejected branches: tracked as `error` events, don't block other branches
 
-### `guardrail(pattern, config)`
-
-Wrap a pattern with validation rails (input → execution → output) and optional circuit breaker.
-
-```typescript
-interface GuardrailConfig extends PatternConfig {
-  rails: Rail[]
-  circuitBreaker?: { maxFailures: number; windowMs: number; cooldownMs: number }
-}
-```
-
-**How it works:**
-
-1. Input rails run before the pattern — can block or redact the input
-2. The inner pattern executes; its events are wrapped with `pattern_enter` / `pattern_exit`
-3. Output rails run after — can warn, retry, or block on bad results
-4. Circuit breaker (redis-backed) trips after N failures in a rolling time window
-
-**Two caveats before you reach for it** (they are why `withInjectionGuard` is a
-separate primitive rather than a rail): rails declared `phase: 'execution'` are
-never dispatched — only `'input'` and `'output'` are filtered and run, so the
-shipped `pathAllowlistRail` is dead code — and input rails read
-`scope.data.input`, which nothing in the framework populates, so `piiScanRail`
-always scans `''`.
-
 ### `withInjectionGuard(config)(pattern)`
 
 Neutralize prompt injection carried in **untrusted tool-result content** before
@@ -912,33 +887,6 @@ definition, deliberately not in a shared default):
 | `search`        | `web` (that route only)                      | `neo4j` — our own graph |
 | `microsoft-365` | `graph`                                      | —                       |
 | `retriever`     | `web` (namespace) + `retriever` (exact name) | `neo4j`                 |
-
-> Compare [`guardrail()`](#guardrailpattern-config): that pattern's output rails
-> run only AFTER the inner pattern completes, and a `RailResult` can block, warn
-> or retry but never REWRITE content — so it cannot stop injection mid-loop.
-> The two compose; they solve different problems.
-
-### `hook(pattern, config)`
-
-Wrap a pattern as a lifecycle hook. Optionally runs in the background without blocking the main chain.
-
-```typescript
-interface HookConfig extends PatternConfig {
-  trigger: 'session_close' | 'error' | 'approval_timeout' | 'custom'
-  background?: boolean // fire-and-forget via queueMicrotask
-}
-
-const distillHook = hook(distillChain, {
-  patternId: 'session-close-hook',
-  trigger: 'session_close',
-  background: true,
-})
-```
-
-**How it works:**
-
-- `background: true` — schedules the inner pattern via `queueMicrotask` and returns immediately
-- `background: false` (default) — runs synchronously; inner events are wrapped with `pattern_enter` / `pattern_exit`
 
 ### `withReferences(pattern, config)`
 
@@ -1494,7 +1442,7 @@ Two levels, and the finer one wins:
 | `ErrorEventData.severity`                                               | this FAILURE                                              | always, and it overrides the pattern |
 
 The event level exists because a pattern that is recoverable in general can hit
-something it cannot come back from. Three do today, and they are all the same
+something it cannot come back from. Two do today, and they are the same
 shape — _this run produced nothing for a later pattern to work with_:
 
 - `simpleLoop` / `actorCritic` handed a **collapsed tool surface** (the gateway
@@ -1502,11 +1450,6 @@ shape — _this run produced nothing for a later pattern to work with_:
   iteration can bring them back. See `gateway-health.server.ts` — and note the
   guard fires on an amputated list as well as an empty one, because `listTools`
   degrades to the app-side tools rather than to `[]`.
-- `guardrail` when an input rail **blocks** or the **circuit breaker trips**.
-  Both `return scope` without running the wrapped pattern, so the execution the
-  chain is composing from does not exist. The pattern default stays
-  `recoverable`, which is correct for the case it was written against: an output
-  rail with `action: 'warn'` records an `error` event BY DESIGN.
 - `parallel` when **no branch survived**, and when the fan-out itself throws.
   The default is right while one branch came back — the survivors are what the
   rest of the chain is for — and says nothing about zero.
@@ -1610,8 +1553,8 @@ transformed into prompt-friendly types. The table below shows which harness
 | `critic_result`      | `CriticResultEventData`                                                                                                                | _(embedded in `Attempt.feedback`)_                      | actorCritic                                                   |
 | `user_message`       | `UserMessageEventData`                                                                                                                 | `Message { role, content }`                             | router (history)                                              |
 | `assistant_message`  | `AssistantMessageEventData`                                                                                                            | `Message { role, content }`                             | router (history)                                              |
-| `pattern_enter`      | `PatternEnterEventData`                                                                                                                | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
-| `pattern_exit`       | `PatternExitEventData`                                                                                                                 | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail`   |
+| `pattern_enter`      | `PatternEnterEventData`                                                                                                                | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`      |
+| `pattern_exit`       | `PatternExitEventData`                                                                                                                 | _(not sent to BAML)_                                    | `chain` + wrapper patterns: `parallel`, `withReferences`      |
 | `approval_request`   | `ApprovalRequestEventData`                                                                                                             | _(not sent to BAML)_                                    | (reserved — no active emitter)                                |
 | `approval_response`  | `ApprovalResponseEventData`                                                                                                            | _(not sent to BAML)_                                    | (reserved — no active emitter)                                |
 | `error`              | `ErrorEventData`                                                                                                                       | _(read via `view.hasErrors()`)_                         | compactExecution (error context), harness error handling      |
@@ -1939,9 +1882,7 @@ harness-baml/                            # The BAML companion module (Lane A6) �
     ├── actorCritic.server.ts   # Generate-evaluate loop; emits callId (+ batchId) on tool pairs
     ├── judge.server.ts         # Evaluation pattern for quality gates
     ├── parallel.server.ts      # Concurrent branches; wraps each branch with pattern_enter/exit
-    ├── guardrail.server.ts     # Rail validation; wraps inner events with pattern_enter/exit (NB: phase:'execution' rails are never dispatched)
     ├── withInjectionGuard.server.ts # ALS wrapper attaching the injection guard; emits content_sanitized
-    ├── hook.server.ts          # Lifecycle hook; wraps inner events with pattern_enter/exit
     ├── chain.server.ts         # Sequential composition; accepts onEvent? for SSE streaming
     ├── compactExecution.server.ts   # Final response synthesis; skips BAML for DIRECT_RESPONSE_ROUTE
     ├── compactIntent.server.ts # Rewrites latest message → scope.data.intent for router-less actors; emits intent_compacted

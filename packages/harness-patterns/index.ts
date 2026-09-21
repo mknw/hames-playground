@@ -174,11 +174,6 @@ export {
   configurePattern,
   parallel,
   judge,
-  guardrail,
-  piiScanRail,
-  pathAllowlistRail,
-  driftDetectorRail,
-  hook,
   withInjectionGuard,
   createInjectionGuard,
   type InjectionGuardConfig,
@@ -197,13 +192,6 @@ export {
   type JudgeConfig,
   type JudgeData,
   type EvaluatorFn,
-  type Rail,
-  type RailResult,
-  type RailContext,
-  type GuardrailConfig,
-  type CircuitBreakerConfig,
-  type HookConfig,
-  type HookTrigger,
 } from './patterns'
 
 // EventView

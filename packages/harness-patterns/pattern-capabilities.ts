@@ -3,8 +3,8 @@
  *
  * Pure helpers (no server-only deps) that walk the `children` of a
  * `ConfiguredPattern[]` to answer capability questions about a harness without
- * running it. Wrapping combinators (`chain`, `routes`, `parallel`, `guardrail`,
- * `hook`, `withReferences`) expose their sub-patterns via
+ * running it. Wrapping combinators (`chain`, `routes`, `parallel`,
+ * `withReferences`) expose their sub-patterns via
  * `ConfiguredPattern.children`; leaves omit it. Execution never reads `children`
  * — it's introspection-only.
  *

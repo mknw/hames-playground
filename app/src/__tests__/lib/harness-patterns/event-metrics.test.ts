@@ -218,7 +218,7 @@ describe('computeEventMetrics', () => {
     // pinned the panel, the summary bar and the dashboard all dropping the `≥`
     // for a figure that was 99.9% wall-clock.
     expect(m.timePricedAttempts).toBe(1)
-    const { isTimePricedStep } = await import('../../../lib/metrics/aggregate')
+    const { isTimePricedStep } = await import('@hames/harness-patterns/metrics/aggregate')
     expect(isTimePricedStep(m)).toBe(true)
     // Both audit fields survive the mix rather than only the last basis'.
     expect(m.timeRate).toEqual({
@@ -309,7 +309,7 @@ describe('computeEventMetrics', () => {
 
   it('a purely token-priced step carries no floor marker at all', async () => {
     const { computeEventMetrics } = await import('@hames/harness-baml/baml-adapters.server')
-    const { isTimePricedStep } = await import('../../../lib/metrics/aggregate')
+    const { isTimePricedStep } = await import('@hames/harness-patterns/metrics/aggregate')
     const collector = fakeCollector([
       { calls: [apiCall('AnthropicSonnet5', { input_tokens: 100, output_tokens: 50 })] },
     ])

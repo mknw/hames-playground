@@ -148,6 +148,14 @@ jobs:
         working-directory: packages/connectors
         run: pnpm test
 
+      # Same co-located-suite arrangement for @hames/harness-patterns (the
+      # core-absorb PR-1): the observability projections + metrics fold moved
+      # with their tests into the package's own `__tests__/` tree. Node
+      # environment, no app fixtures — see the package's vitest.config.ts.
+      - name: Package tests (@hames/harness-patterns)
+        working-directory: packages/harness-patterns
+        run: pnpm test
+
       # Same story for the sandbox package (the @hames/sandbox extraction): the
       # thirteen suites that moved with the code run from their workspace
       # member. They are hermetic — the docker CLI and the MCP SDK are mocked at

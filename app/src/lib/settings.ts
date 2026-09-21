@@ -14,6 +14,7 @@ import {
   type HarnessRuntimeConfig,
 } from '@hames/harness-patterns/runtime-config'
 import type { CostBasis } from '@hames/harness-patterns'
+import { DEFAULT_EUR_PER_USD } from '@hames/harness-patterns/types'
 // Same client-safety rule as the package subpath above: `@hames/sandbox/settings`
 // is types + plain constants, so importing it here never drags the Docker
 // backend (or any `node:` module) into the browser bundle.
@@ -330,10 +331,11 @@ export const CACHE_READ_MULT = 0.1
  * `EUR_PER_USD` (see `cost-rates.server.ts`) so an operator can put the rate
  * their finance team uses in without a rebuild.
  *
- * 0.86 ≈ EUR/USD 1.16, the rate around 2026-08. Update it by hand; the number
- * it feeds is labelled an estimate everywhere it renders.
+ * The constant itself lives in `@hames/harness-patterns` (`types.ts`) since the
+ * core-absorb move: the event-metrics fold moved with it, and one definition is
+ * re-exported here so existing importers are unchanged.
  */
-export const DEFAULT_EUR_PER_USD = 0.86
+export { DEFAULT_EUR_PER_USD } from '@hames/harness-patterns/types'
 
 /**
  * EUR per hour the self-hosted GPU is awake — the owner's figure for the Verda

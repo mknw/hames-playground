@@ -483,7 +483,7 @@ Displays the full agent event timeline:
 - **LLM call detail** (events with `llmCall`): two-tab layout — **Prompt** | **Output**. The Prompt tab uses an Ark UI Accordion with three sections: _Template_ (Jinja source with `{{ vars }}` and `{% if %}` / `{% for %}` blocks, sourced from `baml_src/`), _Variables_ (function inputs), _Rendered messages_ (HTTP body parsed into role/content bubbles via `ParsedPromptView`). Sourced from `LLMCallData` in `baml-adapters.server.ts` — `httpRequest.body` is read via `body.text()` because BAML returns an `HttpBody` class instance, not a plain object.
 - **Save button** (floating, bottom-right): calls `showSaveFilePicker()` to save the full `UnifiedContext` as a named JSON file; falls back to `<a download>` on browsers without File System Access API
 - Requires `context?: UnifiedContext` prop threaded down from `index.tsx` → `SupportPanel` → `ObservabilityPanel`
-- **Split across files** (#226 B5): `ObservabilityPanel.tsx` is the composition root and the only public export. The pure projections live in `app/src/lib/observability/` — `projection.ts` (`buildTimelineItems()`, `getEventPreview()`, `getEventLane()`), `prompt-parse.ts` (`parsePromptBody()`, `flattenContent()`, `formatParamValue()`), `token-totals.ts` (`foldTokenTotals()`, `fmtTok()`, `fmtEur()` — the app's one price formatter) and `event-styles.ts` (icon/colour tables, `getPatternColor()`) — and the rendering in `components/ark-ui/observability/` (`SummaryBar`, `TimelineRows`, `EventDetail`, `LLMCallTabs`, `PromptView`)
+- **Split across files** (#226 B5): `ObservabilityPanel.tsx` is the composition root and the only public export. The pure projections live in `@hames/harness-patterns` since the core-absorb move — `observability/projection.ts` (`buildTimelineItems()`, `getEventPreview()`, `getEventLane()`), `observability/prompt-parse.ts` (`parsePromptBody()`, `flattenContent()`, `formatParamValue()`), `observability/token-totals.ts` (`foldTokenTotals()`, `fmtTok()`, `fmtEur()` — the app's one price formatter) — while `app/src/lib/observability/event-styles.ts` stays app-side (it reads the app-root `pattern-colors.json`), and the rendering in `components/ark-ui/observability/` (`SummaryBar`, `TimelineRows`, `EventDetail`, `LLMCallTabs`, `PromptView`)
 
 ### Theme System
 
@@ -614,12 +614,12 @@ A second page — `routes/dashboard.tsx`, reached from the monitoring icon in th
 nav (the old "Home"/"About" text links are gone; the chat _is_ `/`). It shows
 token, cache and cost aggregates across everything the signed-in user has run.
 
-| Layer  | File                              | Role                                                                                                                                                                                        |
-| ------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Fold   | `lib/metrics/aggregate.ts`        | Pure, client-safe folds over `ContextEvent[]`: `getEventMetrics` (the single accessor for step accounting), `foldEvents`, `aggregateByPattern`, `aggregateByConversation`, `buildDashboard` |
-| Action | `lib/metrics/dashboard.server.ts` | `getMetricsDashboard(topN)` — `requireUser()`, load, fold, return aggregates only (raw events never cross the wire)                                                                         |
-| Query  | `lib/db/conversations.server.ts`  | `listConversationEvents(userId)` projects `context -> 'events'` in SQL (same 200-row ceiling as the sidebar list)                                                                           |
-| Page   | `routes/dashboard.tsx`            | Global cards + input-composition bar, per-pattern table, top-N conversations. No chart library — bars are divs                                                                              |
+| Layer  | File                                        | Role                                                                                                                                                                                        |
+| ------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fold   | `@hames/harness-patterns/metrics/aggregate` | Pure, client-safe folds over `ContextEvent[]`: `getEventMetrics` (the single accessor for step accounting), `foldEvents`, `aggregateByPattern`, `aggregateByConversation`, `buildDashboard` |
+| Action | `lib/metrics/dashboard.server.ts`           | `getMetricsDashboard(topN)` — `requireUser()`, load, fold, return aggregates only (raw events never cross the wire)                                                                         |
+| Query  | `lib/db/conversations.server.ts`            | `listConversationEvents(userId)` projects `context -> 'events'` in SQL (same 200-row ceiling as the sidebar list)                                                                           |
+| Page   | `routes/dashboard.tsx`                      | Global cards + input-composition bar, per-pattern table, top-N conversations. No chart library — bars are divs                                                                              |
 
 Numbers come from `event.metrics` (#122 / PR #130) and **only** from there:
 `llmCall.usage` has no cache-write bucket and no cost, so folding it in would
@@ -1017,11 +1017,9 @@ app/
 │       ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
 │       ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
 │       ├── turn-utils.ts           # findLastUserMessageIndex() — the turn boundary
-│       ├── observability/         # Pure event-stream projections behind the timeline
-│       │   ├── projection.ts      # buildTimelineItems(), getEventPreview(), getEventLane()
-│       │   ├── prompt-parse.ts    # parsePromptBody(), flattenContent(), formatParamValue()
-│       │   ├── token-totals.ts    # foldTokenTotals(), fmtTok(), fmtEur()
-│       │   └── event-styles.ts    # eventIconClasses/eventColors tables, getPatternColor()
+│       ├── observability/         # event-styles.ts (icon/colour tables); the pure
+│       │   │                     # projections moved to @hames/harness-patterns/observability
+│       │   └── event-styles.ts   # getPatternColor(), eventColors, eventIconClasses
 │       ├── neo4j/
 │       │   ├── queries.ts         # runManualCypher() (read-only), getNodeProperties()
 │       │   └── graph-edit.server.ts # createGraphNode()/linkGraphNodes()/setGraphNodeProperty() — authenticated, intent-shaped graph writes

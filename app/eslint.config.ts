@@ -34,6 +34,12 @@ export default tseslint.config(
     files: ['**/*.{ts,tsx}'],
     ...solid.configs['flat/typescript'],
   },
+  // scripts/ runs under plain node, outside the TS configs' TS-extension
+  // globals — name its globals or `pnpm lint` fails on no-undef.
+  {
+    files: ['scripts/**/*.{js,mjs,cjs}'],
+    languageOptions: { globals: { console: 'readonly', process: 'readonly' } },
+  },
   unocss,
   {
     files: [

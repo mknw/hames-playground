@@ -85,10 +85,13 @@ const data = withSandbox({
 })(loop);
 
 return [
-  router({ basic: '…', image_processing: '…', data: '…' }, { route: baml.router }),
+  router(
+    { basic: "…", image_processing: "…", data: "…" },
+    { route: baml.router },
+  ),
   routes({ basic, image_processing: image, data }),
-  compactExecution({ mode: 'thread', synthesize: baml.synthesize }),
-]
+  compactExecution({ mode: "thread", synthesize: baml.synthesize }),
+];
 ```
 
 > **Why the `basic` route is not the ephemeral one any more (#243 follow-up).**
@@ -127,7 +130,7 @@ Why it fits the current primitives (verified in source):
   `withSandbox` fn runs → one container per turn, no fan-out.
 - **Capabilities flow through composition.** `routes()` exposes
   `children: Object.values(patternMap)` (`router.server.ts:277`) and `withSandbox`
-  exposes `children:[pattern]` + stamps its `syncWorkspace` marker — so
+  exposes `children:[pattern]` + declares `capabilities.workspaceSync` — so
   `agentUsesSyncWorkspace` / `agentUsesRedisRetriever` work on a hand-composed agent.
 
 ## Ephemerality is orthogonal to flavour

@@ -16,8 +16,7 @@
  * | continues it (vs. fresh run) | same agent  | never     | resumes  |
  * | pre-seeds a missing row      | yes (#105)  | no        | no       |
  * | `runWithRequestContext`      | yes         | yes       | yes      |
- * | `runWithSettings`            | yes         | yes       | yes      |
- * | `runWithInferenceTier`       | yes         | yes       | yes      |
+ * | the run frame (all 5 slots)  | yes         | yes       | yes      |
  * | first-turn title generation  | yes         | no        | no       |
  * | `saveSession`                | yes         | yes       | yes      |
  * | `compactBulkData` + re-save  | yes         | yes       | yes      |
@@ -58,8 +57,9 @@ import {
   type SessionData,
 } from './session.server'
 import { runWithRequestContext } from './request-user.server'
-import { runWithSettings } from '../settings-context.server'
-import { activeInferenceTier, runWithInferenceTier } from '@hames/harness-baml/clients.server'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { activeInferenceTier, assertInferenceTier } from '@hames/harness-baml/clients.server'
+import { DEFAULT_SETTINGS } from '../settings'
 import { bamlPatterns } from '@hames/harness-baml'
 import type { InferenceTier } from '../inference/config.server'
 import { resolveConversationTier } from '../inference/tier.server'
@@ -197,17 +197,48 @@ export async function runTurnAndPersist(
       console.error(`[turn] could not read the inference tier for ${sessionId}:`, err)
       return undefined
     })) ?? activeInferenceTier()
+  // Refuse a tier this deployment cannot take, BEFORE anything runs and before
+  // the row below records it. This is the check `runWithInferenceTier` used to
+  // make on the way into its scope; the scope is now core's generic run frame,
+  // which cannot know what 'verda' means, so the fail-closed gate stayed in
+  // `@hames/harness-baml` and the host calls it (issue #374, D1).
+  assertInferenceTier(tier)
+
   // Establish the request scope so pattern closures and app-side tools that
   // need per-conversation context at runtime (a per-conversation allowlist
   // reader, `graph_file_ingest`'s Data Stash target) resolve the right user and
-  // conversation without an explicit parameter. The settings scope is opened
-  // here too, once, so the trailing compaction inherits it — the SSE route used
-  // to fire that off outside the handler's await chain, where
-  // `getRequestSettings()` silently fell back to DEFAULT_SETTINGS and ignored
-  // the user's `maxResultForSummary` (SA-M13).
+  // conversation without an explicit parameter.
+  //
+  // THE RUN FRAME IS OPENED HERE, not at the harness entry point, and the
+  // reason is the work this turn STARTS and does not await. The title agent and
+  // the detached `compactAndSave` below both make describe-tier calls and both
+  // read the user's `maxResultForSummary`; started from inside the frame, they
+  // keep it for their whole continuation. Opened at the entry point instead,
+  // the frame would close when the harness returned and a detached
+  // summarization would silently change provider and budget halfway through a
+  // turn — which is the SA-M13 failure, in the one place it costs a wrong model
+  // rather than a wrong number. Core allows this: `harness()` /
+  // `continueSession` / `resumeHarness` JOIN an open frame instead of opening a
+  // second one, provided they bring no slots of their own, which is why the
+  // three `run` closures in `planTurn` pass neither a frame nor an `onEvent`.
+  //
+  // Three of the frame's five slots are filled here and they replace the three
+  // scopes this function used to stack: `config` was `runWithSettings`,
+  // `inference` was `runWithInferenceTier`, and `live` was the listener
+  // `harness()` opened its own scope for. The app's FULL defaults seed `config`
+  // rather than the library's six knobs, because `with-sandbox.server.ts`
+  // dereferences `.sandbox` unguarded and a bare `HarnessRuntimeConfig` has
+  // none. The other two — `guard` and `transports` — stay empty at run level:
+  // `withInjectionGuard` and `withSandbox` amend the frame per pattern, and the
+  // run-level guard manifest is #242's half of this work.
   return runWithRequestContext({ userId, sessionId }, () =>
-    runWithSettings(req.settings, () =>
-      runWithInferenceTier(tier, async () => {
+    withRunFrame(
+      {
+        config: req.settings ?? DEFAULT_SETTINGS,
+        inference: { tier },
+        ...(req.onEvent ? { live: req.onEvent } : {}),
+      },
+      async () => {
         // The header's warm indicator and the global counters both learn about
         // this turn here — one place, so no entry point can forget. `finally`
         // is load-bearing: a turn that throws must not leave the in-flight
@@ -233,7 +264,7 @@ export async function runTurnAndPersist(
         } finally {
           if (tier === 'verda') endVerdaTurn()
         }
-      }),
+      },
     ),
   )
 }
@@ -309,11 +340,15 @@ function planTurn(req: TurnRequest, loaded: LoadedSession | null): { agentId: st
     const { agentId, serializedContext } = loaded
     return {
       agentId,
-      run: (patterns) => resumeHarness(serializedContext, patterns, req.approved, req.onEvent),
+      // No `onEvent` and no frame: `runTurnAndPersist` already opened the run
+      // frame with the listener in it, and a nested entry that brought slots of
+      // its own would be refused — deliberately, so an inner call can never
+      // replace the enclosing run's guard.
+      run: (patterns) => resumeHarness(serializedContext, patterns, req.approved),
     }
   }
 
-  const { agentId, message, onEvent } = req
+  const { agentId, message } = req
   // Continue only when the stored context belongs to the same agent. If the
   // user switched agent within an existing conversation, treat it as a fresh
   // conversation by ignoring the prior context: the UI is expected to mint a
@@ -324,14 +359,14 @@ function planTurn(req: TurnRequest, loaded: LoadedSession | null): { agentId: st
     const { serializedContext } = loaded
     return {
       agentId,
-      run: (patterns) => continueSession(serializedContext, patterns, message, onEvent),
+      run: (patterns) => continueSession(serializedContext, patterns, message),
     }
   }
 
   const data = req.mode === 'triggered' ? req.data : undefined
   return {
     agentId,
-    run: (patterns) => harness(...patterns)(message, req.sessionId, data, onEvent),
+    run: (patterns) => harness(...patterns)(message, req.sessionId, data),
   }
 }
 

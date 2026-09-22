@@ -318,7 +318,7 @@ describe('the loops refuse to answer without tools', () => {
     const health = await import('@hames/harness-patterns/gateway-health.server')
     health.markGatewayUnreachable('ECONNREFUSED')
     const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
-    const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
+    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
 
     const inVm = {
       id: 'sandbox:degrade-loop',
@@ -331,7 +331,7 @@ describe('the loops refuse to answer without tools', () => {
     const pattern = simpleLoop(controller, [], { patternId: 'sandbox-simple-loop' })
     const { scope, view } = await harness('sandbox-simple-loop')
 
-    await withTransport(inVm, () => pattern.fn(scope, view))
+    await withRunFrame({ transports: [inVm] }, () => pattern.fn(scope, view))
 
     // It got as far as the controller, which is all this case is about.
     expect(controller).toHaveBeenCalled()
@@ -347,7 +347,7 @@ describe('the loops refuse to answer without tools', () => {
     const health = await import('@hames/harness-patterns/gateway-health.server')
     health.markGatewayUnreachable('ECONNREFUSED')
     const { actorCritic } = await import('@hames/harness-patterns/patterns/actorCritic.server')
-    const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
+    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
 
     // The two sandbox agents pass `[]` and get their tools from the VM over
     // `docker exec`. Refusing them on a gateway outage would break the one kind
@@ -365,7 +365,7 @@ describe('the loops refuse to answer without tools', () => {
     const pattern = actorCritic(actor, vi.fn(), [], { patternId: 'sandbox-loop' })
     const { scope, view } = await harness('sandbox-loop')
 
-    await withTransport(inVm, () => pattern.fn(scope, view))
+    await withRunFrame({ transports: [inVm] }, () => pattern.fn(scope, view))
 
     // It got as far as the actor, which is all this case is about.
     expect(actor).toHaveBeenCalled()

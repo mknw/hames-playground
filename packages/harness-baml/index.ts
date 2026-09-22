@@ -42,7 +42,7 @@ export {
   VERDA_CLIENT_BY_ROLE,
   SWITCHED_FUNCTIONS_BY_ROLE,
   TIER_SWITCHED_FUNCTIONS,
-  runWithInferenceTier,
+  assertInferenceTier,
   activeInferenceTier,
   clientOverrideFor,
   configureConsumerClients,

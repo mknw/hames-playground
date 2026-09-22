@@ -30,6 +30,16 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 import { EventEmitter } from 'node:events'
 import { mockAction, mockCriticResult } from './fixtures/baml'
 
@@ -271,7 +281,7 @@ describe('withSandbox(actorCritic) end-to-end — word count', () => {
       input: 'count words in this sentence',
     })
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // 1. Critic-accepted result is the bash stdout (9 words in the sentence).
     expect(result.data.result).toBe(9)

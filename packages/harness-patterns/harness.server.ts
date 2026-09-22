@@ -25,7 +25,7 @@ import {
   setError as setCtxError,
   generateId,
 } from './context.server'
-import { runWithLiveListener } from './live-event-context.server'
+import { withRunFrame, currentRunFrame, type RunFrame } from './run-frame.server'
 import { runtimeConfig } from './runtime-config.server'
 
 assertServerOnImport()
@@ -147,6 +147,39 @@ export interface HarnessData {
   response?: string
 }
 
+/**
+ * THE THREE ENTRY POINTS OPEN THE RUN FRAME (rulings Q17 and D5, issue #374).
+ *
+ * Everything a run needs to be ambient — the injection guard, the scoped tool
+ * transports, the host's budgets, the live listener and the inference tier —
+ * lives in one frame opened here, once, rather than in five stores opened by
+ * five different callers at three different granularities. A package consumer
+ * calling `harness(...patterns)(input)` gets all five without learning that any
+ * of them exists; `runChain` refuses if one of them ever doesn't.
+ *
+ * `frame` is how a host supplies the slots. The live listener is the exception
+ * that is NOT in it: `onEvent` is the ergonomic parameter every caller already
+ * passes, so it is folded into the frame's `live` slot here. A host that opens
+ * its OWN frame (to keep the tier across work it starts but does not await, as
+ * this repo's app does) puts the listener in that frame and passes neither
+ * `frame` nor `onEvent` — because a nested entry joins the open frame and is
+ * refused if it brings slots of its own, which is what stops an inner call
+ * replacing the enclosing run's guard.
+ */
+function enterRun<T>(
+  frame: RunFrame | undefined,
+  onEvent: ((event: ContextEvent) => void) | undefined,
+  fn: (listener: ((event: ContextEvent) => void) | undefined) => Promise<T>,
+): Promise<T> {
+  // Joining an already-open frame: bring nothing, and take the listener the
+  // host put there. Supplying one here would be refused, correctly.
+  if (currentRunFrame() && !frame && !onEvent) {
+    return withRunFrame({}, () => fn(currentRunFrame()?.live?.listener))
+  }
+  const supplied: RunFrame = { ...(frame ?? {}), ...(onEvent ? { live: onEvent } : {}) }
+  return withRunFrame(supplied, () => fn(onEvent ?? currentRunFrame()?.live?.listener))
+}
+
 /** Result from harness including serialized context */
 export interface HarnessResultScoped<T> extends HarnessResult<T> {
   /** Full UnifiedContext (can be serialized for session persistence) */
@@ -186,32 +219,111 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
   sessionId?: string,
   initialData?: Partial<T>,
   onEvent?: (event: ContextEvent) => void,
+  frame?: RunFrame,
 ) => Promise<HarnessResultScoped<T>> {
-  return async (input, sessionId, initialData, onEvent) => {
+  return async (input, sessionId, initialData, onEvent, frame) =>
+    enterRun(frame, onEvent, async (listener) => {
+      const startTime = Date.now()
+
+      // Create UnifiedContext
+      const ctx = createContext<T>(input, initialData as T, sessionId)
+
+      // Project total chain turns upfront so progress UIs can seed themselves
+      // before the first pattern_enter arrives. Inside the frame, because the
+      // projection reads the host's budgets through `runtimeConfig()`.
+      stampChainEstimate(ctx, patterns)
+
+      // Emit the initial user_message live so consumers (e.g. SSE listeners)
+      // see `chainTurnEstimate` before any pattern runs.
+      const initial = ctx.events[ctx.events.length - 1]
+      if (initial?.type === 'user_message' && listener) listener(initial)
+
+      // Where this turn's events start. A fresh context holds only the
+      // user_message, but `settleTurn` takes the boundary from all three entry
+      // points for the same reason — see its docstring.
+      const eventsBefore = ctx.events.length
+
+      try {
+        // Execute patterns using chain inside the run frame, so that any pattern
+        // with `liveEvents: true` streams events to the listener as they happen,
+        // not at commit time.
+        await runChain(ctx, patterns, listener)
+
+        // How this turn ended — one shared decision, see `settleTurn`.
+        const settled = settleTurn(ctx, eventsBefore)
+
+        return {
+          response: settled.response,
+          data: ctx.data,
+          status: settled.status,
+          duration_ms: Date.now() - startTime,
+          context: ctx,
+          serialized: serializeContext(ctx),
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        setCtxError(ctx, msg, 'harness')
+
+        return {
+          response: `Error: ${msg}`,
+          data: ctx.data,
+          status: 'error' as CtxStatus,
+          duration_ms: Date.now() - startTime,
+          context: ctx,
+          serialized: serializeContext(ctx),
+        }
+      }
+    })
+}
+
+/**
+ * Resume a paused harness from serialized context.
+ *
+ * @param serializedContext - The serialized UnifiedContext JSON
+ * @param patterns - The original patterns
+ * @param approved - Whether the action was approved
+ * @returns The resumed result with updated context
+ */
+export async function resumeHarness<
+  T extends HarnessData & Record<string, unknown> & { approved?: boolean },
+>(
+  serializedContext: string,
+  patterns: ConfiguredPattern<T>[],
+  approved: boolean,
+  onEvent?: (event: ContextEvent) => void,
+  frame?: RunFrame,
+): Promise<HarnessResultScoped<T>> {
+  return enterRun(frame, onEvent, async (listener) => {
+    // Restore context from serialized state
+    const ctx = deserializeContext<T>(serializedContext)
+
+    if (ctx.status !== 'paused') {
+      throw new Error('Cannot resume: context is not paused')
+    }
+
     const startTime = Date.now()
 
-    // Create UnifiedContext
-    const ctx = createContext<T>(input, initialData as T, sessionId)
+    // Set approval state and resume
+    ctx.status = 'running'
+    ctx.data = { ...ctx.data, approved }
 
-    // Project total chain turns upfront so progress UIs can seed themselves
-    // before the first pattern_enter arrives.
-    stampChainEstimate(ctx, patterns)
+    // Add approval response event
+    ctx.events.push({
+      id: generateId('ev'),
+      type: 'approval_response',
+      ts: Date.now(),
+      patternId: 'harness',
+      data: { approved },
+    })
 
-    // Emit the initial user_message live so consumers (e.g. SSE listeners)
-    // see `chainTurnEstimate` before any pattern runs.
-    const initial = ctx.events[ctx.events.length - 1]
-    if (initial?.type === 'user_message' && onEvent) onEvent(initial)
-
-    // Where this turn's events start. A fresh context holds only the
-    // user_message, but `settleTurn` takes the boundary from all three entry
-    // points for the same reason — see its docstring.
+    // Where THIS resume's events start — the restored context already holds
+    // every previous turn's, including any error they recorded.
     const eventsBefore = ctx.events.length
 
     try {
-      // Execute patterns using chain inside a live-event frame so that any
-      // pattern with `liveEvents: true` streams events to `onEvent` as they
-      // happen, not at commit time.
-      await runWithLiveListener(onEvent, () => runChain(ctx, patterns, onEvent))
+      // Re-run patterns from the restored (now-running) context. The `approved`
+      // flag rides on ctx.data for a resume-aware gating pattern to consume.
+      await runChain(ctx, patterns, listener)
 
       // How this turn ended — one shared decision, see `settleTurn`.
       const settled = settleTurn(ctx, eventsBefore)
@@ -237,80 +349,7 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
         serialized: serializeContext(ctx),
       }
     }
-  }
-}
-
-/**
- * Resume a paused harness from serialized context.
- *
- * @param serializedContext - The serialized UnifiedContext JSON
- * @param patterns - The original patterns
- * @param approved - Whether the action was approved
- * @returns The resumed result with updated context
- */
-export async function resumeHarness<
-  T extends HarnessData & Record<string, unknown> & { approved?: boolean },
->(
-  serializedContext: string,
-  patterns: ConfiguredPattern<T>[],
-  approved: boolean,
-  onEvent?: (event: ContextEvent) => void,
-): Promise<HarnessResultScoped<T>> {
-  // Restore context from serialized state
-  const ctx = deserializeContext<T>(serializedContext)
-
-  if (ctx.status !== 'paused') {
-    throw new Error('Cannot resume: context is not paused')
-  }
-
-  const startTime = Date.now()
-
-  // Set approval state and resume
-  ctx.status = 'running'
-  ctx.data = { ...ctx.data, approved }
-
-  // Add approval response event
-  ctx.events.push({
-    id: generateId('ev'),
-    type: 'approval_response',
-    ts: Date.now(),
-    patternId: 'harness',
-    data: { approved },
   })
-
-  // Where THIS resume's events start — the restored context already holds
-  // every previous turn's, including any error they recorded.
-  const eventsBefore = ctx.events.length
-
-  try {
-    // Re-run patterns from the restored (now-running) context. The `approved`
-    // flag rides on ctx.data for a resume-aware gating pattern to consume.
-    await runWithLiveListener(onEvent, () => runChain(ctx, patterns, onEvent))
-
-    // How this turn ended — one shared decision, see `settleTurn`.
-    const settled = settleTurn(ctx, eventsBefore)
-
-    return {
-      response: settled.response,
-      data: ctx.data,
-      status: settled.status,
-      duration_ms: Date.now() - startTime,
-      context: ctx,
-      serialized: serializeContext(ctx),
-    }
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error)
-    setCtxError(ctx, msg, 'harness')
-
-    return {
-      response: `Error: ${msg}`,
-      data: ctx.data,
-      status: 'error' as CtxStatus,
-      duration_ms: Date.now() - startTime,
-      context: ctx,
-      serialized: serializeContext(ctx),
-    }
-  }
 }
 
 /**
@@ -326,73 +365,76 @@ export async function continueSession<T extends HarnessData & Record<string, unk
   patterns: ConfiguredPattern<T>[],
   newInput: string,
   onEvent?: (event: ContextEvent) => void,
+  frame?: RunFrame,
 ): Promise<HarnessResultScoped<T>> {
-  // Restore context from serialized state
-  const ctx = deserializeContext<T>(serializedContext)
+  return enterRun(frame, onEvent, async (listener) => {
+    // Restore context from serialized state
+    const ctx = deserializeContext<T>(serializedContext)
 
-  const startTime = Date.now()
+    const startTime = Date.now()
 
-  // Update input and reset status for new turn
-  ctx.input = newInput
-  ctx.status = 'running'
-  ctx.error = undefined
+    // Update input and reset status for new turn
+    ctx.input = newInput
+    ctx.status = 'running'
+    ctx.error = undefined
 
-  // Clear stale fields from previous turn — patterns must produce fresh values.
-  // Errors are event-scoped (read via EventView), and response must be
-  // re-generated by the compactExecution to prevent duplicate messages.
-  if (ctx.data && typeof ctx.data === 'object') {
-    delete (ctx.data as Record<string, unknown>).hasError
-    delete (ctx.data as Record<string, unknown>).errorMessage
-    delete (ctx.data as Record<string, unknown>).response
-  }
+    // Clear stale fields from previous turn — patterns must produce fresh values.
+    // Errors are event-scoped (read via EventView), and response must be
+    // re-generated by the compactExecution to prevent duplicate messages.
+    if (ctx.data && typeof ctx.data === 'object') {
+      delete (ctx.data as Record<string, unknown>).hasError
+      delete (ctx.data as Record<string, unknown>).errorMessage
+      delete (ctx.data as Record<string, unknown>).response
+    }
 
-  // Add new user message event
-  ctx.events.push({
-    id: generateId('ev'),
-    type: 'user_message',
-    ts: Date.now(),
-    patternId: 'harness',
-    data: { content: newInput },
+    // Add new user message event
+    ctx.events.push({
+      id: generateId('ev'),
+      type: 'user_message',
+      ts: Date.now(),
+      patternId: 'harness',
+      data: { content: newInput },
+    })
+
+    // Re-project chain turns for this turn — settings or pattern selection may
+    // have changed between turns.
+    stampChainEstimate(ctx, patterns)
+
+    // Emit the new user_message live so consumers see the fresh estimate.
+    const continuedMsg = ctx.events[ctx.events.length - 1]
+    if (continuedMsg?.type === 'user_message' && listener) listener(continuedMsg)
+
+    // Where THIS turn's events start — the restored context already holds every
+    // previous turn's, including any error they recorded.
+    const eventsBefore = ctx.events.length
+
+    try {
+      // Execute patterns
+      await runChain(ctx, patterns, listener)
+
+      // How this turn ended — one shared decision, see `settleTurn`.
+      const settled = settleTurn(ctx, eventsBefore)
+
+      return {
+        response: settled.response,
+        data: ctx.data,
+        status: settled.status,
+        duration_ms: Date.now() - startTime,
+        context: ctx,
+        serialized: serializeContext(ctx),
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      setCtxError(ctx, msg, 'harness')
+
+      return {
+        response: `Error: ${msg}`,
+        data: ctx.data,
+        status: 'error' as CtxStatus,
+        duration_ms: Date.now() - startTime,
+        context: ctx,
+        serialized: serializeContext(ctx),
+      }
+    }
   })
-
-  // Re-project chain turns for this turn — settings or pattern selection may
-  // have changed between turns.
-  stampChainEstimate(ctx, patterns)
-
-  // Emit the new user_message live so consumers see the fresh estimate.
-  const continuedMsg = ctx.events[ctx.events.length - 1]
-  if (continuedMsg?.type === 'user_message' && onEvent) onEvent(continuedMsg)
-
-  // Where THIS turn's events start — the restored context already holds every
-  // previous turn's, including any error they recorded.
-  const eventsBefore = ctx.events.length
-
-  try {
-    // Execute patterns
-    await runWithLiveListener(onEvent, () => runChain(ctx, patterns, onEvent))
-
-    // How this turn ended — one shared decision, see `settleTurn`.
-    const settled = settleTurn(ctx, eventsBefore)
-
-    return {
-      response: settled.response,
-      data: ctx.data,
-      status: settled.status,
-      duration_ms: Date.now() - startTime,
-      context: ctx,
-      serialized: serializeContext(ctx),
-    }
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error)
-    setCtxError(ctx, msg, 'harness')
-
-    return {
-      response: `Error: ${msg}`,
-      data: ctx.data,
-      status: 'error' as CtxStatus,
-      duration_ms: Date.now() - startTime,
-      context: ctx,
-      serialized: serializeContext(ctx),
-    }
-  }
 }

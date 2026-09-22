@@ -75,15 +75,19 @@ describe('the app-tool transport', () => {
   it('is registered as a PROCESS transport, so a scoped one of the same name wins', async () => {
     await import('../../../lib/app-tools/index.server')
     const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
-    const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
+    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
 
     const inVm = vi.fn().mockResolvedValue({ success: true, data: 'in-vm' })
-    const result = await withTransport(
+    const result = await withRunFrame(
       {
-        id: 'sandbox:collide',
-        ownsTool: (n) => n === 'graph_me',
-        callTool: inVm,
-        listTools: async () => [],
+        transports: [
+          {
+            id: 'sandbox:collide',
+            ownsTool: (n: string) => n === 'graph_me',
+            callTool: inVm,
+            listTools: async () => [],
+          },
+        ],
       },
       () => callTool('graph_me', {}),
     )

@@ -25,6 +25,16 @@
  * regression in either shows up as a diff here rather than on the bill.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 import { mockCallTool, mockListTools, fixtures } from '../../mocks/mcp'
 
 process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'offline-render-test'
@@ -242,7 +252,7 @@ describe('simpleLoop (scheme B) — real loop, rendered per turn', () => {
       maxTurns: 5,
     })
     const scope = h.createScope('cache-loop', { intent: 'list the people' })
-    await pattern.fn(scope, h.createEventView(mockContext('list the people')))
+    await runInFrame(() => pattern.fn(scope, h.createEventView(mockContext('list the people'))))
     return captured.slice()
   }
 
@@ -300,7 +310,7 @@ describe('simpleLoop with an upstream plan (#27) — the plan stays out of tier 
       maxTurns: 5,
     })
     const scope = h.createScope('cache-loop', { intent: 'list the people', plan: PLAN })
-    await pattern.fn(scope, h.createEventView(mockContext('list the people')))
+    await runInFrame(() => pattern.fn(scope, h.createEventView(mockContext('list the people'))))
     return captured.slice()
   }
 
@@ -345,7 +355,7 @@ describe('simpleLoop with an upstream plan (#27) — the plan stays out of tier 
       maxTurns: 5,
     })
     const scope = h.createScope('cache-loop', { intent: 'list the people' })
-    await pattern.fn(scope, h.createEventView(mockContext('list the people')))
+    await runInFrame(() => pattern.fn(scope, h.createEventView(mockContext('list the people'))))
     const planless = captured.slice()
 
     // Byte-identical agent-static prefix: two different questions against the
@@ -373,7 +383,7 @@ describe('actorCritic → ActorController — real loop, rendered per attempt', 
       maxRetries: 3,
     })
     const scope = h.createScope('cache-actor', { intent: 'compute the thing' })
-    await pattern.fn(scope, h.createEventView(mockContext('compute the thing')))
+    await runInFrame(() => pattern.fn(scope, h.createEventView(mockContext('compute the thing'))))
     return captured.slice()
   }
 

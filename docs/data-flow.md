@@ -140,7 +140,7 @@ flowchart TD
     PHIT -->|"hit"| PARKED["return parked VM · O(ms)"]
     PHIT -->|"miss"| CBOOT["backend.boot · cold"]
 
-    REUSE --> RUN["withTransport: pattern.fn in ALS scope"]
+    REUSE --> RUN["run frame transports slot: pattern.fn in ALS scope"]
     COLD --> RUN
     PARKED --> RUN
     CBOOT --> RUN

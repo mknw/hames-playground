@@ -89,7 +89,29 @@ async function load() {
   // rates) and its defaultTier reads USE_VERDA_INFERENCE — the wiring every
   // production path takes.
   await import('../../../lib/inference/config.server')
-  return await import('@hames/harness-baml/clients.server')
+  const clients = await import('@hames/harness-baml/clients.server')
+  const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+  // The tier is a SLOT of the run frame since #374, and the fail-closed
+  // reachability check that used to guard the way into the scope is now
+  // `assertInferenceTier` — called by the HOST before it puts a tier in a
+  // frame, because core's frame is generic and cannot know what 'verda' means.
+  // Bound together here so every assertion below reads as the one act a user's
+  // stored preference still performs, and stays byte-identical.
+  const { amendRunFrame, currentRunFrame } =
+    await import('@hames/harness-patterns/run-frame.server')
+  const runWithInferenceTier = async <T>(
+    tier: 'verda' | 'anthropic',
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    clients.assertInferenceTier(tier)
+    // Open-or-amend, because one of the cases below nests a tier inside
+    // another: a nested run ENTRY brings no slots, but scoping a tier below an
+    // open run is `amendRunFrame`'s job and is exactly what this asserts.
+    return currentRunFrame()
+      ? amendRunFrame({ inference: { tier } }, fn)
+      : withRunFrame({ inference: { tier } }, fn)
+  }
+  return { ...clients, runWithInferenceTier }
 }
 
 /** `verdaConfigured` moved to its own leaf (#225 Lane A2); this module is its

@@ -55,10 +55,22 @@ import {
   verdaWarmth,
 } from '../../../lib/inference/verda-activity.server'
 import {
+  assertInferenceTier,
   clientOverrideFor,
   resolveClientForRole,
-  runWithInferenceTier,
 } from '@hames/harness-baml/clients.server'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+
+/**
+ * #374: the tier is a SLOT of the run frame, and the fail-closed reachability
+ * check the old opener made on the way in is now the host-called
+ * `assertInferenceTier`. Bound together here — both, in that order, is what a
+ * turn does — so the assertions below stay as they were.
+ */
+function runWithInferenceTier<T>(tier: 'verda' | 'anthropic', fn: () => Promise<T>): Promise<T> {
+  assertInferenceTier(tier)
+  return withRunFrame({ inference: { tier } }, fn)
+}
 
 /** A fixed "now" so nothing here depends on the wall clock. */
 const NOW = 1_700_000_000_000
@@ -71,7 +83,7 @@ beforeEach(() => {
   process.env.VERDA_INFERENCE_ENDPOINT = 'https://e2e.invalid/v1'
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
   // The private tier's second endpoint (the 4B summarizer `describe` runs on).
-  // Needed only so `runWithInferenceTier('verda', …)` opens at all.
+  // Needed only so a 'verda' frame is allowed to open at all.
   process.env.SMALL_LLM_BASE_URL = 'https://e2e.invalid/small/v1'
 })
 

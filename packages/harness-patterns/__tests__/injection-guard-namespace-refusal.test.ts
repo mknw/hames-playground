@@ -24,6 +24,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import type { ActiveInjectionGuard } from '../injection-guard'
 
 vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -66,7 +67,13 @@ async function loadGuard() {
   const { registerToolNamespaces, inferServer } = await import('../tools.server')
   const { createInjectionGuard, __resetInjectionGuardNamespaceWarnings } =
     await import('../patterns/withInjectionGuard.server')
-  const { runWithInjectionGuard } = await import('../injection-guard-scope.server')
+  // The guard is a slot of the run frame since #374 — the per-store opener is
+  // gone, and the assertions below are unchanged.
+  const { withRunFrame } = await import('../run-frame.server')
+  const runWithInjectionGuard = <T>(
+    guard: ActiveInjectionGuard,
+    fn: () => Promise<T>,
+  ): Promise<T> => withRunFrame({ guard }, fn)
   __resetInjectionGuardNamespaceWarnings()
   return { registerToolNamespaces, inferServer, createInjectionGuard, runWithInjectionGuard }
 }

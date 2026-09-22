@@ -16,6 +16,16 @@
  * best-effort wrapper types came to be classified chain-fatal (#273 D-d).
  */
 import { describe, it, expect, vi } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 import { readFile, readdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
@@ -68,10 +78,12 @@ describe('an irrecoverable error stops the chain', () => {
     const ran: string[] = []
     const ctx = createContext<Data>('how many nodes are in the graph?')
 
-    await runChain(ctx, [
-      failing('exec', { error: 'tools unavailable', severity: 'irrecoverable' }),
-      marker('synth', ran),
-    ])
+    await runInFrame(() =>
+      runChain(ctx, [
+        failing('exec', { error: 'tools unavailable', severity: 'irrecoverable' }),
+        marker('synth', ran),
+      ]),
+    )
 
     // The synthesizer is the pattern this protects the user from: it would have
     // answered the question from an execution that produced nothing.
@@ -83,7 +95,9 @@ describe('an irrecoverable error stops the chain', () => {
   it('adds no second error event', async () => {
     const ctx = createContext<Data>('q')
 
-    await runChain(ctx, [failing('exec', { error: 'boom', severity: 'irrecoverable' })])
+    await runInFrame(() =>
+      runChain(ctx, [failing('exec', { error: 'boom', severity: 'irrecoverable' })]),
+    )
 
     // `setError` would push one, doubling the error bubble in the transcript
     // and in every replay of it — the pattern's own event already carries the
@@ -96,7 +110,9 @@ describe('an irrecoverable error stops the chain', () => {
   it('still closes the failing pattern with its pattern_exit', async () => {
     const ctx = createContext<Data>('q')
 
-    await runChain(ctx, [failing('exec', { error: 'boom', severity: 'irrecoverable' })])
+    await runInFrame(() =>
+      runChain(ctx, [failing('exec', { error: 'boom', severity: 'irrecoverable' })]),
+    )
 
     // The gate sets the status and lets the loop's own guard stop the next
     // iteration, so the lifecycle events of the pattern that failed are intact
@@ -113,10 +129,12 @@ describe('a recoverable error does not', () => {
     const ran: string[] = []
     const ctx = createContext<Data>('q')
 
-    await runChain(ctx, [
-      failing('loop', { error: 'max turns reached', severity: 'recoverable' }),
-      marker('synth', ran),
-    ])
+    await runInFrame(() =>
+      runChain(ctx, [
+        failing('loop', { error: 'max turns reached', severity: 'recoverable' }),
+        marker('synth', ran),
+      ]),
+    )
 
     // A loop that exhausts `maxTurns` records a recoverable error and the
     // synthesizer answers from what it did get (#83). Gating that would report
@@ -134,12 +152,14 @@ describe('a recoverable error does not', () => {
     // so the pattern default decides. Until #273 D-d it had no entry in the map
     // and inherited `'irrecoverable'`, which would have made "the inner pattern
     // ran without curated prior results" end the turn.
-    await runChain(ctx, [
-      // The name is the pattern TYPE `resolveConfig` looks up, so this reads
-      // the real `withReferences` entry rather than the fallback.
-      failing('withReferences', { error: 'reference selection failed' }),
-      marker('synth', ran),
-    ])
+    await runInFrame(() =>
+      runChain(ctx, [
+        // The name is the pattern TYPE `resolveConfig` looks up, so this reads
+        // the real `withReferences` entry rather than the fallback.
+        failing('withReferences', { error: 'reference selection failed' }),
+        marker('synth', ran),
+      ]),
+    )
 
     expect(DEFAULT_ERROR_SEVERITY.withReferences).toBe('recoverable')
     expect(ran).toEqual(['synth'])
@@ -169,7 +189,7 @@ describe('the event outranks the pattern', () => {
       { patternId: 'loop' },
     )
 
-    await runChain(ctx, [loop, marker('synth', ran)])
+    await runInFrame(() => runChain(ctx, [loop, marker('synth', ran)]))
 
     expect(DEFAULT_ERROR_SEVERITY.simpleLoop).toBe('recoverable')
     expect(ran).toEqual([])
@@ -180,10 +200,12 @@ describe('the event outranks the pattern', () => {
     const ran: string[] = []
     const ctx = createContext<Data>('q')
 
-    await runChain(ctx, [
-      failing('router', { error: 'retrying', severity: 'recoverable' }, { patternId: 'router' }),
-      marker('next', ran),
-    ])
+    await runInFrame(() =>
+      runChain(ctx, [
+        failing('router', { error: 'retrying', severity: 'recoverable' }, { patternId: 'router' }),
+        marker('next', ran),
+      ]),
+    )
 
     expect(ran).toEqual(['next'])
     expect(ctx.status).toBe('running')
@@ -203,10 +225,12 @@ describe('a gated turn does not poison the next one', () => {
     const ran: string[] = []
     const ctx = createContext<Data>('q')
 
-    await runChain(ctx, [
-      failing('router', { error: 'no route' }, { patternId: 'router' }),
-      marker('never', ran),
-    ])
+    await runInFrame(() =>
+      runChain(ctx, [
+        failing('router', { error: 'no route' }, { patternId: 'router' }),
+        marker('never', ran),
+      ]),
+    )
     expect(ctx.status).toBe('error')
     expect(ran).toEqual([])
 
@@ -231,10 +255,12 @@ describe('an unknown pattern type', () => {
     // fallback used to be `'irrecoverable'`, which was cosmetic while nothing
     // read severity for control flow and would have become "the first error a
     // custom pattern logs kills the turn" the moment something did.
-    await runChain(ctx, [
-      failing('my-custom-step', { error: 'a note about something' }),
-      marker('synth', ran),
-    ])
+    await runInFrame(() =>
+      runChain(ctx, [
+        failing('my-custom-step', { error: 'a note about something' }),
+        marker('synth', ran),
+      ]),
+    )
 
     expect(DEFAULT_ERROR_SEVERITY['my-custom-step']).toBeUndefined()
     expect(ran).toEqual(['synth'])

@@ -6,6 +6,12 @@
  * expressed. What ORDER dispatch consults them in is `transport-precedence.test.ts`,
  * which drives the real `callTool`.
  *
+ * Since #374 the scoped half is the RUN FRAME's `transports` slot rather than a
+ * store of this module's own: `withRunFrame({ transports })` supplies it and
+ * `amendRunFrame({ transports })` prepends below it. The invariants are
+ * unchanged and so are the assertions — the two ways to supply a transport are
+ * still structurally different, which is what carries the containment rule.
+ *
  * It replaces `__tests__/lib/sandbox/scope.test.ts`, whose four cases pinned the
  * same invariants against a sandbox-owned AsyncLocalStorage that no longer
  * exists. Nothing it pinned is lost: outside-scope, inside-scope, nesting and
@@ -22,12 +28,24 @@ vi.mock('@hames/harness-patterns/assert.server', () => ({
 }))
 
 import {
-  withTransport,
   registerTransport,
   activeTransports,
   processTransports,
   type ToolTransport,
 } from '@hames/harness-patterns/tool-transport.server'
+import {
+  withRunFrame,
+  amendRunFrame,
+  currentRunFrame,
+} from '@hames/harness-patterns/run-frame.server'
+
+/** Open-or-amend, which is what the two supply paths do in production:
+ *  `harness()` opens the run's frame, `withSandbox` amends it. */
+function withTransport<T>(transport: ToolTransport, fn: () => Promise<T>): Promise<T> {
+  return currentRunFrame()
+    ? amendRunFrame({ transports: [transport] }, fn)
+    : withRunFrame({ transports: [transport] }, fn)
+}
 
 function fakeTransport(id: string, owns: string[] = []): ToolTransport {
   return {
@@ -38,8 +56,8 @@ function fakeTransport(id: string, owns: string[] = []): ToolTransport {
   }
 }
 
-describe('withTransport — the scoped registry', () => {
-  it('is empty outside any scope', () => {
+describe("the run frame's transports slot — the scoped registry", () => {
+  it('is empty outside any frame', () => {
     expect(activeTransports()).toEqual([])
   })
 
@@ -143,11 +161,23 @@ describe('no registrant can express a priority', () => {
     )
   })
 
-  it('withTransport takes the transport and the body, and nothing else', () => {
-    expect(withTransport.length).toBe(2)
-    expect(code).toMatch(
-      /export function withTransport<T>\(transport: ToolTransport, fn: \(\) => Promise<T>\)/,
+  it('the frame carries transports as a plain ordered list, with no rank beside them', () => {
+    // The scoped half moved to `run-frame.server.ts`, so the negative moved
+    // with it: the slot is `readonly ToolTransport[]`, and the merge that makes
+    // it innermost-first is a PREPEND, never a sort against a field a
+    // registrant could set.
+    const frameCode = readFileSync(
+      path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '../../../../../packages/harness-patterns/run-frame.server.ts',
+      ),
+      'utf8',
     )
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1')
+    expect(frameCode).toMatch(/transports\?: readonly ToolTransport\[\]/)
+    expect(frameCode).not.toMatch(/priority|rank|weight|precedence\s*[:?]/i)
+    expect(frameCode).not.toMatch(/\.sort\(/)
   })
 
   it('neither the interface nor the module carries a rank, and nothing is sorted', () => {
@@ -155,7 +185,7 @@ describe('no registrant can express a priority', () => {
     expect(code).not.toMatch(/\.sort\(/)
   })
 
-  it('the module reaches nothing outside harness-patterns', () => {
+  it('the transport module reaches nothing outside harness-patterns', () => {
     const specs = [...code.matchAll(/from '([^']+)'/g)].map((m) => m[1])
     expect(specs).not.toContain('../sandbox')
     for (const spec of specs) {

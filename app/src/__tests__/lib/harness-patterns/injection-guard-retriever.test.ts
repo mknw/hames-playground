@@ -15,6 +15,16 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 // Type-only: erased at compile time, so it does not defeat the vi.mock below.
 import type { RetrieverData } from '@hames/harness-patterns/patterns/retriever.server'
 
@@ -97,7 +107,7 @@ async function runRetriever(
   const guarded = guardConfig ? withInjectionGuard(guardConfig)(pattern) : pattern
 
   const ctx = createContext<TestData>('what does the board pack say about Q3?')
-  await runChain(ctx, [guarded])
+  await runInFrame(() => runChain(ctx, [guarded]))
 
   const resultEvent = ctx.events.find((e) => e.type === 'tool_result')
   const result = resultEvent?.data as
@@ -170,7 +180,7 @@ describe('retriever hits — guarded', () => {
       }),
     )
     const scope = createScope('retriever', {} as TestData)
-    const out = await pattern.fn(scope, createEventView(ctx, undefined))
+    const out = await runInFrame(() => pattern.fn(scope, createEventView(ctx, undefined)))
 
     const matches = (out.data as { matches: Hit[] }).matches
     expect(matches[0].content).not.toContain(NEUTRALIZED_SPAN)

@@ -32,16 +32,13 @@
 import { assertServerOnImport } from '../assert.server'
 import { createEvent } from '../context.server'
 import { emitLive } from '../live-event-context.server'
-import {
-  getActiveInjectionGuard,
-  runWithInjectionGuard,
-  type ActiveInjectionGuard,
-} from '../injection-guard-scope.server'
+import { amendRunFrame, currentRunFrame } from '../run-frame.server'
 import {
   applyScreenVerdict,
   redactReport,
   sanitizeUntrusted,
   strictestSpotlight,
+  type ActiveInjectionGuard,
   type InjectionGuardOptions,
   type InjectionRule,
   type SanitizeReport,
@@ -119,7 +116,7 @@ export function createInjectionGuard(
   // composition mistake a security control must not permit. Widening is always
   // safe; narrowing is what needs an explicit decision, and there is no way to
   // ask for it (deliberately).
-  const outer = getActiveInjectionGuard()
+  const outer = currentRunFrame()?.guard
   // A guard that declares neither namespaces nor tools covers nothing and
   // would read as protection while doing none (#242 item 4). Omission is not
   // indistinguishable from decision: `namespaces: []` is the explicit line
@@ -413,7 +410,7 @@ export function withInjectionGuard(config: InjectionGuardConfig) {
         },
         patternId,
       )
-      return runWithInjectionGuard(guard, () => pattern.fn(scope, view))
+      return amendRunFrame({ guard }, () => pattern.fn(scope, view))
     }
 
     return {

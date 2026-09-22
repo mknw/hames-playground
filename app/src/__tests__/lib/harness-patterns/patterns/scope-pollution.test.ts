@@ -13,6 +13,16 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 import type { ContextEvent, EventType, UnifiedContext } from '@hames/harness-patterns'
 import type { RetrievalHit } from '@hames/harness-patterns/patterns/retriever.server'
 
@@ -125,7 +135,10 @@ describe('router: cross-turn route/intent pollution (SA-H2)', () => {
     )
     const scope = createScope('router', priorData)
     const view = createEventView(ctxOf(events), pattern.config.viewConfig, 'router')
-    return { result: await pattern.fn(scope, view), routes: (await load()).routes }
+    return {
+      result: await runInFrame(() => pattern.fn(scope, view)),
+      routes: (await load()).routes,
+    }
   }
 
   it('A: a turn-2 throw does not re-dispatch turn 1’s route or reuse its intent', async () => {
@@ -151,9 +164,9 @@ describe('router: cross-turn route/intent pollution (SA-H2)', () => {
     })
     const { createScope, createEventView } = await load()
     const dispatchScope = createScope('routes', result.data)
-    await expect(dispatch.fn(dispatchScope as never, createEventView(ctxOf([])))).rejects.toThrow(
-      /data\.route is undefined/,
-    )
+    await expect(
+      runInFrame(() => dispatch.fn(dispatchScope as never, createEventView(ctxOf([])))),
+    ).rejects.toThrow(/data\.route is undefined/)
     expect(neo4jFn).not.toHaveBeenCalled()
   })
 
@@ -183,7 +196,9 @@ describe('router: cross-turn route/intent pollution (SA-H2)', () => {
     // The failure surfaces as a throw (runChain turns it into ctx.status
     // 'error'); it is NOT a silent pass-through to an empty response.
     await expect(
-      dispatch.fn(createScope('routes', result.data) as never, createEventView(ctxOf([]))),
+      runInFrame(() =>
+        dispatch.fn(createScope('routes', result.data) as never, createEventView(ctxOf([]))),
+      ),
     ).rejects.toThrow(/router failed this turn/)
   })
 
@@ -242,7 +257,7 @@ describe('compactIntent: cross-turn intent pollution (SA-H3)', () => {
     })
     const view = createEventView(ctxOf(events), pattern.config.viewConfig, 'compactIntent')
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // The actor must fall back to the raw message ("now delete it"), NOT
     // re-execute the previous brief with real file side-effects.
@@ -258,7 +273,7 @@ describe('compactIntent: cross-turn intent pollution (SA-H3)', () => {
     const scope = createScope('compactIntent', { intent: 'a brief from an earlier turn' })
     const view = createEventView(ctxOf([]), pattern.config.viewConfig, 'compactIntent')
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     expect(b.CompactIntent).not.toHaveBeenCalled()
     expect((result.data as { intent?: string }).intent).toBeUndefined()
@@ -304,7 +319,7 @@ describe('retriever: cross-turn matches pollution (sf-L4)', () => {
       'retriever',
     )
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     const errors = result.events.filter((e) => e.type === 'error')
     expect(errors.length).toBeGreaterThan(0)

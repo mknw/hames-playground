@@ -4,7 +4,7 @@
  * Pure TypeScript, framework-neutral, no server imports: this file is the
  * detection/neutralization *algorithm*, so it stays unit-testable without a
  * harness, an MCP gateway or an LLM. The wiring lives in
- * `injection-guard-scope.server.ts` (the ALS scope) and
+ * `run-frame.server.ts` (the `guard` slot of the run frame) and
  * `patterns/withInjectionGuard.server.ts` (the pattern primitive).
  *
  * ## Threat model
@@ -261,6 +261,66 @@ export interface InjectionGuardOptions {
   disableRules?: string[]
   /** Opt-in LLM second opinion. Off by default. */
   screen?: InjectionScreen
+}
+
+/**
+ * The guard as its READERS see it — fully built by `createInjectionGuard` and
+ * carried in the run frame's `guard` slot (`run-frame.server.ts`).
+ *
+ * It lives in this pure module rather than beside the frame because it is the
+ * sanitizer's own vocabulary: the frame stores it, the two readers consult it,
+ * and neither of those is where its contract is decided.
+ *
+ * Two readers, and there are exactly two on purpose:
+ *
+ *   1. `mcp-client.callTool` — the PRIMARY chokepoint. Every tool result of
+ *      every transport (gateway, app-side, sandbox in-VM) and every pattern
+ *      passes through it, including the controller TURN LOG, which loop
+ *      patterns build from `result.data` rather than from the event stream.
+ *   2. `patterns/retriever.server.ts` — the SECOND path. A retriever calls its
+ *      injected backends directly and emits a `tool_result` itself, so it never
+ *      reaches `callTool`; it sanitizes its hits at write-time through the same
+ *      guard, before `scope.data.matches` or the event exist.
+ *
+ * Both read the slot SOFTLY (`currentRunFrame()`): an absent guard is the
+ * opt-in sentinel, so outside a guarded run they behave exactly as they did
+ * before the guard existed.
+ */
+export interface ActiveInjectionGuard {
+  /** True when this tool's namespace (or explicit tool list) is untrusted. */
+  isUntrusted(tool: string): boolean
+  /**
+   * The sanitizer options this guard resolved — already unioned with any
+   * enclosing guard's. Exposed for exactly that reason: a NESTED
+   * `createInjectionGuard` reads it so it can take the STRICTEST of the two
+   * rather than shadowing the outer boundary's rules, spotlight and screen. See
+   * `unionOptions` in `patterns/withInjectionGuard.server.ts`.
+   */
+  options: InjectionGuardOptions
+  /**
+   * Sanitize one untrusted payload.
+   *
+   * `data` comes back by REFERENCE when the content did not change, so
+   * `result.data === input` is the caller's "nothing happened" test — and it is
+   * the test to use, because `spotlight: 'always'` rewrites (fences) content on
+   * which nothing was detected. `summary` is present only when something WAS
+   * detected (or when the optional screen was unavailable), so it answers "is
+   * there anything to annotate?", NOT "did the content change?".
+   *
+   * `summary` is deliberately the REDACTED projection, never the full report:
+   * it is attached to `tool_result` events, which several consumers JSON-dump
+   * wholesale (see `SanitizeSummary`). The verbatim spans go only to the
+   * `content_sanitized` event, which this method emits as a side effect — so
+   * the observability trail cannot be forgotten by a caller.
+   */
+  sanitize(
+    tool: string,
+    data: unknown,
+    /** Per-call overrides. `spotlight: 'off'` is for fields where a multi-line
+     *  fence would corrupt a structural value the UI depends on — the
+     *  retriever's `source` filename is the one real case. */
+    overrides?: { spotlight?: SpotlightMode },
+  ): Promise<{ data: unknown; summary?: SanitizeSummary }>
 }
 
 // ============================================================================

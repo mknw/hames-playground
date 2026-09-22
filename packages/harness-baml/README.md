@@ -52,17 +52,22 @@ This package owns the role → client resolution: `clientOverrideFor(role)` buil
 options bag a call site spreads into its BAML options; `resolveClientForRole(role)` names the
 client a call takes (or is budgeted against); `limitsFor(role)` returns the resolved model's
 context window and output cap so patterns trim and batch against the right model. All three read
-the active tier through the package's own scope:
+the active tier from the RUN FRAME core opens — `@hames/harness-patterns`'s `inference` slot,
+whose `tier` is an opaque string core never interprets. Provider vocabulary lives here, in the
+companion, which is why the narrowing and the fail-closed reachability check
+(`assertInferenceTier`, called by the host before it puts a tier in a frame) are this package's:
 
 ```typescript
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
 import {
-  runWithInferenceTier,
+  assertInferenceTier,
   clientOverrideFor,
   limitsFor,
 } from '@hames/harness-baml/clients.server'
 
-await runWithInferenceTier('anthropic', async () => {
-  const opts = { ...clientOverrideFor('controller') } // {} on the anthropic tier
+assertInferenceTier('anthropic')
+await withRunFrame({ inference: { tier: 'anthropic' } }, async () => {
+  const opts = { ...clientOverrideFor('controller') } // undefined on the anthropic tier
   const limits = limitsFor('controller')
 })
 ```

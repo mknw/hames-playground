@@ -5,6 +5,7 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
+import { activeRunFrame } from '../run-frame.server'
 import type {
   UnifiedContext,
   ContextEvent,
@@ -39,6 +40,21 @@ assertServerOnImport()
  * 7. Adds pattern_exit event
  * 8. Passes data forward
  *
+ * REFUSES OUTSIDE A RUN FRAME. This is where "no frame, no run" (ruling D3,
+ * issue #374) is enforced, and it is one line because there is now one frame
+ * rather than five stores: a chain that starts without one would run with no
+ * injection guard, the library's budgets instead of the host's, no live
+ * emission and whatever tier the inference layer defaults to — four silent
+ * degradations, none of which errors, which is the failure class #373
+ * documented ("present, reported green, and neutralized nothing"). The three
+ * harness entry points open the frame themselves, so a consumer using them
+ * never meets this; a host driving `runChain` directly opens `withRunFrame({})`.
+ *
+ * The check is HERE rather than in `callTool` or `activeTransports` on purpose.
+ * Those are asked the same questions outside a run — a gateway health probe, a
+ * prompt builder sizing a tool surface — where the answer is legitimate and
+ * unchanged. A RUN is the thing that must not happen frameless.
+ *
  * @param ctx - UnifiedContext to execute in
  * @param patterns - ConfiguredPatterns to execute in sequence
  * @returns Updated UnifiedContext
@@ -52,6 +68,8 @@ export async function runChain<T extends Record<string, unknown>>(
   patterns: ConfiguredPattern<T>[],
   onEvent?: (event: ContextEvent) => void,
 ): Promise<UnifiedContext<T>> {
+  activeRunFrame()
+
   if (patterns.length === 0) {
     return ctx
   }

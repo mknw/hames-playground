@@ -1048,7 +1048,7 @@ type CompactIntentConfig = PatternConfig
 
 > Use it upstream of a router-less actor (e.g. the Sandbox · Session agent).
 > Agents that already route don't need it — `router` fills `data.intent` itself.
-> Part E of [#83](https://github.com/mknw/harness-playground/issues/83) (the
+> Part E of [#83](https://github.com/mknw/hames-playground/issues/83) (the
 > `compact*` naming unification) is a deferred follow-up.
 
 ### `planner(planFn, tools, config?)`
@@ -1226,7 +1226,7 @@ seam) — core hosts no default, so the composition root supplies
 echo of the latest message: the router sees the last `routerTurnWindow` turns
 and the prompt's INTENT FORMULATION rules make it expand back-references
 ("try again", "the second one", "now in TypeScript") into the nouns they refer
-to ([#53](https://github.com/mknw/harness-playground/issues/53)). This matters
+to ([#53](https://github.com/mknw/hames-playground/issues/53)). This matters
 because `routes()` passes `data.intent` — and nothing else from the
 conversation — to the dispatched pattern's controller. The router-less
 equivalent is [`compactIntent()`](#compactintentconfig).

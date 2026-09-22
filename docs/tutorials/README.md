@@ -63,9 +63,9 @@ lives there (the registration the injection guard's refusal tells you to make), 
 `configureNeo4j`.
 
 **You must be a TS-bundler consumer.** These packages ship TypeScript source — `main` and
-every `exports` target is a `.ts` file, there is no `dist/`, and `pnpm pack` is the whole
-publish pipeline. Vite, vinxi, esbuild, tsx and Bun run them as-is; a plain
-`node dist/index.js` consumer is not supported, deliberately.
+every code target in `exports` is a `.ts` file (`./package.json` is the one non-code entry),
+there is no `dist/`, and `pnpm pack` is the whole publish pipeline. Vite, vinxi, esbuild, tsx
+and Bun run them as-is; a plain `node dist/index.js` consumer is not supported, deliberately.
 
 ## Suggested order
 

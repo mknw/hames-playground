@@ -69,10 +69,12 @@ Deferring the import turns "this package cannot be imported" into "this
 package's PTY feature is unavailable on this host", which is the truthful scope
 of it. Concretely: node-pty ships prebuilt `.node` binaries and its own loader
 falls back to `prebuilds/<platform>-<arch>/` when no `build/` output exists, so
-the shell path works unbuilt on the four platforms it prebuilds for — if opening
-a shell fails with a missing-`.node`-addon error (a Linux consumer, say), run
-`pnpm approve-builds` and reinstall so node-pty's build scripts are allowed to
-run.
+the shell path works unbuilt on the four platforms it prebuilds for (darwin and
+win32, arm64 and x64 — **not** linux). A consumer on a platform with no prebuild
+needs node-pty's own install script to run, and only pnpm 10 withholds it: under
+npm or yarn that script runs by default and the addon is built. So if opening a
+shell fails with a missing-`.node`-addon error **on pnpm**, run
+`pnpm approve-builds` and reinstall.
 
 It stays a real `dependency` — not `optional`, not `peer` — for the other half:
 a consumer who _does_ open a shell must get it installed without reading a
@@ -124,12 +126,16 @@ Two consequences worth stating rather than discovering:
 ## No build step
 
 Like the other `@hames` packages, this one **ships TypeScript source**: `main`
-and every `exports` target is a `.ts` file, there is no `dist/`, and `pnpm pack`
-is the whole publish pipeline. Consumers are **TS-bundler consumers** — a
-project whose bundler or runtime compiles TypeScript (Vite/vinxi, esbuild, tsx,
-Bun, `--experimental-strip-types`). A plain `node dist/index.js` consumer is not
-supported, deliberately: a build step would make the published artefact
-different from the source every test in this repo runs against.
+and every code target in `exports` is a `.ts` file (`./package.json` is the one
+non-code entry), there is no `dist/`, and `pnpm pack` is the whole publish
+pipeline. Consumers are **TS-bundler consumers** — a project whose bundler or
+runtime compiles TypeScript: Vite/vinxi, esbuild, tsx, Bun. **Not**
+`node --experimental-strip-types`, which refuses to strip types under
+`node_modules` — exactly where an installed package lives
+(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, measured on Node v22.21.1). A
+plain `node dist/index.js` consumer is not supported either, deliberately: a
+build step would make the published artefact different from the source every
+test in this repo runs against.
 
 ## Tests
 

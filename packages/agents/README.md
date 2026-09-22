@@ -280,9 +280,13 @@ way — the definitions carry none.
 ## No build step
 
 Like every `@hames` package, this one **ships TypeScript source**: `main` and
-every `exports` target is a `.ts` file, there is no `dist/`, and `pnpm pack` is
-the whole publish pipeline. Consumers are **TS-bundler consumers** — a project
-whose bundler or runtime compiles TypeScript (Vite/vinxi, esbuild, tsx, Bun,
-`--experimental-strip-types`). A plain `node dist/index.js` consumer is not
-supported, deliberately: a build step would make the published artefact
-different from the source every test in this repo runs against.
+every code target in `exports` is a `.ts` file (`./package.json` is the one
+non-code entry), there is no `dist/`, and `pnpm pack` is the whole publish
+pipeline. Consumers are **TS-bundler consumers** — a project whose bundler or
+runtime compiles TypeScript: Vite/vinxi, esbuild, tsx, Bun. **Not**
+`node --experimental-strip-types`, which refuses to strip types under
+`node_modules` — exactly where an installed package lives
+(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, measured on Node v22.21.1). A
+plain `node dist/index.js` consumer is not supported either, deliberately: a
+build step would make the published artefact different from the source every
+test in this repo runs against.

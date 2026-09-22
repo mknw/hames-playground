@@ -668,7 +668,7 @@ The first 60 chars of the first `user_message` becomes the conversation title. O
 
 ### LLM-generated titles (§6b)
 
-Once the first turn completes, a minimal one-pattern harness agent in `lib/harness-client/agents/title-generator.server.ts` calls a single BAML function (`GenerateConversationTitle`, using the `DescribeAnthropic` chain) and writes the result via `updateConversationTitle()`. The result is pushed to the client over the existing `/api/events` SSE stream as an `event: title_updated` frame before the stream closes (capped at 3s so a slow LLM never wedges the response). The client patches the threads cache in-place — no refetch. See §6b for the full architecture.
+Once the first turn completes, a minimal one-pattern harness agent in `packages/agents/agents/title-generator.server.ts` calls a single BAML function (`GenerateConversationTitle`, using the `DescribeAnthropic` chain) and writes the result via `updateConversationTitle()`. The result is pushed to the client over the existing `/api/events` SSE stream as an `event: title_updated` frame before the stream closes (capped at 3s so a slow LLM never wedges the response). The client patches the threads cache in-place — no refetch. See §6b for the full architecture.
 
 ### Auth
 
@@ -762,15 +762,18 @@ mid-run cancellation is #105 PR 3, unbuilt.
    **`resource.latest`** (raw value once resolved, no Suspense; first load
    still suspends). Applied to `threads`.
 3. **Icon classes in `.ts` files:** UnoCSS's default pipeline never scans
-   plain `.ts` — so `AgentConfig.icon` literals in
-   `harness-client/agents/*.server.ts` need BOTH (verified against
-   `@unocss/vite` source): the `content.filesystem` glob in `uno.config.ts`
-   (the client build reads files that are never in its module graph) AND a
-   literal `@unocss-include` comment in each file — filesystem-globbed files
-   still pass through the pipeline filter, which rejects `.ts` paths unless
-   that marker appears in the code. Adding an agent: use an
-   `i-material-symbols-*` class and keep the marker comment. Render with
-   `class=` + inline sizing, never attributify (gotcha 1).
+   plain `.ts` — so the `AgentConfig.icon` literals need BOTH (verified
+   against `@unocss/vite` source): the `content.filesystem` glob in
+   `uno.config.ts` (the client build reads files that are never in its module
+   graph) AND a literal `@unocss-include` comment in the globbed file —
+   filesystem-globbed files still pass through the pipeline filter, which
+   rejects `.ts` paths unless that marker appears in the code. Since the
+   `@hames/agents` extraction (#225) those literals all live in ONE file —
+   the overlay in `lib/harness-client/registry.server.ts`, one literal per
+   `registerAgent` call — and the glob names exactly that file. Adding an
+   agent: use an `i-material-symbols-*` class at its `overlay(...)` site and
+   keep the marker comment. Render with `class=` + inline sizing, never
+   attributify (gotcha 1).
 4. **Attributify props on Ark `Dialog` overlay parts:** without
    `lazyMount unmountOnExit`, Ark keeps the closed dialog MOUNTED with the
    `hidden` attribute — and any attributify display utility on it
@@ -792,10 +795,10 @@ Once the first user turn completes, a minimal harness agent generates a 3–5 wo
 
 ### Why a harness agent for one BAML call?
 
-The `harness-patterns/` library is the testbed for an eventual standalone npm package. Its current example catalog (`harness-client/agents/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, and a full ontology-builder pipeline — but had no _minimum-rung_ example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
+The `harness-patterns/` library was the testbed for an eventual standalone npm package, and has since been extracted into one: `@hames/harness-patterns`, an independently versioned workspace package at `packages/harness-patterns/` with its own manifest and MIT licence — publish-ready, but not published to npm. Its example catalog (now the `@hames/agents` package, `packages/agents/agents/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, and a full ontology-builder pipeline — but had no _minimum-rung_ example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
 
 ```ts
-// app/src/lib/harness-client/agents/title-generator.server.ts
+// packages/agents/agents/title-generator.server.ts
 export const titleAgent = harness<TitleAgentData>(
   compactExecution<TitleAgentData>({
     patternId: "title-gen",

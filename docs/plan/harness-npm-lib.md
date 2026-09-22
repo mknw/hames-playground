@@ -1,8 +1,8 @@
 # Extracting harness-patterns to npm — package layout and dev-vs-production loading
 
 **Status:** decisions recorded 2026-08-23 (owner-review comments on
-[#225](https://github.com/mknw/harness-playground/issues/225) and
-[#226](https://github.com/mknw/harness-playground/issues/226)); scope is
+[#225](https://github.com/mknw/hames-playground/issues/225) and
+[#226](https://github.com/mknw/hames-playground/issues/226)); scope is
 converged. No code changes in this PR — it revises this plan doc, adds a
 skeleton developer guide (`docs/plan/hames-guide.md`), and updates
 `docs/INDEX.md`.
@@ -83,8 +83,8 @@ SolidJS in the library, runtime settings only via
 about turning that intent into a workspace someone can actually build,
 develop against, and ship from — **package layout, and critically, how the
 libraries get loaded in dev vs. production.** A sibling ergonomics review
-([#225](https://github.com/mknw/harness-playground/issues/225), plus the
-app/infra angle in [#226](https://github.com/mknw/harness-playground/issues/226))
+([#225](https://github.com/mknw/hames-playground/issues/225), plus the
+app/infra angle in [#226](https://github.com/mknw/hames-playground/issues/226))
 covered the library's own API surface and module boundaries; both reviews
 converged with the owner on 2026-08-23, and this revision folds those
 decisions in. The headline scope change: **this plan now starts with one
@@ -730,13 +730,13 @@ Still open, ordered by how much they'd change the plan:
 - `app/src/lib/harness-patterns/SPEC.md` — states the extraction intent and
   the four boundary rules this plan's §1.2 dependency graph is built to
   preserve.
-- [#225](https://github.com/mknw/harness-playground/issues/225) — the
+- [#225](https://github.com/mknw/hames-playground/issues/225) — the
   ergonomics review this plan's BAML seam, `ToolTransport` inversion, typed
   errors, `patternId` derivation, `assert.server` removal, OTel deletion, and
   raw-output-on-parse-failure requirement are drawn from; its owner-review
   comment (2026-08-23) is the authoritative source for all of §1.4/§1.5/§7's
   "resolved" items and the `@hames/harness-patterns`/`whiffletree` naming.
-- [#226](https://github.com/mknw/harness-playground/issues/226) — the
+- [#226](https://github.com/mknw/hames-playground/issues/226) — the
   app/infra-side review; its owner-review comment confirms A7 (stash's
   dependency status, matching #225) and B4 (the framework-agnostic
   ready-made-harnesses constraint, §1.5/Step 5).

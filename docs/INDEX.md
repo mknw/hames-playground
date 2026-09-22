@@ -90,6 +90,7 @@ Each layer's own README stays the authority on its coverage: [`app/e2e/README.md
 | [harness-patterns/frontend.md](harness-patterns/frontend.md)                               | SolidStart integration, server actions, sessions                                                               |
 | [harness-patterns/examples.md](harness-patterns/examples.md)                               | Example agent catalog (6 agents)                                                                               |
 | [harness-patterns/parallel.md](harness-patterns/parallel.md)                               | Parallel pattern design notes                                                                                  |
+| [harness-patterns/prompt-caching.md](harness-patterns/prompt-caching.md)                   | The #122 prompt-caching bench, worktree `prompt-caching-122` — three `ActorController` variants, ~47% saved    |
 | [harness-patterns/with-references.md](harness-patterns/with-references.md)                 | `withReferences` meta-pattern + `expandPreviousResult` synthetic tool design (#30, #19)                        |
 | [harness-patterns/withReferences-tutorial.md](harness-patterns/withReferences-tutorial.md) | Hands-on walkthrough — search the web, attach refs at ingress, write to Neo4j                                  |
 | [tutorials/own-provider-or-model.md](tutorials/own-provider-or-model.md)                   | Bring your own provider or model — define runtime clients, map roles, compose over the built-in tier (#374 D1) |
@@ -253,6 +254,8 @@ kg-agent/
 │   │   └── plan.md              # Data protection findings + plan
 │   ├── user-guides/
 │   │   └── microsoft-graph.md   # Microsoft 365 agent: what you can ask
+│   ├── tutorials/               # Task-shaped pages for consumers of the `@hames` packages
+│   │   └── README.md            # The index + the six tutorial pages
 │   └── harness-patterns/        # Harness patterns documentation
 │       ├── README.md            # Overview
 │       ├── api.md               # API reference
@@ -262,13 +265,16 @@ kg-agent/
 │       ├── prompt-caching.md    # Cache-breakpoint budget and placement (#122)
 │       ├── with-references.md   # withReferences meta-pattern design (#30)
 │       └── withReferences-tutorial.md  # withReferences walkthrough
-├── tutorials/
-│   └── own-provider-or-model.md # BYO provider/model plug walkthrough (#374 D1)
+├── packages/                    # The `hames` library — five MIT workspace packages
+│   ├── harness-patterns/        # Pattern framework (README.md, GUIDE.md, SPEC.md)
+│   ├── harness-baml/            # BAML corpus + committed client, adapters, role→client map
+│   ├── agents/                  # Ready-made agent definitions (agents/) + extractors
+│   ├── connectors/              # Graph tools, Neo4j layer, MCP-gateway namespace catalog
+│   └── sandbox/                 # withSandbox, Docker backend, egress profiles
 ├── app/
 │   ├── README.md                # UI quick start + index
 │   └── src/lib/
-│       ├── harness-patterns/    # Pattern framework (source + README.md)
-│       └── harness-client/      # Frontend integration layer (agents/README.md)
+│       └── harness-client/      # Composition root: agent registry, session, turn
 ├── configs/                     # MCP and catalog configurations
 ├── scripts/                     # Utility scripts
 ├── neo4j_dumps/                 # Graph data exports

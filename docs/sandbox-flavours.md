@@ -2,8 +2,8 @@
 
 > **Status:** the `image-processing` + `data` flavours and a router demonstrator
 > ship in this PR; the hardening/ergonomics items are tracked in
-> [#116](https://github.com/mknw/harness-playground/issues/116). Tracks
-> [#78](https://github.com/mknw/harness-playground/issues/78). Companion to
+> [#116](https://github.com/mknw/hames-playground/issues/116). Tracks
+> [#78](https://github.com/mknw/hames-playground/issues/78). Companion to
 > [`plan/sandbox.md`](plan/sandbox.md) and [`data-flow.md`](data-flow.md)
 > (attachment lifecycle + `/work` ⇄ Data Stash).
 
@@ -56,7 +56,7 @@ write engine for `pd.ExcelWriter` / `pl.DataFrame.write_excel`.
 
 - `routes(name→pattern)` compose them. A route can be a flavoured, sandboxed
   controller — so flavour selection lives entirely in the harness. The demonstrator
-  ([`agents/flavoured-sandbox.server.ts`](../app/src/lib/harness-client/agents/flavoured-sandbox.server.ts)):
+  ([`agents/flavoured-sandbox.server.ts`](../packages/agents/agents/flavoured-sandbox.server.ts)):
 
 ```ts
 // N flavour containers, ONE session workspace: every route is id-addressable
@@ -156,7 +156,7 @@ belongs in an agent (or a route) where no turn is expected to build on a prior
 one. `withSandbox` now warns when `syncWorkspace` is passed without an `id`,
 rather than ignoring it silently.
 
-## Hardening & egress (shipped — [#116](https://github.com/mknw/harness-playground/issues/116) security bullets)
+## Hardening & egress (shipped — [#116](https://github.com/mknw/hames-playground/issues/116) security bullets)
 
 The three security bullets of #116 are implemented; the flavour-ergonomics
 bullets (flavour-in-identity, flavour-aware Shell, per-flavour tool surface)
@@ -218,7 +218,7 @@ interactive terminal (`PtyManager`, `docker exec -it bash`) is a human-driven
 path outside the `sandbox_bash` tool surface, so the command guard does not
 screen it — its routes are owner-gated instead.
 
-## Deferred (→ [#116](https://github.com/mknw/harness-playground/issues/116))
+## Deferred (→ [#116](https://github.com/mknw/hames-playground/issues/116))
 
 - **Flavour-in-identity.** Fold the `${id}:${rootfs}` convention _into_ `withSandbox`
   so callers can't forget it and silently reuse one container across flavours

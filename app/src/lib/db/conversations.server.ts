@@ -403,7 +403,7 @@ export async function getConversationInferenceTier(
  *
  * Unconditional, unlike the `COALESCE` in {@link saveConversation}: this IS the
  * deliberate act, and a mid-conversation flip has to be able to replace a tier
- * the row already carries. The scope is per turn (`runWithInferenceTier`), so
+ * the row already carries. The scope is per turn (the run frame), so
  * the flip takes effect on the next turn and no in-flight one changes provider
  * underneath itself.
  *

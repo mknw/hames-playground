@@ -1904,7 +1904,7 @@ harness-baml/                            # The BAML companion module (Lane A6) �
 ├── baml-patterns.server.ts # bamlPatterns() — the one factory for the eight REQUIRED injected fns (planner, router, compactIntent, retrieveQuery, describe, describeBatch, synthesize, selector) + adapters
 ├── defaults.server.ts      # defaultSynthesize (→ bamlPatterns().synthesize) + defaultSelector (→ bamlPatterns().selector) — the composition-root implementations, not pattern defaults
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter (tool list rides ControllerInput.tools — L14), createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, createInjectionScreen
-├── clients.server.ts       # The role → client maps (CLIENT_BY_ROLE / VERDA_CLIENT_BY_ROLE), clientOverrideFor, limitsFor, the tier ALS — moved byte-for-byte from core (Lane A6/A-i)
+├── clients.server.ts       # The role → client maps (CLIENT_BY_ROLE / VERDA_CLIENT_BY_ROLE), clientOverrideFor, limitsFor, the tier (the run frame's `inference` slot) — moved byte-for-byte from core (Lane A6/A-i)
 ├── routing.server.ts       # routeMessageOp — the router seam's composition-root implementation (`bamlPatterns().router`) (with limits())
 ├── baml-version-check.server.ts # Boot-time staleness warning for baml_client (#154)
 └── scripts/                # smoke-verda.ts + smoke-verda-load.ts — the live Verda endpoint checks

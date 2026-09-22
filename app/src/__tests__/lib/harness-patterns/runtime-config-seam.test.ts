@@ -105,12 +105,12 @@ describe('the frame the app opens is the frame the library reads', () => {
   })
 
   it("the app's FULL settings survive the slot — not just the six library knobs", async () => {
-    // `with-sandbox.server.ts` dereferences `.sandbox` unguarded, so the slot
-    // has to carry the app's own fields too. It does, because the app puts its
-    // whole `HarnessSettings` object in rather than a projection of it: this is
-    // what `getRequestSettings`'s defensive `{ ...DEFAULT_SETTINGS, ...scope }`
-    // spread used to be for, and deleting that reader is only safe while this
-    // holds.
+    // The slot carries the app's own fields, not just the library's six knobs,
+    // because the app puts its whole `HarnessSettings` object in rather than a
+    // projection of it. That is what `getRequestSettings`'s defensive
+    // `{ ...DEFAULT_SETTINGS, ...scope }` spread used to buy, and deleting that
+    // reader is only safe while this holds — a consumer of an app-only field
+    // would otherwise read `undefined` with nothing erroring.
     const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
     const { runtimeConfig } = await import('@hames/harness-patterns/runtime-config.server')
     const { DEFAULT_SETTINGS } = await import('../../../lib/settings')

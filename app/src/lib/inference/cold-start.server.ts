@@ -273,7 +273,7 @@ const watchStore = new AsyncLocalStorage<TurnWatch>()
  * Run `fn` with a cold-start watch armed, notifying `listener` if the turn ends
  * up waiting on a cold box.
  *
- * An AsyncLocalStorage scope for the same reason `runWithInferenceTier` is one:
+ * An AsyncLocalStorage scope for the same reason the run frame is one:
  * the decision belongs to the RUN, and the place that detects it
  * (`clientOverrideFor`, several layers down inside the harness) must not need a
  * parameter threaded to it. Opened by `turn.server.ts` only for a verda-tier

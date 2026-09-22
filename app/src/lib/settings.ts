@@ -99,7 +99,7 @@ function clampSetting(
  * allowed to choose.
  *
  * `POST /api/events` reads `settings` straight off the request body and hands it
- * to `runWithSettings`, from where every pattern reads it at execution time — so
+ * into the run frame's `config` slot, from where every pattern reads it at execution time — so
  * an unvalidated payload is a browser-controlled loop bound, not a preference.
  * `maxToolTurns` is the sharpest: it is the number of controller round-trips one
  * request may spend on the shared Anthropic key (`simpleLoop.server.ts`:
@@ -122,7 +122,7 @@ function clampSetting(
  *    than by the diligence of the next `withSandbox` caller.
  *
  * Returns `undefined` for an absent/non-object payload, which is what
- * `runWithSettings` already reads as "use the defaults".
+ * an absent `config` slot already reads as "use the defaults".
  */
 export function sanitizeHarnessSettings(input: unknown): HarnessSettings | undefined {
   if (input === null || typeof input !== 'object') return undefined

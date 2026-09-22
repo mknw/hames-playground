@@ -152,7 +152,7 @@ export function assertSmallModelConfigured(): void {
  *
  * The tier is two models (see `VERDA_CLIENT_BY_ROLE`), so its configuration is
  * a conjunction and this is the only function that says so. Every gate on the
- * tier — the module-load check below, `runWithInferenceTier('verda')` (through
+ * tier — the module-load check below, `assertInferenceTier('verda')` (through
  * the seam's registered `assertTierReachable`), and `verdaConfigured()`'s
  * "may a user pick this?" — goes through here, so adding a third model to the
  * tier is one edit rather than three.

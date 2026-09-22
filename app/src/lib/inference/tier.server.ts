@@ -27,7 +27,7 @@
  * graph stays clear of `clients.server.ts` and its module-load assert (the
  * reason is written on `StoredInferenceTier`). A value this build does not
  * recognise therefore falls to step 2, which is what an unknown tier should do
- * — passing it to `runWithInferenceTier` would be a silent no-op that reads
+ * — putting it in the run frame's `inference` slot would be a silent no-op that reads
  * like a choice.
  *
  * Deliberately NOT a `'use server'` module: both functions take a `userId`,
@@ -149,7 +149,7 @@ export async function resolveConversationTier(
  *
  * **`'verda'` is refused when the endpoint is unconfigured**, exactly as the
  * header switch it replaces refused it: storing it would leave a row that
- * `runWithInferenceTier` throws on, turning one click into a chat that cannot
+ * `assertInferenceTier` throws on, turning one click into a chat that cannot
  * take another message — and the one thing that must never happen instead, a
  * quiet fall-through to Anthropic, is refused by design upstream. The switch
  * renders that position disabled for the same reason; this is the server half,

@@ -90,15 +90,14 @@ async function load() {
   // production path takes.
   await import('../../../lib/inference/config.server')
   const clients = await import('@hames/harness-baml/clients.server')
-  const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+  const { withRunFrame, amendRunFrame, currentRunFrame } =
+    await import('@hames/harness-patterns/run-frame.server')
   // The tier is a SLOT of the run frame since #374, and the fail-closed
   // reachability check that used to guard the way into the scope is now
   // `assertInferenceTier` — called by the HOST before it puts a tier in a
   // frame, because core's frame is generic and cannot know what 'verda' means.
   // Bound together here so every assertion below reads as the one act a user's
   // stored preference still performs, and stays byte-identical.
-  const { amendRunFrame, currentRunFrame } =
-    await import('@hames/harness-patterns/run-frame.server')
   const runWithInferenceTier = async <T>(
     tier: 'verda' | 'anthropic',
     fn: () => Promise<T>,
@@ -447,6 +446,37 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
     }))
     expect(seen.tier).toBe('anthropic')
     expect(seen.override).toBeUndefined()
+  })
+
+  it('a per-run clientOverride is keyed by ROLE, so mapping describe never moves screen', async () => {
+    // SA-M5 / SD-4, for the PER-RUN layer. #380 pinned exactly this for its
+    // module-level twin (`consumer-clients.test.ts`); the frame layer had no
+    // such pin, and "it cannot happen by construction" is the claim that pin
+    // exists to keep true. A consumer re-pointing summarization at a cheap
+    // model must not carry prompt-injection screening along with it — the
+    // accident the two roles were separated to prevent, and the one that is
+    // live for anyone who edits the shared BAML chain instead.
+    //
+    // MUTATION: key the override on anything but the role (e.g. return the same
+    // bag unconditionally) → the screen moves and the second assertion reddens.
+    configureEndpointOnly()
+    const clients = await load()
+    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+
+    const describeOnly = (role: string) =>
+      role === 'describe' ? { client: 'SomeCheapModel' } : undefined
+
+    const seen = await withRunFrame(
+      { inference: { tier: 'verda', clientOverride: describeOnly } },
+      async () => ({
+        describe: clients.clientOverrideFor('describe'),
+        screen: clients.clientOverrideFor('screen'),
+      }),
+    )
+
+    expect(seen.describe).toEqual({ client: 'SomeCheapModel' })
+    // The screen stayed on the tier's own client — it did not follow.
+    expect(seen.screen).toEqual({ client: 'VerdaQwen' })
   })
 
   it("a per-run clientOverride in the generic slot pre-empts this package's tier map", async () => {

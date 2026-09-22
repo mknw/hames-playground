@@ -2,14 +2,32 @@
   "name": "@hames/harness-patterns",
   "version": "0.1.0",
   "description": "Functional, composable framework for agentic tool execution — patterns, event views, the injection guard, and tool transport.",
+  "keywords": [
+    "agents",
+    "harness",
+    "patterns",
+    "llm",
+    "mcp",
+    "tools",
+    "injection-guard",
+    "typescript"
+  ],
+  "homepage": "https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme",
+  "bugs": {
+    "url": "https://github.com/mknw/hames-playground/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mknw/hames-playground.git",
+    "directory": "packages/harness-patterns"
+  },
   "license": "MIT",
+  "author": {
+    "name": "Michael Accetto",
+    "url": "https://github.com/mknw"
+  },
   "type": "module",
   "main": "./index.ts",
-  "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "prepublishOnly": "node -e \"const ua=process.env.npm_config_user_agent||'';const ex=process.env.npm_execpath||'';if(ua.startsWith('npm/')||ex.includes('npm-cli'))throw new Error('This package must be published with pnpm publish, not npm: npm does not rewrite workspace: specifiers and ships them literally.')\""
-  },
   "exports": {
     ".": "./index.ts",
     "./package.json": "./package.json",
@@ -17,12 +35,6 @@
     "./guard": "./injection-guard.ts",
     "./retriever": "./retriever/index.ts",
     "./*": "./*.ts"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
-  },
-  "devDependencies": {
-    "vitest": "^4.1.5"
   },
   "files": [
     "*.ts",
@@ -35,9 +47,24 @@
     "LICENSE",
     "README.md",
     "GUIDE.md",
+    "SPEC.md",
     "!vitest.config.ts"
   ],
+  "engines": {
+    "node": ">=22"
+  },
   "publishConfig": {
     "access": "public"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "node -e \"const ua=process.env.npm_config_user_agent||'';const ex=process.env.npm_execpath||'';if(ua.startsWith('npm/')||ex.includes('npm-cli'))throw new Error('This package must be published with pnpm publish, not npm: npm does not rewrite workspace: specifiers and ships them literally.')\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.5"
   }
 }

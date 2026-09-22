@@ -55,20 +55,22 @@
  * a pass somebody will make precisely because this commit made the others
  * present.
  *
- *   - **No EMAIL ADDRESS, anywhere in the manifest text.** The registry is
- *     public, a published version cannot be unpublished at will, and an address
- *     in a manifest is an address in every mirror of it forever. The name and the
+ *   - **No EMAIL ADDRESS, anywhere in the manifest.** The registry is public, a
+ *     published version cannot be unpublished at will, and an address in a
+ *     manifest is an address in every mirror of it forever. The name and the
  *     GitHub URL say who wrote this; the mailbox adds nothing a reader needs and
- *     cannot be taken back. This is a scan of the whole file rather than a check
- *     on `author.email`, because a field-name allowlist is always one field
- *     behind the thing it is trying to stop. Three shapes escaped the
- *     property-shaped version it replaces, all green: `author` in its legal
- *     STRING form (`"Name <addr> (url)"`), on which `not.toHaveProperty('email')`
- *     is trivially true; `bugs.email`; and `contributors[].email`. The regex
- *     needs word characters BEFORE the `@`, which is what keeps the scoped
- *     specifiers in these files (`"@hames/agents"`, `"@boundaryml/baml"`,
- *     `"@modelcontextprotocol/sdk"` — each one preceded by a quote) from
- *     matching; zero false positives across all five, checked.
+ *     cannot be taken back. This is a scan of the whole SERIALIZED MANIFEST
+ *     rather than a check on `author.email`, because a field-name allowlist is
+ *     always one field behind the thing it is trying to stop. Three shapes
+ *     escaped the property-shaped version it replaces, all green: `author` in
+ *     its legal STRING form (`"Name <addr> (url)"`), on which
+ *     `not.toHaveProperty('email')` is trivially true; `bugs.email`; and
+ *     `contributors[].email`. A FOURTH escaped the raw-text scan that replaced
+ *     it: an `@` written as a JSON unicode escape, which the file text does not
+ *     contain and `JSON.parse` and `pnpm pack` both decode — so the scan reads
+ *     the parsed object, the form that publishes. The exclusions the pattern
+ *     buys, and the one it deliberately does not, are on `EMAIL_IN_MANIFEST`
+ *     below; zero false positives across all five, checked.
  *   - **`sideEffects`** — `false` licenses a bundler to drop a module it thinks
  *     nobody uses, and `assertServerOnImport()` is a module whose entire job is
  *     to run at import. Tree-shaking it away is a server/client boundary that
@@ -145,14 +147,20 @@
  *
  * ## Proven, not just green
  *
- * Eight mutations, all on the record in the PR that shipped this file.
+ * Eleven mutations, all on the record in the PR that shipped this file, and one
+ * of them is a GREEN that matters as much as the reds.
  *
  * (a): point one `repository.directory` at a path that is not the package's own
- * → red naming both paths; `"sideEffects": false` → red; a `"types"` key → red;
- * and the three email shapes, each on a DIFFERENT package so the per-package
- * loop is exercised rather than one instance of it — `author` as the string
+ * → red naming both paths; `"sideEffects": false` → red; a `"types"` key → red.
+ * Then the email shapes, each on a DIFFERENT package so the per-package loop is
+ * exercised rather than one instance of it: `author` as the string
  * `"Name <addr> (url)"`, a `bugs.email`, and a `contributors` entry with an
- * `email` → red, all three, which the property-shaped predecessor passed green.
+ * `email` → red, all three, which the property-shaped predecessor passed green;
+ * and an `@` written as a JSON unicode escape → red, which the raw-text scan
+ * that replaced it passed green. The GREEN is the false-positive proof: a
+ * `"packageManager": "pnpm@10.28.1"` — the string the repo ROOT manifest already
+ * carries — leaves the suite passing. A guard that reds on a version pin is a
+ * guard someone deletes, so that one is not a nicety.
  *
  * (b): remove `"SPEC.md"` from `packages/harness-patterns/package.json`'s
  * `files` → red naming `SPEC.md`; add a dead in-package link to `SPEC.md` — the
@@ -175,12 +183,38 @@ const REPO_URL = 'https://github.com/mknw/hames-playground'
  *  warn at install time rather than at the first `node:` builtin it uses. */
 const NODE_ENGINE = '>=22'
 
-/** An email address anywhere in a manifest's text. Deliberately not anchored to
- *  a field: `author`, `contributors[]` and `bugs` each take one, and `author`
- *  has a string form a property check cannot see into. The leading `[\w.+-]+`
- *  is what keeps the scoped package specifiers (`"@hames/agents"`) out — an `@`
- *  preceded by a quote has no local part before it. */
-const EMAIL_IN_MANIFEST = /[\w.+-]+@[\w-]+\.[\w.]+/g
+/**
+ * An email address anywhere in a manifest. Deliberately not anchored to a field:
+ * `author`, `contributors[]` and `bugs` each take one, and `author` has a string
+ * form a property check cannot see into.
+ *
+ * Two parts of it are load-bearing and neither is decoration.
+ *
+ * The leading `[\w.+-]+` is what keeps the scoped package specifiers out. The
+ * rule is that a match needs a WORD CHARACTER immediately before the `@` — not
+ * that a quote precedes it, which is only true in the `dependencies` keys: in a
+ * `description` the same specifier follows a SPACE (`… the BAML companion for
+ * @hames/harness-patterns …`), and it is the space, the quote and the line
+ * start alike that fail the local part, because none of them is a word
+ * character.
+ *
+ * The trailing `\.[a-zA-Z]{2,}` — an ALPHABETIC final label — is what keeps
+ * `name@semver` out, and that is a guard about this guard's own survival rather
+ * than about addresses. Without it `pnpm@10.28.1` matches, so the day any
+ * package gains a `packageManager` field (the repo ROOT manifest already carries
+ * that exact string), or names `tsx@4.19.2` in a script or `baml@0.224.0` in a
+ * description, this pin reds with "an email address in a published manifest" on
+ * something that is not one. A guard that cries wolf is a guard someone weakens
+ * or deletes, and deleting this one costs the email pin entirely.
+ *
+ * Known limits, recorded rather than discovered at publish time: a non-ASCII
+ * (IDN) domain, a bracketed-IP domain (`user@[192.0.2.1]`) and a dotless domain
+ * all escape it. All three are knowingly out of scope — none is a shape a
+ * package manifest realistically carries an address in, and the cost of widening
+ * the pattern to reach them is false positives on exactly the `name@version`
+ * class the alphabetic TLD was added to exclude.
+ */
+const EMAIL_IN_MANIFEST = /[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[a-zA-Z]{2,}/g
 
 /** Every workspace member under `packages/` (the `packages/*` glob in
  *  `pnpm-workspace.yaml`), by directory name. Discovered, never listed — same
@@ -379,21 +413,28 @@ describe('published package manifests', () => {
         })
 
         it('carries no email address anywhere in the manifest', () => {
-          // A scan of the whole manifest TEXT, not a check on `author.email`,
-          // and the difference is the whole point. A field-name allowlist is
-          // always one field behind: `author` also has a legal STRING form
+          // A scan of the whole manifest, not a check on `author.email`, and the
+          // difference is the whole point. A field-name allowlist is always one
+          // field behind: `author` also has a legal STRING form
           // ("Name <addr> (url)") on which a property check is trivially true,
           // and `bugs.email` and `contributors[].email` are standard npm fields
           // that each take an address. All three passed green against the
-          // earlier property-shaped pin. The regex requires word characters
-          // BEFORE the `@`, so the scoped specifiers in these manifests
-          // (`@hames/…`, `@boundaryml/baml`, `@modelcontextprotocol/sdk` — each
-          // preceded by a quote) are not matches; verified against all five.
-          const found = [
-            ...readFileSync(join(PACKAGES, name, 'package.json'), 'utf8').matchAll(
-              EMAIL_IN_MANIFEST,
-            ),
-          ].map((match) => match[0])
+          // earlier property-shaped pin.
+          //
+          // The SERIALIZED OBJECT, not the file text, and that is the second
+          // thing this pin learned the hard way: JSON lets an `@` be written as
+          // the escape sequence backslash-u-0-0-4-0, so a RAW-TEXT scan of the
+          // file finds no address at all — while `JSON.parse` decodes it and so
+          // does `pnpm pack`, which means the SHIPPED manifest carries the real
+          // address. (Spelled out rather than written literally, because a
+          // literal one in this comment is itself decoded by half the tools that
+          // touch this file.) Reading the parsed form is
+          // also the truer artifact for this particular question: the fields
+          // above are pinned on the source manifest because a DECLARATION is
+          // what they are about, but this one is a claim about what PUBLISHES.
+          const found = [...JSON.stringify(manifest).matchAll(EMAIL_IN_MANIFEST)].map(
+            (match) => match[0],
+          )
           expect(
             found,
             'an email address in a published manifest is in every registry mirror forever, ' +

@@ -149,7 +149,7 @@ agent passes `tools.all` — literally every listed tool
 (`packages/harness-patterns/tools.server.ts:111,130`) — into one loop
 (`packages/agents/agents/general.server.ts:47,57,63`). An agent's
 declared `servers: [...]` array is display metadata for the agent picker
-(`AgentSelector.tsx:148,161`); **it filters nothing**. So the gateway's enabled
+(`AgentSelector.tsx:182,195`); **it filters nothing**. So the gateway's enabled
 set _is_ the preview's tool surface, and it has to be chosen rather than
 inherited.
 

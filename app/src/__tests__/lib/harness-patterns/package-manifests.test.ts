@@ -2,20 +2,40 @@
  * The publish-metadata pin for the five `packages/*` manifests, and the pin for
  * the class of defect that let `SPEC.md` slip.
  *
- * ## Why a sibling rather than three more `it`s in `package-conventions.test.ts`
+ * ## Why a third file, when `package-publish.test.ts` next door already packs
  *
- * That file is, by its own docblock, a *source scan*: `readdirSync` +
- * `readFileSync` over the package directories, no subprocess, milliseconds. Half
- * of what this file has to answer is not a question about source at all — "does
- * the target of this README link end up in the tarball?" is a statement about
- * the packed artifact, and the only honest way to answer it is to pack. The
- * alternative was to re-implement npm's `files` glob semantics in a model, and a
- * model of a packer is a silent SUPERSET the first day it drifts: it would have
- * to be wrong in exactly the direction that reports `SPEC.md` as shipped. So
- * this file packs, the way `package-publish.test.ts` next door already does, and
- * `package-conventions.test.ts` keeps its cheap shape. Both halves of the guard
- * live here together because they are one subject — what the manifest PROMISES a
- * consumer, and whether the tarball keeps that promise.
+ * Two neighbours could have taken this, and only one of them is a real
+ * alternative. `package-conventions.test.ts` is not: it is by its own docblock a
+ * *source scan* (`readdirSync` + `readFileSync`, no subprocess), and half of what
+ * this file asks — "does the target of this README link end up in the tarball?"
+ * — is a statement about the packed artifact, not about source. Modelling npm's
+ * `files` glob semantics instead would be a silent SUPERSET the first day it
+ * drifts, wrong in exactly the direction that reports `SPEC.md` as shipped.
+ *
+ * `package-publish.test.ts` IS the real alternative. It already `pnpm pack`s and
+ * extracts all five packages for its own (a)/(c)/(d) assertions, so half (b)
+ * could have joined it at no extra pack cost, and the "cheap source scan"
+ * argument does not apply to it. Three reasons it did not, and the cost is owned
+ * rather than waved away:
+ *
+ *   1. That file's subject is one sentence — "does the packed artifact resolve
+ *      and install", `exports` targets, `workspace:` rewriting, undeclared
+ *      imports. This file's subject is a different one: what the manifest
+ *      PROMISES a reader, and whether the tarball keeps that promise. Half (a) is
+ *      pure metadata and belongs nowhere near a pack; splitting this guard so
+ *      that (a) and (b) live in different files would scatter one subject to
+ *      avoid one second.
+ *   2. The (a) half reads the SOURCE manifest and the (b) half reads the packed
+ *      one. Next door is deliberately and entirely about the packed artifact —
+ *      its own docblock makes a point of it — so importing a source-manifest
+ *      block into it would blur the distinction that file is built on.
+ *   3. It keeps the mutation story in one command: one file, one run, both
+ *      halves, which is what a reviewer re-runs.
+ *
+ * The price is that the app suite packs all five packages twice per run. Measured
+ * at ~0.15s per pack, that is well under a second for the extra five — paid
+ * knowingly, and the number is here so a future reader can re-decide with it
+ * rather than re-measure.
  *
  * ## (a) Publish metadata
  *
@@ -29,6 +49,25 @@
  * have shipped a front page of dead links, invisibly, because nothing in the repo
  * renders a README the way the registry does. A wrong `directory` is the same
  * defect with a plausible-looking field in place of a missing one.
+ *
+ * Three fields are pinned ABSENT, and that is not symmetry for its own sake — it
+ * is the half that a "add all the standard npm fields" pass gets wrong, which is
+ * a pass somebody will make precisely because this commit made the others
+ * present.
+ *
+ *   - **`author.email`** — the registry is public, a published version cannot be
+ *     unpublished at will, and an address in a manifest is an address in every
+ *     mirror of it forever. The name and the GitHub URL say who wrote this; the
+ *     mailbox adds nothing a reader needs and cannot be taken back.
+ *   - **`sideEffects`** — `false` licenses a bundler to drop a module it thinks
+ *     nobody uses, and `assertServerOnImport()` is a module whose entire job is
+ *     to run at import. Tree-shaking it away is a server/client boundary that
+ *     silently stops applying. Absent is the SAFE default here, so the pin is
+ *     "no key", not "the key is true".
+ *   - **`types`** — every `main`/`exports` target is a `.ts` file, which
+ *     TypeScript already treats as self-typed. A `types` pointer would add
+ *     nothing today and would be one more thing to keep in step if the build
+ *     shape ever changed.
  *
  * Read off the SOURCE manifest, not the packed one, for two reasons. Source is
  * where a contributor edits and therefore where a regression is introduced. And
@@ -52,20 +91,33 @@
  * There was no gate that read the README at all.
  *
  * So: for each package, every relative markdown link, reference definition, `src`
- * and `srcset` in `README.md` (and `GUIDE.md` where present) whose target lands
- * INSIDE the package directory must be a file the tarball ships.
+ * and `srcset` in every markdown file THE TARBALL SHIPS, whose target lands
+ * INSIDE the package directory, must itself be a file the tarball ships.
+ *
+ * The scanned document set is DERIVED from that shipped file list, never listed.
+ * It was the literal `['README.md', 'GUIDE.md']` for one commit, and this guard's
+ * own change is what made that stale: adding `SPEC.md` to `files` put a third
+ * 110 KB document — carrying its own `./README.md` and `./LICENSE` links — into
+ * the tarball and outside the scan. They resolve today, so nothing was broken;
+ * what was broken is that a future edit to them would have been invisible to the
+ * one pin written for exactly that defect. Deriving the set is also the same
+ * "discovered, never listed" rule the package enumeration above already follows,
+ * and it means the next package to ship a doc is covered without an edit here.
  *
  * **Targets OUTSIDE the package are deliberately ignored here.**
  * `../harness-patterns` (three packages), `../../rootfs` and
  * `../../docs/tutorials/...` are cross-repo links: they are never in anybody's
  * tarball and cannot be, because they are not part of the package. Whether they
- * resolve is a question about the RENDERED page on GitHub and on npmjs.com —
- * owned by the README lane, which is also the lane that can fix the two that are
- * wrong today (`harness-baml`'s `../docs/...` has the wrong depth; `sandbox`'s
- * `../../rootfs` is a directory, which npm's rewriter turns into a blob URL).
- * This file makes exactly one claim, about exactly one artifact: the tarball. A
- * pin that failed on a link it has no power to fix would be a red nobody can
- * clear from the manifest, which is the only file this lane owns.
+ * resolve is a question about the RENDERED page on GitHub and on npmjs.com, and
+ * it belongs to the README lane. Only ONE of them is actually dead:
+ * `harness-baml`'s `../docs/tutorials/...` has the wrong relative depth and
+ * resolves to a `packages/docs/` that does not exist. The two DIRECTORY targets
+ * are fine — npm's rewriter produces a `/blob/<ref>/<dir>` URL and GitHub
+ * 301-redirects that to `/tree/<sha>/<dir>`, which resolves; an earlier version
+ * of this note claimed they 404, and that was checked and is wrong. This file
+ * makes exactly one claim, about exactly one artifact: the tarball. A pin that
+ * failed on a link it has no power to fix would be a red nobody can clear from
+ * the manifest, which is the only file this lane owns.
  *
  * Fenced code blocks ARE stripped before matching, which is the opposite of the
  * call `scripts/pack-smoke-entries.mjs` makes about comments, and the difference
@@ -80,16 +132,19 @@
  *
  * ## Proven, not just green
  *
- * Two mutations, on the record in the PR that shipped this file: remove
- * `"SPEC.md"` from `packages/harness-patterns/package.json`'s `files` → (b) goes
- * red naming `SPEC.md`; point one `repository.directory` at a path that is not
- * the package's own → (a) goes red naming both paths.
+ * Six mutations, all on the record in the PR that shipped this file. (a): point
+ * one `repository.directory` at a path that is not the package's own → red
+ * naming both paths; add an `email` to one `author` → red; add
+ * `"sideEffects": false` to one manifest → red; add a `"types"` to one manifest
+ * → red. (b): remove `"SPEC.md"` from `packages/harness-patterns/package.json`'s
+ * `files` → red naming `SPEC.md`; add a dead in-package link to `SPEC.md` — the
+ * document the literal doc list used to miss — → red naming its target.
  */
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, posix, relative, resolve } from 'node:path'
+import { dirname, join, posix, relative, resolve } from 'node:path'
 
 // `process.cwd()` is `app/` under vitest, the same anchor the other source-scan
 // pins use.
@@ -298,6 +353,27 @@ describe('published package manifests', () => {
           expect(manifest.keywords?.length ?? 0).toBeLessThanOrEqual(8)
         })
 
+        it('carries no author email, and no sideEffects or types key', () => {
+          // The three a "fill in the standard npm fields" pass adds by reflex,
+          // and the three this repo has decided against. Rationale in the
+          // docblock; each is pinned against its own mutation in the PR.
+          expect(
+            manifest.author,
+            'the registry is public and a published version is not retractable — the ' +
+              'name and the GitHub URL identify the author without shipping a mailbox',
+          ).not.toHaveProperty('email')
+          expect(
+            manifest,
+            '`sideEffects: false` licenses a bundler to drop the assertServerOnImport() ' +
+              'guard modules as dead code, and their whole job is running at import',
+          ).not.toHaveProperty('sideEffects')
+          expect(
+            manifest,
+            'every main/exports target is a .ts file, which TypeScript already treats as ' +
+              'self-typed — a `types` pointer adds nothing and is one more thing to drift',
+          ).not.toHaveProperty('types')
+        })
+
         it('has a LICENSE and a README.md, and lists BOTH in files', () => {
           // Both halves are needed and neither subsumes the other: npm
           // force-includes `README*` and `LICENSE*` whatever `files` says, so
@@ -317,22 +393,53 @@ describe('published package manifests', () => {
     // every assertion below reads the same artifact.
     const shippedByName = new Map(packages.map((name) => [name, new Set(packedFiles(name))]))
 
-    /** Package -> the in-package targets its docs name (sorted, deduped). */
+    /** Package -> the markdown files the TARBALL ships, which is the document
+     *  set (b) scans. Derived, never listed — see the docblock: the two-name
+     *  literal this replaces went stale on the very commit that wrote it, when
+     *  `SPEC.md` started shipping and took its own in-package links outside the
+     *  scan with it. */
+    const docsByName = new Map<string, string[]>(
+      packages.map((name) => [
+        name,
+        [...shippedByName.get(name)!].filter((file) => file.endsWith('.md')).sort(),
+      ]),
+    )
+
+    /** Package -> the in-package targets its shipped docs name (sorted, deduped).
+     *  A doc's OWN directory is the base its relative links resolve against, so
+     *  a future nested `docs/x.md` is handled without a second edit here. */
     const targetsByName = new Map<string, string[]>(
       packages.map((name) => {
         const pkgDir = join(PACKAGES, name)
         const found = new Set<string>()
-        for (const doc of ['README.md', 'GUIDE.md']) {
+        for (const doc of docsByName.get(name)!) {
           const file = join(pkgDir, doc)
+          // A shipped path absent from the source tree would be a packer
+          // surprise rather than a link defect, and is not this pin's subject.
           if (!existsSync(file)) continue
           for (const target of linkTargets(readFileSync(file, 'utf8'))) {
-            const rel = inPackageTarget(pkgDir, pkgDir, target)
+            const rel = inPackageTarget(pkgDir, dirname(file), target)
             if (rel !== null) found.add(rel)
           }
         }
         return [name, [...found].sort()]
       }),
     )
+
+    it('the scanned document set is every shipped .md, SPEC.md included', () => {
+      // Read off the SAME map the scan iterates, not recomputed beside it: a
+      // second copy of the derivation would stay green while the one that
+      // matters silently narrowed. Named rather than counted, for the reason the
+      // other non-vacuity pins in this repo give — a count does not notice the
+      // one document dropping out. `SPEC.md` is the one the literal list missed,
+      // and the mutation that proves its CONTENT is read (a dead link added to
+      // it goes red) is on the record in the PR; its two existing links are also
+      // named by the other two docs, so no target can stand in for that proof.
+      expect(docsByName.get('harness-patterns')).toEqual(['GUIDE.md', 'README.md', 'SPEC.md'])
+      for (const name of packages) {
+        expect(docsByName.get(name), `${name} ships no markdown at all`).toContain('README.md')
+      }
+    })
 
     it('the extractor found the targets it is supposed to find (non-vacuity)', () => {
       // Named, not counted. Both emptiness assertions below pass for a package
@@ -358,8 +465,9 @@ describe('published package manifests', () => {
         const missing = (targetsByName.get(name) ?? []).filter((target) => !shipped.has(target))
         expect(
           missing,
-          `${name}'s README/GUIDE link these, and the tarball does not ship them — a consumer ` +
-            'reading the shipped README out of node_modules hits a dead link. Add them to `files`.',
+          `${name}'s shipped docs (${(docsByName.get(name) ?? []).join(', ')}) link these, and ` +
+            'the tarball does not ship them — a consumer reading them out of node_modules hits a ' +
+            'dead link. Add them to `files`.',
         ).toEqual([])
       })
     }

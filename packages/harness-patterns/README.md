@@ -146,6 +146,20 @@ package, in buildable prose with every snippet typecheck-pinned.
 Each of these has a section in the [spec](./SPEC.md), with the signatures,
 configuration and per-pattern semantics that belong there rather than here.
 
+## No build step
+
+This package **ships TypeScript source**: `main` and every code target in
+`exports` is a `.ts` file (`./package.json` is the one non-code entry), there is
+no `dist/`, and `pnpm pack` is the whole publish pipeline — the same is true of
+every `@hames` package. Consumers are **TS-bundler consumers**: a project whose
+bundler or runtime compiles TypeScript — Vite/vinxi, esbuild, tsx, Bun. **Not**
+`node --experimental-strip-types`: Node refuses to strip types under
+`node_modules`, which is exactly where an installed package lives
+(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, measured on Node v22.21.1). A
+plain `node dist/index.js` consumer is not supported either, deliberately — a
+build step would make the published artefact different from the source every
+test in this repo runs against.
+
 ## Status and licence
 
 This package — and only this package — is [MIT](./LICENSE) (Copyright (c) 2026

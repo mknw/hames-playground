@@ -17,15 +17,6 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
-
-/**
- * #374: a pattern run needs a run frame, and these tests drive patterns
- * directly rather than through a harness entry point — the script /
- * background-job case ruling D3 makes explicit. An empty frame gives every slot
- * its default; nesting one inside an open frame joins it rather than opening a
- * second, so this is safe to apply uniformly.
- */
-const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 import { readFile, readdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
@@ -38,6 +29,15 @@ import { runChain, configurePattern } from '@hames/harness-patterns/patterns/cha
 import { createContext, trackEvent } from '@hames/harness-patterns/context.server'
 import { DEFAULT_ERROR_SEVERITY } from '@hames/harness-patterns/types'
 import type { ErrorEventData, PatternConfig } from '@hames/harness-patterns/types'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 type Data = Record<string, unknown>
 

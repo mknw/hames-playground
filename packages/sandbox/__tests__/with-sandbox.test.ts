@@ -9,15 +9,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
 
-/**
- * #374: a pattern run needs a run frame, and these tests drive patterns
- * directly rather than through a harness entry point — the script /
- * background-job case ruling D3 makes explicit. An empty frame gives every slot
- * its default; nesting one inside an open frame joins it rather than opening a
- * second, so this is safe to apply uniformly.
- */
-const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
-
 vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
@@ -61,6 +52,15 @@ import type {
   VMHandle,
 } from '../types'
 import type { ConfiguredPattern, PatternScope, EventView } from '@hames/harness-patterns/types'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 type Calls = {
   boot: Array<{ rootfs: RootfsId; runtime: RuntimeConfig }>
@@ -150,7 +150,7 @@ describe('withSandbox', () => {
       return scope
     })
 
-    const wrapped = runInFrame(() => withSandbox({ backend, rootfs: 'base' })(inner))
+    const wrapped = withSandbox({ backend, rootfs: 'base' })(inner)
     const out = await runInFrame(() => wrapped.fn(fakeScope({}), fakeView))
 
     expect(innerRan).toBe(true)
@@ -190,7 +190,7 @@ describe('withSandbox', () => {
     const backend = fakeBackend({ connectMcpFails: true })
     const inner = fakePattern(async (scope) => scope)
 
-    const wrapped = runInFrame(() => withSandbox({ backend })(inner))
+    const wrapped = withSandbox({ backend })(inner)
     await expect(runInFrame(() => wrapped.fn(fakeScope({}), fakeView))).rejects.toThrow('boom')
 
     expect(backend.calls.boot).toHaveLength(1)
@@ -205,7 +205,7 @@ describe('withSandbox', () => {
       throw new Error('inner failure')
     })
 
-    const wrapped = runInFrame(() => withSandbox({ backend })(inner))
+    const wrapped = withSandbox({ backend })(inner)
     await expect(runInFrame(() => wrapped.fn(fakeScope({}), fakeView))).rejects.toThrow(
       'inner failure',
     )
@@ -282,15 +282,13 @@ describe('withSandbox', () => {
 
     const seen: string[] = []
     let current = 'user-a'
-    const wrapped = runInFrame(() =>
-      withSandbox({
-        backend,
-        tenantId: () => {
-          seen.push(current)
-          return current
-        },
-      })(inner),
-    )
+    const wrapped = withSandbox({
+      backend,
+      tenantId: () => {
+        seen.push(current)
+        return current
+      },
+    })(inner)
 
     await runInFrame(() => wrapped.fn(fakeScope({}), fakeView))
     current = 'user-b'
@@ -370,7 +368,7 @@ describe('withSandbox scheduler + pool wiring', () => {
     })
     const pool = new WarmPool(backend, { caps: { base: 1 }, idleEvictMs: 60_000 })
     const inner = fakePattern(async (scope) => scope)
-    const wrap = runInFrame(() => withSandbox({ backend, pool, rootfs: 'base' })(inner))
+    const wrap = withSandbox({ backend, pool, rootfs: 'base' })(inner)
 
     await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
     expect(backend.calls.boot).toHaveLength(1)
@@ -478,7 +476,7 @@ describe('withSandbox id/fresh (step 6)', () => {
   it('{ id } reuses the same VM across consecutive invocations', async () => {
     const kit = buildKit()
     const inner = fakePattern(async (scope) => scope)
-    const wrap = runInFrame(() => withSandbox({ ...kit, id: 'session-42' })(inner))
+    const wrap = withSandbox({ ...kit, id: 'session-42' })(inner)
 
     await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
     await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
@@ -562,9 +560,7 @@ describe('withSandbox id/fresh (step 6)', () => {
 
   it('{ fresh: true } (no id) destroys the VM when connectMcp fails', async () => {
     const backend = fakeBackend({ connectMcpFails: true })
-    const wrap = runInFrame(() =>
-      withSandbox({ backend, fresh: true })(fakePattern(async (scope) => scope)),
-    )
+    const wrap = withSandbox({ backend, fresh: true })(fakePattern(async (scope) => scope))
 
     await expect(runInFrame(() => wrap.fn(fakeScope({}), fakeView))).rejects.toThrow('boom')
 
@@ -588,7 +584,7 @@ describe('withSandbox id/fresh (step 6)', () => {
   it('{ id } refCount drops to 0 after release; reacquire reuses without booting', async () => {
     const kit = buildKit()
     const inner = fakePattern(async (scope) => scope)
-    const wrap = runInFrame(() => withSandbox({ ...kit, id: 'session-42' })(inner))
+    const wrap = withSandbox({ ...kit, id: 'session-42' })(inner)
 
     await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
     // After release, refCount=0 but entry stays. Sweeper hasn't run.
@@ -646,18 +642,14 @@ describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
   it('exposes the wrapped pattern as children', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
-    const wrapped = runInFrame(() =>
-      withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner),
-    )
+    const wrapped = withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner)
     expect(wrapped.children).toEqual([inner])
   })
 
   it('declares workspaceSync when id + syncWorkspace are both set', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
-    const wrapped = runInFrame(() =>
-      withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner),
-    )
+    const wrapped = withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner)
     expect(wrapped.capabilities?.workspaceSync).toBe(true)
     // Detectable by the capability walker (the registry's agentUsesSyncWorkspace path).
     expect(harnessUsesSyncWorkspace([wrapped])).toBe(true)
@@ -671,9 +663,7 @@ describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
   it('MUTATION PIN: the declared capability IS what the core probe reads', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
-    const wrapped = runInFrame(() =>
-      withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner),
-    )
+    const wrapped = withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner)
 
     expect(declaresWorkspaceSync(wrapped)).toBe(true)
     expect(declaresWorkspaceSync(wrapped)).toBe(wrapped.capabilities?.workspaceSync === true)
@@ -689,9 +679,7 @@ describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
   it('leaves the wrapped pattern`s config untouched, by identity, even when declaring', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
-    const wrapped = runInFrame(() =>
-      withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner),
-    )
+    const wrapped = withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner)
     expect(wrapped.config).toBe(inner.config)
     expect(inner.capabilities).toBeUndefined()
   })
@@ -699,7 +687,7 @@ describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
   it('does NOT declare it without syncWorkspace (config stays transparent)', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
-    const wrapped = runInFrame(() => withSandbox({ backend, id: 'sess-1' })(inner))
+    const wrapped = withSandbox({ backend, id: 'sess-1' })(inner)
     expect(wrapped.capabilities).toBeUndefined()
     expect(wrapped.config).toEqual(inner.config)
     expect(harnessUsesSyncWorkspace([wrapped])).toBe(false)
@@ -709,7 +697,7 @@ describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const wrapped = runInFrame(() => withSandbox({ backend, syncWorkspace: true })(inner))
+    const wrapped = withSandbox({ backend, syncWorkspace: true })(inner)
     expect(wrapped.capabilities).toBeUndefined()
     expect(wrapped.config).toEqual(inner.config)
     expect(harnessUsesSyncWorkspace([wrapped])).toBe(false)
@@ -724,7 +712,7 @@ describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    runInFrame(() => withSandbox({ backend, syncWorkspace: true })(inner))
+    withSandbox({ backend, syncWorkspace: true })(inner)
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn.mock.calls[0][0]).toContain('syncWorkspace')
     expect(warn.mock.calls[0][0]).toContain('requires an `id`')
@@ -735,7 +723,7 @@ describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    runInFrame(() => withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner))
+    withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner)
     expect(warn).not.toHaveBeenCalled()
     warn.mockRestore()
   })
@@ -764,10 +752,8 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
   // so running it every turn is idempotent (see work-artifacts.test.ts).
   it('hydrates /work/in on EVERY turn, not just the first boot (#206 §6.1)', async () => {
     const kit = buildKit()
-    const wrap = runInFrame(() =>
-      withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
-        fakePattern(async (scope) => scope),
-      ),
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async (scope) => scope),
     )
 
     await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
@@ -793,10 +779,8 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
     kit.attachments.release(shellAtt)
     artifacts.hydrateWorkspace.mockClear()
 
-    const wrap = runInFrame(() =>
-      withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
-        fakePattern(async (scope) => scope),
-      ),
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async (scope) => scope),
     )
     await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
 
@@ -807,10 +791,8 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
     const kit = buildKit()
     const baseline = new Map([['old.csv', 'hash-1']])
     artifacts.snapshotOutputs.mockResolvedValue(baseline)
-    const wrap = runInFrame(() =>
-      withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
-        fakePattern(async (scope) => scope),
-      ),
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async (scope) => scope),
     )
 
     await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
@@ -823,10 +805,8 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     artifacts.hydrateWorkspace.mockRejectedValue(new Error('gateway down'))
     const inner = vi.fn(async (scope: PatternScope<Record<string, unknown>>) => scope)
-    const wrap = runInFrame(() =>
-      withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
-        fakePattern(inner),
-      ),
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(inner),
     )
 
     await expect(runInFrame(() => wrap.fn(fakeScope({}), fakeView))).resolves.toBeDefined()
@@ -844,10 +824,8 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     artifacts.snapshotOutputs.mockRejectedValue(new Error('no such directory'))
     const scope = fakeScope({})
-    const wrap = runInFrame(() =>
-      withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
-        fakePattern(async (s) => s),
-      ),
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async (s) => s),
     )
 
     // The turn still runs and still returns…
@@ -868,10 +846,8 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     artifacts.promoteOutputs.mockRejectedValue(new Error('store write failed'))
     const scope = fakeScope({})
-    const wrap = runInFrame(() =>
-      withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
-        fakePattern(async (s) => s),
-      ),
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async (s) => s),
     )
 
     await expect(runInFrame(() => wrap.fn(scope, fakeView))).resolves.toBeDefined()
@@ -895,10 +871,8 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
       skipped: [{ filename: 'report.xlsx', error: 'content too large' }],
     })
     const scope = fakeScope({})
-    const wrap = runInFrame(() =>
-      withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
-        fakePattern(async (s) => s),
-      ),
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async (s) => s),
     )
 
     await runInFrame(() => wrap.fn(scope, fakeView))
@@ -911,12 +885,10 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
 
   it('promotes deliverables even when the pattern throws mid-turn', async () => {
     const kit = buildKit()
-    const wrap = runInFrame(() =>
-      withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
-        fakePattern(async () => {
-          throw new Error('actor gave up')
-        }),
-      ),
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async () => {
+        throw new Error('actor gave up')
+      }),
     )
 
     await expect(runInFrame(() => wrap.fn(fakeScope({}), fakeView))).rejects.toThrow(
@@ -929,10 +901,8 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
     const kit = buildKit()
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     artifacts.promoteOutputs.mockRejectedValue(new Error('store write failed'))
-    const wrap = runInFrame(() =>
-      withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
-        fakePattern(async (scope) => scope),
-      ),
+    const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
+      fakePattern(async (scope) => scope),
     )
 
     await expect(runInFrame(() => wrap.fn(fakeScope({}), fakeView))).resolves.toBeDefined()
@@ -941,9 +911,7 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
 
   it('skips the whole persistence path when syncWorkspace is off', async () => {
     const kit = buildKit()
-    const wrap = runInFrame(() =>
-      withSandbox({ ...kit, id: 'sess-1' })(fakePattern(async (scope) => scope)),
-    )
+    const wrap = withSandbox({ ...kit, id: 'sess-1' })(fakePattern(async (scope) => scope))
 
     await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
 

@@ -26,6 +26,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { mockCallTool, mockListTools, fixtures } from '../../mocks/mcp'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -35,7 +36,6 @@ import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
  * second, so this is safe to apply uniformly.
  */
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
-import { mockCallTool, mockListTools, fixtures } from '../../mocks/mcp'
 
 process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'offline-render-test'
 

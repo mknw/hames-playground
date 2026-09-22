@@ -401,3 +401,73 @@ describe('activeInferenceTier — what runs outside any scope', () => {
     expect(activeInferenceTier()).toBe('verda')
   })
 })
+
+// ============================================================================
+// The RUN FRAME's `inference` slot (#374) — the fifth slot's reader.
+//
+// The other four slots' "reads the frame, not a module global" pins live in
+// `packages/harness-patterns/__tests__/run-frame.test.ts`. This one cannot: its
+// reader is in `@hames/harness-baml`, which core must not import (the
+// dependency arrow runs the other way, and that package has no test host of its
+// own). So it lives here, beside the rest of that module's suite.
+// ============================================================================
+
+describe("the run frame's inference slot — the reader reads the frame", () => {
+  it('the frame beats the module-level tier policy', async () => {
+    // Mutation: restore `tierStore.getStore() ?? tierPolicy.defaultTier()` — a
+    // store of this module's own, which is what the frame replaced — and the
+    // frame's tier becomes invisible: `activeInferenceTier()` answers
+    // 'anthropic' inside the frame and this goes red.
+    configureEndpointOnly()
+    const clients = await load()
+    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+
+    // The module global — the decoy this reader must not prefer.
+    expect(clients.activeInferenceTier()).toBe('anthropic')
+
+    const inside = await withRunFrame({ inference: { tier: 'verda' } }, async () =>
+      clients.activeInferenceTier(),
+    )
+    expect(inside).toBe('verda')
+    // And the frame closed behind itself.
+    expect(clients.activeInferenceTier()).toBe('anthropic')
+  })
+
+  it('an unrecognised tier string falls back to the default rather than routing blind', async () => {
+    // Core carries the tier as an OPAQUE STRING — it cannot know what 'verda'
+    // means — so the narrowing happens here, and a host that writes a typo into
+    // the slot gets the safe tier rather than an unrouted one.
+    configureEndpointOnly()
+    const clients = await load()
+    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+
+    const seen = await withRunFrame({ inference: { tier: 'verdaa' } }, async () => ({
+      tier: clients.activeInferenceTier(),
+      override: clients.clientOverrideFor('controller'),
+    }))
+    expect(seen.tier).toBe('anthropic')
+    expect(seen.override).toBeUndefined()
+  })
+
+  it("a per-run clientOverride in the generic slot pre-empts this package's tier map", async () => {
+    // D1's "bring your own provider or model": the slot is generic and the
+    // consumer's own client layer wins. Mutation: drop the `supplied` branch at
+    // the top of `clientOverrideFor` and the tier map answers instead.
+    configureEndpointOnly()
+    const clients = await load()
+    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+
+    const picked = await withRunFrame(
+      { inference: { tier: 'verda', clientOverride: () => ({ client: 'ConsumerModel' }) } },
+      async () => clients.clientOverrideFor('controller'),
+    )
+    expect(picked).toEqual({ client: 'ConsumerModel' })
+
+    // Without the override the same frame takes the tier map — so the assertion
+    // above is about precedence, not about an empty map.
+    const mapped = await withRunFrame({ inference: { tier: 'verda' } }, async () =>
+      clients.clientOverrideFor('controller'),
+    )
+    expect(mapped).toEqual({ client: 'VerdaQwen' })
+  })
+})

@@ -13,6 +13,8 @@ import '../../../lib/inference/config.server'
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import type { UnifiedContext, ContextEvent, DescribeBatchItem } from '@hames/harness-patterns/types'
+import { CLIENT_MAX_OUTPUT_TOKENS } from '../../../lib/settings'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -22,8 +24,6 @@ import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
  * second, so this is safe to apply uniformly.
  */
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
-import type { UnifiedContext, ContextEvent, DescribeBatchItem } from '@hames/harness-patterns/types'
-import { CLIENT_MAX_OUTPUT_TOKENS } from '../../../lib/settings'
 
 // Mock server-only imports
 vi.mock('@hames/harness-patterns/assert.server', () => ({

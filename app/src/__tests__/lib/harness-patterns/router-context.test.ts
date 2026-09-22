@@ -25,6 +25,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { readFileSync, existsSync } from 'node:fs'
+import path from 'node:path'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -34,8 +36,6 @@ import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
  * second, so this is safe to apply uniformly.
  */
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
-import { readFileSync, existsSync } from 'node:fs'
-import path from 'node:path'
 
 // Mock server-only imports
 vi.mock('@hames/harness-patterns/assert.server', () => ({

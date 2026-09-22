@@ -7,15 +7,6 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
-
-/**
- * #374: a pattern run needs a run frame, and these tests drive patterns
- * directly rather than through a harness entry point — the script /
- * background-job case ruling D3 makes explicit. An empty frame gives every slot
- * its default; nesting one inside an open frame joins it rather than opening a
- * second, so this is safe to apply uniformly.
- */
-const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 import { mockListTools } from '../../../mocks/mcp'
 import { mockFinalAction } from '../../../mocks/baml'
 import type { ContextEvent, EventType, UnifiedContext } from '@hames/harness-patterns'
@@ -26,6 +17,15 @@ import type {
   ControllerInput,
   ActorInput,
 } from '@hames/harness-patterns/types'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 // Mock server-only imports
 vi.mock('@hames/harness-patterns/assert.server', () => ({

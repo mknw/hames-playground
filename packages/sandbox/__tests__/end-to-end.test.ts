@@ -31,6 +31,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+import { EventEmitter } from 'node:events'
+import { mockAction, mockCriticResult } from './fixtures/baml'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -40,8 +42,6 @@ import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
  * second, so this is safe to apply uniformly.
  */
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
-import { EventEmitter } from 'node:events'
-import { mockAction, mockCriticResult } from './fixtures/baml'
 
 vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),

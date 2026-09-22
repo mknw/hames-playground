@@ -16,6 +16,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+// Type-only: erased at compile time, so it does not defeat the vi.mock below.
+import type { RetrieverData } from '@hames/harness-patterns/patterns/retriever.server'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -25,8 +27,6 @@ import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
  * second, so this is safe to apply uniformly.
  */
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
-// Type-only: erased at compile time, so it does not defeat the vi.mock below.
-import type { RetrieverData } from '@hames/harness-patterns/patterns/retriever.server'
 
 /** The retriever's data plus an index signature — the shape `runChain` needs,
  *  and what the real agents get from `SessionData`. */

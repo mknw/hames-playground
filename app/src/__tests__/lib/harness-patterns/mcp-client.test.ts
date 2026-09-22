@@ -415,7 +415,7 @@ describe('mcp-client', () => {
   describe('callTool scoped-transport dispatch', () => {
     it('routes scoped tool names to the scoped transport, not the gateway', async () => {
       const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
-      const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
+      const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
 
       const sandboxCallTool = vi.fn().mockResolvedValue({ success: true, data: 'from-sandbox' })
       const transport = {
@@ -425,7 +425,7 @@ describe('mcp-client', () => {
         callTool: sandboxCallTool,
       }
 
-      const result = await withTransport(transport, () =>
+      const result = await withRunFrame({ transports: [transport] }, () =>
         callTool('sandbox_bash', { cmd: 'echo hi' }),
       )
 
@@ -437,7 +437,7 @@ describe('mcp-client', () => {
 
     it('falls through to the gateway for tools the scoped transport does not own', async () => {
       const { callTool } = await import('@hames/harness-patterns/mcp-client.server')
-      const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
+      const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
 
       const sandboxCallTool = vi.fn()
       const transport = {
@@ -447,7 +447,7 @@ describe('mcp-client', () => {
         callTool: sandboxCallTool,
       }
 
-      const result = await withTransport(transport, () =>
+      const result = await withRunFrame({ transports: [transport] }, () =>
         callTool('neo4j_query', { cypher: 'MATCH (n) RETURN n' }),
       )
 

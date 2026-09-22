@@ -24,8 +24,18 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
 import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 // Mock server-only imports
 vi.mock('@hames/harness-patterns/assert.server', () => ({
@@ -69,9 +79,11 @@ async function runRouterOver(turns: ReadonlyArray<{ type: string; content: strin
     { web_search: 'Web lookups', neo4j: 'Database queries' },
     { route: mockRouteMessageOp },
   )
-  const scope = await pattern.fn(
-    { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
-    createEventView(ctx),
+  const scope = await runInFrame(() =>
+    pattern.fn(
+      { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
+      createEventView(ctx),
+    ),
   )
   // routeMessageOp(message, history, routes, collector)
   const [message, history] = mockRouteMessageOp.mock.calls[0] as [

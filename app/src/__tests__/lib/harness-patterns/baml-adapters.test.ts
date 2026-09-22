@@ -67,7 +67,12 @@ async function withVerdaTier<T>(fn: () => Promise<T>): Promise<T> {
   process.env.VERDA_INFERENCE_API_KEY = 'test-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
   try {
-    return await clients.runWithInferenceTier('verda', fn)
+    // The tier is a SLOT of the run frame since #374, and the fail-closed
+    // reachability check the old opener made on the way in is now the
+    // host-called `assertInferenceTier`. Both, in that order, is what a turn does.
+    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+    clients.assertInferenceTier('verda')
+    return await withRunFrame({ inference: { tier: 'verda' } }, fn)
   } finally {
     for (const k of KEYS) {
       if (saved[k] === undefined) delete process.env[k]
@@ -1312,11 +1317,11 @@ describe('sandbox tool descriptions in prompt', () => {
 
   it('prepends sandbox tools to LoopController prompt when scope is active', async () => {
     const { createLoopControllerAdapter } = await import('@hames/harness-baml/baml-adapters.server')
-    const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
+    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
 
     const controller = createLoopControllerAdapter()
 
-    await withTransport(fakeTransport(), () =>
+    await withRunFrame({ transports: [fakeTransport()] }, () =>
       controller({
         userMessage: 'msg',
         intent: 'intent',
@@ -1358,7 +1363,7 @@ describe('sandbox tool descriptions in prompt', () => {
     // the innermost transport that owns it, so showing the outer one's
     // description beside it would document a machine the call never reaches.
     const { createLoopControllerAdapter } = await import('@hames/harness-baml/baml-adapters.server')
-    const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
+    const { withRunFrame, amendRunFrame } = await import('@hames/harness-patterns/run-frame.server')
 
     const scope = (id: string, description: string) => ({
       id,
@@ -1370,8 +1375,8 @@ describe('sandbox tool descriptions in prompt', () => {
     })
 
     const controller = createLoopControllerAdapter()
-    await withTransport(scope('sandbox:outer', 'outer box'), () =>
-      withTransport(scope('sandbox:inner', 'inner box'), () =>
+    await withRunFrame({ transports: [scope('sandbox:outer', 'outer box')] }, () =>
+      amendRunFrame({ transports: [scope('sandbox:inner', 'inner box')] }, () =>
         controller({ userMessage: 'msg', intent: 'intent', tools: ['Return'], turns: [], turn: 0 }),
       ),
     )
@@ -1387,11 +1392,11 @@ describe('sandbox tool descriptions in prompt', () => {
   it('prepends sandbox tools to ActorController prompt when scope is active', async () => {
     const { createActorControllerAdapter } =
       await import('@hames/harness-baml/baml-adapters.server')
-    const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
+    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
 
     const controller = createActorControllerAdapter(['code-mode', 'Return'])
 
-    await withTransport(fakeTransport(), () => controller('msg', 'intent', [], []))
+    await withRunFrame({ transports: [fakeTransport()] }, () => controller('msg', 'intent', [], []))
 
     // 3rd arg of ActorController is the `tools` array.
     const tools = mockActorController.mock.calls[0][2] as Array<{ name: string }>

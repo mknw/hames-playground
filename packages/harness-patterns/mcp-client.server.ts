@@ -6,7 +6,7 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import { getActiveInjectionGuard } from './injection-guard-scope.server'
+import { currentRunFrame } from './run-frame.server'
 import { activeTransports, processTransports } from './tool-transport.server'
 import { markGatewayReachable, markGatewayUnreachable } from './gateway-health.server'
 import type { ToolCallResult, MCPToolDescription } from './types'
@@ -329,7 +329,10 @@ export async function callTool(
 ): Promise<ToolCallResult> {
   const result = await dispatchTool(name, args)
 
-  const guard = getActiveInjectionGuard()
+  // The run frame's `guard` slot, read SOFTLY: `callTool` is also reached from
+  // a gateway health probe and a tool-catalog refresh, neither of which is a
+  // run, and an absent guard is this chokepoint's opt-in sentinel.
+  const guard = currentRunFrame()?.guard
   if (!guard || !guard.isUntrusted(name)) return result
 
   // `summary` answers "is there anything to annotate?" and the REFERENCE answers

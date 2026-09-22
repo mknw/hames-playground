@@ -1,7 +1,7 @@
 /**
  * Request-scoped execution context for harness runs.
  *
- * Mirrors `settings-context.server.ts`: a tiny AsyncLocalStorage that lets
+ * A tiny AsyncLocalStorage that lets
  * pattern closures and app-side tools read *who* and *which conversation* a
  * call belongs to at runtime, without threading either through every signature.
  *

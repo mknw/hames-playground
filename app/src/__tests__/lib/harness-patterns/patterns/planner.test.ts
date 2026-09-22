@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
 import { mockListTools } from '../../../mocks/mcp'
 import { mockFinalAction } from '../../../mocks/baml'
 import type { ContextEvent, EventType, UnifiedContext } from '@hames/harness-patterns'
@@ -16,6 +17,15 @@ import type {
   ControllerInput,
   ActorInput,
 } from '@hames/harness-patterns/types'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 // Mock server-only imports
 vi.mock('@hames/harness-patterns/assert.server', () => ({
@@ -128,7 +138,7 @@ describe('planner', () => {
     const scope = createScope(PATTERN_ID, {})
     const view = createEventView(ctx, pattern.config.viewConfig, PATTERN_ID)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     expect(mockPlanner).toHaveBeenCalledTimes(1)
     expect((result.data as { plan?: typeof PLAN }).plan).toEqual(PLAN)
@@ -149,7 +159,7 @@ describe('planner', () => {
     const scope = createScope(PATTERN_ID, { intent: 'compacted intent' })
     const view = createEventView(ctx, pattern.config.viewConfig, PATTERN_ID)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     const [userMessage, intent, tools, context] = mockPlanner.mock.calls[0]
     expect(userMessage).toBe('raw question')
@@ -167,7 +177,7 @@ describe('planner', () => {
     const scope = createScope(PATTERN_ID, {})
     const view = createEventView(ctx, pattern.config.viewConfig, PATTERN_ID)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     const plan = (result.data as { plan: { plan: string } }).plan
     expect(plan.plan.startsWith('x'.repeat(50))).toBe(true)
@@ -188,7 +198,7 @@ describe('planner', () => {
       PATTERN_ID,
     )
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     const created = result.events.find((e) => e.type === 'plan_created')!
     expect((created.data as { toolCount: number }).toolCount).toBe(2)
@@ -201,7 +211,7 @@ describe('planner', () => {
     const scope = createScope(PATTERN_ID, {})
     const view = createEventView(ctx, pattern.config.viewConfig, PATTERN_ID)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     expect(mockPlanner).not.toHaveBeenCalled()
     expect((result.data as { plan?: unknown }).plan).toBeUndefined()
@@ -228,7 +238,7 @@ describe('planner', () => {
       PATTERN_ID,
     )
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     expect(mockPlanner).toHaveBeenCalledTimes(1)
     expect(mockPlanner.mock.calls[0][0]).toBe('narrow view')
@@ -248,7 +258,7 @@ describe('planner', () => {
       PATTERN_ID,
     )
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     expect((result.data as { plan?: unknown }).plan).toBeUndefined()
     expect(result.events.filter((e) => e.type === 'plan_created')).toHaveLength(0)
@@ -272,7 +282,7 @@ describe('planner', () => {
     const scope = createScope(PATTERN_ID, {})
     const view = createEventView(ctx, pattern.config.viewConfig, PATTERN_ID)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     expect((result.data as { plan?: unknown }).plan).toBeUndefined()
     const errors = result.events.filter((e) => e.type === 'error')
@@ -312,7 +322,7 @@ describe('planner — a carried-over plan never survives a turn without one', ()
       PATTERN_ID,
     )
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     expect((result.data as { plan?: unknown }).plan).toBeUndefined()
     // The executor gets nothing to follow — not the previous question's plan.
@@ -325,7 +335,7 @@ describe('planner — a carried-over plan never survives a turn without one', ()
     const scope = createScope(PATTERN_ID, { plan: PLAN })
     const view = createEventView(ctxOf([]), pattern.config.viewConfig, PATTERN_ID)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     expect((result.data as { plan?: unknown }).plan).toBeUndefined()
   })
@@ -341,7 +351,7 @@ describe('planner — a carried-over plan never survives a turn without one', ()
       PATTERN_ID,
     )
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     expect((result.data as { plan?: unknown }).plan).toBeUndefined()
   })
@@ -391,7 +401,7 @@ describe('plan plumbing into the loop patterns', () => {
     const scope = createScope('exec', { intent: 'q', plan: PLAN })
     const view = createEventView(ctxOf(userTurn('q')))
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     // Lane A4: planContext rides the object seam now — same outcome, one
     // named field instead of a positional slot.
@@ -412,7 +422,7 @@ describe('plan plumbing into the loop patterns', () => {
     const scope = createScope('exec', { intent: 'q' })
     const view = createEventView(ctxOf(userTurn('q')))
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     expect((controller.mock.calls[0][0] as ControllerInput).planContext).toBeUndefined()
   })
@@ -438,7 +448,7 @@ describe('plan plumbing into the loop patterns', () => {
     const scope = createScope('ac', { intent: 'q', plan: PLAN })
     const view = createEventView(ctxOf(userTurn('q')))
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     // Lane A4: planContext rides the object seam now — same outcome, one
     // named field instead of a positional slot.

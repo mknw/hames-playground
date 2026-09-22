@@ -12,8 +12,18 @@ import '../../../lib/inference/config.server'
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
 import type { UnifiedContext, ContextEvent, DescribeBatchItem } from '@hames/harness-patterns/types'
 import { CLIENT_MAX_OUTPUT_TOKENS } from '../../../lib/settings'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 // Mock server-only imports
 vi.mock('@hames/harness-patterns/assert.server', () => ({
@@ -111,10 +121,12 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     expect(mockDescribe).toHaveBeenCalledOnce()
     expect(mockDescribe).toHaveBeenCalledWith(
@@ -149,10 +161,12 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     expect(mockDescribe).not.toHaveBeenCalled()
     expect(onPersist).toHaveBeenCalledOnce()
@@ -175,10 +189,12 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     expect(mockDescribe).not.toHaveBeenCalled()
   })
@@ -200,10 +216,12 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     expect(mockDescribe).not.toHaveBeenCalled()
   })
@@ -225,10 +243,12 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     expect(mockDescribe).not.toHaveBeenCalled()
   })
@@ -249,10 +269,12 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     expect(mockDescribe).not.toHaveBeenCalled()
   })
@@ -285,10 +307,12 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     // One batched call, no per-item calls at all
     expect(mockDescribeBatch).toHaveBeenCalledOnce()
@@ -317,10 +341,12 @@ describe('compactBulkData', () => {
     ]
 
     const ctx = createTestContext(events)
-    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     expect((events[1].data as { summary?: string }).summary).toBe('first')
     expect((events[2].data as { summary?: string }).summary).toBe('second')
@@ -341,10 +367,12 @@ describe('compactBulkData', () => {
     ]
 
     const ctx = createTestContext(events)
-    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     // Exactly ONE repair call, for the missing item only
     expect(mockDescribeBatch).toHaveBeenCalledOnce()
@@ -371,10 +399,12 @@ describe('compactBulkData', () => {
 
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     expect(mockDescribe).toHaveBeenCalledTimes(2)
     expect((events[1].data as { summary?: string }).summary).toBe('per-item summary')
@@ -397,10 +427,12 @@ describe('compactBulkData', () => {
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
     // Must not throw, and must still persist whatever was gathered
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     expect((events[1].data as { summary?: string }).summary).toBeUndefined()
     expect((events[2].data as { summary?: string }).summary).toBeUndefined()
@@ -423,10 +455,12 @@ describe('compactBulkData', () => {
     )
 
     const ctx = createTestContext(events)
-    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     expect(mockDescribeBatch).toHaveBeenCalledTimes(2)
     const sizes = mockDescribeBatch.mock.calls.map((c) => (c[0] as unknown[]).length)
@@ -467,10 +501,12 @@ describe('compactBulkData', () => {
       )
 
       const ctx = createTestContext(events)
-      await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
-        describe: mockDescribe,
-        describeBatch: mockDescribeBatch,
-      })
+      await runInFrame(() =>
+        compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
+          describe: mockDescribe,
+          describeBatch: mockDescribeBatch,
+        }),
+      )
 
       const sizes = mockDescribeBatch.mock.calls.map((c) => (c[0] as unknown[]).length)
       expect(sizes).toEqual([5, 2])
@@ -527,7 +563,11 @@ describe('compactBulkData', () => {
     process.env.VERDA_INFERENCE_API_KEY = 'test-key'
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
     try {
-      await clients.runWithInferenceTier('verda', async () => {
+      // #374: the tier is a slot of the run frame; the reachability check the
+      // old opener made is now the host-called `assertInferenceTier`.
+      const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+      clients.assertInferenceTier('verda')
+      await withRunFrame({ inference: { tier: 'verda' } }, async () => {
         expect(clients.resolveClientForRole('describe')).toBe('LocalQwenSmall')
         expect(CLIENT_MAX_OUTPUT_TOKENS.LocalQwenSmall).toBeLessThan(
           CLIENT_MAX_OUTPUT_TOKENS.DescribeAnthropic,
@@ -560,10 +600,12 @@ describe('compactBulkData', () => {
     ]
 
     const ctx = createTestContext(events)
-    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     expect(mockDescribeBatch).not.toHaveBeenCalled()
     expect(mockDescribe).toHaveBeenCalledOnce()
@@ -582,10 +624,12 @@ describe('compactBulkData', () => {
     ]
 
     const ctx = createTestContext(events)
-    await compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, vi.fn().mockResolvedValue(undefined), {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     // One target left → single-item path, and the done one is untouched
     expect(mockDescribeBatch).not.toHaveBeenCalled()
@@ -612,10 +656,12 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     expect(mockDescribe).toHaveBeenCalledOnce()
     // The 4th arg (result) should be truncated
@@ -643,10 +689,12 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     // Empty string should not be stored as summary
     expect((events[1].data as { summary?: string }).summary).toBeUndefined()
@@ -673,10 +721,12 @@ describe('compactBulkData', () => {
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
     // Should not throw — Promise.allSettled handles rejections
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     // Summary should not be set
     expect((events[1].data as { summary?: string }).summary).toBeUndefined()
@@ -695,10 +745,12 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     expect(mockDescribe).not.toHaveBeenCalled()
     // onPersist should NOT be called when there's nothing to summarize
@@ -732,10 +784,12 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     // Should only be called for ev-new (current turn)
     expect(mockDescribe).toHaveBeenCalledOnce()
@@ -788,10 +842,12 @@ describe('compactBulkData', () => {
     const ctx = createTestContext(events)
     const onPersist = vi.fn().mockResolvedValue(undefined)
 
-    await compactBulkData(ctx, onPersist, {
-      describe: mockDescribe,
-      describeBatch: mockDescribeBatch,
-    })
+    await runInFrame(() =>
+      compactBulkData(ctx, onPersist, {
+        describe: mockDescribe,
+        describeBatch: mockDescribeBatch,
+      }),
+    )
 
     // Reasoning should be passed as 3rd argument
     expect(mockDescribe.mock.calls[0][2]).toBe('I need to query the graph for person nodes')

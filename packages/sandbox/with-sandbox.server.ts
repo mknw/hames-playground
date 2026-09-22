@@ -18,7 +18,7 @@
  */
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
 import { trackEvent } from '@hames/harness-patterns/context.server'
-import { withTransport } from '@hames/harness-patterns/tool-transport.server'
+import { amendRunFrame } from '@hames/harness-patterns/run-frame.server'
 import { DEFAULT_SANDBOX_SETTINGS } from './settings'
 import { AttachmentTable } from './attachment-table.server'
 import { DockerBackend } from './docker-backend.server'
@@ -39,25 +39,36 @@ assertServerOnImport()
 /**
  * Run `fn` with this VM's in-VM MCP transport scoped to it.
  *
- * This is the sandbox's SCOPED registration on core's tool-transport seam
- * (`harness-patterns/tool-transport.server.ts`), and it replaced a sandbox-owned
- * AsyncLocalStorage of its own. Core no longer knows what a sandbox is: what it
- * knows is that a transport supplied this way is consulted before any
- * process-registered transport and before the gateway, innermost first. The
- * `sandbox_*` prefix in `types.ts` is now the only thing tying dispatch to this
- * package.
+ * This is the sandbox's SCOPED registration on core's tool-transport seam, and
+ * it replaced a sandbox-owned AsyncLocalStorage of its own. Core no longer knows
+ * what a sandbox is: what it knows is that a transport supplied this way is
+ * consulted before any process-registered transport and before the gateway,
+ * innermost first. The `sandbox_*` prefix in `types.ts` is now the only thing
+ * tying dispatch to this package.
+ *
+ * It amends the RUN FRAME rather than opening a scope of its own (issue #374):
+ * `withSandbox` is one of exactly two combinators that legitimately scope below
+ * a run, and `amendRunFrame` is where the per-slot merge rules live — the
+ * `transports` slot PREPENDS, which is what makes the stack innermost-first,
+ * and is deliberately the opposite of the guard slot's widening rule. Amending
+ * requires an open frame, so a sandbox outside a run refuses instead of quietly
+ * attaching a VM to nothing.
  *
  * `McpTransport` is `ToolTransport` plus a VM identity and a lifecycle
  * (`vmId` / `toolNames` / `close`), none of which core has any use for, so the
  * adaptation is a narrowing rather than a new capability.
  */
 function runWithSandbox<T>(transport: McpTransport, fn: () => Promise<T>): Promise<T> {
-  return withTransport(
+  return amendRunFrame(
     {
-      id: `sandbox:${transport.vmId}`,
-      ownsTool: (name) => transport.ownsTool(name),
-      callTool: (name, args) => transport.callTool(name, args),
-      listTools: () => transport.listTools(),
+      transports: [
+        {
+          id: `sandbox:${transport.vmId}`,
+          ownsTool: (name) => transport.ownsTool(name),
+          callTool: (name, args) => transport.callTool(name, args),
+          listTools: () => transport.listTools(),
+        },
+      ],
     },
     fn,
   )

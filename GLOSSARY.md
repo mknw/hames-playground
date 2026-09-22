@@ -22,6 +22,28 @@ means the framework as a whole, `app/src/lib/harness-patterns/`, which replaced
 the older `baml-agent` module (ADR-0005). See
 [`app/src/lib/harness-patterns/README.md`](app/src/lib/harness-patterns/README.md).
 
+**Run** — one execution of a harness: everything `harness(...patterns)(input)`,
+`continueSession` or `resumeHarness` does for a single turn, from the first
+pattern to the settled result. A conversation is many runs; a run is one turn's
+worth of work. The word was already in use for an _Action_'s execution and a
+_Routine_'s, and it means the same thing there.
+
+**Run frame** — the ambient scope a run carries, opened once per run by those
+three entry points and read by everything inside it without being passed
+anywhere. It holds five slots: the injection **guard**, the run's scoped tool
+**transports**, the host's runtime **config**, the **live** event listener, and
+the **inference** tier. A run with no frame refuses rather than running with all
+five silently absent. "Frame" on its own is this repo's word for an
+AsyncLocalStorage scope. See
+[`docs/tutorials/hosting-the-harness.md`](docs/tutorials/hosting-the-harness.md)
+and `packages/harness-patterns/run-frame.server.ts`.
+
+**Slot** — one of a run frame's five named fields. A slot is either filled or
+empty; an empty slot means "this run has none", never "use the default from
+somewhere else". Combinators that scope _below_ a run (`withInjectionGuard`,
+`withSandbox`) amend individual slots, and the per-slot merge rules are not
+uniform — transports prepend, the rest replace.
+
 **Pattern** — one composable step inside a harness: a named function that runs in
 its own isolated scope and commits its events back to the shared context when it
 finishes. `simpleLoop`, `actorCritic`, `planner`, `compactIntent`, `router`,
@@ -30,8 +52,8 @@ finishes. `simpleLoop`, `actorCritic`, `planner`, `compactIntent`, `router`,
 also how its events are tagged and later queried.
 
 **Compaction** — shrinking context with a cheap LLM call so a later, expensive
-call sees a shorter prompt. Three members, one prefix, distinguished by *what*
-they compact and *when* (#83): `compactIntent` rewrites the latest user message
+call sees a shorter prompt. Three members, one prefix, distinguished by _what_
+they compact and _when_ (#83): `compactIntent` rewrites the latest user message
 into a self-contained brief **before** an actor runs; `compactExecution` folds a
 pattern's execution trace into the user-facing answer **at the end of a chain**;
 `compactBulkData` summarizes the turn's oversized tool results **after** the

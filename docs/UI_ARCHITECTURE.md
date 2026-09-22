@@ -1001,7 +1001,6 @@ app/
 │       │       └── event-view.server.ts   # EventViewImpl (fluent query API)
 │       ├── settings.ts             # HarnessSettings type, defaults, MODEL_CONTEXT_WINDOWS
 │       ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
-│       ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
 │       ├── turn-utils.ts           # findLastUserMessageIndex() — the turn boundary
 │       ├── observability/         # event-styles.ts (icon/colour tables); the pure
 │       │   │                     # projections moved to @hames/harness-patterns/observability

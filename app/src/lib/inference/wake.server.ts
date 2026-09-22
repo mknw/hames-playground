@@ -445,7 +445,7 @@ async function poll(): Promise<number> {
 async function attempt(timeoutMs: number): Promise<string | null> {
   // Both values are guaranteed present: every path into a private-tier run goes
   // through `assertPrivateTierConfigured()` first (module load, or scope entry
-  // in `runWithInferenceTier`). Read here rather than cached at module load for
+  // by the run frame's `inference` slot). Read here rather than cached at module load for
   // the same reason the rest of this route reads env per call — a script that
   // sets them before importing a pattern has to be seen.
   const base = (process.env.VERDA_INFERENCE_ENDPOINT ?? '').replace(/\/$/, '')

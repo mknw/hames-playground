@@ -38,11 +38,11 @@
  *   variant, because the endpoint scales to zero and billing follows activity:
  *   one warm box for a session is cheaper than a cold start per stray call.
  *   What changed for the preview (2026-08-25) is the *granularity of the
- *   decision*, not its scope: `runWithInferenceTier()` below opens an
- *   AsyncLocalStorage scope so one user's turn can run on a different tier
- *   than another's, while everything inside that turn stays on one tier.
- *   `USE_VERDA_INFERENCE` remains the process default for anything running
- *   outside such a scope.
+ *   decision*, not its scope: the tier rides the RUN FRAME's `inference` slot
+ *   (`@hames/harness-patterns/run-frame.server`), so one user's turn can run on
+ *   a different tier than another's while everything inside that turn stays on
+ *   one tier. `USE_VERDA_INFERENCE` remains the process default for anything
+ *   running outside a frame, or inside one whose slot nobody filled.
  * - **Unset changes nothing.** With no flag and no scope, `clientOverrideFor()`
  *   returns `undefined`, no options bag gains a `client` key, and every
  *   function runs the Anthropic chain it declares. The default posture is
@@ -104,14 +104,18 @@
  * (`lib/inference/config.server.ts`), and this module reads them through
  * module-level accessors with safe package-side defaults. Mirroring #342's
  * shape: the host opens a scope or passes config; the module never imports back
- * into host policy. The scope the tier rides is `runWithInferenceTier` below —
- * the host opens it through THIS module's own export, so the store and its
- * readers are the same module instance by construction, pinned by
- * `clients-seam.test.ts` (red under the dual-instance mutation).
+ * into host policy. The scope the tier rides is no longer this module's: it is
+ * the RUN FRAME's `inference` slot, opened by core's harness entry points
+ * (issue #374, rulings Q17–Q19). That is the ONE import this package takes from
+ * the frame, and it is what makes five ambient stores one — see
+ * {@link activeInferenceTier}. The store lives on a `globalThis` symbol in core,
+ * so two resolved copies of that package still share one frame; the
+ * dual-instance failure `clients-seam.test.ts` was written for is now pinned in
+ * core's `run-frame.test.ts` as well.
  */
 
-import { AsyncLocalStorage } from 'node:async_hooks'
 import { assertServerOnImport } from '@hames/harness-patterns/assert.server'
+import { currentRunFrame } from '@hames/harness-patterns/run-frame.server'
 import type { ModelLimits, CostBasis } from '@hames/harness-patterns/types'
 // TYPE-ONLY by design: this module owns the routing seam and reads the
 // consumer layer's SHAPE, while `consumer-clients.server.ts` imports the seam
@@ -181,13 +185,15 @@ export function configureModelTables(tables: ModelTables): void {
  *  whether a 'verda' scope is reachable, and what to announce when a
  *  private-tier client is about to take a call. */
 export interface InferenceTierPolicy {
-  /** The tier outside any `runWithInferenceTier` scope (a script, a background
-   *  job). The host reads `USE_VERDA_INFERENCE` here; the package-side default
-   *  is 'anthropic' — the safe direction, never confidential traffic. */
+  /** The tier outside any run frame, or inside one whose `inference` slot
+   *  nobody filled (a script, a background job). The host reads
+   *  `USE_VERDA_INFERENCE` here; the package-side default is 'anthropic' — the
+   *  safe direction, never confidential traffic. */
   defaultTier: () => InferenceTier
-  /** Fail-closed reachability check, run before a 'verda' scope opens (the
-   *  host's `assertPrivateTierConfigured`).
-   *  Unregistered → the scope is REFUSED, not opened. */
+  /** Fail-closed reachability check, run by {@link assertInferenceTier} before
+   *  a host puts 'verda' in a run frame (the host's
+   *  `assertPrivateTierConfigured`).
+   *  Unregistered → the tier is REFUSED, not opened. */
   assertTierReachable?: (tier: InferenceTier) => void
   /** A private-tier client (`VERDA_CLIENT_BY_ROLE`'s values) is about to take
    *  a call. The host decides what that means — the wake/cold-start notice
@@ -619,66 +625,74 @@ export const TIER_SWITCHED_FUNCTIONS: ReadonlySet<string> = new Set(
   ),
 )
 
-const tierStore = new AsyncLocalStorage<InferenceTier>()
-
 /**
- * Run `fn` with `tier` as the active inference tier for everything inside it.
+ * Refuse a tier this deployment cannot actually take — the check that used to
+ * live inside `runWithInferenceTier` before the run frame replaced it.
  *
- * This is the per-user switch's only mechanism. A tier is a property of the
- * RUN, not of a call site, so it rides an AsyncLocalStorage scope exactly like
- * `settings-context.server.ts` and `injection-guard-scope.server.ts` do: the
- * turn runner opens one scope and every adapter deep inside the call graph
- * picks it up through `clientOverrideFor()` without a single signature change.
+ * The scope moved to core and core is GENERIC: the frame's `inference.tier` is
+ * an opaque string, and core neither knows what `'verda'` means nor what would
+ * make it unreachable (ruling D1, issue #374 — provider specifics stay in this
+ * companion). So the fail-closed gate moved here, and the HOST calls it before
+ * it puts a tier in a frame.
  *
- * FAIL CLOSED on `'verda'`: a scope that names the self-hosted tier is checked
- * through the host-registered `assertTierReachable` before anything runs, and
- * a scope opened with NO policy registered is REFUSED outright — the
- * fail-closed default, matching every other gate on this tier. The alternative
- * — shrug and let BAML fall through to the declared Anthropic chain — is the
- * one failure this whole route exists to prevent, and it is no less dangerous
- * for having come from a user's preference row rather than from an env var.
+ * FAIL CLOSED on `'verda'`: checked through the host-registered
+ * `assertTierReachable`, and refused outright when NO policy is registered —
+ * matching every other gate on this tier. The alternative — shrug and let BAML
+ * fall through to the declared Anthropic chain — is the one failure this whole
+ * route exists to prevent, and it is no less dangerous for having come from a
+ * user's preference row than from an env var.
+ *
+ * Throws synchronously. Its predecessor rejected instead, because its contract
+ * was "hand me a callback, get a promise" and a caller that only wrote
+ * `.catch()` would otherwise have taken the throw on the stack. This one takes
+ * no callback, so there is no such caller to protect.
  */
-export function runWithInferenceTier<T>(tier: InferenceTier, fn: () => Promise<T>): Promise<T> {
-  if (tier === 'verda') {
-    // Rejected, not thrown synchronously: this function's whole contract is
-    // "hand me a callback, get a promise", and a caller that only wrote
-    // `.catch()` would otherwise take the throw on the stack instead. `fn` is
-    // deliberately never invoked — the check is before any prompt is built.
-    const assertReachable = tierPolicy.assertTierReachable
-    if (!assertReachable) {
-      return Promise.reject(
-        new Error(
-          "The 'verda' inference tier was requested but no inference policy is registered. " +
-            'The host registers one at its composition root (lib/inference/config.server.ts, ' +
-            'via configureInferencePolicy); refusing rather than guessing is the fail-closed default.',
-        ),
-      )
-    }
-    try {
-      assertReachable(tier)
-    } catch (err) {
-      return Promise.reject(err instanceof Error ? err : new Error(String(err)))
-    }
+export function assertInferenceTier(tier: InferenceTier): void {
+  if (tier !== 'verda') return
+  const assertReachable = tierPolicy.assertTierReachable
+  if (!assertReachable) {
+    throw new Error(
+      "The 'verda' inference tier was requested but no inference policy is registered. " +
+        'The host registers one at its composition root (lib/inference/config.server.ts, ' +
+        'via configureInferencePolicy); refusing rather than guessing is the fail-closed default.',
+    )
   }
-  return tierStore.run(tier, fn)
+  assertReachable(tier)
 }
 
 /**
- * The tier in force right now: the enclosing `runWithInferenceTier` scope, or
- * the deployment default when there is no scope (a script, a background job,
- * anything off the turn path).
+ * The tier in force right now: the open run frame's `inference.tier`, or the
+ * deployment default when there is no frame or the slot is empty (a script, a
+ * background job, anything off the turn path).
+ *
+ * THE ONE NEW IMPORT THIS PACKAGE TAKES FROM CORE'S FRAME. A tier is a property
+ * of the RUN, not of a call site, and it used to ride an `AsyncLocalStorage` of
+ * this module's own — one of five such stores, each with its own opener and its
+ * own chance of being skipped. It is now a slot of the single run frame the
+ * harness entry points open, read here at CALL time, which is what makes one
+ * turn's tier cover every adapter inside it without threading a parameter
+ * anywhere.
+ *
+ * The frame carries the tier as an OPAQUE STRING, because core must not know
+ * provider vocabulary. The narrowing back to this module's union happens here,
+ * and an unrecognised value falls back to the deployment default rather than
+ * being trusted: a host that writes a typo into the slot gets the safe tier,
+ * not an unrouted one.
  */
 export function activeInferenceTier(): InferenceTier {
-  return tierStore.getStore() ?? tierPolicy.defaultTier()
+  const tier = currentRunFrame()?.inference?.tier
+  if (tier === 'verda' || tier === 'anthropic') return tier
+  return tierPolicy.defaultTier()
 }
 
 /**
  * `{ client: 'VerdaQwen' }` for a Verda-routed role while the active tier is
- * `'verda'` (a `runWithInferenceTier` scope, or `USE_VERDA_INFERENCE=1` as the
+ * `'verda'` (the run frame's `inference.tier`, or `USE_VERDA_INFERENCE=1` as the
  * deployment default), otherwise `undefined` — letting the BAML function fall
- * through to the Anthropic chain it declares.
+ * through to the Anthropic chain it declares. A per-run `clientOverride` in the
+ * frame's generic inference slot pre-empts both.
  *
- * Read at CALL time, not at scope entry, which is what makes one turn's tier
+ * Read at CALL time, not at frame open, which is what makes one turn's tier
  * cover every adapter inside it without threading a parameter anywhere.
  *
  * Spread the result into the BAML call's options bag, and branch on whether
@@ -698,8 +712,22 @@ export function clientOverrideFor(role: BamlRole): BamlClientOverride | undefine
   // mapped role returns BEFORE the verda path, so the consumer's registry and
   // primary ride the options bag and the private-call hook below does not fire
   // — the consumer's client is not the private tier and owes nobody a wake.
+  //
+  // TWO LAYERS, most specific first (#374). The run frame's generic
+  // `inference.clientOverride` slot is the PER-RUN form of the same plug: a
+  // host that wants one run on its own model puts the function in that run's
+  // frame instead of registering it process-wide. It is checked first for the
+  // ordinary reason — a scope that names one run cannot be overruled by a
+  // setting that names all of them — and the frame's slot is typed generically
+  // because core must carry no provider vocabulary, so this is the boundary
+  // where the bag becomes this package's own shape.
+  const perRun = currentRunFrame()?.inference?.clientOverride?.(role) as
+    BamlClientOverride | undefined
+  if (perRun) return perRun
+
   const consumerBag = consumerClients?.(role)
   if (consumerBag) return consumerBag
+
   const client = verdaClientFor(role)
   if (!client) return undefined
   // A bag naming a private-tier client is a call about to take the override —
@@ -772,10 +800,10 @@ export function getContextWindow(clientName?: string): number {
  * ACTUALLY take (#225 Lane A5) — the budgets the five core trim/batch sites
  * spend against.
  *
- * PER CALL, not per construction: a tier decision is an AsyncLocalStorage
- * scope, so a value captured at pattern-construction time would budget a
- * verda-tier turn against the wrong model. `resolveClientForRole` reads the
- * scope that is active at the moment of the call — which is why the patterns
+ * PER CALL, not per construction: a tier decision is a slot of the run frame,
+ * so a value captured at pattern-construction time would budget a verda-tier
+ * turn against the wrong model. `resolveClientForRole` reads the frame that is
+ * open at the moment of the call — which is why the patterns
  * ask the seam (`controller.limits()`) immediately before dispatching, and
  * why the adapter implementations answer through THIS function rather than
  * caching a number.

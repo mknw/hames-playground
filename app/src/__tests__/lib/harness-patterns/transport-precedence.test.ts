@@ -47,6 +47,21 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
 type Seam = typeof import('@hames/harness-patterns/tool-transport.server')
 type Transport = Seam['activeTransports'] extends () => readonly (infer T)[] ? T : never
 
+/**
+ * The SCOPED half of the seam is the run frame's `transports` slot since #374 —
+ * supplied when the frame is opened, prepended below it by `amendRunFrame`
+ * (which is what `withSandbox` now does). Bound here so every precedence
+ * assertion below stays exactly as it was: what moved is where the transport is
+ * put, not the order dispatch consults.
+ */
+async function withTransport<T>(transport: Transport, fn: () => Promise<T>): Promise<T> {
+  const { withRunFrame, amendRunFrame, currentRunFrame } =
+    await import('@hames/harness-patterns/run-frame.server')
+  return currentRunFrame()
+    ? amendRunFrame({ transports: [transport] }, fn)
+    : withRunFrame({ transports: [transport] }, fn)
+}
+
 /** A transport that records every call it is handed. */
 function spyTransport(id: string, owns: string[]) {
   const calls: string[] = []
@@ -92,7 +107,7 @@ describe('tool dispatch precedence', () => {
     const process = spyTransport('process', ['read_file'])
     register(process.transport)
 
-    const result = await seam.withTransport(scoped.transport, () => callTool('read_file', { p: 1 }))
+    const result = await withTransport(scoped.transport, () => callTool('read_file', { p: 1 }))
 
     expect(result).toEqual({ success: true, data: 'from:scoped' })
     expect(scoped.calls).toEqual(['read_file'])
@@ -108,7 +123,7 @@ describe('tool dispatch precedence', () => {
     const late = spyTransport('process-late', ['read_file'])
 
     register(early.transport)
-    const result = await seam.withTransport(scoped.transport, async () => {
+    const result = await withTransport(scoped.transport, async () => {
       // Registered from INSIDE the scope, and last: still after every scoped one.
       register(late.transport)
       return callTool('read_file', {})
@@ -137,7 +152,7 @@ describe('tool dispatch precedence', () => {
   it('dispatches to the scoped transport rather than the gateway', async () => {
     const scoped = spyTransport('scoped', ['sandbox_bash'])
 
-    const result = await seam.withTransport(scoped.transport, () =>
+    const result = await withTransport(scoped.transport, () =>
       callTool('sandbox_bash', { cmd: 'echo hi' }),
     )
 
@@ -160,9 +175,7 @@ describe('tool dispatch precedence', () => {
     const process = spyTransport('process', ['graph_me'])
     register(process.transport)
 
-    const result = await seam.withTransport(scoped.transport, () =>
-      callTool('read_neo4j_cypher', {}),
-    )
+    const result = await withTransport(scoped.transport, () => callTool('read_neo4j_cypher', {}))
 
     expect(result).toEqual({ success: true, data: 'from:gateway' })
     expect(scoped.calls).toEqual([])
@@ -178,8 +191,8 @@ describe('tool dispatch precedence', () => {
       const outer = spyTransport('outer', ['sandbox_bash'])
       const inner = spyTransport('inner', ['sandbox_bash'])
 
-      const result = await seam.withTransport(outer.transport, () =>
-        seam.withTransport(inner.transport, () => callTool('sandbox_bash', {})),
+      const result = await withTransport(outer.transport, () =>
+        withTransport(inner.transport, () => callTool('sandbox_bash', {})),
       )
 
       expect(result).toEqual({ success: true, data: 'from:inner' })
@@ -191,8 +204,8 @@ describe('tool dispatch precedence', () => {
       const outer = spyTransport('outer', ['sandbox_bash'])
       const inner = spyTransport('inner', ['sandbox_bash'])
 
-      await seam.withTransport(outer.transport, async () => {
-        await seam.withTransport(inner.transport, () => callTool('sandbox_bash', {}))
+      await withTransport(outer.transport, async () => {
+        await withTransport(inner.transport, () => callTool('sandbox_bash', {}))
         await callTool('sandbox_bash', {})
       })
 
@@ -209,8 +222,8 @@ describe('tool dispatch precedence', () => {
       const outer = spyTransport('outer', ['sandbox_bash', 'sandbox_read'])
       const inner = spyTransport('inner', ['sandbox_bash'])
 
-      const result = await seam.withTransport(outer.transport, () =>
-        seam.withTransport(inner.transport, () => callTool('sandbox_read', {})),
+      const result = await withTransport(outer.transport, () =>
+        withTransport(inner.transport, () => callTool('sandbox_read', {})),
       )
 
       expect(result).toEqual({ success: true, data: 'from:outer' })
@@ -271,7 +284,7 @@ describe('tool dispatch precedence', () => {
         { name: 'sandbox_bash', description: '', inputSchema: {} },
       ]
 
-      const names = await seam.withTransport(scoped.transport, async () =>
+      const names = await withTransport(scoped.transport, async () =>
         (await listTools()).map((t) => t.name),
       )
 

@@ -15,6 +15,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
 import { mockCallTool, mockListTools } from '../../mocks/mcp'
 // Lane B2 (#225 L5): the catalog left core, so the guard scenarios here arm the
 // same resolver the boot hook registers — real seam, no stub. Imported
@@ -22,6 +23,15 @@ import { mockCallTool, mockListTools } from '../../mocks/mcp'
 // this module's mock fixtures).
 // Type-only: erased at compile time, so it does not defeat the vi.mock below.
 import type { SimpleLoopData } from '@hames/harness-patterns/patterns/simpleLoop.server'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 /** The loop's data plus an index signature — the shape `runChain` needs, and
  *  what the real agents get from `SessionData`. */
@@ -269,7 +279,7 @@ describe('composition in a chain', () => {
     const pattern = guardConfig ? withInjectionGuard(guardConfig)(loop) : loop
 
     const ctx = createContext<TestData>('what were the q3 results?')
-    await runChain(ctx, [pattern])
+    await runInFrame(() => runChain(ctx, [pattern]))
     return { ctx, pattern, loop }
   }
 

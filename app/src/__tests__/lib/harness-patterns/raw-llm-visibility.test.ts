@@ -19,10 +19,20 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
 import { mockAction } from '../../mocks/baml'
 import { mockCallTool, mockListTools, fixtures } from '../../mocks/mcp'
 import type { Collector } from '@boundaryml/baml'
 import type { ContextEvent, ErrorEventData, LLMCallData } from '@hames/harness-patterns/types'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -104,7 +114,7 @@ const runPattern = async (
     data: {},
     input: content,
   })
-  const result = await pattern.fn(scope as never, view as never)
+  const result = await runInFrame(() => pattern.fn(scope as never, view as never))
   return result.events
 }
 
@@ -388,7 +398,7 @@ describe('withReferences: a failed selector call carries rawOutput', () => {
       patternId: 'vis-test',
       selector: defaultSelector,
     })
-    const result = await pattern.fn(scope as never, view as never)
+    const result = await runInFrame(() => pattern.fn(scope as never, view as never))
 
     const err = errorEvent(result.events)
     expect(err.data.kind).toBe('llm_call')

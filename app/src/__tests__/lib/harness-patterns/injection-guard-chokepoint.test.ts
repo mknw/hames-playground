@@ -15,6 +15,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { ActiveInjectionGuard } from '@hames/harness-patterns/injection-guard'
 
 vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -54,8 +55,16 @@ async function load() {
   const { callTool, closeMcpClient } = await import('@hames/harness-patterns/mcp-client.server')
   const { createInjectionGuard } =
     await import('@hames/harness-patterns/patterns/withInjectionGuard.server')
-  const { runWithInjectionGuard } =
-    await import('@hames/harness-patterns/injection-guard-scope.server')
+  // The guard is a SLOT of the run frame since #374; the per-store opener it
+  // used to have is gone. Bound here so every assertion below — including the
+  // UNION nesting pins — stays byte-identical: what changed is where the guard
+  // is put, not what the chokepoint does with it.
+  const { withRunFrame, amendRunFrame, currentRunFrame } =
+    await import('@hames/harness-patterns/run-frame.server')
+  const runWithInjectionGuard = <T>(
+    guard: ActiveInjectionGuard,
+    fn: () => Promise<T>,
+  ): Promise<T> => (currentRunFrame() ? amendRunFrame({ guard }, fn) : withRunFrame({ guard }, fn))
   return { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard }
 }
 

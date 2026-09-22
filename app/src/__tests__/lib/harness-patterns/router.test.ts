@@ -3,6 +3,16 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 // Mock server-only imports
 vi.mock('@hames/harness-patterns/assert.server', () => ({
@@ -70,9 +80,8 @@ describe('router', () => {
       { neo4j: 'Database queries', web: 'Web search' },
       { route: mockRouteMessageOp },
     )
-    const result = await pattern.fn(
-      { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
-      view,
+    const result = await runInFrame(() =>
+      pattern.fn({ id: 'router', data: ctx.data, events: [], startTime: Date.now() }, view),
     )
 
     expect(result.data.route).toBe('neo4j')
@@ -103,9 +112,8 @@ describe('router', () => {
     const view = createEventView(ctx)
 
     const pattern = router({ neo4j: 'Database queries' }, { route: mockRouteMessageOp })
-    const result = await pattern.fn(
-      { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
-      view,
+    const result = await runInFrame(() =>
+      pattern.fn({ id: 'router', data: ctx.data, events: [], startTime: Date.now() }, view),
     )
 
     expect(result.data.response).toBe('Hello! How can I help you?')
@@ -134,9 +142,8 @@ describe('router', () => {
     const view = createEventView(ctx)
 
     const pattern = router({ neo4j: 'Database queries' }, { route: mockRouteMessageOp })
-    const result = await pattern.fn(
-      { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
-      view,
+    const result = await runInFrame(() =>
+      pattern.fn({ id: 'router', data: ctx.data, events: [], startTime: Date.now() }, view),
     )
 
     const errorEvents = result.events.filter((e) => e.type === 'error')
@@ -161,9 +168,8 @@ describe('router', () => {
     const view = createEventView(ctx)
 
     const pattern = router({ neo4j: 'Database queries' }, { route: mockRouteMessageOp })
-    const result = await pattern.fn(
-      { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
-      view,
+    const result = await runInFrame(() =>
+      pattern.fn({ id: 'router', data: ctx.data, events: [], startTime: Date.now() }, view),
     )
 
     const errorEvents = result.events.filter((e) => e.type === 'error')
@@ -193,9 +199,8 @@ describe('router', () => {
     const view = createEventView(ctx)
 
     const pattern = router({ neo4j: 'Database queries' }, { route: mockRouteMessageOp })
-    const result = await pattern.fn(
-      { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
-      view,
+    const result = await runInFrame(() =>
+      pattern.fn({ id: 'router', data: ctx.data, events: [], startTime: Date.now() }, view),
     )
 
     expect(result.data.route).toBe('neo4j')
@@ -250,9 +255,11 @@ describe('routes', () => {
       web: { name: 'web-loop', fn: webFn, config: { patternId: 'web' } },
     })
 
-    await dispatchPattern.fn(
-      { id: 'routes', data: { ...ctx.data, route: 'neo4j' }, events: [], startTime: Date.now() },
-      view,
+    await runInFrame(() =>
+      dispatchPattern.fn(
+        { id: 'routes', data: { ...ctx.data, route: 'neo4j' }, events: [], startTime: Date.now() },
+        view,
+      ),
     )
 
     expect(neo4jFn).toHaveBeenCalled()
@@ -274,7 +281,9 @@ describe('routes', () => {
       neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } },
     })
 
-    await expect(dispatchPattern.fn(scope, view)).rejects.toThrow('routes() called without')
+    await expect(runInFrame(() => dispatchPattern.fn(scope, view))).rejects.toThrow(
+      'routes() called without',
+    )
   })
 
   it('should pass through for direct-response route (user)', async () => {
@@ -297,7 +306,7 @@ describe('routes', () => {
       neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } },
     })
 
-    const result = await dispatchPattern.fn(scope, view)
+    const result = await runInFrame(() => dispatchPattern.fn(scope, view))
 
     expect(neo4jFn).not.toHaveBeenCalled()
     expect(result).toBe(scope)
@@ -317,14 +326,16 @@ describe('routes', () => {
       neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } },
     })
 
-    const result = await dispatchPattern.fn(
-      {
-        id: 'routes',
-        data: { ...ctx.data, route: 'unknown_route' },
-        events: [],
-        startTime: Date.now(),
-      },
-      view,
+    const result = await runInFrame(() =>
+      dispatchPattern.fn(
+        {
+          id: 'routes',
+          data: { ...ctx.data, route: 'unknown_route' },
+          events: [],
+          startTime: Date.now(),
+        },
+        view,
+      ),
     )
 
     const errorEvents = result.events.filter((e: any) => e.type === 'error')
@@ -349,9 +360,11 @@ describe('routes', () => {
       neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } },
     })
 
-    const result = await dispatchPattern.fn(
-      { id: 'routes', data: { ...ctx.data, route: 'neo4j' }, events: [], startTime: Date.now() },
-      view,
+    const result = await runInFrame(() =>
+      dispatchPattern.fn(
+        { id: 'routes', data: { ...ctx.data, route: 'neo4j' }, events: [], startTime: Date.now() },
+        view,
+      ),
     )
 
     expect(result.data.response).toBe('Pattern response')
@@ -379,9 +392,11 @@ describe('routes', () => {
       neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } },
     })
 
-    const result = await dispatchPattern.fn(
-      { id: 'routes', data: { ...ctx.data, route: 'neo4j' }, events: [], startTime: Date.now() },
-      view,
+    const result = await runInFrame(() =>
+      dispatchPattern.fn(
+        { id: 'routes', data: { ...ctx.data, route: 'neo4j' }, events: [], startTime: Date.now() },
+        view,
+      ),
     )
 
     const toolCalls = result.events.filter((e: any) => e.type === 'tool_call')
@@ -402,9 +417,11 @@ describe('routes', () => {
       neo4j: { name: 'neo4j-loop', fn: neo4jFn, config: { patternId: 'neo4j' } },
     })
 
-    const result = await dispatchPattern.fn(
-      { id: 'routes', data: { ...ctx.data, route: 'neo4j' }, events: [], startTime: Date.now() },
-      view,
+    const result = await runInFrame(() =>
+      dispatchPattern.fn(
+        { id: 'routes', data: { ...ctx.data, route: 'neo4j' }, events: [], startTime: Date.now() },
+        view,
+      ),
     )
 
     const enterEvents = result.events.filter((e: any) => e.type === 'pattern_enter')

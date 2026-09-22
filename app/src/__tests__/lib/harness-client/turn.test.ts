@@ -29,7 +29,7 @@ import {
   getRequestUserId,
   getRequestSessionId,
 } from '../../../lib/harness-client/request-user.server'
-import { getRequestSettings } from '../../../lib/settings-context.server'
+import { runtimeConfig } from '@hames/harness-patterns/runtime-config.server'
 import { DEFAULT_SETTINGS } from '../../../lib/settings'
 
 /** Every run records the ambient scope it saw. */
@@ -87,37 +87,46 @@ vi.mock('@hames/harness-patterns', () => ({
   compactBulkData,
 }))
 
-// ── settings scope: the real ALS, with the calls recorded ───────────────────
-const settingsScopes: unknown[] = []
-vi.mock('../../../lib/settings-context.server', async () => {
-  const actual = await vi.importActual<typeof import('../../../lib/settings-context.server')>(
-    '../../../lib/settings-context.server',
+// ── the run frame: the REAL one, with every frame this runner opens recorded ─
+//
+// #374 replaced three scopes here (`runWithRequestContext` aside) with one run
+// frame carrying five slots, so the two recorders this file used to keep —
+// one for settings, one for the tier — are one. The per-conversation switch
+// acts through the frame's `inference` slot and nowhere else, which is why the
+// turn runner is where "the user's preference actually steers the run" is
+// provable.
+type OpenedFrame = {
+  config?: { maxResultForSummary?: number }
+  inference?: { tier?: string }
+  live?: unknown
+}
+const openedFrames: OpenedFrame[] = []
+vi.mock('@hames/harness-patterns/run-frame.server', async () => {
+  const actual = await vi.importActual<typeof import('@hames/harness-patterns/run-frame.server')>(
+    '@hames/harness-patterns/run-frame.server',
   )
   return {
     ...actual,
-    runWithSettings: (settings: never, fn: () => Promise<unknown>) => {
-      settingsScopes.push(settings)
-      return actual.runWithSettings(settings, fn)
+    withRunFrame: (frame: never, fn: () => Promise<unknown>) => {
+      openedFrames.push(frame as OpenedFrame)
+      return actual.withRunFrame(frame, fn)
+    },
+    amendRunFrame: (frame: never, fn: () => Promise<unknown>) => {
+      amendedFrames.push(frame as OpenedFrame)
+      return actual.amendRunFrame(frame, fn)
     },
   }
 })
+/** What was amended BELOW the turn frame — today only the live listener, which
+ *  is scoped to the main run so a sidecar cannot inherit the user's wire. */
+const amendedFrames: OpenedFrame[] = []
 
-// ── inference tier scope: the real ALS, with the calls recorded ─────────────
-// The per-user switch acts here and nowhere else, so the turn runner is where
-// "the user's preference actually steers the run" is provable.
-const tierScopes: string[] = []
-vi.mock('@hames/harness-baml/clients.server', async () => {
-  const actual = await vi.importActual<typeof import('@hames/harness-baml/clients.server')>(
-    '@hames/harness-baml/clients.server',
-  )
-  return {
-    ...actual,
-    runWithInferenceTier: (tier: 'verda' | 'anthropic', fn: () => Promise<unknown>) => {
-      tierScopes.push(tier)
-      return actual.runWithInferenceTier(tier, fn)
-    },
-  }
-})
+/** The tier each opened frame named — the successor of `tierScopes`. */
+const tierScopes = {
+  get value(): (string | undefined)[] {
+    return openedFrames.map((f) => f.inference?.tier)
+  },
+}
 
 const resolveConversationTier = vi.fn<
   (sessionId: string, userId: string) => Promise<'verda' | 'anthropic'>
@@ -211,8 +220,8 @@ let logged: ReturnType<typeof vi.spyOn>
 beforeEach(() => {
   vi.clearAllMocks()
   seenScopes.length = 0
-  settingsScopes.length = 0
-  tierScopes.length = 0
+  openedFrames.length = 0
+  amendedFrames.length = 0
   // The real `runWithInferenceTier` is used (only the recording is a wrapper),
   // and it refuses the `verda` position unless the endpoint is configured —
   // fail-closed, by design. Fakes: nothing here opens a socket, and the
@@ -291,12 +300,10 @@ describe('interactive turns', () => {
 
     expect(dbSaveConversation).not.toHaveBeenCalled() // no re-seed for a known row
     expect(harness).not.toHaveBeenCalled()
-    expect(continueSession).toHaveBeenCalledWith(
-      'ctx-a',
-      ['patterns:search'],
-      'follow up',
-      undefined,
-    )
+    // Three arguments, no listener: #374 moved the live listener into the run
+    // frame this runner opens, and a nested entry that brought a slot of its
+    // own would be refused.
+    expect(continueSession).toHaveBeenCalledWith('ctx-a', ['patterns:search'], 'follow up')
     expect(result.response).toBe('continued:follow up')
     expect(saveSession).toHaveBeenCalledWith(
       'sess-2',
@@ -331,7 +338,7 @@ describe('interactive turns', () => {
     expect(seenScopes).toEqual([{ userId: 'user-1', sessionId: 'sess-4' }])
   })
 
-  it('threads onEvent into the run and delivers its hooks in order', async () => {
+  it('puts onEvent in the run frame and delivers its hooks in order', async () => {
     const order: string[] = []
     const onEvent = vi.fn()
     loadSession.mockResolvedValue(STORED)
@@ -351,8 +358,51 @@ describe('interactive turns', () => {
     )
 
     await flush()
-    expect(continueSession.mock.calls[0][3]).toBe(onEvent)
+    // The listener rides the RUN's frame, not the turn's: `runAndSave` amends it
+    // around `run(patterns)` and the turn frame's `live` slot stays empty. This
+    // assertion used to read `expect(openedFrames[0].live).toBe(onEvent)` and
+    // that is exactly what pinned the sidecar leak in — see the dedicated test
+    // below, and `run-frame-sidecar.test.ts` for the mechanism.
+    expect(openedFrames[0].live).toBeUndefined()
+    expect(amendedFrames.map((f) => f.live)).toEqual([onEvent])
+    expect(continueSession.mock.calls[0]).toHaveLength(3)
     expect(order).toEqual(['result', 'title', 'settled', 'compact'])
+  })
+
+  // B1, PR #382 review. The turn starts a SECOND harness run inside itself —
+  // the first-turn title agent — between `done` and the stream closing. Its
+  // whole contract is that it fails silently ("all return null … No retry, no
+  // error event"), so it must not be holding the SSE writer: on the first head
+  // of this PR the listener sat in the TURN frame, `enterRun` handed it to the
+  // sidecar, and a failed title generation painted an inline error bubble in
+  // the user's transcript.
+  //
+  // MUTATION: move `live` back into `runTurnAndPersist`'s `withRunFrame` bag →
+  // the sidecar sees the listener and the first assertion reddens. The
+  // mechanism-level twin is `run-frame-sidecar.test.ts` in the package.
+  it('does not hand the SSE listener to the title agent it starts', async () => {
+    const onEvent = vi.fn()
+    let sidecarLive: unknown = 'not-run'
+    let sidecarTier: unknown
+    let sidecarBudget: unknown
+    runFirstTurnTitleGen.mockImplementation(async () => {
+      const { currentRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+      const frame = currentRunFrame()
+      sidecarLive = frame?.live
+      sidecarTier = frame?.inference?.tier
+      sidecarBudget = frame?.config?.maxResultForSummary
+      return 'A title'
+    })
+
+    await runTurnAndPersist(interactive({ onEvent }))
+    await flush()
+
+    // The wire to the user is the main run's, and the sidecar has none.
+    expect(sidecarLive).toBeUndefined()
+    // What it DOES keep is the turn — SA-M13's reason for opening the frame up
+    // here at all. Dropping those would be the opposite overcorrection.
+    expect(sidecarTier).toBe('anthropic')
+    expect(sidecarBudget).toBe(DEFAULT_SETTINGS.maxResultForSummary)
   })
 
   it('emits the generated title, and stays quiet when there is none', async () => {
@@ -399,7 +449,7 @@ describe('interactive turns', () => {
   it('summarizes and re-persists inside both the request and settings scopes', async () => {
     const seen: { max?: number; userId?: string | null; sessionId?: string | null } = {}
     compactBulkData.mockImplementationOnce(async (_ctx, persist) => {
-      seen.max = getRequestSettings().maxResultForSummary
+      seen.max = runtimeConfig().maxResultForSummary
       seen.userId = getRequestUserId()
       seen.sessionId = getRequestSessionId()
       await persist()
@@ -517,7 +567,7 @@ describe('triggered turns', () => {
     expect(dbSaveConversation).not.toHaveBeenCalled() // the caller already seeded it
     expect(getOrBuildPatterns).toHaveBeenCalledWith('run-1', 'search')
     expect(harness).toHaveBeenCalledWith('patterns:search')
-    expect(runFresh).toHaveBeenCalledWith('do the thing', 'run-1', { trigger: TRIGGER }, undefined)
+    expect(runFresh).toHaveBeenCalledWith('do the thing', 'run-1', { trigger: TRIGGER })
     expect(seenScopes).toEqual([{ userId: 'user-1', sessionId: 'run-1' }])
     expect(saveSession).toHaveBeenNthCalledWith(
       1,
@@ -547,20 +597,23 @@ describe('triggered turns', () => {
     )
   })
 
-  // #226 C5. Off the request path there is no settings payload, but the scope
-  // is opened all the same, so the compaction reads DEFAULT_SETTINGS from a
-  // scope rather than from a fallback.
-  it('opens a settings scope even with no request settings to put in it', async () => {
+  // #226 C5, re-pointed by #374. Off the request path there is no settings
+  // payload, but the frame is opened all the same and its `config` slot is
+  // seeded with the app's FULL defaults — `runtimeConfig()` has no fall-back
+  // left to reach for (ruling D3), and `with-sandbox.server.ts` dereferences
+  // `.sandbox` unguarded, so the library's six knobs would not do.
+  it('opens a frame seeded with the app defaults when the request carried no settings', async () => {
     let maxSeen: number | undefined
     compactBulkData.mockImplementationOnce(async (_ctx, persist) => {
-      maxSeen = getRequestSettings().maxResultForSummary
+      maxSeen = runtimeConfig().maxResultForSummary
       await persist()
     })
 
     await runTurnAndPersist(triggered())
     await flush()
 
-    expect(settingsScopes).toEqual([undefined])
+    expect(openedFrames).toHaveLength(1)
+    expect(openedFrames[0].config).toEqual(DEFAULT_SETTINGS)
     expect(maxSeen).toBe(DEFAULT_SETTINGS.maxResultForSummary)
   })
 
@@ -605,7 +658,7 @@ describe('approval turns', () => {
     const result = await runTurnAndPersist(approval())
 
     expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-7', 'general')
-    expect(resumeHarness).toHaveBeenCalledWith('ctx-a', ['patterns:general'], true, undefined)
+    expect(resumeHarness).toHaveBeenCalledWith('ctx-a', ['patterns:general'], true)
     expect(result.response).toBe('approved')
     expect(saveSession).toHaveBeenNthCalledWith(
       1,
@@ -620,7 +673,7 @@ describe('approval turns', () => {
   it('resumes as rejected', async () => {
     loadSession.mockResolvedValue({ ...STORED, status: 'paused' })
     const result = await runTurnAndPersist(approval({ approved: false }))
-    expect(resumeHarness).toHaveBeenCalledWith('ctx-a', ['patterns:search'], false, undefined)
+    expect(resumeHarness).toHaveBeenCalledWith('ctx-a', ['patterns:search'], false)
     expect(result.response).toBe('rejected')
   })
 
@@ -676,8 +729,8 @@ describe('approval turns', () => {
   })
 })
 
-describe('the inference-tier scope — the per-conversation switch, plumbed', () => {
-  it('opens the scope with the tier the CONVERSATION is on', async () => {
+describe("the run frame's inference slot — the per-conversation switch, plumbed", () => {
+  it('opens the frame with the tier the CONVERSATION is on', async () => {
     resolveConversationTier.mockResolvedValue('verda')
 
     await runTurnAndPersist(interactive())
@@ -685,18 +738,18 @@ describe('the inference-tier scope — the per-conversation switch, plumbed', ()
     // Resolved per conversation, not per user: that is what lets an Anthropic
     // chat start while a private one is still waking.
     expect(resolveConversationTier).toHaveBeenCalledWith('sess-1', 'user-1')
-    expect(tierScopes).toEqual(['verda'])
+    expect(tierScopes.value).toEqual(['verda'])
   })
 
-  it('opens the anthropic position too, rather than skipping the scope', async () => {
-    // The scope must be entered in BOTH positions: a run with no scope falls
-    // back to the deployment default, so "skip it when the user picked
-    // Anthropic" would silently ignore an opt-out on a Verda-default host.
+  it('fills the anthropic position too, rather than leaving the slot empty', async () => {
+    // The slot must be filled in BOTH positions: a run whose frame names no
+    // tier falls back to the deployment default, so "leave it out when the user
+    // picked Anthropic" would silently ignore an opt-out on a Verda-default host.
     resolveConversationTier.mockResolvedValue('anthropic')
 
     await runTurnAndPersist(interactive())
 
-    expect(tierScopes).toEqual(['anthropic'])
+    expect(tierScopes.value).toEqual(['anthropic'])
   })
 
   it('resolves against the run’s OWNER, not any caller', async () => {
@@ -725,7 +778,7 @@ describe('the inference-tier scope — the per-conversation switch, plumbed', ()
       approved: true,
     })
 
-    expect(tierScopes).toHaveLength(3)
+    expect(tierScopes.value).toEqual(['anthropic', 'anthropic', 'anthropic'])
   })
 
   it('runs the turn anyway when the preference cannot be read', async () => {
@@ -735,7 +788,7 @@ describe('the inference-tier scope — the per-conversation switch, plumbed', ()
     const result = await runTurnAndPersist(interactive())
 
     expect(result.response).toBe('fresh:hello world, this is long')
-    expect(tierScopes).toEqual(['anthropic']) // the deployment default
+    expect(tierScopes.value).toEqual(['anthropic']) // the deployment default
     expect(logged).toHaveBeenCalled()
   })
 })

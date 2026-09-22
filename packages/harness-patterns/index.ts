@@ -114,16 +114,35 @@ export {
 // ============================================================================
 //
 // Two structurally different ways to supply a transport, and the difference
-// between them is the containment invariant. `processTransports()` is
-// deliberately NOT here: dispatch and the tool catalog are its only readers.
+// between them is the containment invariant: SCOPED transports ride the run
+// frame's `transports` slot (supplied at `withRunFrame`, amended below it by
+// `withSandbox`), PROCESS transports the registry below. `processTransports()`
+// is deliberately NOT here: dispatch and the tool catalog are its only readers.
 // See `tool-transport.server.ts`.
 
+export { registerTransport, activeTransports, type ToolTransport } from './tool-transport.server'
+
+// ============================================================================
+// The run frame — one ambient scope per run, holding all five slots
+// ============================================================================
+//
+// A consumer using the harness entry points never calls any of this: they open
+// the frame themselves. `withRunFrame({}, fn)` is what a script or a background
+// job that drives patterns directly needs, because `runChain` refuses without
+// one. See `run-frame.server.ts`.
+
 export {
-  withTransport,
-  registerTransport,
-  activeTransports,
-  type ToolTransport,
-} from './tool-transport.server'
+  withRunFrame,
+  amendRunFrame,
+  activeRunFrame,
+  currentRunFrame,
+  type RunFrame,
+  type ActiveRunFrame,
+  type InferenceSlot,
+  type LiveEventSlot,
+  type LiveEventListener,
+  type RunClientOverride,
+} from './run-frame.server'
 
 // ============================================================================
 // Router
@@ -264,12 +283,8 @@ export {
   type SanitizeSummary,
   type ScreenVerdict,
   type SpotlightMode,
-} from './injection-guard'
-export {
-  getActiveInjectionGuard,
-  runWithInjectionGuard,
   type ActiveInjectionGuard,
-} from './injection-guard-scope.server'
+} from './injection-guard'
 export { normalizeControllerAction } from './controller-action'
 
 // Lane A6: the BAML adapter factories and their helpers moved to
@@ -298,16 +313,14 @@ export type {
   RouteMessageResult,
 } from './types'
 
-// Runtime config: the library-owned settings scope (defaults + ALS frame).
-// Import the client-safe pieces (type, bounds, defaults, resolveTurnBudget)
-// from '@hames/harness-patterns/runtime-config'; the scope lives in
-// '@hames/harness-patterns/runtime-config.server'.
+// Runtime config: the library-owned settings defaults and their reader. The
+// VALUE rides the run frame's `config` slot; import the client-safe pieces
+// (type, bounds, defaults, resolveTurnBudget) from
+// '@hames/harness-patterns/runtime-config'.
 export {
   DEFAULT_RUNTIME_CONFIG,
   RUNTIME_CONFIG_BOUNDS,
   resolveTurnBudget,
   runtimeConfig,
-  tryRuntimeConfig,
-  withRuntimeConfig,
   type HarnessRuntimeConfig,
 } from './runtime-config.server'

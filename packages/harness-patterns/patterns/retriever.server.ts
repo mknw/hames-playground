@@ -45,7 +45,7 @@ import type {
   RetrieveQueryFn,
 } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
-import { getActiveInjectionGuard } from '../injection-guard-scope.server'
+import { currentRunFrame } from '../run-frame.server'
 import { getErrorHint } from '../error-hints'
 import { trimToFit } from '../token-budget.server'
 import { LLMCallError } from '../types'
@@ -342,7 +342,7 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
  * is nothing to track here.
  */
 async function sanitizeHits(hits: RetrievalHit[]): Promise<RetrievalHit[]> {
-  const guard = getActiveInjectionGuard()
+  const guard = currentRunFrame()?.guard
   if (!guard || hits.length === 0 || !guard.isUntrusted('retriever')) return hits
 
   const out: RetrievalHit[] = []

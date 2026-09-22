@@ -23,9 +23,19 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
 import { mockAction, mockCriticResult, mockBAMLClient } from '../../mocks/baml'
 import type { ControllerFn } from '@hames/harness-patterns/types'
 import { mockCallTool, mockListTools } from '../../mocks/mcp'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -187,9 +197,11 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
       maxTurns: 3,
     })
 
-    const result = await pattern.fn(
-      createScope('execute', { intent: 'do the thing' }),
-      createEventView(contextWith('do the thing')),
+    const result = await runInFrame(() =>
+      pattern.fn(
+        createScope('execute', { intent: 'do the thing' }),
+        createEventView(contextWith('do the thing')),
+      ),
     )
 
     // The budget bounded the loop, and bounded it at the declared value.
@@ -229,9 +241,8 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
           ...(maxTurns === undefined ? {} : { maxTurns }),
         },
       )
-      const result = await pattern.fn(
-        createScope('execute', { intent: 'x' }),
-        createEventView(contextWith('x')),
+      const result = await runInFrame(() =>
+        pattern.fn(createScope('execute', { intent: 'x' }), createEventView(contextWith('x'))),
       )
       const err = result.events.find((e) => e.type === 'error')
       return (err?.data as { hint?: string }).hint ?? ''
@@ -279,9 +290,8 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
       maxRetries: 2,
     })
 
-    const result = await pattern.fn(
-      createScope('actor-loop', {}),
-      createEventView(contextWith('run it')),
+    const result = await runInFrame(() =>
+      pattern.fn(createScope('actor-loop', {}), createEventView(contextWith('run it'))),
     )
 
     expect(actor).toHaveBeenCalledTimes(2)
@@ -303,10 +313,12 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
     const ceiling = SETTINGS_BOUNDS.maxToolTurns[1]
 
     const controller = neverFinishingController()
-    const result = await simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
-      patternId: 'execute',
-      maxTurns: ceiling + 25,
-    }).fn(createScope('execute', { intent: 'x' }), createEventView(contextWith('x')))
+    const result = await runInFrame(() =>
+      simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
+        patternId: 'execute',
+        maxTurns: ceiling + 25,
+      }).fn(createScope('execute', { intent: 'x' }), createEventView(contextWith('x'))),
+    )
 
     // The resolver being clamped is not the same claim as the loop running on
     // the clamped value — this is the half the reaper's derivation rests on.
@@ -321,10 +333,12 @@ describe('exhaustion is recorded as a truncation, not as a failure', () => {
     const { createEventView } = await import('@hames/harness-patterns/patterns')
 
     const controller = neverFinishingController()
-    const result = await simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
-      patternId: 'execute',
-      maxTurns: 0,
-    }).fn(createScope('execute', { intent: 'x' }), createEventView(contextWith('x')))
+    const result = await runInFrame(() =>
+      simpleLoop(controller, ['read_neo4j_cypher', 'Return'], {
+        patternId: 'execute',
+        maxTurns: 0,
+      }).fn(createScope('execute', { intent: 'x' }), createEventView(contextWith('x'))),
+    )
 
     // The floor exists because the exhaustion event is gated on `turns.length >
     // 0`: at a budget of 0 the loop ran nothing and recorded nothing, a silent

@@ -315,7 +315,7 @@ export interface ConversationTierState {
   tier: InferenceTier
   /** False when the self-hosted endpoints are unconfigured — the switch renders
    *  its private position disabled rather than offering a choice the server
-   *  refuses (and that `runWithInferenceTier` would throw on). */
+   *  refuses (and that `assertInferenceTier` would throw on). */
   verdaAvailable: boolean
 }
 

@@ -22,9 +22,9 @@ is and why it is shaped this way, start at the front page —
 > 1. `harness-patterns/` MUST NOT import from `harness-client/`, `components/`,
 >    or any other consumer.
 > 2. Pattern primitives are framework-neutral — no SolidJS, no UI types.
-> 3. Anything that depends on runtime settings goes through
->    `settings-context.server.ts` (AsyncLocalStorage), not function
->    parameters.
+> 3. Anything that depends on runtime settings goes through the run frame's
+>    `config` slot (`run-frame.server.ts`, read by `runtimeConfig()`), not
+>    function parameters.
 > 4. UI display logic (e.g. `useChainProgress`) lives in the consumer, not
 >    here. The library exposes neutral primitives like
 >    `ConfiguredPattern.estimateTurns` that consumers can build on.
@@ -362,21 +362,24 @@ declares neither namespaces nor tools is refused as well; the deliberate
 `callTool()` routes a tool name to whichever transport owns it, in this order
 and no other:
 
-1. **Scoped transports** — supplied by `withTransport(t, fn)`, innermost first.
-   Today's one is the in-VM sandbox, which `withSandbox` registers this way.
+1. **Scoped transports** — the run frame's `transports` slot, innermost first:
+   filled when the frame is opened, or prepended below it by
+   `amendRunFrame({ transports: [t] }, fn)`. Today's one is the in-VM sandbox,
+   which `withSandbox` registers this way.
 2. **Process transports** — supplied by `registerTransport(t)`, in registration
    order. Today's one is the app-side in-process tools.
 3. **The MCP gateway** — the terminal fallback, and deliberately NOT a
    transport: it cannot answer `ownsTool` without a round-trip, so as a
    registrant it would say "yes" to everything.
 
-> Any tool name owned by a transport supplied through `withTransport` is
+> Any tool name owned by a transport in the run frame's `transports` slot is
 > dispatched there, in innermost-first order, before any process-registered
 > transport and before the gateway. No value a registrant can pass — and no
 > registration order — can invert that.
 
-That is carried by the SHAPE of the seam: two functions with two consultation
-phases, and **no `priority` field on either**. A rank would make containment a
+That is carried by the SHAPE of the seam: two structurally different ways to
+supply a transport, two consultation phases, and **no `priority` field on
+either**. A rank would make containment a
 runtime value any registrant could set. Adding one is a containment change, not
 a refactor. `transport-precedence.test.ts` pins the order on colliding names.
 
@@ -1884,14 +1887,15 @@ harness-patterns/                        # CORE — zero baml_client / @boundary
 ├── types.ts                # Core types (UnifiedContext, PatternScope, RouterConfig, DIRECT_RESPONSE_ROUTE, the seam callables ControllerFn/PlannerFn/CompactIntentFn/… )
 ├── context.server.ts       # Context factory, createEvent(), generateId()
 ├── tools.server.ts         # Tools({ namespaces }) — groups MCP tools by namespace; the map is REQUIRED (ruling B-iii); inferServer consults transports' namespaceFor → registered resolvers (registerToolNamespaces) → heuristic; NO catalog in core — the 86-entry map lives in app-tools/mcp-catalog.ts and registers at boot
-├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? callback
-├── tool-transport.server.ts # ToolTransport + withTransport() (scoped, innermost-first) / registerTransport() (process, consulted after every scoped one) / activeTransports(); the difference between the two registration functions IS the containment invariant — there is no priority field and no argument that could express one
+├── run-frame.server.ts     # THE run frame — one ALS scope per run holding all five slots (guard / transports / config / live / inference), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, the rest replace), activeRunFrame() THROWS outside a frame and currentRunFrame() is the soft read
+├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? and an optional RunFrame; each OPENS the run frame (ruling Q17/D5), or joins the host's
+├── tool-transport.server.ts # ToolTransport + registerTransport() (process, consulted after every scoped one) / activeTransports() (reads the run frame's `transports` slot); the difference between the two ways to supply one IS the containment invariant — there is no priority field and no argument that could express one
 ├── mcp-client.server.ts    # callTool(), listTools(); dispatches across THREE phases — scoped transports (innermost first) → process transports (registration order) → MCP gateway (terminal fallback, not a transport); leases one of N pooled gateway connections per call (`MCP_GATEWAY_POOL_SIZE`, default 4) so the reconnect-once retry rebuilds only the failing connection (issue #120); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50); aggregates multi-text-block results into an array (single block stays scalar) so multi-value tools like Redis `smembers`/`lrange` don't drop all but the first element
 ├── compactBulkData.server.ts # compactBulkData(ctx, onPersist, { describe, describeBatch }) — the two describe fns are REQUIRED config (Lane A6)
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
 ├── token-budget.server.ts  # trimToFit(), estimateTokens() — rolling context window (getContextWindow moved to harness-baml/clients.server with the model tables)
 ├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding
-├── injection-guard-scope.server.ts # ALS scope carrying the active guard (same shape as tool-transport.server.ts's, opposite nesting rule — it UNIONS, see SD-5); read by callTool + retriever
+│                           # (the guard's ALS scope was its own module until #374; it is now the run frame's `guard` slot, and `ActiveInjectionGuard` lives in injection-guard.ts beside the sanitizer it describes. Opposite nesting rule to transports — it UNIONS, see SD-5; read by callTool + retriever)
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values)
 ├── assert.server.ts        # Server-only guards
 
@@ -1900,7 +1904,7 @@ harness-baml/                            # The BAML companion module (Lane A6) �
 ├── baml-patterns.server.ts # bamlPatterns() — the one factory for the eight REQUIRED injected fns (planner, router, compactIntent, retrieveQuery, describe, describeBatch, synthesize, selector) + adapters
 ├── defaults.server.ts      # defaultSynthesize (→ bamlPatterns().synthesize) + defaultSelector (→ bamlPatterns().selector) — the composition-root implementations, not pattern defaults
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter (tool list rides ControllerInput.tools — L14), createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, createInjectionScreen
-├── clients.server.ts       # The role → client maps (CLIENT_BY_ROLE / VERDA_CLIENT_BY_ROLE), clientOverrideFor, limitsFor, the tier ALS — moved byte-for-byte from core (Lane A6/A-i)
+├── clients.server.ts       # The role → client maps (CLIENT_BY_ROLE / VERDA_CLIENT_BY_ROLE), clientOverrideFor, limitsFor, the tier (the run frame's `inference` slot) — moved byte-for-byte from core (Lane A6/A-i)
 ├── routing.server.ts       # routeMessageOp — the router seam's composition-root implementation (`bamlPatterns().router`) (with limits())
 ├── baml-version-check.server.ts # Boot-time staleness warning for baml_client (#154)
 └── scripts/                # smoke-verda.ts + smoke-verda-load.ts — the live Verda endpoint checks

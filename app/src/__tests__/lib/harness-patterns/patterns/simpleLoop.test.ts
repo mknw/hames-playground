@@ -3,9 +3,19 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
 import { mockAction, mockFinalAction, mockBAMLClient } from '../../../mocks/baml'
 import { mockCallTool, mockListTools, fixtures } from '../../../mocks/mcp'
 import type { ControllerInput } from '@hames/harness-patterns/types'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 // Mock server-only imports
 vi.mock('@hames/harness-patterns/assert.server', () => ({
@@ -134,7 +144,7 @@ describe('simpleLoop', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     // Lane A4: fewShots rides the object seam — same outcome, one named field
     // instead of a positional slot.
@@ -183,7 +193,7 @@ describe('simpleLoop', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     expect(onToolResult).toHaveBeenCalledTimes(1)
     const [calledTool, calledResult, calledCtx] = onToolResult.mock.calls[0]
@@ -239,7 +249,7 @@ describe('simpleLoop', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // Original tool_result is preserved (mock callTool returns fixtures.neo4j.queryResult).
     const toolResults = result.events.filter((e) => e.type === 'tool_result')
@@ -298,7 +308,7 @@ describe('simpleLoop execution', () => {
     const view = createEventView(mockContext)
 
     // Execute pattern
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // Verify controller was called
     expect(mockController).toHaveBeenCalled()
@@ -348,7 +358,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // Should have tracked tool_call and tool_result events
     const toolCalls = result.events.filter((e) => e.type === 'tool_call')
@@ -389,7 +399,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     const errorEvents = result.events.filter((e) => e.type === 'error')
     expect(errorEvents.length).toBeGreaterThan(0)
@@ -428,7 +438,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     const errorEvents = result.events.filter((e) => e.type === 'error')
     expect(errorEvents.length).toBeGreaterThan(0)
@@ -471,7 +481,7 @@ describe('simpleLoop execution', () => {
       input: 'test',
     })
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     expect(result.events.filter((e) => e.type === 'error')).toHaveLength(0)
 
@@ -516,16 +526,18 @@ describe('simpleLoop execution', () => {
       patternId: 'test',
     })
 
-    const result = await pattern.fn(
-      createScope('test', {}),
-      createEventView({
-        sessionId: 'test',
-        createdAt: Date.now(),
-        events: [],
-        status: 'running' as const,
-        data: {},
-        input: 'test',
-      }),
+    const result = await runInFrame(() =>
+      pattern.fn(
+        createScope('test', {}),
+        createEventView({
+          sessionId: 'test',
+          createdAt: Date.now(),
+          events: [],
+          status: 'running' as const,
+          data: {},
+          input: 'test',
+        }),
+      ),
     )
 
     const calls = result.events.filter((e) => e.type === 'tool_call')
@@ -563,16 +575,18 @@ describe('simpleLoop execution', () => {
       patternId: 'test',
     })
 
-    const result = await pattern.fn(
-      createScope('test', {}),
-      createEventView({
-        sessionId: 'test',
-        createdAt: Date.now(),
-        events: [],
-        status: 'running' as const,
-        data: {},
-        input: 'test',
-      }),
+    const result = await runInFrame(() =>
+      pattern.fn(
+        createScope('test', {}),
+        createEventView({
+          sessionId: 'test',
+          createdAt: Date.now(),
+          events: [],
+          status: 'running' as const,
+          data: {},
+          input: 'test',
+        }),
+      ),
     )
 
     const toolCall = result.events.find((e) => e.type === 'tool_call')
@@ -618,7 +632,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     const errorEvents = result.events.filter((e) => e.type === 'error')
     expect(errorEvents.length).toBeGreaterThan(0)
@@ -664,7 +678,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // Verify error is tracked as an event, not in scope.data
     const errorEvents = result.events.filter((e) => e.type === 'error')
@@ -701,7 +715,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // Verify error is tracked as an event, not in scope.data
     const errorEvents = result.events.filter((e) => e.type === 'error')
@@ -738,7 +752,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     const errorEvents = result.events.filter((e) => e.type === 'error')
     expect(errorEvents.length).toBeGreaterThan(0)
@@ -785,7 +799,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // Controller was called exactly maxTurns times (loop never broke early)
     expect(mockController).toHaveBeenCalledTimes(3)
@@ -843,7 +857,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // Clean exit via Return — no error events should be tracked
     const errorEvents = result.events.filter((e) => e.type === 'error')
@@ -898,7 +912,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // Should have tool_result events from both iterations
     const toolResults = result.events.filter((e) => e.type === 'tool_result')
@@ -958,7 +972,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     expect(mockController).toHaveBeenCalled()
     // Lane A4: priorResults rides the object seam.
@@ -1023,7 +1037,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     const priorResults = (mockController.mock.calls[0][0] as ControllerInput).priorResults!
     expect(priorResults).toBeDefined()
@@ -1084,7 +1098,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     const priorResults = (mockController.mock.calls[0][0] as ControllerInput).priorResults!
     expect(priorResults).toHaveLength(1)
@@ -1127,7 +1141,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     // priorResults (7th arg) should be undefined
     const priorResults = (mockController.mock.calls[0][0] as ControllerInput).priorResults
@@ -1171,7 +1185,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     const priorResults = (mockController.mock.calls[0][0] as ControllerInput).priorResults!
     expect(priorResults).toHaveLength(1)
@@ -1230,7 +1244,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     const priorResults = (mockController.mock.calls[0][0] as ControllerInput).priorResults!
     expect(priorResults).toBeDefined()
@@ -1282,7 +1296,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     const priorResults = (mockController.mock.calls[0][0] as ControllerInput).priorResults!
     // Only the successful result should be included
@@ -1337,7 +1351,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     // callTool should have been called with the unresolved ref string (not expanded)
     expect(callToolMock).toHaveBeenCalledWith(
@@ -1393,7 +1407,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     // callTool should have been called with the expanded result data (not the ref string)
     expect(callToolMock).toHaveBeenCalledWith(
@@ -1448,7 +1462,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     // callTool should have been called with the unresolved ref string
     expect(callToolMock).toHaveBeenCalledWith(
@@ -1501,7 +1515,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     const toolCalls = result.events.filter((e) => e.type === 'tool_call')
     const toolResults = result.events.filter((e) => e.type === 'tool_result')
@@ -1561,7 +1575,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     // Second controller call should see the first turn's expansions populated.
     expect(turnsByCall.length).toBe(2)
@@ -1608,7 +1622,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     expect(turnsByCall.length).toBe(2)
     const turn0 = (turnsByCall[1] as Array<{ n: number; expansions?: unknown }>)[0]
@@ -1655,7 +1669,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // The synthetic call should NOT have hit the real tool dispatcher.
     expect(callToolMock).not.toHaveBeenCalled()
@@ -1714,7 +1728,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // Loop should not have aborted with an error event — it continues.
     expect(result.events.some((e) => e.type === 'error')).toBe(false)
@@ -1770,7 +1784,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     const expandResult = result.events.find(
       (e) =>
@@ -1833,7 +1847,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // One tool_call, one tool_result — both keyed under expandPreviousResult.
     const calls = result.events.filter(
@@ -1912,7 +1926,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     const expandResult = result.events.find(
       (e) =>
@@ -1981,7 +1995,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
     const expandResult = result.events.find(
       (e) =>
         e.type === 'tool_result' && (e.data as { tool: string }).tool === 'expandPreviousResult',
@@ -2035,7 +2049,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
     const expandResult = result.events.find(
       (e) =>
         e.type === 'tool_result' && (e.data as { tool: string }).tool === 'expandPreviousResult',
@@ -2100,7 +2114,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     expect(priorByCall.length).toBe(1)
     const prior = priorByCall[0] as Array<{ ref_id: string; expanded_in_turn: unknown }>
@@ -2167,7 +2181,7 @@ describe('simpleLoop execution', () => {
     }
     const view = createEventView(mockContext)
 
-    await pattern.fn(scope, view)
+    await runInFrame(() => pattern.fn(scope, view))
 
     expect(priorByCall.length).toBe(1)
     const prior = priorByCall[0] as Array<{ ref_id: string; summary: string }>
@@ -2219,7 +2233,7 @@ describe('simpleLoop execution', () => {
         resultOmit: { read_neo4j_cypher: ['webUrl'] },
       })
       const scope = createScope('omit-loop', { intent: 'q' })
-      const result = await pattern.fn(scope, createEventView(baseContext()))
+      const result = await runInFrame(() => pattern.fn(scope, createEventView(baseContext())))
 
       // Turn 2's previous_results (3rd positional arg) is what the LLM reads.
       const previousResults = JSON.stringify(
@@ -2256,7 +2270,7 @@ describe('simpleLoop execution', () => {
         resultOmit: { some_other_tool: ['webUrl'] },
       })
       const scope = createScope('no-omit-loop', { intent: 'q' })
-      await pattern.fn(scope, createEventView(baseContext()))
+      await runInFrame(() => pattern.fn(scope, createEventView(baseContext())))
 
       expect(JSON.stringify((mockController.mock.calls[1][0] as ControllerInput).turns)).toContain(
         BIG_URL,
@@ -2296,7 +2310,7 @@ describe('simpleLoop execution', () => {
         resultOmit: { graph_files_search: ['webUrl'] },
       })
       const scope = createScope('omit-expand', { intent: 'q' })
-      const result = await pattern.fn(scope, createEventView(ctx))
+      const result = await runInFrame(() => pattern.fn(scope, createEventView(ctx)))
 
       const previousResults = JSON.stringify(
         (mockController.mock.calls[1][0] as ControllerInput).turns,
@@ -2350,7 +2364,7 @@ describe('simpleLoop execution', () => {
       const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
       const { createScope } = await import('@hames/harness-patterns/context.server')
       const { createEventView } = await import('@hames/harness-patterns/patterns')
-      const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
+      const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
 
       callToolMock.mockResolvedValueOnce({ success: true, data: 'ok' })
       const mockController = vi
@@ -2363,8 +2377,8 @@ describe('simpleLoop execution', () => {
 
       const pattern = simpleLoop(mockController, [], { patternId: 'scoped-ok' })
       const scope = createScope('scoped-ok', { intent: 'q' })
-      const result = await withTransport(scopedTransport, () =>
-        pattern.fn(scope, createEventView(context())),
+      const result = await withRunFrame({ transports: [scopedTransport] }, () =>
+        runInFrame(() => pattern.fn(scope, createEventView(context()))),
       )
 
       expect(callToolMock).toHaveBeenCalledWith('sandbox_bash', { command: 'ls' })
@@ -2380,7 +2394,7 @@ describe('simpleLoop execution', () => {
       const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
       const { createScope } = await import('@hames/harness-patterns/context.server')
       const { createEventView } = await import('@hames/harness-patterns/patterns')
-      const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
+      const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
 
       const mockController = vi.fn().mockResolvedValue({
         action: mockAction({ tool_name: 'rm_rf', tool_args: '{}' }),
@@ -2389,8 +2403,8 @@ describe('simpleLoop execution', () => {
 
       const pattern = simpleLoop(mockController, [], { patternId: 'scoped-refuse' })
       const scope = createScope('scoped-refuse', { intent: 'q' })
-      const result = await withTransport(scopedTransport, () =>
-        pattern.fn(scope, createEventView(context())),
+      const result = await withRunFrame({ transports: [scopedTransport] }, () =>
+        runInFrame(() => pattern.fn(scope, createEventView(context()))),
       )
 
       expect(callToolMock).not.toHaveBeenCalledWith('rm_rf', expect.anything())
@@ -2409,7 +2423,7 @@ describe('simpleLoop execution', () => {
       const { simpleLoop } = await import('@hames/harness-patterns/patterns/simpleLoop.server')
       const { createScope } = await import('@hames/harness-patterns/context.server')
       const { createEventView } = await import('@hames/harness-patterns/patterns')
-      const { withTransport } = await import('@hames/harness-patterns/tool-transport.server')
+      const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
 
       callToolMock.mockResolvedValue({ success: true, data: 'ok' })
       const mockController = vi
@@ -2426,8 +2440,8 @@ describe('simpleLoop execution', () => {
 
       const pattern = simpleLoop(mockController, [], { patternId: 'scoped-batch' })
       const scope = createScope('scoped-batch', { intent: 'q' })
-      const result = await withTransport(scopedTransport, () =>
-        pattern.fn(scope, createEventView(context())),
+      const result = await withRunFrame({ transports: [scopedTransport] }, () =>
+        runInFrame(() => pattern.fn(scope, createEventView(context()))),
       )
 
       expect(callToolMock).toHaveBeenCalledWith('sandbox_bash', { command: 'ls' })

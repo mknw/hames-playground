@@ -17,7 +17,7 @@
  * flip in another thread cannot move this one.
  *
  * Mid-conversation flips are allowed on purpose: the tier scope is opened per
- * TURN (`runWithInferenceTier`), so a flip takes effect on the next message and
+ * TURN (the run frame's `inference` slot), so a flip takes effect on the next message and
  * never changes provider underneath a run already in flight. Cost is priced
  * from the client each call actually used, so a thread with turns on both tiers
  * stays truthful without anything extra here.

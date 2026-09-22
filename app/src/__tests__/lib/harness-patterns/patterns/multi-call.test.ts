@@ -12,9 +12,19 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
 import { mockAction, mockFinalAction } from '../../../mocks/baml'
 import type { ControllerAction } from '@hames/harness-baml/baml_client/types'
 import type { ControllerInput, ActorInput } from '@hames/harness-patterns/types'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -82,7 +92,7 @@ async function runPattern(actions: ControllerAction[], config?: Record<string, u
     data: {},
     input: 'q',
   })
-  const result = await pattern.fn(scope, view)
+  const result = await runInFrame(() => pattern.fn(scope, view))
   return { result, controller }
 }
 
@@ -277,7 +287,7 @@ describe('actorCritic multi-call attempts', () => {
       data: {},
       input: 'q',
     })
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
     return { result, actor, critic }
   }
 

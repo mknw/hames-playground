@@ -27,7 +27,8 @@ import type {
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import { trackEvent, resolveConfig, createEvent, createScope } from '../context.server'
 import { emitLive } from '../live-event-context.server'
-import { runtimeConfig } from '../runtime-config.server'
+import { DEFAULT_RUNTIME_CONFIG } from '../runtime-config'
+import { currentRunFrame } from '../run-frame.server'
 import { stripThinkBlocks } from '../content-transforms'
 import { trimToFit } from '../token-budget.server'
 
@@ -83,9 +84,20 @@ export function router<T extends RouterData>(
 ): ConfiguredPattern<T> {
   // Default viewConfig: cross-turn visibility of the last 5 turns, messages only.
   // Caller can override entirely by passing their own viewConfig in config.
+  //
+  // THE ONE SOFT READ OF THE CONFIG SLOT, and the reason is that this line runs
+  // at pattern CONSTRUCTION rather than during a run. "No frame, no run"
+  // (ruling D3, issue #374) refuses a RUN without a frame — `runChain` is where
+  // that is enforced — but building a pattern is not running one, and making
+  // `router()` throw outside a frame would impose an ordering nobody decided:
+  // a host would have to construct its whole agent inside the turn scope, and
+  // `estimateTurns` projections could not be taken at all. The behaviour is
+  // exactly what `runtimeConfig()` gave before the frame: the open run's window
+  // when there is one, the library default otherwise.
+  const frameConfig = currentRunFrame()?.config ?? DEFAULT_RUNTIME_CONFIG
   const DEFAULT_ROUTER_VIEW: ViewConfig = {
     fromLast: false, // no pattern scope filter → see all events across turns
-    fromLastNTurns: runtimeConfig().routerTurnWindow,
+    fromLastNTurns: frameConfig.routerTurnWindow,
     eventTypes: ['user_message', 'assistant_message'],
     contentTransforms: [stripThinkBlocks], // Strip <think> blocks from history — saves tokens, avoids confusing classifier
   }

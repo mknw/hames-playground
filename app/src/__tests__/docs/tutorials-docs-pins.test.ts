@@ -67,13 +67,14 @@ const PACKAGE_NAMES = [
  * the entry to delete. That is the point — an allowlist that silently outlives
  * its reason is how a dangling link becomes permanent.
  *
- * Sequencing (top-level coordinator, 2026-09-22): #381 merges first and #382's
- * delta reconciles it, so removing the entry below belongs to #382's landing,
- * not to this PR.
+ * Sequencing (top-level coordinator, 2026-09-22): #381 merged first and #382's
+ * delta reconciled it. The one entry this list ever held —
+ * `hosting-the-harness.md`, owed by #382 — is gone because that page is here;
+ * the list is deliberately kept (empty) rather than deleted, because the next
+ * cross-PR link will want the same mechanism and rebuilding it from scratch is
+ * how the reasoning gets lost.
  */
-const PENDING_PAGES: Record<string, string> = {
-  'hosting-the-harness.md': 'PR #382 (mknw/run-frame) — the run frame page',
-}
+const PENDING_PAGES: Record<string, string> = {}
 
 interface Fence {
   doc: string

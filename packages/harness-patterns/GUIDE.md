@@ -191,7 +191,7 @@ A **transport** is anything that owns some tool names and can run them. The
 seam has four members and no rank:
 
 ```typescript
-import { registerTransport, withTransport, activeTransports } from '@hames/harness-patterns'
+import { registerTransport, amendRunFrame, activeTransports } from '@hames/harness-patterns'
 import type { ToolTransport } from '@hames/harness-patterns'
 
 const myBackend = {
@@ -213,25 +213,28 @@ const mine: ToolTransport = {
 const unregister = registerTransport(mine)
 
 // SCOPED: consulted FIRST, innermost-first, for the duration of one call.
-await withTransport(mine, async () => {
+// The run frame's `transports` slot — supplied when the frame is opened, or
+// amended below it like this (which is what `withSandbox` does).
+await amendRunFrame({ transports: [mine] }, async () => {
   /* any dispatch inside this call reaches `mine` first */
 })
 ```
 
 Two properties are the design, not accidents:
 
-- **Two ways to supply, and the difference is the invariant.** `withTransport`
-  is an AsyncLocalStorage stack bounded by one call; `registerTransport` is a
-  module-level list. Any tool name owned by a _scoped_ transport is dispatched
-  there before any process-registered transport and before the gateway — there
-  is deliberately **no `priority` field**, so containment cannot be inverted by
-  a value or an import order.
+- **Two ways to supply, and the difference is the invariant.** The run frame's
+  `transports` slot is bounded by one run (or by one `amendRunFrame` below it);
+  `registerTransport` is a module-level list. Any tool name owned by a _scoped_
+  transport is dispatched there before any process-registered transport and
+  before the gateway — there is deliberately **no `priority` field**, so
+  containment cannot be inverted by a value or an import order.
 - **Nested transports shadow; the injection guard unions.** Two nested
-  `withTransport` scopes resolve a name they both own to the inner one — two
+  transport scopes resolve a name they both own to the inner one — two
   sandboxes are two machines, and only an order answers "which machine". Two
   nested `withInjectionGuard`s union instead, because a nested guard is a second
   reviewer of the same content and the strictest reading must win. The
-  inconsistency is deliberate; do not "fix" it.
+  inconsistency is deliberate; do not "fix" it, and both rules are stated in one
+  place — `amendRunFrame` in `run-frame.server.ts`.
 
 ### The gateway tools
 

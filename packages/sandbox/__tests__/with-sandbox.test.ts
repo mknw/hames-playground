@@ -7,6 +7,7 @@
  * visibility guarantee that the inner pattern sees the transport via ALS.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
 
 vi.mock('@hames/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -51,6 +52,15 @@ import type {
   VMHandle,
 } from '../types'
 import type { ConfiguredPattern, PatternScope, EventView } from '@hames/harness-patterns/types'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 type Calls = {
   boot: Array<{ rootfs: RootfsId; runtime: RuntimeConfig }>
@@ -141,7 +151,7 @@ describe('withSandbox', () => {
     })
 
     const wrapped = withSandbox({ backend, rootfs: 'base' })(inner)
-    const out = await wrapped.fn(fakeScope({}), fakeView)
+    const out = await runInFrame(() => wrapped.fn(fakeScope({}), fakeView))
 
     expect(innerRan).toBe(true)
     expect(out.data.ran).toBe(true)
@@ -168,7 +178,7 @@ describe('withSandbox', () => {
       return scope
     })
 
-    await withSandbox({ backend })(inner).fn(fakeScope({}), fakeView)
+    await runInFrame(() => withSandbox({ backend })(inner).fn(fakeScope({}), fakeView))
 
     expect(seenDepth).toBe(1)
     expect(seenId).toBe('sandbox:sbx-test')
@@ -181,7 +191,7 @@ describe('withSandbox', () => {
     const inner = fakePattern(async (scope) => scope)
 
     const wrapped = withSandbox({ backend })(inner)
-    await expect(wrapped.fn(fakeScope({}), fakeView)).rejects.toThrow('boom')
+    await expect(runInFrame(() => wrapped.fn(fakeScope({}), fakeView))).rejects.toThrow('boom')
 
     expect(backend.calls.boot).toHaveLength(1)
     expect(backend.calls.destroy).toHaveLength(1)
@@ -196,7 +206,9 @@ describe('withSandbox', () => {
     })
 
     const wrapped = withSandbox({ backend })(inner)
-    await expect(wrapped.fn(fakeScope({}), fakeView)).rejects.toThrow('inner failure')
+    await expect(runInFrame(() => wrapped.fn(fakeScope({}), fakeView))).rejects.toThrow(
+      'inner failure',
+    )
 
     expect(backend.calls.closes).toBe(1)
     expect(backend.calls.destroy).toHaveLength(1)
@@ -206,12 +218,14 @@ describe('withSandbox', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
 
-    await withSandbox({
-      backend,
-      rootfs: 'base',
-      resources: { cpus: 2, memoryMB: 1024 },
-      egress: 'open',
-    })(inner).fn(fakeScope({}), fakeView)
+    await runInFrame(() =>
+      withSandbox({
+        backend,
+        rootfs: 'base',
+        resources: { cpus: 2, memoryMB: 1024 },
+        egress: 'open',
+      })(inner).fn(fakeScope({}), fakeView),
+    )
 
     // Caller-supplied wins; timeoutSec gets the settings default.
     expect(backend.calls.boot[0].rootfs).toBe('base')
@@ -227,7 +241,7 @@ describe('withSandbox', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
 
-    await withSandbox({ backend })(inner).fn(fakeScope({}), fakeView)
+    await runInFrame(() => withSandbox({ backend })(inner).fn(fakeScope({}), fakeView))
 
     expect(backend.calls.boot[0].runtime).toMatchObject({
       memoryMB: 512, // defaultMemoryMB
@@ -241,9 +255,11 @@ describe('withSandbox', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
 
-    await withSandbox({ backend, tenantId: 'user-42', egress: 'open' })(inner).fn(
-      fakeScope({}),
-      fakeView,
+    await runInFrame(() =>
+      withSandbox({ backend, tenantId: 'user-42', egress: 'open' })(inner).fn(
+        fakeScope({}),
+        fakeView,
+      ),
     )
 
     expect(backend.calls.boot[0].runtime).toMatchObject({ tenantId: 'user-42' })
@@ -274,9 +290,9 @@ describe('withSandbox', () => {
       },
     })(inner)
 
-    await wrapped.fn(fakeScope({}), fakeView)
+    await runInFrame(() => wrapped.fn(fakeScope({}), fakeView))
     current = 'user-b'
-    await wrapped.fn(fakeScope({}), fakeView)
+    await runInFrame(() => wrapped.fn(fakeScope({}), fakeView))
 
     // Called per RUN, not once at wrap time: a hoisted resolution calls it once.
     expect(seen).toEqual(['user-a', 'user-b'])
@@ -296,12 +312,14 @@ describe('withSandbox', () => {
     // A resolver throws when the caller's tenant is unknowable — which IS the
     // 'default' case. Taking the turn down instead would trade an
     // unauthenticated boot for a dead chain.
-    await withSandbox({
-      backend,
-      tenantId: () => {
-        throw new Error('no request scope')
-      },
-    })(inner).fn(fakeScope({}), fakeView)
+    await runInFrame(() =>
+      withSandbox({
+        backend,
+        tenantId: () => {
+          throw new Error('no request scope')
+        },
+      })(inner).fn(fakeScope({}), fakeView),
+    )
 
     expect(backend.calls.boot).toHaveLength(1)
     expect(backend.calls.boot[0].runtime.tenantId).toBe('default')
@@ -316,6 +334,7 @@ describe('withSandbox', () => {
   it('prefixes the inner pattern name and preserves config / estimateTurns', () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
+    // No frame here: this builds the wrapper and never runs it.
     const wrapped = withSandbox({ backend })(inner)
 
     expect(wrapped.name).toBe('withSandbox(inner)')
@@ -333,7 +352,9 @@ describe('withSandbox scheduler + pool wiring', () => {
     const releaseSpy = vi.spyOn(pool, 'release')
 
     const inner = fakePattern(async (scope) => scope)
-    await withSandbox({ backend, pool, rootfs: 'base' })(inner).fn(fakeScope({}), fakeView)
+    await runInFrame(() =>
+      withSandbox({ backend, pool, rootfs: 'base' })(inner).fn(fakeScope({}), fakeView),
+    )
 
     expect(acquireSpy).toHaveBeenCalledWith('base', expect.any(Object))
     expect(releaseSpy).toHaveBeenCalledTimes(1)
@@ -349,13 +370,13 @@ describe('withSandbox scheduler + pool wiring', () => {
     const inner = fakePattern(async (scope) => scope)
     const wrap = withSandbox({ backend, pool, rootfs: 'base' })(inner)
 
-    await wrap.fn(fakeScope({}), fakeView)
+    await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
     expect(backend.calls.boot).toHaveLength(1)
     expect(pool.size('base')).toBe(1) // parked
     expect(backend.calls.destroy).toHaveLength(0)
 
     // Second invocation: pool-hit, no new boot.
-    await wrap.fn(fakeScope({}), fakeView)
+    await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
     expect(backend.calls.boot).toHaveLength(1)
     expect(pool.size('base')).toBe(1) // re-parked
   })
@@ -368,9 +389,11 @@ describe('withSandbox scheduler + pool wiring', () => {
     const allocSpy = vi.spyOn(scheduler, 'allocate')
 
     const inner = fakePattern(async (scope) => scope)
-    await withSandbox({ backend, pool, scheduler, sessionId: 'sess-99' })(inner).fn(
-      fakeScope({}),
-      fakeView,
+    await runInFrame(() =>
+      withSandbox({ backend, pool, scheduler, sessionId: 'sess-99' })(inner).fn(
+        fakeScope({}),
+        fakeView,
+      ),
     )
 
     expect(allocSpy).toHaveBeenCalledWith('sess-99')
@@ -399,18 +422,16 @@ describe('withSandbox scheduler + pool wiring', () => {
     })
     const fast = fakePattern(async (scope) => scope)
 
-    const slowP = withSandbox({ backend, pool, scheduler, sessionId: 's1' })(slow).fn(
-      fakeScope({}),
-      fakeView,
+    const slowP = runInFrame(() =>
+      withSandbox({ backend, pool, scheduler, sessionId: 's1' })(slow).fn(fakeScope({}), fakeView),
     )
     // Give slow a tick to claim the slot.
     await new Promise((r) => setImmediate(r))
     expect(scheduler.inflightCount()).toBe(1)
     expect(scheduler.queueDepth()).toBe(0)
 
-    const fastP = withSandbox({ backend, pool, scheduler, sessionId: 's2' })(fast).fn(
-      fakeScope({}),
-      fakeView,
+    const fastP = runInFrame(() =>
+      withSandbox({ backend, pool, scheduler, sessionId: 's2' })(fast).fn(fakeScope({}), fakeView),
     )
     await new Promise((r) => setImmediate(r))
     // fast is queued behind slow.
@@ -431,7 +452,12 @@ describe('withSandbox scheduler + pool wiring', () => {
     })
 
     await expect(
-      withSandbox({ backend, pool, scheduler, sessionId: 's1' })(inner).fn(fakeScope({}), fakeView),
+      runInFrame(() =>
+        withSandbox({ backend, pool, scheduler, sessionId: 's1' })(inner).fn(
+          fakeScope({}),
+          fakeView,
+        ),
+      ),
     ).rejects.toThrow('inner went pop')
     expect(scheduler.inflightCount()).toBe(0)
   })
@@ -452,9 +478,9 @@ describe('withSandbox id/fresh (step 6)', () => {
     const inner = fakePattern(async (scope) => scope)
     const wrap = withSandbox({ ...kit, id: 'session-42' })(inner)
 
-    await wrap.fn(fakeScope({}), fakeView)
-    await wrap.fn(fakeScope({}), fakeView)
-    await wrap.fn(fakeScope({}), fakeView)
+    await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
+    await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
+    await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
 
     // Only one boot — the attachment table reuses across calls.
     expect(kit.backend.calls.boot).toHaveLength(1)
@@ -472,20 +498,24 @@ describe('withSandbox id/fresh (step 6)', () => {
     const attachments = new AttachmentTable(kit.backend, pool, { idleMs: 60_000 })
     const inner = fakePattern(async (scope) => scope)
 
-    await withSandbox({
-      backend: kit.backend,
-      pool,
-      scheduler: kit.scheduler,
-      attachments,
-      id: 'a',
-    })(inner).fn(fakeScope({}), fakeView)
-    await withSandbox({
-      backend: kit.backend,
-      pool,
-      scheduler: kit.scheduler,
-      attachments,
-      id: 'b',
-    })(inner).fn(fakeScope({}), fakeView)
+    await runInFrame(() =>
+      withSandbox({
+        backend: kit.backend,
+        pool,
+        scheduler: kit.scheduler,
+        attachments,
+        id: 'a',
+      })(inner).fn(fakeScope({}), fakeView),
+    )
+    await runInFrame(() =>
+      withSandbox({
+        backend: kit.backend,
+        pool,
+        scheduler: kit.scheduler,
+        attachments,
+        id: 'b',
+      })(inner).fn(fakeScope({}), fakeView),
+    )
 
     expect(kit.backend.calls.boot).toHaveLength(2)
     expect(attachments.has('a')).toBe(true)
@@ -497,10 +527,14 @@ describe('withSandbox id/fresh (step 6)', () => {
     const destroySpy = vi.spyOn(kit.attachments, 'destroyById')
     const inner = fakePattern(async (scope) => scope)
 
-    await withSandbox({ ...kit, id: 'session-42' })(inner).fn(fakeScope({}), fakeView)
+    await runInFrame(() =>
+      withSandbox({ ...kit, id: 'session-42' })(inner).fn(fakeScope({}), fakeView),
+    )
     expect(destroySpy).not.toHaveBeenCalled()
 
-    await withSandbox({ ...kit, id: 'session-42', fresh: true })(inner).fn(fakeScope({}), fakeView)
+    await runInFrame(() =>
+      withSandbox({ ...kit, id: 'session-42', fresh: true })(inner).fn(fakeScope({}), fakeView),
+    )
     expect(destroySpy).toHaveBeenCalledWith('session-42')
     expect(kit.attachments.has('session-42')).toBe(true)
     // Note: a pool-recycled VM may serve the re-acquire, so we don't assert
@@ -514,7 +548,7 @@ describe('withSandbox id/fresh (step 6)', () => {
     const poolReleaseSpy = vi.spyOn(kit.pool, 'release')
 
     const inner = fakePattern(async (scope) => scope)
-    await withSandbox({ ...kit, fresh: true })(inner).fn(fakeScope({}), fakeView)
+    await runInFrame(() => withSandbox({ ...kit, fresh: true })(inner).fn(fakeScope({}), fakeView))
 
     expect(poolAcquireSpy).not.toHaveBeenCalled()
     expect(poolReleaseSpy).not.toHaveBeenCalled()
@@ -528,7 +562,7 @@ describe('withSandbox id/fresh (step 6)', () => {
     const backend = fakeBackend({ connectMcpFails: true })
     const wrap = withSandbox({ backend, fresh: true })(fakePattern(async (scope) => scope))
 
-    await expect(wrap.fn(fakeScope({}), fakeView)).rejects.toThrow('boom')
+    await expect(runInFrame(() => wrap.fn(fakeScope({}), fakeView))).rejects.toThrow('boom')
 
     expect(backend.calls.boot).toHaveLength(1)
     expect(backend.calls.destroy).toHaveLength(1) // no orphaned container
@@ -542,7 +576,7 @@ describe('withSandbox id/fresh (step 6)', () => {
     })
 
     await expect(
-      withSandbox({ ...kit, fresh: true })(inner).fn(fakeScope({}), fakeView),
+      runInFrame(() => withSandbox({ ...kit, fresh: true })(inner).fn(fakeScope({}), fakeView)),
     ).rejects.toThrow('boom')
     expect(kit.backend.calls.destroy).toHaveLength(1)
   })
@@ -552,12 +586,12 @@ describe('withSandbox id/fresh (step 6)', () => {
     const inner = fakePattern(async (scope) => scope)
     const wrap = withSandbox({ ...kit, id: 'session-42' })(inner)
 
-    await wrap.fn(fakeScope({}), fakeView)
+    await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
     // After release, refCount=0 but entry stays. Sweeper hasn't run.
     expect(kit.attachments.has('session-42')).toBe(true)
     const before = kit.backend.calls.boot.length
 
-    await wrap.fn(fakeScope({}), fakeView)
+    await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
     expect(kit.backend.calls.boot.length).toBe(before) // no extra boot
   })
 })
@@ -595,7 +629,7 @@ describe('withSandbox default-singleton orphan reaper (#97 Gap 1)', () => {
 
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
-    await withSandbox({ backend })(inner).fn(fakeScope({}), fakeView)
+    await runInFrame(() => withSandbox({ backend })(inner).fn(fakeScope({}), fakeView))
 
     // Neither the default DockerBackend nor the injected backend was reaped —
     // withSandbox itself never reaps; only the default-singleton builder does.
@@ -722,8 +756,8 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
       fakePattern(async (scope) => scope),
     )
 
-    await wrap.fn(fakeScope({}), fakeView)
-    await wrap.fn(fakeScope({}), fakeView)
+    await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
+    await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
 
     // Turn 2 reuses the parked attachment (isFirstBoot is false by then) and
     // still hydrates, so a doc ingested that turn lands in /work/in...
@@ -748,7 +782,7 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
     const wrap = withSandbox({ ...kit, id: 'sess-1', sessionId: 'sess-1', syncWorkspace: true })(
       fakePattern(async (scope) => scope),
     )
-    await wrap.fn(fakeScope({}), fakeView)
+    await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
 
     expect(artifacts.hydrateWorkspace).toHaveBeenCalledTimes(1)
   })
@@ -761,7 +795,7 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
       fakePattern(async (scope) => scope),
     )
 
-    await wrap.fn(fakeScope({}), fakeView)
+    await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
 
     expect(artifacts.promoteOutputs).toHaveBeenCalledWith(expect.anything(), 'sess-1', baseline)
   })
@@ -775,7 +809,7 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
       fakePattern(inner),
     )
 
-    await expect(wrap.fn(fakeScope({}), fakeView)).resolves.toBeDefined()
+    await expect(runInFrame(() => wrap.fn(fakeScope({}), fakeView))).resolves.toBeDefined()
     expect(inner).toHaveBeenCalledTimes(1)
     expect(err).toHaveBeenCalledWith(expect.stringContaining('hydrate failed'))
     err.mockRestore()
@@ -795,7 +829,7 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
     )
 
     // The turn still runs and still returns…
-    await expect(wrap.fn(scope, fakeView)).resolves.toBeDefined()
+    await expect(runInFrame(() => wrap.fn(scope, fakeView))).resolves.toBeDefined()
     // …but nothing is promoted against a baseline we do not have.
     expect(artifacts.promoteOutputs).not.toHaveBeenCalled()
     // And the skip is recorded, on both channels.
@@ -816,7 +850,7 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
       fakePattern(async (s) => s),
     )
 
-    await expect(wrap.fn(scope, fakeView)).resolves.toBeDefined()
+    await expect(runInFrame(() => wrap.fn(scope, fakeView))).resolves.toBeDefined()
 
     const errors = scope.events.filter((e) => e.type === 'error')
     expect(errors).toHaveLength(1)
@@ -841,7 +875,7 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
       fakePattern(async (s) => s),
     )
 
-    await wrap.fn(scope, fakeView)
+    await runInFrame(() => wrap.fn(scope, fakeView))
 
     const errors = scope.events.filter((e) => e.type === 'error')
     expect(errors).toHaveLength(1)
@@ -857,7 +891,9 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
       }),
     )
 
-    await expect(wrap.fn(fakeScope({}), fakeView)).rejects.toThrow('actor gave up')
+    await expect(runInFrame(() => wrap.fn(fakeScope({}), fakeView))).rejects.toThrow(
+      'actor gave up',
+    )
     expect(artifacts.promoteOutputs).toHaveBeenCalledTimes(1)
   })
 
@@ -869,7 +905,7 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
       fakePattern(async (scope) => scope),
     )
 
-    await expect(wrap.fn(fakeScope({}), fakeView)).resolves.toBeDefined()
+    await expect(runInFrame(() => wrap.fn(fakeScope({}), fakeView))).resolves.toBeDefined()
     err.mockRestore()
   })
 
@@ -877,7 +913,7 @@ describe('withSandbox durable workspace at runtime (#89)', () => {
     const kit = buildKit()
     const wrap = withSandbox({ ...kit, id: 'sess-1' })(fakePattern(async (scope) => scope))
 
-    await wrap.fn(fakeScope({}), fakeView)
+    await runInFrame(() => wrap.fn(fakeScope({}), fakeView))
 
     expect(artifacts.hydrateWorkspace).not.toHaveBeenCalled()
     expect(artifacts.snapshotOutputs).not.toHaveBeenCalled()

@@ -71,7 +71,7 @@ export function isInferenceTier(value: unknown): value is InferenceTier {
  * deployment and opts *out* to Anthropic, not the other way round.
  *
  * **Anthropic when it is not.** That is not a second policy, it is the same
- * one under a fail-closed constraint: `runWithInferenceTier('verda')` throws
+ * one under a fail-closed constraint: `assertInferenceTier('verda')` throws
  * when the endpoint is unset (see `clients.server.ts`), so defaulting an
  * unconfigured deployment — a dev box, CI — to Verda would make every turn
  * throw rather than fall through to Anthropic. The fall-through is refused by
@@ -91,7 +91,7 @@ export function defaultInferenceTier(): InferenceTier {
 /**
  * The user's stored tier, or `null` when they have never chosen one. A value
  * this build does not recognise is treated as "never chosen" rather than
- * passed through — an unknown tier reaching `runWithInferenceTier` would be a
+ * passed through — an unknown tier reaching the run frame's slot would be a
  * silent no-op that reads like a choice.
  */
 export async function getStoredInferenceTier(userId: string): Promise<InferenceTier | null> {

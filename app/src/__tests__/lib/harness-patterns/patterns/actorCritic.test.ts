@@ -3,10 +3,20 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { withRunFrame } from '@hames/harness-patterns/run-frame.server'
 import { mockAction, mockFinalAction, mockCriticResult, mockBAMLClient } from '../../../mocks/baml'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 import type { CriticFnWithLLMData } from '@hames/harness-baml/baml-adapters.server'
 import type { ActorFn, ActorInput } from '@hames/harness-patterns/types'
+
+/**
+ * #374: a pattern run needs a run frame, and these tests drive patterns
+ * directly rather than through a harness entry point — the script /
+ * background-job case ruling D3 makes explicit. An empty frame gives every slot
+ * its default; nesting one inside an open frame joins it rather than opening a
+ * second, so this is safe to apply uniformly.
+ */
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
 // Mock server-only imports
 vi.mock('@hames/harness-patterns/assert.server', () => ({
@@ -137,16 +147,18 @@ describe('actorCritic execution', () => {
 
     const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], { patternId: 'test' })
 
-    const result = await pattern.fn(
-      createScope('test', { intent: 'edit' }),
-      createEventView({
-        sessionId: 'test',
-        createdAt: Date.now(),
-        events: [],
-        status: 'running' as const,
-        data: {},
-        input: 'edit',
-      }),
+    const result = await runInFrame(() =>
+      pattern.fn(
+        createScope('test', { intent: 'edit' }),
+        createEventView({
+          sessionId: 'test',
+          createdAt: Date.now(),
+          events: [],
+          status: 'running' as const,
+          data: {},
+          input: 'edit',
+        }),
+      ),
     )
 
     expect(result.events.filter((e) => e.type === 'error')).toHaveLength(0)
@@ -183,16 +195,18 @@ describe('actorCritic execution', () => {
 
     const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], { patternId: 'test' })
 
-    const result = await pattern.fn(
-      createScope('test', { intent: 'edit' }),
-      createEventView({
-        sessionId: 'test',
-        createdAt: Date.now(),
-        events: [],
-        status: 'running' as const,
-        data: {},
-        input: 'edit',
-      }),
+    const result = await runInFrame(() =>
+      pattern.fn(
+        createScope('test', { intent: 'edit' }),
+        createEventView({
+          sessionId: 'test',
+          createdAt: Date.now(),
+          events: [],
+          status: 'running' as const,
+          data: {},
+          input: 'edit',
+        }),
+      ),
     )
 
     const calls = result.events.filter((e) => e.type === 'tool_call')
@@ -249,7 +263,7 @@ describe('actorCritic execution', () => {
     const view = createEventView(mockContext)
 
     // Execute pattern
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // Verify actor and critic were called
     expect(mockActor).toHaveBeenCalled()
@@ -301,7 +315,7 @@ describe('actorCritic execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // Should have called actor twice (first attempt with wrong tool, second with correct)
     expect(mockActor).toHaveBeenCalledTimes(2)
@@ -352,7 +366,7 @@ describe('actorCritic execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // Should have called actor twice (first with invalid JSON, second with valid)
     expect(mockActor).toHaveBeenCalledTimes(2)
@@ -402,7 +416,7 @@ describe('actorCritic execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     expect(mockActor).toHaveBeenCalledTimes(2)
     expect(result.data.result).toBeDefined()
@@ -458,7 +472,7 @@ describe('actorCritic execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // Should have called actor and critic twice
     expect(mockActor).toHaveBeenCalledTimes(2)
@@ -507,7 +521,7 @@ describe('actorCritic execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     // Should have exhausted retries
     expect(mockActor).toHaveBeenCalledTimes(2)
@@ -552,7 +566,7 @@ describe('actorCritic execution', () => {
     }
     const view = createEventView(mockContext)
 
-    const result = await pattern.fn(scope, view)
+    const result = await runInFrame(() => pattern.fn(scope, view))
 
     const errorEvents = result.events.filter((e) => e.type === 'error')
     expect(errorEvents.length).toBeGreaterThan(0)
@@ -596,7 +610,7 @@ describe('actorCritic criticCadence', () => {
       data: {},
       input: 'do it',
     }
-    return pattern.fn(scope, createEventView(mockContext))
+    return runInFrame(() => pattern.fn(scope, createEventView(mockContext)))
   }
 
   it('skips the critic until the Nth successful turn (cadence backstop)', async () => {
@@ -779,7 +793,7 @@ describe('actorCritic critic feedback reaches the next attempt', () => {
       data: {},
       input: 'total the invoices',
     }
-    return pattern.fn(createScope('test', {}), createEventView(ctx))
+    return runInFrame(() => pattern.fn(createScope('test', {}), createEventView(ctx)))
   }
 
   it('stamps the rejection reason onto the attempt the critic judged', async () => {

@@ -75,7 +75,20 @@ afterEach(() => {
  *  takes (turn runner → tier.server → config.server → clients.server). */
 async function loadWired() {
   await import(CONFIG)
-  return await import(CLIENTS)
+  const clients = await import(CLIENTS)
+  const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
+  // #374: the tier is a SLOT of the run frame, and the fail-closed reachability
+  // check the old opener made on the way in is now the host-called
+  // `assertInferenceTier`. Bound together here — both, in that order, is what a
+  // turn does — so the seam assertions below are unchanged.
+  const runWithInferenceTier = async <T>(
+    tier: 'verda' | 'anthropic',
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    clients.assertInferenceTier(tier)
+    return withRunFrame({ inference: { tier } }, fn)
+  }
+  return { ...clients, runWithInferenceTier }
 }
 
 describe('the configuration the host registers is the configuration the resolution reads', () => {
@@ -142,7 +155,13 @@ describe('the configuration the host registers is the configuration the resoluti
     // Registered directly rather than via the composition root: with the flag
     // on and the env missing, config.server's own module-load check throws at
     // import (its own pin, in clients-verda.test.ts). This test isolates the
-    // SCOPE-path gate — runWithInferenceTier consulting assertTierReachable.
+    // gate itself — `assertInferenceTier` consulting `assertTierReachable`.
+    //
+    // #374 moved the tier onto core's generic run frame, which cannot know what
+    // 'verda' means, so the gate is no longer on the way INTO a scope: it is
+    // this exported check, and the host calls it before it puts a tier in a
+    // frame (`turn.server.ts`). Asserted against the check rather than through
+    // a frame, because the check is now the whole of the refusal.
     const clients = await import(CLIENTS)
     clients.configureInferencePolicy({
       defaultTier: () => 'anthropic',
@@ -150,9 +169,11 @@ describe('the configuration the host registers is the configuration the resoluti
         throw new Error('fixture assert: the scope is not reachable')
       },
     })
-    await expect(clients.runWithInferenceTier('verda', async () => {})).rejects.toThrow(
+    expect(() => clients.assertInferenceTier('verda')).toThrow(
       /fixture assert: the scope is not reachable/,
     )
+    // And the anthropic position is never gated — it needs no endpoint.
+    expect(() => clients.assertInferenceTier('anthropic')).not.toThrow()
   })
 
   it('the host EUR rates flow through the seam, env override included', async () => {
@@ -177,9 +198,7 @@ describe('unregistered — the package-side defaults are safe', () => {
 
     expect(clients.activeInferenceTier()).toBe('anthropic')
     expect(clients.clientOverrideFor('controller')).toBeUndefined()
-    await expect(clients.runWithInferenceTier('verda', async () => {})).rejects.toThrow(
-      /no inference policy is registered/,
-    )
+    expect(() => clients.assertInferenceTier('verda')).toThrow(/no inference policy is registered/)
   })
 
   it('unknown clients keep the documented fallbacks with no tables registered', async () => {

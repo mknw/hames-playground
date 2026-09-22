@@ -274,9 +274,13 @@ describe('createInjectionScreen — client routing', () => {
     // only so the scope opens; it is the model this screen must NOT be sent to,
     // which is what the second assertion below says.
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
-    const { runWithInferenceTier } = await import('@hames/harness-baml/clients.server')
+    const { assertInferenceTier } = await import('@hames/harness-baml/clients.server')
+    const { withRunFrame } = await import('@hames/harness-patterns/run-frame.server')
     const screen = await (await load())()
-    await runWithInferenceTier('verda', () => screen(CLEAN))
+    // #374: the tier rides the run frame's `inference` slot; the fail-closed
+    // reachability check is the host-called `assertInferenceTier`.
+    assertInferenceTier('verda')
+    await withRunFrame({ inference: { tier: 'verda' } }, () => screen(CLEAN))
     const opts = mockScreen.mock.calls[0][2] as Record<string, unknown> | undefined
     expect(opts?.client).toBe('VerdaQwen')
     // AND NOT THE 4B. `describe` moved to `LocalQwenSmall` on the same tier a few

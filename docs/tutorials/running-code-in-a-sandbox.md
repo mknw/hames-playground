@@ -62,7 +62,8 @@ const sandboxed = withSandbox({
 })(loop);
 ```
 
-There are three attachment paths, and the one you get is decided by `id` and `fresh`:
+Three destinations, four ways to ask for one — the package calls them "four acquire
+paths, picked by `id` and `fresh`":
 
 | Config                | Path             | Lifetime                                                            |
 | --------------------- | ---------------- | ------------------------------------------------------------------- |

@@ -50,35 +50,41 @@ const web: ToolTransport = {
 
 // A scripted controller: one tool call, then stop. This is the ordinary way to
 // exercise a loop without a model (see the package GUIDE, §3).
-const scripted: ControllerFn = (() => {
-  let turn = 0;
-  return async () => {
-    turn += 1;
-    return turn === 1
-      ? {
-          action: {
-            reasoning: "look it up",
-            tool_name: "web_search",
-            tool_args: '{"q":"capital of France"}',
-            is_final: false,
-          },
-        }
-      : {
-          action: {
-            reasoning: "answer",
-            tool_name: "",
-            tool_args: "",
-            is_final: true,
-          },
-        };
-  };
-})();
+//
+// A FACTORY, not a value: the closure counts turns, so it is spent after one
+// run. §2 runs this same agent again with the guard on, and reusing a spent
+// controller would make it answer `is_final` immediately — no tool call, no
+// guard, and no error to tell you why.
+const makeScripted = (): ControllerFn =>
+  (() => {
+    let turn = 0;
+    return async () => {
+      turn += 1;
+      return turn === 1
+        ? {
+            action: {
+              reasoning: "look it up",
+              tool_name: "web_search",
+              tool_args: '{"q":"capital of France"}',
+              is_final: false,
+            },
+          }
+        : {
+            action: {
+              reasoning: "answer",
+              tool_name: "",
+              tool_args: "",
+              is_final: true,
+            },
+          };
+    };
+  })();
 
 const tools = ToolsFrom(await web.listTools!(), {
   namespaces: () => undefined,
 });
 const unguarded = harness<Data>(
-  simpleLoop<Data>(scripted, tools.web ?? [], { patternId: "web-loop" }),
+  simpleLoop<Data>(makeScripted(), tools.web ?? [], { patternId: "web-loop" }),
 );
 
 const result = await withTransport(web, () =>
@@ -110,12 +116,13 @@ interface GuardedData extends HarnessData, SimpleLoopData {
   [key: string]: unknown;
 }
 
-declare const scripted: ControllerFn;
+declare const makeScripted: () => ControllerFn; // from §1
 declare const tools: import("@hames/harness-patterns").ToolSet;
 
 const guarded = harness<GuardedData>(
   withInjectionGuard({ namespaces: ["web"], catalog: tools.all })(
-    simpleLoop<GuardedData>(scripted, tools.web ?? [], {
+    // A FRESH controller — §1's run spent the previous one.
+    simpleLoop<GuardedData>(makeScripted(), tools.web ?? [], {
       patternId: "web-loop",
     }),
   ),
@@ -138,7 +145,8 @@ produced — inside `callTool`, and inside the retriever's own result assembly. 
 
 ## 3. What a violation looks like
 
-Re-run the same turn with the guard on. Two new things appear in the event log.
+Re-run the same turn with the guard on — same transport, same input, a fresh controller
+from `makeScripted()`. Two new things appear in the event log.
 
 A `content_sanitized` event carrying the verbatim spans, for a human:
 

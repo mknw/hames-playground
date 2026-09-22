@@ -120,6 +120,16 @@ function compileFences(fences: Fence[]): Map<Fence, string[]> {
     noEmit: true,
     esModuleInterop: true,
     isolatedModules: true,
+    // Every fence is its OWN module, even when it imports nothing.
+    //
+    // The virtual fence files share one directory, and TypeScript treats a file
+    // with no import/export as a global SCRIPT — so its top-level declarations
+    // land in the shared global scope and the next import-less fence can use
+    // them. That makes the pin vacuous for exactly the class it exists to
+    // catch: an undeclared identifier in an illustrative fence. Forcing module
+    // detection isolates every fence from every other (review finding F3; the
+    // two-fence probe in the PR discussion is the mutation this reddens).
+    moduleDetection: ts.ModuleDetectionKind.Force,
     // A tutorial fence is server-side code and reads `process.env` the way a
     // composition root does. Without this it resolves against the DOM lib
     // alone, so `process` is TS2580 and — worse, because it type-checks —

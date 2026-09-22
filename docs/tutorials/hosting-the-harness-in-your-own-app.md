@@ -12,20 +12,25 @@ gateway, then swap each stand-in for the real thing.
 
 ## 1. Install
 
-Four packages, and only the first is mandatory:
+Five packages, and only the first is mandatory:
 
-| Package                   | Bring it in when                                              |
-| ------------------------- | ------------------------------------------------------------- |
-| `@hames/harness-patterns` | always — patterns, event views, the guard, the tool transport |
-| `@hames/harness-baml`     | you want the shipped prompts and model adapters               |
-| `@hames/agents`           | you want the six ready-made agent definitions                 |
-| `@hames/sandbox`          | you want to run code in a container                           |
+| Package                   | Bring it in when                                                                       |
+| ------------------------- | -------------------------------------------------------------------------------------- |
+| `@hames/harness-patterns` | always — patterns, event views, the guard, the tool transport                          |
+| `@hames/harness-baml`     | you want the shipped prompts and model adapters                                        |
+| `@hames/agents`           | you want the six ready-made agent definitions                                          |
+| `@hames/sandbox`          | you want to run code in a container                                                    |
+| `@hames/connectors`       | you want this deployment's MCP catalog, the Neo4j non-agentic layer or the Graph tools |
 
 ```bash
 pnpm add @hames/harness-patterns
 # each companion declares @hames/harness-patterns as a PEER, so add it yourself:
-pnpm add @hames/harness-baml @hames/agents @hames/sandbox
+pnpm add @hames/harness-baml @hames/agents @hames/sandbox @hames/connectors
 ```
+
+`@hames/connectors` is easy to skip and then need three sections later: it is where
+`mcpNamespace` lives (§4 below, and the registration the injection guard's refusal tells
+you to make), and where `configureNeo4j` lives ([wiring a host §1](./wiring-a-host.md#1-boot-time-seams)).
 
 The peer edge is deliberate: the companions hold module-level AsyncLocalStorage scopes
 (the tool transport, the injection guard, the inference tier), and two resolved copies of

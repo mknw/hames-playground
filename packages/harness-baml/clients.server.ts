@@ -722,8 +722,7 @@ export function clientOverrideFor(role: BamlRole): BamlClientOverride | undefine
   // because core must carry no provider vocabulary, so this is the boundary
   // where the bag becomes this package's own shape.
   const perRun = currentRunFrame()?.inference?.clientOverride?.(role) as
-    | BamlClientOverride
-    | undefined
+    BamlClientOverride | undefined
   if (perRun) return perRun
 
   const consumerBag = consumerClients?.(role)

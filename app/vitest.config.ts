@@ -36,6 +36,7 @@ export default defineConfig({
         '../packages/agents/**/*.{ts,tsx,js,jsx}',
       ],
       exclude: [
+        // Dead but kept deliberately — see PR #376 §11 and the eslint ignore.
         'baml_client/**',
         '.output/**',
         '.vinxi/**',

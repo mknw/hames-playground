@@ -8,7 +8,7 @@ scripts:
   # Runs after a worktree is created. A worktree inherits only COMMITTED state, so
   # everything gitignored is missing and must be seeded or regenerated. Keep
   # "Wait for setup to complete before starting agent" ON — agents need
-  # node_modules and baml_client to exist before their first command.
+  # node_modules to exist before their first command.
   setup: |
     set -euo pipefail
 
@@ -37,11 +37,11 @@ scripts:
       run() { "$@"; }
     fi
 
-    # 4. deps + the generated BAML client (both gitignored, both required).
-    #    Without baml-generate ~270 tests fail on a missing baml_client/inlinedbaml.
+    # 4. deps. No BAML generate step: the one corpus
+    #    (packages/harness-baml/baml_src) ships a COMMITTED baml_client/, so a
+    #    fresh worktree already has the generated client.
     cd "$ORCA_WORKTREE_PATH/app"
     run pnpm install --frozen-lockfile
-    run pnpm baml-generate
 
   # Runs before a worktree is archived/removed. Reports only — never blocks.
   # Removing a worktree does NOT delete its branch, so committed work always

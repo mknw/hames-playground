@@ -20,15 +20,12 @@ import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { CLIENT_MAX_OUTPUT_TOKENS } from '../../lib/settings'
 
-// vitest runs from app/ (every pnpm command does — CLAUDE.md). Since PR-1b
-// the BAML corpus is TWO trees — the app's (heavy roles + screen) and the
-// package's (the describe set + title, plus the full client set) — and ONE
-// table mirrors BOTH: the clients a tree declares must be capped whichever
-// tree they live in.
-const BAML_SRC_DIRS = [
-  path.resolve(process.cwd(), 'baml_src'),
-  path.resolve(process.cwd(), '../packages/harness-baml/baml_src'),
-]
+// vitest runs from app/ (every pnpm command does — CLAUDE.md). There is ONE
+// BAML corpus: `packages/harness-baml/baml_src`, which declares every function
+// and every client. The app's duplicate tree is gone, so this scan has one
+// root and `byName` below can no longer collapse two same-named declarations
+// into whichever file the walk reached last.
+const BAML_SRC_DIR = path.resolve(process.cwd(), '../packages/harness-baml/baml_src')
 
 interface ParsedClient {
   name: string
@@ -42,11 +39,9 @@ interface ParsedClient {
  *  commented-out example clients don't register. */
 function parseClients(): ParsedClient[] {
   const clients: ParsedClient[] = []
-  const files = BAML_SRC_DIRS.flatMap((dir) =>
-    readdirSync(dir)
-      .filter((f) => f.endsWith('.baml'))
-      .map((f) => path.join(dir, f)),
-  )
+  const files = readdirSync(BAML_SRC_DIR)
+    .filter((f) => f.endsWith('.baml'))
+    .map((f) => path.join(BAML_SRC_DIR, f))
   for (const file of files) {
     const source = readFileSync(file, 'utf8')
       .split('\n')

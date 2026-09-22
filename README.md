@@ -229,7 +229,10 @@ exists as an opt-in for deployments that must keep prompts on their own
 infrastructure — see `USE_VERDA_INFERENCE` in `app/.env.example`.
 
 **Every `pnpm` command runs from `app/`** — never npm/npx, never from the repo
-root. Re-run `pnpm baml-generate` after editing anything under `app/baml_src/`.
+root. The BAML corpus is `packages/harness-baml/baml_src/` and its generated
+`baml_client/` is committed beside it, so nothing needs generating to run the
+app; after editing a `.baml` file, re-run `pnpm baml-generate` **from
+`packages/harness-baml/`** and commit the regenerated client.
 
 |               |                                                          |
 | ------------- | -------------------------------------------------------- |

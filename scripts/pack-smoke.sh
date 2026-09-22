@@ -240,8 +240,8 @@ for (const [key, target] of Object.entries<string>(manifest.exports)) {
 }
 
 // 2. the pre-generated client shipped: the whole point of PR-1b's "consumer
-//    never runs baml-generate" — and it declares BOTH trees' functions
-//    (the app's heavy roles AND the moved describe set + title).
+//    never runs baml-generate" — and it declares every function in the one
+//    corpus (the heavy roles, the screen, and the describe set + title).
 const pkg = await import('@hames/harness-baml/baml_client')
 for (const fn of ['LoopController', 'ActorController', 'Critic', 'Planner', 'Router',
   'Synthesize', 'ScreenUntrustedContent', 'ResultDescribe', 'ResultDescribeBatch',

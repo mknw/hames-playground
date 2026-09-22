@@ -7,7 +7,7 @@
 
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
-import { repairJson } from '../json-repair'
+import { repairJson, repairJsonTracked, type JsonRepairNote } from '../json-repair'
 import { normalizeControllerAction } from '../controller-action'
 import type { LoopTurn, PriorResult, ExpandedRef } from '../types'
 import type {
@@ -557,6 +557,21 @@ export function simpleLoop<T extends SimpleLoopData>(
           const allExpansions: ExpandedRef[] = []
           const callIds: string[] = []
           const trackedArgs: unknown[] = []
+          // The repair note for the sub-call at the same index, so a
+          // reconstructed batch member is as visible as a reconstructed
+          // singular one (#217b).
+          const trackedRepairs: (JsonRepairNote | undefined)[] = []
+          // Two arrays read POSITIONALLY at the tool_call emit below, so they
+          // must grow together. Review F1: three of the five branches that
+          // recorded args forgot the note, and a precheck-declined sub-call
+          // ahead of a repaired one shifted every later index by one — the
+          // marker landed on a call that never ran and the reconstructed call
+          // was recorded as clean, which is worse than no marker at all. One
+          // writer instead of five, so a new branch cannot reintroduce it.
+          const track = (args: unknown, repair?: JsonRepairNote) => {
+            trackedArgs.push(args)
+            trackedRepairs.push(repair)
+          }
           const subCalls: SubCall[] = []
 
           for (const c of allCalls) {
@@ -566,7 +581,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             // loop before any tool runs, expand resolves synchronously against
             // the event store — neither composes with a batch.
             if (c.tool_name === 'Return' || c.tool_name === EXPAND_TOOL_NAME) {
-              trackedArgs.push(c.tool_args)
+              track(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
                 precheckError: `${c.tool_name} cannot be part of a multi-call turn — issue it as the only call of its own turn`,
@@ -576,7 +591,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             const callAllowed =
               tools.includes(c.tool_name) || scopedTransports.some((t) => t.ownsTool(c.tool_name))
             if (!callAllowed) {
-              trackedArgs.push(c.tool_args)
+              track(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
                 precheckError: `Tool not allowed: ${c.tool_name}. Allowed: ${tools.join(', ')}`,
@@ -584,10 +599,13 @@ export function simpleLoop<T extends SimpleLoopData>(
               continue
             }
             let callArgs: Record<string, unknown>
+            let callRepair: JsonRepairNote | undefined
             try {
-              callArgs = repairJson(c.tool_args)
+              const parsed = repairJsonTracked(c.tool_args)
+              callArgs = parsed.args
+              callRepair = parsed.repair
             } catch {
-              trackedArgs.push(c.tool_args)
+              track(c.tool_args)
               subCalls.push({
                 tool: c.tool_name,
                 precheckError: controllerLlmCall?.hitOutputCap
@@ -602,7 +620,7 @@ export function simpleLoop<T extends SimpleLoopData>(
               MAX_RESULT_CHARS,
             )
             allExpansions.push(...expansions)
-            trackedArgs.push(callArgs)
+            track(callArgs, callRepair)
             subCalls.push({
               tool: c.tool_name,
               run: async () => {
@@ -653,6 +671,7 @@ export function simpleLoop<T extends SimpleLoopData>(
                 batchId,
                 tool: sc.tool,
                 args: trackedArgs[i],
+                ...(trackedRepairs[i] ? { repaired: trackedRepairs[i] } : {}),
               } as ToolCallEventData,
               resolved.trackHistory,
             ),
@@ -744,8 +763,11 @@ export function simpleLoop<T extends SimpleLoopData>(
 
         // Parse tool args (lenient — LLMs may output unquoted keys/values)
         let args: Record<string, unknown>
+        let argsRepair: JsonRepairNote | undefined
         try {
-          args = repairJson(action.tool_args)
+          const parsed = repairJsonTracked(action.tool_args)
+          args = parsed.args
+          argsRepair = parsed.repair
         } catch {
           hasError = true
           // Truncation-aware message: a response cut off at the client's
@@ -780,7 +802,12 @@ export function simpleLoop<T extends SimpleLoopData>(
         trackEvent(
           scope,
           'tool_call',
-          { callId, tool: action.tool_name, args } as ToolCallEventData,
+          {
+            callId,
+            tool: action.tool_name,
+            args,
+            ...(argsRepair ? { repaired: argsRepair } : {}),
+          } as ToolCallEventData,
           resolved.trackHistory,
         )
 

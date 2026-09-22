@@ -12,8 +12,6 @@
  *   - Docker engine running (colima on macOS).
  *   - `kg-sandbox:base` image built:
  *       cd rootfs && docker build -t kg-sandbox:base .
- *   - BAML client generated:
- *       pnpm baml-generate
  *   - `ANTHROPIC_API_KEY` in env — the only provider key the app needs
  *     (`ActorAnthropic` / `CriticAnthropic` &c.).
  *

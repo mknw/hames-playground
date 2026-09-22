@@ -193,7 +193,6 @@ docker build -t kg-sandbox:base rootfs/     # matches SANDBOX_IMAGE default
 ```bash
 cd /opt/kg-agent/app
 pnpm install --frozen-lockfile      # builds node-pty natively for node 22
-pnpm baml-generate                  # generate baml_client/ (also run by build)
 pnpm build                          # vinxi build → .output/
 ```
 

@@ -17,7 +17,7 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import type { Message, RouteOption } from '../../baml_client/types'
+import type { Message, RouteOption } from '@hames/harness-baml/baml_client/types'
 import { check, type Check, type Scenario } from '../harness'
 
 const ROUTES: RouteOption[] = [
@@ -76,7 +76,7 @@ export const routerScenario: Scenario = {
   title: 'Router — 5 canonical utterances → expected route',
   what: 'route name is one of the offered ones, the tool/no-tool branch is right, and a back-reference is resolved into a self-contained intent',
   run: async (ctx) => {
-    const { b } = await import('../../baml_client')
+    const { b } = await import('@hames/harness-baml/baml_client')
     const checks: Check[] = []
     const collectors: Collector[] = []
     const offered = new Set(ROUTES.map((r) => r.name))

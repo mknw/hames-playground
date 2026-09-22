@@ -139,8 +139,10 @@ what happens to unmapped roles and to prompt budgeting:
 
 ## Regenerating the client
 
-`baml_client/` is pre-generated and committed, so consumers never need BAML's CLI. If you edit
-this package's `baml_src/`, regenerate:
+`baml_client/` is pre-generated and committed, so neither a consumer nor this repo's own app ever
+runs BAML's CLI — this package's `baml_src/` is the ONE corpus in the repo, and nothing regenerates
+it implicitly (no `predev` hook, no CI step, no docker build step). If you edit a `.baml` file here,
+regenerate and commit the result with the source change:
 
 ```bash
 pnpm baml-generate   # from packages/harness-baml; requires @boundaryml/baml (a dependency)

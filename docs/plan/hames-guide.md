@@ -70,8 +70,10 @@ repeated here). Two command facts are repo-local and stay:
 
 - `pnpm dev` / `pnpm dev:exposed` still run from `app/` — nothing about the
   package changes where commands run.
-- `pnpm baml-generate` after any `baml_src/` edit is still the one thing a
-  workspace does not automate.
+- `pnpm baml-generate` after a `baml_src/` edit is still the one thing a
+  workspace does not automate — but it runs from `packages/harness-baml/`, not
+  from `app/`, and its output (`baml_client/`) is COMMITTED. The app carried a
+  duplicate corpus and a `predev` generate hook until 2026-09-22; both are gone.
 
 ## 7. Things the app does that the library does not ship
 

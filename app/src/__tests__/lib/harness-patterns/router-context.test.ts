@@ -173,18 +173,16 @@ describe('router — cross-turn intent (#53)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Prompt-content guards. process.cwd() is the `app/` dir; baml_src is resolved
-// from both sides so the check survives a repo-root layout change.
+// Prompt-content guards. process.cwd() is the `app/` dir, and there is ONE
+// BAML corpus — `packages/harness-baml/baml_src`. A missing file THROWS rather
+// than being skipped: a guard that reads nothing would pass on every
+// assertion below.
 // ---------------------------------------------------------------------------
 
 function readBamlSrc(file: string): string {
-  const candidates = [
-    path.resolve(process.cwd(), '..', 'baml_src', file),
-    path.resolve(process.cwd(), 'baml_src', file),
-  ]
-  const found = candidates.find((p) => existsSync(p))
-  if (!found) throw new Error(`baml_src/${file} not found (cwd=${process.cwd()})`)
-  return readFileSync(found, 'utf8')
+  const full = path.resolve(process.cwd(), '../packages/harness-baml/baml_src', file)
+  if (!existsSync(full)) throw new Error(`baml_src/${file} not found at ${full}`)
+  return readFileSync(full, 'utf8')
 }
 
 describe('router — BAML prompt guardrails (#53)', () => {

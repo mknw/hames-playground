@@ -25,7 +25,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { Collector } from '@boundaryml/baml'
-import type { LoopTurn, ToolDescription } from '../../baml_client/types'
+import type { LoopTurn, ToolDescription } from '@hames/harness-baml/baml_client/types'
 import { CLIENT_MAX_OUTPUT_TOKENS } from '../../src/lib/settings'
 import { check, rawCompletion, type Check, type Scenario } from '../harness'
 
@@ -144,7 +144,7 @@ export const controllerToolCallScenario: Scenario = {
   title: 'simpleLoop controller — tool-call turn (turn 0)',
   what: 'first turn with an empty history: picks an offered tool and emits args the loop can JSON.parse',
   run: async (ctx) => {
-    const { b } = await import('../../baml_client')
+    const { b } = await import('@hames/harness-baml/baml_client')
     const collector = new Collector('eval-controller-toolcall')
     const opts = ctx.opts('controller', collector)
     const action = await b.LoopController(
@@ -206,7 +206,7 @@ export const controllerFinalAnswerScenario: Scenario = {
   title: 'simpleLoop controller — final-answer turn',
   what: 'the answer is already in the turn log: terminates with Return + is_final rather than re-querying',
   run: async (ctx) => {
-    const { b } = await import('../../baml_client')
+    const { b } = await import('@hames/harness-baml/baml_client')
     const collector = new Collector('eval-controller-final')
     const opts = ctx.opts('controller', collector)
     const action = await b.LoopController(
@@ -272,7 +272,7 @@ export const controllerToolErrorScenario: Scenario = {
   title: 'simpleLoop controller — tool-error feedback turn',
   what: 'the previous call errored: reacts to the error instead of re-issuing the identical failing call',
   run: async (ctx) => {
-    const { b } = await import('../../baml_client')
+    const { b } = await import('@hames/harness-baml/baml_client')
     const collector = new Collector('eval-controller-toolerror')
     const opts = ctx.opts('controller', collector)
     const action = await b.LoopController(

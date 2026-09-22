@@ -115,7 +115,7 @@ export const screenScenario: Scenario = {
     const checks: Check[] = []
     const observations: Observation[] = []
     const collectors: Collector[] = []
-    const { b } = await import('../../baml_client')
+    const { b } = await import('@hames/harness-baml/baml_client')
 
     // WHY THE PROPERTY CHECKS CALL THE RAW FUNCTION, not `createInjectionScreen()`.
     // The adapter resolves its client through PRODUCTION

@@ -34,7 +34,7 @@ pair for whichever you are moving (values go in `app/.env`, documented in
 - `SMALL_LLM_*` has **no in-code default** — a BAML option takes a bare `env.X`
   reference, so the localhost value has to come from the env file. That is
   inert today: `LocalQwenSmall` is in no chain until the describe role is
-  re-pointed at it (see `app/baml_src/local-client.baml`).
+  re-pointed at it (see `packages/harness-baml/baml_src/local-client.baml`).
 - **The embedding model must not change with the host.** Vectors are only
   comparable inside one model's space, so a remote embedder has to serve the
   _same_ Qwen3-Embedding-0.6B or the existing index is invalidated — see

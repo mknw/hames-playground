@@ -69,13 +69,15 @@ let installed = false
  * Idempotent, and deliberately not reversible: a suite that could un-install
  * the redirect could also half-install it, and "half" here means live calls.
  */
-export function installHermeticRouting(b: unknown | unknown[], baseUrl: string): void {
+export function installHermeticRouting(b: unknown, baseUrl: string): void {
   if (installed) return
-  // PR-1b split the corpus across TWO generated singletons (the app's and the
-  // package's); the registry has to be defined on every one of them or the
-  // leaf functions would bypass the fake. Each `b` object carries its own
-  // `bamlOptions`, so this is per-instance, not shared state.
-  const clients = Array.isArray(b) ? b : [b]
+  // ONE generated singleton — `@hames/harness-baml/baml_client` — because there
+  // is one corpus. It took a LIST while the app carried a duplicate tree, and
+  // that list was load-bearing then: a registry defined on only one of two `b`
+  // objects let the other one's functions bypass the fake and reach a real
+  // provider from a suite advertised as hermetic. With one corpus the
+  // equivalent guarantee is that this is the same module the adapters import,
+  // which `assertHermeticRouting` below proves by observation.
   const build = (): ClientRegistry => {
     const registry = new ClientRegistry()
     registry.addLlmClient(FAKE_CLIENT, 'openai-generic', {
@@ -86,12 +88,10 @@ export function installHermeticRouting(b: unknown | unknown[], baseUrl: string):
     registry.setPrimary(FAKE_CLIENT)
     return registry
   }
-  for (const client of clients) {
-    Object.defineProperty(client as BamlSingleton, 'bamlOptions', {
-      get: () => ({ clientRegistry: build() }),
-      configurable: true,
-    })
-  }
+  Object.defineProperty(b as BamlSingleton, 'bamlOptions', {
+    get: () => ({ clientRegistry: build() }),
+    configurable: true,
+  })
   installed = true
 }
 

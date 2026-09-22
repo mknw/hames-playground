@@ -7,7 +7,6 @@ SolidStart application providing a chat interface for agentic knowledge graph op
 ```bash
 pnpm install
 docker compose up -d          # Neo4j, MCP Gateway, Redis
-pnpm baml-generate            # Generate BAML client from baml_src/
 pnpm dev                      # Dev server on port 3444
 ```
 
@@ -56,7 +55,6 @@ app/
 │   │   │   └── graph-edit.server.ts # Parameterized Cypher writes from graph UI
 │   │   └── graph/
 │   │       └── transform.ts      # Neo4j driver → Cytoscape transforms
-├── baml_client/               # Auto-generated from baml_src/ (never edit)
 ```
 
 ## Key Features
@@ -100,12 +98,15 @@ See [harness-patterns/SPEC.md](src/lib/harness-patterns/SPEC.md) for the full AP
 ```bash
 pnpm dev              # Dev server (port 3444)
 pnpm dev:exposed      # Bind to 0.0.0.0 (for Docker/Playwright)
-pnpm build            # baml-generate + vinxi build
+pnpm build            # vinxi build
 pnpm test:run         # All tests (vitest)
 pnpm test             # Watch mode
-pnpm baml-generate    # Regenerate baml_client/
-pnpm baml-test        # Run BAML tests
 ```
+
+There is no `baml-generate` here. The one BAML corpus lives in
+[`packages/harness-baml/`](../packages/harness-baml/README.md) and ships a
+COMMITTED `baml_client/`; regenerating is that package's script, run from that
+directory after a `.baml` edit, and the result is committed with it.
 
 `pnpm eval:harness` is deliberately NOT in that list. It runs the
 harness/client compatibility evals in [`evals/`](evals/README.md) — real, billed

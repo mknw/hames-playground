@@ -264,7 +264,10 @@ describe('what goes on the wire', () => {
     // read it from. vLLM 400s an unknown id, so drift would break the FIRST call
     // of every session and nothing else. This is the pin that makes the copy
     // safe.
-    const declared = readFileSync(path.resolve(process.cwd(), 'baml_src/verda-client.baml'), 'utf8')
+    const declared = readFileSync(
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/verda-client.baml'),
+      'utf8',
+    )
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('//'))
       .join('\n')

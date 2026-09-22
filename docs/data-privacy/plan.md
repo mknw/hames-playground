@@ -121,7 +121,7 @@ exists, and it now covers every role without exception.** A verda tier decision
 — the `USE_VERDA_INFERENCE=1` deployment default or a per-conversation switch —
 re-points controller / actor / critic / synthesizer / router / planner /
 describe **and the injection screen** at the company's own Qwen deployment on a
-Verda (DataCrunch) GPU (`baml_src/verda-client.baml`). Read against the paragraph above: no
+Verda (DataCrunch) GPU (`packages/harness-baml/baml_src/verda-client.baml`). Read against the paragraph above: no
 configuration still sends a prompt to Groq, OpenRouter or OpenAI, and the new
 route moves prompts _off_ a third-country processor rather than onto one, so it
 cuts the exposure this finding is about rather than widening it. Three caveats

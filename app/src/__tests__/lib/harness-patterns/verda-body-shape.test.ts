@@ -69,42 +69,19 @@ type Body = {
   messages?: unknown[]
 }
 
-// The corpus is TWO trees since PR-1b: the heavy roles + screen generate into
-// the app's client, the describe set + title into the package's pre-generated
-// one. The CALLS table spans both, so `b` is the merge — every function
-// renders against the tree that DECLARES it first: the app tree (a real
-// generated client — CI's baml-generate step covers the import), falling
-// through to the package client for the leaves that only exist there. This is
-// the PR-1b review fix: both sides of the merge used to import the package
-// specifier, which collapsed the dispatch package-side and left app-side-only
-// prompt edits unrendered.
-type AppRequest = (typeof import('../../../../baml_client').b)['request']
-type PkgRequest = (typeof import('@hames/harness-baml/baml_client').b)['request']
-// Omit drops the shared PRIVATE `runtime` key from one side (a two-class
-// intersection with a private member on both collapses to never); the union
-// keeps every function's real signature, so positional-argument mistakes
-// stay type errors.
-type MergedRequest = Omit<AppRequest, keyof PkgRequest> & PkgRequest
-let b: { request: MergedRequest }
+// ONE corpus: every function in the CALLS table below is declared in
+// `packages/harness-baml/baml_src` and generated into the committed client
+// this imports — the same `b` the adapters call in production, so what is
+// rendered here is what goes on the wire.
+type BamlRequest = (typeof import('@hames/harness-baml/baml_client').b)['request']
+let b: { request: BamlRequest }
 
 beforeAll(async () => {
-  const [appClient, pkgClient] = await Promise.all([
-    import('../../../../baml_client'),
-    import('@hames/harness-baml/baml_client'),
-  ])
-  const appReq = appClient.b.request as unknown as Record<PropertyKey, unknown>
-  const pkgReq = pkgClient.b.request as unknown as Record<PropertyKey, unknown>
-  // Methods live on the prototypes, so a plain spread would produce an empty
-  // object — the proxy dispatches by name and binds `this` to the owner.
-  b = {
-    request: new Proxy({} as MergedRequest, {
-      get: (_t, prop: string) => {
-        const target = prop in appReq ? appReq : pkgReq
-        const value = target[prop]
-        return typeof value === 'function' ? value.bind(target) : value
-      },
-    }),
-  }
+  // Bound, not extracted: the generated `request` methods read private
+  // `runtime` / `ctxManager` state off `this`, so pulling one out and calling
+  // it dies with "Cannot read properties of undefined (reading 'runtime')".
+  const client = await import('@hames/harness-baml/baml_client')
+  b = { request: client.b.request }
 })
 const TOOLS: ToolDescription[] = [
   { name: 'search', description: 'Search', args_schema: '{"query":"string"}' },

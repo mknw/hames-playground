@@ -326,16 +326,45 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
     // Shape-independent on purpose: the guard has already been a top-level
     // `if` and is now a ternary, because nitro's es2019 target rejects the
     // top-level `await` the `if` form needed. What must hold either way is
-    // that the guard is READ before the install is CALLED, and that no line
-    // calls the install on its own.
+    // that the guard is READ before the install is CALLED, and that the ONE
+    // call sits inside the guarded branch.
     expect(middleware).toContain('devFakeInferenceUrl()')
     expect(middleware.indexOf('devFakeInferenceUrl()')).toBeLessThan(
       middleware.indexOf('installDevFakeInference('),
     )
-    const unguarded = middleware
-      .split('\n')
-      .filter((line) => /^\s*installDevFakeInference\(/.test(line))
-    expect(unguarded, 'installDevFakeInference is called as a bare statement').toEqual([])
+
+    // One call site, bounded by the guarded arm.
+    //
+    // Scanned on RAW source, deliberately unlike `one-baml-corpus.test.ts`,
+    // which strips comments first. A doc comment spelling `installDevFakeInference(`
+    // would redden this — a false positive, but a LOUD one that names the line,
+    // where stripping risks the opposite trade on the assertion that matters
+    // most in this file.
+    //
+    // This used to be "no LINE begins with the call", a proxy for "no bare
+    // statement" — and the proxy broke on formatting alone: when the dynamic
+    // import moved to the package specifier the guarded expression no longer
+    // fitted prettier's 100 columns, so the call landed on a continuation line
+    // while staying exactly as guarded as before. Counting the call sites and
+    // bounding their offset states the property directly, and a line break
+    // cannot satisfy it — nor can a second, unguarded call further down, which
+    // the line scan would also have missed whenever it was written with
+    // anything (an `await`, a `void`, an assignment) in front of it.
+    const callSites = [...middleware.matchAll(/(?<![\w.])installDevFakeInference\(/g)].map(
+      (m) => m.index,
+    )
+    expect(callSites, 'installDevFakeInference must be called exactly once').toHaveLength(1)
+    const armStart = middleware.indexOf('onRequest: devFakeInferenceUrl()')
+    const armEnd = middleware.indexOf(': undefined', armStart)
+    expect(armStart, 'the onRequest guard is not in its expected form').toBeGreaterThan(-1)
+    expect(armEnd, 'the guarded ternary has no `: undefined` arm').toBeGreaterThan(armStart)
+    expect(
+      callSites[0],
+      'installDevFakeInference is called outside the guarded arm',
+    ).toBeGreaterThan(armStart)
+    expect(callSites[0], 'installDevFakeInference is called outside the guarded arm').toBeLessThan(
+      armEnd,
+    )
     const callers = walk(path.join(APP, 'src'))
       .filter((f) => /\.(ts|tsx)$/.test(f))
       .filter((f) => !f.startsWith('src/__tests__/'))

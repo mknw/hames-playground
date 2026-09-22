@@ -50,15 +50,25 @@
  * renders a README the way the registry does. A wrong `directory` is the same
  * defect with a plausible-looking field in place of a missing one.
  *
- * Three fields are pinned ABSENT, and that is not symmetry for its own sake — it
- * is the half that a "add all the standard npm fields" pass gets wrong, which is
+ * Some things are pinned ABSENT, and that is not symmetry for its own sake — it
+ * is the half that an "add all the standard npm fields" pass gets wrong, which is
  * a pass somebody will make precisely because this commit made the others
  * present.
  *
- *   - **`author.email`** — the registry is public, a published version cannot be
- *     unpublished at will, and an address in a manifest is an address in every
- *     mirror of it forever. The name and the GitHub URL say who wrote this; the
- *     mailbox adds nothing a reader needs and cannot be taken back.
+ *   - **No EMAIL ADDRESS, anywhere in the manifest text.** The registry is
+ *     public, a published version cannot be unpublished at will, and an address
+ *     in a manifest is an address in every mirror of it forever. The name and the
+ *     GitHub URL say who wrote this; the mailbox adds nothing a reader needs and
+ *     cannot be taken back. This is a scan of the whole file rather than a check
+ *     on `author.email`, because a field-name allowlist is always one field
+ *     behind the thing it is trying to stop. Three shapes escaped the
+ *     property-shaped version it replaces, all green: `author` in its legal
+ *     STRING form (`"Name <addr> (url)"`), on which `not.toHaveProperty('email')`
+ *     is trivially true; `bugs.email`; and `contributors[].email`. The regex
+ *     needs word characters BEFORE the `@`, which is what keeps the scoped
+ *     specifiers in these files (`"@hames/agents"`, `"@boundaryml/baml"`,
+ *     `"@modelcontextprotocol/sdk"` — each one preceded by a quote) from
+ *     matching; zero false positives across all five, checked.
  *   - **`sideEffects`** — `false` licenses a bundler to drop a module it thinks
  *     nobody uses, and `assertServerOnImport()` is a module whose entire job is
  *     to run at import. Tree-shaking it away is a server/client boundary that
@@ -102,7 +112,10 @@
  * what was broken is that a future edit to them would have been invisible to the
  * one pin written for exactly that defect. Deriving the set is also the same
  * "discovered, never listed" rule the package enumeration above already follows,
- * and it means the next package to ship a doc is covered without an edit here.
+ * and it means the next package to ship a doc is scanned without an edit here.
+ * (One literal remains, on purpose: harness-patterns' own doc set is the named
+ * non-vacuity anchor, so a fourth doc THERE updates that one line. That is the
+ * anchor doing its job, not the derivation failing to.)
  *
  * **Targets OUTSIDE the package are deliberately ignored here.**
  * `../harness-patterns` (three packages), `../../rootfs` and
@@ -132,11 +145,16 @@
  *
  * ## Proven, not just green
  *
- * Six mutations, all on the record in the PR that shipped this file. (a): point
- * one `repository.directory` at a path that is not the package's own → red
- * naming both paths; add an `email` to one `author` → red; add
- * `"sideEffects": false` to one manifest → red; add a `"types"` to one manifest
- * → red. (b): remove `"SPEC.md"` from `packages/harness-patterns/package.json`'s
+ * Eight mutations, all on the record in the PR that shipped this file.
+ *
+ * (a): point one `repository.directory` at a path that is not the package's own
+ * → red naming both paths; `"sideEffects": false` → red; a `"types"` key → red;
+ * and the three email shapes, each on a DIFFERENT package so the per-package
+ * loop is exercised rather than one instance of it — `author` as the string
+ * `"Name <addr> (url)"`, a `bugs.email`, and a `contributors` entry with an
+ * `email` → red, all three, which the property-shaped predecessor passed green.
+ *
+ * (b): remove `"SPEC.md"` from `packages/harness-patterns/package.json`'s
  * `files` → red naming `SPEC.md`; add a dead in-package link to `SPEC.md` — the
  * document the literal doc list used to miss — → red naming its target.
  */
@@ -156,6 +174,13 @@ const REPO_URL = 'https://github.com/mknw/hames-playground'
  *  states the same one: a library that ships this code to a stranger should
  *  warn at install time rather than at the first `node:` builtin it uses. */
 const NODE_ENGINE = '>=22'
+
+/** An email address anywhere in a manifest's text. Deliberately not anchored to
+ *  a field: `author`, `contributors[]` and `bugs` each take one, and `author`
+ *  has a string form a property check cannot see into. The leading `[\w.+-]+`
+ *  is what keeps the scoped package specifiers (`"@hames/agents"`) out — an `@`
+ *  preceded by a quote has no local part before it. */
+const EMAIL_IN_MANIFEST = /[\w.+-]+@[\w-]+\.[\w.]+/g
 
 /** Every workspace member under `packages/` (the `packages/*` glob in
  *  `pnpm-workspace.yaml`), by directory name. Discovered, never listed — same
@@ -353,15 +378,35 @@ describe('published package manifests', () => {
           expect(manifest.keywords?.length ?? 0).toBeLessThanOrEqual(8)
         })
 
-        it('carries no author email, and no sideEffects or types key', () => {
-          // The three a "fill in the standard npm fields" pass adds by reflex,
-          // and the three this repo has decided against. Rationale in the
-          // docblock; each is pinned against its own mutation in the PR.
+        it('carries no email address anywhere in the manifest', () => {
+          // A scan of the whole manifest TEXT, not a check on `author.email`,
+          // and the difference is the whole point. A field-name allowlist is
+          // always one field behind: `author` also has a legal STRING form
+          // ("Name <addr> (url)") on which a property check is trivially true,
+          // and `bugs.email` and `contributors[].email` are standard npm fields
+          // that each take an address. All three passed green against the
+          // earlier property-shaped pin. The regex requires word characters
+          // BEFORE the `@`, so the scoped specifiers in these manifests
+          // (`@hames/…`, `@boundaryml/baml`, `@modelcontextprotocol/sdk` — each
+          // preceded by a quote) are not matches; verified against all five.
+          const found = [
+            ...readFileSync(join(PACKAGES, name, 'package.json'), 'utf8').matchAll(
+              EMAIL_IN_MANIFEST,
+            ),
+          ].map((match) => match[0])
           expect(
-            manifest.author,
-            'the registry is public and a published version is not retractable — the ' +
-              'name and the GitHub URL identify the author without shipping a mailbox',
-          ).not.toHaveProperty('email')
+            found,
+            'an email address in a published manifest is in every registry mirror forever, ' +
+              'and a published version is not retractable — the author name and the GitHub ' +
+              'URL identify who wrote this without shipping a mailbox',
+          ).toEqual([])
+        })
+
+        it('carries no sideEffects or types key', () => {
+          // Not email-shaped, so the scan above does not cover them. Two fields
+          // a "fill in the standard npm fields" pass adds by reflex and this
+          // repo has decided against; rationale in the docblock, and each is
+          // pinned against its own mutation in the PR.
           expect(
             manifest,
             '`sideEffects: false` licenses a bundler to drop the assertServerOnImport() ' +

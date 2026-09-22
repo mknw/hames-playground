@@ -56,9 +56,13 @@ nothing until it is wired in (steps 2–3).
 
 ```typescript
 import type { AgentDeps } from "@hames/agents/types";
+import type { ClientOverride } from "@hames/harness-baml/consumer-clients.server";
+
+declare const plug: ClientOverride; // from step 1
+declare const yourOtherDeps: AgentDeps;
 
 const deps: AgentDeps = {
-  // ...your other deps...
+  ...yourOtherDeps,
   clientOverride: plug,
 };
 ```
@@ -71,7 +75,12 @@ injection screen — all route through one seam, `clientOverrideFor(role)`, and 
 layer is composed **inside that seam**, on top of the built-in tier:
 
 ```typescript
-import { activateConsumerClients } from "@hames/harness-baml/consumer-clients.server";
+import {
+  activateConsumerClients,
+  type ClientOverride,
+} from "@hames/harness-baml/consumer-clients.server";
+
+declare const plug: ClientOverride; // from step 1
 
 activateConsumerClients(plug); // once, at your composition root; `undefined` clears it
 ```
@@ -155,6 +164,16 @@ const deps: AgentDeps = {
 To verify a render offline (no socket), the package ships `b.request.<Fn>(...)`:
 
 ```typescript
+import type {
+  RouteOption,
+  Message,
+} from "@hames/harness-baml/baml_client/types";
+import type { ClientOverride } from "@hames/harness-baml/consumer-clients.server";
+
+declare const plug: ClientOverride; // from step 1
+declare const routes: RouteOption[];
+declare const history: Message[];
+
 const { b } = await import("@hames/harness-baml/baml_client");
 const render = await b.request.Router("q", routes, history, plug("router")!);
 render.body.json().model; // → 'meta-llama/Llama-3.3-27B'

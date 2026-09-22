@@ -120,6 +120,16 @@ function compileFences(fences: Fence[]): Map<Fence, string[]> {
     noEmit: true,
     esModuleInterop: true,
     isolatedModules: true,
+    // A tutorial fence is server-side code and reads `process.env` the way a
+    // composition root does. Without this it resolves against the DOM lib
+    // alone, so `process` is TS2580 and — worse, because it type-checks —
+    // a bare `history` silently binds to `window.history` instead of failing.
+    types: ['node'],
+    // Resolved explicitly: the virtual fence modules are written into the core
+    // package's directory (below), whose own node_modules carries no @types —
+    // so the default lookup walks past the app's copy and `types: ['node']`
+    // silently resolves to nothing.
+    typeRoots: [path.join(REPO_ROOT, 'app', 'node_modules', '@types')],
   }
 
   const host = ts.createCompilerHost(options, /* setParentNodes */ true)

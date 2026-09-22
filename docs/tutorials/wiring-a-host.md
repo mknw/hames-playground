@@ -110,9 +110,7 @@ declare const mcpNamespace: (toolName: string) => string | undefined;
 declare const enrichNeo4jResult: OnToolResult;
 declare const createRedisBackend: (sessionId: string) => RetrieverBackend;
 declare const wrapWithSandbox: NonNullable<AgentDeps["withSandbox"]>;
-declare const clientOverrideFor: (
-  role: string,
-) => Record<string, unknown> | undefined;
+declare const clientOverrideFor: NonNullable<AgentDeps["clientOverride"]>;
 declare const updateConversationTitle: NonNullable<AgentDeps["persistTitle"]>;
 declare const doNotCachePatterns: (sessionId: string) => void;
 
@@ -193,10 +191,13 @@ string instead. The resolver exists for the _cached-chain_ path.
 
 ### `clientOverride`
 
-`clientOverride: (role) => Record<string, unknown> | undefined` is spread into the BAML
-options bag per call. Supply it to move roles onto your own models; omit it and every call
-runs on the client its BAML function declares. The mechanism, the role list and what
-happens to roles you do not map are in
+`clientOverride` is the per-call BAML options bag, keyed by role. Its type is
+`ClientOverride` from `@hames/harness-baml/consumer-clients.server` —
+`(role) => { client, clientRegistry? } | undefined` — which is exactly what a
+`defineInferenceClients` plug returns, so a consumer's plug drops into the bag with no
+cast. Supply it to move roles onto your own models; omit it and every call runs on the
+client its BAML function declares. The mechanism, the role list and what happens to roles
+you do not map are in
 [bring your own provider or model](./own-provider-or-model.md).
 
 The one rule to carry over here: re-pointing a BAML **chain** is not the mechanism and

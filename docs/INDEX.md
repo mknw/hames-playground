@@ -11,6 +11,23 @@
 | [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Live planning board (Status / Priority / MSCW per issue)                                                                                                                                                                                                                                       |
 | [plan/ROADMAP.md](plan/ROADMAP.md)                                                      | The roadmap _shape_: target multi-user architecture, phases 0–4 with MoSCoW ratings + dependency spine (Entra SSO #119 as the gate)                                                                                                                                                            |
 | [reviewing.md](reviewing.md)                                                            | **Review map** for the global `/reviewing-changes` skill: pointers to where conventions, spec resolution, gates and the review protocol live — facts stated here directly only when stated nowhere else                                                                                        |
+| [tutorials/README.md](tutorials/README.md)                                              | **Developer tutorials** — task-shaped "how do I use X in my app" pages for consumers of the `@hames` packages: hosting the harness, wiring a host, guarding an agent, sandboxes and workspaces, bringing your own model. Every TypeScript snippet is compile-pinned against the live packages  |
+
+---
+
+## Tutorials (`docs/tutorials/`)
+
+Task-shaped pages for developers building **on** the packages — "how do I use construct X in my app", start to finish, working in ten minutes. They sit below the per-package developer guide ([`packages/harness-patterns/GUIDE.md`](../packages/harness-patterns/GUIDE.md), the concepts) and beside the package READMEs (the API surface); a tutorial links a signature rather than restating it. Every `typescript` fence is extracted and compiled against the real package sources by `app/src/__tests__/docs/tutorials-docs-pins.test.ts`, so a page that drifts from the shipped surface fails CI.
+
+| Document                                                                                             | You will build                                                                                                                                                             |
+| ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [tutorials/README.md](tutorials/README.md)                                                           | The index: what a tutorial is for vs the guide vs a README, the page list, and the suggested order                                                                         |
+| [tutorials/hosting-the-harness-in-your-own-app.md](tutorials/hosting-the-harness-in-your-own-app.md) | A working agent in your own process — no model, no gateway — then each stand-in swapped for the real thing; the `AgentDeps` seam and its missing-supplier throw            |
+| [tutorials/wiring-a-host.md](tutorials/wiring-a-host.md)                                             | The composition root: boot-time package seams, the one `AgentDeps` bag, the registration overlay, and why `tenantId` must be a resolver                                    |
+| [tutorials/guarding-an-agent.md](tutorials/guarding-an-agent.md)                                     | A loop over a hostile tool wrapped in `withInjectionGuard` — the exact `content_sanitized` event a caught injection produces, and the three declarations the guard refuses |
+| [tutorials/running-code-in-a-sandbox.md](tutorials/running-code-in-a-sandbox.md)                     | A sandboxed pattern: the three attachment paths, the fail-closed egress profiles, and per-turn flavour selection                                                           |
+| [tutorials/attaching-a-sandbox-workspace.md](tutorials/attaching-a-sandbox-workspace.md)             | The durable `/work` seam — a workspace store at the composition root, `syncWorkspace`, and the tenant boundary                                                             |
+| [tutorials/own-provider-or-model.md](tutorials/own-provider-or-model.md)                             | The shipped agents calling a model you supply, without touching prompts — client override by role over BAML's client registry                                              |
 
 ---
 

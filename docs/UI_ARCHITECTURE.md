@@ -795,7 +795,7 @@ Once the first user turn completes, a minimal harness agent generates a 3–5 wo
 
 ### Why a harness agent for one BAML call?
 
-The `harness-patterns/` library was the testbed for an eventual standalone npm package, and has since become one: `@hames/harness-patterns`, in `packages/harness-patterns/`. Its example catalog (now the `@hames/agents` package, `packages/agents/agents/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, and a full ontology-builder pipeline — but had no _minimum-rung_ example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
+The `harness-patterns/` library was the testbed for an eventual standalone npm package, and has since been extracted into one: `@hames/harness-patterns`, an independently versioned workspace package at `packages/harness-patterns/` with its own manifest and MIT licence — publish-ready, but not published to npm. Its example catalog (now the `@hames/agents` package, `packages/agents/agents/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, and a full ontology-builder pipeline — but had no _minimum-rung_ example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
 
 ```ts
 // packages/agents/agents/title-generator.server.ts

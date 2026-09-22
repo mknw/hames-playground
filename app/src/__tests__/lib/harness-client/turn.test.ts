@@ -819,7 +819,7 @@ describe('what the header learns from a turn', () => {
     const { clientOverrideFor } = await import('@hames/harness-baml/clients.server')
     const privateWarming = vi.fn()
     const anthropicWarming = vi.fn()
-    const overrides: Record<string, Record<string, unknown> | undefined> = {}
+    const overrides: Record<string, { client: string } | undefined> = {}
 
     let releaseWake: (() => void) | undefined
     const waking = new Promise<void>((resolve) => {

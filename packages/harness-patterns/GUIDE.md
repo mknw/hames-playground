@@ -347,9 +347,11 @@ The package publishes to npm (`pnpm publish`, which rewrites `workspace:`
 specifiers at pack time); inside this workspace the app and the Docker image
 consume it by path. The CI `pack smoke` (`scripts/pack-smoke.sh`) is the
 proof that the tarball a consumer installs actually works: it `pnpm pack`s
-the package, installs the tarball into a scratch project, and asserts every
-exports entry exists, `./guard` behaves, and the app-imported entries
-evaluate. An external developer installs it the ordinary way and brings
+the package, installs the tarball into a scratch project, and asserts that
+`./guard` behaves and that every entry evaluates — the entries being DERIVED,
+from the app's own imports and from this package's `exports` map (its `./*`
+pattern expanded against the packed tarball's file list), never from a list
+typed into the probe. An external developer installs it the ordinary way and brings
 their own model adapter for the six config-injected functions — the core
 ships no LLM defaults, by design; see the companion module's guide for the
 LLM seam (§3 of the plan's guide skeleton re-homes there).

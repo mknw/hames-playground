@@ -21,7 +21,7 @@ controller:
 import {
   harness,
   simpleLoop,
-  withTransport,
+  withRunFrame,
   ToolsFrom,
 } from "@hames/harness-patterns";
 import type {
@@ -87,7 +87,7 @@ const unguarded = harness<Data>(
   simpleLoop<Data>(makeScripted(), tools.web ?? [], { patternId: "web-loop" }),
 );
 
-const result = await withTransport(web, () =>
+const result = await withRunFrame({ transports: [web] }, () =>
   unguarded("capital of France?", "s1"),
 );
 ```

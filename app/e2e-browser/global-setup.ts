@@ -16,7 +16,7 @@ import path from 'node:path'
 import { chromium } from '@playwright/test'
 import { provisionDatabase } from '../src/__tests__/global-setup'
 import { startBackend, assertHermetic } from './lib/backend'
-import { generateBamlClient, startDevServer } from './lib/server'
+import { startDevServer } from './lib/server'
 import { conversationRows, wipeUserRows } from './lib/db'
 import {
   APP_PORT,
@@ -34,9 +34,6 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   // reimplemented; the TARGET is this suite's own since #280 — see
   // `lib/env.ts#TEST_DATABASE_URL` for what sharing it cost.
   await provisionDatabase(TEST_DATABASE_URL)
-
-  // `pnpm dev`'s own `predev` hook, which spawning vinxi directly skips.
-  generateBamlClient()
 
   const backend = await startBackend()
 

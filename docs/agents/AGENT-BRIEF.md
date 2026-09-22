@@ -114,8 +114,9 @@ so a dispatch never has to restate them:
 - [ ] Conventional-commit subject line
 - [ ] **No** `Co-Authored-By` / "Generated with" attribution trailers
 - [ ] `pnpm` only, run from `app/` (never npm/npx)
-- [ ] `pnpm baml-generate` re-run if anything under `baml_src/` changed;
-      `baml_client/` never hand-edited
+- [ ] `pnpm baml-generate` re-run **from `packages/harness-baml/`** if anything
+      under its `baml_src/` changed, and the regenerated `baml_client/`
+      committed with it; `baml_client/` never hand-edited
 ```
 
 One caveat that is easy to get wrong, and is the reason the block is worded the

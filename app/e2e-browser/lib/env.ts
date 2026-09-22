@@ -172,7 +172,7 @@ export const TURN_TIMEOUT_MS = Number.parseInt(
 )
 
 /** How long global setup waits for the dev server to answer `/api/health`.
- *  A cold vite dev start with `baml-generate` behind it is not fast. */
+ *  A cold vite dev start is not fast. */
 export const SERVER_BOOT_TIMEOUT_MS = Number.parseInt(
   process.env.E2E_BROWSER_BOOT_TIMEOUT_MS ?? '180000',
   10,

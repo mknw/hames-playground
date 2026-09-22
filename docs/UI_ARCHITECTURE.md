@@ -480,7 +480,7 @@ Displays the full agent event timeline:
 
 - Events are merged into `TimelineItem[]` via `buildTimelineItems()`: `tool_call` + `tool_result` pairs sharing the same `callId` appear as a single merged row
 - Click any row → detail overlay with args / result / LLM call data
-- **LLM call detail** (events with `llmCall`): two-tab layout — **Prompt** | **Output**. The Prompt tab uses an Ark UI Accordion with three sections: _Template_ (Jinja source with `{{ vars }}` and `{% if %}` / `{% for %}` blocks, sourced from `baml_src/`), _Variables_ (function inputs), _Rendered messages_ (HTTP body parsed into role/content bubbles via `ParsedPromptView`). Sourced from `LLMCallData` in `baml-adapters.server.ts` — `httpRequest.body` is read via `body.text()` because BAML returns an `HttpBody` class instance, not a plain object.
+- **LLM call detail** (events with `llmCall`): two-tab layout — **Prompt** | **Output**. The Prompt tab uses an Ark UI Accordion with three sections: _Template_ (Jinja source with `{{ vars }}` and `{% if %}` / `{% for %}` blocks, sourced from `packages/harness-baml/baml_src/`), _Variables_ (function inputs), _Rendered messages_ (HTTP body parsed into role/content bubbles via `ParsedPromptView`). Sourced from `LLMCallData` in `baml-adapters.server.ts` — `httpRequest.body` is read via `body.text()` because BAML returns an `HttpBody` class instance, not a plain object.
 - **Save button** (floating, bottom-right): calls `showSaveFilePicker()` to save the full `UnifiedContext` as a named JSON file; falls back to `<a download>` on browsers without File System Access API
 - Requires `context?: UnifiedContext` prop threaded down from `index.tsx` → `SupportPanel` → `ObservabilityPanel`
 - **Split across files** (#226 B5): `ObservabilityPanel.tsx` is the composition root and the only public export. The pure projections live in `@hames/harness-patterns` since the core-absorb move — `observability/projection.ts` (`buildTimelineItems()`, `getEventPreview()`, `getEventLane()`), `observability/prompt-parse.ts` (`parsePromptBody()`, `flattenContent()`, `formatParamValue()`), `observability/token-totals.ts` (`foldTokenTotals()`, `fmtTok()`, `fmtEur()` — the app's one price formatter) — while `app/src/lib/observability/event-styles.ts` stays app-side (it reads the app-root `pattern-colors.json`), and the rendering in `components/ark-ui/observability/` (`SummaryBar`, `TimelineRows`, `EventDetail`, `LLMCallTabs`, `PromptView`)
@@ -810,7 +810,7 @@ One pattern (`compactExecution`), one BAML call, no tools, no router. `mode: 'me
 
 ### The BAML function
 
-`app/baml_src/title.baml` — `GenerateConversationTitle(user_message: string) -> string`, wired to `DescribeAnthropic` (`[AnthropicHaiku45]`). Reuses the same lightweight client chain the background tool-result summarizer uses; both are "tiny async post-process" jobs.
+`packages/harness-baml/baml_src/title.baml` — `GenerateConversationTitle(user_message: string) -> string`, wired to `DescribeAnthropic` (`[AnthropicHaiku45]`). Reuses the same lightweight client chain the background tool-result summarizer uses; both are "tiny async post-process" jobs.
 
 ### When it runs
 
@@ -947,18 +947,6 @@ pnpm test:run     # Run vitest unit tests
 app/
 ├── eslint.config.ts              # ESLint rules
 ├── uno.config.ts                 # UnoCSS config + theme
-├── baml_src/                     # BAML function definitions
-│   ├── clients.baml              # LLM client config + fallback chains
-│   ├── local-client.baml         # Local GLM-4.7 client (manual wiring)
-│   ├── router.baml               # Router (intent classification)
-│   ├── simpleLoop.baml           # Generic LoopController (used by every simpleLoop route)
-│   ├── actorCritic.baml          # ActorController + Critic (used by sandbox/ontology agents)
-│   ├── compactExecution.baml          # Final response synthesis
-│   ├── describe.baml             # Lightweight tool-result summarization
-│   ├── title.baml                # Conversation title generation
-│   ├── with-references.baml      # Reference selector for withReferences
-│   ├── types.baml                # Shared schema types
-│   └── generators.baml           # baml-generate output config
 ├── src/
 │   ├── shims.d.ts                # TypeScript augmentation
 │   ├── routes/

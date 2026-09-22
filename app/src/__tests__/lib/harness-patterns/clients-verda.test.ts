@@ -293,7 +293,10 @@ describe('settings and baml_src agree about VerdaQwen', () => {
     // Comments stripped the way client-output-caps.test.ts does it: the file
     // DISCUSSES caching at length, and a test that reads prose cannot tell a
     // declaration from an explanation of why there isn't one.
-    const declared = readFileSync(path.resolve(process.cwd(), 'baml_src/verda-client.baml'), 'utf8')
+    const declared = readFileSync(
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/verda-client.baml'),
+      'utf8',
+    )
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('//'))
       .join('\n')
@@ -349,7 +352,10 @@ describe('settings and baml_src agree about VerdaQwen', () => {
     // 208 tok/s aggregate with 8 requests in flight on one replica (2026-08-25,
     // `smoke-verda-load.ts`) is 26 tok/s per stream. Single-stream measured
     // 64 tok/s; the slower figure is the one a bound has to survive.
-    const declared = readFileSync(path.resolve(process.cwd(), 'baml_src/verda-client.baml'), 'utf8')
+    const declared = readFileSync(
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/verda-client.baml'),
+      'utf8',
+    )
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('//'))
       .join('\n')
@@ -411,7 +417,7 @@ describe('the switched-function set follows the routed roles', () => {
     // because it really does run on both, so excluding it would understate the
     // Anthropic window by the one call that is slowest per character.
     expect(TIER_SWITCHED_FUNCTIONS.has('ScreenUntrustedContent')).toBe(true)
-    // Thirteen: every function declared in `baml_src/`. The filter that reads
+    // Thirteen: every function declared in the one `baml_src/`. The filter that reads
     // this set therefore excludes nothing today, and the honest way to pin
     // that is to say so rather than to let a subset look deliberate.
     expect(TIER_SWITCHED_FUNCTIONS.size).toBe(13)
@@ -428,28 +434,21 @@ describe('the switched-function set follows the routed roles', () => {
     // `screen` shares the chain in BAML (the separation lives only in
     // `CLIENT_BY_ROLE`), so `injection-screen.baml` is excluded BY FILE — the
     // exclusion is the assertion, not an accounting convenience.
-    // Since PR-1b the six describe functions live in the PACKAGE's baml_src
-    // (packages/harness-baml/baml_src); the app's tree holds only the screen.
-    // The scan follows the functions, and the screen's exclusion (BY FILE —
-    // the exclusion is the assertion, not an accounting convenience) applies
-    // to the app-side directory that still owns it.
-    const scanRoots = [
-      path.resolve(process.cwd(), '../packages/harness-baml/baml_src'),
-      path.resolve(process.cwd(), 'baml_src'),
-    ]
+    // ONE corpus: the six describe functions AND the screen are declared in
+    // `packages/harness-baml/baml_src`, so the scan has a single root and the
+    // by-file exclusion is the only thing keeping the screen out of the six.
+    const bamlDir = path.resolve(process.cwd(), '../packages/harness-baml/baml_src')
     const declaringDescribe: string[] = []
-    for (const bamlDir of scanRoots) {
-      for (const entry of readdirSync(bamlDir)) {
-        if (!entry.endsWith('.baml') || entry === 'injection-screen.baml') continue
-        const src = readFileSync(path.join(bamlDir, entry), 'utf8')
-          .split('\n')
-          .filter((line) => !line.trimStart().startsWith('//'))
-          .join('\n')
-        // `function Name(...) -> T { client DescribeAnthropic` — the client line
-        // is what routes the call, so the function is found through it.
-        for (const m of src.matchAll(/function\s+(\w+)\s*\([\s\S]*?\bclient\s+(\w+)/g)) {
-          if (m[2] === 'DescribeAnthropic') declaringDescribe.push(m[1])
-        }
+    for (const entry of readdirSync(bamlDir)) {
+      if (!entry.endsWith('.baml') || entry === 'injection-screen.baml') continue
+      const src = readFileSync(path.join(bamlDir, entry), 'utf8')
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('//'))
+        .join('\n')
+      // `function Name(...) -> T { client DescribeAnthropic` — the client line
+      // is what routes the call, so the function is found through it.
+      for (const m of src.matchAll(/function\s+(\w+)\s*\([\s\S]*?\bclient\s+(\w+)/g)) {
+        if (m[2] === 'DescribeAnthropic') declaringDescribe.push(m[1])
       }
     }
     const { SWITCHED_FUNCTIONS_BY_ROLE } = await load()

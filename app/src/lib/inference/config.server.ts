@@ -28,7 +28,6 @@ import {
   estimateLlmCostEur,
 } from '../settings'
 import { eurPerUsdRate, verdaEurPerHour } from '../cost-rates.server'
-import { runAppBamlClientCheckOnce } from '../baml-client-check.server'
 import { VERDA_CLIENT_NAME } from './verda-activity.server'
 import { noteVerdaCallStarting } from './cold-start.server'
 import {
@@ -208,10 +207,6 @@ configureCostRates({ eurPerUsd: eurPerUsdRate, verdaEurPerHour: verdaEurPerHour 
 // client name rides along: it is what makes a usage-less attempt on the
 // scale-to-zero box price as a floor instead of being dropped.
 configureCostPricing({ estimate: estimateLlmCostEur, timePricedClient: TIME_PRICED_CLIENT })
-
-// The APP tree's BAML-client staleness check (the package tree's own check
-// fires from the package's module load). One-shot, fire-and-forget.
-runAppBamlClientCheckOnce()
 
 // Checked once, at module load, and only when the flag is on: a misconfigured
 // endpoint should fail loudly and closed rather than surface as a 404 mid-

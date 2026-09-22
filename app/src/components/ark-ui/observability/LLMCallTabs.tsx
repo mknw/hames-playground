@@ -310,9 +310,9 @@ const PromptAccordion = (props: { llmCall: LLMCallData }) => {
           when={hasTemplate()}
           fallback={
             <div text="xs ui-text-tertiary">
-              BAML prompt template not captured. Run <code>pnpm baml-generate</code> or verify the
-              function name <code>{props.llmCall.functionName}</code> exists in{' '}
-              <code>baml_src/</code>.
+              BAML prompt template not captured. Regenerate the client from{' '}
+              <code>packages/harness-baml/</code>, or verify the function name{' '}
+              <code>{props.llmCall.functionName}</code> exists in its <code>baml_src/</code>.
             </div>
           }
         >

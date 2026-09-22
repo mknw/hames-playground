@@ -15,33 +15,9 @@
  * dev-only inference redirect is gated the same way. Covering the production
  * bundle needs a real session, and that is a different suite.
  */
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { connect } from 'node:net'
 import { APP_DIR, SERVER_BOOT_TIMEOUT_MS } from './env'
-
-/**
- * `pnpm baml-generate`, which `pnpm dev` runs as a `predev` hook and this
- * suite therefore has to run itself.
- *
- * Not optional and not conditional on the directory existing: `baml_client/`
- * is generated and gitignored, and a STALE one does not error — the generated
- * functions take their arguments positionally, so a client older than
- * `baml_src/` silently drops the trailing options bag. On the first run of
- * this suite that surfaced as every self-hosted call failing with
- * `Could not find client with name: VerdaQwen`, three layers from the cause.
- */
-export function generateBamlClient(): void {
-  const result = spawnSync('node_modules/.bin/baml-cli', ['generate'], {
-    cwd: APP_DIR,
-    encoding: 'utf8',
-  })
-  if (result.status !== 0) {
-    throw new Error(
-      `e2e-browser: pnpm baml-generate failed (exit ${result.status}).\n` +
-        `${result.stdout ?? ''}${result.stderr ?? ''}`,
-    )
-  }
-}
 
 export interface DevServer {
   readonly url: string

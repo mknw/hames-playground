@@ -205,19 +205,16 @@ async function boot(): Promise<AppHandles> {
   delete process.env.USE_VERDA_INFERENCE
 
   // ---- Routing -----------------------------------------------------------
-  // PR-1b: the corpus is two generated singletons — the package's client is
-  // the superset production renders through (its adapters own `b`); the app
-  // tree's client is the dev-fake middleware's. The fake registry is
-  // installed on BOTH, and the preflight call goes through the package
-  // client.
-  const [{ b: appB }, { b: pkgB }] = await Promise.all([
-    import('../../baml_client'),
-    import('@hames/harness-baml/baml_client'),
-  ])
+  // ONE corpus: `@hames/harness-baml/baml_client` is the generated singleton
+  // every production call runs through (the package's adapters, defaults,
+  // routing and the title agent all import this exact module), so installing
+  // the fake registry on it covers the whole app. The preflight below proves
+  // that by observation rather than by trusting the property descriptor.
+  const { b } = await import('@hames/harness-baml/baml_client')
   if (IS_HERMETIC) {
-    installHermeticRouting([appB, pkgB], fakeLlm.baseUrl)
+    installHermeticRouting(b, fakeLlm.baseUrl)
     await assertHermeticRouting(
-      () => pkgB.GenerateConversationTitle('e2e preflight'),
+      () => b.GenerateConversationTitle('e2e preflight'),
       () => fakeLlm.calls.length,
     )
     fakeLlm.reset()

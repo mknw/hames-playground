@@ -242,7 +242,7 @@ Each case stubs the LLM (or runs against the real fallback model with a recorded
 ## 10. Implementation plan
 
 1. **Types** — `WithReferencesConfig`, `SelectorFn`, `ReferenceAttachedEventData`, new `EventType`.
-2. **BAML** — `b.ReferenceSelector` function in `baml_src/with-references.baml`.
+2. **BAML** — `b.ReferenceSelector` function in `packages/harness-baml/baml_src/with-references.baml`.
 3. **Pattern** — `app/src/lib/harness-patterns/patterns/with-references.server.ts`.
 4. **Adapter merge** — extend `baml-adapters.server.ts` to read `scope.data.attachedRefs` and merge into `priorResults`.
 5. **Cache** — small in-memory `Map<sessionId, Map<hash, decision>>` cleared on session end.

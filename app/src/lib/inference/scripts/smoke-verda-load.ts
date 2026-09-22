@@ -253,7 +253,7 @@ interface CallResult {
 }
 
 async function oneCall(i: number): Promise<CallResult> {
-  const { b } = await import('../../../../baml_client')
+  const { b } = await import('@hames/harness-baml/baml_client')
   const collector = new Collector(`load-${i}`)
   const opts = { collector, ...clientOverrideFor('controller') }
   const t0 = Date.now()

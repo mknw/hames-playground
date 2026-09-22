@@ -306,7 +306,7 @@ describe('createInjectionScreen — client routing', () => {
     // the map's docstring says "keep in sync with the `client X` lines in
     // baml_src/*.baml", and nothing else enforces it.
     const declared = readFileSync(
-      path.resolve(process.cwd(), 'baml_src/injection-screen.baml'),
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/injection-screen.baml'),
       'utf8',
     )
       .split('\n')

@@ -5,7 +5,7 @@
  */
 
 import { vi } from 'vitest'
-import type { ControllerAction, CriticResult } from '../../../baml_client/types'
+import type { ControllerAction, CriticResult } from '@hames/harness-baml/baml_client/types'
 
 // ============================================================================
 // Mock Action Factories
@@ -21,7 +21,7 @@ export function mockAction(overrides?: Partial<ControllerAction>): ControllerAct
     tool_args: '{}',
     status: 'success',
     is_final: false,
-    ...overrides
+    ...overrides,
   }
 }
 
@@ -32,7 +32,7 @@ export function mockFinalAction(response = 'Done'): ControllerAction {
   return mockAction({
     tool_name: 'Return',
     tool_args: JSON.stringify({ response }),
-    is_final: true
+    is_final: true,
   })
 }
 
@@ -44,7 +44,7 @@ export function mockCriticResult(overrides?: Partial<CriticResult>): CriticResul
     is_sufficient: true,
     explanation: 'Result is sufficient',
     suggested_approach: undefined,
-    ...overrides
+    ...overrides,
   }
 }
 
@@ -96,12 +96,14 @@ export function mockBAMLClient(options: MockBAMLClientOptions = {}) {
     }),
 
     Router: vi.fn(async () => {
-      return options.routerResult ?? {
-        intent: 'test intent',
-        needs_tool: true,
-        route: 'neo4j',
-        response: ''
-      }
+      return (
+        options.routerResult ?? {
+          intent: 'test intent',
+          needs_tool: true,
+          route: 'neo4j',
+          response: '',
+        }
+      )
     }),
 
     Synthesize: vi.fn(async () => {
@@ -110,7 +112,7 @@ export function mockBAMLClient(options: MockBAMLClientOptions = {}) {
 
     ResultDescribe: vi.fn(async () => {
       return options.resultDescribeResult ?? 'Tool result summary'
-    })
+    }),
   }
 }
 
@@ -132,7 +134,7 @@ export function mockCollector(lastLog?: MockCollectorLog) {
     last: lastLog ?? {
       rawLlmResponse: 'Raw LLM response',
       usage: { inputTokens: 100, outputTokens: 50 },
-      calls: [{ httpRequest: { body: { messages: [] } } }]
-    }
+      calls: [{ httpRequest: { body: { messages: [] } } }],
+    },
   }
 }

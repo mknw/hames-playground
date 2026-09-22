@@ -10,7 +10,9 @@ app.config.timestamp_*.js
 .env
 .env*.local
 
-# BAML Generated
+# BAML Generated. Dead here since the one-corpus change — the only
+# baml_client/ is committed under packages/harness-baml/ — but kept so a stale
+# local copy stays out of `git status`. See PR #376 §11.
 baml_client/
 
 # dependencies

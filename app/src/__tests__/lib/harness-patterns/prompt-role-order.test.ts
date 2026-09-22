@@ -86,16 +86,10 @@ import type {
 // Leaf-file classes (describe-batch / with-references) moved to the package
 // tree — their generated types live there now.
 import type { DescribeTarget, ReferenceCandidate } from '@hames/harness-baml/baml_client/types'
-// The corpus is TWO trees since PR-1b (app: heavy + screen; package: describe
-// set + title). The every-function audit below renders BOTH trees' functions,
-// so the request namespace is the union of the two — intersected at
-// the NAMESPACE level, not the top-level client, whose private `runtime`
-// would collapse the intersection to never. The app side imports the app's
-// OWN generated client (CI's baml-generate step covers the import), and the
-// dispatch prefers the app tree for the functions it declares — the PR-1b
-// review fix: both sides used to import the package specifier, which
-// collapsed the dispatch package-side and left app-side-only prompt edits
-// unrendered.
+// ONE corpus: `packages/harness-baml/baml_src` and the committed client it
+// generates. The app's duplicate tree is gone, so the every-function audit
+// below renders every function through the single client production itself
+// calls — there is no union to take and no tree that can go unrendered.
 
 /** Fakes: rendering a request needs the options to resolve, not to connect. */
 const ENV = {
@@ -109,33 +103,16 @@ const ENV = {
 const OPENAI = { client: 'VerdaQwen', env: ENV }
 const ANTHROPIC = { client: 'AnthropicSonnet5', env: ENV }
 
-type AppRequest = (typeof import('../../../../baml_client').b)['request']
-type PkgRequest = (typeof import('@hames/harness-baml/baml_client').b)['request']
-// Omit drops the shared PRIVATE `runtime` key from one side (a two-class
-// intersection with a private member on both collapses to never); the union
-// keeps every function's real signature, so positional-argument mistakes
-// stay type errors.
-type MergedRequest = Omit<AppRequest, keyof PkgRequest> & PkgRequest
-let b: { request: MergedRequest }
+type BamlRequest = (typeof import('@hames/harness-baml/baml_client').b)['request']
+let b: { request: BamlRequest }
 
 beforeAll(async () => {
-  const [appClient, pkgClient] = await Promise.all([
-    import('../../../../baml_client'),
-    import('@hames/harness-baml/baml_client'),
-  ])
-  const appReq = appClient.b.request as unknown as Record<PropertyKey, unknown>
-  const pkgReq = pkgClient.b.request as unknown as Record<PropertyKey, unknown>
-  // Methods live on the prototypes, so a plain spread would produce an empty
-  // object — the proxy dispatches by name and binds `this` to the owner.
-  b = {
-    request: new Proxy({} as MergedRequest, {
-      get: (_t, prop: string) => {
-        const target = prop in appReq ? appReq : pkgReq
-        const value = target[prop]
-        return typeof value === 'function' ? value.bind(target) : value
-      },
-    }),
-  }
+  // Bound, not extracted: the generated `request` methods read private
+  // `runtime` / `ctxManager` state off `this`, so `const { Router } = b.request`
+  // dies with "Cannot read properties of undefined (reading 'runtime')". Every
+  // render below therefore goes through the client object itself.
+  const client = await import('@hames/harness-baml/baml_client')
+  b = { request: client.b.request }
 })
 // ---------------------------------------------------------------------------
 // Worst-case arguments: every optional populated and every history non-empty,

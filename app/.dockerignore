@@ -12,8 +12,9 @@ node_modules
 dist
 app.config.timestamp_*.js
 
-# Generated BAML client — regenerated from baml_src/ inside the build, which is
-# the whole point of doing it there (a stale copy fails silently).
+# Generated BAML client. Nothing generates one here any more — the committed
+# client arrives with `COPY packages/harness-baml` — so this only keeps a stale
+# local `app/baml_client/` out of the context. Kept deliberately; see PR #376 §11.
 baml_client
 
 # Secrets. The image is tenant-agnostic; config arrives at runtime via compose

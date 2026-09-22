@@ -26,7 +26,7 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import type { ToolDescription } from '../../baml_client/types'
+import type { ToolDescription } from '@hames/harness-baml/baml_client/types'
 import { check, rawCompletion, usageOf, type Scenario } from '../harness'
 
 const TOOLS: ToolDescription[] = [
@@ -77,7 +77,7 @@ export const reliabilityScenario: Scenario = {
   what: 'parse-failure rate on the escaping-heavy envelope, the shape malformed actions come from',
   run: async (ctx) => {
     const n = reliabilityCount()
-    const { b } = await import('../../baml_client')
+    const { b } = await import('@hames/harness-baml/baml_client')
     let parsed = 0
     const failures: string[] = []
     let outputTokens = 0

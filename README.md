@@ -29,7 +29,7 @@ call sees only a slice chosen on purpose.
 [![BAML](https://img.shields.io/badge/BAML-typed%20LLM%20calls-8b5cf6?style=flat)](https://docs.boundaryml.com)
 [![pnpm](https://img.shields.io/badge/pnpm-workspace-f69220?style=flat&logo=pnpm&logoColor=white)](https://pnpm.io)
 
-[Features](#what-you-can-do-with-it) · [Quickstart](#quickstart) · [Tutorials](#tutorials) · [Roadmap](#roadmap) · [Architecture](#architecture) · [Primitives](#hames--the-primitives) · [Agents](#agents) · [Docs](#documentation) · [Contributing](#contributing) · [License](#license)
+[Features](#what-you-can-do-with-it) · [Quickstart](#quickstart) · [Tutorials](#tutorials) · [Roadmap](#roadmap) · [The idea](#the-idea) · [Architecture](#architecture) · [Primitives](#hames--the-primitives) · [Agents](#agents) · [Docs](#documentation) · [Contributing](#contributing) · [License](#license)
 
 <!-- TODO: a screenshot of the running app belongs here (issue #315, G1) — do not ship a placeholder image. -->
 
@@ -51,42 +51,13 @@ call sees only a slice chosen on purpose.
 - **Your Microsoft 365 identity** — per-user delegated access; the M365 agent
   answers from the signed-in user's own mailbox, calendar and files
 - **Composable primitives** — loops, actor-critic, planning, routing, context
-  compaction and an injection guard for untrusted content; a new agent is a
-  definition plus a registration
+  compaction and an injection guard for untrusted content; each agent is a
+  different composition of them
 - **Typed LLM calls** — prompts live in version-controlled BAML files with
   declared input and output types; a parse failure is a typed error event, not a
   string you hope parses
 - **Full observability** — every run streams its event log to the UI: prompts,
   tool results, cost per step, and a live graph of what the agent touched
-
-## The idea
-
-Every agent framework eventually collides with the same wall: the transcript.
-It grows every turn, everything gets pasted into everything, and by turn five the
-model is reasoning over a pile of text nobody deliberately chose for it. `hames`
-starts from the other end. The run's history is the primary object, and what any
-one LLM call sees is a slice of it that somebody picked on purpose.
-
-That object is the **`UnifiedContext`** — one append-only event log per session,
-where every pattern (a loop, a router, a planner, a guard) reads and appends, and
-where nothing else counts as state. Patterns write into an isolated scope first
-and commit only on completion, so a step that fails leaves no trace behind. A
-session _is_ its serialized log, which is why continuing a conversation and
-resuming after an approval gate are the same mechanism rather than two features.
-
-**Views and scopes** are how the slice gets picked. `EventView` is a small query
-API over the log — by pattern, by event type, by the last N user turns — so a
-synthesizer can be handed exactly the tool results of the route that just ran,
-and a router just the message history it needs to classify. `ViewConfig` declares
-that per pattern instead of at every call site, so detail from three turns ago
-expires by construction instead of by someone remembering to prune it.
-
-The LLM leaf of every primitive is a **BAML** function, and that was the point of
-choosing BAML: prompts live in version-controlled `.baml` files with declared
-input and output types, so a controller returns a validated `ControllerAction`
-instead of a string you hope parses, model fallback chains sit next to the prompt
-they serve, and a parse failure arrives as a typed `error` event in the same log
-as everything else. Prompts as code — not string soup.
 
 ## Quickstart
 
@@ -103,11 +74,8 @@ cd hames-playground
 docker compose up -d
 docker compose ps                 # all five services should be Up
 
-# 2. Seed the graph — imports a small demo knowledge graph so the graph tools
-#    and the UI's graph views have data to query on a first run (optional but
-#    recommended). The script refuses to clear a container that already holds
-#    data unless you pass --wipe, and honours NEO4J_CONTAINER if yours is
-#    named differently.
+# 2. Seed a small demo knowledge graph (optional). Refuses to clear a non-empty
+#    graph without --wipe; NEO4J_CONTAINER overrides the container name.
 ./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher
 
 # 3. Install — at the REPO ROOT. That is what links the workspace packages
@@ -145,8 +113,9 @@ By default every agent call runs on Anthropic. A self-hosted inference tier
 exists as an opt-in for deployments that must keep prompts on their own
 infrastructure — see `USE_VERDA_INFERENCE` in `app/.env.example`.
 
-**The install runs at the repo root; every `pnpm` _script_ runs from `app/`** —
-never npm/npx. `app/` consumes the five packages through `workspace:*`, and
+**The install runs at the repo root; the app's `pnpm` scripts run from `app/`** —
+never npm/npx, and each package's own scripts run from that package's directory.
+`app/` consumes the five packages through `workspace:*`, and
 those links are created by a root-level install; a `predev` guard
 ([`app/scripts/check-workspace-links.mjs`](app/scripts/check-workspace-links.mjs))
 checks them before the dev server starts and repairs them by running
@@ -188,7 +157,7 @@ so a page that drifts from the shipped surface fails CI.
 | Tutorial                                                                         | You will build                                                                                                                                    |
 | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Hosting the harness](docs/tutorials/hosting-the-harness.md)                     | Running a turn from your own application: the run frame a turn opens, its five slots, what breaks when you skip it, and one complete host to copy |
-| [Wiring a host](docs/tutorials/wiring-a-host.md) **(stub)**                      | The composition root: boot-time seams, the one `AgentDeps` bag, and the registration overlay                                                      |
+| [Wiring a host](docs/tutorials/wiring-a-host.md) **(stub)**                      | The composition root: what a host supplies and why none of it can live in a package, and the three rules that outlive the rewrite                 |
 | [Guarding an agent](docs/tutorials/guarding-an-agent.md)                         | A loop over a hostile tool, wrapped in the injection guard — and the exact event a caught injection produces                                      |
 | [Running code in a sandbox](docs/tutorials/running-code-in-a-sandbox.md)         | A sandboxed pattern: egress profiles, attachment lifetimes, and per-turn flavour selection                                                        |
 | [Attaching a sandbox workspace](docs/tutorials/attaching-a-sandbox-workspace.md) | The durable `/work` seam — a workspace store, `syncWorkspace`, and the tenant boundary                                                            |
@@ -216,6 +185,35 @@ lives in [`docs/plan/ROADMAP.md`](docs/plan/ROADMAP.md) and is not duplicated
 here. Live item tracking — Status, Priority, and the `MSCW` field that mirrors
 those ratings — is on the
 [GitHub project board](https://github.com/users/mknw/projects/5).
+
+## The idea
+
+Every agent framework eventually collides with the same wall: the transcript.
+It grows every turn, everything gets pasted into everything, and by turn five the
+model is reasoning over a pile of text nobody deliberately chose for it. `hames`
+starts from the other end. The run's history is the primary object, and what any
+one LLM call sees is a slice of it that somebody picked on purpose.
+
+That object is the **`UnifiedContext`** — one append-only event log per session,
+where every pattern (a loop, a router, a planner, a guard) reads and appends, and
+where nothing else counts as state. Patterns write into an isolated scope first
+and commit only on completion, so a step that fails leaves no trace behind. A
+session _is_ its serialized log, which is why continuing a conversation and
+resuming after an approval gate are the same mechanism rather than two features.
+
+**Views and scopes** are how the slice gets picked. `EventView` is a small query
+API over the log — by pattern, by event type, by the last N user turns — so a
+synthesizer can be handed exactly the tool results of the route that just ran,
+and a router just the message history it needs to classify. `ViewConfig` declares
+that per pattern instead of at every call site, so detail from three turns ago
+expires by construction instead of by someone remembering to prune it.
+
+The LLM leaf of every primitive is a **BAML** function, and that was the point of
+choosing BAML: prompts live in version-controlled `.baml` files with declared
+input and output types, so a controller returns a validated `ControllerAction`
+instead of a string you hope parses, model fallback chains sit next to the prompt
+they serve, and a parse failure arrives as a typed `error` event in the same log
+as everything else. Prompts as code — not string soup.
 
 ## Architecture
 

@@ -33,8 +33,8 @@ worked example.
 ## Run one from your own project
 
 ```bash
-pnpm add @hames/harness-patterns                                  # always
-pnpm add @hames/harness-baml @hames/agents @hames/connectors      # for the others
+pnpm add @hames/harness-patterns                                               # always
+pnpm add @hames/harness-baml @hames/agents @hames/connectors @hames/sandbox    # for the others
 cp hosting-the-harness.ts my-host.ts
 pnpm dlx tsx my-host.ts
 ```
@@ -46,7 +46,15 @@ fine — see the [tutorials index](../README.md#install) on being a TS-bundler c
 
 `guarding-an-agent.ts` also imports `@hames/connectors` (for `mcpNamespace`), and
 `own-provider-or-model.ts` imports `@hames/harness-baml` and `@hames/agents`. The two
-sandbox examples import `@hames/sandbox`.
+sandbox examples import `@hames/sandbox` — which is why the second line installs all four,
+even though the first example you copy may need none of them.
+
+**If you reformat one of these files, reformat its page too.** `docs/` resolves no Prettier
+config, so both halves — the `.ts` files here and the fences in `../*.md` — sit on Prettier's
+defaults and are clean under them; nothing in this repo applies `app/`'s config to `docs/`.
+Point it here explicitly and you rewrite quoted code: formatting **both** halves stays green,
+formatting only one turns the pin red on the fence that moved. The red is the correct
+outcome, and this note is so it reads as a formatting change rather than a mystery.
 
 What the two that print anything show — `own-provider-or-model.ts` runs silently, because
 defining clients and activating the layer is all it does:

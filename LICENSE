@@ -3,8 +3,10 @@ Required Notice: Copyright (c) 2026 Michael Accetto (https://github.com/mknw/ham
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 These terms cover the hames playground — this repository — with one carve-out:
-`app/src/lib/harness-patterns/` is the `hames` library and is licensed
-separately under the MIT License. See that directory's own LICENSE file.
+the five `hames` packages under `packages/` — `packages/harness-patterns/`,
+`packages/harness-baml/`, `packages/agents/`, `packages/connectors/` and
+`packages/sandbox/` — are each licensed separately under the MIT License. See
+each package's own LICENSE file.
 
 The third-party notices in `.claude/skills/NOTICE.md` and the upstream pins in
 `.claude/skills/PROVENANCE.md` govern the vendored files they name, and are

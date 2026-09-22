@@ -8,21 +8,51 @@
  * An example is **assembled, not written**. Its code is lifted verbatim from
  * its page's ```typescript fences, and three properties keep it that way:
  *
- * 1. **Verbatim inclusion.** Every fence the manifest says a file was built
- *    from must appear in that file as a CONTIGUOUS substring, byte for byte,
- *    exactly once. Edit either side — the page or the example — and this goes
- *    red naming both.
+ * 1. **Verbatim inclusion, in order.** Every fence the manifest says a file was
+ *    built from must appear in that file as a CONTIGUOUS substring, byte for
+ *    byte, exactly once, and the quoted regions must appear in `from` order.
+ *    Edit either side — the page or the example — and this goes red naming
+ *    both. Order is checked because these files EXECUTE: hoisting §4's
+ *    registration above §1's `ToolsFrom` changes what the file demonstrates
+ *    and falsifies the comment sitting above it (review S1).
  * 2. **No wiring of its own.** Every statement in an example must sit inside
  *    one of those quoted fence regions; the only statements allowed outside
- *    them are `console.*` echoes. Comments are free. So an example can PRINT
- *    what the page's code produced, and cannot introduce a pattern, a client, a
- *    guard or a transport the page never wrote. Without this half, rule 1 alone
- *    would let an example quote a fence and then contradict it two lines later.
+ *    them are `console.*` echoes, and an echo may not `await` (below). So an
+ *    example can PRINT what the page's code produced, and cannot introduce a
+ *    pattern, a client, a guard or a transport at statement level. Without this
+ *    half, rule 1 alone would let an example quote a fence and then contradict
+ *    it two lines later.
  * 3. **The manifest accounts for every fence on the page.** `from` and
  *    `omitted` must together name exactly the page's fence ordinals. A page
  *    that GAINS a fence therefore fails until someone decides whether the
  *    example takes it — the silent-drift case a "compiles green" check cannot
  *    see.
+ *
+ * ### Where rule 2 stops, stated rather than implied
+ *
+ * An earlier version of this docblock claimed rule 2 meant an example "cannot
+ * introduce a pattern, a client, a guard or a transport the page never wrote",
+ * full stop. That was FALSE and a reviewer demonstrated it: `isConsoleEcho`
+ * looked at the callee only, so a whole second unguarded harness turn fitted
+ * inside a `console.log(await …)` and all five tests stayed green — in the
+ * example file for the GUARD tutorial. An overstated guard is worse than a
+ * modest one, so the claim and the code were both changed:
+ *
+ * - **No `await` anywhere inside an echo's arguments.** That is what made the
+ *   smuggled turn a turn: a `console.log` that awaits can run one to completion
+ *   and print its result as if the page had produced it. None of the echoes
+ *   shipped here awaits, so the ban costs nothing.
+ * - **What is still open, deliberately:** an echo's arguments are expressions,
+ *   and a SYNCHRONOUS call inside one is allowed — the shipped echo
+ *   `console.log('…', result.context.events.find(…)?.data)` needs a call to
+ *   navigate the page's own data, and a blanket ban would take it with the
+ *   abuse. So an un-awaited `f()` could still start something whose result
+ *   nothing joins. The property therefore bounds STATEMENT-level wiring plus
+ *   the await, not everything an expression can evaluate.
+ * - **Comments are free by construction**, including each file's "Taken / Not
+ *   taken" header — which is a second copy of the manifest, and only the
+ *   manifest is enforced (review N1/N3). A comment can therefore lie; a
+ *   statement cannot.
  *
  * Plus the compile property the tutorials' own pin already applies to fences:
  * every example type-checks against the packages AS PUBLISHED (the `exports`
@@ -264,8 +294,23 @@ function compileExamples(files: string[]): Map<string, string[]> {
     noEmit: true,
     esModuleInterop: true,
     isolatedModules: true,
+    // Every example is its OWN module, even one that imports nothing.
+    //
+    // TypeScript treats a file with no import/export as a global SCRIPT, so its
+    // top-level declarations land in shared global scope and the next
+    // import-less file can use them — which made the sibling pin vacuous for
+    // exactly the class it exists to catch, an undeclared identifier
+    // (tutorials-docs-pins.test.ts, review finding F3). Same trap here: these
+    // virtual files share one directory.
     moduleDetection: ts.ModuleDetectionKind.Force,
+    // An example is server-side code and reads `process.env` the way a
+    // composition root does. Without node types it resolves against the DOM lib
+    // alone, so `process` is an error and — worse, because it type-checks — a
+    // bare `history` silently binds to `window.history` (same finding).
     types: ['node'],
+    // Named explicitly: the virtual files are written into the core package's
+    // directory, whose own node_modules carries no @types, so the default
+    // lookup walks straight past the app's copy.
     typeRoots: [path.join(REPO_ROOT, 'app', 'node_modules', '@types')],
   }
 
@@ -284,6 +329,9 @@ function compileExamples(files: string[]): Map<string, string[]> {
   host.resolveModuleNames = (moduleNames, containingFile) =>
     moduleNames.map((specifier) => {
       if (specifier.startsWith('@hames/')) {
+        // NO fall-through to node_modules: inside this workspace the symlink
+        // would resolve a subpath the published package does not expose, which
+        // is the whole failure this resolver exists to catch.
         const resolved = resolvePackageModule(specifier)
         return resolved ? { resolvedFileName: resolved, isExternalLibraryImport: false } : undefined
       }
@@ -336,13 +384,17 @@ describe('tutorials examples pins', () => {
     expect(failures).toEqual([])
   }, 120_000)
 
-  it('every quoted fence appears in its example verbatim, exactly once', () => {
+  it('every quoted fence appears in its example verbatim, exactly once, in manifest order', () => {
     const failures: string[] = []
     // Non-vacuity floor: a manifest edited down to nothing must not pass green.
+    // Set to the REAL count, not below it — this is a guard, not a budget, and
+    // a slack floor would let two `from` entries be demoted into `omitted` with
+    // a plausible reason and stay green (review S3).
     let quoted = 0
     for (const [file, spec] of Object.entries(EXAMPLES_MANIFEST)) {
       const text = readExample(file)
       const fences = fencesOf(spec.page)
+      let previousEnd = -1
       for (const index of spec.from) {
         const fence = fences.find((f) => f.index === index)
         if (!fence) {
@@ -351,17 +403,29 @@ describe('tutorials examples pins', () => {
         }
         quoted++
         const occurrences = text.split(fence.code).length - 1
-        if (occurrences === 1) continue
-        failures.push(
-          occurrences === 0
-            ? `examples/${file} no longer contains ${spec.page} fence #${index} ` +
-                `(section: ${fence.heading}) verbatim — one of the two was edited`
-            : `examples/${file} contains ${spec.page} fence #${index} ${occurrences} times; ` +
-                `a quoted fence must appear exactly once`,
-        )
+        if (occurrences !== 1) {
+          failures.push(
+            occurrences === 0
+              ? `examples/${file} no longer contains ${spec.page} fence #${index} ` +
+                  `(section: ${fence.heading}) verbatim — one of the two was edited`
+              : `examples/${file} contains ${spec.page} fence #${index} ${occurrences} times; ` +
+                  `a quoted fence must appear exactly once`,
+          )
+          continue
+        }
+        // ORDER: `from` is documented as the order the regions appear in, and
+        // these files execute, so a hoisted region changes what the example
+        // does rather than how it reads.
+        const at = text.indexOf(fence.code)
+        if (at < previousEnd)
+          failures.push(
+            `examples/${file} quotes ${spec.page} fence #${index} out of manifest order — ` +
+              `from: [${spec.from.join(', ')}] is the order the regions must appear in`,
+          )
+        previousEnd = at + fence.code.length
       }
     }
-    expect(quoted).toBeGreaterThanOrEqual(7)
+    expect(quoted).toBeGreaterThanOrEqual(9)
     expect(failures).toEqual([])
   })
 
@@ -390,9 +454,15 @@ describe('tutorials examples pins', () => {
         if (covered.some(([from, to]) => start >= from && end <= to)) continue
         if (isConsoleEcho(statement)) continue
         const line = source.getLineAndCharacterOfPosition(start).line + 1
+        // Name the AWAIT case separately: "not a console echo" would be a
+        // baffling thing to read above a line that plainly starts `console.log`.
+        const why = containsAwait(statement)
+          ? 'is outside every quoted fence and AWAITS — an echo that awaits can run a whole ' +
+            "turn and print it as the page's own output"
+          : 'is outside every fence quoted from ' + spec.page + ' and is not a console echo'
         failures.push(
-          `examples/${file}:${line} is outside every fence quoted from ${spec.page} and is ` +
-            `not a console echo: ${statement.getText(source).split('\n')[0].slice(0, 80)}`,
+          `examples/${file}:${line} ${why}: ` +
+            `${statement.getText(source).split('\n')[0].slice(0, 80)}`,
         )
       }
     }
@@ -423,15 +493,32 @@ describe('tutorials examples pins', () => {
   })
 })
 
-/** `console.log(...)` / `console.error(...)` and friends, as a whole statement. */
+/**
+ * `console.log(...)` / `console.error(...)` and friends, as a whole statement —
+ * and with NO `await` anywhere in the arguments.
+ *
+ * The callee check alone is not the property: a reviewer fitted a second,
+ * entirely unguarded harness turn inside one `console.log(await …)` and every
+ * test stayed green. An echo that awaits can drive a turn to completion and
+ * print its result as the page's own output, which is exactly the wiring rule 2
+ * exists to keep out. A blanket ban on calls would be too strong — the shipped
+ * echoes navigate the page's data with `.find(…)` — so the cut is at `await`,
+ * and the docblock states what that leaves open.
+ */
 function isConsoleEcho(statement: ts.Statement): boolean {
   if (!ts.isExpressionStatement(statement)) return false
   const call = statement.expression
   if (!ts.isCallExpression(call)) return false
   const callee = call.expression
-  return (
+  const isConsole =
     ts.isPropertyAccessExpression(callee) &&
     ts.isIdentifier(callee.expression) &&
     callee.expression.text === 'console'
-  )
+  return isConsole && !call.arguments.some(containsAwait)
+}
+
+/** Does this expression await anywhere inside it, however deeply nested? */
+function containsAwait(node: ts.Node): boolean {
+  if (ts.isAwaitExpression(node)) return true
+  return ts.forEachChild(node, containsAwait) ?? false
 }
